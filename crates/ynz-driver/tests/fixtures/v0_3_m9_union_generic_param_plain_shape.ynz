@@ -40,7 +40,7 @@ function declared<T>(share t: Thing, share extra: T) -> string {
 function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let thing: Thing = tiny
+  let thing: Thing = tiny.copy()
   let out = same(thing, big)
   print(describe(out))
   let second = same(thing, tiny)

@@ -51,9 +51,9 @@ function onlyIfPresent(share fig: Circle | nothing) -> string {
 function entrypoint() -> nothing {
   let circle: Circle = { radius: 2.0 }
   let square: Square = { side: 3.0 }
-  let mixed: WithInt = circle
+  let mixed: WithInt = circle.copy()
   print(withElse(mixed))
-  let first: Pair = circle
+  let first: Pair = circle.copy()
   print(bothShapes(first))
   let second: Pair = square
   print(bothShapes(second))

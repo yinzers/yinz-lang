@@ -24,8 +24,8 @@ shape Tag {
 
 function entrypoint() -> nothing {
   let a: Tag = { name: `alpha`, n: 1 }
-  let tags: array<Tag> = [a]
   let same: Tag = { name: a.name, n: 1 }
+  let tags: array<Tag> = [a]
   print(tags.contains(same))
   let fresh: Tag = { name: `alpha`, n: 1 }
   print(tags.contains(fresh))

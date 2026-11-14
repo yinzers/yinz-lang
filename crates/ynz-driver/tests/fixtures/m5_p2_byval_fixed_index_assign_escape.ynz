@@ -21,13 +21,13 @@ function entrypoint() -> nothing {
     { qty: qb, price: qb * 10 }
   ]
   let zero: Part = { qty: 0, price: 0 }
-  let pair: fixed<Part> = [zero, zero]
+  let pair: fixed<Part> = [zero.copy(), zero.copy()]
   let i: int = 0
   while (i < 2) {
     let got = parts[i]
     if (got.exists()) {
       let cur: Part = got.value
-      pair[i] = cur
+      pair[i] = cur.copy()
     }
     i = i + 1
   }

@@ -1,0 +1,27 @@
+// v0.3-M9 C5a: the green-world lock of `bg_arg_alias_container_add_red.ynz`, spelled the way the
+// language now allows. That fixture stored a bare parameter in a container (`bucket.add(rows)`),
+// which hands `rows` over, so it is refused (see `v03_m9_store_hands_over.rs`). Here `stash`
+// declares `give rows` and the spawn gives it; the lock is unchanged:
+//   1. the task's container is its OWN: the parent still sees 1 row after the task adds one;
+//   2. the task's ITEMS are its own too: the task overwrites its row 0 with 999 and the
+//      parent's row 0 still starts at 1;
+//   3. nothing dangles: the parent dereferences `bucket[0]` after the task finished.
+function stash(bucket: array<array<int>>, give rows: array<int>) -> nothing {
+  bucket.add(rows)
+  let spare: array<int> = [0]
+  let mine: array<int> = bucket[0].or(spare)
+  mine.set(0, 999)
+  print(`task sees ${bucket.count().toString()} rows`)
+}
+
+function entrypoint() -> nothing {
+  let seed: array<int> = [1, 2, 3]
+  let bucket: array<array<int>> = [seed]
+  let rows: array<int> = [10, 20, 30]
+  background stash(bucket, rows)
+  wait sleep(80)
+  print(`parent sees ${bucket.count().toString()} rows`)
+  let fallback: array<int> = [0]
+  let first: array<int> = bucket[0].or(fallback)
+  print(`parent row 0 starts at ${first[0].or(-1).toString()}`)
+}

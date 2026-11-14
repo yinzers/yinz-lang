@@ -60,7 +60,7 @@ function describeTable(share table: map<string, string> | nothing) -> string {
 function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let thing: Thing = big
+  let thing: Thing = big.copy()
   let other: Thing = tiny
   if (thing) {
     is Big => {
@@ -77,7 +77,7 @@ function entrypoint() -> nothing {
   print(describe(same(thing, other)))
   let table: map<string, string> = { `a`: `b` }
   print(describeTable(table))
-  let maybeTable: map<string, string> | nothing = table
+  let maybeTable: map<string, string> | nothing = table.copy()
   print(describeTable(fallback(maybeTable, table)))
   print(`end`)
 }

@@ -37,7 +37,7 @@ function entrypoint() -> nothing {
   print(show(fromCall))
   let count = 0
   while (count < 2) {
-    let again: Mixed = circle
+    let again: Mixed = circle.copy()
     let plain: Mixed = count
     print(show(again))
     print(show(plain))

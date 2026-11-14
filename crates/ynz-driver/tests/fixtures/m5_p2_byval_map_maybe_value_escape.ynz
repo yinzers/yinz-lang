@@ -19,12 +19,12 @@ function entrypoint() -> nothing {
     { qty: qc, price: qc * 10 }
   ]
   let empty: maybe<Part> = parts[9]
-  let picks: map<string, maybe<Part> > = { `pick`: empty }
+  let picks: map<string, maybe<Part> > = { `pick`: empty.copy() }
   let i: int = 0
   while (i < 3) {
     let cur: maybe<Part> = parts[i]
     if (i == 0) {
-      picks.set(`pick`, cur)
+      picks.set(`pick`, cur.copy())
     }
     i = i + 1
   }

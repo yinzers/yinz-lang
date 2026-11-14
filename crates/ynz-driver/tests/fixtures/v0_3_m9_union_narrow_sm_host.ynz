@@ -38,13 +38,13 @@ function showSuspending(share fig: Figure) -> nothing {
     is Circle => {
       print(describe(fig))
       print(fig.area())
-      let inner: Circle = fig
+      let inner: Circle = fig.copy()
       print(inner.label)
       wait sleep(1)
       print(`resumed`)
       print(fig.radius)
       print(fig.label)
-      let after: Circle = fig
+      let after: Circle = fig.copy()
       print(after.label)
     }
     is Square => {
@@ -61,7 +61,7 @@ function entrypoint() -> nothing {
     is Circle => {
       print(describe(fig))
       print(fig.area())
-      let inner: Circle = fig
+      let inner: Circle = fig.copy()
       print(inner.label)
     }
     is Square => {

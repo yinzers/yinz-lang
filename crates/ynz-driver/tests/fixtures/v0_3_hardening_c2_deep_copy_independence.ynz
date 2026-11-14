@@ -17,7 +17,7 @@
 //   held copy is 2
 function entrypoint() -> nothing {
   let inner: array<int> = [1, 2, 3]
-  let outer: array<array<int>> = [inner]
+  let outer: array<array<int>> = [inner.copy()]
   let clone: array<array<int>> = outer.copy()
   let cloneRow: array<int> = clone[0].or(inner)
   cloneRow.set(0, 99)

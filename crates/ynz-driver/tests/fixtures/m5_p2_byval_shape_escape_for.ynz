@@ -24,7 +24,7 @@ function entrypoint() -> nothing {
   let found: Part = { qty: 0, price: 0 }
   for (p in parts) {
     if (p.qty == 1) {
-      found = p
+      found = p.copy()
     }
   }
   print(found.qty)

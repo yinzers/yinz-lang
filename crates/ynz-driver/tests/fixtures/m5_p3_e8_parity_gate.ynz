@@ -50,16 +50,21 @@ function entrypoint() -> nothing {
 
   // ── maps: exactly one map<int, Part> (+5 counted; shape values inline)
   let stock: map<int, Part> = {}
-  stock.set(1, pa)
-  stock.set(2, pb)
-  stock.set(1, pb)
+  let pa2: Part = { qty: seed, price: seed * 10 }
+  let pb2: Part = { qty: seed * 2, price: seed * 20 }
+  let pb3: Part = { qty: seed * 2, price: seed * 20 }
+  stock.set(1, pa2)
+  stock.set(2, pb2)
+  stock.set(1, pb3)
   print(stock.count())
 
   // ── FRAGO 011 persist cells, exact-count: +1 at construction, +3 in the loop
-  let holder: Holder = { best: pa }
+  let pa3: Part = { qty: seed, price: seed * 10 }
+  let holder: Holder = { best: pa3 }
   let j: int = 0
   while (j < 3) {
-    holder.best = pb
+    let next: Part = { qty: seed * 2, price: seed * 20 }
+    holder.best = next
     j = j + 1
   }
   print(holder.best.qty)

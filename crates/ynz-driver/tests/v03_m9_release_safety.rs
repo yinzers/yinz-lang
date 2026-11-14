@@ -23,12 +23,13 @@
 //! optimization level is the same fixture at `--no-optimize`, where no optimizer can delete a
 //! dead read of freed memory and hide the defect.
 //!
-//! ## C5a store fixtures (AddressSanitizer) — 8 programs × 2 optimization levels
+//! ## C5a store fixtures (AddressSanitizer) — 7 programs × 2 optimization levels
 //!
 //! The heap-value-stored-without-a-sink class (spike S3 holes t6b, g1, g8, g7, t7, and the
-//! accepted spelling of t3): typeck's transfer record now joins each stored value to its holder
-//! (`ynz-typeck/tests/transfer_record.rs` asserts the facts); these programs are the end-to-end
-//! guard that the release pass frees none of them early. Green today for the same reason as the
+//! accepted spelling of t3): storing a value hands it over, and typeck's transfer record notes
+//! each store as an escape of the stored value (`ynz-typeck/tests/transfer_record.rs` asserts
+//! the facts); these programs are the end-to-end guard that the release pass frees none of
+//! them early. The read-after-store programs are refused now (`v03_m9_store_hands_over.rs`). Green today for the same reason as the
 //! exit classes above.
 //!
 //! ## Leak fixtures (alloc/free counters) — RED until the release pass lands
@@ -173,12 +174,6 @@ asan_case!(
     "v0_3_m9_c5a_give_copy_in_loop.ynz",
     "3\n3\n3\n3\n",
     "a loop giving `x.copy()` each pass: the pass frees the outer `x` with the callee's clone, or frees a clone twice (High)"
-);
-asan_case!(
-    store_then_read_both,
-    "v0_3_m9_c5a_store_then_read_both.ynz",
-    "3\n1\n3\n",
-    "`o.add(a)` then reading `a` and `o`: the pass treats the store as a move and frees `a`'s array under the container (High)"
 );
 
 /// Run a leak fixture and return (stdout, counters).
