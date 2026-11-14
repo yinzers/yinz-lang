@@ -645,6 +645,9 @@ pub struct TypedModule {
     /// v0.3-M9 C5a: the persisted transfer record — the final alias-class partition of every
     /// function with its release anchor and escapes (see `crate::transfer_record`).
     pub transfers: crate::transfer_record::TransferRecord,
+    /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
+    /// span. Codegen picks the instance a call runs from this record and nothing else.
+    pub generic_call_instances: crate::generics::GenericCallInstances,
 }
 
 impl TypedModule {
@@ -667,6 +670,7 @@ impl TypedModule {
             back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
             binding_names: self.binding_names.clone(),
             transfers: self.transfers.clone(),
+            generic_call_instances: self.generic_call_instances.clone(),
         })
     }
 }
@@ -725,6 +729,7 @@ pub fn check(
         current_shape: None,
         type_param_scope: HashMap::new(),
         mono_table: MonomorphizationTable::default(),
+        generic_call_instances: crate::generics::GenericCallInstances::default(),
         maybe_non_none: HashSet::new(),
         union_narrowed: HashMap::new(),
         union_aliases: collect_union_aliases(module, shape_table),
@@ -764,6 +769,7 @@ pub fn check(
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
         transfers,
+        generic_call_instances: checker.generic_call_instances,
     };
     (
         typed,
@@ -818,6 +824,7 @@ pub fn check_with_kernel_mode(
         current_shape: None,
         type_param_scope: HashMap::new(),
         mono_table: MonomorphizationTable::default(),
+        generic_call_instances: crate::generics::GenericCallInstances::default(),
         maybe_non_none: HashSet::new(),
         union_narrowed: HashMap::new(),
         union_aliases: collect_union_aliases(module, shape_table),
@@ -857,6 +864,7 @@ pub fn check_with_kernel_mode(
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
         transfers,
+        generic_call_instances: checker.generic_call_instances,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -925,6 +933,9 @@ struct Checker<'b> {
     diags: DiagnosticBucket,
     /// Accumulated monomorphization entries for all generic call sites in this module.
     mono_table: MonomorphizationTable,
+    /// The type arguments each generic call was checked with; see
+    /// `TypedModule::generic_call_instances`.
+    generic_call_instances: crate::generics::GenericCallInstances,
     /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
     /// Maps alias name → resolved union type. Populated before check_module runs.
     union_aliases: HashMap<String, Type>,
@@ -7220,6 +7231,8 @@ impl<'b> Checker<'b> {
             .iter()
             .map(|(_, ty)| apply_substitution(ty, &subst))
             .collect();
+        self.generic_call_instances
+            .record((call.span.start, call.span.end), concrete_type_args.clone());
         self.mono_table.record(
             name.to_string(),
             concrete_type_args,
@@ -9856,7 +9869,7 @@ pub(crate) fn collect_union_aliases(
 ///   unions have different memory layouts, so neither converts to the other.
 ///
 /// O(size of the types) time and space.
-pub fn can_assign(target: &Type, source: &Type) -> bool {
+fn can_assign(target: &Type, source: &Type) -> bool {
     match (target, source) {
         (
             Type::BuiltinFixed {

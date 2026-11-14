@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ynz_ast::nodes::OwnershipModifier;
 use ynz_diagnostics::SourceSpan;
@@ -173,8 +173,8 @@ pub struct MonoSignature {
 /// Keyed by `(fn_name, concrete_type_args)`. Codegen (P4a) consumes this to
 /// emit one LLVM function per unique instantiation.
 ///
-/// `BTreeMap`, not `HashMap`: codegen's Pass 1.5/2.5 emission ORDER (and its
-/// first-match-by-name fallback lookup) follow this table's iteration order, which
+/// `BTreeMap`, not `HashMap`: codegen's Pass 1.5/2.5 emission ORDER follows this
+/// table's iteration order, which
 /// therefore reaches the object bytes. A per-process-seeded `HashMap` here made
 /// multi-file builds flap between orderings run-to-run (v0.3-M7 R10 — the
 /// pirates-roster two-hash flap). Ordered iteration is load-bearing; do not switch back.
@@ -186,6 +186,58 @@ pub struct MonomorphizationTable {
 impl MonomorphizationTable {
     pub fn record(&mut self, fn_name: String, type_args: Vec<Type>, sig: MonoSignature) {
         self.entries.insert(MonoKey { fn_name, type_args }, sig);
+    }
+}
+
+/// The type arguments type checking chose for each generic call, keyed by the call's
+/// `(span.start, span.end)`.
+///
+/// Codegen reads the instance a call runs from here and nowhere else. Re-deriving it from
+/// the argument types is ambiguous: `pickA(tiny, big)` against `pickA<T>(first: T | Tiny,
+/// second: T)` fits both `pickA<Big>` and `pickA<Big | Tiny>` when both exist, and only the
+/// type checker knows which one it checked (C1g, #424).
+///
+/// A call checked twice with different type arguments is kept as a conflict, never as the
+/// last or first choice, so codegen stops with an internal error instead of guessing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GenericCallInstances {
+    type_args_by_call: HashMap<(usize, usize), Vec<Type>>,
+    conflicting_calls: HashSet<(usize, usize)>,
+}
+
+impl GenericCallInstances {
+    /// Record the type arguments the call at `call_span` was checked with. O(type args) time.
+    pub fn record(&mut self, call_span: (usize, usize), type_args: Vec<Type>) {
+        match self.type_args_by_call.get(&call_span) {
+            Some(recorded) if *recorded != type_args => {
+                self.conflicting_calls.insert(call_span);
+            }
+            Some(_) => {}
+            None => {
+                self.type_args_by_call.insert(call_span, type_args);
+            }
+        }
+    }
+
+    /// The type arguments the call at `call_span` was checked with. An error when the type
+    /// checker recorded none, or recorded two different sets. O(1) time.
+    pub fn type_args_at(&self, call_span: (usize, usize)) -> Result<&[Type], String> {
+        if self.conflicting_calls.contains(&call_span) {
+            return Err(format!(
+                "the call at bytes {}..{} was type-checked with two different sets of type \
+                 arguments",
+                call_span.0, call_span.1
+            ));
+        }
+        self.type_args_by_call
+            .get(&call_span)
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                format!(
+                    "the type checker recorded no type arguments for the call at bytes {}..{}",
+                    call_span.0, call_span.1
+                )
+            })
     }
 }
 

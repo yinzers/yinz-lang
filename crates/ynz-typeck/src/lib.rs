@@ -70,12 +70,12 @@ pub mod type_variant_sampler;
 pub mod types;
 
 pub use check::{
-    block_contains_back_edge_yield, can_assign, check, check_with_kernel_mode,
-    crossing_local_names, crossing_local_names_with_cpu_spike,
-    crossing_local_names_with_provenance, expr_is_conduit_suspend, expr_is_ufcs_suspending_call,
-    find_let_annotation_type_in_stmts, loop_stmt_back_edge_yields, stmt_contains_back_edge_yield,
-    stmt_contains_conduit_suspend, stmt_is_conduit_suspend, type_attached_const_type,
-    CrossingNames, LocalCrossesWait, TypedModule, DEFAULT_CHANNEL_CAPACITY,
+    block_contains_back_edge_yield, check, check_with_kernel_mode, crossing_local_names,
+    crossing_local_names_with_cpu_spike, crossing_local_names_with_provenance,
+    expr_is_conduit_suspend, expr_is_ufcs_suspending_call, find_let_annotation_type_in_stmts,
+    loop_stmt_back_edge_yields, stmt_contains_back_edge_yield, stmt_contains_conduit_suspend,
+    stmt_is_conduit_suspend, type_attached_const_type, CrossingNames, LocalCrossesWait,
+    TypedModule, DEFAULT_CHANNEL_CAPACITY,
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;
@@ -83,7 +83,9 @@ pub use false_sharing::{
     collect_shape_type_names, finalize_false_sharing, FalseSharingOutcome,
     CROSS_THREAD_FIELDS_NOT_PADDED,
 };
-pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
+pub use generics::{
+    GenericCallInstances, GenericFnTable, GenericShapeTable, MonomorphizationTable,
+};
 pub use inlay_hint_passes::{
     array_to_fixed_promotion_hints, auto_arc_hints, background_routing_hints,
     channel_capacity_hints, copy_point_hints, let_to_const_promotion_hints,

@@ -1350,7 +1350,6 @@ fn build_module<'ctx, 'g>(
                 &shape_types,
                 &shape_abi_sizes,
                 &shape_field_abi,
-                mono_table,
                 &options_table,
                 &wait_cache,
                 suspend_set,
@@ -1410,7 +1409,6 @@ fn build_module<'ctx, 'g>(
             fn_val,
             type_subst,
             mono_sig,
-            mono_table,
             &options_table,
             layout,
         )?;
@@ -1519,7 +1517,6 @@ fn lower_generic_function<'ctx>(
     fn_val: FunctionValue<'ctx>,
     type_subst: HashMap<String, Type>,
     mono_sig: &ynz_typeck::generics::MonoSignature,
-    mono_table: &'_ MonomorphizationTable,
     options_table: &'_ ynz_typeck::options_table::OptionsTable,
     layout: &'_ ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
@@ -1546,7 +1543,6 @@ fn lower_generic_function<'ctx>(
         // alignment path runs for generic bodies too.
         layout,
         type_subst,
-        mono_table,
         options_table,
         // Generic functions are not errors-capable in M7 (no `-> T errors` on generics yet).
         is_errors_capable: false,
@@ -1950,7 +1946,6 @@ struct Cg<'ctx, 'g> {
     // M5 P4a: type-param substitution for the current monomorphized instance.
     // Empty for non-generic functions.
     type_subst: HashMap<String, Type>,
-    mono_table: &'g MonomorphizationTable,
     // M6: options table for variant tag lookup.
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     // M7 P4a: true when the current function declared `-> T errors`.
@@ -4818,7 +4813,6 @@ fn lower_function<'ctx, 'g>(
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
     shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
-    mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
@@ -4846,7 +4840,6 @@ fn lower_function<'ctx, 'g>(
             shape_types,
             shape_abi_sizes,
             shape_field_abi,
-            mono_table,
             options_table,
             wait_cache,
             suspend_set,
@@ -4892,7 +4885,6 @@ fn lower_function<'ctx, 'g>(
         soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
-        mono_table,
         options_table,
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
@@ -5085,7 +5077,6 @@ fn lower_function_with_waits<'ctx, 'g>(
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
     shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
-    mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
@@ -5400,7 +5391,6 @@ fn lower_function_with_waits<'ctx, 'g>(
         soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
-        mono_table,
         options_table,
         // is_errors_capable = false inside the resume fn: the SM return path handles
         // errors-capable results explicitly (stores {i64,i64} in return slot). Keeping
@@ -16912,8 +16902,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     // Prefer the direct name. If not found, check for an aliased import
                     // (`import { getValue as fetchVal }`) — the LLVM module declares the
                     // function under the original exported name, not the local alias.
-                    // Then the monomorphization lookup: the one generic instance the call's
-                    // argument types resolve to, or an internal error (no guess).
+                    // Then a generic call: the instance the type checker recorded for this
+                    // call site, or an internal error (no guess).
                     let effective_name = if cg.module.get_function(name).is_some() {
                         name.to_string()
                     } else if let Some(orig) = cg
@@ -16923,10 +16913,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     {
                         orig.to_string()
                     } else {
-                        // Infer concrete arg types from the call site to pick the right mono.
-                        let arg_types: Vec<Type> =
-                            call.args.iter().map(|a| cg.expr_type(a)).collect();
-                        find_mono_name_by_args(cg.mono_table, name, &arg_types)?
+                        recorded_generic_instance_name(
+                            &cg.typed.generic_call_instances,
+                            &cg.type_subst,
+                            name,
+                            &call.span,
+                            |instance| cg.module.get_function(instance).is_some(),
+                        )?
                     };
 
                     // The direct wrapper-fn invocation below serves ONLY callees that do not
@@ -18389,7 +18382,13 @@ fn lower_expr_background<'ctx>(
     } else if cg.module.get_function(&callee_name).is_some() {
         callee_name.clone()
     } else {
-        find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)?
+        recorded_generic_instance_name(
+            &cg.typed.generic_call_instances,
+            &cg.type_subst,
+            &callee_name,
+            &call.span,
+            |instance| cg.module.get_function(instance).is_some(),
+        )?
     };
     let target_fn = cg
         .module
@@ -21369,193 +21368,165 @@ fn declare_sat_intrinsic<'ctx>(
         .unwrap_or_else(|| module.add_function(name, fn_ty, None))
 }
 
-/// Find the mangled name of the generic instance a call site resolved to.
+/// The mangled name of the generic instance the call at `call_span` runs: the type arguments
+/// the type checker checked that call with (`TypedModule::generic_call_instances`), with the
+/// enclosing instance's own type parameters substituted (`type_subst`), so a generic call
+/// inside a generic body runs the instance built for the outer instance's types.
 ///
-/// Type checking compares every argument with its substituted parameter (C1g, #424), so the
-/// call's instance is the one whose parameter types the arguments can be assigned to. An exact
-/// match wins; otherwise exactly one instance must accept every argument (a plain `map` passed
-/// for a `T` the call made `map | nothing` is assignable, not equal).
+/// Never re-derived from the argument types: `pickA(tiny, big)` against `pickA<T>(first: T |
+/// Tiny, second: T)` fits both `pickA<Big>` and `pickA<Big | Tiny>`, and a guess runs a
+/// function built for other types (a `Tiny` read as a `Big`). A call with no record, a call
+/// recorded twice with different type arguments, or an instance that was never declared is an
+/// internal error — the type checker and codegen disagree, a compiler bug and never a user
+/// mistake (C1g, #424).
 ///
-/// There is no "first instance of that name" fallback: an instance the arguments do not fit
-/// would run a function built for other types (a `Tiny` read as a `Big`). No match, or several
-/// with no exact one, is an internal error naming the call and the instances there were — the
-/// type checker and the monomorphization table disagree, a compiler bug and never a user
-/// mistake.
-///
-/// O(entries x parameters x size of the types) time, O(entries) space.
-fn find_mono_name_by_args(
-    mono_table: &MonomorphizationTable,
+/// O(size of the type arguments) time and space.
+fn recorded_generic_instance_name(
+    instances: &ynz_typeck::GenericCallInstances,
+    type_subst: &HashMap<String, Type>,
     fn_name: &str,
-    arg_types: &[Type],
+    call_span: &ynz_diagnostics::SourceSpan,
+    instance_is_declared: impl Fn(&str) -> bool,
 ) -> Result<String, String> {
-    let mut instances_of_name = Vec::new();
-    let mut assignable_instances = Vec::new();
-    for (key, sig) in &mono_table.entries {
-        if key.fn_name != fn_name {
-            continue;
-        }
-        let same_arity = sig.param_types.len() == arg_types.len();
-        if same_arity && sig.param_types.iter().zip(arg_types).all(|(a, b)| a == b) {
-            return Ok(mangle_mono_name(&key.fn_name, &key.type_args));
-        }
-        if same_arity
-            && sig
-                .param_types
-                .iter()
-                .zip(arg_types)
-                .all(|(param, arg)| ynz_typeck::can_assign(param, arg))
-        {
-            assignable_instances.push(mangle_mono_name(&key.fn_name, &key.type_args));
-        }
-        instances_of_name.push(format!("{:?}", sig.param_types));
+    let internal_error = |detail: String| {
+        format!(
+            "internal compiler error: cannot tell which instance of generic `{fn_name}` to call: \
+             {detail}. This is a compiler bug."
+        )
+    };
+    let recorded = instances
+        .type_args_at((call_span.start, call_span.end))
+        .map_err(internal_error)?;
+    let type_args: Vec<Type> = recorded
+        .iter()
+        .map(|type_arg| ynz_typeck::generics::apply_substitution(type_arg, type_subst))
+        .collect();
+    let mangled = mangle_mono_name(fn_name, &type_args);
+    if !instance_is_declared(&mangled) {
+        return Err(internal_error(format!(
+            "the call was checked with type arguments {type_args:?}, but no instance `{mangled}` \
+             was built"
+        )));
     }
-    match assignable_instances.as_slice() {
-        [only] => Ok(only.clone()),
-        fitting => Err(format!(
-            "internal compiler error: the call to generic `{fn_name}` has argument types \
-             {arg_types:?}, which {} of its {} compiled instance(s) {}. The type checker should \
-             have refused or recorded this call; this is a compiler bug.",
-            if fitting.is_empty() {
-                "fit none".to_string()
-            } else {
-                format!("fit {} of them equally, with no exact match", fitting.len())
-            },
-            instances_of_name.len(),
-            instances_of_name.join(", "),
-        )),
-    }
+    Ok(mangled)
 }
 
 #[cfg(test)]
-mod mono_lookup_tests {
-    use super::{find_mono_name_by_args, mangle_mono_name};
-    use ynz_typeck::generics::MonoSignature;
-    use ynz_typeck::{MonomorphizationTable, Type};
+mod recorded_generic_instance_tests {
+    use super::{mangle_mono_name, recorded_generic_instance_name};
+    use std::collections::HashMap;
+    use ynz_diagnostics::SourceSpan;
+    use ynz_typeck::{GenericCallInstances, Type};
 
-    fn table_with_one_instance_for_big() -> MonomorphizationTable {
-        let big = Type::Shape { name: "Big".into() };
-        let mut table = MonomorphizationTable::default();
-        table.record(
-            "same".into(),
-            vec![big.clone()],
-            MonoSignature {
-                param_types: vec![big.clone(), big.clone()],
-                ret_type: big,
-            },
-        );
-        table
+    fn big() -> Type {
+        Type::Shape { name: "Big".into() }
+    }
+
+    fn tiny() -> Type {
+        Type::Shape {
+            name: "Tiny".into(),
+        }
+    }
+
+    fn call_at(start: usize) -> SourceSpan {
+        SourceSpan::new("main.ynz", start, start + 10)
     }
 
     #[test]
-    fn v03_m9_c1g_mono_lookup_finds_the_instance_whose_parameters_match() {
-        // GUARD (High: call dispatch): the exact match still resolves.
-        let table = table_with_one_instance_for_big();
-        let big = Type::Shape { name: "Big".into() };
+    fn v03_m9_c1g_call_runs_the_instance_it_was_checked_with() {
+        // BUG (High: call dispatch, memory safety): `pickA(tiny, big)` fits both `pickA<Big>`
+        // and `pickA<Big | Tiny>`; re-deriving the instance from argument types could not tell
+        // them apart. Two calls with the same argument types run their own recorded instance.
+        let big_or_tiny = Type::Union {
+            variants: vec![big(), tiny()],
+        };
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![big()]);
+        instances.record((20, 30), vec![big_or_tiny.clone()]);
+        let declared = [
+            mangle_mono_name("pickA", &[big()]),
+            mangle_mono_name("pickA", std::slice::from_ref(&big_or_tiny)),
+        ];
+        let is_declared = |name: &str| declared.iter().any(|known| known == name);
+        let no_subst = HashMap::new();
         assert_eq!(
-            find_mono_name_by_args(&table, "same", &[big.clone(), big.clone()]),
-            Ok(mangle_mono_name("same", &[big]))
+            recorded_generic_instance_name(
+                &instances,
+                &no_subst,
+                "pickA",
+                &call_at(0),
+                is_declared
+            ),
+            Ok(mangle_mono_name("pickA", &[big()]))
+        );
+        assert_eq!(
+            recorded_generic_instance_name(
+                &instances,
+                &no_subst,
+                "pickA",
+                &call_at(20),
+                is_declared
+            ),
+            Ok(mangle_mono_name("pickA", &[big_or_tiny]))
         );
     }
 
     #[test]
-    fn v03_m9_c1g_mono_lookup_never_falls_back_to_the_first_instance() {
-        // BUG (High: call dispatch, memory safety): arguments that match no instance used to
-        // resolve to the FIRST instance of the name, calling a function built for other types.
-        let table = table_with_one_instance_for_big();
-        let tiny = Type::Shape {
-            name: "Tiny".into(),
+    fn v03_m9_c1g_call_inside_a_generic_body_runs_the_outer_instances_types() {
+        // BUG (High: call dispatch): a call recorded as `inner<T | nothing>` inside `outer<T>`
+        // must run `inner<Big | nothing>` in `outer<Big>`, never the unsubstituted instance.
+        let maybe_t = Type::Union {
+            variants: vec![Type::TypeParam { name: "T".into() }, Type::Nothing],
         };
-        let big = Type::Shape { name: "Big".into() };
-        let error = find_mono_name_by_args(&table, "same", &[big, tiny]).unwrap_err();
-        assert!(
-            error.contains("internal compiler error") && error.contains("`same`"),
-            "{error}"
+        let maybe_big = Type::Union {
+            variants: vec![big(), Type::Nothing],
+        };
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![maybe_t]);
+        let declared = mangle_mono_name("inner", std::slice::from_ref(&maybe_big));
+        let outer_big = HashMap::from([("T".to_string(), big())]);
+        assert_eq!(
+            recorded_generic_instance_name(&instances, &outer_big, "inner", &call_at(0), |name| {
+                name == declared
+            }),
+            Ok(declared.clone())
         );
     }
 
     #[test]
-    fn v03_m9_c1g_mono_lookup_accepts_an_argument_assignable_to_the_instance() {
-        // GUARD (High: call dispatch): a plain `map` passed for a `T` the call made
-        // `map | nothing` fits that one instance without being equal to it — the legal flow
-        // the old first-instance fallback served by accident.
-        let map = Type::BuiltinMap {
-            key: Box::new(Type::String),
-            val: Box::new(Type::String),
-        };
-        let maybe_map = Type::Union {
-            variants: vec![map.clone(), Type::Nothing],
-        };
-        let mut table = MonomorphizationTable::default();
-        table.record(
-            "fallback".into(),
-            vec![maybe_map.clone()],
-            MonoSignature {
-                param_types: vec![maybe_map.clone(), maybe_map.clone()],
-                ret_type: maybe_map.clone(),
-            },
-        );
-        let found = find_mono_name_by_args(&table, "fallback", &[maybe_map.clone(), map]);
-        assert_eq!(found, Ok(mangle_mono_name("fallback", &[maybe_map])));
-    }
-
-    #[test]
-    fn v03_m9_c1g_mono_lookup_picks_the_exact_instance_among_several() {
-        // GUARD (High: call dispatch, memory safety): with two instances of one name the
-        // exact match must win whichever order the table holds them in; a wrong pick calls a
-        // function built for the other type.
-        let big = Type::Shape { name: "Big".into() };
-        let tiny = Type::Shape {
-            name: "Tiny".into(),
-        };
-        let mut table = MonomorphizationTable::default();
-        for instance in [&big, &tiny] {
-            table.record(
-                "same".into(),
-                vec![instance.clone()],
-                MonoSignature {
-                    param_types: vec![instance.clone(), instance.clone()],
-                    ret_type: instance.clone(),
-                },
+    fn v03_m9_c1g_call_without_a_usable_record_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): no record, two conflicting records, or a
+        // recorded instance that was never built must stop codegen, never fall back to some
+        // instance of that name.
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![big()]);
+        instances.record((0, 10), vec![tiny()]);
+        instances.record((20, 30), vec![tiny()]);
+        let no_subst = HashMap::new();
+        let any_name_declared = |_: &str| true;
+        let none_declared = |_: &str| false;
+        for (start, is_declared, expected) in [
+            (
+                0,
+                &any_name_declared as &dyn Fn(&str) -> bool,
+                "two different sets",
+            ),
+            (40, &any_name_declared, "recorded no type arguments"),
+            (20, &none_declared, "was built"),
+        ] {
+            let error = recorded_generic_instance_name(
+                &instances,
+                &no_subst,
+                "same",
+                &call_at(start),
+                is_declared,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("internal compiler error") && error.contains(expected),
+                "{error}"
             );
         }
-        assert_eq!(
-            find_mono_name_by_args(&table, "same", &[tiny.clone(), tiny.clone()]),
-            Ok(mangle_mono_name("same", &[tiny]))
-        );
-        assert_eq!(
-            find_mono_name_by_args(&table, "same", &[big.clone(), big.clone()]),
-            Ok(mangle_mono_name("same", &[big]))
-        );
-    }
-
-    #[test]
-    fn v03_m9_c1g_mono_lookup_refuses_to_choose_between_instances_that_both_fit() {
-        // BUG (High: call dispatch): two instances accept a plain `map` and neither is an
-        // exact match; picking one would be a guess, so the lookup is an internal error that
-        // says how many fit.
-        let map = Type::BuiltinMap {
-            key: Box::new(Type::String),
-            val: Box::new(Type::String),
-        };
-        let mut table = MonomorphizationTable::default();
-        for other_variant in [Type::Nothing, Type::Int] {
-            let union = Type::Union {
-                variants: vec![map.clone(), other_variant],
-            };
-            table.record(
-                "fallback".into(),
-                vec![union.clone()],
-                MonoSignature {
-                    param_types: vec![union.clone(), union.clone()],
-                    ret_type: union,
-                },
-            );
-        }
-        let error = find_mono_name_by_args(&table, "fallback", &[map.clone(), map]).unwrap_err();
-        assert!(
-            error.contains("internal compiler error") && error.contains("fit 2 of them equally"),
-            "{error}"
-        );
     }
 }
 
