@@ -185,9 +185,19 @@ coercion_tests!(
 
 /// `fixture_name` must fail `ynz build`, with `refusal` in its diagnostics.
 fn assert_build_refused(fixture_name: &str, refusal: &str) {
+    let program =
+        std::fs::read_to_string(support::fixture_path(fixture_name)).expect("read fixture");
+    assert_source_refused(fixture_name, &program, refusal);
+}
+
+/// `program` must fail `ynz build`, with `refusal` in its diagnostics. For a refusal that only
+/// the default (auto-parallel) build gives, so the program cannot sit in the fixture corpus the
+/// mode-matrix sweep compiles in every mode.
+fn assert_source_refused(label: &str, program: &str, refusal: &str) {
+    let fixture_name = label;
     let directory = tempfile::tempdir().expect("create temp directory");
     let source = directory.path().join("program.ynz");
-    std::fs::copy(support::fixture_path(fixture_name), &source).expect("copy fixture");
+    std::fs::write(&source, program).expect("write program");
     let output = Command::new(env!("CARGO_BIN_EXE_ynz"))
         .arg("build")
         .arg(Path::new(&source))
@@ -220,8 +230,54 @@ fn v03_m9_union_coerce_suspending_let_cpu_promoted_is_refused() {
     // Bug: a callee typeck sees as plain but the compiler promotes to a pausing function
     // (two independent `leaf` calls) reached codegen's guard, so the user saw "compiler bug"
     // instead of the teaching refusal. Tier: High.
-    assert_build_refused(
-        "v0_3_m9_union_coerce_suspending_let_promoted_refused.ynz",
+    assert_source_refused(
+        "promoted callee into a union let",
+        PROMOTED_CALLEE_PROGRAM,
         "`combine()` pauses and resumes before it gives its result",
     );
 }
+
+/// `combine` has no `wait`, so typeck sees an ordinary function; the compiler promotes it to a
+/// pausing function (the two `leaf` calls run at the same time) and `entrypoint` holds a
+/// `wait`, so `let m: Mixed = combine()` is bound by the state-machine lowering. Inline, not a
+/// fixture: under `--no-auto-parallel` nothing is promoted and it compiles, which the
+/// every-mode corpus sweep would report as a divergence.
+const PROMOTED_CALLEE_PROGRAM: &str = r#"
+shape Circle {
+  name: string
+}
+shape Mixed = Circle | int
+
+function show(share m: Mixed) -> string {
+  if (m) {
+    is Circle => {
+      return `circle ${m.name}`
+    }
+    else => {
+      return `int`
+    }
+  }
+}
+
+function leaf(n: int) -> int {
+  let t = 0
+  let i = 0
+  while (i < n) {
+    t = t + i
+    i = i + 1
+  }
+  return t
+}
+
+function combine() -> int {
+  let a = leaf(10)
+  let b = leaf(11)
+  return a + b
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let m: Mixed = combine()
+  print(show(m))
+}
+"#;
