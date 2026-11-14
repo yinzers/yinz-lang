@@ -1183,46 +1183,7 @@ impl<'b> Checker<'b> {
                     for field in &s.fields {
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
                     }
-                    // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): a hidden
-                    // field with an int-literal default against a `number` type
-                    // (`hidden cache: number = 5`) is never typechecked here otherwise,
-                    // and codegen ICEs lowering the raw i64 into the decimal128 pointer
-                    // slot (emit.rs hidden-default store). Only hidden-field defaults are
-                    // lowered as defaults (non-hidden fields must be provided at
-                    // construction, so their default expr is dead), so the gate matches
-                    // that scope. Route through the SAME shared teaching gate as every
-                    // other int-literal→`number` slot (authoritative-derivation: one gate,
-                    // no per-slot twin). Coercion stays deferred to the stub plan.
-                    for field in &s.fields {
-                        if !field.is_hidden {
-                            continue;
-                        }
-                        let Some(default_expr) = &field.default else {
-                            continue;
-                        };
-                        // Guard on the RAW AST type before resolving through
-                        // ast_type_to_type. This arm runs with an empty
-                        // type_param_scope (it is only populated in
-                        // check_generic_function_body), so resolving a
-                        // type-param-typed field (`hidden buffer: array<T>`) would
-                        // emit a spurious "T is not a known type" diagnostic — the
-                        // exact trap the diagnostic-free walker above deliberately
-                        // avoids. `number` is banned from aliasing, so a `number`
-                        // slot is ALWAYS the literal AstType::Number here; matching
-                        // it directly resolves and fires the gate only for a bare
-                        // `number` annotation, never walking a generic param. The
-                        // gate already fires only on bare Type::Number (so `maybe
-                        // number` etc. fall through), so this loses nothing.
-                        if !matches!(&field.ty, AstType::Number { .. }) {
-                            continue;
-                        }
-                        let field_ty = self.ast_type_to_type(&field.ty);
-                        self.reject_int_literal_number_slot(
-                            NumberSlotRole::Field { name: &field.name },
-                            &field_ty,
-                            default_expr,
-                        );
-                    }
+                    self.check_hidden_field_defaults(s, &type_params);
                     // Union type alias RHS: `shape PghEvent = SouthSideEvent | StripeDistrictEvent`.
                     // alias_ty is the raw AstType (Union) written in source. Because the check
                     // pass never enters ShapeDecl bodies, these member names are otherwise
@@ -2088,6 +2049,94 @@ impl<'b> Checker<'b> {
                     "A `return` statement ends the function immediately. Any code after it in the same block is never reached.",
                 ));
             }
+        }
+    }
+
+    /// Check every hidden-field default of `shape` against the field's declared type.
+    ///
+    /// Only hidden-field defaults are lowered as defaults (non-hidden fields must be provided at
+    /// construction, so their default expression is dead), so the check matches that scope. A
+    /// default is a value meeting a slot of declared type, so it gets the same three outcomes as
+    /// a shape-literal field: the int-literal-into-`number` teaching gate (`hidden cache: number
+    /// = 5`, which otherwise ICEs lowering the raw i64 into the decimal128 slot), the ordinary
+    /// mismatch diagnostic (`hidden extra: string = 4096`), and, for a union-typed field, the
+    /// coercion record (`record_union_coercion`) that makes codegen wrap the default in the
+    /// tagged envelope. Without the record a plain variant default was stored as the bare value
+    /// where the envelope pointer belongs.
+    ///
+    /// The default is inferred under the shape's own type parameters (`hidden buffer: array<T>
+    /// = []`), outside any function body, in a scope frame of its own.
+    ///
+    /// Time: O(fields x default size)  Space: O(1) beyond the recorded types
+    fn check_hidden_field_defaults(
+        &mut self,
+        shape: &ynz_ast::nodes::ShapeDecl,
+        type_params: &HashSet<String>,
+    ) {
+        for param in type_params {
+            self.type_param_scope.insert(param.clone(), ());
+        }
+        self.scope.push();
+        for field in &shape.fields {
+            if !field.is_hidden {
+                continue;
+            }
+            let Some(default_expr) = &field.default else {
+                continue;
+            };
+            let field_ty = self.ast_type_to_type(&field.ty);
+            if self.reject_int_literal_number_slot(
+                NumberSlotRole::Field { name: &field.name },
+                &field_ty,
+                default_expr,
+            ) {
+                continue;
+            }
+            let default_ty = self.infer_expr(default_expr, Some(&field_ty));
+            if default_ty == Type::Error || field_ty == Type::Error {
+                continue;
+            }
+            if can_assign(&field_ty, &default_ty) {
+                self.record_union_coercion(default_expr, &field_ty, &default_ty);
+            } else if is_union_into_its_variant(&field_ty, &default_ty) {
+                self.diags.push(union_where_variant_expected_diag(
+                    default_expr,
+                    &default_ty,
+                    &field_ty,
+                    &format!(
+                        "`{}.{}` is declared as a `{}`",
+                        shape.name,
+                        field.name,
+                        type_name(&field_ty)
+                    ),
+                ));
+            } else {
+                self.diags.push(Diagnostic::error(
+                    default_expr.span().clone(),
+                    format!(
+                        "Hidden field `{}` expects `{}`, but its default is `{}`.",
+                        field.name,
+                        type_name(&field_ty),
+                        type_name(&default_ty)
+                    ),
+                    format!(
+                        "Give `{}` a default of type `{}`, or change the field's type.",
+                        field.name,
+                        type_name(&field_ty)
+                    ),
+                    format!(
+                        "`{}.{}` was declared as `{}`, and every new `{}` starts with its default.",
+                        shape.name,
+                        field.name,
+                        type_name(&field_ty),
+                        shape.name
+                    ),
+                ));
+            }
+        }
+        self.scope.pop();
+        for param in type_params {
+            self.type_param_scope.remove(param);
         }
     }
 

@@ -83,3 +83,47 @@ container_store_tests!(
     v03_m9_union_hidden_default_asan_optimized,
     v03_m9_union_hidden_default_asan_no_optimize
 );
+
+/// `fixture_name` must fail `ynz build` with `refusal` in its diagnostics, and never with the
+/// internal "compiler bug" / "failed to produce machine code" box.
+fn assert_build_refused(fixture_name: &str, refusal: &str) {
+    let compiled = support::compile(fixture_name);
+    assert!(
+        !compiled.success,
+        "{fixture_name} compiled:\n{}",
+        compiled.diagnostics
+    );
+    assert!(
+        compiled.diagnostics.contains(refusal),
+        "{fixture_name}: refusal must contain `{refusal}`; got:\n{}",
+        compiled.diagnostics
+    );
+    for internal_error in ["compiler bug", "failed to produce machine code"] {
+        assert!(
+            !compiled.diagnostics.contains(internal_error),
+            "{fixture_name}: a user-reachable refusal must not be `{internal_error}`; got:\n{}",
+            compiled.diagnostics
+        );
+    }
+}
+
+#[test]
+fn v03_m9_union_hidden_default_wrong_type_is_refused() {
+    // Bug: `hidden extra: string = 4096` was never checked against its annotation, compiled, and
+    // SIGSEGVed reading the raw int as a string. Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_hidden_default_string_refused.ynz",
+        "Hidden field `extra` expects `string`, but its default is `int`",
+    );
+}
+
+#[test]
+fn v03_m9_union_hidden_default_shape_literal_into_union_is_refused() {
+    // Bug: a shape-literal default into a union-typed hidden field stopped the build with the
+    // internal "struct literal with non-shape type Error" instead of a teaching diagnostic.
+    // Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_hidden_default_shape_literal_refused.ynz",
+        "A shape value `{ ... }` cannot produce a `Tiny | Big` value",
+    );
+}

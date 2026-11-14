@@ -1,0 +1,17 @@
+// v0.3-M9 C1e rework (#421): a hidden shape-field default is checked against the field's declared
+// type. `hidden extra: string = 4096` must be refused with the ordinary mismatch diagnostic; it
+// used to compile, and reading the field then SIGSEGVed on the raw int.
+
+shape Holder {
+  name: string
+  hidden extra: string = 4096
+}
+
+function peek(share self: Holder) -> string {
+  return self.extra
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { name: `a` }
+  print(holder.peek())
+}
