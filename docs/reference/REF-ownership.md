@@ -100,7 +100,7 @@ print(rows.count())
 
 After an `if`, a `match` or a loop, `rows` is usable again only if every arm assigned it (a match needs an `else` arm, or to cover every variant). A loop body may run zero times, so a reassignment inside it does not count after the loop.
 
-Putting a list, a map or a shape into a place hands it over, just like giving it to a function. That covers `bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`, a list or shape built from named values (`[rows, more]`) and `let copy = rows`. The place owns the value from then on, and reading `rows` afterwards is an error:
+Putting a list, a map or a shape into a place hands it over, just like giving it to a function. That covers `bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`, a list or shape built from named values (`[rows, more]`) and `let moved = rows`. The place owns the value from then on, and reading `rows` afterwards is an error:
 
 ```ynz
 let rows: array<int> = [1, 2, 3]
@@ -112,7 +112,7 @@ print(rows.count())
 //   If you only need it before the store, put this line above the store.
 ```
 
-Numbers, booleans, options and strings are copied, so storing them gives nothing away.
+Numbers, booleans, options, strings and ranges are copied, so storing them gives nothing away.
 
 ---
 
