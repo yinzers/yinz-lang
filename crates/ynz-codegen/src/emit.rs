@@ -5377,6 +5377,17 @@ fn lower_shape_defaults_initializer<'ctx, 'g>(
                 )
                 .map_err(|e| format!("hidden default GEP `{}`: {e}", ast_field.name))?;
             let val = lower_expr(&mut cg, default_expr)?;
+            // `lower_expr` wraps a plain variant in an envelope that is a slot in THIS frame,
+            // and this frame ends at the `ret`: the instance's field would point at a dead
+            // slot. Re-home a freshly wrapped union value on counted heap cells, the same home
+            // a wrapped value staged into a suspending callee's frame gets.
+            let val = cg.home_union_on_heap(
+                default_expr,
+                val,
+                &field_ty,
+                EnvelopeHome::Heap,
+                "hidden_default_union",
+            )?;
             store_field(&mut cg, val, &field_ty, gep)?;
         }
         let Some((parent_name, _)) = &current.extends else {
