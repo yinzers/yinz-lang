@@ -1418,63 +1418,84 @@ fn build_module<'ctx, 'g>(
     Ok(())
 }
 
-/// Mangle a generic function name + type args into a unique LLVM symbol name.
+/// Mangle a generic function name + type args into a unique LLVM symbol name:
+/// `fn_name<arg,arg>`.
+///
+/// The name must be injective, and must never equal a user function's name: Pass 1.5 skips an
+/// instance whose name is already declared, and a call resolves to whatever function holds the
+/// name. The old `_`-joined form broke both, because Yinz identifiers may contain `_`:
+/// `show<Big>` was `show_shape_Big`, the name of a user function `show_shape_Big(Tiny)`, so
+/// `show(big)` ran that function on a `Big`; and `second<A_shape_B, int>` and
+/// `second<A, B_int>` were both `second_shape_A_shape_B_int` (C1g, #424). `<`, `>`, `,` and the
+/// delimiters `mangle_type` uses never occur in an identifier, so neither can happen.
+///
+/// O(size of the type arguments) time and space.
 fn mangle_mono_name(fn_name: &str, type_args: &[Type]) -> String {
-    let mut name = fn_name.to_string();
-    for ty in type_args {
-        name.push('_');
-        name.push_str(&mangle_type(ty));
-    }
-    name
+    let args: Vec<String> = type_args.iter().map(mangle_type).collect();
+    format!("{fn_name}<{}>", args.join(","))
 }
 
+/// A type's symbol-name form. Injective: a user name is always followed by a delimiter or the
+/// end, and the delimiters (`:`, `(`, `)`, `,`, `|`) never occur in an identifier, so two
+/// different types never share a form (see `mangle_mono_name`).
+///
+/// O(size of the type) time and space.
 fn mangle_type(ty: &Type) -> String {
+    let joined = |types: &[Type], separator: &str| {
+        types
+            .iter()
+            .map(mangle_type)
+            .collect::<Vec<_>>()
+            .join(separator)
+    };
     match ty {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
         Type::Bool => "boolean".to_string(),
         Type::String => "string".to_string(),
         Type::Nothing => "nothing".to_string(),
-        Type::Shape { name } => format!("shape_{name}"),
-        Type::Dynamic { contract } => format!("dyn_{contract}"),
-        Type::BuiltinArray { elem } => format!("array_{}", mangle_type(elem)),
-        Type::BuiltinFixed { elem, size } => {
-            format!("fixed_{}_{}", size.unwrap_or(0), mangle_type(elem))
-        }
-        Type::Maybe { inner } => format!("maybe_{}", mangle_type(inner)),
-        Type::Generic { name, args } => {
-            let arg_str = args.iter().map(mangle_type).collect::<Vec<_>>().join("_");
-            format!("{name}_{arg_str}")
-        }
-        Type::TypeParam { name } => format!("tparam_{name}"),
-        Type::Number { precision } => format!("number_{precision}"),
+        Type::Shape { name } => format!("shape:{name}"),
+        Type::Dynamic { contract } => format!("dyn:{contract}"),
+        Type::BuiltinArray { elem } => format!("array({})", mangle_type(elem)),
+        Type::BuiltinFixed { elem, size } => match size {
+            Some(size) => format!("fixed({size},{})", mangle_type(elem)),
+            None => format!("fixed(,{})", mangle_type(elem)),
+        },
+        Type::Maybe { inner } => format!("maybe({})", mangle_type(inner)),
+        Type::Generic { name, args } => format!("generic:{name}({})", joined(args, ",")),
+        Type::TypeParam { name } => format!("tparam:{name}"),
+        Type::Number { precision } => format!("number({precision})"),
         Type::Range {
             element,
             end_inclusive,
         } => {
             format!(
-                "range_{}{}",
-                mangle_type(element),
-                if *end_inclusive { "_inc" } else { "" }
+                "{}({})",
+                if *end_inclusive { "range_inc" } else { "range" },
+                mangle_type(element)
             )
         }
         Type::BuiltinMap { key, val } => {
-            format!("map_{}_{}", mangle_type(key), mangle_type(val))
+            format!("map({},{})", mangle_type(key), mangle_type(val))
         }
         Type::MapEntry { key, val } => {
-            format!("mapentry_{}_{}", mangle_type(key), mangle_type(val))
+            format!("mapentry({},{})", mangle_type(key), mangle_type(val))
         }
-        Type::BuiltinChannel { elem } => format!("channel_{}", mangle_type(elem)),
+        Type::BuiltinChannel { elem } => format!("channel({})", mangle_type(elem)),
         // v0.3-M4: inferred-only task handles never appear as generic type args in valid
         // programs, but the mangler stays total.
-        Type::BackgroundHandle { result, .. } => format!("bghandle_{}", mangle_type(result)),
-        Type::Options { name } => format!("options_{name}"),
-        Type::Union { variants } => {
-            let parts: Vec<_> = variants.iter().map(mangle_type).collect();
-            format!("union_{}", parts.join("_or_"))
-        }
-        Type::ErrorsCapable { inner } => format!("errors_{}", mangle_type(inner)),
-        Type::Sensitive { inner } => format!("sensitive_{}", mangle_type(inner)),
+        Type::BackgroundHandle { result, msg_elem } => match msg_elem {
+            Some(msg_elem) => format!(
+                "bghandle({},{})",
+                mangle_type(result),
+                mangle_type(msg_elem)
+            ),
+            None => format!("bghandle({},)", mangle_type(result)),
+        },
+        Type::Options { name } => format!("options:{name}"),
+        Type::Union { variants } => format!("union({})", joined(variants, "|")),
+        Type::ErrorsCapable { inner } => format!("errors({})", mangle_type(inner)),
+        Type::Sensitive { inner } => format!("sensitive({})", mangle_type(inner)),
         // Type::Error should never reach codegen — an earlier phase should have
         // caught all type errors and stopped compilation. Panic here so it's
         // visible immediately if it ever does (instead of silently emitting a

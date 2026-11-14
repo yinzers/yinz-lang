@@ -7,12 +7,13 @@
 //! call discarded `unify_param`'s mismatch; the dot-call form checked non-receiver arguments
 //! for the union case only); built under ASan at -O0 the first four overflow the stack.
 //!
-//! Test count: 12 — one per refused case and per call form (generic with a sibling argument,
+//! Test count: 13 — one per refused case and per call form (generic with a sibling argument,
 //! with an explicit type argument, with a concrete parameter, with two scalar types, with a
 //! shape that fits a union parameter only through its type parameter; dot-call
 //! with a shape and with an int), the plain-form guard (already clean when probed), and the
 //! legal calls, container parameters, union-bound type parameters and the instance each
-//! generic call was checked with that must keep running.
+//! generic call was checked with, and an instance name no other function holds, that must keep
+//! running.
 
 mod support;
 
@@ -207,5 +208,19 @@ fn v03_m9_c1g_generic_call_runs_the_instance_the_type_checker_chose() {
         false,
         "hello\nhello\ntiny\n",
         "every generic call must run the instance it was checked with",
+    );
+}
+
+#[test]
+fn v03_m9_c1g_generic_instance_name_never_belongs_to_another_function() {
+    // BUG (found in round 3): instance names were `_`-joined and identifiers may hold `_`, so
+    // `show<Big>` took the name of a user function `show_shape_Big(Tiny)` (which then ran on a
+    // `Big`, reading its `label` pointer as an int), and two instances of `second` shared one
+    // name. TIER: High (call dispatch, memory safety).
+    support::assert_fixture_prints(
+        "v0_3_m9_c1g_generic_instance_name_is_its_own.ynz",
+        false,
+        "generic\n42\nx\n",
+        "every generic call must run its own instance",
     );
 }

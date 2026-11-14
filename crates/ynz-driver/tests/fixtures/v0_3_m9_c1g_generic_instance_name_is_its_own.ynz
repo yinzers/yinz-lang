@@ -1,0 +1,46 @@
+// v0.3-M9 C1g regression guard: a generic instance's symbol name is its own. Identifiers may
+// contain `_`, and instance names were `_`-joined: `show<Big>` was `show_shape_Big`, which is
+// also the user function below, so `show(big)` ran `show_shape_Big` on a `Big` and printed the
+// `label` pointer as `code`; `second<A_shape_B, int>` and `second<A, B_int>` were both
+// `second_shape_A_shape_B_int`, so one call ran the other's body.
+// Correct behavior: compiles; prints generic / 42 / x.
+// Pre-fix (b3e23ce): prints a heap address for `show(big)`; the two `second` calls fail in the
+// LLVM verifier ("Function return type does not match").
+
+shape Tiny {
+  code: int
+}
+shape Big {
+  label: string
+  count: int
+}
+shape A {
+  flag: boolean
+}
+shape A_shape_B {
+  flag: boolean
+}
+shape B_int {
+  label: string
+  count: int
+}
+function show<T>(share value: T) -> nothing {
+  print(`generic`)
+}
+function show_shape_Big(share value: Tiny) -> nothing {
+  print(`${value.code}`)
+}
+function second<T, U>(share first: T, share other: U) -> U {
+  return other
+}
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  show(big)
+  let a: A = { flag: true }
+  let ab: A_shape_B = { flag: true }
+  let bint: B_int = { label: `x`, count: 1 }
+  let n = second(ab, 42)
+  print(`${n}`)
+  let got = second(a, bint)
+  print(got.label)
+}
