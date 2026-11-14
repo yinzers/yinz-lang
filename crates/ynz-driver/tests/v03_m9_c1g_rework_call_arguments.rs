@@ -11,9 +11,14 @@
 //! statement form reaches `check_generic_fn_call`), so they pin that route; the dot-call cases
 //! were red there.
 //!
-//! Test count: 6 — one per refused case (two `background` generic calls, three dot-call argument
-//! counts: too few, too many, through a `dynamic` receiver) and the legal generic `background`
-//! call that must keep running.
+//! Round 1 (rule fixer): the built-in collection, `maybe`, string and number methods are dot-calls
+//! too. The type checker never counted their arguments, so `xs.add()` panicked the code generator
+//! and `n.toString(1, 2)` dropped its arguments; each method family has its own fixture.
+//!
+//! Test count: 12 — one per refused case (two `background` generic calls, three dot-call argument
+//! counts: too few, too many, through a `dynamic` receiver), the teaching text of the dot-call
+//! form, one per built-in method family (array, map, `maybe`, string, number) and the legal generic
+//! `background` call that must keep running.
 
 mod support;
 
@@ -109,6 +114,89 @@ fn v03_m9_c1g_rework_dynamic_dot_call_without_a_required_argument_is_rejected() 
         &[
             "`display` takes 2 argument(s), but 1 were given.",
             "Call it with 2 argument(s).",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_dot_call_arity_teaches_the_receiver_in_every_slot() {
+    // A dot call counts the value before the dot as the first argument, so "takes 2, but 1 were
+    // given" for `big.useBig()` only makes sense once the text says so (Golden Rule 11: WHAT,
+    // WHAT-INSTEAD and WHY, each tied to this call). TIER: High (a diagnostic that sends the
+    // reader to write a second wrong call teaches nothing).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_dot_call_too_few_arguments.ynz",
+        &[
+            "Put 1 argument(s) inside the parentheses of `big.useBig(…)`.",
+            "A dot call counts the value before the dot, `big`, as the first argument.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_array_method_with_wrong_argument_count_is_rejected() {
+    // BUG (round 1, Security): `xs.add()` panicked the code generator; `xs.count(1)` dropped its
+    // argument. TIER: High (type checker).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_arity_array.ynz",
+        &[
+            "`add` takes 2 argument(s), but 1 were given.",
+            "`get` takes 2 argument(s), but 1 were given.",
+            "`count` takes 1 argument(s), but 2 were given.",
+            "Put 1 argument(s) inside the parentheses of `xs.add(…)`.",
+            "Put nothing inside the parentheses of `xs.count()`.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_map_method_with_wrong_argument_count_is_rejected() {
+    // BUG (round 1, Security): `m.set(`a`)` panicked the code generator. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_arity_map.ynz",
+        &[
+            "`set` takes 3 argument(s), but 2 were given.",
+            "`get` takes 2 argument(s), but 3 were given.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_maybe_method_with_wrong_argument_count_is_rejected() {
+    // BUG (round 1, Security): `xs.first().or()` panicked the code generator. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_arity_maybe.ynz",
+        &[
+            "`or` takes 2 argument(s), but 1 were given.",
+            "`exists` takes 1 argument(s), but 2 were given.",
+            "counts the value before the dot, `xs.first()`, as the first argument.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_string_method_with_wrong_argument_count_is_rejected() {
+    // BUG (round 1, Security): `s.contains()` and `s.substring(1)` panicked the code generator;
+    // `s.trim(1)` dropped its argument. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_arity_string.ynz",
+        &[
+            "`contains` takes 2 argument(s), but 1 were given.",
+            "`substring` takes 3 argument(s), but 2 were given.",
+            "`trim` takes 1 argument(s), but 2 were given.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_number_method_with_wrong_argument_count_is_rejected() {
+    // BUG (round 1, Security): `n.toString(1, 2)` compiled and dropped both arguments;
+    // `n.wrappingAdd()` was refused as an unknown method. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_arity_scalar.ynz",
+        &[
+            "`toString` takes 1 argument(s), but 3 were given.",
+            "`wrappingAdd` takes 2 argument(s), but 1 were given.",
         ],
     );
 }

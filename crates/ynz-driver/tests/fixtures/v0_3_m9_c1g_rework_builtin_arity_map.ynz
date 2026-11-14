@@ -1,0 +1,11 @@
+// v0.3-M9 C1g rework (round 1 rule fixer): built-in `map<K, V>` methods called with the wrong
+// number of arguments.
+// Correct behavior: does not compile — each call is refused with the arity text of a plain call.
+// Pre-fix failure: `m.set(`a`)` panicked the code generator (it reads the value argument that was
+// never passed).
+
+function entrypoint() -> nothing {
+  let m: map<string, int> = {}
+  m.set(`a`)
+  let found = m.get(`a`, `b`)
+}

@@ -1,0 +1,12 @@
+// v0.3-M9 C1g rework (round 1 rule fixer): `maybe<T>` methods called with the wrong number of
+// arguments.
+// Correct behavior: does not compile — `.or()` without its fallback is refused with the arity text
+// of a plain call.
+// Pre-fix failure: `xs.first().or()` panicked the code generator (it reads the fallback argument
+// that was never passed).
+
+function entrypoint() -> nothing {
+  let xs: array<int> = [1, 2, 3]
+  let head = xs.first().or()
+  let present = xs.first().exists(1)
+}

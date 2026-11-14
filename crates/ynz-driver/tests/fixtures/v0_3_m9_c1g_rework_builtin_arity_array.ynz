@@ -1,0 +1,14 @@
+// v0.3-M9 C1g rework (round 1 rule fixer): built-in `array<T>` methods called with the wrong
+// number of arguments.
+// Correct behavior: does not compile — each call is refused with the arity text of a plain call,
+// the value before the dot counted as the first argument.
+// Pre-fix failure: the type checker never counted a built-in method's arguments, so `xs.add()`
+// panicked the code generator (index past the argument list) and `xs.count(1)` dropped its
+// argument without a word.
+
+function entrypoint() -> nothing {
+  let xs: array<int> = [1, 2, 3]
+  xs.add()
+  let found = xs.get()
+  let total = xs.count(1)
+}
