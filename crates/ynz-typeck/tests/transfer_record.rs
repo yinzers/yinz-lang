@@ -226,11 +226,11 @@ fn t7_struct_literal_hands_every_part_to_the_literal() {
     assert!(!transfers.same_class("a", "c"), "{transfers:#?}");
     assert_eq!(
         escapes_of(&transfers, "a"),
-        vec![stored("the literal `{ … }`")]
+        vec![stored("the literal `{ first: a, second: c }`")]
     );
     assert_eq!(
         escapes_of(&transfers, "c"),
-        vec![stored("the literal `{ … }`")]
+        vec![stored("the literal `{ first: a, second: c }`")]
     );
     assert_eq!(escapes_of(&transfers, "p"), vec![Escape::Returned]);
 }
@@ -565,7 +565,7 @@ fn storing_a_range_hands_nothing_over() {
     );
 }
 
-const EAT2: &str ="function eat_all(give rows: array<array<int>>) -> nothing {
+const EAT2: &str = "function eat_all(give rows: array<array<int>>) -> nothing {
   print(rows.count().toString())
 }\n";
 

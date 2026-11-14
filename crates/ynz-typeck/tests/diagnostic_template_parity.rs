@@ -1133,3 +1133,48 @@ fn argument_conflicts_with_type_parameter_suggestions_compile() {
          }}"
     ));
 }
+
+/// (High) The WHAT-INSTEAD of a store into a struct literal is a literal the reader can type:
+/// every field is named, the stored part is `.copy()`, no `…` placeholder.
+#[test]
+fn consumed_by_store_into_a_struct_literal_names_a_literal_that_compiles() {
+    assert_rendered(
+        DiagnosticKind::ConsumedByStore,
+        "shape Pair { first: array<int>, second: array<int> }\n\
+         function entrypoint() -> nothing {\n\
+           let a: array<int> = [1]\n\
+           let c: array<int> = [2]\n\
+           let pair: Pair = { first: a, second: c }\n\
+           print(a.count())\n\
+           print(pair.first.count())\n\
+         }",
+        &[
+            ("name", "a"),
+            ("place", "the literal `{ first: a, second: c }`"),
+            ("stored", "a"),
+            ("copy_form", "{ first: a.copy(), second: c }"),
+            ("via", ""),
+        ],
+    );
+}
+
+/// (High) The same for a map literal: keys and values both written out.
+#[test]
+fn consumed_by_store_into_a_map_literal_names_a_literal_that_compiles() {
+    assert_rendered(
+        DiagnosticKind::ConsumedByStore,
+        "function entrypoint() -> nothing {\n\
+           let rows: array<int> = [1]\n\
+           let table: map<string, array<int>> = { `first`: rows }\n\
+           print(rows.count())\n\
+           print(table.count())\n\
+         }",
+        &[
+            ("name", "rows"),
+            ("place", "the literal `{ `first`: rows }`"),
+            ("stored", "rows"),
+            ("copy_form", "{ `first`: rows.copy() }"),
+            ("via", ""),
+        ],
+    );
+}

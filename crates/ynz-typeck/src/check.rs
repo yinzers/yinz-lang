@@ -471,6 +471,44 @@ fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
     }
 }
 
+/// The parts of a container literal, in source order: the elements of `[a, c]`, the keys and
+/// values of a map literal, the field values of `{ first: a, second: c }`. Empty for any other
+/// expression.
+fn literal_parts(literal: &Expr) -> Vec<&Expr> {
+    match literal {
+        Expr::ArrayLit { elements, .. } => elements.iter().collect(),
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .flat_map(|(key, value)| [key, value])
+            .collect(),
+        Expr::StructLit { fields, .. } => fields.iter().map(|field| &field.value).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A container literal written out with `part_texts` standing for its parts (one text per entry
+/// of `literal_parts`): `[a, c]`, `{ `key`: value }`, `{ first: a, second: c }`. The one
+/// rendering of a literal in diagnostic text, so the literal a message names and the literal its
+/// WHAT-INSTEAD suggests (`{ first: a.copy(), second: c }`) are typeable Yinz.
+fn literal_text(literal: &Expr, part_texts: &[String]) -> String {
+    match literal {
+        Expr::ArrayLit { .. } => format!("[{}]", part_texts.join(", ")),
+        Expr::MapLit { .. } => {
+            let entries: Vec<String> = part_texts.chunks(2).map(|entry| entry.join(": ")).collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
+        Expr::StructLit { fields, .. } => {
+            let entries: Vec<String> = fields
+                .iter()
+                .zip(part_texts)
+                .map(|(field, text)| format!("{}: {text}", field.name))
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
+        other => expr_source_text(other),
+    }
+}
+
 /// Source-shaped text for an expression in a diagnostic slot (`bucket.rows`, `matrix[0]`,
 /// `pick(bucket)`, `[a]`, …). Typeck has no source buffer, so this renders from the AST;
 /// it only needs to be recognizable, never byte-exact.
@@ -510,16 +548,13 @@ fn expr_source_text(expr: &Expr) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Expr::ArrayLit { elements, .. } => format!(
-            "[{}]",
-            elements
-                .iter()
+        Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
+            let part_texts: Vec<String> = literal_parts(expr)
+                .into_iter()
                 .map(expr_source_text)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Expr::MapLit { .. } => "{ … }".to_string(),
-        Expr::StructLit { .. } => "{ … }".to_string(),
+                .collect();
+            literal_text(expr, &part_texts)
+        }
         Expr::PostfixOp { receiver, op, .. } => match op {
             PostfixOpKind::Copy => format!("{}.copy()", expr_source_text(receiver)),
             PostfixOpKind::Freeze => format!("{}.freeze()", expr_source_text(receiver)),
@@ -531,11 +566,23 @@ fn expr_source_text(expr: &Expr) -> String {
         Expr::NoneLit { .. } => "none".to_string(),
         Expr::Wait(inner, _) => format!("wait {}", expr_source_text(inner)),
         Expr::Background(inner, _) => format!("background {}", expr_source_text(inner)),
-        Expr::BinOp { .. }
-        | Expr::UnaryOp { .. }
-        | Expr::Is { .. }
-        | Expr::InterpolatedString(..)
-        | Expr::Error(..) => "this value".to_string(),
+        Expr::InterpolatedString(parts, _) => {
+            let written: String = parts
+                .iter()
+                .map(|part| match part {
+                    ynz_ast::nodes::StringPart::Lit(bytes, _) => {
+                        String::from_utf8_lossy(bytes).into_owned()
+                    }
+                    ynz_ast::nodes::StringPart::Expr(inner, _) => {
+                        format!("${{{}}}", expr_source_text(inner))
+                    }
+                })
+                .collect();
+            format!("`{written}`")
+        }
+        Expr::BinOp { .. } | Expr::UnaryOp { .. } | Expr::Is { .. } | Expr::Error(..) => {
+            "this value".to_string()
+        }
     }
 }
 
@@ -5139,17 +5186,13 @@ impl<'b> Checker<'b> {
     /// one owner of everything in it and `a`, `c` are gone. A part that is bits is copied.
     /// Runs once per literal, after every part is inferred. O(parts) time.
     fn hand_literal_parts_over(&mut self, literal: &Expr) {
-        if !self.stored_literals.insert((literal.span().start, literal.span().end)) {
+        if !self
+            .stored_literals
+            .insert((literal.span().start, literal.span().end))
+        {
             return;
         }
-        let parts: Vec<&Expr> = match literal {
-            Expr::ArrayLit { elements, .. } => elements.iter().collect(),
-            Expr::MapLit { entries, .. } => {
-                entries.iter().flat_map(|(key, value)| [key, value]).collect()
-            }
-            Expr::StructLit { fields, .. } => fields.iter().map(|field| &field.value).collect(),
-            _ => return,
-        };
+        let parts = literal_parts(literal);
         let place = format!("the literal `{}`", expr_source_text(literal));
         let consumed_before = self.scope.consumed_classes();
         for (position, part) in parts.iter().enumerate() {
@@ -5164,11 +5207,7 @@ impl<'b> Checker<'b> {
                     }
                 })
                 .collect();
-            let copy_template = match literal {
-                Expr::ArrayLit { .. } => format!("[{}]", written_parts.join(", ")),
-                Expr::MapLit { .. } => format!("{{ {}, … }}", written_parts.join(": ")),
-                _ => format!("{{ …, {}, … }}", written_parts[position]),
-            };
+            let copy_template = literal_text(literal, &written_parts);
             self.store_value(part, &place, &copy_template, &consumed_before);
         }
     }
@@ -6382,7 +6421,12 @@ impl<'b> Checker<'b> {
     /// `Fresh` → `Owned`, own class; `Whole(b)` → b's origin, JOINS b's class (two names, one
     /// value); `Reaches(roots)` → `Reaches`, joins every root's class (giving a root away
     /// consumes this name with it); `Unknown` → `Unknown`, own class.
-    fn binding_event_origin(&mut self, value: &Expr, target: &str, copy_template: &str) -> BindingEvent {
+    fn binding_event_origin(
+        &mut self,
+        value: &Expr,
+        target: &str,
+        copy_template: &str,
+    ) -> BindingEvent {
         match self.provenance_of(value) {
             Provenance::Fresh => BindingEvent {
                 origin: Origin::Owned,
@@ -6401,7 +6445,11 @@ impl<'b> Checker<'b> {
                 );
                 BindingEvent {
                     // A refused store was reported at `a`; `b` must not be given away on top of it.
-                    origin: if admitted { Origin::Owned } else { Origin::Unknown },
+                    origin: if admitted {
+                        Origin::Owned
+                    } else {
+                        Origin::Unknown
+                    },
                     alias_class: self.scope.new_class(),
                     joined: Vec::new(),
                 }
@@ -6540,7 +6588,10 @@ impl<'b> Checker<'b> {
                             "Declare `{name}` with `let` if you need to hand it over for good, \
                              or give `{callee}` a copy: `{name}.copy()`."
                         ),
-                        TransferSink::Store { place, copy_template } => format!(
+                        TransferSink::Store {
+                            place,
+                            copy_template,
+                        } => format!(
                             "Declare `{name}` with `let` if you need to hand it over for good, \
                              or store a copy in {place}: `{}`.",
                             copy_template.replace("{value}", &format!("{name}.copy()"))
@@ -7687,7 +7738,12 @@ impl<'b> Checker<'b> {
         // A heap value stored by an in-place collection method (`add`, `set`) is handed over to the
         // receiver, like a field or index store.
         if let Some(receiver) = receiver_expr {
-            self.store_into_collection(receiver, method, args, collection_store_positions(receiver_ty, method));
+            self.store_into_collection(
+                receiver,
+                method,
+                args,
+                collection_store_positions(receiver_ty, method),
+            );
         }
 
         // M5 P3b: built-in collection method dispatch.
