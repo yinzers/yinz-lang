@@ -27,8 +27,7 @@ use inkwell::{
     AddressSpace, IntPredicate,
 };
 use ynz_ast::nodes::{
-    BinOpKind, Block, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt,
-    StringPart, UnaryOpKind,
+    BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
@@ -1589,6 +1588,7 @@ fn lower_generic_function<'ctx>(
         sm_crossing_shape_allocas: HashMap::new(),
         sm_scope_depth: 0,
         narrowed_unions: Vec::new(),
+        coercion_inner: None,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
         // Generic functions cannot contain `wait` — auto-parallel is never applicable.
@@ -1885,17 +1885,17 @@ struct SoaArrayInfo<'ctx> {
     segments: Vec<SoaSegment<'ctx>>,
 }
 
-/// Where the envelope built for a plain shape lives (`Cg::coerce_into_union_slot`).
+/// Where a union value that must outlive its frame is re-homed (`Cg::home_union_on_heap`). A value
+/// that only flows into a borrowed slot (an argument, a binding, a field) keeps the envelope
+/// `lower_expr` built in this frame and is never re-homed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EnvelopeHome {
-    /// The caller's frame: a callee that only borrows the argument.
-    Frame,
-    /// Counted heap cells for a plain shape that must outlive this frame: an argument staged
-    /// into a suspending callee's frame. Union-typed values pass through (their binding already
-    /// homed them).
+    /// Counted heap cells for a freshly wrapped value staged into a suspending callee's frame
+    /// (a frame slot would die with the resume invocation).
     Heap,
-    /// A `return`: like `Heap`, and a union-typed value the callee built itself is promoted to
-    /// heap cells too (its envelope is a slot in the frame that is about to die).
+    /// A `return`: a union value the callee built itself, a returned parameter and a freshly
+    /// wrapped value move to heap cells (their envelope is a slot in the frame about to die); a
+    /// call result already is a heap cell.
     Return,
 }
 
@@ -1909,10 +1909,6 @@ struct NarrowedUnion<'ctx> {
     outer_slot: PointerValue<'ctx>,
     /// The arm's slot: holds the variant payload pointer; `cg.locals[name]` inside the arm.
     narrowed_slot: PointerValue<'ctx>,
-    /// Spans of the arm's uses of `name` that flow into a UNION-typed slot (a union
-    /// parameter, a union return): those take the envelope, never the payload pointer
-    /// (`union_slot_uses_in_block`).
-    envelope_uses: HashSet<(usize, usize)>,
 }
 
 struct Cg<'ctx, 'g> {
@@ -2079,6 +2075,10 @@ struct Cg<'ctx, 'g> {
     // `reload_params_from_frame` reads this to write the reloaded envelope to the OUTER slot
     // and re-derive the payload pointer (`renarrow_union_locals`).
     narrowed_unions: Vec<NarrowedUnion<'ctx>>,
+    // The expression whose OWN lowering is running inside `lower_expr`'s coercion wrapper: its
+    // node lowers against its plain typeck type (`Cg::expr_type`); every other reader sees the
+    // union the value was coerced to.
+    coercion_inner: Option<(usize, usize)>,
     // Counter tracking how many suspending for-loops have been emitted in this SM function.
     // Generates the matching synthetic crossing-local name `__ynz_for_idx_N` that
     // typeck pre-allocates a frame slot for. Must increment in the same order as
@@ -2220,8 +2220,18 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Look up the typeck type for `expr` and apply the current type-param substitution.
+    ///
+    /// An expression typeck coerced into a union slot (`TypedModule::union_coercions`) reads as
+    /// that union: `lower_expr` wraps its value in the tagged envelope, so every consumer of the
+    /// lowered value sees the type of what it got. The expression's own node lowers against the
+    /// plain type (`coercion_inner`).
     fn expr_type(&self, expr: &Expr) -> Type {
         let key = (expr.span().start, expr.span().end);
+        if self.coercion_inner != Some(key) {
+            if let Some(coercion) = self.typed.union_coercions.get(&key) {
+                return self.resolve_type(&coercion.slot);
+            }
+        }
         let raw = self
             .typed
             .expr_types
@@ -3633,7 +3643,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// Read the `data` word (field 1) of a non-null union envelope `{i64 tag, i64 data}`.
     /// For a shape variant these are the `ptr_to_int` bits of the payload's storage
-    /// (union-ctor Let arm); for any other variant they are the value's own i64 bits.
+    /// (`wrap_into_union_envelope`); for any other variant they are the value's own i64 bits.
     ///
     /// The ONE place the envelope's `data` field is read: `union_payload_ptr` (variant
     /// narrowing) and `union_to_heap_cell` (binding promotion) both go through it, so
@@ -3696,18 +3706,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// narrowable binding (typeck applies no overlay then either).
     ///
     /// Typeck still accepts the narrowed binding where the UNION is expected (a union
-    /// parameter, a union return: `can_assign` admits a variant there), and no such
-    /// site wraps a shape into an envelope. Those uses (`union_slot_uses_in_block` over
-    /// `arm_body`) keep the envelope (`narrowed_envelope_use`); handing them the payload
-    /// pointer would make the callee read a 16-byte envelope out of a smaller variant.
+    /// slot: `can_assign` admits a variant there) and records the flow in
+    /// `TypedModule::union_coercions`. Those uses keep the envelope (`narrowed_envelope_use`);
+    /// handing them the payload pointer would make the callee read a 16-byte envelope out of a
+    /// smaller variant.
     ///
-    /// Time: O(n) for n nodes of `arm_body`  Space: O(u) for u envelope uses, plus one
-    /// pointer-sized entry-block slot per arm site
+    /// Time: O(1)  Space: O(1) (one pointer-sized entry-block slot per arm site)
     fn narrow_union_local_to_variant(
         &mut self,
         scrutinee: &Expr,
         envelope: PointerValue<'ctx>,
-        arm_body: &Block,
         site: &str,
     ) -> Result<Option<(String, PointerValue<'ctx>)>, String> {
         let Some(name) = ynz_typeck::check::simple_ident_name(scrutinee) else {
@@ -3723,26 +3731,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_store(narrowed_slot, payload)
             .map_err(|err| format!("{site}: store narrowed payload: {err}"))?;
         self.locals.insert(name.to_string(), narrowed_slot);
-        let ret_ty = self
-            .sm_yinz_ret_ty
-            .clone()
-            .unwrap_or_else(|| self.current_fn_ret_ty.clone());
-        let mut envelope_uses = HashSet::new();
-        union_slot_uses_in_block(
-            arm_body,
-            name,
-            self.sig_table,
-            &self.typed.module,
-            self.shape_table,
-            &self.resolve_type(&ret_ty),
-            &mut envelope_uses,
-        );
         self.narrowed_unions.push(NarrowedUnion {
             name: name.to_string(),
             scrutinee: scrutinee.clone(),
             outer_slot,
             narrowed_slot,
-            envelope_uses,
         });
         Ok(Some((name.to_string(), outer_slot)))
     }
@@ -3793,8 +3786,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// The declared type of parameter `index` of `callee`, resolved. A generic function is not
-    /// in the signature table, so its declaration in this module answers (same lookup as
-    /// `UnionSlotUses::param_is_union`).
+    /// in the signature table, so its declaration in this module answers.
     ///
     /// Time: O(f) for f items in the module  Space: O(1)
     fn callee_param_type(&self, callee: &str, index: usize) -> Option<Type> {
@@ -3827,27 +3819,52 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Whether `expr` is an identifier use that `narrowed_envelope_use` answers with the
-    /// union envelope (an `is` arm's narrowed binding flowing into a union-typed slot).
+    /// union envelope: an `is` arm's narrowed binding that typeck recorded as flowing into a
+    /// union-typed slot (`TypedModule::union_coercions`: the one record of such flows).
     fn is_narrowed_envelope_ident(&self, expr: &Expr) -> bool {
         let Expr::Ident(name, span) = expr else {
             return false;
         };
-        self.narrowed_unions
-            .iter()
-            .rev()
-            .find(|entry| &entry.name == name)
-            .is_some_and(|entry| entry.envelope_uses.contains(&(span.start, span.end)))
+        self.narrowed_use_reuses_envelope(name, (span.start, span.end))
     }
 
-    /// Build the tagged envelope `{i64 tag, i64 data}` for a plain shape variant: `data` is the
-    /// `ptr_to_int` of the payload's storage, exactly what the union-annotated `let` builds. The
-    /// slot is a per-site entry-block alloca (the caller's frame): the callee borrows it for the
-    /// call. Anything that must outlive the frame goes through `union_to_heap_cell` after.
+    /// Whether the use of the narrowed binding `name` at `use_key` can hand the slot the arm's
+    /// OUTER envelope: typeck recorded the use as flowing into a union slot AND that slot is the
+    /// union the arm narrowed. The envelope's tag is a position in ITS union, so a slot union
+    /// that lists the variant at another position (`Thing = Tiny | Big` narrowed to `Big`, into
+    /// a slot `Big | Small`) needs a fresh envelope from the payload, which the ordinary
+    /// coercion builds with the slot's own tag.
+    ///
+    /// Matching `narrowed_unions` by `name` is by binding: `BindingNames::apply` gives a `let`
+    /// that shadows the narrowed name its own codegen name, so a shadow never finds an entry.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(1)
+    fn narrowed_use_reuses_envelope(&self, name: &str, use_key: (usize, usize)) -> bool {
+        let Some(coercion) = self.typed.union_coercions.get(&use_key) else {
+            return false;
+        };
+        let Some(entry) = self
+            .narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+        else {
+            return false;
+        };
+        self.expr_type(&entry.scrutinee) == self.resolve_type(&coercion.slot)
+    }
+
+    /// Build the tagged envelope `{i64 tag, i64 data}`: `data_bits` is the variant's payload
+    /// word — for a shape variant the `ptr_to_int` of the payload's storage, for any other
+    /// variant the value's own i64 bits (`wrap_into_union_envelope` picks which). The slot is a
+    /// per-site entry-block alloca (this function's frame): the callee borrows it for the call.
+    /// Anything that must outlive the frame goes through `union_to_heap_cell` after
+    /// (`home_union_on_heap`).
     ///
     /// Time: O(1)  Space: O(1)
     fn build_union_envelope(
         &self,
-        payload: PointerValue<'ctx>,
+        data_bits: inkwell::values::IntValue<'ctx>,
         tag: u64,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
@@ -3866,38 +3883,176 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .builder
             .build_struct_gep(union_st, slot, 1, &format!("{site}_env_data"))
             .map_err(|err| format!("union envelope data gep {site}: {err}"))?;
-        let payload_bits = self
-            .builder
-            .build_ptr_to_int(payload, self.i64(), &format!("{site}_env_bits"))
-            .map_err(|err| format!("union envelope ptr2int {site}: {err}"))?;
         self.builder
-            .build_store(data_gep, payload_bits)
+            .build_store(data_gep, data_bits)
             .map_err(|err| format!("union envelope data store {site}: {err}"))?;
         Ok(slot)
     }
 
-    /// THE coercion of a lowered value into a union-typed slot (a union parameter or a union
-    /// return) — one decision for every call path and every return path.
+    /// Internal guard behind the teaching refusals of a suspending call's result entering a
+    /// union slot (typeck's `refuse_suspending_result_into_union_let` and `..._return`, and the
+    /// codegen query's `suspending_union_diagnostics` with the effective suspend set): refuse a
+    /// `let` whose value typeck recorded as entering a union slot
+    /// (`TypedModule::union_coercions`) when the state-machine lowering binds that value
+    /// without `lower_expr`, the one coercion point: `let m: Mixed = wait count()` and
+    /// `let m: Mixed = count()` with a suspending `count`. Bound bare, the raw return value
+    /// becomes the envelope pointer and the first `is` arm reads its tag through that
+    /// address. A user program never reaches it; reaching it is a compiler bug.
     ///
-    /// A union with a SHAPE variant is an envelope pointer (`{tag, data}`, null = `nothing`);
-    /// any other union (`map<..> | nothing`) is the raw pointer or null and is never touched
-    /// here. For an envelope union:
-    /// - a plain shape variant is wrapped in a freshly tagged envelope — `Frame` home (the
-    ///   caller's entry-block slot) for an argument the callee only borrows, `Heap`/`Return`
-    ///   home (`union_to_heap_cell`: envelope AND payload in counted heap cells) for anything
-    ///   that outlives this frame: an argument staged into a suspending callee's frame, and a
-    ///   returned value;
-    /// - under `Return` home, a union-typed value is copied to a heap cell too, unless it is a
-    ///   call result (the callee returned a heap cell: every union return promotes, a returned
-    ///   PARAMETER included — its envelope is the caller's Frame slot, which dies with the
-    ///   caller's own frame when the call result is returned onward). Otherwise a callee-built or
-    ///   pass-through envelope would come back as a pointer into a dead frame;
-    /// - an `is` arm's narrowed binding already lowers to its envelope (`narrowed_envelope_use`)
-    ///   and is never re-wrapped.
+    /// Time: O(1)  Space: O(1)
+    fn refuse_unwrapped_suspending_let(&self, name: &str, value: &Expr) -> Result<(), String> {
+        match self.recorded_union_slot(value) {
+            None => Ok(()),
+            Some(slot) => Err(format!(
+                "codegen: `let {name}`: the result of a suspending call reached a `{slot:?}` binding \
+                 unwrapped although typeck refuses that before codegen runs (the call is \
+                 suspending only in the effective suspend set); this is a compiler bug",
+            )),
+        }
+    }
+
+    /// The `return` face of `refuse_unwrapped_suspending_let`: refuse `return <suspending call>`
+    /// whose value typeck recorded as entering the returned union. The state-machine `return`
+    /// stores the call's result in the return slot without `lower_expr`, so the raw result would
+    /// be read back as the envelope pointer (and `to_i64_bits` panics on it, which a user must
+    /// not see as the "compiler bug" box).
     ///
-    /// Time: O(1) + the heap-cell copy under `Heap`/`Return`  Space: O(1) envelope slot
-    /// (`Frame`), two counted heap cells per present value (`Heap`/`Return`)
-    fn coerce_into_union_slot(
+    /// Time: O(1)  Space: O(1)
+    fn refuse_unwrapped_suspending_return(&self, value: &Expr) -> Result<(), String> {
+        match self.recorded_union_slot(value) {
+            None => Ok(()),
+            Some(slot) => Err(format!(
+                "codegen: `return`: the result of a suspending call reached the `{slot:?}` return \
+                 slot unwrapped although typeck and the codegen query refuse that before \
+                 emission; this is a compiler bug",
+            )),
+        }
+    }
+
+    /// The resolved union slot typeck recorded for `value` (`TypedModule::union_coercions`),
+    /// `None` when `value` enters no union slot.
+    ///
+    /// Time: O(1)  Space: O(size of the slot type)
+    fn recorded_union_slot(&self, value: &Expr) -> Option<Type> {
+        let span = value.span();
+        self.typed
+            .union_coercions
+            .get(&(span.start, span.end))
+            .map(|coercion| self.resolve_type(&coercion.slot))
+    }
+
+    /// THE coercion point: wrap the lowered plain value `val` of `expr` in the tagged envelope
+    /// of the union slot typeck recorded for it (`TypedModule::union_coercions`). Called by
+    /// `lower_expr` and nowhere else, so every slot kind typeck records — annotated `let`,
+    /// argument (plain, dot-call, generic, `wait`-staged), `return`, shape field, `.or`
+    /// fallback — wraps here, once, with the same tag derivation.
+    ///
+    /// The envelope lives in this function's frame (a per-site entry-block slot): a callee only borrows it,
+    /// and a binding or field holds the pointer. A value that must outlive the frame is
+    /// promoted afterwards (`home_union_on_heap`). A union with no shape variant never reaches
+    /// here: typeck records only envelope unions (`T | nothing` with a non-shape `T` stays the
+    /// raw pointer).
+    ///
+    /// The payload word: a shape's storage pointer; `int`, `boolean` and `float` as their own
+    /// bits; a `string`, array, map or `number` above 34 digits as the heap pointer. A variant
+    /// whose value does not fit one word without an allocation (`number` up to 34 digits,
+    /// `maybe`, `fixed`, `dynamic`, ...) is refused: an error beats a silent wrong envelope.
+    ///
+    /// Time: O(1)  Space: O(1) envelope slot
+    fn wrap_into_union_envelope(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+        coercion: &ynz_typeck::check::UnionCoercion,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let span = expr.span();
+        let site = format!("coerce_{}_{}", span.start, span.end);
+        let Type::Union { variants } = self.resolve_type(&coercion.slot) else {
+            return Err(format!(
+                "codegen: {site}: typeck recorded a coercion into `{:?}`, which is not a union",
+                coercion.slot
+            ));
+        };
+        let variant = variants
+            .get(coercion.tag)
+            .map(|v| self.resolve_type(v))
+            .ok_or_else(|| {
+                format!(
+                    "codegen: {site}: coercion tag {} is out of range for a union of {} variants",
+                    coercion.tag,
+                    variants.len()
+                )
+            })?;
+        // Internal guard behind typeck's teaching refusal (`record_union_coercion`): both ask
+        // `ynz_typeck::check::envelope_refusal`, so a variant the envelope cannot hold (and a
+        // narrow `number` typeck assigned to a wide `number` variant, whose slot address would
+        // be read as a wide decimal) never reaches the lowering below. Reaching it means typeck's
+        // gate was bypassed or a type parameter resolved to such a variant after typeck ran.
+        let plain_ty = self.resolve_type(
+            &self
+                .typed
+                .expr_types
+                .get(&(span.start, span.end))
+                .cloned()
+                .unwrap_or(Type::Error),
+        );
+        if let Some(refusal) = ynz_typeck::check::envelope_refusal(&variant, &plain_ty) {
+            return Err(format!(
+                "codegen: {site}: a `{plain_ty:?}` value reached a union's `{variant:?}` \
+                 variant ({refusal:?}) although typeck refuses that before codegen runs; this \
+                 is a compiler bug"
+            ));
+        }
+        let bits = match &variant {
+            Type::Shape { .. }
+            | Type::String
+            | Type::BuiltinArray { .. }
+            | Type::Number { precision: 35.. }
+            | Type::BuiltinMap { .. } => self
+                .builder
+                .build_ptr_to_int(
+                    val.into_pointer_value(),
+                    self.i64(),
+                    &format!("{site}_bits"),
+                )
+                .map_err(|err| format!("{site}: ptr2int: {err}"))?,
+            Type::Int => val.into_int_value(),
+            Type::Bool => self
+                .builder
+                .build_int_z_extend(val.into_int_value(), self.i64(), &format!("{site}_bits"))
+                .map_err(|err| format!("{site}: zext: {err}"))?,
+            Type::Float => self
+                .builder
+                .build_bit_cast(val.into_float_value(), self.i64(), &format!("{site}_bits"))
+                .map_err(|err| format!("{site}: bitcast: {err}"))?
+                .into_int_value(),
+            other => {
+                return Err(format!(
+                    "codegen: {site}: a `{other:?}` variant of a union has no envelope lowering \
+                     and `envelope_refusal` does not list it; this is a compiler bug"
+                ))
+            }
+        };
+        Ok(self
+            .build_union_envelope(bits, coercion.tag as u64, &site)?
+            .into())
+    }
+
+    /// Move a union value that must outlive this frame onto counted heap cells
+    /// (`union_to_heap_cell`: envelope AND payload) — #410's heap homes, kept as they are until
+    /// #423 replaces them. Two homes, each costing two counted allocations (envelope + payload
+    /// cell) per present value, freed by no pass yet:
+    /// - `Heap`: an argument staged into a suspending (`wait`ed) callee's frame, when
+    ///   `lower_expr` just wrapped it (a frame slot would die with the resume invocation). A
+    ///   union VALUE passes through: its binding already homed it.
+    /// - `Return`: a `return`ed union value, unless it is a call result (every union return
+    ///   already promoted, so the caller got a heap cell). A union a callee built itself, a
+    ///   returned PARAMETER and a freshly wrapped value all promote.
+    ///
+    /// A non-envelope union (no shape variant) is the raw pointer and passes through.
+    ///
+    /// Time: O(1) + the heap-cell copy  Space: O(1), two counted heap cells per present value
+    fn home_union_on_heap(
         &mut self,
         expr: &Expr,
         val: BasicValueEnum<'ctx>,
@@ -3918,46 +4073,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         {
             return Ok(val);
         }
-        let narrowed = self.is_narrowed_envelope_ident(expr);
-        let source_ty = self.resolve_type(&self.expr_type(expr));
-        match source_ty {
-            Type::Shape { ref name } if !narrowed => {
-                let Some(tag) = variants.iter().position(
-                    |variant| matches!(variant, Type::Shape { name: shape_name } if shape_name == name),
-                ) else {
-                    return Err(format!(
-                        "codegen: `{name}` reaches the union slot `{site}` but is not one of its \
-                         variants; the type checker should have refused this"
-                    ));
-                };
-                let envelope =
-                    self.build_union_envelope(val.into_pointer_value(), tag as u64, site)?;
-                match home {
-                    EnvelopeHome::Frame => Ok(envelope.into()),
-                    EnvelopeHome::Heap | EnvelopeHome::Return => {
-                        Ok(self.union_to_heap_cell(envelope, &variants, site)?.into())
-                    }
-                }
-            }
-            _ => {
-                let is_union_value = narrowed || matches!(source_ty, Type::Union { .. });
-                let already_homed = matches!(
-                    expr,
-                    Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..)
-                );
-                if home == EnvelopeHome::Return && is_union_value && !already_homed {
-                    Ok(self
-                        .union_to_heap_cell(val.into_pointer_value(), &variants, site)?
-                        .into())
-                } else {
-                    Ok(val)
-                }
-            }
+        let span = expr.span();
+        let wrapped_here = self
+            .typed
+            .union_coercions
+            .contains_key(&(span.start, span.end))
+            && !self.is_narrowed_envelope_ident(expr);
+        let is_union_value = matches!(self.expr_type(expr), Type::Union { .. });
+        let already_homed = !wrapped_here
+            && matches!(
+                expr,
+                Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..)
+            );
+        let promote = match home {
+            EnvelopeHome::Heap => wrapped_here,
+            EnvelopeHome::Return => is_union_value && !already_homed,
+        };
+        if promote {
+            Ok(self
+                .union_to_heap_cell(val.into_pointer_value(), &variants, site)?
+                .into())
+        } else {
+            Ok(val)
         }
     }
 
     /// The envelope for the identifier `name` at `span` when that use belongs to an active
-    /// `is`-arm narrowing and flows into a union-typed slot (`NarrowedUnion::envelope_uses`);
+    /// `is`-arm narrowing and flows into a union-typed slot (`TypedModule::union_coercions`);
     /// `None` for every other use, which reads the payload through `cg.locals`.
     ///
     /// Time: O(d) for d nested narrowings  Space: O(1)
@@ -3966,6 +4108,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         name: &str,
         span: &ynz_diagnostics::SourceSpan,
     ) -> Result<Option<PointerValue<'ctx>>, String> {
+        if !self.narrowed_use_reuses_envelope(name, (span.start, span.end)) {
+            return Ok(None);
+        }
         let Some(entry) = self
             .narrowed_unions
             .iter()
@@ -3974,9 +4119,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         else {
             return Ok(None);
         };
-        if !entry.envelope_uses.contains(&(span.start, span.end)) {
-            return Ok(None);
-        }
         let (scrutinee, outer_slot, narrowed_slot) = (
             entry.scrutinee.clone(),
             entry.outer_slot,
@@ -4026,7 +4168,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   - NULL for the `T | nothing` none case (the `is`-none path
     ///     `build_is_null`s the value directly), or
     ///   - a pointer to a `{i64 tag, i64 data}` tagged struct whose `data` holds
-    ///     `ptr_to_int` of the payload shape's storage (union-ctor Let arm).
+    ///     `ptr_to_int` of the payload shape's storage (`wrap_into_union_envelope`).
     ///
     /// The clone preserves BOTH reprs:
     ///   - **null → null**: a heap cell pointer is never null, so cloning a none
@@ -4042,8 +4184,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// BINDING surface only: `value_to_stable_bits` deliberately keeps NO Union
     /// arm (its KNOWN-HOLE doc — the persist surfaces stay loud-fail-pinned
     /// until the union ABI gets one authoritative layout), so this helper is
-    /// reachable only from the two binding funnels (`store_binding`'s Union arm
-    /// and the union-ctor Let arm's crossing branch).
+    /// reachable only from the binding funnel (`store_binding`'s Union arm) and the
+    /// frame-outliving homes (`home_union_on_heap`).
     ///
     /// Time: O(1) + one memcpy of the selected variant's ABI size  Space: O(1)
     /// (two heap cells per present value; zero for a none)
@@ -4927,6 +5069,7 @@ fn lower_function<'ctx, 'g>(
         sm_crossing_shape_allocas: HashMap::new(),
         sm_scope_depth: 0,
         narrowed_unions: Vec::new(),
+        coercion_inner: None,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
         // Non-SM functions cannot contain independent suspending groups.
@@ -5439,6 +5582,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
         narrowed_unions: Vec::new(),
+        coercion_inner: None,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
         // When set, lower_sm_block skips independence analysis and lowers all stmts
@@ -5542,9 +5686,9 @@ fn lower_function_with_waits<'ctx, 'g>(
             // union-ANNOTATED crossing local's RHS types as the CONCRETE variant shape
             // (`let fig: Figure = s` types as `Square`), which would misclassify the
             // binding into `shape_embed_set` — but its storage is the union {tag,data}
-            // heap cell (bind-time promotion in the union-ctor Let arm), never
+            // heap cell (bind-time promotion in `store_binding`), never
             // embeddable shape bytes. Resolve the Let's annotation through the SAME
-            // finder the typeck guards use and the SAME resolver the union-ctor arm
+            // finder the typeck guards use and the SAME resolver the annotated `let`
             // uses (`ast_type_to_typeck_type` — one source, no twin); a Union
             // annotation routes the binding to the pointer-alloca strategy (the
             // default arm below), same as maybe.
@@ -7574,9 +7718,10 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // `let name = wait suspendingCallee(args)` — bind the return value.
         Stmt::Let {
             name,
-            value: Expr::Wait(inner, _),
+            value: let_value @ Expr::Wait(inner, _),
             ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_let(name, let_value)?;
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -7609,6 +7754,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         Stmt::Let {
             name, value: inner, ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_let(name, inner)?;
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -7685,6 +7831,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         Stmt::Return {
             value: Some(inner), ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_return(inner)?;
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -8696,7 +8843,6 @@ fn lower_sm_match<'ctx, 'g>(
             cg.narrow_union_local_to_variant(
                 scrutinee,
                 scrutinee_val.into_pointer_value(),
-                &arm.body,
                 "sm_is_arm",
             )?
         } else {
@@ -12634,19 +12780,15 @@ fn stage_suspending_call_arg_bits<'ctx>(
     }
     let mut arg_val = lower_expr(cg, arg)?;
     let mut arg_ty = cg.expr_type(arg);
-    // 3. A plain shape for a UNION parameter: the staged bits must name a tagged envelope that
-    //    survives the parent's suspension, so the envelope and payload live in counted heap
-    //    cells (`coerce_into_union_slot`, `Heap` home) — a frame slot would die with the resume
+    // 3. A plain value for a UNION parameter: `lower_expr` wrapped it in a tagged envelope in
+    //    this resume function's frame. The staged bits must name an envelope that survives the
+    //    parent's suspension, so the envelope and payload move to counted heap cells
+    //    (`home_union_on_heap`, `Heap` home) — a frame slot would die with the resume
     //    invocation.
     if let Some(param_ty) = param_ty {
         if matches!(param_ty, Type::Union { .. }) {
-            arg_val = cg.coerce_into_union_slot(
-                arg,
-                arg_val,
-                &param_ty,
-                EnvelopeHome::Heap,
-                "sm_union_arg",
-            )?;
+            arg_val =
+                cg.home_union_on_heap(arg, arg_val, &param_ty, EnvelopeHome::Heap, "sm_union_arg")?;
             arg_ty = param_ty;
         }
     }
@@ -14225,11 +14367,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         }
 
         Stmt::Let {
-            name,
-            ty: ann_ty,
-            value,
-            span,
-            ..
+            name, value, span, ..
         } => {
             // v0.3-M4 Phase 2: `let h = background fn(...)` — the handle-form spawn.
             // Compile-time spawn-form keying (R8): only THIS let-bound form routes to
@@ -14260,174 +14398,89 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 lower_expr(cg, value)?
             };
 
-            // M6: when annotation is a union type and value is a concrete shape variant,
-            // construct a tagged-struct { i64 tag, i64 data } on the stack.
-            let union_constructed = 'union_ctor: {
-                if let Some(ast_ann) = ann_ty.as_ref() {
-                    let resolved_ann = ast_type_to_typeck_type(ast_ann, cg.shape_table);
-                    if let Type::Union { ref variants } = resolved_ann {
-                        if let Type::Shape {
-                            name: ref shape_name,
-                        } = val_ty
-                        {
-                            let tag = variants.iter().position(|v| {
-                                if let Type::Shape { name } = v {
-                                    name == shape_name
-                                } else {
-                                    false
-                                }
-                            });
-                            if let Some(tag_idx) = tag {
-                                let union_st = cg
-                                    .ctx
-                                    .struct_type(&[cg.i64().into(), cg.i64().into()], false);
-                                let union_slot = cg
-                                    .builder
-                                    .build_alloca(union_st, &format!("{name}_union"))
-                                    .map_err(|e| format!("{e}"))?;
-                                let tag_gep = cg
-                                    .builder
-                                    .build_struct_gep(union_st, union_slot, 0, "u_tag")
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(tag_gep, cg.i64().const_int(tag_idx as u64, false))
-                                    .map_err(|e| format!("{e}"))?;
-                                let data_gep = cg
-                                    .builder
-                                    .build_struct_gep(union_st, union_slot, 1, "u_data")
-                                    .map_err(|e| format!("{e}"))?;
-                                let ptr_as_i64 = cg
-                                    .builder
-                                    .build_ptr_to_int(val.into_pointer_value(), cg.i64(), "ptr2i")
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(data_gep, ptr_as_i64)
-                                    .map_err(|e| format!("{e}"))?;
-                                // v0.3-M6 Phase 1c step 3c (FRAGOs 006/007/013): a
-                                // CROSSING union binding must not keep the STACK tagged
-                                // struct — the resume fn's stack dies on every Pending
-                                // return, so a suspending callee's tag read dangles
-                                // (fixture `v0_3_m6_union_arg_pure_call.ynz`: `circle`
-                                // vs `square`). Promote envelope + payload to counted
-                                // heap cells and store the cell into the PRE-CREATED
-                                // sm_entry crossing alloca — never a fresh `outer_slot`,
-                                // which would orphan the alloca the flush/reload
-                                // machinery reads (and, being created in a state block,
-                                // would violate LLVM SSA dominance across states).
-                                let is_sm_crossing = cg
-                                    .sm_crossing_names
-                                    .as_ref()
-                                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
-                                if is_sm_crossing {
-                                    let cell = cg.union_to_heap_cell(union_slot, variants, name)?;
-                                    let slot = *cg.locals.get(name.as_str()).ok_or_else(|| {
-                                        format!("sm crossing alloca for `{name}` missing in entry")
-                                    })?;
-                                    cg.builder
-                                        .build_store(slot, cell)
-                                        .map_err(|e| format!("{e}"))?;
-                                } else {
-                                    let outer_slot = cg
-                                        .builder
-                                        .build_alloca(cg.ptr(), name)
-                                        .map_err(|e| format!("{e}"))?;
-                                    cg.builder
-                                        .build_store(outer_slot, union_slot)
-                                        .map_err(|e| format!("{e}"))?;
-                                    cg.locals.insert(name.clone(), outer_slot);
-                                }
-                                break 'union_ctor true;
-                            }
-                        }
-                    }
-                }
-                false
+            // When inside a SM resume function and this name is a crossing local,
+            // the alloca was pre-created in the sm_entry block (LLVM SSA dominance
+            // requires allocas to be in the entry block). Reuse that alloca instead
+            // of creating a new one in the current state block.
+            //
+            // A nested `let` that reuses a crossing local's user name is a different
+            // binding with a different codegen name (`TypedModule::binding_names`), so
+            // `name` below is crossing only when THIS declaration is the crossing one.
+            let is_sm_crossing = cg
+                .sm_crossing_names
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
+            let slot = if is_sm_crossing {
+                // Crossing local: reuse the pre-created sm_entry alloca regardless of
+                // nesting depth. LLVM SSA dominance requires allocas to be in the entry
+                // block; the sm_entry alloca dominates all state blocks. Codegen names are
+                // unique per binding (`TypedModule::binding_names`), so any `let name`
+                // here is the first and only definition of that crossing local.
+                *cg.locals
+                    .get(name.as_str())
+                    .ok_or_else(|| format!("sm crossing alloca for `{name}` missing in entry"))?
+            } else {
+                // Not a crossing local: alloca in the ENTRY block so it dominates all
+                // successor blocks. Yinz allows variable shadowing (design/linting.md
+                // `shadowed-variables` lint); a shadow `let x` inside an if/while body
+                // is a separate LLVM basic block — its alloca must be in the entry block
+                // or LLVM rejects the IR with "Instruction does not dominate all uses!".
+                // The outer binding is restored to cg.locals on scope exit (restore-all
+                // protocol), so the shadow has no lasting effect outside its own scope.
+                let s = cg.alloca_in_entry(&val_ty, name)?;
+                cg.locals.insert(name.clone(), s);
+                s
             };
-            if !union_constructed {
-                // When inside a SM resume function and this name is a crossing local,
-                // the alloca was pre-created in the sm_entry block (LLVM SSA dominance
-                // requires allocas to be in the entry block). Reuse that alloca instead
-                // of creating a new one in the current state block.
-                //
-                // A nested `let` that reuses a crossing local's user name is a different
-                // binding with a different codegen name (`TypedModule::binding_names`), so
-                // `name` below is crossing only when THIS declaration is the crossing one.
-                let is_sm_crossing = cg
-                    .sm_crossing_names
-                    .as_ref()
-                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
-                let slot = if is_sm_crossing {
-                    // Crossing local: reuse the pre-created sm_entry alloca regardless of
-                    // nesting depth. LLVM SSA dominance requires allocas to be in the entry
-                    // block; the sm_entry alloca dominates all state blocks. Codegen names are
-                    // unique per binding (`TypedModule::binding_names`), so any `let name`
-                    // here is the first and only definition of that crossing local.
-                    *cg.locals.get(name.as_str()).ok_or_else(|| {
-                        format!("sm crossing alloca for `{name}` missing in entry")
-                    })?
-                } else {
-                    // Not a crossing local: alloca in the ENTRY block so it dominates all
-                    // successor blocks. Yinz allows variable shadowing (design/linting.md
-                    // `shadowed-variables` lint); a shadow `let x` inside an if/while body
-                    // is a separate LLVM basic block — its alloca must be in the entry block
-                    // or LLVM rejects the IR with "Instruction does not dominate all uses!".
-                    // The outer binding is restored to cg.locals on scope exit (restore-all
-                    // protocol), so the shadow has no lasting effect outside its own scope.
-                    let s = cg.alloca_in_entry(&val_ty, name)?;
-                    cg.locals.insert(name.clone(), s);
-                    s
+            // Shape crossing local: val is a PointerValue to a temp stack struct (from
+            // lower_struct_lit). The slot is a ptr alloca pre-wired to the frame's slot
+            // region (Step 1b). Memcpy from the temp into the frame region by loading the
+            // frame region ptr from the ptr alloca and memcpy-ing into it. Works at any
+            // nesting depth — the ptr alloca is always the sm_entry one.
+            let stored = if is_sm_crossing
+                && matches!(val_ty, Type::Shape { .. })
+                && cg.sm_crossing_shape_embed_set.contains(name.as_str())
+            {
+                let shape_name = match &val_ty {
+                    Type::Shape { name: sn } => sn.clone(),
+                    _ => unreachable!(),
                 };
-                // Shape crossing local: val is a PointerValue to a temp stack struct (from
-                // lower_struct_lit). The slot is a ptr alloca pre-wired to the frame's slot
-                // region (Step 1b). Memcpy from the temp into the frame region by loading the
-                // frame region ptr from the ptr alloca and memcpy-ing into it. Works at any
-                // nesting depth — the ptr alloca is always the sm_entry one.
-                let stored = if is_sm_crossing
-                    && matches!(val_ty, Type::Shape { .. })
-                    && cg.sm_crossing_shape_embed_set.contains(name.as_str())
-                {
-                    let shape_name = match &val_ty {
-                        Type::Shape { name: sn } => sn.clone(),
-                        _ => unreachable!(),
-                    };
-                    if cg.shape_types.get(&shape_name).is_some() {
-                        let src_ptr = val.into_pointer_value();
-                        // Copy size from the ONE authoritative shape-size source
-                        // (`shape_abi_sizes` via `shape_abi_size_const`) — the
-                        // FRAGO 010 twin (`struct_ty.size_of()` + zext) unified
-                        // away (P3 step 5(c), authoritative-derivation §1).
-                        let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
-                        // Load the frame region ptr from the ptr alloca (pre-wired to frame
-                        // in Step 1b). Memcpy from the temp stack alloca into the frame region.
-                        let dest_ptr = cg
-                            .builder
-                            .build_load(
-                                cg.ctx.ptr_type(AddressSpace::default()),
-                                slot,
-                                &format!("{name}_frame_ptr"),
-                            )
-                            .map_err(|e| format!("sm shape let load frame ptr {name}: {e}"))?
-                            .into_pointer_value();
-                        cg.builder
-                            .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
-                            .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
-                        true
-                    } else {
-                        false
-                    }
+                if cg.shape_types.get(&shape_name).is_some() {
+                    let src_ptr = val.into_pointer_value();
+                    // Copy size from the ONE authoritative shape-size source
+                    // (`shape_abi_sizes` via `shape_abi_size_const`) — the
+                    // FRAGO 010 twin (`struct_ty.size_of()` + zext) unified
+                    // away (P3 step 5(c), authoritative-derivation §1).
+                    let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
+                    // Load the frame region ptr from the ptr alloca (pre-wired to frame
+                    // in Step 1b). Memcpy from the temp stack alloca into the frame region.
+                    let dest_ptr = cg
+                        .builder
+                        .build_load(
+                            cg.ctx.ptr_type(AddressSpace::default()),
+                            slot,
+                            &format!("{name}_frame_ptr"),
+                        )
+                        .map_err(|e| format!("sm shape let load frame ptr {name}: {e}"))?
+                        .into_pointer_value();
+                    cg.builder
+                        .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
+                        .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
+                    true
                 } else {
                     false
-                };
-                if !stored {
-                    // Binding funnel: shape/maybe values copy their bytes into
-                    // variable-owned storage here (get-side ownership contract —
-                    // see store_binding); everything else stores as before.
-                    store_binding(cg, val, &val_ty, slot, name)?;
                 }
-                // M7 P4a: track bindings that hold errors-capable results.
-                if matches!(val_ty, Type::ErrorsCapable { .. }) {
-                    cg.errors_capable_locals.insert(name.clone());
-                }
+            } else {
+                false
+            };
+            if !stored {
+                // Binding funnel: shape/maybe values copy their bytes into
+                // variable-owned storage here (get-side ownership contract —
+                // see store_binding); everything else stores as before.
+                store_binding(cg, val, &val_ty, slot, name)?;
+            }
+            // M7 P4a: track bindings that hold errors-capable results.
+            if matches!(val_ty, Type::ErrorsCapable { .. }) {
+                cg.errors_capable_locals.insert(name.clone());
             }
         }
 
@@ -14767,7 +14820,6 @@ fn lower_stmt_match<'ctx>(
             cg.narrow_union_local_to_variant(
                 scrutinee,
                 scrutinee_val.into_pointer_value(),
-                &arm.body,
                 "is_arm",
             )?
         } else {
@@ -15573,9 +15625,9 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 let mut val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
                 // A union return carries a tagged envelope that outlives this resume
-                // invocation (`coerce_into_union_slot`, `Return` home).
+                // invocation (`home_union_on_heap`, `Return` home).
                 if let Some(union_ty) = cg.union_return_slot_ty() {
-                    val = cg.coerce_into_union_slot(
+                    val = cg.home_union_on_heap(
                         expr,
                         val,
                         &union_ty,
@@ -15770,7 +15822,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                     })?
                                             }
                                             // String, Array, Map: heap-allocated (global
-                                            // literals or ynz_alloc). Union: `coerce_into_union_slot`
+                                            // literals or ynz_alloc). Union: `home_union_on_heap`
                                             // above already put an envelope union's envelope and
                                             // payload in counted heap cells (a raw-pointer union is
                                             // heap-backed like Map). The pointer survives resume fn
@@ -15974,9 +16026,9 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 let mut val = lower_expr(cg, expr)?;
                 let mut val_ty = cg.expr_type(expr);
                 // A union success value's envelope must not live in this frame
-                // (`coerce_into_union_slot`, `Return` home); the coerced value IS a union.
+                // (`home_union_on_heap`, `Return` home); the coerced value IS a union.
                 if let Some(union_ty) = cg.union_return_slot_ty() {
-                    val = cg.coerce_into_union_slot(
+                    val = cg.home_union_on_heap(
                         expr,
                         val,
                         &union_ty,
@@ -16049,16 +16101,11 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         Some(expr) => {
             let mut val = lower_expr(cg, expr)?;
             // A union return is a pointer to a tagged envelope that must outlive this frame
-            // (`coerce_into_union_slot`, `Return` home): never a bare shape, never a slot in
+            // (`home_union_on_heap`, `Return` home): never a bare shape, never a slot in
             // the frame that is about to die.
             if let Some(union_ty) = cg.union_return_slot_ty() {
-                val = cg.coerce_into_union_slot(
-                    expr,
-                    val,
-                    &union_ty,
-                    EnvelopeHome::Return,
-                    "union_ret",
-                )?;
+                val =
+                    cg.home_union_on_heap(expr, val, &union_ty, EnvelopeHome::Return, "union_ret")?;
             }
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
@@ -16239,211 +16286,32 @@ fn channel_drop_glue<'ctx>(
     Ok(glue_fn.as_global_value().as_pointer_value())
 }
 
-/// Collect the spans of every use of the narrowed binding `name` in `block` that typeck
-/// accepts into a UNION-typed slot: an argument whose callee parameter is a union (a plain,
-/// `wait`ed or `background` call, or a UFCS call's extra argument) and a `return` value
-/// when the function returns a union. Inside an `is` arm those uses must get the envelope,
-/// not the payload pointer (`Cg::narrow_union_local_to_variant`).
-///
-/// O(n * f) time for n AST nodes in `block` and f items in the module (a generic callee's
-/// declaration is looked up by scanning the module); O(u) memory for u matching uses.
-fn union_slot_uses_in_block(
-    block: &Block,
-    name: &str,
-    sig_table: &SignatureTable,
-    module: &ynz_ast::nodes::Module,
-    shape_table: &ShapeTable,
-    fn_ret_ty: &Type,
-    uses: &mut HashSet<(usize, usize)>,
-) {
-    let mut walker = UnionSlotUses {
-        name,
-        sig_table,
-        module,
-        shape_table,
-        returns_union: matches!(fn_ret_ty, Type::Union { .. }),
-        uses,
-    };
-    walker.block(block);
-}
-
-/// The walk behind `union_slot_uses_in_block`.
-struct UnionSlotUses<'walk> {
-    name: &'walk str,
-    sig_table: &'walk SignatureTable,
-    module: &'walk ynz_ast::nodes::Module,
-    shape_table: &'walk ShapeTable,
-    returns_union: bool,
-    uses: &'walk mut HashSet<(usize, usize)>,
-}
-
-impl UnionSlotUses<'_> {
-    fn note_if_union_slot(&mut self, value: &Expr, slot_is_union: bool) {
-        if let Expr::Ident(used, span) = value {
-            if slot_is_union && used == self.name {
-                self.uses.insert((span.start, span.end));
-            }
-        }
-    }
-
-    /// Whether parameter `index` of `callee` is declared with a union type. A generic
-    /// function is not in the signature table, so its declaration in this module answers.
-    fn param_is_union(&self, callee: &str, index: usize) -> bool {
-        let declared = match self.sig_table.fns.get(callee) {
-            Some(sig) => sig.params.get(index).map(|(_, param_ty)| param_ty.clone()),
-            None => self.module.items.iter().find_map(|item| match item {
-                Item::Function(function) if function.name == callee => function
-                    .params
-                    .get(index)
-                    .map(|param| ast_type_to_typeck_type(&param.ty, self.shape_table)),
-                _ => None,
-            }),
-        };
-        matches!(declared, Some(Type::Union { .. }))
-    }
-
-    fn block(&mut self, block: &Block) {
-        for stmt in &block.stmts {
-            self.stmt(stmt);
-        }
-    }
-
-    fn stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Expr(value) | Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-                self.expr(value)
-            }
-            Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
-                self.expr(cond);
-                self.block(body);
-            }
-            Stmt::Match {
-                scrutinee,
-                arms,
-                else_arm,
-                ..
-            } => {
-                self.expr(scrutinee);
-                for arm in arms {
-                    if let MatchPatternKind::Value(pattern) = &arm.pattern.kind {
-                        self.expr(pattern);
-                    }
-                    self.block(&arm.body);
-                }
-                if let Some(else_block) = else_arm {
-                    self.block(else_block);
-                }
-            }
-            Stmt::For { iter, body, .. } => {
-                self.expr(iter);
-                self.block(body);
-            }
-            Stmt::Return { value, .. } => {
-                if let Some(value) = value {
-                    self.note_if_union_slot(value, self.returns_union);
-                    self.expr(value);
-                }
-            }
-            Stmt::FieldAssign { target, value, .. } => {
-                self.expr(target);
-                self.expr(value);
-            }
-            Stmt::IndexAssign {
-                receiver,
-                index,
-                value,
-                ..
-            } => {
-                self.expr(receiver);
-                self.expr(index);
-                self.expr(value);
-            }
-        }
-    }
-
-    fn expr(&mut self, expr: &Expr) {
-        match expr {
-            Expr::Call(call) => {
-                if let Expr::Ident(callee, _) = &call.callee {
-                    for (index, arg) in call.args.iter().enumerate() {
-                        let slot_is_union = self.param_is_union(callee, index);
-                        self.note_if_union_slot(arg, slot_is_union);
-                    }
-                } else {
-                    self.expr(&call.callee);
-                }
-                for arg in &call.args {
-                    self.expr(arg);
-                }
-            }
-            Expr::MethodCall {
-                receiver,
-                method,
-                args,
-                ..
-            } => {
-                // UFCS: `receiver.method(args)` is `method(receiver, args)`.
-                let receiver_is_union = self.param_is_union(method, 0);
-                self.note_if_union_slot(receiver, receiver_is_union);
-                self.expr(receiver);
-                for (index, arg) in args.iter().enumerate() {
-                    let slot_is_union = self.param_is_union(method, index + 1);
-                    self.note_if_union_slot(arg, slot_is_union);
-                    self.expr(arg);
-                }
-            }
-            Expr::Ident(..)
-            | Expr::StringLit(..)
-            | Expr::Error(..)
-            | Expr::IntLit(..)
-            | Expr::NumberLit(..)
-            | Expr::BoolLit(..)
-            | Expr::SelfValue { .. }
-            | Expr::NoneLit { .. } => {}
-            Expr::BinOp { lhs, rhs, .. } => {
-                self.expr(lhs);
-                self.expr(rhs);
-            }
-            Expr::UnaryOp { operand, .. } => self.expr(operand),
-            Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
-                self.expr(receiver)
-            }
-            Expr::StructLit { fields, .. } => {
-                for field in fields {
-                    self.expr(&field.value);
-                }
-            }
-            Expr::IndexAccess {
-                receiver, index, ..
-            } => {
-                self.expr(receiver);
-                self.expr(index);
-            }
-            Expr::ArrayLit { elements, .. } => {
-                for element in elements {
-                    self.expr(element);
-                }
-            }
-            Expr::MapLit { entries, .. } => {
-                for (key, value) in entries {
-                    self.expr(key);
-                    self.expr(value);
-                }
-            }
-            Expr::Is { expr, .. } => self.expr(expr),
-            Expr::InterpolatedString(parts, _) => {
-                for part in parts {
-                    if let StringPart::Expr(inner, _) = part {
-                        self.expr(inner);
-                    }
-                }
-            }
-            Expr::Wait(inner, _) | Expr::Background(inner, _) => self.expr(inner),
-        }
-    }
-}
-
+/// Lower `expr` to its value — THE one place a plain value entering a union-typed slot is
+/// wrapped. Typeck records every such flow (`TypedModule::union_coercions`: annotated `let`,
+/// argument, `return`, shape field, `.or` fallback); the node lowers against its own plain type
+/// (`Cg::coercion_inner`), then `wrap_into_union_envelope` makes the tagged envelope, so every
+/// consumer of the result sees the union (`Cg::expr_type`). An `is` arm's narrowed binding
+/// already lowers to its envelope and is not wrapped again.
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    let span = expr.span();
+    let key = (span.start, span.end);
+    let Some(coercion) = cg.typed.union_coercions.get(&key).cloned() else {
+        return lower_expr_node(cg, expr);
+    };
+    let outer = cg.coercion_inner.replace(key);
+    let lowered = lower_expr_node(cg, expr);
+    cg.coercion_inner = outer;
+    let val = lowered?;
+    if cg.is_narrowed_envelope_ident(expr) {
+        return Ok(val);
+    }
+    cg.wrap_into_union_envelope(expr, val, &coercion)
+}
+
+fn lower_expr_node<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
         Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
 
@@ -16958,19 +16826,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         format!("codegen: function `{effective_name}` not found in module")
                     })?;
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
-                    for (index, arg) in call.args.iter().enumerate() {
-                        let mut val = lower_expr(cg, arg)?;
-                        // A plain shape for a union parameter travels as a tagged envelope
-                        // in this frame (`coerce_into_union_slot`).
-                        if let Some(param_ty) = cg.callee_param_type(name, index) {
-                            val = cg.coerce_into_union_slot(
-                                arg,
-                                val,
-                                &param_ty,
-                                EnvelopeHome::Frame,
-                                &format!("{name}_arg{index}"),
-                            )?;
-                        }
+                    for arg in call.args.iter() {
+                        let val = lower_expr(cg, arg)?;
                         call_args.push(val.into());
                     }
                     // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
@@ -20239,19 +20096,8 @@ fn lower_ufcs_call<'ctx>(
         .ok_or_else(|| format!("codegen UFCS: function `{}` not found in module", method))?;
 
     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
-    for (index, arg) in extra_args.iter().enumerate() {
-        let mut arg_val = lower_expr(cg, arg)?;
-        // A plain shape for a union parameter travels as a tagged envelope in this frame
-        // (`coerce_into_union_slot`); parameter 0 is the receiver.
-        if let Some(param_ty) = cg.callee_param_type(method, index + 1) {
-            arg_val = cg.coerce_into_union_slot(
-                arg,
-                arg_val,
-                &param_ty,
-                EnvelopeHome::Frame,
-                &format!("{method}_ufcs_arg{}", index + 1),
-            )?;
-        }
+    for arg in extra_args.iter() {
+        let arg_val = lower_expr(cg, arg)?;
         args.push(arg_val.into());
     }
 

@@ -7,10 +7,10 @@
 //! and the field are accepted by the checker there too (the binding is typed as the union), and
 //! the build only stops later on an unrelated `values do not have fields` error.
 //!
-//! Test count: 8, the "about 8" High-tier budget — one per slot class and call form the one
-//! directional check serves (plain, dot-call and generic argument; a plain shape into a union-bound
-//! type parameter; return; `let` + field together) plus the legal flows it must keep (run at two
-//! optimization levels).
+//! Test count: 7, the "about 8" High-tier budget — one per slot class and call form the one
+//! directional check serves (plain, dot-call and generic argument; return; `let` + field
+//! together) plus the legal flows it must keep (run at two optimization levels). A plain shape
+//! for a union-bound type parameter is covered by `v03_m9_union_coerce`.
 
 use std::path::Path;
 use std::process::Command;
@@ -108,29 +108,6 @@ fn v03_m9_union_into_variant_generic_call_argument_is_rejected() {
             "`useBig` expects a `Big` here",
         ],
     );
-}
-
-#[test]
-fn v03_m9_plain_shape_into_type_parameter_bound_to_union_is_rejected() {
-    // WHY: `same(thing, big)` binds `T` to the union; codegen wraps only declared union
-    // parameters, so `big` reached the callee unwrapped and read as the wrong variant (`none`).
-    let compiled = compile("v0_3_m9_union_generic_param_plain_shape.ynz");
-    assert!(
-        !compiled.success,
-        "a plain shape reached a union-bound type parameter and compiled:\n{}",
-        compiled.diagnostics
-    );
-    for fragment in [
-        "`big` is a `Big`",
-        "which this call makes a `Tiny | Big`",
-        "let asUnion: Tiny | Big = big",
-    ] {
-        assert!(
-            compiled.diagnostics.contains(fragment),
-            "diagnostic must contain {fragment:?}; got:\n{}",
-            compiled.diagnostics
-        );
-    }
 }
 
 #[test]

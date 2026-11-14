@@ -241,6 +241,7 @@ fn check_query_cycle_initial(
             back_edge_yield_admitted: std::collections::HashSet::new(),
             background_arg_inferred_ownership: std::collections::HashMap::new(),
             background_arg_sole_holder: std::collections::HashMap::new(),
+            union_coercions: std::collections::HashMap::new(),
             cross_thread_padded_shapes: std::collections::HashSet::new(),
             binding_names: crate::binding_names::BindingNames::default(),
             transfers: Default::default(),

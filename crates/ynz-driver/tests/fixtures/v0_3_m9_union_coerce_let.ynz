@@ -1,0 +1,47 @@
+// v0.3-M9 C1e (#421): an annotated `let` of a union type takes a plain value of any variant:
+// a shape variant (call result, loop body) AND a NON-shape variant (`int`).
+// Variants that are not shapes are matched with `else =>`: an `is int =>` arm does not lower
+// (#418, deferred).
+// Correct behavior: prints `circle`, `other`, `circle`, `circle`, `other`, `end`; clean under
+// AddressSanitizer at both optimization levels.
+// Pre-fix failure: `let n: Mixed = 5` kept the raw int as the envelope pointer — SIGSEGV on the
+// first read of its tag (address 0x5).
+
+shape Circle {
+  radius: float
+}
+shape Mixed = Circle | int
+
+function show(share fig: Mixed) -> string {
+  if (fig) {
+    is Circle => {
+      return `circle`
+    }
+    else => {
+      return `other`
+    }
+  }
+}
+
+function makeCircle() -> Circle {
+  let made: Circle = { radius: 1.0 }
+  return made
+}
+
+function entrypoint() -> nothing {
+  let circle: Circle = { radius: 2.0 }
+  let number: Mixed = 5
+  print(show(circle))
+  print(show(number))
+  let fromCall: Mixed = makeCircle()
+  print(show(fromCall))
+  let count = 0
+  while (count < 2) {
+    let again: Mixed = circle
+    let plain: Mixed = count
+    print(show(again))
+    print(show(plain))
+    count = count + 1
+  }
+  print(`end`)
+}

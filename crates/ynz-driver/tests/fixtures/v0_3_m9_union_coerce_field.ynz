@@ -1,0 +1,63 @@
+// v0.3-M9 C1e (#421): a plain shape stored in a UNION-typed shape FIELD must be wrapped in a
+// tagged envelope, whether the field is set by a struct literal or read back through a dot.
+// `Tiny` is a 1-byte variant, so reading it as the 16-byte envelope is out of bounds.
+// Correct behavior: prints the variant that was stored (`tiny`, `big hello`, `big world`), clean
+// under AddressSanitizer at both optimization levels.
+// Pre-fix failure: the field held the bare shape pointer; `describe` read it as `{tag, data}`:
+// wrong variant / SIGSEGV, and an AddressSanitizer stack-buffer-overflow READ past `Tiny`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+shape Reversed = Big | Tiny
+
+shape Holder {
+  inner: Tiny | Big
+}
+shape Flipped {
+  inner: Big | Tiny
+}
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function describeReversed(share t: Reversed) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let big: Big = { label: `hello`, count: 3 }
+  let holder: Holder = { inner: tiny }
+  print(describe(holder.inner))
+  let bigHolder: Holder = { inner: big }
+  print(describe(bigHolder.inner))
+  let flipped: Flipped = { inner: big }
+  print(describeReversed(flipped.inner))
+  let other: Big = { label: `world`, count: 4 }
+  let second: Flipped = { inner: other }
+  print(describeReversed(second.inner))
+  print(`end`)
+}
