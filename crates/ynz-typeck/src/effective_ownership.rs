@@ -309,6 +309,8 @@ pub(crate) fn value_like(ty: &Type) -> bool {
                 | Type::Bool
                 | Type::Number { .. }
                 | Type::String
+                // A range is its start and end; `owned_copy_plan` calls its copy the receiver's bits.
+                | Type::Range { .. }
                 | Type::Options { .. }
                 | Type::Nothing
                 | Type::Error
@@ -2639,5 +2641,66 @@ function entrypoint() -> nothing { }
             receiver_kind_ownership(&ReceiverKind::Share),
             EffectiveOwnership::Reads
         );
+    }
+}
+
+#[cfg(test)]
+mod value_like_parity {
+    use super::value_like;
+    use crate::owned_copy::{owned_copy_plan, OwnedCopy};
+    use crate::types::Type;
+
+    /// (High) `value_like` is "storing it hands nothing over", the question `owned_copy_plan`
+    /// answers with "the receiver's bits ARE the copy" (`ReceiverIsCopy`) or immutable contents
+    /// with nothing to free (`FrameLocalImmutable`). Two answers to one question drift (the
+    /// `range` store refusal was exactly that drift), so every type the copy table calls bits
+    /// must be bits here too.
+    #[test]
+    fn every_type_the_copy_table_calls_bits_is_value_like() {
+        let string = Type::String;
+        let samples = [
+            Type::Int,
+            Type::Float,
+            Type::Bool,
+            Type::String,
+            Type::Number { precision: 34 },
+            Type::Options {
+                name: "Color".to_string(),
+            },
+            Type::Range {
+                element: Box::new(Type::Int),
+                end_inclusive: false,
+            },
+            Type::Sensitive {
+                inner: Box::new(string.clone()),
+            },
+            Type::Maybe {
+                inner: Box::new(string),
+            },
+        ];
+        for sample in &samples {
+            let copy_is_bits = matches!(
+                owned_copy_plan(sample),
+                OwnedCopy::ReceiverIsCopy | OwnedCopy::FrameLocalImmutable { .. }
+            );
+            if copy_is_bits {
+                assert!(
+                    value_like(sample),
+                    "{sample:?}: its copy is the receiver's bits, so storing it must hand nothing over"
+                );
+            }
+        }
+    }
+
+    /// (High) The other direction: a type that owns heap storage is handed over when stored.
+    #[test]
+    fn a_heap_type_is_not_value_like() {
+        let array_of_ints = Type::BuiltinArray {
+            elem: Box::new(Type::Int),
+        };
+        assert!(!value_like(&array_of_ints));
+        assert!(!value_like(&Type::Shape {
+            name: "Order".to_string()
+        }));
     }
 }

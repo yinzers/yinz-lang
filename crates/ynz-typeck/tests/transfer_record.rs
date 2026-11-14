@@ -542,7 +542,30 @@ fn storing_a_sensitive_string_hands_nothing_over() {
     );
 }
 
-const EAT2: &str = "function eat_all(give rows: array<array<int>>) -> nothing {
+/// (High) A `range` is its start and end and nothing can change them: `owned_copy_plan` calls its
+/// copy the receiver's bits, so storing one hands nothing over. `let s = r` then `for (i in r)`
+/// is a valid program, and a range stored in a container stays readable.
+#[test]
+fn storing_a_range_hands_nothing_over() {
+    assert_accepted(
+        "function f() -> int {
+  let r = range(0, 3)
+  let s = r
+  let ranges: array<range> = []
+  ranges.add(r)
+  let total = 0
+  for (i in r) {
+    total = total + i
+  }
+  for (j in s) {
+    total = total + j
+  }
+  return total + ranges.count()
+}",
+    );
+}
+
+const EAT2: &str ="function eat_all(give rows: array<array<int>>) -> nothing {
   print(rows.count().toString())
 }\n";
 
