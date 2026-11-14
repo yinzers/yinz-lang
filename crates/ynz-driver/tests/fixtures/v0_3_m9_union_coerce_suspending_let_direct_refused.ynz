@@ -1,0 +1,32 @@
+// v0.3-M9 C1e (#421): `let m: Mixed = count()` (a suspending callee, no `wait`) binds the
+// callee's result in the state-machine lowering, which does not pass through the one
+// coercion point. Until it does, the build refuses
+// it; `let got = wait count()` then `let m: Mixed = got` compiles and runs.
+// Correct behavior: does not compile (the refusal names the suspending call).
+// Pre-fix failure: compiled; the raw int 4 became the envelope pointer and the `is` arm read
+// its tag through address 0x4 (SIGSEGV, ASan SEGV at both optimization levels).
+shape Circle {
+  name: string
+}
+shape Mixed = Circle | int
+
+function show(share m: Mixed) -> string {
+  if (m) {
+    is Circle => {
+      return `circle ${m.name}`
+    }
+    else => {
+      return `int`
+    }
+  }
+}
+
+function count() -> int {
+  wait sleep(1)
+  return 4
+}
+
+function entrypoint() -> nothing {
+  let m: Mixed = count()
+  print(show(m))
+}

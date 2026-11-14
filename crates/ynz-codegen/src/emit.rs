@@ -3884,6 +3884,28 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(slot)
     }
 
+    /// Refuse a `let` whose value typeck recorded as entering a union slot
+    /// (`TypedModule::union_coercions`) when the state-machine lowering binds that value
+    /// without `lower_expr`, the one coercion point: `let m: Mixed = wait count()` and
+    /// `let m: Mixed = count()` with a suspending `count`. Bound bare, the raw return value
+    /// becomes the envelope pointer and the first `is` arm reads its tag through that
+    /// address. Binding the result to a plain `let` first and storing that in the union
+    /// `let` goes through the coercion point.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn refuse_unwrapped_suspending_let(&self, name: &str, value: &Expr) -> Result<(), String> {
+        let span = value.span();
+        match self.typed.union_coercions.get(&(span.start, span.end)) {
+            None => Ok(()),
+            Some(coercion) => Err(format!(
+                "codegen: `let {name}`: the result of a suspending call cannot be stored \
+                 directly in a `{:?}` binding yet; bind it to a plain `let` first, then store \
+                 that binding in the union-typed `let`",
+                self.resolve_type(&coercion.slot)
+            )),
+        }
+    }
+
     /// THE coercion point: wrap the lowered plain value `val` of `expr` in the tagged envelope
     /// of the union slot typeck recorded for it (`TypedModule::union_coercions`). Called by
     /// `lower_expr` and nowhere else, so every slot kind typeck records — annotated `let`,
@@ -7661,9 +7683,10 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // `let name = wait suspendingCallee(args)` — bind the return value.
         Stmt::Let {
             name,
-            value: Expr::Wait(inner, _),
+            value: let_value @ Expr::Wait(inner, _),
             ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_let(name, let_value)?;
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -7696,6 +7719,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         Stmt::Let {
             name, value: inner, ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_let(name, inner)?;
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,

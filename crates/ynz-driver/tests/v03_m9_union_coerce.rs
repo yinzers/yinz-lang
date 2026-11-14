@@ -8,7 +8,7 @@
 //! parameter and return slots of a SHAPE variant pass there (#410) and stay as the
 //! `v03_m9_union_wrap` fixtures through the new point.
 //!
-//! Count: 30 tests = 7 fixtures x 4 runs + 2 build refusals, past the ~8 a High-tier unit gets
+//! Count: 32 tests = 7 fixtures x 4 runs + 4 build refusals, past the ~8 a High-tier unit gets
 //! without a written reason. The fixtures are one per slot kind (field, let, non-shape variant,
 //! `.or`, generic parameter, narrowed binding into another union, nested arm on a shadowing
 //! binding) because the card requires a
@@ -123,6 +123,27 @@ fn v03_m9_union_coerce_number_precision_mismatch_is_refused() {
     assert_build_refused(
         "v0_3_m9_union_coerce_number_precision_refused.ynz",
         "the two number precisions have different layouts",
+    );
+}
+
+#[test]
+fn v03_m9_union_coerce_suspending_let_wait_is_refused() {
+    // Bug: `let m: Mixed = wait count()` bound the raw int as the envelope pointer in the
+    // state-machine lowering, which bypasses the coercion point; the `is` arm read the tag
+    // through address 0x4. Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_coerce_suspending_let_wait_refused.ynz",
+        "the result of a suspending call cannot be stored directly",
+    );
+}
+
+#[test]
+fn v03_m9_union_coerce_suspending_let_direct_is_refused() {
+    // Bug: the same raw-int envelope through the other state-machine `let` arm, a suspending
+    // callee called without `wait`. Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_coerce_suspending_let_direct_refused.ynz",
+        "the result of a suspending call cannot be stored directly",
     );
 }
 
