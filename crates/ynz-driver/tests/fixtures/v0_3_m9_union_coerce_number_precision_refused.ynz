@@ -1,0 +1,17 @@
+// v0.3-M9 C1e (#421): a `number<10>` is a 128-bit decimal slot; a `number<40>` variant of a union
+// stores a pointer to a wide decimal. Typeck accepts any number into any number slot, but the
+// envelope would hold the narrow value's slot address as a wide decimal and read garbage.
+// Correct behavior: does not compile (the refusal names the precision mismatch).
+// Pre-fix failure: compiled, and the callee read the wrong layout.
+shape Circle {
+  radius: int
+}
+
+function describe(share value: Circle | number<40>) -> string {
+  return `ok`
+}
+
+function entrypoint() -> nothing {
+  let small: number<10> = 5.0
+  print(describe(small))
+}

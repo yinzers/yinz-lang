@@ -8,9 +8,10 @@
 //! parameter and return slots of a SHAPE variant pass there (#410) and stay as the
 //! `v03_m9_union_wrap` fixtures through the new point.
 //!
-//! Count: 25 tests = 6 fixtures x 4 runs + 1 build refusal, past the ~8 a High-tier unit gets
+//! Count: 30 tests = 7 fixtures x 4 runs + 2 build refusals, past the ~8 a High-tier unit gets
 //! without a written reason. The fixtures are one per slot kind (field, let, non-shape variant,
-//! `.or`, generic parameter, narrowed binding into another union) because the card requires a
+//! `.or`, generic parameter, narrowed binding into another union, nested arm on a shadowing
+//! binding) because the card requires a
 //! red fixture per kind and each kind failed on the base through a different path. The 4 runs
 //! per fixture are not copies: plain vs ASan, because the pre-fix miscompiles often print
 //! plausible output and only the sanitizer sees the out-of-bounds envelope read; -O0 vs -O2,
@@ -109,31 +110,19 @@ fn v03_m9_union_coerce_channel_union_element_is_refused() {
     // Regression guard (no hole found): a channel never carries a union, so no plain value can
     // reach a union-typed channel slot. If channels start accepting union elements, a send must
     // wrap through the one coercion point and this test becomes a run fixture. Tier: High.
-    let directory = tempfile::tempdir().expect("create temp directory");
-    let source = directory.path().join("program.ynz");
-    std::fs::copy(
-        support::fixture_path("v0_3_m9_union_coerce_channel_refused.ynz"),
-        &source,
-    )
-    .expect("copy fixture");
-    let output = Command::new(env!("CARGO_BIN_EXE_ynz"))
-        .arg("build")
-        .arg(Path::new(&source))
-        .env("CLICOLOR", "0")
-        .output()
-        .expect("spawn `ynz build`");
-    let diagnostics = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    assert_build_refused(
+        "v0_3_m9_union_coerce_channel_refused.ynz",
+        "`channel<Tiny | Big>` is not supported yet",
     );
-    assert!(
-        !output.status.success(),
-        "a union-element channel compiled:\n{diagnostics}"
-    );
-    assert!(
-        diagnostics.contains("`channel<Tiny | Big>` is not supported yet"),
-        "refusal must name the union channel; got:\n{diagnostics}"
+}
+
+#[test]
+fn v03_m9_union_coerce_number_precision_mismatch_is_refused() {
+    // Bug: a `number<10>` into a `number<40>` variant was wrapped as if it were the wide pointer
+    // representation, so the callee read the narrow slot as a wide decimal. Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_coerce_number_precision_refused.ynz",
+        "the two number precisions have different layouts",
     );
 }
 
@@ -160,3 +149,41 @@ coercion_tests!(
     v03_m9_union_coerce_narrowed_other_union_asan_optimized,
     v03_m9_union_coerce_narrowed_other_union_asan_no_optimize
 );
+
+// Bug: a nested `is` arm on a `let` that shadows the narrowed name removed the OUTER binding's
+// narrowing when it ended, so the outer `t.label` was rejected as a field read on a union.
+// Tier: High.
+coercion_tests!(
+    "v0_3_m9_union_coerce_nested_shadow_arm.ynz",
+    "inner other\nwother\nhello\nbig hello\nhello\nbig hello\nend\n",
+    v03_m9_union_coerce_nested_shadow_arm_optimized,
+    v03_m9_union_coerce_nested_shadow_arm_no_optimize,
+    v03_m9_union_coerce_nested_shadow_arm_asan_optimized,
+    v03_m9_union_coerce_nested_shadow_arm_asan_no_optimize
+);
+
+/// `fixture_name` must fail `ynz build`, with `refusal` in its diagnostics.
+fn assert_build_refused(fixture_name: &str, refusal: &str) {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let source = directory.path().join("program.ynz");
+    std::fs::copy(support::fixture_path(fixture_name), &source).expect("copy fixture");
+    let output = Command::new(env!("CARGO_BIN_EXE_ynz"))
+        .arg("build")
+        .arg(Path::new(&source))
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("spawn `ynz build`");
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success(),
+        "{fixture_name} compiled:\n{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains(refusal),
+        "{fixture_name}: refusal must contain `{refusal}`; got:\n{diagnostics}"
+    );
+}
