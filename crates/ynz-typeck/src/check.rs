@@ -518,12 +518,12 @@ fn expr_source_text(expr: &Expr) -> String {
         Expr::SelfValue { .. } => "self".to_string(),
         Expr::FieldAccess {
             receiver, field, ..
-        } => format!("{}.{field}", expr_source_text(receiver)),
+        } => format!("{}.{field}", operand_text(receiver)),
         Expr::IndexAccess {
             receiver, index, ..
         } => format!(
             "{}[{}]",
-            expr_source_text(receiver),
+            operand_text(receiver),
             expr_source_text(index)
         ),
         Expr::Call(call) => format!(
@@ -542,7 +542,7 @@ fn expr_source_text(expr: &Expr) -> String {
             ..
         } => format!(
             "{}.{method}({})",
-            expr_source_text(receiver),
+            operand_text(receiver),
             args.iter()
                 .map(expr_source_text)
                 .collect::<Vec<_>>()
@@ -556,8 +556,8 @@ fn expr_source_text(expr: &Expr) -> String {
             literal_text(expr, &part_texts)
         }
         Expr::PostfixOp { receiver, op, .. } => match op {
-            PostfixOpKind::Copy => format!("{}.copy()", expr_source_text(receiver)),
-            PostfixOpKind::Freeze => format!("{}.freeze()", expr_source_text(receiver)),
+            PostfixOpKind::Copy => format!("{}.copy()", operand_text(receiver)),
+            PostfixOpKind::Freeze => format!("{}.freeze()", operand_text(receiver)),
         },
         Expr::IntLit(n, _) => n.to_string(),
         Expr::NumberLit(s, _) => s.clone(),
@@ -580,9 +580,57 @@ fn expr_source_text(expr: &Expr) -> String {
                 .collect();
             format!("`{written}`")
         }
-        Expr::BinOp { .. } | Expr::UnaryOp { .. } | Expr::Is { .. } | Expr::Error(..) => {
-            "this value".to_string()
+        Expr::BinOp { op, lhs, rhs, .. } => format!(
+            "{} {} {}",
+            operand_text(lhs),
+            binop_symbol(op),
+            operand_text(rhs)
+        ),
+        Expr::UnaryOp { op, operand, .. } => {
+            let symbol = match op {
+                UnaryOpKind::Neg => "-",
+                UnaryOpKind::Not => "!",
+                UnaryOpKind::BitNot => "~",
+            };
+            format!("{symbol}{}", operand_text(operand))
         }
+        Expr::Is { expr, ty, .. } => format!("{} is {}", operand_text(expr), ty.name),
+        Expr::Error(..) => "this value".to_string(),
+    }
+}
+
+/// `expr_source_text` of an operand or receiver, in parentheses when it is itself an operator
+/// expression, so the text keeps the grouping the AST has (`(a + b).len()`, `-(a + b)`). Typeck has
+/// no precedence table, so a nested operator expression is always grouped.
+fn operand_text(expr: &Expr) -> String {
+    match expr {
+        Expr::BinOp { .. } | Expr::UnaryOp { .. } | Expr::Is { .. } => {
+            format!("({})", expr_source_text(expr))
+        }
+        _ => expr_source_text(expr),
+    }
+}
+
+fn binop_symbol(op: &BinOpKind) -> &'static str {
+    match op {
+        BinOpKind::Add => "+",
+        BinOpKind::Sub => "-",
+        BinOpKind::Mul => "*",
+        BinOpKind::Div => "/",
+        BinOpKind::Rem => "%",
+        BinOpKind::Lt => "<",
+        BinOpKind::LtEq => "<=",
+        BinOpKind::GtEq => ">=",
+        BinOpKind::Gt => ">",
+        BinOpKind::EqEq => "==",
+        BinOpKind::NotEq => "!=",
+        BinOpKind::And => "&&",
+        BinOpKind::Or => "||",
+        BinOpKind::BitAnd => "&",
+        BinOpKind::BitOr => "|",
+        BinOpKind::BitXor => "^",
+        BinOpKind::Shl => "<<",
+        BinOpKind::Shr => ">>",
     }
 }
 

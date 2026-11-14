@@ -1178,3 +1178,31 @@ fn consumed_by_store_into_a_map_literal_names_a_literal_that_compiles() {
         ],
     );
 }
+
+/// (High) A literal part that is an operator expression is written out, not replaced by a
+/// placeholder: the WHAT-INSTEAD names `{ first: a.copy(), count: (n + 1) * 2 }`, which a reader can
+/// type, not `{ first: a.copy(), count: this value }`.
+#[test]
+fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles() {
+    assert_rendered(
+        DiagnosticKind::ConsumedByStore,
+        "shape Tally { first: array<int>, count: int }\n\
+         function entrypoint() -> nothing {\n\
+           let a: array<int> = [1]\n\
+           let n: int = 3\n\
+           let tally: Tally = { first: a, count: (n + 1) * 2 }\n\
+           print(a.count())\n\
+           print(tally.count)\n\
+         }",
+        &[
+            ("name", "a"),
+            (
+                "place",
+                "the literal `{ first: a, count: (n + 1) * 2 }`",
+            ),
+            ("stored", "a"),
+            ("copy_form", "{ first: a.copy(), count: (n + 1) * 2 }"),
+            ("via", ""),
+        ],
+    );
+}
