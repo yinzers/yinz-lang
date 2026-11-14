@@ -557,3 +557,25 @@ function entrypoint() -> nothing { let n = identity(5) }
         "Monomorphized identity<int> must have param_type = int"
     );
 }
+
+#[test]
+fn v03_m9_c1g_substituting_a_union_that_collapses_to_one_variant_gives_that_variant() {
+    // BUG (High: type checker): `first: T | Tiny` with `T = Tiny` substituted to a union
+    // holding the one variant `Tiny` twice (or once), a different type from the plain `Tiny`
+    // the argument has, so a correct call was refused naming the same type on both sides.
+    // TIER: High (type substitution decides what every generic call may pass).
+    use std::collections::HashMap;
+    use ynz_typeck::generics::apply_substitution;
+
+    let tiny = Type::Shape {
+        name: "Tiny".into(),
+    };
+    let tiny_or_type_parameter = Type::Union {
+        variants: vec![Type::TypeParam { name: "T".into() }, tiny.clone()],
+    };
+    let substitution = HashMap::from([("T".to_string(), tiny.clone())]);
+    assert_eq!(
+        apply_substitution(&tiny_or_type_parameter, &substitution),
+        tiny
+    );
+}

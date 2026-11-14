@@ -21494,39 +21494,65 @@ mod recorded_generic_instance_tests {
     }
 
     #[test]
-    fn v03_m9_c1g_call_without_a_usable_record_is_an_internal_error() {
-        // BUG (High: call dispatch, memory safety): no record, two conflicting records, or a
-        // recorded instance that was never built must stop codegen, never fall back to some
-        // instance of that name.
+    fn v03_m9_c1g_call_with_no_record_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a call the type checker recorded nothing
+        // for must stop codegen, never fall back to some instance of that name.
+        let mut instances = GenericCallInstances::default();
+        instances.record((20, 30), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(40),
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error")
+                && error.contains("recorded no type arguments"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_with_two_different_records_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a call checked with two different sets of
+        // type arguments must stop codegen, never run the first or the last one.
         let mut instances = GenericCallInstances::default();
         instances.record((0, 10), vec![big()]);
         instances.record((0, 10), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(0),
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("two different sets"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_recorded_for_an_instance_never_built_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a recorded instance the module does not
+        // declare must stop codegen, never resolve to another instance of that name.
+        let mut instances = GenericCallInstances::default();
         instances.record((20, 30), vec![tiny()]);
-        let no_subst = HashMap::new();
-        let any_name_declared = |_: &str| true;
-        let none_declared = |_: &str| false;
-        for (start, is_declared, expected) in [
-            (
-                0,
-                &any_name_declared as &dyn Fn(&str) -> bool,
-                "two different sets",
-            ),
-            (40, &any_name_declared, "recorded no type arguments"),
-            (20, &none_declared, "was built"),
-        ] {
-            let error = recorded_generic_instance_name(
-                &instances,
-                &no_subst,
-                "same",
-                &call_at(start),
-                is_declared,
-            )
-            .unwrap_err();
-            assert!(
-                error.contains("internal compiler error") && error.contains(expected),
-                "{error}"
-            );
-        }
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(20),
+            |_| false,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("was built"),
+            "{error}"
+        );
     }
 }
 
