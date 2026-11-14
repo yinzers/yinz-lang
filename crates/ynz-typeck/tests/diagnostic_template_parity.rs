@@ -1001,3 +1001,32 @@ fn a_suspending_result_into_a_union_let_is_refused_with_its_registry_text() {
         "let got = wait count()\n let m: Circle | int = got",
     ));
 }
+
+#[test]
+fn a_suspending_result_returned_as_a_union_is_refused_with_its_registry_text() {
+    // WHY: `return wait count()` from a union-returning pausing function stored the raw int in the
+    // return slot; the compiler then panicked instead of teaching the recovery.
+    let program = |returned: &str| {
+        format!(
+            "shape Circle {{ name: string }}\n\
+             shape Mixed = Circle | int\n\
+             function count() -> int {{ wait sleep(1)\n return 4 }}\n\
+             function pick() -> Mixed {{ wait sleep(1)\n {returned} }}\n\
+             function entrypoint() -> nothing {{\n\
+               let m = pick()\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::SuspendingResultIntoUnionReturn,
+        &program("return wait count()"),
+        &[("call", "wait count()"), ("union", "Circle | int")],
+    );
+    assert_rendered(
+        DiagnosticKind::SuspendingResultIntoUnionReturn,
+        &program("return count()"),
+        &[("call", "count()"), ("union", "Circle | int")],
+    );
+    assert_compiles(&program("let got = count()\n return got"));
+    assert_compiles(&program("let got = wait count()\n return got"));
+}

@@ -1,0 +1,32 @@
+// v0.3-M9 C1e (#421): `return wait count()` from a function that returns a union stores the
+// callee's result in the return slot in the state-machine lowering, which does not pass through
+// the one coercion point. Until it does, the build refuses it; `let got = wait count()` then
+// `return got` compiles and runs (`v0_3_m9_union_coerce_return_via_variable.ynz`).
+// Correct behavior: does not compile (the refusal names the suspending call).
+// Pre-fix failure: the compiler panicked ("Yinz compiler bug" box), no diagnostic.
+shape Circle {
+  name: string
+}
+shape Mixed = Circle | int
+
+function count() -> int {
+  wait sleep(1)
+  return 4
+}
+
+function pick() -> Mixed {
+  wait sleep(1)
+  return wait count()
+}
+
+function entrypoint() -> nothing {
+  let m = pick()
+  if (m) {
+    is Circle => {
+      print(`circle ${m.name}`)
+    }
+    else => {
+      print(`int`)
+    }
+  }
+}

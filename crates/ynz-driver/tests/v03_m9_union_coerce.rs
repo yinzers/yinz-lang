@@ -8,10 +8,10 @@
 //! parameter and return slots of a SHAPE variant pass there (#410) and stay as the
 //! `v03_m9_union_wrap` fixtures through the new point.
 //!
-//! Count: 32 tests = 7 fixtures x 4 runs + 4 build refusals, past the ~8 a High-tier unit gets
+//! Count: 41 tests = 8 fixtures x 4 runs + 9 build refusals, past the ~8 a High-tier unit gets
 //! without a written reason. The fixtures are one per slot kind (field, let, non-shape variant,
 //! `.or`, generic parameter, narrowed binding into another union, nested arm on a shadowing
-//! binding) because the card requires a
+//! binding, and the `return`-through-a-variable recovery) because the card requires a
 //! red fixture per kind and each kind failed on the base through a different path. The 4 runs
 //! per fixture are not copies: plain vs ASan, because the pre-fix miscompiles often print
 //! plausible output and only the sanitizer sees the out-of-bounds envelope read; -O0 vs -O2,
@@ -185,16 +185,24 @@ coercion_tests!(
 
 /// `fixture_name` must fail `ynz build`, with `refusal` in its diagnostics.
 fn assert_build_refused(fixture_name: &str, refusal: &str) {
-    let program =
-        std::fs::read_to_string(support::fixture_path(fixture_name)).expect("read fixture");
-    assert_source_refused(fixture_name, &program, refusal);
+    assert_source_refused(fixture_name, &read_fixture(fixture_name), refusal);
 }
 
 /// `program` must fail `ynz build`, with `refusal` in its diagnostics. For a refusal that only
 /// the default (auto-parallel) build gives, so the program cannot sit in the fixture corpus the
 /// mode-matrix sweep compiles in every mode.
 fn assert_source_refused(label: &str, program: &str, refusal: &str) {
-    let fixture_name = label;
+    let diagnostics = refused_build_diagnostics(label, program);
+    assert!(
+        diagnostics.contains(refusal),
+        "{label}: refusal must contain `{refusal}`; got:\n{diagnostics}"
+    );
+}
+
+/// The diagnostics `ynz build` prints for `program`, which must fail with a teaching diagnostic:
+/// a refusal a user program can reach is never codegen's "This is a compiler bug" box or an
+/// internal panic (Golden Rule 11).
+fn refused_build_diagnostics(label: &str, program: &str) -> String {
     let directory = tempfile::tempdir().expect("create temp directory");
     let source = directory.path().join("program.ynz");
     std::fs::write(&source, program).expect("write program");
@@ -209,20 +217,30 @@ fn assert_source_refused(label: &str, program: &str, refusal: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        !output.status.success(),
-        "{fixture_name} compiled:\n{diagnostics}"
-    );
-    // A refusal a user program can reach is a teaching diagnostic from typeck, never codegen's
-    // "This is a compiler bug" box (Golden Rule 11).
+    assert!(!output.status.success(), "{label} compiled:\n{diagnostics}");
     assert!(
         !diagnostics.contains("compiler bug"),
-        "{fixture_name}: a user-reachable refusal must not say `compiler bug`; got:\n{diagnostics}"
+        "{label}: a user-reachable refusal must not say `compiler bug`; got:\n{diagnostics}"
     );
-    assert!(
-        diagnostics.contains(refusal),
-        "{fixture_name}: refusal must contain `{refusal}`; got:\n{diagnostics}"
-    );
+    diagnostics
+}
+
+/// `program` returns `call` from a function that returns a union and must be refused with the
+/// whole teaching text of `SuspendingResultIntoUnionReturn`: what happened, what to write
+/// instead (which compiles, see `v0_3_m9_union_coerce_return_via_variable.ynz`) and why.
+fn assert_return_refused(label: &str, program: &str, call: &str) {
+    let diagnostics = refused_build_diagnostics(label, program);
+    for teaching_part in [
+        format!("`{call}` pauses and resumes before it gives its result"),
+        "can't be returned straight from this function".to_string(),
+        format!("`let got = {call}`, then `return got`"),
+        "its result arrives without that tag being added".to_string(),
+    ] {
+        assert!(
+            diagnostics.contains(&teaching_part),
+            "{label}: diagnostic must contain `{teaching_part}`; got:\n{diagnostics}"
+        );
+    }
 }
 
 #[test]
@@ -281,3 +299,77 @@ function entrypoint() -> nothing {
   print(show(m))
 }
 "#;
+
+#[test]
+fn v03_m9_union_coerce_suspending_return_wait_is_refused() {
+    // Bug: `return wait count()` from a union-returning pausing function panicked in the
+    // state-machine lowering ("no handler", the compiler-bug box). Tier: High.
+    assert_return_refused(
+        "return wait count()",
+        &read_fixture("v0_3_m9_union_coerce_suspending_return_wait_refused.ynz"),
+        "wait count()",
+    );
+}
+
+#[test]
+fn v03_m9_union_coerce_suspending_return_direct_is_refused() {
+    // Bug: `return count()` stored the raw result in the return slot, then panicked in
+    // `to_i64_bits` (`into_pointer_value` on an int). Tier: High.
+    assert_return_refused(
+        "return count()",
+        &read_fixture("v0_3_m9_union_coerce_suspending_return_direct_refused.ynz"),
+        "count()",
+    );
+}
+
+#[test]
+fn v03_m9_union_coerce_suspending_return_other_variants_are_refused() {
+    // Bug: the same panic for every non-shape variant the callee can give back. Tier: High.
+    for (variant, literal) in [("string", "`text`"), ("float", "1.5"), ("boolean", "true")] {
+        let program = format!(
+            "shape Circle {{\n  name: string\n}}\n\
+             shape Mixed = Circle | {variant}\n\n\
+             function later() -> {variant} {{\n  wait sleep(1)\n  return {literal}\n}}\n\n\
+             function pick() -> Mixed {{\n  wait sleep(1)\n  return later()\n}}\n\n\
+             function entrypoint() -> nothing {{\n  let m = pick()\n  print(`done`)\n}}\n"
+        );
+        assert_return_refused(&format!("return later() as {variant}"), &program, "later()");
+    }
+}
+
+#[test]
+fn v03_m9_union_coerce_suspending_return_cpu_promoted_is_refused() {
+    // Bug: a callee typeck sees as plain but the compiler promotes to a pausing function
+    // reached the `return` arm's panic instead of the teaching refusal. Tier: High.
+    let program = PROMOTED_CALLEE_PROGRAM
+        .replace(
+            "function entrypoint() -> nothing {\n  wait sleep(1)\n  let m: Mixed = combine()\n  print(show(m))\n}",
+            "function pick() -> Mixed {\n  wait sleep(1)\n  return combine()\n}\n\n\
+             function entrypoint() -> nothing {\n  let m = pick()\n  print(show(m))\n}",
+        );
+    assert!(
+        program.contains("return combine()"),
+        "the promoted-callee program must carry the `return` under test"
+    );
+    assert_return_refused(
+        "promoted callee returned into a union",
+        &program,
+        "combine()",
+    );
+}
+
+// Bug: the recovery the refusals name (`let got = count()` / `let got = wait count()`, then
+// `return got`) must wrap through the one coercion point, so the caller reads an `int` variant.
+// Tier: High.
+coercion_tests!(
+    "v0_3_m9_union_coerce_return_via_variable.ynz",
+    "int\nint\nend\n",
+    v03_m9_union_coerce_return_via_variable_optimized,
+    v03_m9_union_coerce_return_via_variable_no_optimize,
+    v03_m9_union_coerce_return_via_variable_asan_optimized,
+    v03_m9_union_coerce_return_via_variable_asan_no_optimize
+);
+
+fn read_fixture(fixture_name: &str) -> String {
+    std::fs::read_to_string(support::fixture_path(fixture_name)).expect("read fixture")
+}

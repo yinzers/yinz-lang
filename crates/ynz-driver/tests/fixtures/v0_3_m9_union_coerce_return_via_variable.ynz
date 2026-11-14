@@ -1,0 +1,43 @@
+// v0.3-M9 C1e (#421): the recovery the refusal of `return count()` / `return wait count()` names:
+// the suspending call's result goes into its own variable first, and `return got` passes through
+// the one coercion point, so the caller reads the right variant tag.
+shape Circle {
+  name: string
+}
+shape Mixed = Circle | int
+
+function count() -> int {
+  wait sleep(1)
+  return 4
+}
+
+function pickDirect() -> Mixed {
+  wait sleep(1)
+  let got = count()
+  return got
+}
+
+function pickWait() -> Mixed {
+  wait sleep(1)
+  let got = wait count()
+  return got
+}
+
+function show(share m: Mixed) -> string {
+  if (m) {
+    is Circle => {
+      return `circle ${m.name}`
+    }
+    else => {
+      return `int`
+    }
+  }
+}
+
+function entrypoint() -> nothing {
+  let direct = pickDirect()
+  print(show(direct))
+  let waited = pickWait()
+  print(show(waited))
+  print(`end`)
+}
