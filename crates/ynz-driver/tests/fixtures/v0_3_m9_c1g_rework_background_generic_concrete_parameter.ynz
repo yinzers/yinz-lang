@@ -1,8 +1,9 @@
 // v0.3-M9 C1g rework (security): a GENERIC function started with `background` receives a
 // `Tiny` where its concrete parameter `second: Big` needs a `Big` (`background pick(big, tiny)`).
 // Correct behavior: does not compile — refused with the plain call form's text.
-// Pre-fix failure: compiled; the task read the 1-byte `Tiny` as a 16-byte `Big` and printed
-// garbage (typeck's `background` handling never compared the arguments of a generic callee).
+// Reported failure (not reproducible at 3a4de04, where the statement form already reaches
+// `check_generic_fn_call`): the task read the 1-byte `Tiny` as a 16-byte `Big` and printed
+// garbage. Kept as a guard on that route.
 
 shape Tiny {
   flag: boolean

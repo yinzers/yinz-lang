@@ -163,6 +163,23 @@ fn union_recovery(value: &Expr, source_union: &Type, expected_variant: &Type) ->
     }
 }
 
+/// The teaching diagnostic for a call with a different number of arguments than the function
+/// declares. ONE text for every call form: the plain call, the generic call and the dot call
+/// (`value.f(a)` is `f(value, a)`, so the dot call counts the receiver as the first argument).
+fn wrong_argument_count_diag(
+    span: SourceSpan,
+    callee: &str,
+    expected: usize,
+    given: usize,
+) -> Diagnostic {
+    Diagnostic::error(
+        span,
+        format!("`{callee}` takes {expected} argument(s), but {given} were given."),
+        format!("Call it with {expected} argument(s)."),
+        "Every function call must match the number of arguments the function declares.",
+    )
+}
+
 /// The teaching diagnostic for a union value reaching a slot that expects one of its variants
 /// (`UnionWhereVariantExpected`). `needs` finishes the sentence "…, but {needs}" and names the
 /// slot: `showBig` expects a `Big` here, the function must return a `Big`, …. The WHAT-INSTEAD
@@ -6866,15 +6883,11 @@ impl<'b> Checker<'b> {
         ret: Type,
     ) -> Type {
         if call.args.len() != params.len() {
-            self.diags.push(Diagnostic::error(
+            self.diags.push(wrong_argument_count_diag(
                 call.span.clone(),
-                format!(
-                    "`{name}` takes {} argument(s), but {} were given.",
-                    params.len(),
-                    call.args.len()
-                ),
-                format!("Call it with {} argument(s).", params.len()),
-                "Every function call must match the number of arguments the function declares.",
+                name,
+                params.len(),
+                call.args.len(),
             ));
             for arg in &call.args {
                 self.infer_expr(arg, None);
@@ -7115,15 +7128,11 @@ impl<'b> Checker<'b> {
             .collect();
 
         if call.args.len() != non_self_params.len() {
-            self.diags.push(Diagnostic::error(
+            self.diags.push(wrong_argument_count_diag(
                 call.span.clone(),
-                format!(
-                    "`{name}` takes {} argument(s), but {} were given.",
-                    non_self_params.len(),
-                    call.args.len()
-                ),
-                format!("Call it with {} argument(s).", non_self_params.len()),
-                "Every function call must match the number of arguments the function declares.",
+                name,
+                non_self_params.len(),
+                call.args.len(),
             ));
             for arg in &call.args {
                 self.infer_expr(arg, None);
@@ -7567,6 +7576,17 @@ impl<'b> Checker<'b> {
             // Dynamic dispatch: look up the method on the contract shape's sigs.
             if let Some(shape_def) = self.shape_table.get(contract) {
                 if let Some(sig) = shape_def.contract_sigs.iter().find(|s| s.name == method) {
+                    // The contract lists its parameters without `self`; the receiver is the
+                    // first argument of the call (same count and text as the shape path).
+                    if args.len() != sig.param_tys.len() {
+                        self.diags.push(wrong_argument_count_diag(
+                            method_span.clone(),
+                            method,
+                            sig.param_tys.len() + 1,
+                            args.len() + 1,
+                        ));
+                        return Type::Error;
+                    }
                     // Can't-infer: dynamic dispatch through a vtable from a suspending caller.
                     // The concrete callee is unknown at compile time so its suspension status
                     // cannot be determined. Gate on current_fn_suspends: only callers that
@@ -7626,6 +7646,21 @@ impl<'b> Checker<'b> {
                 if let Some((_, first_ty)) = sig.params.first() {
                     if first_ty == receiver_ty || *first_ty == Type::Error {
                         self.referenced_names.insert(method.to_string());
+                        // `p.f(a)` is `f(p, a)`: the receiver counts as the first argument,
+                        // so the function must declare exactly one parameter more than the
+                        // dot-call has arguments. The zip below stops at the shorter list;
+                        // without this count a missing argument was read from nowhere and an
+                        // extra one was dropped, and LLVM refused the call as a compiler bug
+                        // (C1g rework, #424). Same text as the plain call form.
+                        if args.len() + 1 != sig.params.len() {
+                            self.diags.push(wrong_argument_count_diag(
+                                method_span.clone(),
+                                method,
+                                sig.params.len(),
+                                args.len() + 1,
+                            ));
+                            return Type::Error;
+                        }
                         // Ownership over the ONE normalized argument list `[receiver,
                         // args…]` — the same transfer decision the plain call form runs,
                         // so `p.heal(20)` and `heal(p, 20)` render byte-identical text

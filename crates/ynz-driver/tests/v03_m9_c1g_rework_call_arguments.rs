@@ -7,6 +7,10 @@
 //! the teaching text (WHAT, WHAT-INSTEAD, WHY from the same diagnostics the plain call form
 //! gives) and that the compiler did not report one of its own bugs.
 //!
+//! The two `background` cases are GUARDS: probed at 3a4de04 they were already refused (the
+//! statement form reaches `check_generic_fn_call`), so they pin that route; the dot-call cases
+//! were red there.
+//!
 //! Test count: 6 — one per refused case (two `background` generic calls, three dot-call argument
 //! counts: too few, too many, through a `dynamic` receiver) and the legal generic `background`
 //! call that must keep running.
@@ -40,8 +44,9 @@ fn assert_rejected_with(fixture_name: &str, fragments: &[&str]) {
 
 #[test]
 fn v03_m9_c1g_rework_background_generic_argument_for_a_concrete_parameter_is_rejected() {
-    // BUG: `background pick(big, tiny)` with `second: Big` on a generic callee — the `background`
-    // handling never compared the arguments, so the task read a `Tiny` as a `Big`.
+    // GUARD (reported bug, not reproducible at 3a4de04): `background pick(big, tiny)` with
+    // `second: Big` on a generic callee must be compared like the plain call, or the task reads a
+    // `Tiny` as a `Big`.
     // TIER: High (type checker, memory safety).
     assert_rejected_with(
         "v0_3_m9_c1g_rework_background_generic_concrete_parameter.ynz",
@@ -54,8 +59,9 @@ fn v03_m9_c1g_rework_background_generic_argument_for_a_concrete_parameter_is_rej
 
 #[test]
 fn v03_m9_c1g_rework_background_generic_two_types_for_one_type_parameter_is_rejected() {
-    // BUG: `background pick(count, label)` (`T = int`, then a `string`) failed LLVM
-    // verification — a compiler-bug report instead of a diagnostic. TIER: High.
+    // GUARD (reported bug, not reproducible at 3a4de04): `background pick(count, label)`
+    // (`T = int`, then a `string`) would fail LLVM
+    // verification, a compiler-bug report instead of a diagnostic. TIER: High.
     assert_rejected_with(
         "v0_3_m9_c1g_rework_background_generic_one_type_parameter.ynz",
         &[
