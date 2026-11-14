@@ -15,11 +15,13 @@
 //! too. The type checker never counted their arguments, so `xs.add()` panicked the code generator
 //! and `n.toString(1, 2)` dropped its arguments; each method family has its own fixture.
 //!
-//! Test count: 13 — one per refused case (two `background` generic calls, three dot-call argument
+//! Test count: 14 — one per refused case (two `background` generic calls, three dot-call argument
 //! counts: too few, too many, through a `dynamic` receiver), the teaching text of the dot-call
-//! form, one per built-in method family (array, map, `maybe`, string, number), one for the
-//! `sensitive`, `errors`-capable and `options` receivers (round 2) and the legal generic
-//! `background` call that must keep running.
+//! form, one per built-in method family (array, `fixed`, map, `maybe`, string, number), one for
+//! the `sensitive`, `errors`-capable and `options` receivers (round 2) and the legal generic
+//! `background` call that must keep running. Justified above 13: every test is one compile of
+//! its own fixture and names one bug on one receiver family, so a regression in one counting arm
+//! of `builtin_method_argument_count` fails one named test.
 
 mod support;
 
@@ -115,6 +117,8 @@ fn v03_m9_c1g_rework_dynamic_dot_call_without_a_required_argument_is_rejected() 
         &[
             "`display` takes 2 argument(s), but 1 were given.",
             "Call it with 2 argument(s).",
+            "Put 1 argument(s) inside the parentheses of `shown.display(…)`.",
+            "A dot call counts the value before the dot, `shown`, as the first argument.",
         ],
     );
 }
@@ -146,6 +150,21 @@ fn v03_m9_c1g_rework_builtin_array_method_with_wrong_argument_count_is_rejected(
             "`count` takes 1 argument(s), but 2 were given.",
             "Put 1 argument(s) inside the parentheses of `xs.add(…)`.",
             "Put nothing inside the parentheses of `xs.count()`.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_fixed_method_with_wrong_argument_count_is_rejected() {
+    // BUG (round 2, Test): the count table has its own `fixed<T>` arm and no test pinned it;
+    // `fs.get()` read an index that was never passed and `fs.count(1)` dropped its argument.
+    // TIER: High (type checker).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_arity_fixed.ynz",
+        &[
+            "`get` takes 2 argument(s), but 1 were given.",
+            "`count` takes 1 argument(s), but 2 were given.",
+            "Put 1 argument(s) inside the parentheses of `fs.get(…)`.",
         ],
     );
 }
