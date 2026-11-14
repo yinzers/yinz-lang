@@ -3722,10 +3722,13 @@ impl<'b> Checker<'b> {
                     // We push a scope with the narrowed type for the binding if we can identify it.
                     // (Full binding-name extraction is P3b — basic case: scrutinee is a direct Ident)
                     let narrowed_name = simple_ident_name(scrutinee).map(|s| s.to_string());
+                    // The overlay the arm replaces, put back at the arm's end: a nested arm on a
+                    // same-named shadowing binding must not drop the outer binding's narrowing.
+                    let mut enclosing_narrowing = None;
                     if let Some(ref name) = narrowed_name {
                         if let Some(narrowed_binding) = self.scope.lookup(name) {
                             let defined_at = narrowed_binding.defined_at.clone();
-                            self.union_narrowed.insert(
+                            enclosing_narrowing = self.union_narrowed.insert(
                                 name.clone(),
                                 (
                                     Type::Shape {
@@ -3740,7 +3743,14 @@ impl<'b> Checker<'b> {
                     self.check_stmts(&arm.body.stmts);
                     self.scope.pop();
                     if let Some(ref name) = narrowed_name {
-                        self.union_narrowed.remove(name);
+                        match enclosing_narrowing {
+                            Some(enclosing) => {
+                                self.union_narrowed.insert(name.clone(), enclosing);
+                            }
+                            None => {
+                                self.union_narrowed.remove(name);
+                            }
+                        }
                     }
                     continue; // skip the standard scope push/pop below
                 }
