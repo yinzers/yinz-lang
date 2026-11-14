@@ -89,3 +89,43 @@ container_store_tests!(
     v03_m9_union_container_map_set_asan_optimized,
     v03_m9_union_container_map_set_asan_no_optimize
 );
+
+// RED UNTIL #423 (by-value envelope with an inline payload; a frame envelope cannot pass this).
+// Bug: a union container filled in a loop shares one per-site envelope slot (every element reads
+// the last value stored, ASan-clean), so the elements of one site must each own their envelope
+// and payload. Tier: High.
+#[test]
+fn v03_m9_union_container_loop_elements_keep_their_own_variant() {
+    // WHY: -O0, where nothing optimizes the aliasing away; the output is the verdict.
+    assert_prints(
+        "v0_3_m9_union_container_loop.ynz",
+        true,
+        "tiny\nbig b1\ntiny\nbig b3\nbig m0\nbig m1\nend\n",
+        WHAT,
+    );
+}
+
+// RED UNTIL #423. Bug: a union container returned from the function that filled it holds
+// pointers into the dead frame (envelope and payload): stack-use-after-return, `none` printed.
+// Tier: High.
+#[test]
+fn v03_m9_union_container_returned_from_its_frame_stays_valid() {
+    // WHY: ASan names the dangling read; -O0 keeps the dead frame's slots untouched in the output.
+    assert_asan_clean(
+        "v0_3_m9_union_container_escape.ynz",
+        true,
+        "big hello\ntiny\nend\n",
+    );
+}
+
+// RED, awaiting the lead's go-ahead to fix (question 4 of the card). Bug: a hidden shape-field
+// default of a non-shape variant (`hidden extra: Big | int = 4096`) lands as the raw int where the
+// envelope pointer belongs: SIGSEGV reading address 0x1000. Tier: High.
+container_store_tests!(
+    "v0_3_m9_union_hidden_default_non_shape.ynz",
+    "other\nend\n",
+    v03_m9_union_hidden_default_optimized,
+    v03_m9_union_hidden_default_no_optimize,
+    v03_m9_union_hidden_default_asan_optimized,
+    v03_m9_union_hidden_default_asan_no_optimize
+);
