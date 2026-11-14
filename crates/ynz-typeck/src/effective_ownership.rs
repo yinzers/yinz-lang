@@ -299,6 +299,9 @@ pub(crate) fn value_like(ty: &Type) -> bool {
     match ty {
         // A `maybe` of bits is an inline envelope of bits: it holds no heap pointer either.
         Type::Maybe { inner } => value_like(inner),
+        // `sensitive string` is the string pointer with a label: its copy is the receiver's bits
+        // (`owned_copy_plan`), so storing it hands nothing over.
+        Type::Sensitive { inner } => value_like(inner),
         _ => matches!(
             ty,
             Type::Int

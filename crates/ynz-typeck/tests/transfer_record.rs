@@ -511,6 +511,22 @@ fn storing_a_string_hands_nothing_over() {
     );
 }
 
+/// (High) A `sensitive string` is the string pointer with a label; its copy is the receiver's bits
+/// (`owned_copy_plan`), so storing one hands nothing over and the name stays readable.
+#[test]
+fn storing_a_sensitive_string_hands_nothing_over() {
+    assert_accepted(
+        "function f() -> int {
+  let key: sensitive string = sensitive(`abc`)
+  let keys: array<sensitive string> = []
+  keys.add(key)
+  let same: sensitive string = key
+  print(key)
+  return keys.count()
+}",
+    );
+}
+
 const EAT2: &str = "function eat_all(give rows: array<array<int>>) -> nothing {
   print(rows.count().toString())
 }\n";
