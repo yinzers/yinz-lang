@@ -268,8 +268,8 @@ pub fn collection_method_arg_slots(receiver: &Type, method: &str) -> Vec<(usize,
     }
 }
 
-/// How many arguments (the receiver not counted) the built-in methods of the collection, `maybe`
-/// and string types take, or `None` when this table does not know the method: an unknown name
+/// How many arguments (the receiver not counted) the built-in methods of the collection, `maybe`,
+/// string, `sensitive`, `errors`-capable and `options` types take, or `None` when this table does not know the method: an unknown name
 /// (refused elsewhere, with its own text), `sort` (its arguments are optional) and the methods the
 /// registry's `primitive_intrinsic` entries already count (`int`/`float`/`number`/`bool` methods
 /// and the string methods with zero or one argument — see `Checker::builtin_method_argument_count`,
@@ -316,6 +316,22 @@ pub fn builtin_method_argument_count(receiver: &Type, method: &str) -> Option<us
         // one parameter, so they are counted here and not by the registry.
         Type::String => match method {
             "substring" | "replace" => Some(2),
+            _ => None,
+        },
+        // `sensitive T` has the methods of `T` plus `reveal()` (`sensitive_method_return`).
+        Type::Sensitive { inner } => match method {
+            "reveal" => Some(0),
+            _ => builtin_method_argument_count(inner, method),
+        },
+        // The members of an `errors`-capable value that are calls: `failed()` and `or(fallback)`
+        // (`check_errors_capable_method`; `message` and the other fields are not calls).
+        Type::ErrorsCapable { .. } => match method {
+            "failed" => Some(0),
+            "or" => Some(1),
+            _ => None,
+        },
+        Type::Options { .. } => match method {
+            "toString" => Some(0),
             _ => None,
         },
         _ => None,

@@ -9321,12 +9321,22 @@ impl<'b> Checker<'b> {
         if let Some(count) = builtin_method_argument_count(receiver_ty, method) {
             return Some(count);
         }
-        if self.intrinsics.lookup_method(receiver_ty, method).is_some() {
+        // `sensitive string` has the methods of `string`: the registry entries are keyed by the
+        // inner type.
+        let registry_receiver_ty = match receiver_ty {
+            Type::Sensitive { inner } => inner.as_ref(),
+            other => other,
+        };
+        if self
+            .intrinsics
+            .lookup_method(registry_receiver_ty, method)
+            .is_some()
+        {
             return Some(0);
         }
         if self
             .intrinsics
-            .lookup_method_1arg(receiver_ty, method)
+            .lookup_method_1arg(registry_receiver_ty, method)
             .is_some()
         {
             return Some(1);
