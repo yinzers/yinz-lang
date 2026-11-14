@@ -4077,6 +4077,7 @@ impl<'b> Checker<'b> {
                 };
                 if val_ty != Type::Error && can_assign(returned_slot, &val_ty) {
                     self.record_union_coercion(expr, returned_slot, &val_ty);
+                    self.refuse_suspending_result_into_union_return(expr, returned_slot);
                 }
             }
         }
@@ -6628,6 +6629,36 @@ impl<'b> Checker<'b> {
             &self.expr_types,
             &callee_suspends,
         ) {
+            self.diags.push(diagnostic);
+        }
+    }
+
+    /// Refuse `return <call that pauses and resumes>` (`return wait count()`, or a bare call to
+    /// a suspending function) from a function that returns a union, once
+    /// `record_union_coercion` recorded the value as entering the returned union. The
+    /// state-machine lowering stores such a call's result in the return slot without the one
+    /// coercion point codegen wraps values at, so the raw result would be read back as the
+    /// union pointer. `let got = <call>`, then `return got`, wraps.
+    ///
+    /// Codegen asks the same question with the effective suspend set
+    /// (`suspending_union_diagnostics`) and keeps an internal guard behind both.
+    /// Time: O(1)  Space: O(1)
+    fn refuse_suspending_result_into_union_return(&mut self, value: &Expr, union_ty: &Type) {
+        let span = value.span();
+        if !self.union_coercions.contains_key(&(span.start, span.end)) {
+            return;
+        }
+        let callee_suspends = |callee: &str| {
+            !is_base_suspension_intrinsic(callee)
+                && self
+                    .sig_table
+                    .fns
+                    .get(callee)
+                    .is_some_and(|signature| signature.suspends)
+        };
+        if let Some(diagnostic) =
+            suspending_union_return_diagnostic(value, union_ty, &self.expr_types, &callee_suspends)
+        {
             self.diags.push(diagnostic);
         }
     }
@@ -9908,13 +9939,35 @@ pub fn envelope_refusal(variant: &Type, value_ty: &Type) -> Option<EnvelopeRefus
     }
 }
 
+/// True when `value` is a call that pauses and resumes: `wait count()`, or a bare call to a
+/// function `callee_suspends` names (a plain call or a dot-call). The state-machine lowering
+/// binds such a call's result without the one coercion point codegen wraps values at.
+///
+/// Time: O(1)  Space: O(1)
+fn is_suspending_call_value(
+    value: &Expr,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> bool {
+    let call = match value {
+        Expr::Wait(inner, _) => inner.as_ref(),
+        other => other,
+    };
+    match call {
+        Expr::Call(call_expr) => {
+            matches!(&call_expr.callee, Expr::Ident(callee, _) if callee_suspends(callee))
+        }
+        _ => expr_is_ufcs_suspending_call(call, expr_types, callee_suspends),
+    }
+}
+
 /// The teaching diagnostic for `let name: Union = <value>` when `value` is a call that pauses
-/// and resumes (`wait count()`, or a bare call to a function `callee_suspends` names), `None`
-/// otherwise. The state-machine lowering binds such a call's result without the one coercion
-/// point codegen wraps values at, so the raw result would become the union pointer.
+/// and resumes (`is_suspending_call_value`), `None` otherwise. The state-machine lowering
+/// binds such a call's result without the one coercion point codegen wraps values at, so the
+/// raw result would become the union pointer.
 ///
 /// Typeck asks it per annotated `let` with its own suspending-function set; the codegen query
-/// asks it again over the whole module (`suspending_union_let_diagnostics`) with the effective
+/// asks it again over the whole module (`suspending_union_diagnostics`) with the effective
 /// suspend set, which also holds the callees the CPU-parallel promotion makes suspending after
 /// typeck ran. One predicate, two sets.
 ///
@@ -9926,17 +9979,7 @@ fn suspending_union_let_diagnostic(
     expr_types: &HashMap<(usize, usize), Type>,
     callee_suspends: &dyn Fn(&str) -> bool,
 ) -> Option<Diagnostic> {
-    let call = match value {
-        Expr::Wait(inner, _) => inner.as_ref(),
-        other => other,
-    };
-    let is_suspending_call = match call {
-        Expr::Call(call_expr) => {
-            matches!(&call_expr.callee, Expr::Ident(callee, _) if callee_suspends(callee))
-        }
-        _ => expr_is_ufcs_suspending_call(call, expr_types, callee_suspends),
-    };
-    if !is_suspending_call {
+    if !is_suspending_call_value(value, expr_types, callee_suspends) {
         return None;
     }
     let slots = [
@@ -9952,15 +9995,42 @@ fn suspending_union_let_diagnostic(
     ))
 }
 
-/// Every `let` of `typed` that binds a suspending call's result into a union slot, as the
-/// teaching diagnostic, judged by `callee_suspends`. Typeck refuses these as it checks each
-/// `let`; this is the same refusal for a call only the codegen query can see is suspending (a
+/// The teaching diagnostic for `return <value>` from a function that returns the union
+/// `union_ty` when `value` is a call that pauses and resumes, `None` otherwise: the `return`
+/// face of `suspending_union_let_diagnostic`, asked by typeck and by the codegen query the same
+/// way, with the same two suspend sets.
+///
+/// Time: O(1)  Space: O(size of the call's source text)
+fn suspending_union_return_diagnostic(
+    value: &Expr,
+    union_ty: &Type,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> Option<Diagnostic> {
+    if !is_suspending_call_value(value, expr_types, callee_suspends) {
+        return None;
+    }
+    let slots = [
+        ("call", expr_source_text(value)),
+        ("union", type_name(union_ty)),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    Some(registry_diag(
+        value.span().clone(),
+        DiagnosticKind::SuspendingResultIntoUnionReturn,
+        &slots,
+    ))
+}
+
+/// Every `let` and `return` of `typed` that binds a suspending call's result into a union slot,
+/// as the teaching diagnostic, judged by `callee_suspends`. Typeck refuses these as it checks
+/// each `let` and `return`; this is the same refusal for a call only the codegen query can see is suspending (a
 /// function the CPU-parallel promotion turns into a state machine: `cpu_promotion_query` depends
 /// on typeck's result, so typeck cannot ask it). Without it such a program reached codegen's
 /// "compiler bug" guard.
 ///
 /// Time: O(n) for n statements  Space: O(r) for r refusals
-pub fn suspending_union_let_diagnostics(
+pub fn suspending_union_diagnostics(
     typed: &TypedModule,
     callee_suspends: &dyn Fn(&str) -> bool,
 ) -> Vec<Diagnostic> {
@@ -9977,6 +10047,19 @@ pub fn suspending_union_let_diagnostics(
                     if let Some(coercion) = typed.union_coercions.get(&(span.start, span.end)) {
                         out.extend(suspending_union_let_diagnostic(
                             name,
+                            value,
+                            &coercion.slot,
+                            &typed.expr_types,
+                            callee_suspends,
+                        ));
+                    }
+                }
+                Stmt::Return {
+                    value: Some(value), ..
+                } => {
+                    let span = value.span();
+                    if let Some(coercion) = typed.union_coercions.get(&(span.start, span.end)) {
+                        out.extend(suspending_union_return_diagnostic(
                             value,
                             &coercion.slot,
                             &typed.expr_types,

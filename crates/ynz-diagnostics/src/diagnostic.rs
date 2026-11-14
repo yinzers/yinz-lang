@@ -59,6 +59,11 @@ pub enum DiagnosticKind {
     /// (`let m: Mixed = wait count()`); that result is bound without the tag a union needs.
     /// v0.3-M9 C1e: refused in typeck instead of at codegen's "compiler bug" refusal.
     SuspendingResultIntoUnionLet,
+    /// A `return` of a union-typed function takes the result of a call that pauses and resumes
+    /// (`return wait count()`); that result is stored in the return slot without the tag a union
+    /// needs. v0.3-M9 C1e: refused in typeck and by the codegen query instead of reaching the
+    /// compiler's internal guard.
+    SuspendingResultIntoUnionReturn,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -126,6 +131,7 @@ impl DiagnosticKind {
             DiagnosticKind::UnionWhereVariantExpected => "UnionWhereVariantExpected",
             DiagnosticKind::UnionVariantNotStorable => "UnionVariantNotStorable",
             DiagnosticKind::SuspendingResultIntoUnionLet => "SuspendingResultIntoUnionLet",
+            DiagnosticKind::SuspendingResultIntoUnionReturn => "SuspendingResultIntoUnionReturn",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -159,6 +165,7 @@ impl DiagnosticKind {
         "UnionWhereVariantExpected",
         "UnionVariantNotStorable",
         "SuspendingResultIntoUnionLet",
+        "SuspendingResultIntoUnionReturn",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -190,7 +197,12 @@ impl DiagnosticKind {
             // (a non-shape variant, an expression value) cannot offer as written.
             DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
             DiagnosticKind::UnionVariantNotStorable => "can't be stored in a union yet".to_string(),
-            DiagnosticKind::SuspendingResultIntoUnionLet => "store it in a variable first".to_string(),
+            DiagnosticKind::SuspendingResultIntoUnionLet => {
+                "store it in a variable first".to_string()
+            }
+            DiagnosticKind::SuspendingResultIntoUnionReturn => {
+                "store it in a variable first".to_string()
+            }
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {

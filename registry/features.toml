@@ -1744,6 +1744,20 @@ what_template = "`{call}` pauses and resumes before it gives its result, and tha
 what_instead_template = "Store the result in its own variable first, then store that variable in `{name}`: `let got = {call}`, then `let {name}: {union} = got`."
 why_template = "A `{union}` variable holds a value together with a tag saying which variant it is. When a call pauses and resumes, its result arrives without that tag being added, so the first `is` check on `{name}` would read a wrong tag and could crash. Copying the result from its own variable into `{name}` is the step where the compiler adds the tag."
 
+# v0.3-M9 C1e (#421): `return wait count()` and `return count()` with a suspending `count`, from a
+# function that returns a union. The state-machine `return` stores a call's result in the return
+# slot without the step that tags a plain value for a union, so the first `is` check on the
+# caller's result would read a garbage tag. Typeck refuses it at the `return`, and the codegen
+# query refuses it again for a callee only the CPU-parallel promotion makes suspending; the
+# workaround it names (`let got = ...`, then `return got`) goes through the tagging step.
+# `{call}` is the call as source text (`wait count()`), `{union}` the function's return type.
+# Decided v0.3-M9 C1e round 3: `git log --grep=SuspendingResultIntoUnionReturn`.
+[[diagnostic_template]]
+kind_name = "SuspendingResultIntoUnionReturn"
+what_template = "`{call}` pauses and resumes before it gives its result, and that result can't be returned straight from this function, which returns a `{union}`, yet."
+what_instead_template = "Store the result in its own variable first, then return that variable: `let got = {call}`, then `return got`."
+why_template = "A `{union}` result holds a value together with a tag saying which variant it is. When a call pauses and resumes, its result arrives without that tag being added, so the first `is` check on what this function returns would read a wrong tag and could crash. Returning the result from its own variable is the step where the compiler adds the tag."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full

@@ -3884,28 +3884,56 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(slot)
     }
 
-    /// Internal guard behind typeck's teaching refusal (`refuse_suspending_result_into_union_let`):
-    /// refuse a `let` whose value typeck recorded as entering a union slot
+    /// Internal guard behind the teaching refusals of a suspending call's result entering a
+    /// union slot (typeck's `refuse_suspending_result_into_union_let` and `..._return`, and the
+    /// codegen query's `suspending_union_diagnostics` with the effective suspend set): refuse a
+    /// `let` whose value typeck recorded as entering a union slot
     /// (`TypedModule::union_coercions`) when the state-machine lowering binds that value
     /// without `lower_expr`, the one coercion point: `let m: Mixed = wait count()` and
     /// `let m: Mixed = count()` with a suspending `count`. Bound bare, the raw return value
     /// becomes the envelope pointer and the first `is` arm reads its tag through that
-    /// address. Typeck refuses first from its own suspending-function set; this guard asks the
-    /// effective set, which also holds callees the CPU-parallel promotion makes suspending
-    /// after typeck ran, so it keeps those from reaching the lowering.
+    /// address. A user program never reaches it; reaching it is a compiler bug.
     ///
     /// Time: O(1)  Space: O(1)
     fn refuse_unwrapped_suspending_let(&self, name: &str, value: &Expr) -> Result<(), String> {
-        let span = value.span();
-        match self.typed.union_coercions.get(&(span.start, span.end)) {
+        match self.recorded_union_slot(value) {
             None => Ok(()),
-            Some(coercion) => Err(format!(
-                "codegen: `let {name}`: the result of a suspending call reached a `{:?}` binding \
+            Some(slot) => Err(format!(
+                "codegen: `let {name}`: the result of a suspending call reached a `{slot:?}` binding \
                  unwrapped although typeck refuses that before codegen runs (the call is \
                  suspending only in the effective suspend set); this is a compiler bug",
-                self.resolve_type(&coercion.slot)
             )),
         }
+    }
+
+    /// The `return` face of `refuse_unwrapped_suspending_let`: refuse `return <suspending call>`
+    /// whose value typeck recorded as entering the returned union. The state-machine `return`
+    /// stores the call's result in the return slot without `lower_expr`, so the raw result would
+    /// be read back as the envelope pointer (and `to_i64_bits` panics on it, which a user must
+    /// not see as the "compiler bug" box).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn refuse_unwrapped_suspending_return(&self, value: &Expr) -> Result<(), String> {
+        match self.recorded_union_slot(value) {
+            None => Ok(()),
+            Some(slot) => Err(format!(
+                "codegen: `return`: the result of a suspending call reached the `{slot:?}` return \
+                 slot unwrapped although typeck and the codegen query refuse that before \
+                 emission; this is a compiler bug",
+            )),
+        }
+    }
+
+    /// The resolved union slot typeck recorded for `value` (`TypedModule::union_coercions`),
+    /// `None` when `value` enters no union slot.
+    ///
+    /// Time: O(1)  Space: O(size of the slot type)
+    fn recorded_union_slot(&self, value: &Expr) -> Option<Type> {
+        let span = value.span();
+        self.typed
+            .union_coercions
+            .get(&(span.start, span.end))
+            .map(|coercion| self.resolve_type(&coercion.slot))
     }
 
     /// THE coercion point: wrap the lowered plain value `val` of `expr` in the tagged envelope
@@ -7798,6 +7826,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         Stmt::Return {
             value: Some(inner), ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_return(inner)?;
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,

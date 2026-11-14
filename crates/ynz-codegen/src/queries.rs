@@ -437,12 +437,12 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // already evaluated inside frame_layouts_query above.
     let layout = layout_decisions_query(db, source);
 
-    // Refuse, as the teaching diagnostic, a union `let` whose value is a call only the
+    // Refuse, as the teaching diagnostic, a union `let` or `return` whose value is a call only the
     // effective suspend set knows is suspending (a CPU-promoted function). Typeck judged the
-    // same `let` with its own set; codegen's `refuse_unwrapped_suspending_let` stays as the
-    // internal guard behind both.
+    // same slot with its own set; codegen's `refuse_unwrapped_suspending_let` and
+    // `refuse_unwrapped_suspending_return` stay as the internal guards behind both.
     let promoted_refusals =
-        ynz_typeck::check::suspending_union_let_diagnostics(&check.typed_module, &|callee| {
+        ynz_typeck::check::suspending_union_diagnostics(&check.typed_module, &|callee| {
             suspends_with_promotions.contains(callee)
                 && !ynz_typeck::is_base_suspension_intrinsic(callee)
         });
