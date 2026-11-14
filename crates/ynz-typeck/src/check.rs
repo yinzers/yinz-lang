@@ -8,10 +8,10 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 
 use crate::{
     builtins::{
-        array_method_is_mutating, array_method_return, collection_method_arg_slots,
-        collection_store_positions, fixed_method_is_mutating, fixed_method_return,
-        map_method_is_mutating, map_method_return, maybe_method_return, sensitive_method_return,
-        string_method_return,
+        array_method_is_mutating, array_method_return, builtin_method_argument_count,
+        collection_method_arg_slots, collection_store_positions, fixed_method_is_mutating,
+        fixed_method_return, map_method_is_mutating, map_method_return, maybe_method_return,
+        sensitive_method_return, string_method_return,
     },
     effective_ownership::{
         classify_binding_in_stmts, provenance, stmt_rebinds, EffectiveOwnership, Freshness,
@@ -166,18 +166,53 @@ fn union_recovery(value: &Expr, source_union: &Type, expected_variant: &Type) ->
 /// The teaching diagnostic for a call with a different number of arguments than the function
 /// declares. ONE text for every call form: the plain call, the generic call and the dot call
 /// (`value.f(a)` is `f(value, a)`, so the dot call counts the receiver as the first argument).
+///
+/// `expected` and `given` always count the receiver of a dot call. `dot_receiver` is the source
+/// text of the value before the dot, `None` for a plain call. The first sentence of the WHAT is
+/// the same for every form; a dot call adds to WHAT-INSTEAD and WHY what the plain call has no
+/// need of: that the value before the dot is one of the arguments (without it, "takes 2, but 1
+/// were given" for `big.useBig()` has nothing to point at, since the parentheses are empty).
 fn wrong_argument_count_diag(
     span: SourceSpan,
     callee: &str,
     expected: usize,
     given: usize,
+    dot_receiver: Option<&str>,
 ) -> Diagnostic {
+    let what = format!("`{callee}` takes {expected} argument(s), but {given} were given.");
+    let Some(receiver) = dot_receiver else {
+        return Diagnostic::error(
+            span,
+            what,
+            format!("Call it with {expected} argument(s)."),
+            "Every function call must match the number of arguments the function declares.",
+        );
+    };
+    let inside_parentheses = expected.saturating_sub(1);
+    let what_instead = if inside_parentheses == 0 {
+        format!(
+            "Call it with {expected} argument(s). Put nothing inside the parentheses of `{receiver}.{callee}()`."
+        )
+    } else {
+        format!(
+            "Call it with {expected} argument(s). Put {inside_parentheses} argument(s) inside the parentheses of `{receiver}.{callee}(…)`."
+        )
+    };
     Diagnostic::error(
         span,
-        format!("`{callee}` takes {expected} argument(s), but {given} were given."),
-        format!("Call it with {expected} argument(s)."),
-        "Every function call must match the number of arguments the function declares.",
+        what,
+        what_instead,
+        format!(
+            "Every function call must match the number of arguments the function declares. A dot call counts the value before the dot, `{receiver}`, as the first argument."
+        ),
     )
+}
+
+/// The text of the value before the dot in a dot-call diagnostic. `Checker::check_method_call`
+/// is only reached from the method-call expression, which always has a receiver; the `None` arm
+/// states what is true of any dot call instead of printing an empty name.
+fn dot_receiver_text(receiver_expr: Option<&Expr>) -> String {
+    receiver_expr.map_or_else(|| "the receiver".to_string(), expr_source_text)
 }
 
 /// The teaching diagnostic for a union value reaching a slot that expects one of its variants
@@ -4305,6 +4340,19 @@ impl<'b> Checker<'b> {
                         args,
                         method_call_span,
                     )
+                // A built-in method called with the wrong number of arguments is refused here,
+                // BEFORE the one-argument intrinsic path below (which would accept
+                // `s.substring(1)`) and before `check_method_call` (which never counts them):
+                // codegen indexes the argument list by position, so a missing argument is a
+                // panic and an extra one is dropped without a word.
+                } else if self.reject_wrong_builtin_method_argument_count(
+                    &effective_receiver_ty,
+                    receiver,
+                    method,
+                    method_span,
+                    args,
+                ) {
+                    Type::Error
                 } else
                 // M4 P5: one-arg intrinsic methods (wrapping/saturating arithmetic).
                 // Must NOT use `return` here — the match value feeds expr_types.insert below.
@@ -6888,6 +6936,7 @@ impl<'b> Checker<'b> {
                 name,
                 params.len(),
                 call.args.len(),
+                None,
             ));
             for arg in &call.args {
                 self.infer_expr(arg, None);
@@ -7133,6 +7182,7 @@ impl<'b> Checker<'b> {
                 name,
                 non_self_params.len(),
                 call.args.len(),
+                None,
             ));
             for arg in &call.args {
                 self.infer_expr(arg, None);
@@ -7584,6 +7634,7 @@ impl<'b> Checker<'b> {
                             method,
                             sig.param_tys.len() + 1,
                             args.len() + 1,
+                            Some(&dot_receiver_text(receiver_expr)),
                         ));
                         return Type::Error;
                     }
@@ -7658,6 +7709,7 @@ impl<'b> Checker<'b> {
                                 method,
                                 sig.params.len(),
                                 args.len() + 1,
+                                Some(&dot_receiver_text(receiver_expr)),
                             ));
                             return Type::Error;
                         }
@@ -9258,6 +9310,58 @@ impl<'b> Checker<'b> {
             format!("Change the parameter to `lend {root_name}: {value_ty}` if this function needs to modify it."),
             "A `share` parameter is a read-only borrow: the caller keeps ownership and trusts the value is unchanged after the call. When a function modifies a value, declare `lend` so the change is visible at every call site.",
         ));
+        true
+    }
+    /// How many arguments (the receiver not counted) the built-in method `method` takes on
+    /// `receiver_ty`, or `None` when no table knows it. Asks the collection/`maybe`/string table
+    /// first (`builtin_method_argument_count`), then the registry-backed primitive intrinsics
+    /// (`method` entries take none, `method_1arg` entries take one) — one source per method,
+    /// never a second copy of the registry's counts.
+    fn builtin_method_argument_count(&self, receiver_ty: &Type, method: &str) -> Option<usize> {
+        if let Some(count) = builtin_method_argument_count(receiver_ty, method) {
+            return Some(count);
+        }
+        if self.intrinsics.lookup_method(receiver_ty, method).is_some() {
+            return Some(0);
+        }
+        if self
+            .intrinsics
+            .lookup_method_1arg(receiver_ty, method)
+            .is_some()
+        {
+            return Some(1);
+        }
+        None
+    }
+
+    /// Refuse a built-in method (`xs.add()`, `m.set(`a`)`, `n.toString(1, 2)`) called with a
+    /// different number of arguments than it takes, with the shared arity teaching text; the
+    /// receiver counts as the first argument, like for a function of your own. The arguments are
+    /// still inferred so their own errors are reported. Returns `true` when it refused.
+    fn reject_wrong_builtin_method_argument_count(
+        &mut self,
+        receiver_ty: &Type,
+        receiver_expr: &Expr,
+        method: &str,
+        method_span: &SourceSpan,
+        args: &[Expr],
+    ) -> bool {
+        let Some(expected) = self.builtin_method_argument_count(receiver_ty, method) else {
+            return false;
+        };
+        if args.len() == expected {
+            return false;
+        }
+        self.diags.push(wrong_argument_count_diag(
+            method_span.clone(),
+            method,
+            expected + 1,
+            args.len() + 1,
+            Some(&expr_source_text(receiver_expr)),
+        ));
+        for arg in args {
+            self.infer_expr(arg, None);
+        }
         true
     }
 

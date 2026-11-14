@@ -268,6 +268,60 @@ pub fn collection_method_arg_slots(receiver: &Type, method: &str) -> Vec<(usize,
     }
 }
 
+/// How many arguments (the receiver not counted) the built-in methods of the collection, `maybe`
+/// and string types take, or `None` when this table does not know the method: an unknown name
+/// (refused elsewhere, with its own text), `sort` (its arguments are optional) and the methods the
+/// registry's `primitive_intrinsic` entries already count (`int`/`float`/`number`/`bool` methods
+/// and the string methods with zero or one argument — see `Checker::builtin_method_argument_count`,
+/// which asks this table first, then those entries).
+/// `sort`, `filter`, `map` and `find` are left out on purpose: their closure arguments are not
+/// settled (`sort` takes none, one or two) and the type-check tests call `filter()` with none.
+///
+/// The ONE argument-count table for built-in methods, beside `collection_method_arg_slots` (which
+/// says WHICH positions carry the element type; this says HOW MANY positions there are).
+/// `check_method_call`'s caller compares it with the call before any lowering, because codegen
+/// indexes the argument list by position and a missing argument is a panic, not an error. A
+/// method that gains an argument gains its number HERE, never a per-arm check.
+///
+/// O(1): a match on two short strings.
+pub fn builtin_method_argument_count(receiver: &Type, method: &str) -> Option<usize> {
+    match receiver {
+        Type::BuiltinArray { .. } => match method {
+            "removeFirst" | "removeLast" | "clear" | "first" | "last" | "count" | "unique"
+            | "copy" | "freeze" => Some(0),
+            "add" | "remove" | "get" | "contains" | "limit" | "concat" | "append" | "prepend" => {
+                Some(1)
+            }
+            "set" => Some(2),
+            _ => None,
+        },
+        Type::BuiltinFixed { .. } => match method {
+            "first" | "last" | "count" | "unique" | "copy" | "freeze" => Some(0),
+            "get" | "contains" | "limit" | "append" | "prepend" | "concat" => Some(1),
+            "set" => Some(2),
+            _ => None,
+        },
+        Type::Maybe { .. } => match method {
+            "exists" => Some(0),
+            "or" => Some(1),
+            _ => None,
+        },
+        Type::BuiltinMap { .. } => match method {
+            "clear" | "count" | "keys" | "values" | "entries" => Some(0),
+            "get" | "has" | "remove" => Some(1),
+            "set" => Some(2),
+            _ => None,
+        },
+        // `substring(start, end)` and `replace(from, to)` take two; the registry lists them with
+        // one parameter, so they are counted here and not by the registry.
+        Type::String => match method {
+            "substring" | "replace" => Some(2),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// THE table of built-in collection methods that STORE an argument into the receiver, and which
 /// argument positions they store: `add(v)`, `set(i, v)`, `map.set(k, v)`. A heap value stored
 /// this way is held by the receiver from then on, so the transfer record joins the two
