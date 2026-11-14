@@ -64,6 +64,11 @@ pub enum DiagnosticKind {
     /// needs. v0.3-M9 C1e: refused in typeck and by the codegen query instead of reaching the
     /// compiler's internal guard.
     SuspendingResultIntoUnionReturn,
+    /// An argument whose type differs from the type a type parameter of a generic function was
+    /// already made to stand for, by an earlier argument or an explicit type argument
+    /// (`same(big, tiny)` makes `T` a `Big`, then a `Tiny` arrives). The function is built for
+    /// the first type and would read the second as it. v0.3-M9 C1g.
+    ArgumentConflictsWithTypeParameter,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -132,6 +137,9 @@ impl DiagnosticKind {
             DiagnosticKind::UnionVariantNotStorable => "UnionVariantNotStorable",
             DiagnosticKind::SuspendingResultIntoUnionLet => "SuspendingResultIntoUnionLet",
             DiagnosticKind::SuspendingResultIntoUnionReturn => "SuspendingResultIntoUnionReturn",
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "ArgumentConflictsWithTypeParameter"
+            }
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -166,6 +174,7 @@ impl DiagnosticKind {
         "UnionVariantNotStorable",
         "SuspendingResultIntoUnionLet",
         "SuspendingResultIntoUnionReturn",
+        "ArgumentConflictsWithTypeParameter",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -202,6 +211,9 @@ impl DiagnosticKind {
             }
             DiagnosticKind::SuspendingResultIntoUnionReturn => {
                 "store it in a variable first".to_string()
+            }
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "not the type this call needs".to_string()
             }
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),

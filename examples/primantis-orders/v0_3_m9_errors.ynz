@@ -1,4 +1,4 @@
-// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness)
+// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments)
 //
 // Every block below intentionally triggers a diagnostic added or extended in v0.3-M9.
 // Run `ynz build v0_3_m9_errors.ynz` to see all diagnostics.
@@ -39,6 +39,10 @@ function describeRound(share round: Round) -> string {
   return `other`
 }
 
+function sameKind<T>(share first: T, share second: T) -> T {
+  return second
+}
+
 function entrypoint() -> nothing {
   let special: Special = { label: `cheesesteak` }
   let order: Order = special
@@ -61,4 +65,8 @@ function entrypoint() -> nothing {
   let plain: Plain = { table: 4 }
   let round: Round = plain
   print(describeRound(round))
+
+  // WHY: ArgumentConflictsWithTypeParameter — `sameKind` takes both arguments as one `T`;
+  // `plain` makes `T` a `Plain`, so the `Special` cannot follow.
+  print(sameKind(plain, special).table.toString())
 }

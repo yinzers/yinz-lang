@@ -1,0 +1,37 @@
+// v0.3-M9 C1g regression guard: codegen calls the generic instance the type checker checked
+// each call with. `pickA(tiny, big)` fits both `pickA<Big>` and `pickA<Big | Tiny>` (both are
+// built, the second for `pickA(u, u)`); re-deriving the instance from the argument types could
+// not choose and stopped with an internal compiler error on this legal program. A wrong choice
+// would read the bare `Big` passed for `second` as a tagged `Big | Tiny` box.
+// Correct behavior: compiles; prints hello / hello / tiny.
+// Pre-fix (bd1ce3e): internal compiler error "fit 2 of them equally, with no exact match".
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+function pickA<T>(share first: T | Tiny, share second: T) -> T | Tiny {
+  return second
+}
+function show(share picked: Big | Tiny) -> nothing {
+  if (picked) {
+    is Big => {
+      print(picked.label)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }
+}
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let u: Big | Tiny = big
+  let v: Big | Tiny = tiny
+  show(pickA(tiny, big))
+  show(pickA(u, u))
+  show(pickA(u, v))
+}

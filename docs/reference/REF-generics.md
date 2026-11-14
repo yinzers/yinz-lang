@@ -94,6 +94,36 @@ The compiler picks `T` from the argument you pass. You almost never write it exp
 
 ---
 
+## One `T` is one type per call
+
+When two parameters share a type parameter, every argument for them must have that one type. The first argument that fixes `T` (or the explicit `<Type>` you wrote) decides it:
+
+```
+shape Tiny { flag: boolean }
+shape Big { label: string, count: int }
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+same(big, big2)        // OK — T is Big for both
+same(big, tiny)        // COMPILE ERROR
+same<Big>(big, tiny)   // COMPILE ERROR
+```
+
+The error names the argument, the type `T` was made, and what made it:
+
+```
+`tiny` has type `Tiny`, but `same` needs `Big` for `second`: `second` and `first` share the
+type parameter `T`, and the argument `big` for `first` already made it `Big`.
+```
+
+The function is compiled for `Big`, so it would read the `Tiny` as a `Big`: wrong values, or memory past the end of the `Tiny`. Pass a `Big` for `second`, or give `first` a `Tiny` too.
+
+The same comparison applies to every argument of every call form: `f(a, b)`, `a.f(b)` and generic calls. An argument must be the type its parameter declares.
+
+---
+
 ## Multiple type parameters on a function
 
 ```

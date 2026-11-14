@@ -1030,3 +1030,55 @@ fn a_suspending_result_returned_as_a_union_is_refused_with_its_registry_text() {
     assert_compiles(&program("let got = count()\n return got"));
     assert_compiles(&program("let got = wait count()\n return got"));
 }
+
+const SAME_TWO_SHAPES: &str = "shape Tiny { flag: boolean }\n\
+     shape Big { label: string }\n\
+     function same<T>(share first: T, share second: T) -> T { return second }\n";
+
+#[test]
+fn argument_conflicts_with_type_parameter_is_rendered_from_the_registry() {
+    // WHY: v0.3-M9 C1g — `same(big, tiny)` compiled and read a `Tiny` as a `Big`; the refusal's
+    // text must come from the registry template (`cause`/`alternative` are the two slots that
+    // depend on what bound the type parameter).
+    assert_rendered(
+        DiagnosticKind::ArgumentConflictsWithTypeParameter,
+        &format!(
+            "{SAME_TWO_SHAPES}function entrypoint() -> nothing {{\n\
+               let big: Big = {{ label: `hello` }}\n\
+               let tiny: Tiny = {{ flag: true }}\n\
+               print(same(big, tiny).label)\n\
+             }}"
+        ),
+        &[
+            ("value", "tiny"),
+            ("actual", "Tiny"),
+            ("callee", "same"),
+            ("param", "second"),
+            ("typeParam", "T"),
+            ("bound", "Big"),
+            (
+                "cause",
+                "`second` and `first` share the type parameter `T`, and the argument `big` for \
+                 `first` already made it `Big`",
+            ),
+            (
+                "alternative",
+                "Or give `first` a `Tiny` too, so `first` and `second` have the same type",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn argument_conflicts_with_type_parameter_suggestions_compile() {
+    // WHY: Golden Rule 11 — each alternative the WHAT-INSTEAD names must compile today:
+    // `first` given a `Tiny` too, and the explicit type argument changed to `Tiny`.
+    assert_compiles(&format!(
+        "{SAME_TWO_SHAPES}function entrypoint() -> nothing {{\n\
+           let tiny: Tiny = {{ flag: true }}\n\
+           let other: Tiny = {{ flag: false }}\n\
+           print(same(tiny, other).flag.toString())\n\
+           print(same<Tiny>(tiny, other).flag.toString())\n\
+         }}"
+    ));
+}

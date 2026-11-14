@@ -1,0 +1,15 @@
+// v0.3-M9 C1g (security): two scalar types for ONE type parameter (`same(count, label)`,
+// `T = int` then a `string`).
+// Correct behavior: does not compile — refused with the same teaching text as the shape case.
+// Pre-fix failure: compiled to an LLVM module the verifier rejected ("Call parameter type does
+// not match function signature"), reported as a compiler bug instead of a diagnostic.
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function entrypoint() -> nothing {
+  let count: int = 5
+  let label: string = `x`
+  print(same(count, label))
+}

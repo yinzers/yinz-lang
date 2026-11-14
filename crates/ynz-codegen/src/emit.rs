@@ -1354,7 +1354,6 @@ fn build_module<'ctx, 'g>(
                 &shape_types,
                 &shape_abi_sizes,
                 &shape_field_abi,
-                mono_table,
                 &options_table,
                 &wait_cache,
                 suspend_set,
@@ -1414,7 +1413,6 @@ fn build_module<'ctx, 'g>(
             fn_val,
             type_subst,
             mono_sig,
-            mono_table,
             &options_table,
             layout,
         )?;
@@ -1424,63 +1422,84 @@ fn build_module<'ctx, 'g>(
     Ok(())
 }
 
-/// Mangle a generic function name + type args into a unique LLVM symbol name.
+/// Mangle a generic function name + type args into a unique LLVM symbol name:
+/// `fn_name<arg,arg>`.
+///
+/// The name must be injective, and must never equal a user function's name: Pass 1.5 skips an
+/// instance whose name is already declared, and a call resolves to whatever function holds the
+/// name. The old `_`-joined form broke both, because Yinz identifiers may contain `_`:
+/// `show<Big>` was `show_shape_Big`, the name of a user function `show_shape_Big(Tiny)`, so
+/// `show(big)` ran that function on a `Big`; and `second<A_shape_B, int>` and
+/// `second<A, B_int>` were both `second_shape_A_shape_B_int` (C1g, #424). `<`, `>`, `,` and the
+/// delimiters `mangle_type` uses never occur in an identifier, so neither can happen.
+///
+/// O(size of the type arguments) time and space.
 fn mangle_mono_name(fn_name: &str, type_args: &[Type]) -> String {
-    let mut name = fn_name.to_string();
-    for ty in type_args {
-        name.push('_');
-        name.push_str(&mangle_type(ty));
-    }
-    name
+    let args: Vec<String> = type_args.iter().map(mangle_type).collect();
+    format!("{fn_name}<{}>", args.join(","))
 }
 
+/// A type's symbol-name form. Injective: a user name is always followed by a delimiter or the
+/// end, and the delimiters (`:`, `(`, `)`, `,`, `|`) never occur in an identifier, so two
+/// different types never share a form (see `mangle_mono_name`).
+///
+/// O(size of the type) time and space.
 fn mangle_type(ty: &Type) -> String {
+    let joined = |types: &[Type], separator: &str| {
+        types
+            .iter()
+            .map(mangle_type)
+            .collect::<Vec<_>>()
+            .join(separator)
+    };
     match ty {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
         Type::Bool => "boolean".to_string(),
         Type::String => "string".to_string(),
         Type::Nothing => "nothing".to_string(),
-        Type::Shape { name } => format!("shape_{name}"),
-        Type::Dynamic { contract } => format!("dyn_{contract}"),
-        Type::BuiltinArray { elem } => format!("array_{}", mangle_type(elem)),
-        Type::BuiltinFixed { elem, size } => {
-            format!("fixed_{}_{}", size.unwrap_or(0), mangle_type(elem))
-        }
-        Type::Maybe { inner } => format!("maybe_{}", mangle_type(inner)),
-        Type::Generic { name, args } => {
-            let arg_str = args.iter().map(mangle_type).collect::<Vec<_>>().join("_");
-            format!("{name}_{arg_str}")
-        }
-        Type::TypeParam { name } => format!("tparam_{name}"),
-        Type::Number { precision } => format!("number_{precision}"),
+        Type::Shape { name } => format!("shape:{name}"),
+        Type::Dynamic { contract } => format!("dyn:{contract}"),
+        Type::BuiltinArray { elem } => format!("array({})", mangle_type(elem)),
+        Type::BuiltinFixed { elem, size } => match size {
+            Some(size) => format!("fixed({size},{})", mangle_type(elem)),
+            None => format!("fixed(,{})", mangle_type(elem)),
+        },
+        Type::Maybe { inner } => format!("maybe({})", mangle_type(inner)),
+        Type::Generic { name, args } => format!("generic:{name}({})", joined(args, ",")),
+        Type::TypeParam { name } => format!("tparam:{name}"),
+        Type::Number { precision } => format!("number({precision})"),
         Type::Range {
             element,
             end_inclusive,
         } => {
             format!(
-                "range_{}{}",
-                mangle_type(element),
-                if *end_inclusive { "_inc" } else { "" }
+                "{}({})",
+                if *end_inclusive { "range_inc" } else { "range" },
+                mangle_type(element)
             )
         }
         Type::BuiltinMap { key, val } => {
-            format!("map_{}_{}", mangle_type(key), mangle_type(val))
+            format!("map({},{})", mangle_type(key), mangle_type(val))
         }
         Type::MapEntry { key, val } => {
-            format!("mapentry_{}_{}", mangle_type(key), mangle_type(val))
+            format!("mapentry({},{})", mangle_type(key), mangle_type(val))
         }
-        Type::BuiltinChannel { elem } => format!("channel_{}", mangle_type(elem)),
+        Type::BuiltinChannel { elem } => format!("channel({})", mangle_type(elem)),
         // v0.3-M4: inferred-only task handles never appear as generic type args in valid
         // programs, but the mangler stays total.
-        Type::BackgroundHandle { result, .. } => format!("bghandle_{}", mangle_type(result)),
-        Type::Options { name } => format!("options_{name}"),
-        Type::Union { variants } => {
-            let parts: Vec<_> = variants.iter().map(mangle_type).collect();
-            format!("union_{}", parts.join("_or_"))
-        }
-        Type::ErrorsCapable { inner } => format!("errors_{}", mangle_type(inner)),
-        Type::Sensitive { inner } => format!("sensitive_{}", mangle_type(inner)),
+        Type::BackgroundHandle { result, msg_elem } => match msg_elem {
+            Some(msg_elem) => format!(
+                "bghandle({},{})",
+                mangle_type(result),
+                mangle_type(msg_elem)
+            ),
+            None => format!("bghandle({},)", mangle_type(result)),
+        },
+        Type::Options { name } => format!("options:{name}"),
+        Type::Union { variants } => format!("union({})", joined(variants, "|")),
+        Type::ErrorsCapable { inner } => format!("errors({})", mangle_type(inner)),
+        Type::Sensitive { inner } => format!("sensitive({})", mangle_type(inner)),
         // Type::Error should never reach codegen — an earlier phase should have
         // caught all type errors and stopped compilation. Panic here so it's
         // visible immediately if it ever does (instead of silently emitting a
@@ -1523,7 +1542,6 @@ fn lower_generic_function<'ctx>(
     fn_val: FunctionValue<'ctx>,
     type_subst: HashMap<String, Type>,
     mono_sig: &ynz_typeck::generics::MonoSignature,
-    mono_table: &'_ MonomorphizationTable,
     options_table: &'_ ynz_typeck::options_table::OptionsTable,
     layout: &'_ ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
@@ -1550,7 +1568,6 @@ fn lower_generic_function<'ctx>(
         // alignment path runs for generic bodies too.
         layout,
         type_subst,
-        mono_table,
         options_table,
         // Generic functions are not errors-capable in M7 (no `-> T errors` on generics yet).
         is_errors_capable: false,
@@ -1951,7 +1968,6 @@ struct Cg<'ctx, 'g> {
     // M5 P4a: type-param substitution for the current monomorphized instance.
     // Empty for non-generic functions.
     type_subst: HashMap<String, Type>,
-    mono_table: &'g MonomorphizationTable,
     // M6: options table for variant tag lookup.
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     // M7 P4a: true when the current function declared `-> T errors`.
@@ -2219,6 +2235,30 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// The union coercion typeck recorded for the expression at `key`
+    /// (`TypedModule::union_coercions`), or `None` when it enters no union slot in the instance
+    /// being lowered. THE reader of that record: every consumer asks here, so none of them
+    /// wraps a value the instance already holds as the slot's union.
+    ///
+    /// Typeck records a generic body's `return second` (`second: T` into `T | Tiny`) as a
+    /// coercion of variant 0. When the instance binds `T` to a union (`Big | Tiny`), the value
+    /// already IS the slot's flat union (`Big | Tiny`, the type `apply_substitution` builds):
+    /// there is no plain variant to wrap, and wrapping would nest an envelope in an envelope
+    /// (C1g `v0_3_m9_c1g_generic_call_runs_its_checked_instance`). A bound union whose flat
+    /// variants come in another order than the slot's (`Tiny | T`) is not this case and still
+    /// reaches the lowering, which refuses it instead of mis-tagging.
+    ///
+    /// Time: O(size of the slot type)  Space: O(size of the slot type)
+    fn coercion_at(&self, key: (usize, usize)) -> Option<&ynz_typeck::check::UnionCoercion> {
+        let coercion = self.typed.union_coercions.get(&key)?;
+        let plain = self.resolve_type(self.typed.expr_types.get(&key)?);
+        let flat_slot = ynz_typeck::generics::apply_substitution(&coercion.slot, &self.type_subst);
+        if matches!(plain, Type::Union { .. }) && plain == flat_slot {
+            return None;
+        }
+        Some(coercion)
+    }
+
     /// Look up the typeck type for `expr` and apply the current type-param substitution.
     ///
     /// An expression typeck coerced into a union slot (`TypedModule::union_coercions`) reads as
@@ -2228,7 +2268,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     fn expr_type(&self, expr: &Expr) -> Type {
         let key = (expr.span().start, expr.span().end);
         if self.coercion_inner != Some(key) {
-            if let Some(coercion) = self.typed.union_coercions.get(&key) {
+            if let Some(coercion) = self.coercion_at(key) {
                 return self.resolve_type(&coercion.slot);
             }
         }
@@ -3840,7 +3880,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///
     /// Time: O(d) for d nested narrowings  Space: O(1)
     fn narrowed_use_reuses_envelope(&self, name: &str, use_key: (usize, usize)) -> bool {
-        let Some(coercion) = self.typed.union_coercions.get(&use_key) else {
+        let Some(coercion) = self.coercion_at(use_key) else {
             return false;
         };
         let Some(entry) = self
@@ -3935,9 +3975,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Time: O(1)  Space: O(size of the slot type)
     fn recorded_union_slot(&self, value: &Expr) -> Option<Type> {
         let span = value.span();
-        self.typed
-            .union_coercions
-            .get(&(span.start, span.end))
+        self.coercion_at((span.start, span.end))
             .map(|coercion| self.resolve_type(&coercion.slot))
     }
 
@@ -4074,10 +4112,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return Ok(val);
         }
         let span = expr.span();
-        let wrapped_here = self
-            .typed
-            .union_coercions
-            .contains_key(&(span.start, span.end))
+        let wrapped_here = self.coercion_at((span.start, span.end)).is_some()
             && !self.is_narrowed_envelope_ident(expr);
         let is_union_value = matches!(self.expr_type(expr), Type::Union { .. });
         let already_homed = !wrapped_here
@@ -4965,7 +5000,6 @@ fn lower_function<'ctx, 'g>(
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
     shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
-    mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
@@ -4993,7 +5027,6 @@ fn lower_function<'ctx, 'g>(
             shape_types,
             shape_abi_sizes,
             shape_field_abi,
-            mono_table,
             options_table,
             wait_cache,
             suspend_set,
@@ -5039,7 +5072,6 @@ fn lower_function<'ctx, 'g>(
         soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
-        mono_table,
         options_table,
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
@@ -5233,7 +5265,6 @@ fn lower_function_with_waits<'ctx, 'g>(
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
     shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
-    mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
@@ -5548,7 +5579,6 @@ fn lower_function_with_waits<'ctx, 'g>(
         soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
-        mono_table,
         options_table,
         // is_errors_capable = false inside the resume fn: the SM return path handles
         // errors-capable results explicitly (stores {i64,i64} in return slot). Keeping
@@ -16295,7 +16325,7 @@ fn channel_drop_glue<'ctx>(
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
     let span = expr.span();
     let key = (span.start, span.end);
-    let Some(coercion) = cg.typed.union_coercions.get(&key).cloned() else {
+    let Some(coercion) = cg.coercion_at(key).cloned() else {
         return lower_expr_node(cg, expr);
     };
     let outer = cg.coercion_inner.replace(key);
@@ -16790,7 +16820,8 @@ fn lower_expr_node<'ctx>(
                     // Prefer the direct name. If not found, check for an aliased import
                     // (`import { getValue as fetchVal }`) — the LLVM module declares the
                     // function under the original exported name, not the local alias.
-                    // Fall back to monomorphization lookup, then the name itself.
+                    // Then a generic call: the instance the type checker recorded for this
+                    // call site, or an internal error (no guess).
                     let effective_name = if cg.module.get_function(name).is_some() {
                         name.to_string()
                     } else if let Some(orig) = cg
@@ -16800,11 +16831,13 @@ fn lower_expr_node<'ctx>(
                     {
                         orig.to_string()
                     } else {
-                        // Infer concrete arg types from the call site to pick the right mono.
-                        let arg_types: Vec<Type> =
-                            call.args.iter().map(|a| cg.expr_type(a)).collect();
-                        find_mono_name_by_args(cg.mono_table, name, &arg_types)
-                            .unwrap_or_else(|| name.to_string())
+                        recorded_generic_instance_name(
+                            &cg.typed.generic_call_instances,
+                            &cg.type_subst,
+                            name,
+                            &call.span,
+                            |instance| cg.module.get_function(instance).is_some(),
+                        )?
                     };
 
                     // The direct wrapper-fn invocation below serves ONLY callees that do not
@@ -18243,8 +18276,13 @@ fn lower_expr_background<'ctx>(
     } else if cg.module.get_function(&callee_name).is_some() {
         callee_name.clone()
     } else {
-        find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)
-            .unwrap_or_else(|| callee_name.clone())
+        recorded_generic_instance_name(
+            &cg.typed.generic_call_instances,
+            &cg.type_subst,
+            &callee_name,
+            &call.span,
+            |instance| cg.module.get_function(instance).is_some(),
+        )?
     };
     let target_fn = cg
         .module
@@ -21378,33 +21416,192 @@ fn declare_sat_intrinsic<'ctx>(
         .unwrap_or_else(|| module.add_function(name, fn_ty, None))
 }
 
-/// Find the mangled name for a generic function call by matching the base name in the mono table.
+/// The mangled name of the generic instance the call at `call_span` runs: the type arguments
+/// the type checker checked that call with (`TypedModule::generic_call_instances`), with the
+/// enclosing instance's own type parameters substituted (`type_subst`), so a generic call
+/// inside a generic body runs the instance built for the outer instance's types.
 ///
-/// When there are multiple instantiations of the same generic (e.g. `identity<int>` and
-/// `identity<string>`), this picks the first match. For P4a the typical case is a single
-/// instantiation per call site — a precise match by argument types is a P4b refinement.
-fn find_mono_name_by_args(
-    mono_table: &MonomorphizationTable,
+/// Never re-derived from the argument types: `pickA(tiny, big)` against `pickA<T>(first: T |
+/// Tiny, second: T)` fits both `pickA<Big>` and `pickA<Big | Tiny>`, and a guess runs a
+/// function built for other types (a `Tiny` read as a `Big`). A call with no record, a call
+/// recorded twice with different type arguments, or an instance that was never declared is an
+/// internal error — the type checker and codegen disagree, a compiler bug and never a user
+/// mistake (C1g, #424).
+///
+/// O(size of the type arguments) time and space.
+fn recorded_generic_instance_name(
+    instances: &ynz_typeck::GenericCallInstances,
+    type_subst: &HashMap<String, Type>,
     fn_name: &str,
-    arg_types: &[Type],
-) -> Option<String> {
-    // Try exact match on param types first.
-    for (key, sig) in &mono_table.entries {
-        if key.fn_name != fn_name {
-            continue;
-        }
-        if sig.param_types.len() == arg_types.len()
-            && sig.param_types.iter().zip(arg_types).all(|(a, b)| a == b)
-        {
-            return Some(mangle_mono_name(&key.fn_name, &key.type_args));
+    call_span: &ynz_diagnostics::SourceSpan,
+    instance_is_declared: impl Fn(&str) -> bool,
+) -> Result<String, String> {
+    let internal_error = |detail: String| {
+        format!(
+            "internal compiler error: cannot tell which instance of generic `{fn_name}` to call: \
+             {detail}. This is a compiler bug."
+        )
+    };
+    let recorded = instances
+        .type_args_at((call_span.start, call_span.end))
+        .map_err(internal_error)?;
+    let type_args: Vec<Type> = recorded
+        .iter()
+        .map(|type_arg| ynz_typeck::generics::apply_substitution(type_arg, type_subst))
+        .collect();
+    let mangled = mangle_mono_name(fn_name, &type_args);
+    if !instance_is_declared(&mangled) {
+        return Err(internal_error(format!(
+            "the call was checked with type arguments {type_args:?}, but no instance `{mangled}` \
+             was built"
+        )));
+    }
+    Ok(mangled)
+}
+
+#[cfg(test)]
+mod recorded_generic_instance_tests {
+    use super::{mangle_mono_name, recorded_generic_instance_name};
+    use std::collections::HashMap;
+    use ynz_diagnostics::SourceSpan;
+    use ynz_typeck::{GenericCallInstances, Type};
+
+    fn big() -> Type {
+        Type::Shape { name: "Big".into() }
+    }
+
+    fn tiny() -> Type {
+        Type::Shape {
+            name: "Tiny".into(),
         }
     }
-    // Fall back: first entry with matching name (single-instantiation case).
-    mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == fn_name)
-        .map(|k| mangle_mono_name(&k.fn_name, &k.type_args))
+
+    fn call_at(start: usize) -> SourceSpan {
+        SourceSpan::new("main.ynz", start, start + 10)
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_runs_the_instance_it_was_checked_with() {
+        // BUG (High: call dispatch, memory safety): `pickA(tiny, big)` fits both `pickA<Big>`
+        // and `pickA<Big | Tiny>`; re-deriving the instance from argument types could not tell
+        // them apart. Two calls with the same argument types run their own recorded instance.
+        let big_or_tiny = Type::Union {
+            variants: vec![big(), tiny()],
+        };
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![big()]);
+        instances.record((20, 30), vec![big_or_tiny.clone()]);
+        let declared = [
+            mangle_mono_name("pickA", &[big()]),
+            mangle_mono_name("pickA", std::slice::from_ref(&big_or_tiny)),
+        ];
+        let is_declared = |name: &str| declared.iter().any(|known| known == name);
+        let no_subst = HashMap::new();
+        assert_eq!(
+            recorded_generic_instance_name(
+                &instances,
+                &no_subst,
+                "pickA",
+                &call_at(0),
+                is_declared
+            ),
+            Ok(mangle_mono_name("pickA", &[big()]))
+        );
+        assert_eq!(
+            recorded_generic_instance_name(
+                &instances,
+                &no_subst,
+                "pickA",
+                &call_at(20),
+                is_declared
+            ),
+            Ok(mangle_mono_name("pickA", &[big_or_tiny]))
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_inside_a_generic_body_runs_the_outer_instances_types() {
+        // BUG (High: call dispatch): a call recorded as `inner<T | nothing>` inside `outer<T>`
+        // must run `inner<Big | nothing>` in `outer<Big>`, never the unsubstituted instance.
+        let maybe_t = Type::Union {
+            variants: vec![Type::TypeParam { name: "T".into() }, Type::Nothing],
+        };
+        let maybe_big = Type::Union {
+            variants: vec![big(), Type::Nothing],
+        };
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![maybe_t]);
+        let declared = mangle_mono_name("inner", std::slice::from_ref(&maybe_big));
+        let outer_big = HashMap::from([("T".to_string(), big())]);
+        assert_eq!(
+            recorded_generic_instance_name(&instances, &outer_big, "inner", &call_at(0), |name| {
+                name == declared
+            }),
+            Ok(declared.clone())
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_with_no_record_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a call the type checker recorded nothing
+        // for must stop codegen, never fall back to some instance of that name.
+        let mut instances = GenericCallInstances::default();
+        instances.record((20, 30), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(40),
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error")
+                && error.contains("recorded no type arguments"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_with_two_different_records_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a call checked with two different sets of
+        // type arguments must stop codegen, never run the first or the last one.
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![big()]);
+        instances.record((0, 10), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(0),
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("two different sets"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_recorded_for_an_instance_never_built_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a recorded instance the module does not
+        // declare must stop codegen, never resolve to another instance of that name.
+        let mut instances = GenericCallInstances::default();
+        instances.record((20, 30), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(20),
+            |_| false,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("was built"),
+            "{error}"
+        );
+    }
 }
 
 // ── BuiltinArray method dispatch ─────────────────────────────────────────────

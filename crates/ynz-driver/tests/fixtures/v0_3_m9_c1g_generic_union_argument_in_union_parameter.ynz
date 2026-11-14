@@ -1,0 +1,48 @@
+// v0.3-M9 C1g regression guard: a type parameter that a call binds to a UNION, used inside a
+// union parameter (`value: T | nothing`, `first: T | Tiny`), makes that parameter the flat union
+// of all the variants (`Big | Tiny | nothing`), the type a hand-written union of those variants
+// has. The substitution used to leave the union nested inside the union, so the argument
+// comparison refused a correct call, naming the same type on both sides ("expects `Big | Tiny |
+// nothing`", the argument `Big | Tiny | nothing`).
+// Correct behavior: compiles; prints hello / tiny2 (the second call returns its `fallback`).
+// Pre-fix: both calls were refused. On the parent of C1g both compiled and ran.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+function orElse<T>(share value: T | nothing, share fallback: T) -> T {
+  return fallback
+}
+function firstOf<T>(share first: T | Tiny, share second: T) -> T | Tiny {
+  return first
+}
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let u: Big | Tiny = big
+  let v: Big | Tiny = tiny
+  let w: Big | Tiny | nothing = big
+  let x: Big | Tiny = tiny
+  let out = firstOf(u, v)
+  if (out) {
+    is Big => {
+      print(out.label)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }
+  let out2 = orElse(w, x)
+  if (out2) {
+    is Big => {
+      print(out2.label)
+    }
+    is Tiny => {
+      print(`tiny2`)
+    }
+  }
+}

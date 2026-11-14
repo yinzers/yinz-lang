@@ -417,16 +417,58 @@ fn resolve_sig_type_with_params(
     type_params: &[String],
     shape_table: &ShapeTable,
 ) -> Type {
+    let resolve = |inner: &AstType| resolve_sig_type_with_params(inner, type_params, shape_table);
     match ast_ty {
         AstType::Named(n, _) if type_params.contains(n) => Type::TypeParam { name: n.clone() },
+        // A type parameter nested in a container keeps its place (`maybe<T>`, `T | nothing`,
+        // `array<T>`). Resolved through the shape table alone it became `Error`, and a call's
+        // substituted parameter type could never equal its argument's type (C1g, #424).
+        AstType::Maybe { inner, .. } => Type::Maybe {
+            inner: Box::new(resolve(inner)),
+        },
+        AstType::Union { variants, .. } => {
+            let resolved: Vec<Type> = variants.iter().map(resolve).collect();
+            if resolved.len() < 2 {
+                Type::Error
+            } else {
+                Type::Union { variants: resolved }
+            }
+        }
+        AstType::ErrorCapable { inner, .. } => Type::ErrorsCapable {
+            inner: Box::new(resolve(inner)),
+        },
+        AstType::Sensitive(inner) => Type::Sensitive {
+            inner: Box::new(resolve(inner)),
+        },
         AstType::Generic { name, args, .. } => {
-            let resolved_args = args
-                .iter()
-                .map(|a| resolve_sig_type_with_params(a, type_params, shape_table))
-                .collect();
-            Type::Generic {
-                name: name.clone(),
-                args: resolved_args,
+            let mut resolved_args: Vec<Type> = args.iter().map(resolve).collect();
+            // The built-in containers are their own types; `Generic` is a user-declared
+            // generic shape. The arguments of a call have the built-in types.
+            match (name.as_str(), resolved_args.len()) {
+                ("array", 1) => Type::BuiltinArray {
+                    elem: Box::new(resolved_args.remove(0)),
+                },
+                ("fixed", 1) => Type::BuiltinFixed {
+                    elem: Box::new(resolved_args.remove(0)),
+                    size: None,
+                },
+                ("channel", 1) => Type::BuiltinChannel {
+                    elem: Box::new(resolved_args.remove(0)),
+                },
+                ("map", 2) => {
+                    let val = Box::new(resolved_args.remove(1));
+                    let key = Box::new(resolved_args.remove(0));
+                    Type::BuiltinMap { key, val }
+                }
+                ("MapEntry", 2) => {
+                    let val = Box::new(resolved_args.remove(1));
+                    let key = Box::new(resolved_args.remove(0));
+                    Type::MapEntry { key, val }
+                }
+                _ => Type::Generic {
+                    name: name.clone(),
+                    args: resolved_args,
+                },
             }
         }
         other => shape_table.resolve_ast_type(other),
