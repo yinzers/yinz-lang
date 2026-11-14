@@ -6576,8 +6576,7 @@ impl<'b> Checker<'b> {
     /// see `envelope_refusal`. Nothing is recorded for a refused value.
     ///
     /// Time: O(v) for v variants  Space: O(size of the slot type) per recorded value
-    fn record_union_coercion(
-&mut self, value: &Expr, slot_ty: &Type, value_ty: &Type) {
+    fn record_union_coercion(&mut self, value: &Expr, slot_ty: &Type, value_ty: &Type) {
         let Some(coercion) = union_coercion_for(slot_ty, value_ty) else {
             return;
         };
@@ -6622,30 +6621,15 @@ impl<'b> Checker<'b> {
                     .get(callee)
                     .is_some_and(|signature| signature.suspends)
         };
-        let call = match value {
-            Expr::Wait(inner, _) => inner.as_ref(),
-            other => other,
-        };
-        let is_suspending_call = match call {
-            Expr::Call(call_expr) => {
-                matches!(&call_expr.callee, Expr::Ident(callee, _) if callee_suspends(callee))
-            }
-            _ => expr_is_ufcs_suspending_call(call, &self.expr_types, &callee_suspends),
-        };
-        if !is_suspending_call {
-            return;
+        if let Some(diagnostic) = suspending_union_let_diagnostic(
+            name,
+            value,
+            union_ty,
+            &self.expr_types,
+            &callee_suspends,
+        ) {
+            self.diags.push(diagnostic);
         }
-        let slots = [
-            ("name", name.to_string()),
-            ("call", expr_source_text(value)),
-            ("union", type_name(union_ty)),
-        ];
-        let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.diags.push(registry_diag(
-            span.clone(),
-            DiagnosticKind::SuspendingResultIntoUnionLet,
-            &slots,
-        ));
     }
 
     fn check_user_fn_call(
@@ -9922,6 +9906,106 @@ pub fn envelope_refusal(variant: &Type, value_ty: &Type) -> Option<EnvelopeRefus
         | Type::BackgroundHandle { .. } => Some(EnvelopeRefusal::VariantNotStorable),
         _ => None,
     }
+}
+
+/// The teaching diagnostic for `let name: Union = <value>` when `value` is a call that pauses
+/// and resumes (`wait count()`, or a bare call to a function `callee_suspends` names), `None`
+/// otherwise. The state-machine lowering binds such a call's result without the one coercion
+/// point codegen wraps values at, so the raw result would become the union pointer.
+///
+/// Typeck asks it per annotated `let` with its own suspending-function set; the codegen query
+/// asks it again over the whole module (`suspending_union_let_diagnostics`) with the effective
+/// suspend set, which also holds the callees the CPU-parallel promotion makes suspending after
+/// typeck ran. One predicate, two sets.
+///
+/// Time: O(1)  Space: O(size of the call's source text)
+fn suspending_union_let_diagnostic(
+    name: &str,
+    value: &Expr,
+    union_ty: &Type,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> Option<Diagnostic> {
+    let call = match value {
+        Expr::Wait(inner, _) => inner.as_ref(),
+        other => other,
+    };
+    let is_suspending_call = match call {
+        Expr::Call(call_expr) => {
+            matches!(&call_expr.callee, Expr::Ident(callee, _) if callee_suspends(callee))
+        }
+        _ => expr_is_ufcs_suspending_call(call, expr_types, callee_suspends),
+    };
+    if !is_suspending_call {
+        return None;
+    }
+    let slots = [
+        ("name", name.to_string()),
+        ("call", expr_source_text(value)),
+        ("union", type_name(union_ty)),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    Some(registry_diag(
+        value.span().clone(),
+        DiagnosticKind::SuspendingResultIntoUnionLet,
+        &slots,
+    ))
+}
+
+/// Every `let` of `typed` that binds a suspending call's result into a union slot, as the
+/// teaching diagnostic, judged by `callee_suspends`. Typeck refuses these as it checks each
+/// `let`; this is the same refusal for a call only the codegen query can see is suspending (a
+/// function the CPU-parallel promotion turns into a state machine: `cpu_promotion_query` depends
+/// on typeck's result, so typeck cannot ask it). Without it such a program reached codegen's
+/// "compiler bug" guard.
+///
+/// Time: O(n) for n statements  Space: O(r) for r refusals
+pub fn suspending_union_let_diagnostics(
+    typed: &TypedModule,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> Vec<Diagnostic> {
+    fn walk_block(
+        block: &Block,
+        typed: &TypedModule,
+        callee_suspends: &dyn Fn(&str) -> bool,
+        out: &mut Vec<Diagnostic>,
+    ) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let { name, value, .. } => {
+                    let span = value.span();
+                    if let Some(coercion) = typed.union_coercions.get(&(span.start, span.end)) {
+                        out.extend(suspending_union_let_diagnostic(
+                            name,
+                            value,
+                            &coercion.slot,
+                            &typed.expr_types,
+                            callee_suspends,
+                        ));
+                    }
+                }
+                Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                    walk_block(body, typed, callee_suspends, out)
+                }
+                Stmt::Match { arms, else_arm, .. } => {
+                    for arm in arms {
+                        walk_block(&arm.body, typed, callee_suspends, out);
+                    }
+                    if let Some(else_block) = else_arm {
+                        walk_block(else_block, typed, callee_suspends, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for item in &typed.module.items {
+        if let Item::Function(function) = item {
+            walk_block(&function.body, typed, callee_suspends, &mut out);
+        }
+    }
+    out
 }
 
 /// `type_name` with a `number` of a non-default precision spelled `number<10>` (it prints plain

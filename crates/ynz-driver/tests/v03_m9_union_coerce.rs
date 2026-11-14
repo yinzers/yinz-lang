@@ -214,3 +214,14 @@ fn assert_build_refused(fixture_name: &str, refusal: &str) {
         "{fixture_name}: refusal must contain `{refusal}`; got:\n{diagnostics}"
     );
 }
+
+#[test]
+fn v03_m9_union_coerce_suspending_let_cpu_promoted_is_refused() {
+    // Bug: a callee typeck sees as plain but the compiler promotes to a pausing function
+    // (two independent `leaf` calls) reached codegen's guard, so the user saw "compiler bug"
+    // instead of the teaching refusal. Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_coerce_suspending_let_promoted_refused.ynz",
+        "`combine()` pauses and resumes before it gives its result",
+    );
+}
