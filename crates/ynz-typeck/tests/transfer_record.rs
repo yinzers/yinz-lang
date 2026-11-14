@@ -35,7 +35,6 @@
 // (`revive_paths.rs`), which must not leak into the record (a record that forgot the give would
 // let a release pass free the class early).
 
-
 #[macro_use]
 mod support;
 
@@ -121,6 +120,16 @@ fn escapes_of(transfers: &FunctionTransfers, member: &str) -> Vec<Escape> {
 const BAG: &str = "shape Bag {\n  items: array<int>\n}\n";
 const PAIR: &str = "shape Pair {\n  first: array<int>\n  second: array<int>\n}\n";
 
+/// A callee that takes a whole `Bag` (`give`), and a maker of a fresh one to reassign it with.
+const EAT_BAG: &str = "shape Bag {\n  items: array<int>\n}
+function eat_bag(give bag: Bag) -> nothing {
+  print(bag.items.count().toString())
+}
+function fresh_bag() -> Bag {
+  let made: Bag = { items: [4, 5] }
+  return made
+}
+";
 
 /// The escape of a value stored in `place` (the place as typeck names it, backticks included).
 fn stored(place: &str) -> Escape {
@@ -382,6 +391,19 @@ cases! { assert_loop_give_rejected;
   }}
 }}"
     ), "(High) t3 through the condition: a `while` condition runs at the top of every pass, so a give made in it reaches the next pass; the loop was opened only after the condition was checked, so typeck accepted a double give";
+    give_in_an_inner_loop_reaches_the_outer_pass: format!(
+        "{EAT_BAG}function l() -> nothing {{
+  let bag: Bag = {{ items: [1, 2, 3] }}
+  let view: array<int> = bag.items
+  for (j in range(0, 2)) {{
+    print(view.count().toString())
+    for (i in range(0, 1)) {{
+      eat_bag(bag)
+      bag = fresh_bag()
+    }}
+  }}
+}}"
+    ), "(High) t3 across nested loops: the inner loop revives `bag` so it carries nothing, but the outer pass reads `view`, a piece of the value given; without the hand-up of the inner loop's give, that read of freed memory is accepted";
 }
 
 cases! { assert_loop_store_rejected;
@@ -441,14 +463,7 @@ cases! { assert_accepted;
 }}"
     ), "(High) over-rejection: a give on a path that leaves the loop never reaches the next pass";
     unread_class_mate_of_a_revived_binding_is_accepted: format!(
-        "{BAG}function eat_bag(give bag: Bag) -> nothing {{
-  print(bag.items.count().toString())
-}}
-function fresh_bag() -> Bag {{
-  let made: Bag = {{ items: [4, 5] }}
-  return made
-}}
-function l() -> nothing {{
+        "{EAT_BAG}function l() -> nothing {{
   let bag: Bag = {{ items: [1, 2, 3] }}
   let view: array<int> = bag.items
   for (i in range(0, 3)) {{
