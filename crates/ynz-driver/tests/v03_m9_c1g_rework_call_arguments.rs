@@ -119,9 +119,9 @@ fn v03_m9_c1g_rework_legal_generic_background_call_still_runs() {
     // match its parameters keeps compiling and running (the instance typeck recorded for the
     // call is the one codegen starts). TIER: High (the check must not reject a correct program).
     support::assert_fixture_prints(
-        "v0_3_m4_p3_cross_give_generic.ynz",
+        "v0_3_m9_c1g_rework_legal_generic_background_call.ynz",
         false,
-        "q3\ncross-give-generic-done\n",
+        "q3\ngeneric-background-done\n",
         "a legal generic background call must still compile and run",
     );
 }
