@@ -299,19 +299,22 @@ fn consumed_is_rendered_from_the_registry() {
 fn consumed_through_an_alias_class_names_what_was_given_in_the_via_slot() {
     assert_rendered(
         DiagnosticKind::Consumed,
-        "function eat(give rows: array<int>) -> nothing { print(rows.count()) }\n\
+        // A class-mate is a piece view of the given value (a whole-value alias cannot exist any
+        // more: `let other = rows` hands `rows` over, `ConsumedByStore`).
+        "shape Bag { items: array<int> }\n\
+         function eatBag(give bag: Bag) -> nothing { print(bag.items.count()) }\n\
          function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1, 2, 3]\n\
-           let other = rows\n\
-           eat(rows)\n\
-           print(other.count())\n\
+           let bag: Bag = { items: [1, 2, 3] }\n\
+           let view: array<int> = bag.items\n\
+           eatBag(bag)\n\
+           print(view.count())\n\
          }",
         &[
-            ("name", "other"),
-            ("given", "rows"),
+            ("name", "view"),
+            ("given", "bag"),
             (
                 "via",
-                " — it shares its value with `rows`, which is what was given away",
+                " — it shares its value with `bag`, which is what was given away",
             ),
         ],
     );
@@ -325,18 +328,19 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     // it the consume happened inside this call. RED before the fix: zero diagnostics.
     assert_rendered(
         DiagnosticKind::Consumed,
-        "function eat2(give a: array<int>, give b: array<int>) -> nothing { print(a.count()) }\n\
+        "shape Bag { items: array<int> }\n\
+         function eat2(give a: Bag, give b: array<int>) -> nothing { print(a.items.count()) }\n\
          function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1, 2, 3]\n\
-           let other = rows\n\
-           eat2(rows, other)\n\
+           let bag: Bag = { items: [1, 2, 3] }\n\
+           let view: array<int> = bag.items\n\
+           eat2(bag, view)\n\
          }",
         &[
-            ("name", "other"),
-            ("given", "rows"),
+            ("name", "view"),
+            ("given", "bag"),
             (
                 "via",
-                " — it shares its value with `rows`, which is what was given away",
+                " — it shares its value with `bag`, which is what was given away",
             ),
         ],
     );
@@ -344,18 +348,19 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     // consumed is the same read after free.
     assert_rendered(
         DiagnosticKind::Consumed,
-        "function mix(give a: array<int>, share b: array<int>) -> nothing { print(a.count()) }\n\
+        "shape Bag { items: array<int> }\n\
+         function mix(give a: Bag, share b: array<int>) -> nothing { print(a.items.count()) }\n\
          function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1, 2, 3]\n\
-           let other = rows\n\
-           mix(rows, other)\n\
+           let bag: Bag = { items: [1, 2, 3] }\n\
+           let view: array<int> = bag.items\n\
+           mix(bag, view)\n\
          }",
         &[
-            ("name", "other"),
-            ("given", "rows"),
+            ("name", "view"),
+            ("given", "bag"),
             (
                 "via",
-                " — it shares its value with `rows`, which is what was given away",
+                " — it shares its value with `bag`, which is what was given away",
             ),
         ],
     );
@@ -398,20 +403,66 @@ fn a_class_consumed_before_the_call_is_not_reported_twice() {
 fn consumed_by_send_is_rendered_from_the_registry_with_the_via_slot() {
     assert_rendered(
         DiagnosticKind::ConsumedBySend,
+        // The class-mate is a piece view of the sent value (`first` reaches `rows`).
         "function entrypoint() -> nothing {\n\
-           let wire: channel<array<int>> = channel<array<int>>(2)\n\
-           let rows: array<int> = [1, 2, 3]\n\
-           let other = rows\n\
+           let wire: channel<array<array<int>>> = channel<array<array<int>>>(2)\n\
+           let rows: array<array<int>> = [[1, 2, 3]]\n\
+           let first = rows.first()\n\
            wire.send(rows)\n\
-           print(other.count())\n\
+           print(first.exists().toString())\n\
          }",
         &[
-            ("name", "other"),
+            ("name", "first"),
             ("channel", "wire"),
             ("sent", "rows"),
             (
                 "via",
                 " — it shares its value with `rows`, which is what was sent",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn consumed_by_store_is_rendered_from_the_registry() {
+    assert_rendered(
+        DiagnosticKind::ConsumedByStore,
+        "function entrypoint() -> nothing {\n\
+           let rows: array<int> = [1, 2, 3]\n\
+           let table: array<array<int>> = []\n\
+           table.add(rows)\n\
+           print(rows.count())\n\
+         }",
+        &[
+            ("name", "rows"),
+            ("place", "`table`"),
+            ("stored", "rows"),
+            ("copy_form", "table.add(rows.copy())"),
+            ("via", ""),
+        ],
+    );
+}
+
+#[test]
+fn consumed_by_store_through_a_class_mate_names_what_was_stored_in_the_via_slot() {
+    assert_rendered(
+        DiagnosticKind::ConsumedByStore,
+        "shape Bag { items: array<int> }\n\
+         function entrypoint() -> nothing {\n\
+           let bag: Bag = { items: [1, 2, 3] }\n\
+           let view: array<int> = bag.items\n\
+           let kept: Bag = bag\n\
+           print(view.count())\n\
+           print(kept.items.count())\n\
+         }",
+        &[
+            ("name", "view"),
+            ("place", "`kept`"),
+            ("stored", "bag"),
+            ("copy_form", "let kept = bag.copy()"),
+            (
+                "via",
+                " — it shares its value with `bag`, which is what was stored",
             ),
         ],
     );

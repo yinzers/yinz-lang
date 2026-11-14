@@ -296,13 +296,17 @@ function l(s: Pair) -> int {
 }
 
 cases! { assert_revive_rejected;
-    an_alias_reassigned_on_one_path_still_aliases_on_the_other: "function l(c: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  let y = x
-  if (c) { y = [0] }
-  eat(x)
-  return y.count()
-}", "a reassignment under `if` moved `y` out of `x`'s alias class on every path, so giving `x` left `y` readable where it still holds `x`'s value (High: read after give)";
+    a_class_mate_reassigned_on_one_path_still_reaches_the_value_on_the_other: "shape Bag { items: array<int> }
+function eat_bag(give bag: Bag) -> nothing {
+  print(bag.items.count().toString())
+}
+function l(c: boolean) -> int {
+  let bag: Bag = { items: [1, 2, 3] }
+  let view: array<int> = bag.items
+  if (c) { view = [0] }
+  eat_bag(bag)
+  return view.count()
+}", "a reassignment under `if` moved `view` out of `bag`'s class on every path, so giving `bag` left `view` readable where it still reaches `bag`'s value (High: read after give). Was `an_alias_reassigned_on_one_path_still_aliases_on_the_other` with `let y = x`; a whole-value alias cannot exist any more (storing hands the value over), so the class-mate is a piece";
 }
 
 /// The give itself must be refused: the value may be a piece another value still holds.
