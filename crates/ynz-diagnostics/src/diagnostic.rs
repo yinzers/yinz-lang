@@ -50,6 +50,15 @@ pub enum DiagnosticKind {
     /// expects one of its variants. The union is a tagged envelope; the slot would read it as
     /// the bare variant — wrong data or memory past the envelope. v0.3-M9 C1b.
     UnionWhereVariantExpected,
+    /// A plain value reaches a union slot whose matching variant the union's tagged box cannot
+    /// hold yet (`number`, `maybe`, `fixed`, `dynamic`, `range`, an `options` type), or a
+    /// shorter `number` meets a `number` variant of more than 34 digits. v0.3-M9 C1e: refused
+    /// in typeck instead of at codegen's "compiler bug" refusal of the same case.
+    UnionVariantNotStorable,
+    /// An annotated `let` of a union type takes the result of a call that pauses and resumes
+    /// (`let m: Mixed = wait count()`); that result is bound without the tag a union needs.
+    /// v0.3-M9 C1e: refused in typeck instead of at codegen's "compiler bug" refusal.
+    SuspendingResultIntoUnionLet,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -115,6 +124,8 @@ impl DiagnosticKind {
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
             DiagnosticKind::UnionWhereVariantExpected => "UnionWhereVariantExpected",
+            DiagnosticKind::UnionVariantNotStorable => "UnionVariantNotStorable",
+            DiagnosticKind::SuspendingResultIntoUnionLet => "SuspendingResultIntoUnionLet",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -146,6 +157,8 @@ impl DiagnosticKind {
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
         "UnionWhereVariantExpected",
+        "UnionVariantNotStorable",
+        "SuspendingResultIntoUnionLet",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -176,6 +189,8 @@ impl DiagnosticKind {
             // label comes from the kind alone, so it must not name an `is` check that two of them
             // (a non-shape variant, an expression value) cannot offer as written.
             DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
+            DiagnosticKind::UnionVariantNotStorable => "can't be stored in a union yet".to_string(),
+            DiagnosticKind::SuspendingResultIntoUnionLet => "store it in a variable first".to_string(),
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {

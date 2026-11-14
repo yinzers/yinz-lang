@@ -3884,13 +3884,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(slot)
     }
 
-    /// Refuse a `let` whose value typeck recorded as entering a union slot
+    /// Internal guard behind typeck's teaching refusal (`refuse_suspending_result_into_union_let`):
+    /// refuse a `let` whose value typeck recorded as entering a union slot
     /// (`TypedModule::union_coercions`) when the state-machine lowering binds that value
     /// without `lower_expr`, the one coercion point: `let m: Mixed = wait count()` and
     /// `let m: Mixed = count()` with a suspending `count`. Bound bare, the raw return value
     /// becomes the envelope pointer and the first `is` arm reads its tag through that
-    /// address. Binding the result to a plain `let` first and storing that in the union
-    /// `let` goes through the coercion point.
+    /// address. Typeck refuses first from its own suspending-function set; this guard asks the
+    /// effective set, which also holds callees the CPU-parallel promotion makes suspending
+    /// after typeck ran, so it keeps those from reaching the lowering.
     ///
     /// Time: O(1)  Space: O(1)
     fn refuse_unwrapped_suspending_let(&self, name: &str, value: &Expr) -> Result<(), String> {
@@ -3898,9 +3900,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         match self.typed.union_coercions.get(&(span.start, span.end)) {
             None => Ok(()),
             Some(coercion) => Err(format!(
-                "codegen: `let {name}`: the result of a suspending call cannot be stored \
-                 directly in a `{:?}` binding yet; bind it to a plain `let` first, then store \
-                 that binding in the union-typed `let`",
+                "codegen: `let {name}`: the result of a suspending call reached a `{:?}` binding \
+                 unwrapped although typeck refuses that before codegen runs (the call is \
+                 suspending only in the effective suspend set); this is a compiler bug",
                 self.resolve_type(&coercion.slot)
             )),
         }
@@ -3948,25 +3950,25 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     variants.len()
                 )
             })?;
-        // Typeck lets any `number<A>` into a `number<B>` variant. Only the wide (>34 digits)
-        // representation is a pointer the envelope can carry: a narrow value is a slot address
-        // holding an i128, which the callee would read as a wide decimal.
-        if matches!(variant, Type::Number { precision: 35.. }) {
-            let plain_ty = self.resolve_type(
-                &self
-                    .typed
-                    .expr_types
-                    .get(&(span.start, span.end))
-                    .cloned()
-                    .unwrap_or(Type::Error),
-            );
-            if !matches!(plain_ty, Type::Number { precision: 35.. }) {
-                return Err(format!(
-                    "codegen: {site}: a `{plain_ty:?}` value cannot be stored in a union's \
-                     `{variant:?}` variant: the two number precisions have different layouts \
-                     and the conversion is not supported yet"
-                ));
-            }
+        // Internal guard behind typeck's teaching refusal (`record_union_coercion`): both ask
+        // `ynz_typeck::check::envelope_refusal`, so a variant the envelope cannot hold (and a
+        // narrow `number` typeck assigned to a wide `number` variant, whose slot address would
+        // be read as a wide decimal) never reaches the lowering below. Reaching it means typeck's
+        // gate was bypassed or a type parameter resolved to such a variant after typeck ran.
+        let plain_ty = self.resolve_type(
+            &self
+                .typed
+                .expr_types
+                .get(&(span.start, span.end))
+                .cloned()
+                .unwrap_or(Type::Error),
+        );
+        if let Some(refusal) = ynz_typeck::check::envelope_refusal(&variant, &plain_ty) {
+            return Err(format!(
+                "codegen: {site}: a `{plain_ty:?}` value reached a union's `{variant:?}` \
+                 variant ({refusal:?}) although typeck refuses that before codegen runs; this \
+                 is a compiler bug"
+            ));
         }
         let bits = match &variant {
             Type::Shape { .. }
@@ -3993,8 +3995,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .into_int_value(),
             other => {
                 return Err(format!(
-                    "codegen: {site}: a `{other:?}` variant of a union cannot be stored in the \
-                     16-byte envelope yet"
+                    "codegen: {site}: a `{other:?}` variant of a union has no envelope lowering \
+                     and `envelope_refusal` does not list it; this is a compiler bug"
                 ))
             }
         };

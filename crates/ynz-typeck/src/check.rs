@@ -2707,6 +2707,7 @@ impl<'b> Checker<'b> {
                 // M6: for union type annotations, use the declared union type as the binding type,
                 // not the concrete variant. `let s: Shape = circle` → s is Shape, not Circle.
                 self.record_union_coercion(value, ann_ty, &value_ty);
+                self.refuse_suspending_result_into_union_let(name, value, ann_ty);
                 ann_ty.clone()
             } else {
                 // Use the value_ty to preserve size information from ArrayLit inference.
@@ -6571,13 +6572,80 @@ impl<'b> Checker<'b> {
     /// is known assignable: annotated `let`, argument (plain, dot-call, generic), `return`,
     /// shape field, and the fallback of `.or(...)`.
     ///
+    /// Refuses, with a teaching diagnostic, a plain variant value no union envelope can hold:
+    /// see `envelope_refusal`. Nothing is recorded for a refused value.
+    ///
     /// Time: O(v) for v variants  Space: O(size of the slot type) per recorded value
-    fn record_union_coercion(&mut self, value: &Expr, slot_ty: &Type, value_ty: &Type) {
-        if let Some(coercion) = union_coercion_for(slot_ty, value_ty) {
-            let span = value.span();
-            self.union_coercions
-                .insert((span.start, span.end), coercion);
+    fn record_union_coercion(
+&mut self, value: &Expr, slot_ty: &Type, value_ty: &Type) {
+        let Some(coercion) = union_coercion_for(slot_ty, value_ty) else {
+            return;
+        };
+        if let Type::Union { variants } = slot_ty {
+            let variant = &variants[coercion.tag];
+            if let Some(refusal) = envelope_refusal(variant, value_ty) {
+                self.diags.push(union_variant_refusal_diag(
+                    value, value_ty, slot_ty, variant, refusal,
+                ));
+                return;
+            }
         }
+        let span = value.span();
+        self.union_coercions
+            .insert((span.start, span.end), coercion);
+    }
+
+    /// Refuse `let name: Union = <call that pauses and resumes>` (`wait count()`, or a bare
+    /// call to a suspending function) once `record_union_coercion` recorded the value as
+    /// entering the union. The state-machine lowering binds such a call's result without the
+    /// one coercion point codegen wraps values at, so the raw result would become the union
+    /// pointer. A plain `let got = ...` first, then `let name: Union = got`, wraps.
+    ///
+    /// Codegen keeps `refuse_unwrapped_suspending_let` as the guard behind this one: it asks
+    /// its own effective suspend set, which adds functions the CPU-parallel promotion makes
+    /// suspending after typeck ran. Time: O(1)  Space: O(1)
+    fn refuse_suspending_result_into_union_let(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        union_ty: &Type,
+    ) {
+        let span = value.span();
+        if !self.union_coercions.contains_key(&(span.start, span.end)) {
+            return;
+        }
+        let callee_suspends = |callee: &str| {
+            !is_base_suspension_intrinsic(callee)
+                && self
+                    .sig_table
+                    .fns
+                    .get(callee)
+                    .is_some_and(|signature| signature.suspends)
+        };
+        let call = match value {
+            Expr::Wait(inner, _) => inner.as_ref(),
+            other => other,
+        };
+        let is_suspending_call = match call {
+            Expr::Call(call_expr) => {
+                matches!(&call_expr.callee, Expr::Ident(callee, _) if callee_suspends(callee))
+            }
+            _ => expr_is_ufcs_suspending_call(call, &self.expr_types, &callee_suspends),
+        };
+        if !is_suspending_call {
+            return;
+        }
+        let slots = [
+            ("name", name.to_string()),
+            ("call", expr_source_text(value)),
+            ("union", type_name(union_ty)),
+        ];
+        let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.diags.push(registry_diag(
+            span.clone(),
+            DiagnosticKind::SuspendingResultIntoUnionLet,
+            &slots,
+        ));
     }
 
     fn check_user_fn_call(
@@ -9813,6 +9881,93 @@ fn can_assign(target: &Type, source: &Type) -> bool {
 /// container of the other? True when each is assignable to the other.
 fn same_layout(first: &Type, second: &Type) -> bool {
     can_assign(first, second) && can_assign(second, first)
+}
+
+/// Why a plain value cannot enter the tagged envelope of a union slot, when it cannot: the
+/// envelope keeps ONE 64-bit payload word next to the tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvelopeRefusal {
+    /// The variant does not fit one payload word (`number` up to 34 digits, `maybe`, `fixed`,
+    /// `dynamic`, `range`, an `options` type, ...).
+    VariantNotStorable,
+    /// The variant is a `number` of more than 34 digits (a pointer to a wide decimal) and the
+    /// value is a shorter `number` (a 128-bit decimal slot): typeck assigns one to the other,
+    /// but the payload words differ and nothing converts them.
+    NumberPrecision,
+}
+
+/// THE decision whether `value_ty` can be stored in the union `variant` it was matched to.
+/// Typeck refuses with a teaching diagnostic (`union_variant_refusal_diag`); codegen's
+/// `wrap_into_union_envelope` asks this same function before it lowers, so the two never keep
+/// separate lists (authoritative-derivation.md). The refusals are the variants codegen has no
+/// payload lowering for; a type parameter or an unresolved generic is not refused here (its
+/// concrete type is only known after monomorphization).
+///
+/// Time: O(1)  Space: O(1)
+pub fn envelope_refusal(variant: &Type, value_ty: &Type) -> Option<EnvelopeRefusal> {
+    match variant {
+        Type::Number { precision: 35.. } => match value_ty {
+            Type::Number { precision: 35.. } => None,
+            Type::Number { .. } => Some(EnvelopeRefusal::NumberPrecision),
+            _ => None,
+        },
+        Type::Number { .. }
+        | Type::Maybe { .. }
+        | Type::BuiltinFixed { .. }
+        | Type::Dynamic { .. }
+        | Type::Range { .. }
+        | Type::Options { .. }
+        | Type::MapEntry { .. }
+        | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. } => Some(EnvelopeRefusal::VariantNotStorable),
+        _ => None,
+    }
+}
+
+/// `type_name` with a `number` of a non-default precision spelled `number<10>` (it prints plain
+/// `number` for every precision), so a refusal that is about two precisions can tell them apart.
+///
+/// Time: O(v) for v variants  Space: O(size of the type name)
+fn number_precision_name(ty: &Type) -> String {
+    match ty {
+        Type::Number { precision } if *precision != 34 => format!("number<{precision}>"),
+        Type::Union { variants } => variants
+            .iter()
+            .map(number_precision_name)
+            .collect::<Vec<_>>()
+            .join(" | "),
+        other => type_name(other),
+    }
+}
+
+/// The teaching diagnostic for a plain `value` of `value_ty` that `refusal` keeps out of the
+/// `variant` of `slot_ty` it was matched to.
+fn union_variant_refusal_diag(
+    value: &Expr,
+    value_ty: &Type,
+    slot_ty: &Type,
+    variant: &Type,
+    refusal: EnvelopeRefusal,
+) -> Diagnostic {
+    let slots = [
+        ("value", expr_source_text(value)),
+        ("value_ty", number_precision_name(value_ty)),
+        ("union", number_precision_name(slot_ty)),
+        ("variant", number_precision_name(variant)),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let span = value.span().clone();
+    match refusal {
+        EnvelopeRefusal::VariantNotStorable => {
+            registry_diag(span, DiagnosticKind::UnionVariantNotStorable, &slots)
+        }
+        EnvelopeRefusal::NumberPrecision => registry_diag_template(
+            span,
+            DiagnosticKind::UnionVariantNotStorable,
+            "UnionVariantNotStorableNumberPrecision",
+            &slots,
+        ),
+    }
 }
 
 /// The coercion a value of type `value_ty` needs to enter a slot of type `slot_ty`: `Some` when

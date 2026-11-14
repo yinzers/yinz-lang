@@ -45,6 +45,7 @@ const TEMPLATES_WITHOUT_A_VARIANT: &[&str] = &[
     "StatementNestingTooDeep",
     "UnionWhereVariantExpectedNameIt",
     "UnionWhereVariantExpectedNoIsArm",
+    "UnionVariantNotStorableNumberPrecision",
 ];
 
 /// PRE-EXISTING variant-backed templates whose emit sites still hand-write their text
@@ -240,8 +241,19 @@ fn fill(template: &str, slots: &[(&str, &str)]) -> String {
 }
 
 fn assert_rendered(kind: DiagnosticKind, source: &str, slots: &[(&str, &str)]) {
-    let template = ynz_registry::diagnostic_template_lookup(kind.kind_name())
-        .unwrap_or_else(|| panic!("no template for {}", kind.kind_name()));
+    assert_template_rendered(kind.kind_name(), kind, source, slots);
+}
+
+/// `assert_rendered` for a variant-less sibling template (`template_name`) whose diagnostic
+/// carries `kind`.
+fn assert_template_rendered(
+    template_name: &str,
+    kind: DiagnosticKind,
+    source: &str,
+    slots: &[(&str, &str)],
+) {
+    let template = ynz_registry::diagnostic_template_lookup(template_name)
+        .unwrap_or_else(|| panic!("no template for {template_name}"));
     let expected_what = fill(template.what_template, slots);
     let expected_instead = fill(template.what_instead_template, slots);
     let expected_why = fill(template.why_template, slots);
@@ -893,4 +905,99 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
            print(takesEither(v))\n\
          }",
     );
+}
+
+// v0.3-M9 C1e (#421): a plain value that no union box can hold is refused in typeck with a
+// registry teaching diagnostic, never at codegen's "This is a compiler bug" refusal. Each test
+// renders its template from the registry and compiles the code its WHAT-INSTEAD names (Golden
+// Rule 11).
+
+#[test]
+fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
+    // WHY: `Circle | number` passed typeck and died in codegen as "a compiler bug".
+    let preamble = "shape Circle { radius: int }\n\
+                    function describe(share value: Circle | number) -> string { return `ok` }\n";
+    assert_rendered(
+        DiagnosticKind::UnionVariantNotStorable,
+        &format!(
+            "{preamble}function entrypoint() -> nothing {{\n\
+               let small: number = 5.0\n\
+               print(describe(small))\n\
+             }}"
+        ),
+        &[
+            ("value", "small"),
+            ("union", "Circle | number"),
+            ("variant", "number"),
+        ],
+    );
+    // The suggested code: the number in a shape, the shape as the variant.
+    assert_compiles(
+        "shape Circle { radius: int }\n\
+         shape Boxed { value: number }\n\
+         function describe(share value: Circle | Boxed) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let small: number = 5.0\n\
+           let boxed: Boxed = { value: small }\n\
+           print(describe(boxed))\n\
+         }",
+    );
+}
+
+#[test]
+fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text() {
+    // WHY: typeck assigns `number<10>` to `number<40>`, and the union box stored the narrow
+    // value's slot address as the wide value's pointer.
+    assert_template_rendered(
+        "UnionVariantNotStorableNumberPrecision",
+        DiagnosticKind::UnionVariantNotStorable,
+        "shape Circle { radius: int }\n\
+         function describe(share value: Circle | number<40>) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let small: number<10> = 5.0\n\
+           print(describe(small))\n\
+         }",
+        &[
+            ("value", "small"),
+            ("value_ty", "number<10>"),
+            ("union", "Circle | number<40>"),
+            ("variant", "number<40>"),
+        ],
+    );
+    assert_compiles(
+        "shape Circle { radius: int }\n\
+         function describe(share value: Circle | number<40>) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let amount: number<40> = 5.0\n\
+           print(describe(amount))\n\
+         }",
+    );
+}
+
+#[test]
+fn a_suspending_result_into_a_union_let_is_refused_with_its_registry_text() {
+    // WHY: `let m: Mixed = wait count()` bound the raw int as the union's pointer and the first
+    // `is` check read its tag through address 0x4.
+    let program = |bind: &str| {
+        format!(
+            "shape Circle {{ name: string }}\n\
+             shape Mixed = Circle | int\n\
+             function count() -> int {{ wait sleep(1)\n return 4 }}\n\
+             function entrypoint() -> nothing {{\n\
+               {bind}\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::SuspendingResultIntoUnionLet,
+        &program("let m: Mixed = wait count()"),
+        &[
+            ("name", "m"),
+            ("call", "wait count()"),
+            ("union", "Circle | int"),
+        ],
+    );
+    assert_compiles(&program(
+        "let got = wait count()\n let m: Circle | int = got",
+    ));
 }

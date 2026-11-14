@@ -122,7 +122,7 @@ fn v03_m9_union_coerce_number_precision_mismatch_is_refused() {
     // representation, so the callee read the narrow slot as a wide decimal. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_coerce_number_precision_refused.ynz",
-        "the two number precisions have different layouts",
+        "a union can't convert a `number<10>` into one yet",
     );
 }
 
@@ -133,7 +133,7 @@ fn v03_m9_union_coerce_suspending_let_wait_is_refused() {
     // through address 0x4. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_coerce_suspending_let_wait_refused.ynz",
-        "the result of a suspending call cannot be stored directly",
+        "`wait count()` pauses and resumes before it gives its result",
     );
 }
 
@@ -143,7 +143,7 @@ fn v03_m9_union_coerce_suspending_let_direct_is_refused() {
     // callee called without `wait`. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_coerce_suspending_let_direct_refused.ynz",
-        "the result of a suspending call cannot be stored directly",
+        "`count()` pauses and resumes before it gives its result",
     );
 }
 
@@ -202,6 +202,12 @@ fn assert_build_refused(fixture_name: &str, refusal: &str) {
     assert!(
         !output.status.success(),
         "{fixture_name} compiled:\n{diagnostics}"
+    );
+    // A refusal a user program can reach is a teaching diagnostic from typeck, never codegen's
+    // "This is a compiler bug" box (Golden Rule 11).
+    assert!(
+        !diagnostics.contains("compiler bug"),
+        "{fixture_name}: a user-reachable refusal must not say `compiler bug`; got:\n{diagnostics}"
     );
     assert!(
         diagnostics.contains(refusal),

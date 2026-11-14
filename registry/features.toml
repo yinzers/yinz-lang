@@ -1708,6 +1708,42 @@ what_template = "`{value}` is a `{union}` — it might hold any one of those —
 what_instead_template = "No `is` arm can hand `{value}` over as a `{variant}`: `is` arms name shape variants only. Change what receives it to accept a `{union}` instead, or keep the value a `{variant}` from where it is created instead of storing it in a `{union}`."
 why_template = "A `{union}` might hold any one of its variants, not only a `{variant}`: also {others}. Code that expects a plain `{variant}` is written for that variant alone, so given another variant it would read the wrong kind of data, and can crash. No check the compiler can run today proves `{value}` is a `{variant}`, so it refuses the hand-over."
 
+# v0.3-M9 C1e (#421): a plain value reaches a union slot whose matching variant the union box
+# cannot hold. Typeck refuses it where it records the coercion (`record_union_coercion`) so a
+# correct program never reaches codegen's refusal of the same case ("This is a compiler bug").
+# `{value}` is the value as source text, `{union}` the union's type, `{variant}` the variant that
+# takes it. The union box keeps one small value next to the tag: shapes, strings, arrays, maps,
+# `int`, `float`, `boolean` and a `number` of more than 34 digits fit; every other variant does not.
+# Decided v0.3-M9 C1e round 2: `git log --grep=UnionVariantNotStorable`.
+[[diagnostic_template]]
+kind_name = "UnionVariantNotStorable"
+what_template = "`{value}` would be stored in the `{variant}` part of a `{union}`, but a `{variant}` can't be stored in a union yet."
+what_instead_template = "Put the `{variant}` inside a shape and use that shape as the union's variant instead: `shape Boxed { value: {variant} }`, then build it with `let boxed: Boxed = { value: {value} }` and use `boxed` here."
+why_template = "A `{union}` is a box with a tag saying which variant is inside, and the box has room for one small value next to the tag. A `{variant}` is not stored that way yet, so the compiler can't build the box for it. It stops here, because storing it anyway would make the code that reads the union get the wrong data. A shape works because the box then holds the shape's location."
+
+# The same slot when the variant is a `number` of more than 34 digits and the value is a shorter
+# `number`: the two are stored differently and typeck accepts one where the other is declared, but
+# the union box has no conversion yet. Selected by `union_variant_refusal_diag`; the diagnostic
+# carries `UnionVariantNotStorable`. `{value_ty}` is the value's type (`number<10>`).
+[[diagnostic_template]]
+kind_name = "UnionVariantNotStorableNumberPrecision"
+what_template = "`{value}` is a `{value_ty}`, but the `{variant}` part of `{union}` needs a `{variant}`, and a union can't convert a `{value_ty}` into one yet."
+what_instead_template = "Create the value as a `{variant}` where you declare it, for example `let amount: {variant} = 5.0`, then use `amount` here."
+why_template = "A `number` with more digits is stored differently from one with fewer, and putting a number into a union does not convert between the two. Storing the `{value_ty}` as it is would make the code that reads the union misread its digits, so the compiler refuses instead of storing wrong digits."
+
+# v0.3-M9 C1e (#421): `let m: Mixed = wait count()` and `let m: Mixed = count()` with a suspending
+# `count`. The state-machine `let` binds a call's result without the step that tags a plain value
+# for a union, so the first `is` check on `m` would read a garbage tag. Typeck refuses it at the
+# annotated `let`; the workaround it names (`let got = ...`, then `let m: Mixed = got`) goes
+# through the tagging step. `{name}` is the binding, `{call}` the call as source text
+# (`wait count()`), `{union}` the binding's type.
+# Decided v0.3-M9 C1e round 2: `git log --grep=SuspendingResultIntoUnionLet`.
+[[diagnostic_template]]
+kind_name = "SuspendingResultIntoUnionLet"
+what_template = "`{call}` pauses and resumes before it gives its result, and that result can't be stored straight into `{name}`, which is declared as `{union}`, yet."
+what_instead_template = "Store the result in its own variable first, then store that variable in `{name}`: `let got = {call}`, then `let {name}: {union} = got`."
+why_template = "A `{union}` variable holds a value together with a tag saying which variant it is. When a call pauses and resumes, its result arrives without that tag being added, so the first `is` check on `{name}` would read a wrong tag and could crash. Copying the result from its own variable into `{name}` is the step where the compiler adds the tag."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full
