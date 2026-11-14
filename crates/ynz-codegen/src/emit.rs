@@ -3781,8 +3781,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// The declared type of parameter `index` of `callee`, resolved. A generic function is not
-    /// in the signature table, so its declaration in this module answers (same lookup as
-    /// `UnionSlotUses::param_is_union`).
+    /// in the signature table, so its declaration in this module answers.
     ///
     /// Time: O(f) for f items in the module  Space: O(1)
     fn callee_param_type(&self, callee: &str, index: usize) -> Option<Type> {
@@ -3927,6 +3926,26 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     variants.len()
                 )
             })?;
+        // Typeck lets any `number<A>` into a `number<B>` variant. Only the wide (>34 digits)
+        // representation is a pointer the envelope can carry: a narrow value is a slot address
+        // holding an i128, which the callee would read as a wide decimal.
+        if matches!(variant, Type::Number { precision: 35.. }) {
+            let plain_ty = self.resolve_type(
+                &self
+                    .typed
+                    .expr_types
+                    .get(&(span.start, span.end))
+                    .cloned()
+                    .unwrap_or(Type::Error),
+            );
+            if !matches!(plain_ty, Type::Number { precision: 35.. }) {
+                return Err(format!(
+                    "codegen: {site}: a `{plain_ty:?}` value cannot be stored in a union's \
+                     `{variant:?}` variant: the two number precisions have different layouts \
+                     and the conversion is not supported yet"
+                ));
+            }
+        }
         let bits = match &variant {
             Type::Shape { .. }
             | Type::String
