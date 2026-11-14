@@ -7,11 +7,11 @@
 //! call discarded `unify_param`'s mismatch; the dot-call form checked non-receiver arguments
 //! for the union case only); built under ASan at -O0 the first four overflow the stack.
 //!
-//! Test count: 10 — one per refused case and per call form (generic with a sibling argument,
+//! Test count: 11 — one per refused case and per call form (generic with a sibling argument,
 //! with an explicit type argument, with a concrete parameter, with two scalar types, with a
 //! shape that fits a union parameter only through its type parameter; dot-call
 //! with a shape and with an int), the plain-form guard (already clean when probed), and the
-//! legal calls and container parameters that must keep running.
+//! legal calls, container parameters and union-bound type parameters that must keep running.
 
 mod support;
 
@@ -177,5 +177,19 @@ fn v03_m9_c1g_shape_fitting_only_through_a_type_parameter_inside_a_union_is_reje
                 "`big` is a `Big`, but `pickOrTiny` takes it as `T | Tiny`, which this call makes a `Big | Tiny`.",
         "Put it in a `Big | nothing` first",
         ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_union_bound_to_a_type_parameter_inside_a_union_parameter_is_accepted() {
+    // BUG (found in round 2): `T | nothing` with `T = Big | Tiny` was a union nested in a union,
+    // a different type from the flat `Big | Tiny | nothing` the argument has, so a correct call
+    // that compiled and ran before C1g was refused. TIER: High (the check must not reject a
+    // correct program).
+    support::assert_fixture_prints(
+        "v0_3_m9_c1g_generic_union_argument_in_union_parameter.ynz",
+        false,
+        "hello\ntiny2\n",
+        "a union bound to a type parameter inside a union parameter must still compile and run",
     );
 }

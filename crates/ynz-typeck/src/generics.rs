@@ -93,13 +93,43 @@ pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
             key: apply(key),
             val: apply(val),
         },
-        Type::Union { variants } => Type::Union {
-            variants: variants
+        Type::Union { variants } => {
+            let substituted: Vec<Type> = variants
                 .iter()
                 .map(|variant| apply_substitution(variant, subst))
-                .collect(),
-        },
+                .collect();
+            flatten_union(substituted)
+        }
         other => other.clone(),
+    }
+}
+
+/// The union a substituted union stands for: a variant that became a union itself
+/// (`T | nothing` with `T = Big | Tiny`) contributes its variants in place, and a variant
+/// that repeats an earlier one (`T | Tiny` with `T = Tiny`) is dropped, so the result is the
+/// flat variant list a program writes by hand (`Big | Tiny | nothing`). A union left with one
+/// variant is that variant. Without this a nested union is a different type from the flat
+/// union holding the same variants, and a correct call is refused with a message that says the
+/// parameter expects the very type the argument has (C1g, #424).
+///
+/// O(total variants squared) time, O(total variants) space.
+fn flatten_union(substituted: Vec<Type>) -> Type {
+    let mut flat: Vec<Type> = Vec::with_capacity(substituted.len());
+    for variant in substituted {
+        let contributed = match variant {
+            Type::Union { variants } => variants,
+            single => vec![single],
+        };
+        for contributed_variant in contributed {
+            if !flat.contains(&contributed_variant) {
+                flat.push(contributed_variant);
+            }
+        }
+    }
+    if flat.len() == 1 {
+        flat.remove(0)
+    } else {
+        Type::Union { variants: flat }
     }
 }
 
