@@ -56,6 +56,14 @@ enum TransferSink<'s> {
         callee: &'s str,
         chain_param: Option<&'s str>,
     },
+    /// A store (`list.add(v)`, `x.field = v`, `let b = a`, a container literal): the place takes
+    /// the value over. `place` is the place as the diagnostic names it, with its backticks;
+    /// `copy_template` is the store written with the stored value as `{value}`, so a copy of any
+    /// argument of the store can be spelled out.
+    Store {
+        place: &'s str,
+        copy_template: &'s str,
+    },
 }
 
 impl TransferSink<'_> {
@@ -71,6 +79,15 @@ impl TransferSink<'_> {
             TransferSink::Give { callee, .. } => ConsumedBy::Given {
                 callee: callee.to_string(),
                 given: sent.to_string(),
+                missed_revive: None,
+            },
+            TransferSink::Store {
+                place,
+                copy_template,
+            } => ConsumedBy::Stored {
+                place: place.to_string(),
+                stored: sent.to_string(),
+                copy_form: copy_template.replace("{value}", &format!("{sent}.copy()")),
                 missed_revive: None,
             },
         }
@@ -96,6 +113,13 @@ impl TransferSink<'_> {
             } => (
                 format!("given to `{callee}`, whose `{p}` parameter gives it away"),
                 format!("{callee}({name}.copy(), …)"),
+            ),
+            TransferSink::Store {
+                place,
+                copy_template,
+            } => (
+                format!("handed to {place}"),
+                copy_template.replace("{value}", &format!("{name}.copy()")),
             ),
         }
     }
@@ -360,6 +384,22 @@ fn consumed_diag(span: SourceSpan, name: &str, cause: &ConsumedBy, via: &str) ->
                 ("via", via),
             ],
         ),
+        ConsumedBy::Stored {
+            place,
+            stored,
+            copy_form,
+            ..
+        } => registry_diag(
+            span,
+            DiagnosticKind::ConsumedByStore,
+            &[
+                ("name", name),
+                ("place", place),
+                ("stored", stored),
+                ("copy_form", copy_form),
+                ("via", via),
+            ],
+        ),
     }
 }
 
@@ -376,7 +416,12 @@ fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagn
         ConsumedBy::Sent { sent, .. } if sent != name => {
             format!(" — it shares its value with `{sent}`, which is what was sent")
         }
-        ConsumedBy::Given { .. } | ConsumedBy::Sent { .. } => String::new(),
+        ConsumedBy::Stored { stored, .. } if stored != name => {
+            format!(" — it shares its value with `{stored}`, which is what was stored")
+        }
+        ConsumedBy::Given { .. } | ConsumedBy::Sent { .. } | ConsumedBy::Stored { .. } => {
+            String::new()
+        }
     };
     let via = match cause.missed_revive() {
         Some(kind) => format!("{via}{}", missed_revive_clause(kind)),
@@ -417,6 +462,12 @@ fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
             cause,
             ", because the previous pass through this loop already sent it",
         ),
+        ConsumedBy::Stored { stored, place, .. } => {
+            let via = format!(
+                ", because the previous pass through this loop already stored it in {place}"
+            );
+            consumed_diag(span, stored, cause, &via)
+        }
     }
 }
 
@@ -752,7 +803,7 @@ pub fn check(
             .or_insert_with(|| entry.clone());
     }
 
-    let make_checker = |call_stores: crate::transfer_record::CallStoreTable| Checker {
+    let mut checker = Checker {
         intrinsics,
         sig_table,
         shape_table,
@@ -798,9 +849,9 @@ pub fn check(
         transfers: crate::transfer_record::TransferRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
-        call_stores,
+        stored_literals: HashSet::new(),
     };
-    let checker = walk_module(module, make_checker);
+    checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
@@ -821,32 +872,6 @@ pub fn check(
         checker.diags,
         checker.referenced_names,
     )
-}
-
-/// Walk every function body. A call may store one of its arguments into another (`put(o, a)` with
-/// `o.add(a)` in the body); whether it does is the CALLEE's own record, which exists only once
-/// the callee has been walked, and a caller can come first. So when some call passes heap values
-/// in two or more positions, solve the stores from the first walk and walk again: the second walk
-/// merges those arguments in the live scope too, so a program that reads `a` after giving `o` away
-/// is rejected like the direct `o.add(a)` form (the record already says they are one class).
-/// A module with no such call is walked once; one with such a call is walked twice, so checking
-/// costs up to 2x O(module size) time and one extra checker state in memory.
-fn walk_module<'b>(
-    module: &Module,
-    make_checker: impl Fn(crate::transfer_record::CallStoreTable) -> Checker<'b>,
-) -> Checker<'b> {
-    let mut checker = make_checker(crate::transfer_record::CallStoreTable::new());
-    checker.check_module(module);
-    if !checker.transfers.has_multi_holder_calls() {
-        return checker;
-    }
-    let call_stores = checker.transfers.solve_call_stores();
-    if call_stores.is_empty() {
-        return checker;
-    }
-    let mut second = make_checker(call_stores);
-    second.check_module(module);
-    second
 }
 
 /// Like `check` but with kernel-mode enabled.
@@ -876,7 +901,7 @@ pub fn check_with_kernel_mode(
     // empty report (an unseen callee consumes nothing and returns `MayAlias`).
     let empty_report = crate::effective_ownership::EffectiveOwnershipReport::empty();
     let no_imports: HashSet<String> = HashSet::new();
-    let make_checker = |call_stores: crate::transfer_record::CallStoreTable| Checker {
+    let mut checker = Checker {
         intrinsics,
         sig_table,
         shape_table,
@@ -922,9 +947,9 @@ pub fn check_with_kernel_mode(
         transfers: crate::transfer_record::TransferRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
-        call_stores,
+        stored_literals: HashSet::new(),
     };
-    let checker = walk_module(module, make_checker);
+    checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
@@ -1197,9 +1222,9 @@ struct Checker<'b> {
     loop_gives: Vec<LoopGive>,
     /// Frame index of the body of each enclosing loop, outermost first.
     loop_body_frames: Vec<usize>,
-    /// The parameter pairs each local function stores into one another, solved by a first walk
-    /// of the module (`walk_module`). Empty during that first walk.
-    call_stores: crate::transfer_record::CallStoreTable,
+    /// The literals whose parts were already handed over (`hand_literal_parts_over`), by span: a
+    /// literal inferred twice hands its parts over once.
+    stored_literals: HashSet<(usize, usize)>,
 }
 
 impl<'b> Checker<'b> {
@@ -1400,12 +1425,6 @@ impl<'b> Checker<'b> {
                 },
             );
         }
-        let parameter_declarations: Vec<DeclKey> = f
-            .params
-            .iter()
-            .map(|param| decl_key(&param.name_span, &param.name))
-            .collect();
-        self.transfers.set_parameters(parameter_declarations);
 
         // Option-B deferral checks: emit clean teaching errors for wait patterns
         // that require the M3 coroutine-locals transform rather than silently
@@ -2187,12 +2206,6 @@ impl<'b> Checker<'b> {
                 },
             );
         }
-        let parameter_declarations: Vec<DeclKey> = f
-            .params
-            .iter()
-            .map(|param| decl_key(&param.name_span, &param.name))
-            .collect();
-        self.transfers.set_parameters(parameter_declarations);
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
 
@@ -2898,7 +2911,7 @@ impl<'b> Checker<'b> {
         // and alias class come from the initializer's provenance — a NEW entry; a shadowed
         // outer entry keeps its own origin, class and consumed state (it still names its
         // old value). The same rule `check_assign` applies on a reassignment.
-        let event = self.binding_event_origin(value);
+        let event = self.binding_event_origin(value, name, &format!("let {name} = {{value}}"));
         let declaration = decl_key(name_span, name);
         self.declare_binding(
             name.to_string(),
@@ -3682,7 +3695,8 @@ impl<'b> Checker<'b> {
                 // reassigned names a NEW value — revive-on-reassign: `eat(rows); rows =
                 // [4, 5]; rows.count()` is a correct program), and it joins the new value's
                 // class per the initializer table.
-                let event = self.binding_event_origin(value);
+                let event =
+                    self.binding_event_origin(value, target, &format!("{target} = {{value}}"));
                 let declaration = self.declaration_of(target);
                 self.transfers_note_reassign(declaration.as_ref(), &event);
                 // A reassignment names a NEW value, so the binding is no longer given away, and
@@ -4477,7 +4491,11 @@ impl<'b> Checker<'b> {
                     self.infer_field_access(receiver, field, field_span)
                 }
             }
-            Expr::StructLit { fields, span } => self.check_struct_lit(fields, hint, span),
+            Expr::StructLit { fields, span } => {
+                let ty = self.check_struct_lit(fields, hint, span);
+                self.hand_literal_parts_over(expr);
+                ty
+            }
             Expr::PostfixOp { receiver, op, span } => self.check_postfix_op(receiver, op, span),
             Expr::SelfValue { span } => match self.scope.lookup("self") {
                 Some(entry) => entry.ty.clone(),
@@ -4569,8 +4587,16 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            Expr::ArrayLit { elements, span } => self.check_array_lit(elements, hint, span),
-            Expr::MapLit { entries, span } => self.check_map_lit(entries, hint, span),
+            Expr::ArrayLit { elements, span } => {
+                let ty = self.check_array_lit(elements, hint, span);
+                self.hand_literal_parts_over(expr);
+                ty
+            }
+            Expr::MapLit { entries, span } => {
+                let ty = self.check_map_lit(entries, hint, span);
+                self.hand_literal_parts_over(expr);
+                ty
+            }
             // M6: `x is Foo` type-narrowing predicate — returns bool.
             Expr::Is {
                 expr: inner,
@@ -5020,34 +5046,110 @@ impl<'b> Checker<'b> {
             .collect()
     }
 
-    /// A heap value stored into a place (`o.add(a)`, `o.set(i, a)`, `o[i] = a`, `b.f = a`):
-    /// the place's root binding and the value's holders now reach one value, so they join —
-    /// in the live scope (giving or returning either covers both) and in the record. A store
-    /// does NOT consume the source: that would reject programs that compile today, and would
-    /// need new user-facing syntax (B4).
-    fn record_store(&mut self, place: &Expr, value: &Expr) {
-        let holders = self.heap_holders_of(value);
-        if holders.is_empty() {
+    /// True when `expr` is typed as bits (int, float, bool, number, options, string, a `maybe` of
+    /// those): copying it is the value, so storing it hands nothing over.
+    fn expr_is_bits(&self, expr: &Expr) -> bool {
+        let span = expr.span();
+        self.expr_types
+            .get(&(span.start, span.end))
+            .is_some_and(crate::effective_ownership::value_like)
+    }
+
+    /// A heap value stored into a place (`o.add(a)`, `o.set(k, a)`, `o[i] = a`, `b.f = a`,
+    /// `let b = a`, a part of a container literal): the place takes the value over, so the store
+    /// is a transfer like a give or a send, decided by the ONE `check_transfer`. A value that is
+    /// bits is not handed over. `consumed_before` is `Scope::consumed_classes()` taken before the
+    /// first store of the statement. Returns true when the value was admitted.
+    fn store_value(
+        &mut self,
+        value: &Expr,
+        place: &str,
+        copy_template: &str,
+        consumed_before: &HashSet<u64>,
+    ) -> bool {
+        if self.expr_is_bits(value) {
+            return true;
+        }
+        let sink = TransferSink::Store {
+            place,
+            copy_template,
+        };
+        self.check_transfer(value, &sink, consumed_before)
+    }
+
+    /// The stores of one collection-method call (`o.add(a)`, `m.set(k, a)`): each argument at a
+    /// store position is handed to the receiver `receiver`. `positions` comes from
+    /// `builtins::collection_store_positions`. All positions of one call share one snapshot of the
+    /// consumed classes, so `m.set(a, a)` reports the second read.
+    fn store_into_collection(
+        &mut self,
+        receiver: &Expr,
+        method: &str,
+        args: &[Expr],
+        positions: &[usize],
+    ) {
+        if positions.is_empty() {
             return;
         }
-        // The place's holders come from its provenance, not the root of its name chain: a place
-        // that is a call or method result (`firstBag(bags).items`) still reaches `bags`.
-        let places = self.heap_holders_of(place);
-        if places.is_empty() {
-            for (_, holder) in holders {
-                self.transfers.escape(&holder, Escape::StoredIntoTemporary);
-            }
+        let place = format!("`{}`", expr_source_text(receiver));
+        let consumed_before = self.scope.consumed_classes();
+        for &position in positions {
+            let Some(stored) = args.get(position) else {
+                continue;
+            };
+            let written_args = args
+                .iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    if index == position {
+                        "{value}".to_string()
+                    } else {
+                        expr_source_text(arg)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let copy_template = format!("{}.{method}({written_args})", expr_source_text(receiver));
+            self.store_value(stored, &place, &copy_template, &consumed_before);
+        }
+    }
+
+    /// A container literal built from named heap values (`[a, c]`, `{ first: a, second: c }`)
+    /// takes them over: each part is stored in the literal (`store_value`), so the literal is the
+    /// one owner of everything in it and `a`, `c` are gone. A part that is bits is copied.
+    /// Runs once per literal, after every part is inferred. O(parts) time.
+    fn hand_literal_parts_over(&mut self, literal: &Expr) {
+        if !self.stored_literals.insert((literal.span().start, literal.span().end)) {
             return;
         }
-        for (place_name, place_declaration) in &places {
-            for (name, holder) in &holders {
-                if let (Some(place_class), Some(holder_class)) =
-                    (self.scope.class_of(place_name), self.scope.class_of(name))
-                {
-                    self.scope.merge_classes(place_class, holder_class);
-                }
-                self.transfers.join(place_declaration, holder);
+        let parts: Vec<&Expr> = match literal {
+            Expr::ArrayLit { elements, .. } => elements.iter().collect(),
+            Expr::MapLit { entries, .. } => {
+                entries.iter().flat_map(|(key, value)| [key, value]).collect()
             }
+            Expr::StructLit { fields, .. } => fields.iter().map(|field| &field.value).collect(),
+            _ => return,
+        };
+        let place = format!("the literal `{}`", expr_source_text(literal));
+        let consumed_before = self.scope.consumed_classes();
+        for (position, part) in parts.iter().enumerate() {
+            let written_parts: Vec<String> = parts
+                .iter()
+                .enumerate()
+                .map(|(index, other)| {
+                    if index == position {
+                        "{value}".to_string()
+                    } else {
+                        expr_source_text(other)
+                    }
+                })
+                .collect();
+            let copy_template = match literal {
+                Expr::ArrayLit { .. } => format!("[{}]", written_parts.join(", ")),
+                Expr::MapLit { .. } => format!("{{ {}, … }}", written_parts.join(": ")),
+                _ => format!("{{ …, {}, … }}", written_parts[position]),
+            };
+            self.store_value(part, &place, &copy_template, &consumed_before);
         }
     }
 
@@ -5073,6 +5175,9 @@ impl<'b> Checker<'b> {
                     },
                     ConsumedBy::Sent { channel, .. } => Escape::Sent {
                         channel: channel.clone(),
+                    },
+                    ConsumedBy::Stored { place, .. } => Escape::Stored {
+                        place: place.clone(),
                     },
                 },
             );
@@ -6257,26 +6362,30 @@ impl<'b> Checker<'b> {
     /// `Fresh` → `Owned`, own class; `Whole(b)` → b's origin, JOINS b's class (two names, one
     /// value); `Reaches(roots)` → `Reaches`, joins every root's class (giving a root away
     /// consumes this name with it); `Unknown` → `Unknown`, own class.
-    fn binding_event_origin(&mut self, value: &Expr) -> BindingEvent {
+    fn binding_event_origin(&mut self, value: &Expr, target: &str, copy_template: &str) -> BindingEvent {
         match self.provenance_of(value) {
             Provenance::Fresh => BindingEvent {
                 origin: Origin::Owned,
                 alias_class: self.scope.new_class(),
                 joined: Vec::new(),
             },
-            Provenance::Whole(b) => match self.scope.lookup(&b) {
-                Some(entry) => BindingEvent {
-                    origin: entry.origin.clone(),
-                    alias_class: entry.alias_class,
-                    joined: vec![decl_key(&entry.defined_at, &b)],
-                },
-                // An undefined name — already diagnosed by `resolve_ident`.
-                None => BindingEvent {
-                    origin: Origin::Unknown,
+            // `let b = a`, `b = a`: the binding takes the value over (`store_value`), so `b` owns it
+            // and `a` is gone. Bits are copied, so `b` is a fresh value of its own.
+            Provenance::Whole(_) => {
+                let consumed_before = self.scope.consumed_classes();
+                let admitted = self.store_value(
+                    value,
+                    &format!("`{target}`"),
+                    copy_template,
+                    &consumed_before,
+                );
+                BindingEvent {
+                    // A refused store was reported at `a`; `b` must not be given away on top of it.
+                    origin: if admitted { Origin::Owned } else { Origin::Unknown },
                     alias_class: self.scope.new_class(),
                     joined: Vec::new(),
-                },
-            },
+                }
+            }
             Provenance::Reaches(roots) => {
                 let reason = self.reaches_reason(value, &roots);
                 // Join EVERY root's class: the roots of one initializer are all held by the
@@ -6338,14 +6447,6 @@ impl<'b> Checker<'b> {
                 Some(r) => format!("an item inside `{r}`"),
                 None => "an item inside a value that is not held in a named binding".to_string(),
             },
-            Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
-                let names = roots
-                    .iter()
-                    .map(|r| format!("`{r}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("built from {names}, which are still named here")
-            }
             Expr::Call(call) => match &call.callee {
                 Expr::Ident(callee, _) => self.returns_piece_reason(callee),
                 _ => "a value the compiler cannot trace to one owner".to_string(),
@@ -6419,6 +6520,11 @@ impl<'b> Checker<'b> {
                             "Declare `{name}` with `let` if you need to hand it over for good, \
                              or give `{callee}` a copy: `{name}.copy()`."
                         ),
+                        TransferSink::Store { place, copy_template } => format!(
+                            "Declare `{name}` with `let` if you need to hand it over for good, \
+                             or store a copy in {place}: `{}`.",
+                            copy_template.replace("{value}", &format!("{name}.copy()"))
+                        ),
                     };
                     self.diags.push(Diagnostic::error(
                         span,
@@ -6488,17 +6594,7 @@ impl<'b> Checker<'b> {
                 let text = expr_source_text(expr);
                 let ty = self.expr_type_name(expr);
                 let reason = self.reaches_reason(expr, &roots);
-                let fix = match expr {
-                    Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
-                        let parts = roots
-                            .iter()
-                            .map(|r| format!("{r}.copy()"))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("[{parts}, …]")
-                    }
-                    _ => format!("{text}.copy()"),
-                };
+                let fix = format!("{text}.copy()");
                 self.emit_transfer_needs_copy(span, &text, &ty, &reason, &fix, sink);
                 false
             }
@@ -6592,24 +6688,6 @@ impl<'b> Checker<'b> {
         ownerships: &[Option<OwnershipModifier>],
         param_names: &[String],
     ) {
-        // A callee may store one argument into another; whether it does is decided from its own
-        // record once every function is walked (`TransferRecorder::finish`).
-        let holders_per_position: Vec<Vec<(String, DeclKey)>> = normalized_args
-            .iter()
-            .map(|arg| self.heap_holders_of(arg))
-            .collect();
-        self.transfers.note_call(
-            callee,
-            holders_per_position
-                .iter()
-                .map(|holders| {
-                    holders
-                        .iter()
-                        .map(|(_, declaration)| declaration.clone())
-                        .collect()
-                })
-                .collect(),
-        );
         // The pre-call snapshot: which alias classes were consumed before THIS call touched
         // anything. A later position whose class is consumed but absent here was consumed by
         // an earlier position of this same call — `check_transfer` reports that read.
@@ -6646,66 +6724,6 @@ impl<'b> Checker<'b> {
                 // a class-mate an earlier `give` position of this same call consumed
                 // (`mix(rows, other)` with `mix(give a, share b)`) is a read after free.
                 _ => self.check_read_of_same_call_consumed(arg, &consumed_before),
-            }
-        }
-        self.merge_call_stored_arguments(callee, ownerships, &holders_per_position);
-    }
-
-    /// A call that stores one argument into another (`put(o, a)` with `o.add(a)` in `put`) makes
-    /// the two arguments' holders one value, exactly as the direct `o.add(a)` does: giving or
-    /// returning either covers both, so a read of the other afterwards is a use-after-give.
-    /// The record joins the same pairs for a LOCAL callee (`TransferRecorder::finish`). For an
-    /// unseen callee the two deliberately differ: the record joins EVERY pair (a release pass must
-    /// never free early, and a leak is acceptable), while this live merge takes only pairs with a
-    /// `lend` position (merging more would reject programs that compile today).
-    ///
-    /// Which pairs: a LOCAL callee stores what its own record says (`call_stores`, solved by the
-    /// first walk of the module); any other callee (imported, dynamic) is unseen, so every pair
-    /// with a `lend` position, the only way a callee can write into an argument it does not own.
-    /// A `give` position is skipped: it hands the value to the callee, which owns it from there,
-    /// and the transfer sink has already consumed it.
-    fn merge_call_stored_arguments(
-        &mut self,
-        callee: &str,
-        ownerships: &[Option<OwnershipModifier>],
-        holders_per_position: &[Vec<(String, DeclKey)>],
-    ) {
-        let positions = holders_per_position.len();
-        let pairs: Vec<(usize, usize)> = if self.local_fn_names.contains(callee) {
-            self.call_stores.get(callee).cloned().unwrap_or_default()
-        } else {
-            let lends = |position: usize| {
-                matches!(
-                    ownerships.get(position),
-                    Some(Some(OwnershipModifier::Lend))
-                )
-            };
-            (0..positions)
-                .flat_map(|first| ((first + 1)..positions).map(move |second| (first, second)))
-                .filter(|&(first, second)| lends(first) || lends(second))
-                .collect()
-        };
-        for (first, second) in pairs {
-            if first >= positions || second >= positions {
-                continue;
-            }
-            let hands_over = |position: usize| {
-                matches!(
-                    ownerships.get(position),
-                    Some(Some(OwnershipModifier::Give))
-                ) || self.ownership.consumed_of(callee, position)
-            };
-            if hands_over(first) || hands_over(second) {
-                continue;
-            }
-            for (name_a, _) in &holders_per_position[first] {
-                for (name_b, _) in &holders_per_position[second] {
-                    if let (Some(class_a), Some(class_b)) =
-                        (self.scope.class_of(name_a), self.scope.class_of(name_b))
-                    {
-                        self.scope.merge_classes(class_a, class_b);
-                    }
-                }
             }
         }
     }
@@ -7646,14 +7664,10 @@ impl<'b> Checker<'b> {
             }
         }
 
-        // A heap value stored by an in-place collection method (`add`, `set`) joins the
-        // receiver's alias class — the same edge as a field or index store.
+        // A heap value stored by an in-place collection method (`add`, `set`) is handed over to the
+        // receiver, like a field or index store.
         if let Some(receiver) = receiver_expr {
-            for position in collection_store_positions(receiver_ty, method) {
-                if let Some(stored) = args.get(*position) {
-                    self.record_store(receiver, stored);
-                }
-            }
+            self.store_into_collection(receiver, method, args, collection_store_positions(receiver_ty, method));
         }
 
         // M5 P3b: built-in collection method dispatch.
@@ -9510,7 +9524,14 @@ impl<'b> Checker<'b> {
         // Resolve the field and check the value type.
         let field_ty = self.infer_field_access(receiver, field, field_span);
         let value_ty = self.infer_expr(value, Some(&field_ty));
-        self.record_store(receiver, value);
+        let place_text = format!("{}.{field}", expr_source_text(receiver));
+        let consumed_before = self.scope.consumed_classes();
+        self.store_value(
+            value,
+            &format!("`{place_text}`"),
+            &format!("{place_text} = {{value}}"),
+            &consumed_before,
+        );
 
         // Int literal assigned to a `number`-typed field — the hinted infer
         // silently types it `number` and ICEs at codegen (Future-Req #14).
@@ -9693,7 +9714,18 @@ impl<'b> Checker<'b> {
     ) {
         self.check_index_assign_types(receiver, index, value, span);
         // The value is inferred by now on every path, so its provenance is answerable.
-        self.record_store(receiver, value);
+        let place_text = format!(
+            "{}[{}]",
+            expr_source_text(receiver),
+            expr_source_text(index)
+        );
+        let consumed_before = self.scope.consumed_classes();
+        self.store_value(
+            value,
+            &format!("`{place_text}`"),
+            &format!("{place_text} = {{value}}"),
+            &consumed_before,
+        );
     }
 
     fn check_index_assign_types(

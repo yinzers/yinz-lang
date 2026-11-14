@@ -17,19 +17,18 @@
 //!
 //! # What joins a class (the alias edges)
 //!
-//! Decided with the Software Architect (plan #17 C5a): storing a heap value into a place
-//! JOINS the value's class with the place's class; it does not consume the source. Consuming
-//! on store would reject programs that compile today (`bg_arg_alias_container_add_red.ynz`
-//! reads `rows` after `bucket.add(rows)`) and would need new user-facing syntax or a
-//! per-type `.copy()` ruling (B4: no new user-facing syntax).
+//! Decided (Patrick, plan #17 C5a, on the Chief Architect's recommendation): storing a heap value
+//! HANDS IT OVER. `list.add(a)`, `table.set(k, a)`, `x.field = a`, `x[i] = a`, a container literal
+//! built from named values and `let b = a` are transfers like a give or a send: the place owns the
+//! value, `a` is consumed (reading it is a compile error, `ConsumedByStore`), and the record notes
+//! an `Escape::Stored` on `a`'s class. A store therefore never joins two classes: one value, one
+//! owner. Classes join only where a name keeps reading a piece of another value:
 //!
 //! | event | edge |
 //! |---|---|
-//! | `let b = a`, `acc = per` | `b`/`acc` joins `a`/`per` |
-//! | `let b = {x: a, y: c}`, `[a, c]` | `b` joins EVERY root: `a`, `c` |
-//! | `b.items = a`, `o[i] = a` | the receiver's root joins the value's roots |
-//! | `o.add(a)`, `o.set(i, a)` | the receiver's root joins the value's roots |
+//! | `let f = x.field`, `let c = x[i]`, a call result that is a piece of its argument | `f`/`c` joins every root it reaches |
 //! | `for (cell in m)` | `cell` joins `m` |
+//! | an untraceable result (an imported call) | joins every binding the expression mentions |
 //!
 //! # Who frees what
 //!
@@ -75,8 +74,11 @@ pub enum Escape {
     Given { callee: String },
     /// Sent into `channel`, on at least one path.
     Sent { channel: String },
-    /// Stored into a place no binding names (`makeBag().items = a`).
-    StoredIntoTemporary,
+    /// Stored in `place` (`list.add(a)`, `x.field = a`, `let b = a`, a container literal): the
+    /// place owns the value from then on, on at least one path. `place` is the place as typeck
+    /// names it, e.g. `` `list` `` or ``the literal `[a, c]` ``; a place no binding names
+    /// (`makeBag().items = a`) is recorded the same way.
+    Stored { place: String },
 }
 
 /// Why no member can be named the founder.
@@ -144,10 +146,6 @@ impl FunctionTransfers {
     }
 }
 
-/// Per local function, the pairs of parameter positions a call may store into one another
-/// (`TransferRecorder::solve_call_stores`). A function absent from the table stores nothing.
-pub type CallStoreTable = HashMap<String, Vec<(usize, usize)>>;
-
 /// The finished record of a module, carried on `TypedModule::transfers`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransferRecord {
@@ -203,29 +201,9 @@ struct FunctionState {
     /// Union-find parent links over `bindings`.
     parent: Vec<usize>,
     escapes: Vec<(usize, Escape)>,
-    /// The parameters in position order (a method's receiver first).
-    parameters: Vec<DeclKey>,
-    /// Every call this function makes to a function that may store one argument into another.
-    calls: Vec<CallEdge>,
-}
-
-/// One call site: the callee and, per argument position, the declarations holding the
-/// argument's heap value (empty for a fresh or value-typed argument).
-#[derive(Clone)]
-struct CallEdge {
-    callee: String,
-    positions: Vec<Vec<DeclKey>>,
 }
 
 impl FunctionState {
-    /// Root of `node` without compressing paths (usable through a shared reference).
-    fn find_readonly(&self, mut node: usize) -> usize {
-        while self.parent[node] != node {
-            node = self.parent[node];
-        }
-        node
-    }
-
     /// Join two bindings; true when they were in different classes.
     fn union(&mut self, first: usize, second: usize) -> bool {
         let first_root = self.find(first);
@@ -295,8 +273,6 @@ impl TransferRecorder {
             index: HashMap::new(),
             parent: Vec::new(),
             escapes: Vec::new(),
-            parameters: Vec::new(),
-            calls: Vec::new(),
         });
     }
 
@@ -385,68 +361,6 @@ impl TransferRecorder {
         function.escapes.push((position, escape));
     }
 
-    /// The parameters of the current function, in position order (a method's receiver first).
-    pub fn set_parameters(&mut self, parameters: Vec<DeclKey>) {
-        let Some(function) = self.current.as_mut() else {
-            self.internal_errors
-                .push(outside_function_message("the parameters", None));
-            return;
-        };
-        function.parameters = parameters;
-    }
-
-    /// The current function calls `callee`; `positions[i]` holds the declarations that hold
-    /// argument `i`'s heap value. Whether the call stores one argument into another is decided
-    /// in `finish`, from the callee's own record, once every function has been walked.
-    pub fn note_call(&mut self, callee: &str, positions: Vec<Vec<DeclKey>>) {
-        let Some(function) = self.current.as_mut() else {
-            self.internal_errors
-                .push(outside_function_message("a call", None));
-            return;
-        };
-        if positions.iter().any(|holders| !holders.is_empty()) {
-            function.calls.push(CallEdge {
-                callee: callee.to_string(),
-                positions,
-            });
-        }
-    }
-
-    /// True when some call passes heap values in two or more argument positions: only then can
-    /// a call store one argument into another, so only then is `solve_call_stores` worth running.
-    pub fn has_multi_holder_calls(&self) -> bool {
-        self.finished
-            .iter()
-            .chain(self.current.iter())
-            .flat_map(|function| function.calls.iter())
-            .any(|edge| {
-                edge.positions
-                    .iter()
-                    .filter(|holders| !holders.is_empty())
-                    .count()
-                    >= 2
-            })
-    }
-
-    /// Solve the call-site stores (on a copy; the recorder is left as it is): for every local function, the
-    /// pairs of its parameter positions that end up in one class. A second walk of the module
-    /// hands this to the checker so the LIVE scope merges the same arguments a call joins in the
-    /// record (`put(o, a)` storing `a` into `o`; giving `o` then covers `a`).
-    ///
-    /// O(rounds . calls . p^2) time, see `propagate_call_stores`.
-    pub fn solve_call_stores(&self) -> CallStoreTable {
-        let mut functions: Vec<FunctionState> = self.finished.clone();
-        functions.extend(self.current.clone());
-        propagate_call_stores(&mut functions);
-        functions
-            .iter()
-            .filter_map(|function| {
-                let pairs = parameter_pairs(function);
-                (!pairs.is_empty()).then(|| (function.name.clone(), pairs))
-            })
-            .collect()
-    }
-
     /// Close the last function and build the record. Codegen names come from `names`, which
     /// must have named every declaration this recorder saw (the checker declares both at the
     /// same event). An event the recorder could not place, or a declaration `names` lacks, ends
@@ -457,7 +371,6 @@ impl TransferRecorder {
         if let Some(last) = self.current.take() {
             self.finished.push(last);
         }
-        propagate_call_stores(&mut self.finished);
         let mut record = TransferRecord {
             internal_errors: self.internal_errors,
             ..TransferRecord::default()
@@ -472,87 +385,6 @@ impl TransferRecorder {
             }
         }
         record
-    }
-}
-
-/// The pairs of parameter positions of `function` that share a class (so a call may have stored
-/// the argument at one position into the argument at the other).
-fn parameter_pairs(function: &FunctionState) -> Vec<(usize, usize)> {
-    let parameter_roots: Vec<Option<usize>> = function
-        .parameters
-        .iter()
-        .map(|parameter| {
-            function
-                .index
-                .get(parameter)
-                .map(|&position| function.find_readonly(position))
-        })
-        .collect();
-    let mut shared = Vec::new();
-    for first in 0..parameter_roots.len() {
-        for second in (first + 1)..parameter_roots.len() {
-            if parameter_roots[first].is_some() && parameter_roots[first] == parameter_roots[second]
-            {
-                shared.push((first, second));
-            }
-        }
-    }
-    shared
-}
-
-/// A call may store one argument into another (`put(o, a)` with `o.add(a)` in the body). The
-/// callee's own record says which of its parameters ended up in one class; the caller's holders
-/// of those arguments then hold one value too. A callee with no record (imported, or a body
-/// typeck did not walk) could store anything anywhere, so all its heap arguments join.
-/// Repeats until no class changes: a callee's classes can grow from its own calls.
-///
-/// O(rounds · calls · p²) time for p argument positions; rounds is bounded by the bindings.
-fn propagate_call_stores(functions: &mut [FunctionState]) {
-    let by_name: HashMap<String, usize> = functions
-        .iter()
-        .enumerate()
-        .map(|(position, function)| (function.name.clone(), position))
-        .collect();
-    loop {
-        let mut changed = false;
-        for caller in 0..functions.len() {
-            let edges = std::mem::take(&mut functions[caller].calls);
-            for edge in &edges {
-                // Which pairs of argument positions share a class in the callee.
-                let pairs: Vec<(usize, usize)> = match by_name.get(&edge.callee) {
-                    Some(&callee) => {
-                        let mut shared = parameter_pairs(&functions[callee]);
-                        shared.retain(|&(_, second)| second < edge.positions.len());
-                        shared
-                    }
-                    None => {
-                        let count = edge.positions.len();
-                        (0..count)
-                            .flat_map(|first| {
-                                ((first + 1)..count).map(move |second| (first, second))
-                            })
-                            .collect()
-                    }
-                };
-                let caller_state = &mut functions[caller];
-                for (first, second) in pairs {
-                    for holder_a in &edge.positions[first] {
-                        for holder_b in &edge.positions[second] {
-                            if let (Some(&first_binding), Some(&second_binding)) = (
-                                caller_state.index.get(holder_a),
-                                caller_state.index.get(holder_b),
-                            ) {
-                                changed |= caller_state.union(first_binding, second_binding);
-                            }
-                        }
-                    }
-                }
-            }
-            functions[caller].calls = edges;
-        }
-        if !changed {
-            break;
-        }
     }
 }
 

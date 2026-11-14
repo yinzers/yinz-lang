@@ -6,7 +6,7 @@ use ynz_diagnostics::SourceSpan;
 use crate::types::Type;
 
 /// Why a binding is no longer usable — the cause selects the diagnostic the consumed-read
-/// site renders (`Consumed` for a give, `ConsumedBySend` for a channel send) and fills its
+/// site renders (`Consumed` for a give, `ConsumedBySend` for a channel send, `ConsumedByStore` for a store) and fills its
 /// slots. ONE field on the entry, never a bool beside an `Option<String>` (v0.3-M8 Phase 4,
 /// `IMP-ownership.md` "Binding events, origin and alias classes").
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +27,19 @@ pub enum ConsumedBy {
     Sent {
         channel: String,
         sent: String,
+        missed_revive: Option<BranchKind>,
+    },
+    /// Stored into `place` (`list.add(v)`, `x.field = v`, `let b = a`, a container literal): the
+    /// place holds the value from then on, so the source is gone. `place` is the place as the
+    /// diagnostic names it (`list`, `x.field`, the literal `[a, c]`); `stored` is the
+    /// binding that was named at the store (it differs from the consumed name when the
+    /// consumption reached this entry through its alias class); `copy_form` is the store written
+    /// with a copy, for the WHAT-INSTEAD.
+    /// `missed_revive`: see [`ConsumedBy::missed_revive`].
+    Stored {
+        place: String,
+        stored: String,
+        copy_form: String,
         missed_revive: Option<BranchKind>,
     },
 }
@@ -50,7 +63,9 @@ impl ConsumedBy {
     /// one canonical `Consumed` text.
     pub fn missed_revive(&self) -> Option<BranchKind> {
         match self {
-            ConsumedBy::Given { missed_revive, .. } | ConsumedBy::Sent { missed_revive, .. } => {
+            ConsumedBy::Given { missed_revive, .. }
+            | ConsumedBy::Sent { missed_revive, .. }
+            | ConsumedBy::Stored { missed_revive, .. } => {
                 *missed_revive
             }
         }
@@ -75,6 +90,17 @@ impl ConsumedBy {
             } => ConsumedBy::Sent {
                 channel,
                 sent,
+                missed_revive: missed_revive.or(Some(kind)),
+            },
+            ConsumedBy::Stored {
+                place,
+                stored,
+                copy_form,
+                missed_revive,
+            } => ConsumedBy::Stored {
+                place,
+                stored,
+                copy_form,
                 missed_revive: missed_revive.or(Some(kind)),
             },
         }

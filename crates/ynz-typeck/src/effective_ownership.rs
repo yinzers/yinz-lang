@@ -413,11 +413,9 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
                 None => Provenance::Unknown,
             }
         }
-        Expr::ArrayLit { elements, .. } => fold_parts(elements.iter(), ctx, true),
-        Expr::MapLit { entries, .. } => {
-            fold_parts(entries.iter().flat_map(|(k, v)| [k, v]), ctx, true)
-        }
-        Expr::StructLit { fields, .. } => fold_parts(fields.iter().map(|f| &f.value), ctx, true),
+        // A container literal stores each named heap part (`check.rs::hand_literal_parts_over`):
+        // it takes them over, so it is the sole holder of everything in it.
+        Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => Provenance::Fresh,
         Expr::PostfixOp { receiver, op, .. } => match op {
             // `.copy()` is fresh iff the copy is genuinely independent for the receiver's
             // type (parity-tested against codegen's `PostfixOpKind::Copy` arms); the FR#10

@@ -70,3 +70,12 @@ macro_rules! cases {
         )+
     };
 }
+
+/// The program must be rejected with an error that contains `needle`.
+pub fn assert_rejected_with(source: &str, needle: &str) {
+    let found = errors(&run(source));
+    assert!(
+        found.iter().any(|message| message.contains(needle)),
+        "expected an error containing {needle:?} for:\n{source}\ngot {found:#?}"
+    );
+}
