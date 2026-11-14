@@ -1,0 +1,22 @@
+// v0.3-M9 C1g rework (round 2 code fixer): built-in methods on a `sensitive string`, an
+// `errors`-capable value and an `options` value called with the wrong number of arguments.
+// Correct behavior: does not compile — each call is refused with the arity text of a plain call.
+// Pre-fix failure: `secret.substring(1)` and `readConfig().or()` panicked the code generator
+// (each reads an argument that was never passed); `color.toString(1)` dropped its argument
+// without a word.
+
+options Color { red, green }
+
+function readConfig() -> string errors {
+  return `ok`
+}
+
+function entrypoint() -> nothing {
+  let secret: sensitive string = sensitive(`hello`)
+  let part = secret.substring(1)
+  let has = secret.contains()
+  let fallback = readConfig().or()
+  let failed = readConfig().failed(1)
+  let color = Color.red
+  let text = color.toString(1)
+}

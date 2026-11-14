@@ -15,9 +15,10 @@
 //! too. The type checker never counted their arguments, so `xs.add()` panicked the code generator
 //! and `n.toString(1, 2)` dropped its arguments; each method family has its own fixture.
 //!
-//! Test count: 12 — one per refused case (two `background` generic calls, three dot-call argument
+//! Test count: 13 — one per refused case (two `background` generic calls, three dot-call argument
 //! counts: too few, too many, through a `dynamic` receiver), the teaching text of the dot-call
-//! form, one per built-in method family (array, map, `maybe`, string, number) and the legal generic
+//! form, one per built-in method family (array, map, `maybe`, string, number), one for the
+//! `sensitive`, `errors`-capable and `options` receivers (round 2) and the legal generic
 //! `background` call that must keep running.
 
 mod support;
@@ -211,5 +212,23 @@ fn v03_m9_c1g_rework_legal_generic_background_call_still_runs() {
         false,
         "q3\ngeneric-background-done\n",
         "a legal generic background call must still compile and run",
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_method_on_a_wrapped_receiver_with_wrong_argument_count_is_rejected() {
+    // BUG (round 2): the argument count was only checked for the plain collection, `maybe`,
+    // string and number receivers; `secret.substring(1)` (`sensitive string`) and
+    // `readConfig().or()` (`errors`-capable) still panicked the code generator, and
+    // `color.toString(1)` (`options`) dropped its argument. TIER: High (type checker).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_arity_wrapped_receivers.ynz",
+        &[
+            "`substring` takes 3 argument(s), but 2 were given.",
+            "`contains` takes 2 argument(s), but 1 were given.",
+            "`or` takes 2 argument(s), but 1 were given.",
+            "`failed` takes 1 argument(s), but 2 were given.",
+            "`toString` takes 1 argument(s), but 2 were given.",
+        ],
     );
 }
