@@ -1,0 +1,53 @@
+// v0.3-M9 C3a fixture: bignums whose text is a few bytes (`9`, `10`, `1`): the exact-size heap
+// string is 2-3 bytes, so a 16-byte decimal128 read runs past the allocation (an
+// AddressSanitizer report when the read is instrumented, a wrong answer otherwise). `9 < 10`
+// also separates a numeric compare from a text compare ("9" > "10").
+//
+// Expected: bignum vs bignum (9, 10): true true false true false false
+//           bignum vs bignum (10, 9): false false false true true true
+//           small vs bignum (1, 9):   true true false true false false
+//           bignum vs small (9, 1):   false false false true true true
+
+function bigBig(lhs: number<50>, rhs: number<50>) -> nothing {
+  print(lhs < rhs)
+  print(lhs <= rhs)
+  print(lhs == rhs)
+  print(lhs != rhs)
+  print(lhs > rhs)
+  print(lhs >= rhs)
+}
+
+function smallBig(lhs: number<10>, rhs: number<50>) -> nothing {
+  print(lhs < rhs)
+  print(lhs <= rhs)
+  print(lhs == rhs)
+  print(lhs != rhs)
+  print(lhs > rhs)
+  print(lhs >= rhs)
+}
+
+function bigSmall(lhs: number<50>, rhs: number<10>) -> nothing {
+  print(lhs < rhs)
+  print(lhs <= rhs)
+  print(lhs == rhs)
+  print(lhs != rhs)
+  print(lhs > rhs)
+  print(lhs >= rhs)
+}
+
+function entrypoint() -> nothing {
+  let nine: number<50> = oneAnd(8.0)
+  let ten: number<50> = oneAnd(9.0)
+  let smallOne: number<10> = 1.0
+  bigBig(nine, ten)
+  bigBig(ten, nine)
+  smallBig(smallOne, nine)
+  bigSmall(nine, smallOne)
+}
+
+// A computed bignum is an exact-size heap string. A literal is a static string, which sits in
+// read-only data with more bytes after it, so a 16-byte over-read of it can happen to look right.
+function oneAnd(addend: number<50>) -> number<50> {
+  let one: number<50> = 1.0
+  return one + addend
+}

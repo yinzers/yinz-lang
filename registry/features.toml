@@ -1676,6 +1676,107 @@ what_template = "`{callee}` gets its command channel from `{expr}`, which is not
 what_instead_template = "Bind the channel first, then spawn: `let commands = {expr}` and `let h = background {callee}(commands, …)`. Call `commands.close()` when you are done sending."
 why_template = "A task handle can send into its channel (`h.send(value)`) but cannot close it — only the channel binding can. Without a binding, a task waiting on `receive()` can never be told the stream has ended, so it waits forever."
 
+# v0.3-M9 C1b (security): a union value reaching a slot that expects one of its variants. The
+# union is a 16-byte tagged envelope; the slot reads it as the bare variant, so the callee reads
+# the envelope's tag/data words as the variant's fields (a segfault whose read address the
+# value controls). `{value}` is the value as source text, `{union}` its type (`Tiny | Big`),
+# `{variant}` the variant the slot expects, `{needs}` the slot ("`showBig` expects a `Big` here",
+# "this function must return a `Big`", "`b` is declared as `Big`").
+# Decided v0.3-M9 C1b: `git log --grep=UnionWhereVariantExpected`.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpected"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "Check which variant it holds first, then use it inside that arm: `if ({value}) { is {variant} => { … } }` — inside the arm, `{value}` is a `{variant}`. Handle the other variants in their own `is` arms, or in an `else =>` arm."
+why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. Inside an `is {variant}` arm the compiler knows the tag matched, so `{value}` is a `{variant}` there and can be passed on."
+
+# The two other recoveries of `UnionWhereVariantExpected`, selected by `union_where_variant_expected_diag`
+# so the WHAT-INSTEAD only ever names code that compiles today (Golden Rule 11). They have no
+# `DiagnosticKind` variant of their own: the diagnostic carries `UnionWhereVariantExpected`.
+# `{value}`, `{union}`, `{variant}` and `{needs}` are the base template's slots; `{others}` is the
+# union's other variants, backticked and comma-separated ("`nothing`", "`int`, `string`").
+#
+# `...NameIt`: the value is not a bare name (`holder.inner`, `pick()`); an `is` arm checks a
+# named binding only. The union has a shape variant and the slot expects exactly that shape.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpectedNameIt"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "Give it a name first, then check the name: `let checked = {value}`, then `if (checked) { is {variant} => { … } }` — inside the arm, `checked` is a `{variant}`. Handle the other variants in their own `is` arms, or in an `else =>` arm."
+why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. An `is` arm checks a named binding, not an expression like `{value}`; inside an `is {variant}` arm the compiler knows the tag matched, so the named binding is a `{variant}` there and can be passed on."
+
+# `...NoIsArm`: no `is` arm can hand the value over as the expected variant today — the variant is
+# not a shape (`is` arms name shape variants only), or the union has no shape variant at all (it is
+# the variant's own pointer, with no tag box). The recoveries that compile are on the slot's side.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpectedNoIsArm"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "No `is` arm can hand `{value}` over as a `{variant}`: `is` arms name shape variants only. Change what receives it to accept a `{union}` instead, or keep the value a `{variant}` from where it is created instead of storing it in a `{union}`."
+why_template = "A `{union}` might hold any one of its variants, not only a `{variant}`: also {others}. Code that expects a plain `{variant}` is written for that variant alone, so given another variant it would read the wrong kind of data, and can crash. No check the compiler can run today proves `{value}` is a `{variant}`, so it refuses the hand-over."
+
+# v0.3-M9 C1e (#421): a plain value reaches a union slot whose matching variant the union box
+# cannot hold. Typeck refuses it where it records the coercion (`record_union_coercion`) so a
+# correct program never reaches codegen's refusal of the same case ("This is a compiler bug").
+# `{value}` is the value as source text, `{union}` the union's type, `{variant}` the variant that
+# takes it. The union box keeps one small value next to the tag: shapes, strings, arrays, maps,
+# `int`, `float`, `boolean` and a `number` of more than 34 digits fit; every other variant does not.
+# Decided v0.3-M9 C1e round 2: `git log --grep=UnionVariantNotStorable`.
+[[diagnostic_template]]
+kind_name = "UnionVariantNotStorable"
+what_template = "`{value}` would be stored in the `{variant}` part of a `{union}`, but a `{variant}` can't be stored in a union yet."
+what_instead_template = "Put the `{variant}` inside a shape and use that shape as the union's variant instead: `shape Boxed { value: {variant} }`, then build it with `let boxed: Boxed = { value: {value} }` and use `boxed` here."
+why_template = "A `{union}` is a box with a tag saying which variant is inside, and the box has room for one small value next to the tag. A `{variant}` is not stored that way yet, so the compiler can't build the box for it. It stops here, because storing it anyway would make the code that reads the union get the wrong data. A shape works because the box then holds the shape's location."
+
+# The same slot when the variant is a `number` of more than 34 digits and the value is a shorter
+# `number`: the two are stored differently and typeck accepts one where the other is declared, but
+# the union box has no conversion yet. Selected by `union_variant_refusal_diag`; the diagnostic
+# carries `UnionVariantNotStorable`. `{value_ty}` is the value's type (`number<10>`).
+[[diagnostic_template]]
+kind_name = "UnionVariantNotStorableNumberPrecision"
+what_template = "`{value}` is a `{value_ty}`, but the `{variant}` part of `{union}` needs a `{variant}`, and a union can't convert a `{value_ty}` into one yet."
+what_instead_template = "Create the value as a `{variant}` where you declare it, for example `let amount: {variant} = 5.0`, then use `amount` here."
+why_template = "A `number` with more digits is stored differently from one with fewer, and putting a number into a union does not convert between the two. Storing the `{value_ty}` as it is would make the code that reads the union misread its digits, so the compiler refuses instead of storing wrong digits."
+
+# v0.3-M9 C1e (#421): `let m: Mixed = wait count()` and `let m: Mixed = count()` with a suspending
+# `count`. The state-machine `let` binds a call's result without the step that tags a plain value
+# for a union, so the first `is` check on `m` would read a garbage tag. Typeck refuses it at the
+# annotated `let`; the workaround it names (`let got = ...`, then `let m: Mixed = got`) goes
+# through the tagging step. `{name}` is the binding, `{call}` the call as source text
+# (`wait count()`), `{union}` the binding's type.
+# Decided v0.3-M9 C1e round 2: `git log --grep=SuspendingResultIntoUnionLet`.
+[[diagnostic_template]]
+kind_name = "SuspendingResultIntoUnionLet"
+what_template = "`{call}` pauses and resumes before it gives its result, and that result can't be stored straight into `{name}`, which is declared as `{union}`, yet."
+what_instead_template = "Store the result in its own variable first, then store that variable in `{name}`: `let got = {call}`, then `let {name}: {union} = got`."
+why_template = "A `{union}` variable holds a value together with a tag saying which variant it is. When a call pauses and resumes, its result arrives without that tag being added, so the first `is` check on `{name}` would read a wrong tag and could crash. Copying the result from its own variable into `{name}` is the step where the compiler adds the tag."
+
+# v0.3-M9 C1e (#421): `return wait count()` and `return count()` with a suspending `count`, from a
+# function that returns a union. The state-machine `return` stores a call's result in the return
+# slot without the step that tags a plain value for a union, so the first `is` check on the
+# caller's result would read a garbage tag. Typeck refuses it at the `return`, and the codegen
+# query refuses it again for a callee only the CPU-parallel promotion makes suspending; the
+# workaround it names (`let got = ...`, then `return got`) goes through the tagging step.
+# `{call}` is the call as source text (`wait count()`), `{union}` the function's return type.
+# Decided v0.3-M9 C1e round 3: `git log --grep=SuspendingResultIntoUnionReturn`.
+[[diagnostic_template]]
+kind_name = "SuspendingResultIntoUnionReturn"
+what_template = "`{call}` pauses and resumes before it gives its result, and that result can't be returned straight from this function, which returns a `{union}`, yet."
+what_instead_template = "Store the result in its own variable first, then return that variable: `let got = {call}`, then `return got`."
+why_template = "A `{union}` result holds a value together with a tag saying which variant it is. When a call pauses and resumes, its result arrives without that tag being added, so the first `is` check on what this function returns would read a wrong tag and could crash. Returning the result from its own variable is the step where the compiler adds the tag."
+
+# v0.3-M9 C1g (#424): an argument whose type differs from the type a type parameter of a generic
+# function already stands for. Rendered by `check_generic_fn_call` when the parameter's type IS the
+# type parameter (`same<T>(first: T, second: T)`); every other argument/parameter mismatch uses the
+# plain call form's text. `{value}`/`{actual}` the argument as source text and its type; `{callee}`
+# the function; `{param}` the parameter it is passed for; `{typeParam}` the type parameter and
+# `{bound}` the type the call made it; `{cause}` says what made it (the argument for a sibling
+# parameter, or the explicit type argument); `{alternative}` the other way out, in prose that
+# names only code that compiles.
+# Decided v0.3-M9 C1g: `git log --grep=ArgumentConflictsWithTypeParameter`.
+[[diagnostic_template]]
+kind_name = "ArgumentConflictsWithTypeParameter"
+what_template = "`{value}` has type `{actual}`, but `{callee}` needs `{bound}` for `{param}`: {cause}."
+what_instead_template = "Pass a value of type `{bound}` for `{param}`. {alternative}."
+why_template = "`{callee}` is compiled once for each type `{typeParam}` stands for, and this call makes it `{bound}`, so `{callee}` handles `{param}` as `{bound}`. A `{actual}` is laid out differently, so reading it as `{bound}` gives wrong values, or goes past the end of the `{actual}` and can crash."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full

@@ -1,0 +1,49 @@
+// v0.3-M9 C1g + #421: a plain shape that fits a union parameter only THROUGH the type
+// parameter inside it (`first: T | nothing` or `first: T | Tiny`, `T = Big` from `second`) is
+// wrapped in the union's tagged box at the call, through the substituted parameter type — the
+// one union coercion point (`record_union_coercion`).
+// Correct behavior: compiles, runs ASan-clean, prints `hello` for both calls (the callee reads
+// the `Big` variant, not the bare shape's bytes as a box).
+// Pre-#421 failure: `pick(big, big)` with `T | nothing` compiled and printed `absent` instead
+// of `hello` (the bare `Big` was read as the tagged union box); with `T | Tiny` codegen failed
+// ("`Big` reaches the union slot `pick_arg0` but is not one of its variants"). C1g refused both
+// calls until the coercion point covered substituted parameters.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function describe(share thing: Big | nothing) -> string {
+  if (thing) {
+    is Big => {
+      return thing.label
+    }
+  }
+  return `absent`
+}
+
+function pick<T>(share first: T | nothing, share second: T) -> T | nothing {
+  return first
+}
+
+function pickOrTiny<T>(share first: T | Tiny, share second: T) -> T | Tiny {
+  return first
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  print(describe(pick(big, big)))
+  let out = pickOrTiny(big, big)
+  if (out) {
+    is Big => {
+      print(out.label)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }
+}

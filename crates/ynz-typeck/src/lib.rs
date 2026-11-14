@@ -83,7 +83,9 @@ pub use false_sharing::{
     collect_shape_type_names, finalize_false_sharing, FalseSharingOutcome,
     CROSS_THREAD_FIELDS_NOT_PADDED,
 };
-pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
+pub use generics::{
+    GenericCallInstances, GenericFnTable, GenericShapeTable, MonomorphizationTable,
+};
 pub use inlay_hint_passes::{
     array_to_fixed_promotion_hints, auto_arc_hints, background_routing_hints,
     channel_capacity_hints, copy_point_hints, let_to_const_promotion_hints,

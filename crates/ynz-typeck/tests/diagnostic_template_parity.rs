@@ -43,6 +43,9 @@ const TEMPLATES_WITHOUT_A_VARIANT: &[&str] = &[
     "UnawaitedSleepAsync",
     "WaitRequiredOnStateMachineCall",
     "StatementNestingTooDeep",
+    "UnionWhereVariantExpectedNameIt",
+    "UnionWhereVariantExpectedNoIsArm",
+    "UnionVariantNotStorableNumberPrecision",
 ];
 
 /// PRE-EXISTING variant-backed templates whose emit sites still hand-write their text
@@ -238,8 +241,19 @@ fn fill(template: &str, slots: &[(&str, &str)]) -> String {
 }
 
 fn assert_rendered(kind: DiagnosticKind, source: &str, slots: &[(&str, &str)]) {
-    let template = ynz_registry::diagnostic_template_lookup(kind.kind_name())
-        .unwrap_or_else(|| panic!("no template for {}", kind.kind_name()));
+    assert_template_rendered(kind.kind_name(), kind, source, slots);
+}
+
+/// `assert_rendered` for a variant-less sibling template (`template_name`) whose diagnostic
+/// carries `kind`.
+fn assert_template_rendered(
+    template_name: &str,
+    kind: DiagnosticKind,
+    source: &str,
+    slots: &[(&str, &str)],
+) {
+    let template = ynz_registry::diagnostic_template_lookup(template_name)
+        .unwrap_or_else(|| panic!("no template for {template_name}"));
     let expected_what = fill(template.what_template, slots);
     let expected_instead = fill(template.what_instead_template, slots);
     let expected_why = fill(template.why_template, slots);
@@ -671,4 +685,400 @@ fn message_before_failed_check_refuses_a_non_ident_receiver() {
          }",
         &[("name", "freshResult()"), ("field", "message")],
     );
+}
+
+#[test]
+fn union_where_variant_expected_is_rendered_from_the_registry() {
+    // WHY: v0.3-M9 C1b — a union reaching a variant slot used to compile and crash; its refusal
+    // text must come from the registry template, not a hand-written twin.
+    assert_rendered(
+        DiagnosticKind::UnionWhereVariantExpected,
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           print(showBig(thing))\n\
+         }",
+        &[
+            ("value", "thing"),
+            ("union", "Tiny | Big"),
+            ("variant", "Big"),
+            ("needs", "`showBig` expects a `Big` here"),
+        ],
+    );
+}
+
+// Golden Rule 11: the WHAT-INSTEAD of `UnionWhereVariantExpected` may only name code that
+// compiles today. The base template names `if (value) { is Variant => … }`; that is wrong for a
+// value that is not a name, a variant that is not a shape, and a union with no shape variant
+// (it is the variant's own pointer, not a tag box). Each recovery has its own registry template,
+// and each suggestion below is compiled to prove it.
+
+fn assert_compiles(source: &str) {
+    let errors = errors_for(source);
+    assert!(
+        errors.is_empty(),
+        "the suggested code must compile, got {:#?}",
+        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+    );
+}
+
+/// Every recovery of `UnionWhereVariantExpected` is rendered from its own registry template:
+/// a variant-less sibling carries the diagnostic's kind, and the WHAT is the base template's.
+fn assert_recovery_rendered(template_name: &str, source: &str, slots: &[(&str, &str)]) {
+    let base = ynz_registry::diagnostic_template_lookup("UnionWhereVariantExpected")
+        .expect("the base template exists");
+    let template = ynz_registry::diagnostic_template_lookup(template_name)
+        .unwrap_or_else(|| panic!("no template for {template_name}"));
+    assert_eq!(
+        template.what_template, base.what_template,
+        "{template_name}: the WHAT must be the base template's"
+    );
+    let expected_what = fill(template.what_template, slots);
+    let errors = errors_for(source);
+    let hit = errors
+        .iter()
+        .find(|d| d.what == expected_what)
+        .unwrap_or_else(|| {
+            panic!(
+                "{template_name}: no diagnostic rendered the WHAT {expected_what:?}; got {:#?}",
+                errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(
+        hit.what_instead,
+        fill(template.what_instead_template, slots),
+        "{template_name}: WHAT-INSTEAD drifted"
+    );
+    assert_eq!(
+        hit.why,
+        fill(template.why_template, slots),
+        "{template_name}: WHY drifted"
+    );
+    assert_eq!(hit.kind, Some(DiagnosticKind::UnionWhereVariantExpected));
+}
+
+#[test]
+fn union_where_variant_expected_base_suggestion_compiles() {
+    // The `is` arm on the name, with the other variant handled, is what the base text suggests.
+    assert_compiles(
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           if (thing) {\n\
+             is Big => { print(showBig(thing)) }\n\
+             else => { print(`tiny`) }\n\
+           }\n\
+         }",
+    );
+}
+
+#[test]
+fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
+    // `holder.inner` is an expression: an `is` arm checks a named binding only.
+    assert_recovery_rendered(
+        "UnionWhereVariantExpectedNameIt",
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         shape Holder { inner: Tiny | Big }\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           let holder: Holder = { inner: thing }\n\
+           print(showBig(holder.inner))\n\
+         }",
+        &[
+            ("value", "holder.inner"),
+            ("union", "Tiny | Big"),
+            ("variant", "Big"),
+            ("needs", "`showBig` expects a `Big` here"),
+        ],
+    );
+    // The suggested code: name it, check the name, use it in the arm.
+    assert_compiles(
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         shape Holder { inner: Tiny | Big }\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           let holder: Holder = { inner: thing }\n\
+           let checked = holder.inner\n\
+           if (checked) {\n\
+             is Big => { print(showBig(checked)) }\n\
+             else => { print(`tiny`) }\n\
+           }\n\
+         }",
+    );
+}
+
+#[test]
+fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is_arm() {
+    // `map<string, string> | nothing` is the map's own pointer: no `is` arm can name `map<..>`
+    // (it does not even parse), and there is no tag box for the WHY to describe.
+    let source =
+        "function takesTable(share table: map<string, string>) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let table: map<string, string> = { `a`: `b` }\n\
+           let maybeTable: map<string, string> | nothing = table\n\
+           print(takesTable(maybeTable))\n\
+         }";
+    assert_recovery_rendered(
+        "UnionWhereVariantExpectedNoIsArm",
+        source,
+        &[
+            ("value", "maybeTable"),
+            ("union", "map<string, string> | nothing"),
+            ("variant", "map<string, string>"),
+            ("needs", "`takesTable` expects a `map<string, string>` here"),
+            ("others", "`nothing`"),
+        ],
+    );
+    let diagnostic = errors_for(source).remove(0);
+    assert!(
+        !diagnostic.what_instead.contains("if (maybeTable)") && !diagnostic.why.contains("a box"),
+        "a raw-pointer union has no `is` arm to suggest and no tag box to describe: {diagnostic:?}"
+    );
+    // The suggested code: let the receiving slot take the union.
+    assert_compiles(
+        "function describeTable(share table: map<string, string> | nothing) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let table: map<string, string> = { `a`: `b` }\n\
+           let maybeTable: map<string, string> | nothing = table\n\
+           print(describeTable(maybeTable))\n\
+         }",
+    );
+}
+
+#[test]
+fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
+    // `is int =>` does not lower (#418): the suggestion must not name it.
+    let source = "function takesInt(share number: int) -> int { return number }\n\
+         function entrypoint() -> nothing {\n\
+           let v: int | string = 5\n\
+           print(takesInt(v).toString())\n\
+         }";
+    assert_recovery_rendered(
+        "UnionWhereVariantExpectedNoIsArm",
+        source,
+        &[
+            ("value", "v"),
+            ("union", "int | string"),
+            ("variant", "int"),
+            ("needs", "`takesInt` expects a `int` here"),
+            ("others", "`string`"),
+        ],
+    );
+    let diagnostic = errors_for(source).remove(0);
+    assert!(
+        !diagnostic.what_instead.contains("is int")
+            && !diagnostic.what_instead.contains("handle each variant"),
+        "no `is int` arm exists to suggest, and a receiving slot cannot handle an `int` variant: {diagnostic:?}"
+    );
+    // The caret label comes from the kind alone and is shown for every recovery, so it must not
+    // tell the reader to `is`-check a value that no `is` arm can hand over (it printed
+    // "check it with `is` first" under this very diagnostic).
+    let caret_label = diagnostic
+        .kind
+        .as_ref()
+        .expect("the diagnostic carries its kind")
+        .tag();
+    assert!(
+        !caret_label.contains("`is`"),
+        "the caret label names an `is` check no arm can offer here: {caret_label:?}"
+    );
+    assert_compiles(
+        "function takesEither(share either: int | string) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let v: int | string = 5\n\
+           print(takesEither(v))\n\
+         }",
+    );
+}
+
+// v0.3-M9 C1e (#421): a plain value that no union box can hold is refused in typeck with a
+// registry teaching diagnostic, never at codegen's "This is a compiler bug" refusal. Each test
+// renders its template from the registry and compiles the code its WHAT-INSTEAD names (Golden
+// Rule 11).
+
+#[test]
+fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
+    // WHY: `Circle | number` passed typeck and died in codegen as "a compiler bug".
+    let preamble = "shape Circle { radius: int }\n\
+                    function describe(share value: Circle | number) -> string { return `ok` }\n";
+    assert_rendered(
+        DiagnosticKind::UnionVariantNotStorable,
+        &format!(
+            "{preamble}function entrypoint() -> nothing {{\n\
+               let small: number = 5.0\n\
+               print(describe(small))\n\
+             }}"
+        ),
+        &[
+            ("value", "small"),
+            ("union", "Circle | number"),
+            ("variant", "number"),
+        ],
+    );
+    // The suggested code: the number in a shape, the shape as the variant.
+    assert_compiles(
+        "shape Circle { radius: int }\n\
+         shape Boxed { value: number }\n\
+         function describe(share value: Circle | Boxed) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let small: number = 5.0\n\
+           let boxed: Boxed = { value: small }\n\
+           print(describe(boxed))\n\
+         }",
+    );
+}
+
+#[test]
+fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text() {
+    // WHY: typeck assigns `number<10>` to `number<40>`, and the union box stored the narrow
+    // value's slot address as the wide value's pointer.
+    assert_template_rendered(
+        "UnionVariantNotStorableNumberPrecision",
+        DiagnosticKind::UnionVariantNotStorable,
+        "shape Circle { radius: int }\n\
+         function describe(share value: Circle | number<40>) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let small: number<10> = 5.0\n\
+           print(describe(small))\n\
+         }",
+        &[
+            ("value", "small"),
+            ("value_ty", "number<10>"),
+            ("union", "Circle | number<40>"),
+            ("variant", "number<40>"),
+        ],
+    );
+    assert_compiles(
+        "shape Circle { radius: int }\n\
+         function describe(share value: Circle | number<40>) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let amount: number<40> = 5.0\n\
+           print(describe(amount))\n\
+         }",
+    );
+}
+
+#[test]
+fn a_suspending_result_into_a_union_let_is_refused_with_its_registry_text() {
+    // WHY: `let m: Mixed = wait count()` bound the raw int as the union's pointer and the first
+    // `is` check read its tag through address 0x4.
+    let program = |bind: &str| {
+        format!(
+            "shape Circle {{ name: string }}\n\
+             shape Mixed = Circle | int\n\
+             function count() -> int {{ wait sleep(1)\n return 4 }}\n\
+             function entrypoint() -> nothing {{\n\
+               {bind}\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::SuspendingResultIntoUnionLet,
+        &program("let m: Mixed = wait count()"),
+        &[
+            ("name", "m"),
+            ("call", "wait count()"),
+            ("union", "Circle | int"),
+        ],
+    );
+    assert_compiles(&program(
+        "let got = wait count()\n let m: Circle | int = got",
+    ));
+}
+
+#[test]
+fn a_suspending_result_returned_as_a_union_is_refused_with_its_registry_text() {
+    // WHY: `return wait count()` from a union-returning pausing function stored the raw int in the
+    // return slot; the compiler then panicked instead of teaching the recovery.
+    let program = |returned: &str| {
+        format!(
+            "shape Circle {{ name: string }}\n\
+             shape Mixed = Circle | int\n\
+             function count() -> int {{ wait sleep(1)\n return 4 }}\n\
+             function pick() -> Mixed {{ wait sleep(1)\n {returned} }}\n\
+             function entrypoint() -> nothing {{\n\
+               let m = pick()\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::SuspendingResultIntoUnionReturn,
+        &program("return wait count()"),
+        &[("call", "wait count()"), ("union", "Circle | int")],
+    );
+    assert_rendered(
+        DiagnosticKind::SuspendingResultIntoUnionReturn,
+        &program("return count()"),
+        &[("call", "count()"), ("union", "Circle | int")],
+    );
+    assert_compiles(&program("let got = count()\n return got"));
+    assert_compiles(&program("let got = wait count()\n return got"));
+}
+
+const SAME_TWO_SHAPES: &str = "shape Tiny { flag: boolean }\n\
+     shape Big { label: string }\n\
+     function same<T>(share first: T, share second: T) -> T { return second }\n";
+
+#[test]
+fn argument_conflicts_with_type_parameter_is_rendered_from_the_registry() {
+    // WHY: v0.3-M9 C1g — `same(big, tiny)` compiled and read a `Tiny` as a `Big`; the refusal's
+    // text must come from the registry template (`cause`/`alternative` are the two slots that
+    // depend on what bound the type parameter).
+    assert_rendered(
+        DiagnosticKind::ArgumentConflictsWithTypeParameter,
+        &format!(
+            "{SAME_TWO_SHAPES}function entrypoint() -> nothing {{\n\
+               let big: Big = {{ label: `hello` }}\n\
+               let tiny: Tiny = {{ flag: true }}\n\
+               print(same(big, tiny).label)\n\
+             }}"
+        ),
+        &[
+            ("value", "tiny"),
+            ("actual", "Tiny"),
+            ("callee", "same"),
+            ("param", "second"),
+            ("typeParam", "T"),
+            ("bound", "Big"),
+            (
+                "cause",
+                "`second` and `first` share the type parameter `T`, and the argument `big` for \
+                 `first` already made it `Big`",
+            ),
+            (
+                "alternative",
+                "Or give `first` a `Tiny` too, so `first` and `second` have the same type",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn argument_conflicts_with_type_parameter_suggestions_compile() {
+    // WHY: Golden Rule 11 — each alternative the WHAT-INSTEAD names must compile today:
+    // `first` given a `Tiny` too, and the explicit type argument changed to `Tiny`.
+    assert_compiles(&format!(
+        "{SAME_TWO_SHAPES}function entrypoint() -> nothing {{\n\
+           let tiny: Tiny = {{ flag: true }}\n\
+           let other: Tiny = {{ flag: false }}\n\
+           print(same(tiny, other).flag.toString())\n\
+           print(same<Tiny>(tiny, other).flag.toString())\n\
+         }}"
+    ));
 }

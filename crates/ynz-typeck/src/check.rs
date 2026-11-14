@@ -18,8 +18,8 @@ use crate::{
         Provenance, ProvenanceCtx,
     },
     generics::{
-        apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
-        MonoSignature, MonomorphizationTable, Substitution,
+        apply_substitution, mentions_type_param, unify_param, GenericFnSig, GenericFnTable,
+        GenericShapeTable, MonoSignature, MonomorphizationTable, Substitution,
     },
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
@@ -106,10 +106,22 @@ impl TransferSink<'_> {
 /// be dead data beside a hand-written twin). A missing template is a build-time invariant
 /// (`diagnostic_templates_render_from_the_registry` in the tests) — panicking here names it.
 fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)]) -> Diagnostic {
-    let kind_name = kind.kind_name();
-    let template = ynz_registry::diagnostic_template_lookup(kind_name).unwrap_or_else(|| {
+    let template_name = kind.kind_name();
+    registry_diag_template(span, kind, template_name, slots)
+}
+
+/// `registry_diag` for a kind whose text has more than one recovery: `template_name` names the
+/// `[[diagnostic_template]]` to render (a variant-less sibling of the kind's own template), and
+/// the diagnostic still carries `kind`.
+fn registry_diag_template(
+    span: SourceSpan,
+    kind: DiagnosticKind,
+    template_name: &str,
+    slots: &[(&str, &str)],
+) -> Diagnostic {
+    let template = ynz_registry::diagnostic_template_lookup(template_name).unwrap_or_else(|| {
         panic!(
-            "registry/features.toml has no [[diagnostic_template]] with kind_name = {kind_name:?}"
+            "registry/features.toml has no [[diagnostic_template]] with kind_name = {template_name:?}"
         )
     });
     let fill = |text: &str| -> String {
@@ -137,6 +149,175 @@ fn mentioned_names(expr: &Expr) -> Vec<String> {
     let mut sorted: Vec<String> = mentioned.into_iter().collect();
     sorted.sort();
     sorted
+}
+
+/// Which recovery the WHAT-INSTEAD may name for a union reaching a variant slot. Only code that
+/// compiles today is ever suggested: an `is` arm parses a bare shape-variant name and checks a
+/// named binding (`check_is_arm_pattern`; non-shape variants are #418).
+enum UnionRecovery {
+    /// `if (value) { is Variant => … }` — the value is a name and the variant a listed shape of
+    /// a union that has a shape variant.
+    IsArmOnTheValue,
+    /// The same, after `let checked = value` — the value is an expression, not a name.
+    IsArmOnANamedCopy,
+    /// No `is` arm can hand the value over: the variant is not a shape, or the union has no
+    /// shape variant (it is the variant's own pointer, with no tag box).
+    NoIsArm,
+}
+
+fn union_recovery(value: &Expr, source_union: &Type, expected_variant: &Type) -> UnionRecovery {
+    let is_arm_can_name_variant = is_envelope_union(source_union)
+        && matches!(expected_variant, Type::Shape { .. })
+        && matches!(source_union, Type::Union { variants } if variants.contains(expected_variant));
+    match (is_arm_can_name_variant, value) {
+        (false, _) => UnionRecovery::NoIsArm,
+        (true, Expr::Ident(..)) => UnionRecovery::IsArmOnTheValue,
+        (true, _) => UnionRecovery::IsArmOnANamedCopy,
+    }
+}
+
+/// The teaching diagnostic for a union value reaching a slot that expects one of its variants
+/// (`UnionWhereVariantExpected`). `needs` finishes the sentence "…, but {needs}" and names the
+/// slot: `showBig` expects a `Big` here, the function must return a `Big`, …. The WHAT-INSTEAD
+/// and WHY come from the registry template for the recovery that compiles (`union_recovery`).
+fn union_where_variant_expected_diag(
+    value: &Expr,
+    source_union: &Type,
+    expected_variant: &Type,
+    needs: &str,
+) -> Diagnostic {
+    let other_variants = match source_union {
+        Type::Union { variants } => variants
+            .iter()
+            .filter(|variant| *variant != expected_variant)
+            .map(|variant| format!("`{}`", type_name(variant)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => String::new(),
+    };
+    let slots = [
+        ("value", expr_source_text(value)),
+        ("union", type_name(source_union)),
+        ("variant", type_name(expected_variant)),
+        ("needs", needs.to_string()),
+        ("others", other_variants),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let span = value.span().clone();
+    match union_recovery(value, source_union, expected_variant) {
+        UnionRecovery::IsArmOnTheValue => {
+            registry_diag(span, DiagnosticKind::UnionWhereVariantExpected, &slots)
+        }
+        UnionRecovery::IsArmOnANamedCopy => registry_diag_template(
+            span,
+            DiagnosticKind::UnionWhereVariantExpected,
+            "UnionWhereVariantExpectedNameIt",
+            &slots,
+        ),
+        UnionRecovery::NoIsArm => registry_diag_template(
+            span,
+            DiagnosticKind::UnionWhereVariantExpected,
+            "UnionWhereVariantExpectedNoIsArm",
+            &slots,
+        ),
+    }
+}
+
+/// What made a type parameter stand for the type a later argument disagrees with.
+enum TypeParamBinding<'call> {
+    /// An earlier argument: the parameter it is passed for and its value.
+    Argument {
+        parameter: &'call str,
+        value: &'call Expr,
+    },
+    /// The explicit type arguments of the call (`same<Big>(…)`), as written.
+    ExplicitTypeArgs(&'call [String]),
+}
+
+/// The argument that conflicts with its type parameter, in the call's own names.
+struct ConflictingArgument<'call> {
+    callee: &'call str,
+    parameter: &'call str,
+    value: &'call Expr,
+    actual: &'call Type,
+}
+
+/// `ArgumentConflictsWithTypeParameter`: an argument of another type than the one its type
+/// parameter was made to stand for (`same(big, tiny)`, `same<Big>(big, tiny)`). The registry
+/// template holds the text; `cause` and `alternative` are the two sentences that depend on
+/// what bound the type parameter, and name only code that compiles.
+fn argument_conflicts_with_type_parameter_diag(
+    conflict: ConflictingArgument<'_>,
+    type_param: &str,
+    sig: &GenericFnSig,
+    bound: &Type,
+    binding: TypeParamBinding<'_>,
+) -> Diagnostic {
+    let actual = type_name(conflict.actual);
+    let (cause, alternative) = match binding {
+        TypeParamBinding::Argument {
+            parameter: first_parameter,
+            value: first_value,
+        } => (
+            format!(
+                "`{}` and `{first_parameter}` share the type parameter `{type_param}`, and the \
+                 argument `{}` for `{first_parameter}` already made it `{}`",
+                conflict.parameter,
+                expr_source_text(first_value),
+                type_name(bound),
+            ),
+            format!(
+                "Or give `{first_parameter}` a `{actual}` too, so `{first_parameter}` and `{}` \
+                 have the same type",
+                conflict.parameter,
+            ),
+        ),
+        TypeParamBinding::ExplicitTypeArgs(written) => {
+            let as_written = written.join(", ");
+            let with_actual = sig
+                .type_params
+                .iter()
+                .zip(written.iter())
+                .map(|(declared, written_arg)| {
+                    if declared == type_param {
+                        actual.clone()
+                    } else {
+                        written_arg.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                format!(
+                    "`{}<{as_written}>` sets the type parameter `{type_param}` to `{}`",
+                    conflict.callee,
+                    type_name(bound),
+                ),
+                format!(
+                    "Or write `{}<{with_actual}>` instead, if every argument that takes \
+                     `{type_param}` is a `{actual}`",
+                    conflict.callee,
+                ),
+            )
+        }
+    };
+    let value = expr_source_text(conflict.value);
+    let bound = type_name(bound);
+    let slots = [
+        ("value", value.as_str()),
+        ("actual", actual.as_str()),
+        ("callee", conflict.callee),
+        ("param", conflict.parameter),
+        ("typeParam", type_param),
+        ("bound", bound.as_str()),
+        ("cause", cause.as_str()),
+        ("alternative", alternative.as_str()),
+    ];
+    registry_diag(
+        conflict.value.span().clone(),
+        DiagnosticKind::ArgumentConflictsWithTypeParameter,
+        &slots,
+    )
 }
 
 /// What a binding event (`let`, reassignment) makes the name denote: the origin and live alias
@@ -360,6 +541,17 @@ const EC_MEMBER_NAMES: &[&str] = &["or", "failed", "message", "suggestions", "tr
 // `.failed()` itself and `.or(default)` are NOT gated — `.failed()` IS the check, and
 // `.or(default)` supplies its own fallback, so neither is an `EcField` variant.
 
+/// A plain value that flows into a slot of an ENVELOPE union type (`Tiny | Big`, `Circle | int`)
+/// and so must be wrapped in the tagged `{tag, data}` envelope before it is stored or passed
+/// (`TypedModule::union_coercions`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnionCoercion {
+    /// The union type of the slot the value flows into (a type parameter already substituted).
+    pub slot: Type,
+    /// Index in `slot`'s variants of the variant the value is: the envelope's tag.
+    pub tag: usize,
+}
+
 /// Inferred ownership for a plain-ident argument at a `background` call site.
 ///
 /// `OwnershipModifier` (from ynz-ast) covers `Share / Lend / Give` — the three
@@ -465,6 +657,13 @@ pub struct TypedModule {
     ///   and neither is the default-deny `Give` a non-ident argument gets, which consumes
     ///   nothing either (`background eat(b.items)` leaves `b` holding the map).
     pub background_arg_sole_holder: std::collections::HashMap<(usize, usize), SoleHolder>,
+    /// v0.3-M9 C1e (#421): every expression whose plain value flows into a slot of an envelope
+    /// union type, keyed by the expression's `(span.start, span.end)`: the slot's union and the
+    /// variant's tag. Written by the ONE recording function (`Checker::record_union_coercion`)
+    /// at every point where a value meets a slot of declared type (annotated `let`, argument,
+    /// `return`, shape field, built-in method argument); codegen wraps exactly these
+    /// expressions, at the one place it lowers an expression, and nowhere else.
+    pub union_coercions: std::collections::HashMap<(usize, usize), UnionCoercion>,
     /// v0.3-M7 Phase 6: function names ADMITTED to the back-edge poll-yield transform —
     /// state-machine functions whose loops become poll-yield suspension points.
     ///
@@ -483,6 +682,9 @@ pub struct TypedModule {
     /// v0.3-M9 C5a: the persisted transfer record — the final alias-class partition of every
     /// function with its release anchor and escapes (see `crate::transfer_record`).
     pub transfers: crate::transfer_record::TransferRecord,
+    /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
+    /// span. Codegen picks the instance a call runs from this record and nothing else.
+    pub generic_call_instances: crate::generics::GenericCallInstances,
 }
 
 impl TypedModule {
@@ -504,10 +706,12 @@ impl TypedModule {
             expr_types: self.expr_types.clone(),
             background_arg_inferred_ownership: self.background_arg_inferred_ownership.clone(),
             background_arg_sole_holder: self.background_arg_sole_holder.clone(),
+            union_coercions: self.union_coercions.clone(),
             cross_thread_padded_shapes: self.cross_thread_padded_shapes.clone(),
             back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
             binding_names: self.binding_names.clone(),
             transfers: self.transfers.clone(),
+            generic_call_instances: self.generic_call_instances.clone(),
         })
     }
 }
@@ -566,6 +770,7 @@ pub fn check(
         current_shape: None,
         type_param_scope: HashMap::new(),
         mono_table: MonomorphizationTable::default(),
+        generic_call_instances: crate::generics::GenericCallInstances::default(),
         maybe_non_none: HashSet::new(),
         union_narrowed: HashMap::new(),
         union_aliases: collect_union_aliases(module, shape_table),
@@ -580,6 +785,7 @@ pub fn check(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
@@ -602,10 +808,12 @@ pub fn check(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
         transfers,
+        generic_call_instances: checker.generic_call_instances,
     };
     (
         typed,
@@ -686,6 +894,7 @@ pub fn check_with_kernel_mode(
         current_shape: None,
         type_param_scope: HashMap::new(),
         mono_table: MonomorphizationTable::default(),
+        generic_call_instances: crate::generics::GenericCallInstances::default(),
         maybe_non_none: HashSet::new(),
         union_narrowed: HashMap::new(),
         union_aliases: collect_union_aliases(module, shape_table),
@@ -700,6 +909,7 @@ pub fn check_with_kernel_mode(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
@@ -722,10 +932,12 @@ pub fn check_with_kernel_mode(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
         transfers,
+        generic_call_instances: checker.generic_call_instances,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -794,6 +1006,9 @@ struct Checker<'b> {
     diags: DiagnosticBucket,
     /// Accumulated monomorphization entries for all generic call sites in this module.
     mono_table: MonomorphizationTable,
+    /// The type arguments each generic call was checked with; see
+    /// `TypedModule::generic_call_instances`.
+    generic_call_instances: crate::generics::GenericCallInstances,
     /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
     /// Maps alias name → resolved union type. Populated before check_module runs.
     union_aliases: HashMap<String, Type>,
@@ -833,8 +1048,10 @@ struct Checker<'b> {
     /// Flow-sensitive tracking: binding names known to be non-none inside an `.exists()` guard.
     maybe_non_none: HashSet<String>,
     /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
-    /// Maps binding name → narrowed type (the specific variant type).
-    union_narrowed: HashMap<String, Type>,
+    /// Maps binding name → (narrowed variant type, the narrowed binding's `defined_at`). The
+    /// overlay applies only while the name still resolves to that binding: a `let` in the arm
+    /// that reuses the name is a different binding (`active_union_narrowing`).
+    union_narrowed: HashMap<String, (Type, SourceSpan)>,
     /// Flow-sensitive: binding IDENTITIES (`ScopeEntry::alias_class`, not names) known to be
     /// in the success state after a `.failed() == false` check or after auto-propagation
     /// fired. These bindings have narrowed from `ErrorsCapable<T>` to `T`.
@@ -907,6 +1124,8 @@ struct Checker<'b> {
     /// `TypedModule::background_arg_sole_holder` is moved from. Written by the ONE spawn-arg
     /// recording function (`record_spawn_arg_ownership`).
     bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
+    /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
+    union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
     /// v0.3-M8 Phase 5: the next Auto-Arc group id (minted per admitted group, module-wide).
     next_arc_group: u32,
@@ -1626,9 +1845,9 @@ impl<'b> Checker<'b> {
                 // are describing one event — while a crossing read at any other span
                 // disqualifies the name and it stays rejected here, because the promotion
                 // does not make the parent's own post-wait reload safe. The union skip keys on
-                // the ANNOTATION resolving to Union (step 3c): the union-ctor arm that
-                // performs the promotion keys on that same annotation, and the RHS types
-                // as the concrete variant shape.
+                // the ANNOTATION resolving to Union (step 3c): codegen wraps the value in the union
+                // envelope and `store_binding` promotes it, while typeck types the RHS as the
+                // concrete variant shape.
                 if arg_escape_only.contains(crossing_name.as_str())
                     && (matches!(effective_ty, Some(Type::Maybe { .. }))
                         || matches!(ann_ty, Some(Type::Union { .. })))
@@ -2584,7 +2803,7 @@ impl<'b> Checker<'b> {
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 
         // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): `let x: number = 5`
-        // hints the int literal to `number`, so `types_compatible(number, number)`
+        // hints the int literal to `number`, so `can_assign(number, number)`
         // admits it — then codegen ICEs storing a raw i64 into the decimal128 pointer
         // slot (the store-site #9 class). Route it through the SAME shared teaching
         // gate as every other int-literal→`number` slot (authoritative-derivation: one
@@ -2623,25 +2842,36 @@ impl<'b> Checker<'b> {
         let binding_ty = if let Some(ann_ty) = &annotated_ty {
             if value_ty == Type::Error || *ann_ty == Type::Error {
                 Type::Error
-            } else if !types_compatible(ann_ty, &value_ty) {
-                self.diags.push(Diagnostic::error(
-                    value.span().clone(),
-                    format!(
-                        "This value is `{}`, but `{}` is declared as `{}`.",
-                        type_name(&value_ty),
-                        name,
-                        type_name(ann_ty)
-                    ),
-                    format!(
-                        "Change the annotation to `{}`, or use a different value.",
-                        type_name(&value_ty)
-                    ),
-                    "The value on the right side must match the type annotation on the left.",
-                ));
+            } else if !can_assign(ann_ty, &value_ty) {
+                if is_union_into_its_variant(ann_ty, &value_ty) {
+                    self.diags.push(union_where_variant_expected_diag(
+                        value,
+                        &value_ty,
+                        ann_ty,
+                        &format!("`{name}` is declared as `{}`", type_name(ann_ty)),
+                    ));
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        value.span().clone(),
+                        format!(
+                            "This value is `{}`, but `{}` is declared as `{}`.",
+                            type_name(&value_ty),
+                            name,
+                            type_name(ann_ty)
+                        ),
+                        format!(
+                            "Change the annotation to `{}`, or use a different value.",
+                            type_name(&value_ty)
+                        ),
+                        "The value on the right side must match the type annotation on the left.",
+                    ));
+                }
                 Type::Error
             } else if matches!(ann_ty, Type::Union { .. }) {
                 // M6: for union type annotations, use the declared union type as the binding type,
                 // not the concrete variant. `let s: Shape = circle` → s is Shape, not Circle.
+                self.record_union_coercion(value, ann_ty, &value_ty);
+                self.refuse_suspending_result_into_union_let(name, value, ann_ty);
                 ann_ty.clone()
             } else {
                 // Use the value_ty to preserve size information from ArrayLit inference.
@@ -3184,7 +3414,7 @@ impl<'b> Checker<'b> {
                 // probed live, `let inner: Circle = fig` copies the union storage
                 // into a shape-sized binding — an OOB read that SIGSEGVs on a
                 // pointer-field read, one binding over (Future Requirements #24).
-                if self.union_narrowed.contains_key(rname) {
+                if self.active_union_narrowing(rname).is_some() {
                     // FRAGO 024 (round 8): this function is now called MULTIPLE
                     // times for the same spawn (the pre-recording loops in
                     // `check_stmts`/`check_background_handle_spawn` AND the
@@ -3659,17 +3889,33 @@ impl<'b> Checker<'b> {
                     // We push a scope with the narrowed type for the binding if we can identify it.
                     // (Full binding-name extraction is P3b — basic case: scrutinee is a direct Ident)
                     let narrowed_name = simple_ident_name(scrutinee).map(|s| s.to_string());
+                    // The overlay the arm replaces, put back at the arm's end: a nested arm on a
+                    // same-named shadowing binding must not drop the outer binding's narrowing.
+                    let mut enclosing_narrowing = None;
                     if let Some(ref name) = narrowed_name {
-                        self.union_narrowed.insert(
-                            name.clone(),
-                            Type::Shape {
-                                name: type_path.name.clone(),
-                            },
-                        );
+                        if let Some(narrowed_binding) = self.scope.lookup(name) {
+                            let defined_at = narrowed_binding.defined_at.clone();
+                            enclosing_narrowing = self.union_narrowed.insert(
+                                name.clone(),
+                                (
+                                    Type::Shape {
+                                        name: type_path.name.clone(),
+                                    },
+                                    defined_at,
+                                ),
+                            );
+                        }
                     }
                     self.check_branch_body(&arm.body);
                     if let Some(ref name) = narrowed_name {
-                        self.union_narrowed.remove(name);
+                        match enclosing_narrowing {
+                            Some(enclosing) => {
+                                self.union_narrowed.insert(name.clone(), enclosing);
+                            }
+                            None => {
+                                self.union_narrowed.remove(name);
+                            }
+                        }
                     }
                     continue; // skip the standard scope push/pop below
                 }
@@ -3732,30 +3978,47 @@ impl<'b> Checker<'b> {
                 })
                 .collect();
             if else_arm.is_none() {
-                let missing: Vec<String> = variants
+                // Every variant an `is` arm does not name is unhandled, shape or not. Two
+                // exemptions, each because no arm CAN name the variant:
+                //   - `nothing` is the absent case of `T | nothing`; there is no `is nothing`
+                //     arm, and skipping the absent case is the defined "only if present"
+                //     idiom (no data is dropped), so it never needs an `else`.
+                //   - a non-shape variant (`int`, `string`, …) is also unnameable today — the
+                //     `is` arm accepts shape variants only (`check_is_arm_pattern`) — so it can
+                //     only be handled by `else =>`, which is why it is reported rather than
+                //     exempted: skipping it would silently drop a real value.
+                let missing: Vec<(String, bool)> = variants
                     .iter()
-                    .filter_map(|v| {
-                        if let Type::Shape { name } = v {
-                            if !covered.contains(name) {
-                                Some(name.clone())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
+                    .filter_map(|v| match v {
+                        Type::Nothing => None,
+                        Type::Shape { name } if covered.contains(name) => None,
+                        Type::Shape { name } => Some((name.clone(), true)),
+                        other => Some((type_name(other), false)),
                     })
                     .collect();
                 if !missing.is_empty() {
+                    let missing_names: Vec<String> =
+                        missing.iter().map(|(name, _)| name.clone()).collect();
+                    // Only suggest what compiles today: an `is` arm names a shape variant
+                    // only, so a non-shape variant is handled by `else =>`.
+                    let what_instead = match missing.iter().find(|(_, is_shape)| *is_shape) {
+                        Some((shape_name, _)) => format!(
+                            "Add the missing arms (e.g. `is {shape_name} =>`) or add an `else =>` default arm."
+                        ),
+                        None => format!(
+                            "Add an `else =>` default arm to handle {}.",
+                            missing_names.join(", ")
+                        ),
+                    };
                     self.diags.push(Diagnostic::error(
                         scrutinee.span().clone(),
                         format!(
                             "Non-exhaustive union multi-case — {} variant{} not handled: {}.",
                             missing.len(),
                             if missing.len() == 1 { " is" } else { "s are" },
-                            missing.join(", ")
+                            missing_names.join(", ")
                         ),
-                        format!("Add the missing arms (e.g. `is {} =>`) or add an `else =>` default arm.", missing[0]),
+                        what_instead,
                         "The compiler knows every union variant at compile time. A missing arm means some values silently fall through — likely a bug.",
                     ));
                 }
@@ -3998,18 +4261,30 @@ impl<'b> Checker<'b> {
                 if self.reject_int_literal_number_slot(NumberSlotRole::Return, ret, expr) {
                     return;
                 }
-                if val_ty != Type::Error && *ret != Type::Error && !types_compatible(ret, &val_ty) {
+                if val_ty != Type::Error && *ret != Type::Error && !can_assign(ret, &val_ty) {
                     // M7 P3a: in an errors-capable function, returning the inner success
                     // type is valid (the auto-propagation machinery wraps it at codegen).
                     let compatible = if let Type::ErrorsCapable { inner } = ret {
-                        types_compatible(&val_ty, inner)
+                        can_assign(inner, &val_ty)
                     } else if let Type::ErrorsCapable { inner } = &val_ty {
                         // Returning an ErrorsCapable value from an errors function is also valid.
-                        self.current_fn_errors_capable && types_compatible(inner, ret)
+                        self.current_fn_errors_capable && can_assign(ret, inner)
                     } else {
                         false
                     };
-                    if !compatible {
+                    // The variant the return type declares, with an `errors` wrapper peeled.
+                    let declared_variant = match ret {
+                        Type::ErrorsCapable { inner } => inner.as_ref(),
+                        _ => ret,
+                    };
+                    if !compatible && is_union_into_its_variant(declared_variant, &val_ty) {
+                        self.diags.push(union_where_variant_expected_diag(
+                            expr,
+                            &val_ty,
+                            declared_variant,
+                            &format!("this function must return a `{}`", type_name(ret)),
+                        ));
+                    } else if !compatible {
                         self.diags.push(Diagnostic::error(
                             expr.span().clone(),
                             format!(
@@ -4024,6 +4299,16 @@ impl<'b> Checker<'b> {
                             ),
                         ));
                     }
+                }
+                // A plain value returned into a union slot (`-> Thing`, or `-> Thing errors`:
+                // the success type is the slot) is wrapped in the tagged envelope.
+                let returned_slot = match ret {
+                    Type::ErrorsCapable { inner } => inner.as_ref(),
+                    _ => ret,
+                };
+                if val_ty != Type::Error && can_assign(returned_slot, &val_ty) {
+                    self.record_union_coercion(expr, returned_slot, &val_ty);
+                    self.refuse_suspending_result_into_union_return(expr, returned_slot);
                 }
             }
         }
@@ -4883,10 +5168,20 @@ impl<'b> Checker<'b> {
     /// un-narrowed union for a receiver narrowed to a shape variant, skipping the
     /// spawn heap-upgrade — the same UAF one subcase over.
     fn binding_ty_narrowed(&self, name: &str) -> Option<Type> {
-        self.union_narrowed
-            .get(name)
-            .cloned()
+        self.active_union_narrowing(name)
             .or_else(|| self.scope.lookup(name).map(|e| e.ty.clone()))
+    }
+
+    /// The `is`-arm variant `name` is narrowed to, when `name` still resolves to the binding the
+    /// arm narrowed. A `let` inside the arm that reuses the name declares a different binding
+    /// (another `defined_at`), which keeps its own type: reading it as the arm's variant would
+    /// tag its value with the wrong variant wherever it enters a union slot.
+    ///
+    /// Time: O(s) for s scopes searched by `scope.lookup`  Space: O(1)
+    fn active_union_narrowing(&self, name: &str) -> Option<Type> {
+        let (narrowed_ty, narrowed_binding) = self.union_narrowed.get(name)?;
+        let current = self.scope.lookup(name)?;
+        (current.defined_at == *narrowed_binding).then(|| narrowed_ty.clone())
     }
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
@@ -4896,7 +5191,7 @@ impl<'b> Checker<'b> {
         // source); only the narrowed case returns here — the un-narrowed path continues
         // below to the side-effecting scope checks (use-after-give, ErrorsCapable
         // narrowing) the overlay window bypasses.
-        if self.union_narrowed.contains_key(name) {
+        if self.active_union_narrowing(name).is_some() {
             if let Some(narrowed_ty) = self.binding_ty_narrowed(name) {
                 return narrowed_ty;
             }
@@ -6577,6 +6872,188 @@ impl<'b> Checker<'b> {
         true
     }
 
+    /// THE recording of a value meeting a slot of declared type: when `value` is a plain value
+    /// of one variant of an envelope union `slot_ty`, codegen must wrap it in the tagged
+    /// envelope (`TypedModule::union_coercions`). Every slot kind calls this, once the value
+    /// is known assignable: annotated `let`, argument (plain, dot-call, generic), `return`,
+    /// shape field, and the fallback of `.or(...)`.
+    ///
+    /// Refuses, with a teaching diagnostic, a plain variant value no union envelope can hold:
+    /// see `envelope_refusal`. Nothing is recorded for a refused value.
+    ///
+    /// Time: O(v) for v variants  Space: O(size of the slot type) per recorded value
+    fn record_union_coercion(&mut self, value: &Expr, slot_ty: &Type, value_ty: &Type) {
+        let Some(coercion) = union_coercion_for(slot_ty, value_ty) else {
+            return;
+        };
+        if let Type::Union { variants } = slot_ty {
+            let variant = &variants[coercion.tag];
+            if let Some(refusal) = envelope_refusal(variant, value_ty) {
+                self.diags.push(union_variant_refusal_diag(
+                    value, value_ty, slot_ty, variant, refusal,
+                ));
+                return;
+            }
+        }
+        let span = value.span();
+        self.union_coercions
+            .insert((span.start, span.end), coercion);
+    }
+
+    /// Refuse `let name: Union = <call that pauses and resumes>` (`wait count()`, or a bare
+    /// call to a suspending function) once `record_union_coercion` recorded the value as
+    /// entering the union. The state-machine lowering binds such a call's result without the
+    /// one coercion point codegen wraps values at, so the raw result would become the union
+    /// pointer. A plain `let got = ...` first, then `let name: Union = got`, wraps.
+    ///
+    /// Codegen keeps `refuse_unwrapped_suspending_let` as the guard behind this one: it asks
+    /// its own effective suspend set, which adds functions the CPU-parallel promotion makes
+    /// suspending after typeck ran. Time: O(1)  Space: O(1)
+    fn refuse_suspending_result_into_union_let(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        union_ty: &Type,
+    ) {
+        let span = value.span();
+        if !self.union_coercions.contains_key(&(span.start, span.end)) {
+            return;
+        }
+        let callee_suspends = |callee: &str| {
+            !is_base_suspension_intrinsic(callee)
+                && self
+                    .sig_table
+                    .fns
+                    .get(callee)
+                    .is_some_and(|signature| signature.suspends)
+        };
+        if let Some(diagnostic) = suspending_union_let_diagnostic(
+            name,
+            value,
+            union_ty,
+            &self.expr_types,
+            &callee_suspends,
+        ) {
+            self.diags.push(diagnostic);
+        }
+    }
+
+    /// Refuse `return <call that pauses and resumes>` (`return wait count()`, or a bare call to
+    /// a suspending function) from a function that returns a union, once
+    /// `record_union_coercion` recorded the value as entering the returned union. The
+    /// state-machine lowering stores such a call's result in the return slot without the one
+    /// coercion point codegen wraps values at, so the raw result would be read back as the
+    /// union pointer. `let got = <call>`, then `return got`, wraps.
+    ///
+    /// Codegen asks the same question with the effective suspend set
+    /// (`suspending_union_diagnostics`) and keeps an internal guard behind both.
+    /// Time: O(1)  Space: O(1)
+    fn refuse_suspending_result_into_union_return(&mut self, value: &Expr, union_ty: &Type) {
+        let span = value.span();
+        if !self.union_coercions.contains_key(&(span.start, span.end)) {
+            return;
+        }
+        let callee_suspends = |callee: &str| {
+            !is_base_suspension_intrinsic(callee)
+                && self
+                    .sig_table
+                    .fns
+                    .get(callee)
+                    .is_some_and(|signature| signature.suspends)
+        };
+        if let Some(diagnostic) =
+            suspending_union_return_diagnostic(value, union_ty, &self.expr_types, &callee_suspends)
+        {
+            self.diags.push(diagnostic);
+        }
+    }
+
+    /// Compare one call argument with the type its parameter declares, and refuse a mismatch
+    /// with the teaching diagnostic. THE comparison of the plain call form (`f(a, b)`) and the
+    /// dot-call form (`a.f(b)`), so both render byte-identical text (non-oop.md's dual-style
+    /// convention): an `errors` value for a plain parameter, a union where one of its variants
+    /// is expected (`UnionWhereVariantExpected`), a concrete shape for a `dynamic Contract`
+    /// parameter (accepted when it follows the contract), anything else not assignable.
+    ///
+    /// `name` is the callee as the call names it. An `Error` argument was already reported.
+    /// O(size of the two types) time and space.
+    fn check_argument_type(
+        &mut self,
+        name: &str,
+        arg: &Expr,
+        expected_ty: &Type,
+        actual_ty: &Type,
+    ) {
+        let actual_ty = actual_ty.clone();
+        // M7 P3c: range values are first-class — can be passed as function arguments.
+        if let Type::ErrorsCapable { .. } = &actual_ty {
+            // M7 P3a: give a more helpful diagnostic for ErrorsCapable values passed
+            // to a function expecting the success type.
+            if !matches!(expected_ty, Type::ErrorsCapable { .. }) {
+                self.diags.push(Diagnostic::error(
+                        arg.span().clone(),
+                        "This function can fail, but the failure is not handled here.",
+                        "Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.",
+                        "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
+                    ));
+            }
+        } else if actual_ty != Type::Error && !can_assign(expected_ty, &actual_ty) {
+            // Accept a concrete shape as a `dynamic Contract` argument when the
+            // shape's declaration includes `follows Contract`.
+            //
+            // Both shapes and `dynamic` values are plain pointers in the LLVM ABI —
+            // the coerce is a type-level widening only; no runtime fat-pointer packing
+            // is needed at this call site.  Method dispatch through `d` inside the
+            // callee uses the vtable at the call site where the concrete type is known.
+            let is_valid_dyn_coerce = match (expected_ty, &actual_ty) {
+                (Type::Dynamic { contract }, Type::Shape { name: shape_name }) => self
+                    .shape_table
+                    .get(shape_name)
+                    .map(|def| def.follows.contains(contract))
+                    .unwrap_or(false),
+                _ => false,
+            };
+
+            if !is_valid_dyn_coerce && is_union_into_its_variant(expected_ty, &actual_ty) {
+                self.diags.push(union_where_variant_expected_diag(
+                    arg,
+                    &actual_ty,
+                    expected_ty,
+                    &format!("`{name}` expects a `{}` here", type_name(expected_ty)),
+                ));
+            } else if !is_valid_dyn_coerce {
+                self.diags.push(Diagnostic::error(
+                        arg.span().clone(),
+                        format!(
+                            "This argument is `{}`, but `{name}` expects `{}` here.",
+                            type_name(&actual_ty),
+                            type_name(expected_ty)
+                        ),
+                        if let Type::Dynamic { contract } = expected_ty {
+                            format!(
+                                "Pass a shape that follows `{contract}` (add `follows {contract}` to the shape declaration)."
+                            )
+                        } else {
+                            format!("Pass a `{}` value.", type_name(expected_ty))
+                        },
+                        if let Type::Dynamic { contract } = expected_ty {
+                            format!(
+                                "`{name}` declared this parameter as `dynamic {contract}`. Only shapes that declare `follows {contract}` can be passed here."
+                            )
+                        } else {
+                            format!(
+                                "`{name}` declared this parameter as `{}`. Passing a `{}` would be a type mismatch.",
+                                type_name(expected_ty),
+                                type_name(&actual_ty)
+                            )
+                        },
+                    ));
+            }
+        } else if actual_ty != Type::Error {
+            self.record_union_coercion(arg, expected_ty, &actual_ty);
+        }
+    }
+
     fn check_user_fn_call(
         &mut self,
         call: &CallExpr,
@@ -6659,64 +7136,7 @@ impl<'b> Checker<'b> {
                 }
             }
 
-            // M7 P3c: range values are first-class — can be passed as function arguments.
-            if let Type::ErrorsCapable { .. } = &actual_ty {
-                // M7 P3a: give a more helpful diagnostic for ErrorsCapable values passed
-                // to a function expecting the success type.
-                if !matches!(expected_ty, Type::ErrorsCapable { .. }) {
-                    self.diags.push(Diagnostic::error(
-                        arg.span().clone(),
-                        "This function can fail, but the failure is not handled here.",
-                        "Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.",
-                        "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
-                    ));
-                }
-            } else if actual_ty != Type::Error && !types_compatible(expected_ty, &actual_ty) {
-                // Accept a concrete shape as a `dynamic Contract` argument when the
-                // shape's declaration includes `follows Contract`.
-                //
-                // Both shapes and `dynamic` values are plain pointers in the LLVM ABI —
-                // the coerce is a type-level widening only; no runtime fat-pointer packing
-                // is needed at this call site.  Method dispatch through `d` inside the
-                // callee uses the vtable at the call site where the concrete type is known.
-                let is_valid_dyn_coerce = match (expected_ty, &actual_ty) {
-                    (Type::Dynamic { contract }, Type::Shape { name: shape_name }) => self
-                        .shape_table
-                        .get(shape_name)
-                        .map(|def| def.follows.contains(contract))
-                        .unwrap_or(false),
-                    _ => false,
-                };
-
-                if !is_valid_dyn_coerce {
-                    self.diags.push(Diagnostic::error(
-                        arg.span().clone(),
-                        format!(
-                            "This argument is `{}`, but `{name}` expects `{}` here.",
-                            type_name(&actual_ty),
-                            type_name(expected_ty)
-                        ),
-                        if let Type::Dynamic { contract } = expected_ty {
-                            format!(
-                                "Pass a shape that follows `{contract}` (add `follows {contract}` to the shape declaration)."
-                            )
-                        } else {
-                            format!("Pass a `{}` value.", type_name(expected_ty))
-                        },
-                        if let Type::Dynamic { contract } = expected_ty {
-                            format!(
-                                "`{name}` declared this parameter as `dynamic {contract}`. Only shapes that declare `follows {contract}` can be passed here."
-                            )
-                        } else {
-                            format!(
-                                "`{name}` declared this parameter as `{}`. Passing a `{}` would be a type mismatch.",
-                                type_name(expected_ty),
-                                type_name(&actual_ty)
-                            )
-                        },
-                    ));
-                }
-            }
+            self.check_argument_type(name, arg, expected_ty, &actual_ty);
         }
         // Reject Range return values (shouldn't be in sig_table, but guard anyway)
         if matches!(ret, Type::Range { .. }) {
@@ -6910,10 +7330,13 @@ impl<'b> Checker<'b> {
 
         let mut subst: Substitution = HashMap::new();
 
-        // Explicit type args (e.g. `foo<int>(x)`) seed the substitution directly.
+        // Explicit type args (e.g. `foo<int>(x)`) seed the substitution directly. The ones
+        // given are kept as written for the conflict diagnostic (`same<Big>`).
+        let mut explicit_type_args: Vec<String> = Vec::new();
         if let Some(type_args) = &call.type_args {
             for (tp_name, ast_ty) in sig.type_params.iter().zip(type_args.iter()) {
                 let concrete = self.ast_type_to_type(ast_ty);
+                explicit_type_args.push(type_name(&concrete));
                 subst.insert(tp_name.clone(), concrete);
             }
         }
@@ -6924,12 +7347,32 @@ impl<'b> Checker<'b> {
         let non_self_ownerships: Vec<Option<ynz_ast::nodes::OwnershipModifier>> =
             sig.param_ownerships.iter().skip(skip).cloned().collect();
         let mut arg_types = Vec::new();
-        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
+        // The argument that first made each type parameter stand for a type, so a later
+        // argument that disagrees can name it (`ArgumentConflictsWithTypeParameter`).
+        let mut binding_argument: HashMap<String, usize> = HashMap::new();
+        let mut unify_results: Vec<Result<(), String>> = vec![Ok(()); call.args.len()];
+        for (index, (arg, (_, param_ty))) in
+            call.args.iter().zip(non_self_params.iter()).enumerate()
+        {
             let actual = self.infer_expr(arg, None);
             arg_types.push(actual.clone());
 
             if actual != Type::Error {
-                let _ = unify_param(param_ty, &actual, &mut subst);
+                let bound_before: Vec<&String> = sig
+                    .type_params
+                    .iter()
+                    .filter(|type_param| subst.contains_key(*type_param))
+                    .collect();
+                // Kept: unify_param reports a structural disagreement (`T` already bound to
+                // another type, a concrete parameter of another type). The comparison below
+                // refuses it unless the types are legally assignable (C1g, #424 — the result
+                // used to be discarded, so nothing compared arguments with parameters).
+                unify_results[index] = unify_param(param_ty, &actual, &mut subst);
+                for type_param in &sig.type_params {
+                    if subst.contains_key(type_param) && !bound_before.contains(&type_param) {
+                        binding_argument.insert(type_param.clone(), index);
+                    }
+                }
             }
         }
         // Ownership over the normalized argument list — the same transfer decision as
@@ -6946,13 +7389,91 @@ impl<'b> Checker<'b> {
         // number from arg 0). One post-loop pass over the SUBSTITUTED param
         // types catches all three via the same shared gate (Future-Req #14):
         // an unresolved TypeParam stays a TypeParam and never matches
-        // `Number`, so partial substitutions cannot false-fire. (The
-        // `unify_param` mismatch above is deliberately discarded — generic
-        // inference tolerates partial unification — so without this gate the
-        // program passes typeck silently and ICEs at codegen.)
-        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
+        // `Number`, so partial substitutions cannot false-fire. An argument this gate
+        // refuses is not compared again below (one diagnostic per argument).
+        let int_literal_refused: Vec<bool> = call
+            .args
+            .iter()
+            .zip(non_self_params.iter())
+            .map(|(arg, (_, param_ty))| {
+                let resolved = apply_substitution(param_ty, &subst);
+                self.reject_int_literal_number_arg(name, &resolved, arg)
+            })
+            .collect();
+        // A union where the resolved parameter expects one of its variants (`pick(5, thing)`
+        // with `b: Big`, `same(big, thing)` with `T = Big`, `useBig<int>(thing, 3)`): the
+        // `unify_param` mismatch above is discarded, so without this the callee reads the
+        // 16-byte tagged envelope as the variant (C1b, #409). Same teaching diagnostic as the
+        // plain and UFCS call forms.
+        // A plain variant into a parameter whose resolved type is an envelope union is recorded
+        // below as a coercion (`record_union_coercion`).
+        for (index, (arg, (_, param_ty))) in
+            call.args.iter().zip(non_self_params.iter()).enumerate()
+        {
+            let actual_ty = arg_types[index].clone();
+            if actual_ty == Type::Error {
+                continue;
+            }
             let resolved = apply_substitution(param_ty, &subst);
-            self.reject_int_literal_number_arg(name, &resolved, arg);
+            if is_union_into_its_variant(&resolved, &actual_ty) {
+                self.diags.push(union_where_variant_expected_diag(
+                    arg,
+                    &actual_ty,
+                    &resolved,
+                    &format!("`{name}` expects a `{}` here", type_name(&resolved)),
+                ));
+            } else if !int_literal_refused[index]
+                && !mentions_type_param(&resolved)
+                && unify_results[index].is_err()
+                && !can_assign(&resolved, &actual_ty)
+            {
+                // Any other argument that is not the type its (substituted) parameter has: the
+                // callee is built for `resolved` and would read the argument as it — a 1-byte
+                // `Tiny` as a 16-byte `Big`, or an `int` where a `string` pointer belongs
+                // (C1g, #424). When the parameter IS a type parameter, the text names what made
+                // it that type; otherwise it is the plain call form's text.
+                let binder = match param_ty {
+                    Type::TypeParam { name: type_param } => {
+                        let binding = binding_argument
+                            .get(type_param)
+                            .filter(|binding| **binding != index)
+                            .map(|binding| TypeParamBinding::Argument {
+                                parameter: &non_self_params[*binding].0,
+                                value: &call.args[*binding],
+                            })
+                            .or_else(|| {
+                                (!explicit_type_args.is_empty()).then_some(
+                                    TypeParamBinding::ExplicitTypeArgs(&explicit_type_args),
+                                )
+                            });
+                        binding.map(|binding| (type_param, binding))
+                    }
+                    _ => None,
+                };
+                match binder {
+                    Some((type_param, binding)) => {
+                        self.diags.push(argument_conflicts_with_type_parameter_diag(
+                            ConflictingArgument {
+                                callee: name,
+                                parameter: &non_self_params[index].0,
+                                value: arg,
+                                actual: &actual_ty,
+                            },
+                            type_param,
+                            sig,
+                            &resolved,
+                            binding,
+                        ));
+                    }
+                    None => self.check_argument_type(name, arg, &resolved, &actual_ty),
+                }
+            } else {
+                // A plain variant into a parameter whose resolved type is an envelope union
+                // (declared, or a type parameter the call bound to one: `same(thing, big)`,
+                // `T = Tiny | Big`, `first: T | nothing`): wrapped at the one coercion point,
+                // through the substituted type (#421).
+                self.record_union_coercion(arg, &resolved, &actual_ty);
+            }
         }
 
         // Verify all type params were resolved — emit one consolidated error if multiple are missing.
@@ -7039,6 +7560,8 @@ impl<'b> Checker<'b> {
             .iter()
             .map(|(_, ty)| apply_substitution(ty, &subst))
             .collect();
+        self.generic_call_instances
+            .record((call.span.start, call.span.end), concrete_type_args.clone());
         self.mono_table.record(
             name.to_string(),
             concrete_type_args,
@@ -7105,6 +7628,21 @@ impl<'b> Checker<'b> {
         for (pos, slot_ty) in collection_method_arg_slots(receiver_ty, method) {
             if let Some(arg) = args.get(pos) {
                 self.reject_int_literal_number_arg(method, &slot_ty, arg);
+                // `.or(fallback)`: the fallback IS the result when the receiver is empty, so it
+                // flows into the element slot; wrapped like any other value entering a union
+                // slot. The other element-typed positions are not a plain flow into a slot:
+                // `add`/`set` STORE into the receiver (an envelope that must outlive the frame:
+                // the lifetime class of #423), `contains`/`remove`/`get` only look a value up.
+                if method == "or" {
+                    let argument_span = arg.span();
+                    if let Some(actual_ty) = self
+                        .expr_types
+                        .get(&(argument_span.start, argument_span.end))
+                        .cloned()
+                    {
+                        self.record_union_coercion(arg, &slot_ty, &actual_ty);
+                    }
+                }
             }
         }
 
@@ -7304,16 +7842,31 @@ impl<'b> Checker<'b> {
                                 &param_names,
                             );
                         }
-                        // Int literal into a `number` param through the UFCS
-                        // dot-call form (`p.f(5)` — sugar for `f(p, 5)`): the
-                        // non-receiver args were inferred with no hint upstream,
-                        // so without this gate the program passes typeck and
-                        // ICEs at codegen. Same shared gate as the plain call
-                        // form so both render byte-identical diagnostics per
-                        // non-oop.md's dual-style convention (Future-Req #14).
-                        // Receiver is the first param; args map to params[1..].
+                        // Every non-receiver argument against its parameter (`p.f(a)` is
+                        // sugar for `f(p, a)`; the receiver is the first parameter, so the
+                        // arguments map to params[1..]). Two checks, in the plain call
+                        // form's order and with its text (non-oop.md's dual-style
+                        // convention): an int literal into a `number` parameter (the
+                        // arguments were inferred with no hint upstream, so without this
+                        // gate the program ICEs at codegen — Future-Req #14), then the
+                        // argument's type against the parameter's (`check_argument_type`).
+                        // Without the second, `a.useBig(tiny)` read a 1-byte `Tiny` as a
+                        // 16-byte `Big` and `a.useBig(5)` failed LLVM verification (C1g,
+                        // #424); only the union case was compared before (C1b, #409).
+                        // The arguments' types are in `expr_types`.
                         for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
-                            self.reject_int_literal_number_arg(method, expected_ty, arg);
+                            if self.reject_int_literal_number_arg(method, expected_ty, arg) {
+                                continue;
+                            }
+                            let argument_span = arg.span();
+                            let Some(actual_ty) = self
+                                .expr_types
+                                .get(&(argument_span.start, argument_span.end))
+                                .cloned()
+                            else {
+                                continue;
+                            };
+                            self.check_argument_type(method, arg, expected_ty, &actual_ty);
                         }
                         // Kernel-mode rejection for UFCS suspending method calls. The
                         // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
@@ -7354,6 +7907,20 @@ impl<'b> Checker<'b> {
         // M7 P3a: errors-capable value method dispatch.
         if let Type::ErrorsCapable { inner } = receiver_ty {
             let inner = inner.as_ref().clone();
+            // `.or(fallback)` on a failed result: the fallback is the success value, so it flows
+            // into the success type's slot (a plain shape for a union success type is wrapped).
+            if method == "or" {
+                if let Some(arg) = args.first() {
+                    let argument_span = arg.span();
+                    if let Some(actual_ty) = self
+                        .expr_types
+                        .get(&(argument_span.start, argument_span.end))
+                        .cloned()
+                    {
+                        self.record_union_coercion(arg, &inner, &actual_ty);
+                    }
+                }
+            }
             return self.check_errors_capable_method(receiver_expr, method, method_span, &inner);
         }
 
@@ -8770,7 +9337,22 @@ impl<'b> Checker<'b> {
                     }
                     if actual != Type::Error
                         && expected != Type::Error
-                        && !types_compatible(&actual, &expected)
+                        && !can_assign(&expected, &actual)
+                        && is_union_into_its_variant(&expected, &actual)
+                    {
+                        self.diags.push(union_where_variant_expected_diag(
+                            &lit_field.value,
+                            &actual,
+                            &expected,
+                            &format!(
+                                "`{shape_name}.{}` is declared as a `{}`",
+                                lit_field.name,
+                                type_name(&expected)
+                            ),
+                        ));
+                    } else if actual != Type::Error
+                        && expected != Type::Error
+                        && !can_assign(&expected, &actual)
                     {
                         self.diags.push(Diagnostic::error(
                             lit_field.name_span.clone(),
@@ -8791,6 +9373,8 @@ impl<'b> Checker<'b> {
                                 type_name(&expected)
                             ),
                         ));
+                    } else if actual != Type::Error {
+                        self.record_union_coercion(&lit_field.value, &expected, &actual);
                     }
                 }
             }
@@ -9624,49 +10208,378 @@ pub(crate) fn collect_union_aliases(
     aliases
 }
 
-/// Check whether two types are compatible for assignment.
+/// Can a value of type `source` be assigned to a slot of type `target`?
 ///
-/// This is mostly structural equality, with one exception: `BuiltinFixed` ignores the
-/// `size` field so that `let f: fixed<int> = [1, 2, 3]` does not fail (annotation has
-/// `size: None`; the literal infers `size: Some(3)`).
-fn types_compatible(a: &Type, b: &Type) -> bool {
-    match (a, b) {
-        (Type::BuiltinFixed { elem: ea, .. }, Type::BuiltinFixed { elem: eb, .. }) => {
-            types_compatible(ea, eb)
+/// The check is **directional**: `target` is what the slot (annotation, parameter, return
+/// type, field) declares, `source` is what the value is. Argument order is the assignment
+/// order, `target` first, and swapping them changes the answer.
+///
+/// This is mostly structural equality, with these exceptions:
+/// - `BuiltinFixed` ignores the `size` field so that `let f: fixed<int> = [1, 2, 3]` does not
+///   fail (annotation has `size: None`; the literal infers `size: Some(3)`).
+/// - A concrete variant widens into a union that lists it (`Big` into `Tiny | Big`,
+///   `map<string,string>` into `map<string,string> | nothing`). The reverse never holds: a
+///   union is a tagged envelope, and a slot that expects one variant reads the envelope's
+///   bytes as that variant — wrong data, or memory past the 16-byte envelope. Narrow it with
+///   an `is Variant` arm first.
+/// - Any `number<A>` is assignable to any `number<B>` (the narrowing warning is emitted in
+///   `check_let_stmt`).
+/// - Element and payload types of containers (`array`, `fixed`, `maybe`, `errors`, union
+///   variants) must agree in BOTH directions: a container of variants and a container of
+///   unions have different memory layouts, so neither converts to the other.
+///
+/// O(size of the types) time and space.
+fn can_assign(target: &Type, source: &Type) -> bool {
+    match (target, source) {
+        (
+            Type::BuiltinFixed {
+                elem: target_elem, ..
+            },
+            Type::BuiltinFixed {
+                elem: source_elem, ..
+            },
+        )
+        | (Type::BuiltinArray { elem: target_elem }, Type::BuiltinArray { elem: source_elem })
+        | (Type::Maybe { inner: target_elem }, Type::Maybe { inner: source_elem })
+        | (
+            Type::ErrorsCapable { inner: target_elem },
+            Type::ErrorsCapable { inner: source_elem },
+        ) => same_layout(target_elem, source_elem),
+        // M6: a union is assignable to a union with the same variants in the same order.
+        (
+            Type::Union {
+                variants: target_variants,
+            },
+            Type::Union {
+                variants: source_variants,
+            },
+        ) => {
+            target_variants.len() == source_variants.len()
+                && target_variants.iter().zip(source_variants.iter()).all(
+                    |(target_variant, source_variant)| same_layout(target_variant, source_variant),
+                )
         }
-        (Type::BuiltinArray { elem: ea }, Type::BuiltinArray { elem: eb }) => {
-            types_compatible(ea, eb)
-        }
-        (Type::Maybe { inner: ia }, Type::Maybe { inner: ib }) => types_compatible(ia, ib),
-        // M6: union type compatibility — same set of variants (order-insensitive for now).
-        (Type::Union { variants: va }, Type::Union { variants: vb }) => {
-            va.len() == vb.len()
-                && va
-                    .iter()
-                    .zip(vb.iter())
-                    .all(|(a, b)| types_compatible(a, b))
-        }
-        // M6: assigning a concrete variant type to a union is valid.
-        // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
-        (Type::Union { variants }, concrete) => {
-            variants.iter().any(|v| types_compatible(v, concrete))
-        }
-        // Symmetric: a concrete type is compatible with a union if it matches any variant.
-        // e.g., map<string,string> is valid for map<string,string> | nothing.
-        (concrete, Type::Union { variants }) => {
-            variants.iter().any(|v| types_compatible(concrete, v))
-        }
-        // M7 P3a: ErrorsCapable is compatible with itself when inner types match.
-        (Type::ErrorsCapable { inner: ia }, Type::ErrorsCapable { inner: ib }) => {
-            types_compatible(ia, ib)
-        }
+        // A concrete variant widens into a union that lists it, e.g. `let s: Circle | Square =
+        // { radius: 5.0 }` or `map<string,string>` for `map<string,string> | nothing`.
+        (Type::Union { variants }, concrete_source) => variants
+            .iter()
+            .any(|variant| can_assign(variant, concrete_source)),
         // M8 P6: mixed-precision number compatibility.
         // Any number<A> is compatible with any number<B> — widening always succeeds;
         // narrowing (A > B) will emit a warning at the call site. Here we just
         // allow the assignment so the program can type-check. The narrowing warning
         // is emitted in check_let_stmt when we detect precision shrinkage.
         (Type::Number { .. }, Type::Number { .. }) => true,
-        _ => a == b,
+        // A union source into a non-union target (a variant slot) falls through to here and
+        // is refused: `Type::Union != <anything that is not a union>`.
+        _ => target == source,
+    }
+}
+
+/// Do two element or payload types have the same memory layout, so a container of one is a
+/// container of the other? True when each is assignable to the other.
+fn same_layout(first: &Type, second: &Type) -> bool {
+    can_assign(first, second) && can_assign(second, first)
+}
+
+/// Why a plain value cannot enter the tagged envelope of a union slot, when it cannot: the
+/// envelope keeps ONE 64-bit payload word next to the tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvelopeRefusal {
+    /// The variant does not fit one payload word (`number` up to 34 digits, `maybe`, `fixed`,
+    /// `dynamic`, `range`, an `options` type, ...).
+    VariantNotStorable,
+    /// The variant is a `number` of more than 34 digits (a pointer to a wide decimal) and the
+    /// value is a shorter `number` (a 128-bit decimal slot): typeck assigns one to the other,
+    /// but the payload words differ and nothing converts them.
+    NumberPrecision,
+}
+
+/// THE decision whether `value_ty` can be stored in the union `variant` it was matched to.
+/// Typeck refuses with a teaching diagnostic (`union_variant_refusal_diag`); codegen's
+/// `wrap_into_union_envelope` asks this same function before it lowers, so the two never keep
+/// separate lists (authoritative-derivation.md). The refusals are the variants codegen has no
+/// payload lowering for; a type parameter or an unresolved generic is not refused here (its
+/// concrete type is only known after monomorphization).
+///
+/// Time: O(1)  Space: O(1)
+pub fn envelope_refusal(variant: &Type, value_ty: &Type) -> Option<EnvelopeRefusal> {
+    match variant {
+        Type::Number { precision: 35.. } => match value_ty {
+            Type::Number { precision: 35.. } => None,
+            Type::Number { .. } => Some(EnvelopeRefusal::NumberPrecision),
+            _ => None,
+        },
+        Type::Number { .. }
+        | Type::Maybe { .. }
+        | Type::BuiltinFixed { .. }
+        | Type::Dynamic { .. }
+        | Type::Range { .. }
+        | Type::Options { .. }
+        | Type::MapEntry { .. }
+        | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. } => Some(EnvelopeRefusal::VariantNotStorable),
+        _ => None,
+    }
+}
+
+/// True when `value` is a call that pauses and resumes: `wait count()`, or a bare call to a
+/// function `callee_suspends` names (a plain call or a dot-call). The state-machine lowering
+/// binds such a call's result without the one coercion point codegen wraps values at.
+///
+/// Time: O(1)  Space: O(1)
+fn is_suspending_call_value(
+    value: &Expr,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> bool {
+    let call = match value {
+        Expr::Wait(inner, _) => inner.as_ref(),
+        other => other,
+    };
+    match call {
+        Expr::Call(call_expr) => {
+            matches!(&call_expr.callee, Expr::Ident(callee, _) if callee_suspends(callee))
+        }
+        _ => expr_is_ufcs_suspending_call(call, expr_types, callee_suspends),
+    }
+}
+
+/// The teaching diagnostic for `let name: Union = <value>` when `value` is a call that pauses
+/// and resumes (`is_suspending_call_value`), `None` otherwise. The state-machine lowering
+/// binds such a call's result without the one coercion point codegen wraps values at, so the
+/// raw result would become the union pointer.
+///
+/// Typeck asks it per annotated `let` with its own suspending-function set; the codegen query
+/// asks it again over the whole module (`suspending_union_diagnostics`) with the effective
+/// suspend set, which also holds the callees the CPU-parallel promotion makes suspending after
+/// typeck ran. One predicate, two sets.
+///
+/// Time: O(1)  Space: O(size of the call's source text)
+fn suspending_union_let_diagnostic(
+    name: &str,
+    value: &Expr,
+    union_ty: &Type,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> Option<Diagnostic> {
+    if !is_suspending_call_value(value, expr_types, callee_suspends) {
+        return None;
+    }
+    let slots = [
+        ("name", name.to_string()),
+        ("call", expr_source_text(value)),
+        ("union", type_name(union_ty)),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    Some(registry_diag(
+        value.span().clone(),
+        DiagnosticKind::SuspendingResultIntoUnionLet,
+        &slots,
+    ))
+}
+
+/// The teaching diagnostic for `return <value>` from a function that returns the union
+/// `union_ty` when `value` is a call that pauses and resumes, `None` otherwise: the `return`
+/// face of `suspending_union_let_diagnostic`, asked by typeck and by the codegen query the same
+/// way, with the same two suspend sets.
+///
+/// Time: O(1)  Space: O(size of the call's source text)
+fn suspending_union_return_diagnostic(
+    value: &Expr,
+    union_ty: &Type,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> Option<Diagnostic> {
+    if !is_suspending_call_value(value, expr_types, callee_suspends) {
+        return None;
+    }
+    let slots = [
+        ("call", expr_source_text(value)),
+        ("union", type_name(union_ty)),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    Some(registry_diag(
+        value.span().clone(),
+        DiagnosticKind::SuspendingResultIntoUnionReturn,
+        &slots,
+    ))
+}
+
+/// Every `let` and `return` of `typed` that binds a suspending call's result into a union slot,
+/// as the teaching diagnostic, judged by `callee_suspends`. Typeck refuses these as it checks
+/// each `let` and `return`; this is the same refusal for a call only the codegen query can see is suspending (a
+/// function the CPU-parallel promotion turns into a state machine: `cpu_promotion_query` depends
+/// on typeck's result, so typeck cannot ask it). Without it such a program reached codegen's
+/// "compiler bug" guard.
+///
+/// Time: O(n) for n statements  Space: O(r) for r refusals
+pub fn suspending_union_diagnostics(
+    typed: &TypedModule,
+    callee_suspends: &dyn Fn(&str) -> bool,
+) -> Vec<Diagnostic> {
+    fn walk_block(
+        block: &Block,
+        typed: &TypedModule,
+        callee_suspends: &dyn Fn(&str) -> bool,
+        out: &mut Vec<Diagnostic>,
+    ) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let { name, value, .. } => {
+                    let span = value.span();
+                    if let Some(coercion) = typed.union_coercions.get(&(span.start, span.end)) {
+                        out.extend(suspending_union_let_diagnostic(
+                            name,
+                            value,
+                            &coercion.slot,
+                            &typed.expr_types,
+                            callee_suspends,
+                        ));
+                    }
+                }
+                Stmt::Return {
+                    value: Some(value), ..
+                } => {
+                    let span = value.span();
+                    if let Some(coercion) = typed.union_coercions.get(&(span.start, span.end)) {
+                        out.extend(suspending_union_return_diagnostic(
+                            value,
+                            &coercion.slot,
+                            &typed.expr_types,
+                            callee_suspends,
+                        ));
+                    }
+                }
+                Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                    walk_block(body, typed, callee_suspends, out)
+                }
+                Stmt::Match { arms, else_arm, .. } => {
+                    for arm in arms {
+                        walk_block(&arm.body, typed, callee_suspends, out);
+                    }
+                    if let Some(else_block) = else_arm {
+                        walk_block(else_block, typed, callee_suspends, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for item in &typed.module.items {
+        if let Item::Function(function) = item {
+            walk_block(&function.body, typed, callee_suspends, &mut out);
+        }
+    }
+    out
+}
+
+/// `type_name` with a `number` of a non-default precision spelled `number<10>` (it prints plain
+/// `number` for every precision), so a refusal that is about two precisions can tell them apart.
+///
+/// Time: O(v) for v variants  Space: O(size of the type name)
+fn number_precision_name(ty: &Type) -> String {
+    match ty {
+        Type::Number { precision } if *precision != 34 => format!("number<{precision}>"),
+        Type::Union { variants } => variants
+            .iter()
+            .map(number_precision_name)
+            .collect::<Vec<_>>()
+            .join(" | "),
+        other => type_name(other),
+    }
+}
+
+/// The teaching diagnostic for a plain `value` of `value_ty` that `refusal` keeps out of the
+/// `variant` of `slot_ty` it was matched to.
+fn union_variant_refusal_diag(
+    value: &Expr,
+    value_ty: &Type,
+    slot_ty: &Type,
+    variant: &Type,
+    refusal: EnvelopeRefusal,
+) -> Diagnostic {
+    let slots = [
+        ("value", expr_source_text(value)),
+        ("value_ty", number_precision_name(value_ty)),
+        ("union", number_precision_name(slot_ty)),
+        ("variant", number_precision_name(variant)),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let span = value.span().clone();
+    match refusal {
+        EnvelopeRefusal::VariantNotStorable => {
+            registry_diag(span, DiagnosticKind::UnionVariantNotStorable, &slots)
+        }
+        EnvelopeRefusal::NumberPrecision => registry_diag_template(
+            span,
+            DiagnosticKind::UnionVariantNotStorable,
+            "UnionVariantNotStorableNumberPrecision",
+            &slots,
+        ),
+    }
+}
+
+/// The coercion a value of type `value_ty` needs to enter a slot of type `slot_ty`: `Some` when
+/// the slot is an envelope union and the value is one of its variants but not itself a union,
+/// `None` otherwise (a union value already is an envelope; `nothing` is the null pointer; a
+/// union with no shape variant is the raw pointer, and has no envelope to build).
+///
+/// The tag is the variant the value IS: an exact type match first, then the first variant the
+/// value is assignable to (`number<A>` into `number<B>`).
+///
+/// Time: O(v) for v variants  Space: O(size of the slot type)
+fn union_coercion_for(slot_ty: &Type, value_ty: &Type) -> Option<UnionCoercion> {
+    if !is_envelope_union(slot_ty) {
+        return None;
+    }
+    let Type::Union { variants } = slot_ty else {
+        return None;
+    };
+    if matches!(
+        value_ty,
+        Type::Union { .. } | Type::Nothing | Type::Error | Type::ErrorsCapable { .. }
+    ) {
+        return None;
+    }
+    let tag = variants
+        .iter()
+        .position(|variant| variant == value_ty)
+        .or_else(|| {
+            variants
+                .iter()
+                .position(|variant| can_assign(variant, value_ty))
+        })?;
+    if matches!(variants[tag], Type::Nothing) {
+        return None;
+    }
+    Some(UnionCoercion {
+        slot: slot_ty.clone(),
+        tag,
+    })
+}
+
+/// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
+/// `{tag, data}` envelope. Any other union (`map<..> | nothing`) is the variant's raw pointer,
+/// null for `nothing`, and has no envelope to build.
+fn is_envelope_union(candidate: &Type) -> bool {
+    match candidate {
+        Type::Union { variants } => variants
+            .iter()
+            .any(|variant| matches!(variant, Type::Shape { .. })),
+        _ => false,
+    }
+}
+
+/// `source` is a union that lists `target` as one of its variants, and `target` is not itself a
+/// union: the shape of the bug where a tagged envelope reaches a slot that expects the bare
+/// variant. Used to pick the teaching diagnostic over the generic type mismatch.
+fn is_union_into_its_variant(target: &Type, source: &Type) -> bool {
+    match (target, source) {
+        (Type::Union { .. }, _) => false,
+        (_, Type::Union { variants }) => variants.iter().any(|variant| can_assign(target, variant)),
+        _ => false,
     }
 }
 

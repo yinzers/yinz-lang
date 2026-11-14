@@ -1,0 +1,63 @@
+// v0.3-M9 C1d: the forms the stricter exhaustiveness check must keep accepting.
+//   - `Circle | int` with an `else =>` arm handles the non-shape variant;
+//   - `Circle | Square` with an arm per shape variant needs no `else`;
+//   - `Circle | nothing` with only `is Circle` and no `else` stays legal: `nothing` is the
+//     absent case, no arm can name it, and skipping it drops no data. (Decided v0.3-M9 C1d:
+//     `git log --grep=nothing-exemption`.)
+// Correct behavior: compiles and prints `circle`, `circle`, `square`, `circle`, `end`.
+
+shape Circle {
+  radius: float
+}
+shape Square {
+  side: float
+}
+shape WithInt = Circle | int
+shape Pair = Circle | Square
+
+function withElse(share fig: WithInt) -> string {
+  if (fig) {
+    is Circle => {
+      return `circle`
+    }
+    else => {
+      return `other`
+    }
+  }
+  return `unreachable`
+}
+
+function bothShapes(share fig: Pair) -> string {
+  if (fig) {
+    is Circle => {
+      return `circle`
+    }
+    is Square => {
+      return `square`
+    }
+  }
+  return `unreachable`
+}
+
+function onlyIfPresent(share fig: Circle | nothing) -> string {
+  if (fig) {
+    is Circle => {
+      return `circle`
+    }
+  }
+  return `absent`
+}
+
+function entrypoint() -> nothing {
+  let circle: Circle = { radius: 2.0 }
+  let square: Square = { side: 3.0 }
+  let mixed: WithInt = circle
+  print(withElse(mixed))
+  let first: Pair = circle
+  print(bothShapes(first))
+  let second: Pair = square
+  print(bothShapes(second))
+  let optional: Circle | nothing = circle
+  print(onlyIfPresent(optional))
+  print(`end`)
+}

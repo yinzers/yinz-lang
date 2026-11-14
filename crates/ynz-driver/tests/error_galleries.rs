@@ -692,3 +692,44 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         );
     }
 }
+
+#[test]
+fn v0_3_m9_gallery_fires_union_diagnostics() {
+    // WHY: v0_3_m9_errors.ynz is where a human reads the v0.3-M9 union refusals together: a
+    // union reaching a slot that expects one of its variants (return, argument, annotated
+    // `let`, shape field), a union match that leaves a non-shape variant unhandled, and (C1g) an
+    // argument of another type than its type parameter was made to stand for. One
+    // trigger each; the count plus a key phrase per class keeps one from regressing into a
+    // generic message.
+    let (stderr, code) = compile_gallery(&gallery("v0_3_m9_errors.ynz"));
+    assert_ne!(code, 0, "v0_3_m9 gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    assert_eq!(
+        error_count, 6,
+        "v0_3_m9 gallery must produce exactly 6 errors, one per trigger; got \
+         {error_count}.\nstderr:\n{stderr}"
+    );
+
+    for (label, phrase) in [
+        ("argument", "`plateSpecial` expects a `Special` here"),
+        ("return", "this function must return a `Special`"),
+        ("annotated `let`", "`again` is declared as `Special`"),
+        ("shape field", "`Ticket.held` is declared as a `Special`"),
+        ("what-instead", "Check which variant it holds first"),
+        ("why", "is a box with a tag saying which variant is inside"),
+        (
+            "non-shape variant left unhandled",
+            "1 variant is not handled: int",
+        ),
+        (
+            "argument that conflicts with its type parameter",
+            "`special` has type `Special`, but `sameKind` needs `Plain` for `second`",
+        ),
+    ] {
+        assert!(
+            stderr.contains(phrase),
+            "v0_3_m9 gallery must include the {label} diagnostic (`{phrase}`); got:\n{stderr}"
+        );
+    }
+}

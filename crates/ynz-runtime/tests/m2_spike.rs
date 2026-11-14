@@ -1748,7 +1748,7 @@ fn contract_12_codegen_invariant_documented() {
 // ── Contract #6 expanded: Drop impl + non-trivial local cleanup ───────────────
 //
 // 1000 state machines with heap string locals; half cancelled mid-wait.
-// Asserts BOTH frame alloc/free AND ynz_string_free counters return to baseline.
+// Asserts BOTH frame alloc/free AND ynz_string_release counters return to baseline.
 //
 // test-ratchet: switching from C-ABI global runtime (handle not accessible outside crate)
 // to a local per-test runtime. Same invariant: net frame/string counters return to baseline.

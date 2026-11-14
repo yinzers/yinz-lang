@@ -1,0 +1,24 @@
+// v0.3-M9 C1g (security): an explicit type argument fixes `T`, and an argument of another type
+// is passed for it (`same<Big>(big, tiny)`).
+// Correct behavior: does not compile — refused, naming the explicit type argument as the cause.
+// Pre-fix failure: compiled and read the 1-byte `Tiny` as a 16-byte `Big` (ASan stack-buffer-overflow
+// READ), the same hole as `same(big, tiny)`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let out = same<Big>(big, tiny)
+  print(out.count.toString())
+}

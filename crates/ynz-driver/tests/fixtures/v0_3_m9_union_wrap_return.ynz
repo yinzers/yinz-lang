@@ -1,0 +1,87 @@
+// v0.3-M9 C1c: a PLAIN shape RETURNED from a function declared `-> Thing` (a union) must come
+// back as a correctly tagged envelope that outlives the callee's frame.
+// Covers: a plain shape returned through a pass-through call (`return passThrough(b)`: the
+// envelope was a slot in the wrapper's own frame), returning a plain shape, returning a union
+// local the callee built itself (the envelope was a callee-stack slot), returning a union
+// parameter unchanged, and a suspending function's union return.
+// Correct behavior: each result names the variant that was returned, clean under
+// AddressSanitizer.
+// Pre-fix failure: the bare shape pointer (or a dangling callee-stack envelope) came back and
+// the caller's `is` arm picked the wrong variant or read stack memory that was already dead.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function makeBig() -> Thing {
+  let big: Big = { label: `hello`, count: 3 }
+  return big
+}
+
+function makeTiny() -> Thing {
+  let tiny: Tiny = { flag: true }
+  return tiny
+}
+
+function makeFromLocalUnion() -> Thing {
+  let big: Big = { label: `local`, count: 4 }
+  let thing: Thing = big
+  return thing
+}
+
+function passThrough(share t: Thing) -> Thing {
+  return t
+}
+
+function viaWrapper(share b: Big) -> Thing {
+  return passThrough(b)
+}
+
+function makeLater() -> Thing {
+  wait sleep(1)
+  let tiny: Tiny = { flag: false }
+  return tiny
+}
+
+function clobberStack(share depth: int) -> int {
+  let filler: Big = { label: `filler`, count: depth }
+  return filler.count
+}
+
+function entrypoint() -> nothing {
+  let fromBig = makeBig()
+  let fromTiny = makeTiny()
+  let fromLocal = makeFromLocalUnion()
+  let ignored = clobberStack(7)
+  print(describe(fromBig))
+  print(describe(fromTiny))
+  print(describe(fromLocal))
+  let source: Tiny = { flag: true }
+  let wrapped: Thing = source
+  let again = passThrough(wrapped)
+  print(describe(again))
+  let wrapperSource: Big = { label: `wrapped`, count: 5 }
+  let viaPass = viaWrapper(wrapperSource)
+  let ignoredAgain = clobberStack(9)
+  print(describe(viaPass))
+  let later = wait makeLater()
+  print(describe(later))
+  print(`end`)
+}

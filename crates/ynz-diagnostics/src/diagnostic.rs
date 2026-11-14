@@ -46,6 +46,29 @@ pub enum DiagnosticKind {
     /// A handle-form spawn's command channel is not a named binding, so nothing outside the
     /// task could ever close it — v0.3-M8 Phase 4.
     HandleChannelArgNeedsBinding,
+    /// A union value reaches a slot (argument, return, annotated `let`, shape field) that
+    /// expects one of its variants. The union is a tagged envelope; the slot would read it as
+    /// the bare variant — wrong data or memory past the envelope. v0.3-M9 C1b.
+    UnionWhereVariantExpected,
+    /// A plain value reaches a union slot whose matching variant the union's tagged box cannot
+    /// hold yet (`number`, `maybe`, `fixed`, `dynamic`, `range`, an `options` type), or a
+    /// shorter `number` meets a `number` variant of more than 34 digits. v0.3-M9 C1e: refused
+    /// in typeck instead of at codegen's "compiler bug" refusal of the same case.
+    UnionVariantNotStorable,
+    /// An annotated `let` of a union type takes the result of a call that pauses and resumes
+    /// (`let m: Mixed = wait count()`); that result is bound without the tag a union needs.
+    /// v0.3-M9 C1e: refused in typeck instead of at codegen's "compiler bug" refusal.
+    SuspendingResultIntoUnionLet,
+    /// A `return` of a union-typed function takes the result of a call that pauses and resumes
+    /// (`return wait count()`); that result is stored in the return slot without the tag a union
+    /// needs. v0.3-M9 C1e: refused in typeck and by the codegen query instead of reaching the
+    /// compiler's internal guard.
+    SuspendingResultIntoUnionReturn,
+    /// An argument whose type differs from the type a type parameter of a generic function was
+    /// already made to stand for, by an earlier argument or an explicit type argument
+    /// (`same(big, tiny)` makes `T` a `Big`, then a `Tiny` arrives). The function is built for
+    /// the first type and would read the second as it. v0.3-M9 C1g.
+    ArgumentConflictsWithTypeParameter,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -110,6 +133,13 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "ParamNeedsGive",
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
+            DiagnosticKind::UnionWhereVariantExpected => "UnionWhereVariantExpected",
+            DiagnosticKind::UnionVariantNotStorable => "UnionVariantNotStorable",
+            DiagnosticKind::SuspendingResultIntoUnionLet => "SuspendingResultIntoUnionLet",
+            DiagnosticKind::SuspendingResultIntoUnionReturn => "SuspendingResultIntoUnionReturn",
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "ArgumentConflictsWithTypeParameter"
+            }
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -140,6 +170,11 @@ impl DiagnosticKind {
         "ParamNeedsGive",
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
+        "UnionWhereVariantExpected",
+        "UnionVariantNotStorable",
+        "SuspendingResultIntoUnionLet",
+        "SuspendingResultIntoUnionReturn",
+        "ArgumentConflictsWithTypeParameter",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -166,6 +201,20 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
+            // True for all three recoveries `union_where_variant_expected_diag` picks from: the caret
+            // label comes from the kind alone, so it must not name an `is` check that two of them
+            // (a non-shape variant, an expression value) cannot offer as written.
+            DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
+            DiagnosticKind::UnionVariantNotStorable => "can't be stored in a union yet".to_string(),
+            DiagnosticKind::SuspendingResultIntoUnionLet => {
+                "store it in a variable first".to_string()
+            }
+            DiagnosticKind::SuspendingResultIntoUnionReturn => {
+                "store it in a variable first".to_string()
+            }
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "not the type this call needs".to_string()
+            }
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {

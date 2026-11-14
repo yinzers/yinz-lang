@@ -1,0 +1,28 @@
+// v0.3-M9 C1g regression guard: two instances of one generic function never share a symbol name.
+// Identifiers may contain `_`, and instance names were `_`-joined: `second<A_shape_B, int>` and
+// `second<A, B_int>` were both `second_shape_A_shape_B_int`, so one call ran the other's body.
+// Correct behavior: compiles; prints 42 / x.
+// Pre-fix (b3e23ce): fails in the LLVM verifier ("Function return type does not match").
+
+shape A {
+  flag: boolean
+}
+shape A_shape_B {
+  flag: boolean
+}
+shape B_int {
+  label: string
+  count: int
+}
+function second<T, U>(share first: T, share other: U) -> U {
+  return other
+}
+function entrypoint() -> nothing {
+  let a: A = { flag: true }
+  let ab: A_shape_B = { flag: true }
+  let bint: B_int = { label: `x`, count: 1 }
+  let n = second(ab, 42)
+  print(`${n}`)
+  let got = second(a, bint)
+  print(got.label)
+}

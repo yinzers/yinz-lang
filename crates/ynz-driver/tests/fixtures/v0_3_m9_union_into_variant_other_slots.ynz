@@ -1,0 +1,24 @@
+// v0.3-M9 C1b (security): the same union-into-variant flow through the two other assignment
+// slots — an annotated `let` and a shape-literal field. Correct behavior: both are refused
+// with `UnionWhereVariantExpected`. Pre-fix failure: both compiled (same symmetric check).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+shape Holder {
+  inner: Big
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let thing: Thing = big
+  let again: Big = thing
+  let holder: Holder = { inner: thing }
+  print(again.label)
+  print(holder.inner.label)
+}

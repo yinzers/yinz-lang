@@ -1,0 +1,40 @@
+// v0.3-M9 C1g regression guard: the plain call form already compares every argument with its
+// parameter type. A `Tiny` for a `Big`, an `int` for a `string`, a `string` for an `int`, a
+// `maybe` for its inner type, and an `array<Tiny>` for an `array<Big>` are each refused.
+// Correct behavior (kept): does not compile — five argument errors, one per call.
+// Probed before the fix: every one of these was already refused, so no code change guards them;
+// this fixture keeps them from regressing when the call forms are changed.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function useBig(share first: Big, share second: Big) -> int {
+  return second.count
+}
+function useString(share text: string) -> int {
+  return 1
+}
+function useInt(share number: int) -> int {
+  return number
+}
+function useBigs(share items: array<Big>) -> int {
+  return items.count()
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let tinies: array<Tiny> = [tiny]
+  let numbers: array<int> = [5]
+  let maybeCount = numbers.first()
+  print(useBig(big, tiny).toString())
+  print(useString(5).toString())
+  print(useInt(`five`).toString())
+  print(useInt(maybeCount).toString())
+  print(useBigs(tinies).toString())
+}

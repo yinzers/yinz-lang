@@ -1,0 +1,27 @@
+// v0.3-M9 C1d: a union match that names only the SHAPE variant and has no `else` must not
+// compile when the union also has a NON-shape variant (`int`) — a value of that variant would
+// silently fall through every arm (Golden Rule 5).
+// Correct behavior: compile error `Non-exhaustive union multi-case — 1 variant is not handled:
+// int.`, whose WHAT-INSTEAD suggests `else =>` (an `is int =>` arm is not accepted today).
+// Pre-fix failure: compiled and printed `circle`; the exhaustiveness check skipped every
+// variant that is not a shape.
+
+shape Circle {
+  radius: float
+}
+shape Mixed = Circle | int
+
+function describe(share fig: Mixed) -> string {
+  if (fig) {
+    is Circle => {
+      return `circle`
+    }
+  }
+  return `other`
+}
+
+function entrypoint() -> nothing {
+  let circle: Circle = { radius: 2.0 }
+  let fig: Mixed = circle
+  print(describe(fig))
+}

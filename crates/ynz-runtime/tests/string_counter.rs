@@ -16,14 +16,14 @@ use std::ffi::CStr;
 
 use ynz_runtime::runtime::{ynz_rt_init, ynz_rt_shutdown};
 use ynz_runtime::{
-    ynz_bignum_add, ynz_string_alloc_bytes, ynz_string_alloc_count, ynz_string_builder_append,
-    ynz_string_builder_finalize, ynz_string_builder_new, ynz_string_codepoint_at,
-    ynz_string_concat, ynz_string_free, ynz_string_free_bytes, ynz_string_free_count,
-    ynz_string_from_static, ynz_string_to_upper,
+    ynz_bignum_add, ynz_float_to_string, ynz_int_to_string, ynz_string_alloc_bytes,
+    ynz_string_alloc_count, ynz_string_builder_append, ynz_string_builder_finalize,
+    ynz_string_builder_new, ynz_string_codepoint_at, ynz_string_concat, ynz_string_free_bytes,
+    ynz_string_free_count, ynz_string_from_static, ynz_string_release, ynz_string_to_upper,
 };
 
 /// Run one allocator, check it moved the alloc counters by exactly (1, expected_bytes) and
-/// that the returned string has the expected content, then free it through `ynz_string_free`
+/// that the returned string has the expected content, then free it through `ynz_string_release`
 /// and check the free counters moved by the same amount.
 fn check_allocator(
     allocator_name: &str,
@@ -55,21 +55,21 @@ fn check_allocator(
         "{allocator_name}"
     );
 
-    unsafe { ynz_string_free(heap_string) };
+    unsafe { ynz_string_release(heap_string) };
     assert_eq!(
         ynz_string_free_count() - free_count_before,
         1,
-        "{allocator_name}: ynz_string_free must count exactly one free"
+        "{allocator_name}: ynz_string_release must count exactly one free"
     );
     assert_eq!(
         ynz_string_free_bytes() - free_bytes_before,
         expected_bytes,
-        "{allocator_name}: ynz_string_free must count the same bytes the allocation did"
+        "{allocator_name}: ynz_string_release must count the same bytes the allocation did"
     );
 }
 
 #[test]
-fn every_string_allocator_is_counted_and_balanced_by_ynz_string_free() {
+fn every_string_allocator_is_counted_and_balanced_by_ynz_string_release() {
     // Latched once by `ynz_rt_init`, exactly as a compiled program does (`YNZ_ALLOC_COUNTER`).
     std::env::set_var("YNZ_ALLOC_COUNTER", "1");
     ynz_rt_init();
@@ -77,6 +77,8 @@ fn every_string_allocator_is_counted_and_balanced_by_ynz_string_free() {
     check_allocator("ynz_string_from_static", "round", || unsafe {
         ynz_string_from_static(b"round".as_ptr(), 5)
     });
+    check_allocator("ynz_int_to_string", "-42", || ynz_int_to_string(-42));
+    check_allocator("ynz_float_to_string", "1.5", || ynz_float_to_string(1.5));
     check_allocator("ynz_string_concat", "foobar", || unsafe {
         ynz_string_concat(c"foo".as_ptr().cast(), c"bar".as_ptr().cast())
     });
@@ -105,7 +107,7 @@ fn every_string_allocator_is_counted_and_balanced_by_ynz_string_free() {
 
     // Freeing null must be a no-op that moves nothing (a null `string` slot is a legal state).
     let free_count_before = ynz_string_free_count();
-    unsafe { ynz_string_free(std::ptr::null()) };
+    unsafe { ynz_string_release(std::ptr::null()) };
     assert_eq!(ynz_string_free_count(), free_count_before);
 
     // `ynz_rt_init` starts Tokio worker threads; Miri fails a process that exits with live
