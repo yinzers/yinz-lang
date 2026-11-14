@@ -708,6 +708,12 @@ pub struct TypedModule {
     ///   and neither is the default-deny `Give` a non-ident argument gets, which consumes
     ///   nothing either (`background eat(b.items)` leaves `b` holding the map).
     pub background_arg_sole_holder: std::collections::HashMap<(usize, usize), SoleHolder>,
+    /// v0.3-M9 C5a: every named heap value a store handed over, keyed by the stored expression's
+    /// `(span.start, span.end)`, with the place as the diagnostic names it (`` `list` ``,
+    /// `` `x.field` ``, the literal `` `[a, c]` ``, `` `b` ``). Written by the ONE store decision
+    /// (`Checker::store_value`); the muted hint at the store reads it, so the IDE says what the
+    /// compiler decided and re-derives nothing.
+    pub stores_handed_over: std::collections::HashMap<(usize, usize), String>,
     /// v0.3-M9 C1e (#421): every expression whose plain value flows into a slot of an envelope
     /// union type, keyed by the expression's `(span.start, span.end)`: the slot's union and the
     /// variant's tag. Written by the ONE recording function (`Checker::record_union_coercion`)
@@ -757,6 +763,7 @@ impl TypedModule {
             expr_types: self.expr_types.clone(),
             background_arg_inferred_ownership: self.background_arg_inferred_ownership.clone(),
             background_arg_sole_holder: self.background_arg_sole_holder.clone(),
+            stores_handed_over: self.stores_handed_over.clone(),
             union_coercions: self.union_coercions.clone(),
             cross_thread_padded_shapes: self.cross_thread_padded_shapes.clone(),
             back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
@@ -836,6 +843,7 @@ pub fn check(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        stores_handed_over: HashMap::new(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -859,6 +867,7 @@ pub fn check(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        stores_handed_over: checker.stores_handed_over,
         union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
@@ -934,6 +943,7 @@ pub fn check_with_kernel_mode(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        stores_handed_over: HashMap::new(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -957,6 +967,7 @@ pub fn check_with_kernel_mode(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        stores_handed_over: checker.stores_handed_over,
         union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
@@ -1149,6 +1160,8 @@ struct Checker<'b> {
     /// `TypedModule::background_arg_sole_holder` is moved from. Written by the ONE spawn-arg
     /// recording function (`record_spawn_arg_ownership`).
     bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
+    /// The record `TypedModule::stores_handed_over` is moved from (`store_value`).
+    stores_handed_over: HashMap<(usize, usize), String>,
     /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
     union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
@@ -5074,7 +5087,14 @@ impl<'b> Checker<'b> {
             place,
             copy_template,
         };
-        self.check_transfer(value, &sink, consumed_before)
+        let admitted = self.check_transfer(value, &sink, consumed_before);
+        // A named binding handed over is what the muted hint at the store says.
+        if admitted && matches!(self.provenance_of(value), Provenance::Whole(_)) {
+            let span = value.span();
+            self.stores_handed_over
+                .insert((span.start, span.end), place.to_string());
+        }
+        admitted
     }
 
     /// The stores of one collection-method call (`o.add(a)`, `m.set(k, a)`): each argument at a

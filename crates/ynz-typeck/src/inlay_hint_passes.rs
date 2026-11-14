@@ -111,11 +111,12 @@ pub struct TypeHint {
 
 /// Ownership modifier hint at a function-call argument.
 ///
-/// Rendered as `share`, `lend`, or `give` at `position` (after the argument).
+/// Rendered as `share`, `lend`, or `give` at `position` (after the argument), or as
+/// ``handed to `place` `` after a value a store handed over.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OwnershipHint {
     pub position: usize,
-    /// `"share"`, `"lend"`, or `"give"`.
+    /// `"share"`, `"lend"`, `"give"`, or ``"handed to `place`"``.
     pub modifier: String,
 }
 
@@ -757,6 +758,17 @@ pub fn ownership_call_site_hints(
                 &mut hints,
             );
         }
+    }
+
+    // A named heap value a store handed over (`list.add(a)`, `x.f = a`, `let b = a`, a literal
+    // part): typeck recorded it at the one store decision; the hint says where it went.
+    let mut handed_over: Vec<_> = check.typed_module.stores_handed_over.iter().collect();
+    handed_over.sort();
+    for ((_, end), place) in handed_over {
+        hints.push(OwnershipHint {
+            position: *end,
+            modifier: format!("handed to {place}"),
+        });
     }
 
     // Emit inferred `give`/`copy` hints for plain-ident arguments at `background`
