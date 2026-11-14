@@ -2532,6 +2532,13 @@ placement_category = "Informational"
 description = "Shows the ownership modifier the compiler picks at a function call site; also fires at background call sites when .copy() arg exceeds 64 bytes to suggest .give instead"
 example_source = "foo(player)"
 example_hint_rendered = "share (read-only — matches foo's signature)"
+# Rule 11 hover docs. One domain, two hint forms, so one tooltip explains both: the ownership word
+# at a call (`share`/`lend`/`give`) and the store hint (`handed to `list``, v0.3-M9 C5a, Patrick
+# 2026-11-13: `git log --grep="hands it over"`). The store wording is the one the ConsumedByStore
+# diagnostic uses ("storing a value hands it over").
+hover_what = "Shows who holds a value at this line. After a call it is the ownership word the compiler picked: `share` (the function only reads it), `lend` (the function may change it, you keep it) or `give` (the function takes it over). After a store it reads `handed to` and the place: storing a value hands it over, so that place is now its one owner and the name before the hint cannot be read after this line."
+hover_what_instead = "Nothing to type for a call; write `share`, `lend` or `give` in the function's signature to make the choice visible. For a store, if you read the value again, store a copy instead (`list.add(a.copy())`), or move the line that reads it above the store."
+hover_why = "Every value has one owner, and the owner frees the value when it is done with it. If two names could reach one value, one of them would free it under the other, so a store hands the value over and a call tells you whether you still hold it. A copy is a separate value, so both names can keep theirs."
 # v0.3-M1 extension: fires at `background fn(largeStruct.copy)` call sites when
 # estimated copy size > 64 bytes. LSP inlayHint handler: crates/ynz-lsp/src/inlay_hint.rs.
 # Firing condition: BackgroundLargeStructCopy warning present at call site span.

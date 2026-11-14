@@ -766,6 +766,40 @@ fn test_channel_capacity_registry_hover_states_the_authoritative_default() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Domain 2 (store form): the tooltip explains the `handed to` hint too
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_ownership_hover_explains_the_store_hint_in_the_diagnostics_words() {
+    // WHY: the `handed to `list`` hint (C5a) shares the `ownership_call_site` domain, so its
+    // tooltip is that domain's registry hover. Golden Rule 11 (one canonical wording per concept):
+    // the tooltip must say what the ConsumedByStore diagnostic says ("storing a value hands it
+    // over") and name the `.copy()` fix, not only describe the call-site `share`/`lend`/`give`.
+    let hover = ynz_registry::lsp_inlay_hint_hover_for("ownership_call_site")
+        .expect("ownership_call_site domain must have registry hover text");
+    let diagnostic = ynz_registry::diagnostic_template_lookup("ConsumedByStore")
+        .expect("ConsumedByStore template present");
+    assert!(
+        diagnostic
+            .what_template
+            .contains("storing a value hands it over"),
+        "the diagnostic's wording moved; update the hover with it"
+    );
+    for fragment in [
+        "handed to",
+        "storing a value hands it over",
+        ".copy()",
+        "share",
+        "give",
+    ] {
+        assert!(
+            hover.contains(fragment),
+            "hover must contain {fragment:?}; got: {hover}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Domain 11: auto_arc — shared-by-reference-count comment after a group-member spawn
 // ─────────────────────────────────────────────────────────────────────────────
 
