@@ -2,6 +2,10 @@
 // `revive_paths.rs`): one place for running a program, reading its errors, the use-after-give
 // assertions and the one-named-test-per-program macro, so the two files cannot drift apart.
 
+// Each test crate compiles this module on its own and uses a different subset of the helpers, so
+// a helper one of them leaves unused is not dead code.
+#![allow(dead_code)]
+
 use ynz_diagnostics::{Diagnostic, Severity};
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput};
