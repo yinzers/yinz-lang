@@ -65,9 +65,7 @@ impl ConsumedBy {
         match self {
             ConsumedBy::Given { missed_revive, .. }
             | ConsumedBy::Sent { missed_revive, .. }
-            | ConsumedBy::Stored { missed_revive, .. } => {
-                *missed_revive
-            }
+            | ConsumedBy::Stored { missed_revive, .. } => *missed_revive,
         }
     }
 
