@@ -127,3 +127,14 @@ fn v03_m9_union_hidden_default_shape_literal_into_union_is_refused() {
         "A shape value `{ ... }` cannot produce a `Tiny | Big` value",
     );
 }
+
+// A hidden union default is per instance and inherited: reassigning one instance's slot leaves
+// the other's default intact, and a parent's default reaches a child built in a loop. Tier: High.
+container_store_tests!(
+    "v0_3_m9_union_hidden_default_per_instance.ynz",
+    "big replacement\nint\nint\nint\nint\nint\n",
+    v03_m9_union_hidden_default_per_instance_optimized,
+    v03_m9_union_hidden_default_per_instance_no_optimize,
+    v03_m9_union_hidden_default_per_instance_asan_optimized,
+    v03_m9_union_hidden_default_per_instance_asan_no_optimize
+);
