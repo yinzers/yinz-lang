@@ -1,10 +1,18 @@
-//! v0.3-M9 C1e rework (#421): plain values reaching a UNION-typed slot through the container and
-//! hidden-default paths. The index-set refusal guard (`arr[i] = plain` never reaches codegen)
-//! and the hidden shape-field default (`hidden extra: Big | int = 4096`) must keep every plain
-//! variant behind the one coercion point. Tier: High (data integrity / memory safety).
+//! v0.3-M9 C1e rework (#421): a plain value that lands in a UNION-typed shape field through a
+//! hidden default must keep its variant tag, wrapped at the one coercion point. Tier: High (data
+//! integrity / memory safety). Also holds the guard that keeps an index store of a plain variant
+//! out of codegen, and the two refusals a hidden default's type check raises.
 //!
 //! The container stores `add` / `map.set` are #423's (a frame envelope cannot live in a
 //! container): their fixtures and tests are at `feat/v0-3-m9-c1e-rework-containers@56b4986`.
+//!
+//! Count: 11 tests = 2 run fixtures x 4 runs + 3 compile-only guards, past the ~8 a High-tier
+//! unit gets without a written reason. The two fixtures are not copies: `non_shape` is the
+//! minimal red case (a raw int where the envelope pointer belongs); `per_instance` is what the
+//! heap re-home of the default must keep true (two instances never share one envelope, and a
+//! parent's default reaches a child built in a loop). The 4 runs per fixture are plain vs ASan
+//! (a misread often prints plausible output; only the sanitizer sees the out-of-bounds read)
+//! and -O0 vs -O2 (the optimizer can mask a misread). The 3 guards compile only.
 //!
 //! One named test per case: each fixture runs at two optimization levels, plainly (the VALUE)
 //! and under AddressSanitizer (the MEMORY ACCESS), kept apart so a failure says which is wrong.
@@ -15,10 +23,10 @@ use support::{
     assert_asan_clean_and_prints as assert_asan_clean, assert_fixture_prints as assert_prints,
 };
 
-const WHAT: &str = "a plain value entering a union-typed slot must carry its \
+const WHAT: &str = "a hidden default entering a union-typed field must carry its \
                     own variant tag";
 
-macro_rules! container_store_tests {
+macro_rules! hidden_default_tests {
     ($fixture:expr, $stdout:expr, $optimized:ident, $no_optimize:ident, $asan_optimized:ident, $asan_no_optimize:ident) => {
         #[test]
         fn $optimized() {
@@ -73,9 +81,9 @@ fn v03_m9_union_container_index_set_plain_variant_is_refused() {
     );
 }
 
-// Bug: a hidden shape-field default of a non-shape variant (`hidden extra: Big | int = 4096`) lands as the raw int where the
-// envelope pointer belongs: SIGSEGV reading address 0x1000. Tier: High.
-container_store_tests!(
+// Bug: hidden default `extra: Big | int = 4096` landed as the raw int where the envelope pointer
+// belongs (SIGSEGV at 0x1000). Tier: High.
+hidden_default_tests!(
     "v0_3_m9_union_hidden_default_non_shape.ynz",
     "other\nend\n",
     v03_m9_union_hidden_default_optimized,
@@ -128,9 +136,10 @@ fn v03_m9_union_hidden_default_shape_literal_into_union_is_refused() {
     );
 }
 
-// A hidden union default is per instance and inherited: reassigning one instance's slot leaves
-// the other's default intact, and a parent's default reaches a child built in a loop. Tier: High.
-container_store_tests!(
+// Bug: a hidden union default re-homed out of the initializer was shared, dead or dropped (another
+// instance's slot changed, a stack envelope outlived its frame, an inherited default went missing).
+// Tier: High.
+hidden_default_tests!(
     "v0_3_m9_union_hidden_default_per_instance.ynz",
     "big replacement\nint\nint\nint\nint\nint\n",
     v03_m9_union_hidden_default_per_instance_optimized,

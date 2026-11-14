@@ -5,6 +5,13 @@
 //! module and called by every construction site, writes them now. Tier: High (data integrity /
 //! memory safety).
 //!
+//! Count: 9 tests = 2 fixtures x 4 runs + 1 structural check, past the ~8 a High-tier unit gets
+//! without a written reason. `imported` is the plain cross-module construction;
+//! `inherited_imported` adds a parent's defaults applied through the child's initializer, a path of
+//! its own (`extends` cannot cross files, so it cannot be folded into the first). The 4 runs per
+//! fixture are plain vs ASan (a null envelope read can print plausible output) and -O0 vs -O2 (the
+//! optimizer can mask a misread); all 8 go red without the one-initializer fix.
+//!
 //! Each fixture is a multi-module project (a directory) run at two optimization levels,
 //! plainly (the VALUE) and under AddressSanitizer (the MEMORY ACCESS, every module
 //! instrumented), kept apart so a failure says which is wrong.
