@@ -7,13 +7,13 @@
 //! call discarded `unify_param`'s mismatch; the dot-call form checked non-receiver arguments
 //! for the union case only); built under ASan at -O0 the first four overflow the stack.
 //!
-//! Test count: 13 — one per refused case and per call form (generic with a sibling argument,
+//! Test count: 14 — one per refused case and per call form (generic with a sibling argument,
 //! with an explicit type argument, with a concrete parameter, with two scalar types, with a
 //! shape that fits a union parameter only through its type parameter; dot-call
 //! with a shape and with an int), the plain-form guard (already clean when probed), and the
 //! legal calls, container parameters, union-bound type parameters and the instance each
-//! generic call was checked with, and an instance name no other function holds, that must keep
-//! running.
+//! generic call was checked with, and instance names no other function or instance holds (one
+//! test per collision: with a user function, between two instances), that must keep running.
 
 mod support;
 
@@ -212,15 +212,27 @@ fn v03_m9_c1g_generic_call_runs_the_instance_the_type_checker_chose() {
 }
 
 #[test]
-fn v03_m9_c1g_generic_instance_name_never_belongs_to_another_function() {
+fn v03_m9_c1g_generic_instance_name_never_belongs_to_a_user_function() {
     // BUG (found in round 3): instance names were `_`-joined and identifiers may hold `_`, so
-    // `show<Big>` took the name of a user function `show_shape_Big(Tiny)` (which then ran on a
-    // `Big`, reading its `label` pointer as an int), and two instances of `second` shared one
-    // name. TIER: High (call dispatch, memory safety).
+    // `show<Big>` took the name of a user function `show_shape_Big(Tiny)`, which then ran on a
+    // `Big` and read its `label` pointer as an int. TIER: High (call dispatch, memory safety).
     support::assert_fixture_prints(
         "v0_3_m9_c1g_generic_instance_name_is_its_own.ynz",
         false,
-        "generic\n42\nx\n",
-        "every generic call must run its own instance",
+        "generic\n",
+        "`show(big)` must run the `show<Big>` instance, not the user function with its old name",
+    );
+}
+
+#[test]
+fn v03_m9_c1g_generic_instances_never_share_a_name() {
+    // BUG (found in round 3): `second<A_shape_B, int>` and `second<A, B_int>` were both
+    // `second_shape_A_shape_B_int`, so one call ran the other's body (the verifier caught it
+    // only because the return types differ). TIER: High (call dispatch).
+    support::assert_fixture_prints(
+        "v0_3_m9_c1g_generic_instances_do_not_share_a_name.ynz",
+        false,
+        "42\nx\n",
+        "each instance of `second` must run its own body",
     );
 }
