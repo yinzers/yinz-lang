@@ -4,7 +4,7 @@ description: "Yinz manages memory automatically — without a garbage collector.
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-14"
 status: "active"
 author: "patrick"
 metadata:
@@ -100,7 +100,19 @@ print(rows.count())
 
 After an `if`, a `match` or a loop, `rows` is usable again only if every arm assigned it (a match needs an `else` arm, or to cover every variant). A loop body may run zero times, so a reassignment inside it does not count after the loop.
 
-Putting a value into a container (`bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`) does not give it away: you can still read `rows`. But the two now share one value, so once you give `bucket` away, `rows` is gone too and reading it is an error.
+Putting a list, a map or a shape into a place hands it over, just like giving it to a function. That covers `bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`, a list or shape built from named values (`[rows, more]`) and `let copy = rows`. The place owns the value from then on, and reading `rows` afterwards is an error:
+
+```ynz
+let rows: array<int> = [1, 2, 3]
+let bucket: array<array<int>> = []
+bucket.add(rows)
+print(rows.count())
+// COMPILE ERROR: `rows` was stored in `bucket` and cannot be used here — storing a value hands it over.
+//   If you still need `rows` after the store, store a copy instead: `bucket.add(rows.copy())`.
+//   If you only need it before the store, put this line above the store.
+```
+
+Numbers, booleans, options and strings are copied, so storing them gives nothing away.
 
 ---
 

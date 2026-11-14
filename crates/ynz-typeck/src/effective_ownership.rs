@@ -245,7 +245,7 @@ pub enum Provenance {
     /// origin permits; consumes the binding's whole alias class.
     Whole(String),
     /// A value someone still reaches through the named roots — a field, an index, a loop
-    /// cell, a literal built from named values, a call that returns a piece of its argument.
+    /// cell, a call that returns a piece of its argument.
     /// Never transferable; the fix is `.copy()` on the reached piece. `Reaches([])` is a
     /// piece of a fresh temporary (`makeBucket().rows`) — still not transferable.
     Reaches(Vec<String>),
