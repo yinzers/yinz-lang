@@ -8,7 +8,7 @@
 //! parameter and return slots of a SHAPE variant pass there (#410) and stay as the
 //! `v03_m9_union_wrap` fixtures through the new point.
 //!
-//! Count: 41 tests = 8 fixtures x 4 runs + 9 build refusals, past the ~8 a High-tier unit gets
+//! Count: 43 tests = 8 fixtures x 4 runs + 11 build refusals, past the ~8 a High-tier unit gets
 //! without a written reason. The fixtures are one per slot kind (field, let, non-shape variant,
 //! `.or`, generic parameter, narrowed binding into another union, nested arm on a shadowing
 //! binding, and the `return`-through-a-variable recovery) because the card requires a
@@ -16,6 +16,10 @@
 //! per fixture are not copies: plain vs ASan, because the pre-fix miscompiles often print
 //! plausible output and only the sanitizer sees the out-of-bounds envelope read; -O0 vs -O2,
 //! because the optimizer can mask a misread, so a defect that shows at one level only is named.
+//! The 11 build refusals are one per refused case, each a distinct compile-time path that must
+//! teach instead of panicking: channel element, number precision, a suspending call's result
+//! into a union `let` (`wait`, direct, CPU-promoted) and into a union `return` (`wait`, direct,
+//! `string`, `float`, `boolean` callee, CPU-promoted). Each compiles only, so none costs a run.
 //!
 //! One named test per case: each fixture runs at two optimization levels, plainly (the VALUE)
 //! and under AddressSanitizer (the MEMORY ACCESS), kept apart so a failure says which is wrong.
@@ -322,19 +326,39 @@ fn v03_m9_union_coerce_suspending_return_direct_is_refused() {
     );
 }
 
+/// `return later()` from a union-returning pausing function, where `later` gives back a
+/// `variant` (not a shape), must be refused with the whole `SuspendingResultIntoUnionReturn`
+/// teaching text.
+fn assert_non_shape_variant_return_refused(variant: &str, literal: &str) {
+    let program = format!(
+        "shape Circle {{\n  name: string\n}}\n\
+         shape Mixed = Circle | {variant}\n\n\
+         function later() -> {variant} {{\n  wait sleep(1)\n  return {literal}\n}}\n\n\
+         function pick() -> Mixed {{\n  wait sleep(1)\n  return later()\n}}\n\n\
+         function entrypoint() -> nothing {{\n  let m = pick()\n  print(`done`)\n}}\n"
+    );
+    assert_return_refused(&format!("return later() as {variant}"), &program, "later()");
+}
+
 #[test]
-fn v03_m9_union_coerce_suspending_return_other_variants_are_refused() {
-    // Bug: the same panic for every non-shape variant the callee can give back. Tier: High.
-    for (variant, literal) in [("string", "`text`"), ("float", "1.5"), ("boolean", "true")] {
-        let program = format!(
-            "shape Circle {{\n  name: string\n}}\n\
-             shape Mixed = Circle | {variant}\n\n\
-             function later() -> {variant} {{\n  wait sleep(1)\n  return {literal}\n}}\n\n\
-             function pick() -> Mixed {{\n  wait sleep(1)\n  return later()\n}}\n\n\
-             function entrypoint() -> nothing {{\n  let m = pick()\n  print(`done`)\n}}\n"
-        );
-        assert_return_refused(&format!("return later() as {variant}"), &program, "later()");
-    }
+fn v03_m9_union_coerce_suspending_return_string_variant_is_refused() {
+    // Bug: `return later()` with a `string` variant gave the compiler-bug panic of the `int` case.
+    // Tier: High.
+    assert_non_shape_variant_return_refused("string", "`text`");
+}
+
+#[test]
+fn v03_m9_union_coerce_suspending_return_float_variant_is_refused() {
+    // Bug: `return later()` with a `float` variant gave the compiler-bug panic of the `int` case.
+    // Tier: High.
+    assert_non_shape_variant_return_refused("float", "1.5");
+}
+
+#[test]
+fn v03_m9_union_coerce_suspending_return_boolean_variant_is_refused() {
+    // Bug: `return later()` with a `boolean` variant gave the compiler-bug panic of the `int` case.
+    // Tier: High.
+    assert_non_shape_variant_return_refused("boolean", "true");
 }
 
 #[test]
