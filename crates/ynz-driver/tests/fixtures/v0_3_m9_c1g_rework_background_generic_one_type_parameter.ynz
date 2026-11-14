@@ -1,0 +1,16 @@
+// v0.3-M9 C1g rework (security): `background pick(count, label)` gives ONE type parameter `T`
+// two types (`int`, then `string`).
+// Correct behavior: does not compile — refused with the same teaching text as the plain call.
+// Pre-fix failure: compiled to an LLVM module the verifier rejected, reported as a compiler bug
+// instead of a diagnostic (typeck's `background` handling never compared the arguments).
+
+function pick<T>(give first: T, give second: T) -> nothing {
+  print(`picked`)
+}
+
+function entrypoint() -> nothing {
+  let count: int = 5
+  let label: string = `x`
+  background pick(count, label)
+  sleepBlocking(60)
+}

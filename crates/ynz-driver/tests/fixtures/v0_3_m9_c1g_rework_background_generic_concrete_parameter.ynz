@@ -1,0 +1,24 @@
+// v0.3-M9 C1g rework (security): a GENERIC function started with `background` receives a
+// `Tiny` where its concrete parameter `second: Big` needs a `Big` (`background pick(big, tiny)`).
+// Correct behavior: does not compile — refused with the plain call form's text.
+// Pre-fix failure: compiled; the task read the 1-byte `Tiny` as a 16-byte `Big` and printed
+// garbage (typeck's `background` handling never compared the arguments of a generic callee).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function pick<T>(give first: T, give second: Big) -> nothing {
+  print(second.count.toString())
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  background pick(big, tiny)
+  sleepBlocking(60)
+}

@@ -1,0 +1,19 @@
+// v0.3-M9 C1g rework: `big.useBig(big, big)` is sugar for `useBig(big, big, big)`, but `useBig`
+// takes two arguments.
+// Correct behavior: does not compile — refused with the plain call form's arity text.
+// Pre-fix failure: LLVM "Incorrect number of arguments" reported as a compiler bug (the extra
+// arguments were silently dropped by the typeck zip).
+
+shape Big {
+  label: string
+  count: int
+}
+
+function useBig(share first: Big, share second: Big) -> int {
+  return second.count
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  print(big.useBig(big, big).toString())
+}

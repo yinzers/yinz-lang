@@ -1,0 +1,121 @@
+//! v0.3-M9 C1g rework (#424): a generic function started with `background` compares each
+//! argument with its parameter, and a dot-call passes the number of arguments the function
+//! declares. Tier: High (type checker; untrusted program input; the pre-fix flow read a 1-byte
+//! `Tiny` as a 16-byte `Big`, or reached LLVM with a call whose argument count was wrong).
+//!
+//! The fixtures go through the public compile boundary (`ynz build`). Each refused case asserts
+//! the teaching text (WHAT, WHAT-INSTEAD, WHY from the same diagnostics the plain call form
+//! gives) and that the compiler did not report one of its own bugs.
+//!
+//! Test count: 6 — one per refused case (two `background` generic calls, three dot-call argument
+//! counts: too few, too many, through a `dynamic` receiver) and the legal generic `background`
+//! call that must keep running.
+
+mod support;
+
+use support::compile;
+
+/// The compile must fail with a diagnostic that holds every fragment, and the failure must be
+/// the program's, not the compiler's.
+fn assert_rejected_with(fixture_name: &str, fragments: &[&str]) {
+    let compiled = compile(fixture_name);
+    assert!(
+        !compiled.success,
+        "{fixture_name}: the call compiled:\n{}",
+        compiled.diagnostics
+    );
+    assert!(
+        !compiled.diagnostics.contains("compiler bug"),
+        "{fixture_name}: the compiler reported its own bug instead of teaching:\n{}",
+        compiled.diagnostics
+    );
+    for fragment in fragments {
+        assert!(
+            compiled.diagnostics.contains(fragment),
+            "{fixture_name}: diagnostic must contain {fragment:?}; got:\n{}",
+            compiled.diagnostics
+        );
+    }
+}
+
+#[test]
+fn v03_m9_c1g_rework_background_generic_argument_for_a_concrete_parameter_is_rejected() {
+    // BUG: `background pick(big, tiny)` with `second: Big` on a generic callee — the `background`
+    // handling never compared the arguments, so the task read a `Tiny` as a `Big`.
+    // TIER: High (type checker, memory safety).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_background_generic_concrete_parameter.ynz",
+        &[
+            "This argument is `Tiny`, but `pick` expects `Big` here.",
+            "Pass a `Big` value.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_background_generic_two_types_for_one_type_parameter_is_rejected() {
+    // BUG: `background pick(count, label)` (`T = int`, then a `string`) failed LLVM
+    // verification — a compiler-bug report instead of a diagnostic. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_background_generic_one_type_parameter.ynz",
+        &[
+            "`label` has type `string`, but `pick` needs `int` for `second`",
+            "the argument `count` for `first` already made it `int`",
+            "Pass a value of type `int` for `second`",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_dot_call_without_a_required_argument_is_rejected() {
+    // BUG: `big.useBig()` is `useBig(big)` for a two-parameter function; the typeck zip dropped
+    // the missing argument and LLVM reported "Incorrect number of arguments" as a compiler bug.
+    // TIER: High (type checker).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_dot_call_too_few_arguments.ynz",
+        &[
+            "`useBig` takes 2 argument(s), but 1 were given.",
+            "Call it with 2 argument(s).",
+            "Every function call must match the number of arguments the function declares.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_dot_call_with_extra_arguments_is_rejected() {
+    // BUG: `big.useBig(big, big)` is a three-argument call to a two-parameter function; the
+    // typeck zip dropped the extras and LLVM reported a compiler bug. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_dot_call_too_many_arguments.ynz",
+        &[
+            "`useBig` takes 2 argument(s), but 3 were given.",
+            "Call it with 2 argument(s).",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_dynamic_dot_call_without_a_required_argument_is_rejected() {
+    // BUG: the `dynamic` receiver's dot-call path never compared the argument count with the
+    // contract's declaration. TIER: High (type checker).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_dot_call_dynamic_too_few_arguments.ynz",
+        &[
+            "`display` takes 2 argument(s), but 1 were given.",
+            "Call it with 2 argument(s).",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_legal_generic_background_call_still_runs() {
+    // GUARD against over-rejecting: a `background` call of a generic function whose arguments
+    // match its parameters keeps compiling and running (the instance typeck recorded for the
+    // call is the one codegen starts). TIER: High (the check must not reject a correct program).
+    support::assert_fixture_prints(
+        "v0_3_m4_p3_cross_give_generic.ynz",
+        false,
+        "q3\ncross-give-generic-done\n",
+        "a legal generic background call must still compile and run",
+    );
+}
