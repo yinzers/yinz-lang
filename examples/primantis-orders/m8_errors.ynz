@@ -102,20 +102,21 @@ function m8ConsumedBySendMap() -> nothing {
   print(table.count().toString())
 }
 
-// WHY: ConsumedBySend through an ALIAS CLASS — `let other = rows` puts both names in one
-// class; sending `rows` consumes the class, so the read of `other` is refused and the
-// diagnostic's `{via}` slot names `rows` as what was sent (probe 4, alias-by-`let`).
+// WHY: ConsumedBySend through an ALIAS CLASS — `first` is a piece of `rows`, so both names are
+// in one class; sending `rows` consumes the class, so the read of `first` is refused and the
+// diagnostic's `{via}` slot names `rows` as what was sent. (A whole-value alias, `let other =
+// rows`, cannot exist since C5a: that `let` hands `rows` over, see the two triggers below.)
 function m8ConsumedViaAliasLet() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(2)
-  let rows: array<int> = [1, 2, 3]
-  let other = rows
+  let wire: channel<array<array<int>>> = channel<array<array<int>>>(2)
+  let rows: array<array<int>> = [[1, 2, 3]]
+  let first = rows.first()
   wire.send(rows)
-  print(other.count().toString())
+  print(first.exists().toString())
 }
 
-// WHY: ConsumedBySend through REASSIGNMENT — `rows = other` moves `rows` out of its own class
-// and into `other`'s (a binding event, exhaustive over `Stmt`); the send then consumes both
-// (probe 5, alias-by-reassignment — the round-1 BLOCKER that made the rule `Stmt`-exhaustive).
+// WHY: ConsumedByStore through REASSIGNMENT — `rows = other` is a store: it hands `other` to
+// `rows`, so the later read of `other` is refused (C5a; before, the two names shared one class
+// and the send below consumed both).
 function m8ConsumedViaAliasReassign() -> nothing {
   let wire: channel<array<int>> = channel<array<int>>(2)
   let rows: array<int> = [1]
@@ -125,8 +126,8 @@ function m8ConsumedViaAliasReassign() -> nothing {
   print(other.count().toString())
 }
 
-// WHY: ConsumedBySend through a SHADOWING `let` — a new entry joining `other`'s class; the
-// send consumes the class and the read of `other` is refused (probe 6, alias-by-shadow).
+// WHY: ConsumedByStore through a SHADOWING `let` — `let rows = other` hands `other` to the new
+// `rows`, so the read of `other` is refused (C5a).
 function m8ConsumedViaAliasShadow() -> nothing {
   let wire: channel<array<int>> = channel<array<int>>(2)
   let other: array<int> = [2]
@@ -295,28 +296,29 @@ function m8CloseWithArgs() -> nothing {
 // infers all of its arguments before any position consumes, so the read of `other` at
 // position 1 is seen only by the transfer decision, which compares against the classes
 // consumed BEFORE the call (fix round 2, Producer C1: `eat2(rows, other)` used to compile and
-// print `3 3`). `{via}` names `rows` as what was given away.
-function m8Eat2(give a: array<int>, give b: array<int>) -> nothing {
-  print(`${a.count()} ${b.count()}`)
+// print `3 3`). `{via}` names `bucket` as what was given away. (C5a: the class-mate is a piece of
+// `bucket`; a whole-value alias is refused where it is made.)
+function m8Eat2(give a: Bucket, give b: array<int>) -> nothing {
+  print(`${a.rows.count()} ${b.count()}`)
 }
 
 function m8SameCallAliasGiveGive() -> nothing {
-  let rows: array<int> = [1, 2, 3]
-  let other = rows
-  m8Eat2(rows, other)
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  let other: array<int> = bucket.rows
+  m8Eat2(bucket, other)
 }
 
-// WHY: the mixed form — `rows` given at position 0, its class-mate `other` READ (`share`) at
+// WHY: the mixed form — `bucket` given at position 0, its class-mate `other` (a piece of `bucket`) READ (`share`) at
 // position 1 of the same call: a read after free inside the callee, refused with the same
 // use-after-give error.
-function m8Mix(give a: array<int>, share b: array<int>) -> nothing {
-  print(`${a.count()} ${b.count()}`)
+function m8Mix(give a: Bucket, share b: array<int>) -> nothing {
+  print(`${a.rows.count()} ${b.count()}`)
 }
 
 function m8SameCallAliasGiveShare() -> nothing {
-  let rows: array<int> = [1, 2, 3]
-  let other = rows
-  m8Mix(rows, other)
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  let other: array<int> = bucket.rows
+  m8Mix(bucket, other)
 }
 
 // WHY: there is no `h.close()` — a handle is a message line TO the child, not the channel's

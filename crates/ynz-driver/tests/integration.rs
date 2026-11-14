@@ -11273,6 +11273,12 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
     //   3. the parent dereferences `bucket[0]`, which is precisely what the old defect made
     //      unsafe (garbage / SIGSEGV across runs) and why the old pin refused to do it.
     //
+    // C5a re-pin, 8 -> 12: the green-world fixture needs two more array locals than the refused one
+    // (`spare` in the task, `fallback` in the parent, 2 counted allocations each, never released
+    // like every other heap local). Measured: the old fixture under the old compiler is alloc=14
+    // free=6, the new fixture under the OLD and the NEW compiler is alloc=18 free=6, so the
+    // hand-over rule adds no leak and the 4 extra are the 2 extra locals.
+    //
     // Gap accounting (8): the parent's own three locals (`seed`, `bucket`, `rows` — 2 counted
     // allocations each) are never released, which is the separate, pre-existing "nothing frees
     // a heap local at scope exit" class, and the task's deep-copied item is not freed by the
@@ -11307,7 +11313,7 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
     );
     assert_eq!(
         alloc,
-        free + 8,
+        free + 12,
         "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
          being freed — check it is not the parent's container or its items, which is the \
          use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \

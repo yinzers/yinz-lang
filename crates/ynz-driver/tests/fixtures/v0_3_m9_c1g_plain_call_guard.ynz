@@ -29,7 +29,7 @@ function useBigs(share items: array<Big>) -> int {
 function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let tinies: array<Tiny> = [tiny]
+  let tinies: array<Tiny> = [tiny.copy()]
   let numbers: array<int> = [5]
   let maybeCount = numbers.first()
   print(useBig(big, tiny).toString())

@@ -138,7 +138,7 @@ fn m8_gallery_fires_expected_diagnostics() {
     // test-ratchet: v0.1-polish adds 3 inline-shape error triggers (unknown field,
     // missing field, hidden-in-inline) — count grows from 2 to ~6.
     // v0.3-M8 Phase 4 (test-ratchet): the channel-close + transfer-rule section adds the
-    // four new compile diagnostics (ConsumedBySend ×5 incl. the three alias forms,
+    // four new compile diagnostics (ConsumedBySend ×3 incl. the piece-view alias form (C5a: the other two alias forms are ConsumedByStore ×2),
     // ParamNeedsGive ×5 incl. both frames of the relay chain, TransferNeedsCopy ×5 incl. the
     // dynamic-contract instance, HandleChannelArgNeedsBinding ×1), the extracted const-send
     // refusal, the existing use-after-give error at two new sites (+2 same-call alias-pair
@@ -170,6 +170,11 @@ fn m8_gallery_fires_expected_diagnostics() {
     assert!(
         stderr.contains("which is what was sent"),
         "m8 gallery must include the alias-class `{{via}}` form of ConsumedBySend; got:\n{stderr}"
+    );
+    // ConsumedByStore (C5a) — `rows = other` and `let rows = other` hand `other` over.
+    assert!(
+        stderr.contains("`other` was stored in `rows` and cannot be used here"),
+        "m8 gallery must include the ConsumedByStore diagnostic; got:\n{stderr}"
     );
     // ParamNeedsGive — the WHAT's fixed closing sentence.
     assert!(
@@ -698,16 +703,16 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
     // WHY: v0_3_m9_errors.ynz is where a human reads the v0.3-M9 union refusals together: a
     // union reaching a slot that expects one of its variants (return, argument, annotated
     // `let`, shape field), a union match that leaves a non-shape variant unhandled, and (C1g) an
-    // argument of another type than its type parameter was made to stand for. One
-    // trigger each; the count plus a key phrase per class keeps one from regressing into a
+    // argument of another type than its type parameter was made to stand for, and (C5a) a store
+    // that hands a value over and a later read of it. One trigger each; the count plus a key phrase per class keeps one from regressing into a
     // generic message.
     let (stderr, code) = compile_gallery(&gallery("v0_3_m9_errors.ynz"));
     assert_ne!(code, 0, "v0_3_m9 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert_eq!(
-        error_count, 6,
-        "v0_3_m9 gallery must produce exactly 6 errors, one per trigger; got \
+        error_count, 7,
+        "v0_3_m9 gallery must produce exactly 7 errors, one per trigger; got \
          {error_count}.\nstderr:\n{stderr}"
     );
 
@@ -725,6 +730,10 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
         (
             "argument that conflicts with its type parameter",
             "`special` has type `Special`, but `sameKind` needs `Plain` for `second`",
+        ),
+        (
+            "store that hands a value over (C5a)",
+            "`moved` was stored in `box` and cannot be used here",
         ),
     ] {
         assert!(

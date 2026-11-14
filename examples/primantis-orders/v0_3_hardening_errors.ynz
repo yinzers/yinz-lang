@@ -46,7 +46,8 @@ function entrypoint() -> nothing {
 
   // WHY: CopyNotIndependent on a union — which choice is live is only settled while the
   // program runs, and the two choices are different sizes.
-  const run: Delivery = { miles: 9 }
+  let run: Delivery = { miles: 9 }
+  let secondRun: Delivery = { miles: 9 }
   let either: Delivery | Pickup = run
   let bothWays = either.copy()
 
@@ -68,7 +69,7 @@ function entrypoint() -> nothing {
   // WHY: SpawnArgNotIndependent — the `background` face of the same rule. This line still
   // reads `parcel` after the task starts, so the task would need its own separate one, and a
   // union has no separate one to give. Hand it over instead, or read it before the spawn.
-  let parcel: Delivery | Pickup = run
+  let parcel: Delivery | Pickup = secondRun
   background sort(parcel)
   if (parcel is Delivery) {
     print(`still a delivery`)

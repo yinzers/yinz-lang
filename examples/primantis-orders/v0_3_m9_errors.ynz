@@ -1,4 +1,4 @@
-// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments)
+// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C5a store hands over)
 //
 // Every block below intentionally triggers a diagnostic added or extended in v0.3-M9.
 // Run `ynz build v0_3_m9_errors.ynz` to see all diagnostics.
@@ -45,7 +45,8 @@ function sameKind<T>(share first: T, share second: T) -> T {
 
 function entrypoint() -> nothing {
   let special: Special = { label: `cheesesteak` }
-  let order: Order = special
+  let order: Order = special.copy()
+  let second: Order = special.copy()
 
   // WHY: UnionWhereVariantExpected (argument) — an `Order` might hold a `Plain`, but
   // `plateSpecial` reads a `Special`.
@@ -55,7 +56,7 @@ function entrypoint() -> nothing {
   let again: Special = order
 
   // WHY: UnionWhereVariantExpected (shape field) — the field is declared as a `Special`.
-  let ticket: Ticket = { held: order }
+  let ticket: Ticket = { held: second }
 
   print(again.label)
   print(ticket.held.label)
@@ -63,10 +64,17 @@ function entrypoint() -> nothing {
   // WHY: non-exhaustive union multi-case with a non-shape variant — `describeRound`
   // names `Plain` only, so an `int` round would fall through every arm.
   let plain: Plain = { table: 4 }
-  let round: Round = plain
+  let round: Round = plain.copy()
   print(describeRound(round))
 
   // WHY: ArgumentConflictsWithTypeParameter — `sameKind` takes both arguments as one `T`;
   // `plain` makes `T` a `Plain`, so the `Special` cannot follow.
   print(sameKind(plain, special).table.toString())
+
+  // WHY: ConsumedByStore — `box.add(moved)` hands `moved` over to `box`, so the read of
+  // `moved` on the next line is refused (store a copy, or read it above the store).
+  let moved: array<int> = [1, 2, 3]
+  let box: array<array<int>> = []
+  box.add(moved)
+  print(moved.count().toString())
 }

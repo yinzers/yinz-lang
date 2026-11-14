@@ -16,9 +16,10 @@ shape Holder {
 
 function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
-  let thing: Thing = big
+  let thing: Thing = big.copy()
+  let other: Thing = big
   let again: Big = thing
-  let holder: Holder = { inner: thing }
+  let holder: Holder = { inner: other }
   print(again.label)
   print(holder.inner.label)
 }
