@@ -159,3 +159,11 @@ fn entry_allocas_come_before_a_loops_stacksave() {
         "entry-block allocas after the loop's stacksave would be released by its stackrestore: {late_allocas:?}"
     );
 }
+
+store_case!(
+    copied_containers_own_their_strings,
+    "v0_3_m9_c3b_container_copy.ynz",
+    "t-1\nv-1\nx-1\nx-1\n",
+    11,
+    "`.copy()` of a shape or a map, and a `maybe<string>` stored in a field or returned, hold the source's string pointer, so releasing both frees it twice (High)"
+);

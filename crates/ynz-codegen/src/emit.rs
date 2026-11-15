@@ -3495,6 +3495,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(owned_env)
     }
 
+    /// THE codegen call that copies a string (`ynz_string_clone`): a fresh counted heap string
+    /// with the same bytes. The `StringClone` arm of `emit_owned_copy` and the payload copy of a
+    /// `maybe<string>` (`maybe_payload_stable_bits`, which only has `&self`) both come here.
+    fn string_clone_call(
+        &self,
+        string: BasicValueEnum<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        Ok(self
+            .builder
+            .build_call(self.rt.ynz_string_clone, &[string.into()], name)
+            .map_err(|e| format!("{name} string clone: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("{name} string clone: returned void"))?
+            .into_pointer_value())
+    }
+
     /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
     /// `maybe_to_owned_dest`, v0.3-M7 Phase 3 / R9): given a maybe envelope's
     /// loaded `flag` and `bits`, return payload bits that are STABLE past the
@@ -3530,10 +3548,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         enum WidePayload {
             Shape(String),
             Number,
+            String,
         }
         let wide = match self.resolve_type(inner_ty) {
             Type::Shape { name } => WidePayload::Shape(name),
             Type::Number { precision } if precision <= 34 && heap => WidePayload::Number,
+            // A `maybe<string>` owns its payload string: a store copies it like any other string.
+            Type::String => WidePayload::String,
             _ => return Ok(bits),
         };
         let has = self
@@ -3581,6 +3602,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // Number reaches here only with `heap = true` (the match above passes
             // in-frame copies through) — the one authoritative i128 promotion.
             WidePayload::Number => self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?,
+            WidePayload::String => {
+                self.string_clone_call(src_pay.into(), &format!("{site}_str_pay"))?
+            }
         };
         let own_bits = self
             .builder
@@ -20863,6 +20887,7 @@ fn emit_owned_copy<'ctx>(
             cg.builder
                 .build_store(dst, struct_val)
                 .map_err(|e| format!("{site} store: {e}"))?;
+            emit_shape_string_fields_copy(cg, dst, name, site)?;
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape {
@@ -20984,6 +21009,26 @@ fn emit_owned_copy<'ctx>(
                 .try_as_basic_value()
                 .basic()
                 .ok_or_else(|| format!("{site} map clone: returned void"))?;
+            // The cells were copied, so a `string` key or value still points at the source's
+            // string: give the clone strings of its own (`ynz_map_clone_strings`).
+            if let Type::BuiltinMap { key, val: value } = &resolved {
+                let clone_keys = is_string_like(&cg.resolve_type(key));
+                let clone_values = is_string_like(&cg.resolve_type(value));
+                if clone_keys || clone_values {
+                    let flag = |on: bool| cg.i32().const_int(on as u64, false);
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_map_clone_strings,
+                            &[
+                                cloned.into_pointer_value().into(),
+                                flag(clone_keys).into(),
+                                flag(clone_values).into(),
+                            ],
+                            "",
+                        )
+                        .map_err(|e| format!("{site} map string clone: {e}"))?;
+                }
+            }
             // DEFERRED, four fields, for the SpawnArg case only.
             // WHAT: the task's own copy of a `map` argument is not released when the task
             //   retires, so a spawn that passes a map leaks that copy.
@@ -21092,6 +21137,59 @@ fn sole_holder_transfer_free_kind<'ctx>(
         // No copy exists; the caller's own refusal arm handles it.
         ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
     }
+}
+
+/// Copy every direct `string` field of the shape at `shape_ptr`, in place, through
+/// [`emit_owned_copy`]: the shape's bytes were just copied, so each string field still points at
+/// the source's string, and two shapes holding one string would free it twice. Fields that hold
+/// a pointer to something else (a nested shape, an `array`, a `map`) stay shared: the residual
+/// named in `ynz_typeck::owned_copy`'s header. O(fields) time, plus one string copy per field.
+fn emit_shape_string_fields_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    shape_ptr: PointerValue<'ctx>,
+    shape_name: &str,
+    site: &str,
+) -> Result<(), String> {
+    let struct_ty = cg
+        .shape_types
+        .get(shape_name)
+        .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
+    let fields = cg
+        .shape_table
+        .get(shape_name)
+        .ok_or_else(|| format!("{site}: shape `{shape_name}` not in the shape table"))?
+        .fields
+        .clone();
+    for (index, field) in fields.iter().enumerate() {
+        if !is_string_like(&cg.resolve_type(&field.ty)) {
+            continue;
+        }
+        let field_ptr = cg
+            .builder
+            .build_struct_gep(
+                struct_ty,
+                shape_ptr,
+                index as u32,
+                &format!("{site}_sf_{}", field.name),
+            )
+            .map_err(|e| format!("{site} string field gep: {e}"))?;
+        let original = cg
+            .builder
+            .build_load(cg.ptr(), field_ptr, &format!("{site}_sfv_{}", field.name))
+            .map_err(|e| format!("{site} string field load: {e}"))?;
+        let (copied, _free) = emit_owned_copy(
+            cg,
+            None,
+            original,
+            &field.ty,
+            CopyMode::Body,
+            &format!("{site}_field"),
+        )?;
+        cg.builder
+            .build_store(field_ptr, copied)
+            .map_err(|e| format!("{site} string field store: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Copy every string in the `cell_count` i64 cells at `cells` (a `fixed<string>` block just
