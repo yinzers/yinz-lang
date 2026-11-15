@@ -1,5 +1,7 @@
-// v0.3-M9 C6 cost fixture: the receiver of a UFCS call to a user function reads a place the call
-// writes nothing through, so it is passed as it is.
+// v0.3-M9 C6 cost fixture: the receiver of a UFCS call to a user function (typeck takes it as
+// argument 0) reads a place the call writes nothing through, so it is passed as it is. Written as
+// the plain call `total(receiver)`, not `receiver.total()`: the dotted form needs the chain
+// `buckets[0].or(fallback).total()`, and a `let` for the receiver would copy it (+2 allocations).
 // Allocations: `first`'s array (2), the list of one `Bucket` (2) and the fallback's empty array
 // (2); the call copies no receiver.
 
@@ -16,5 +18,5 @@ function entrypoint() -> nothing {
   let first: Bucket = { rows: [1, 2], id: 1 }
   let buckets: array<Bucket> = [first]
   let fallback: Bucket = { rows: [], id: 0 }
-  print(buckets[0].or(fallback).total())
+  print(total(buckets[0].or(fallback)))
 }

@@ -4,6 +4,6 @@ function entrypoint() -> nothing {
   let picked = rows.get(0)
   rows[0] = [9]
   let fallback: array<int> = []
-  let arr = picked.or(fallback)
-  print(arr.count())
+  let pickedArray = picked.or(fallback)
+  print(pickedArray.count())
 }

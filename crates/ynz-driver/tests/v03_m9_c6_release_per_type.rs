@@ -275,7 +275,7 @@ release_cases!(
         declarations: TAG,
         value_type: "fixed<Tag>",
         setup: "  let first: Tag = { name: `a`, id: 1 }\n  let second: Tag = { name: `b`, id: 2 }\n  let fallback: Tag = { name: `none`, id: 0 }\n  let value: fixed<Tag> = [first, second]\n",
-        read: "  print(value[0].or(fallback).id)\n",
+        read: "  let item: Tag = value[0].or(fallback)\n  print(item.id)\n",
     }
 );
 

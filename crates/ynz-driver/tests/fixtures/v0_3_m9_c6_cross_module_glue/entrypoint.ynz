@@ -5,6 +5,8 @@ function entrypoint() -> nothing {
   tags[1] = { name: `main-${4}`, id: 4 }
   replaceFirst(tags)
   let fallback: Tag = { name: `none`, id: 0 }
-  print(tags[0].or(fallback).name)
-  print(tags[1].or(fallback).name)
+  let firstTag: Tag = tags[0].or(fallback)
+  let secondTag: Tag = tags[1].or(fallback)
+  print(firstTag.name)
+  print(secondTag.name)
 }

@@ -16,5 +16,6 @@ function entrypoint() -> nothing {
   let got = handle.receive()
   let fallback: map<string, string> = {}
   let heldTable = got.or(fallback)
-  print(heldTable.get(`k`).or(`none`))
+  let maybeValue = heldTable.get(`k`)
+  print(maybeValue.or(`none`))
 }

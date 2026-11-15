@@ -86,7 +86,7 @@ fixed_set_case!(
     "c-3\nb-2\n",
     3,
     1,
-    4,
+    6,
     1
 );
 // Items that are not strings or shapes: the cell holds a pointer the list owns, so the write

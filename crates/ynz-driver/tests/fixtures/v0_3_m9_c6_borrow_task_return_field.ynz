@@ -15,7 +15,7 @@ function entrypoint() -> nothing {
   wait sleep(50)
   let got = handle.receive()
   let fallback: array<int> = []
-  let arr = got.or(fallback)
-  print(arr.count())
-  print(arr[0].or(-1))
+  let pickedArray = got.or(fallback)
+  print(pickedArray.count())
+  print(pickedArray[0].or(-1))
 }

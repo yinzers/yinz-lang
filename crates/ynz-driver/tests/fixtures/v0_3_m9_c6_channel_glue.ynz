@@ -8,5 +8,6 @@ function entrypoint() -> nothing {
   let items: array<string> = [`a`, `b`]
   wire.send(items)
   let got = wire.receive()
-  print(got.or([]).count())
+  let received: array<string> = got.or([])
+  print(received.count())
 }

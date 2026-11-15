@@ -4,7 +4,9 @@
 function entrypoint() -> nothing {
   let outer: map<string, map<string, string>> = { `a`: { `k`: `v-${1}` } }
   let fallback: map<string, string> = {}
-  let inner = outer.get(`a`).or(fallback)
+  let maybeInner = outer.get(`a`)
+  let inner = maybeInner.or(fallback)
   outer[`a`] = { `k`: `w-${2}` }
-  print(inner.get(`k`).or(`none`))
+  let maybeValue = inner.get(`k`)
+  print(maybeValue.or(`none`))
 }

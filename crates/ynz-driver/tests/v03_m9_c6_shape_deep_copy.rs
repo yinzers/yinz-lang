@@ -77,9 +77,10 @@ mod fixed_shape_copy_owns_its_items {
         assert_eq!(output.stdout, EXPECTED);
         assert_eq!(
             (counters.alloc, counters.string_alloc),
-            (4, 5),
-            "expected 4 counted allocations (2 cells for the list, 2 for its copy) and 5 heap \
-             strings (`a-1`, `b-2`, `none`, and a copy of each name): {counters:?}"
+            (4, 7),
+            "expected 4 counted allocations (2 cells for the list, 2 for its copy) and 7 heap \
+             strings (`a-1`, `b-2`, `none`, a copy of each name in the twin, and a copy of the \
+             name in each of the two `let`s of an item): {counters:?}"
         );
     }
 

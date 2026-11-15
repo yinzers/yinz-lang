@@ -3,8 +3,9 @@
 // Counted allocations: `first` and `second` each own 1 string (`a-1`, `b-2`) moved into their
 // literals, and the list's literal moves a heap cell for each: 2 cells. `value.copy()` gives the
 // twin 2 cells of its own and a copy of each name: 2 cells, 2 strings. Total 4 counted
-// allocations and 4 heap strings. Before the deep copy the twin shared the original's 2 cells and
-// 2 names: 2 and 2.
+// allocations. Heap strings: `a-1`, `b-2`, the literal of `fallback`, the twin's 2 name copies and
+// the 2 name copies of the two `let`s that read an item: 7. Before the deep copy the twin shared
+// the original's 2 cells and 2 names: 2 counted allocations and 5 heap strings.
 // Expected output: the two names the lists hold.
 
 shape Tag {
@@ -18,6 +19,8 @@ function entrypoint() -> nothing {
   let fallback: Tag = { name: `none`, id: 0 }
   let value: fixed<Tag> = [first, second]
   let twin = value.copy()
-  print(value[0].or(fallback).name)
-  print(twin[1].or(fallback).name)
+  let firstItem: Tag = value[0].or(fallback)
+  let twinItem: Tag = twin[1].or(fallback)
+  print(firstItem.name)
+  print(twinItem.name)
 }

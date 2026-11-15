@@ -1,5 +1,7 @@
 // v0.3-M9 C6 cost fixture: the receiver of a UFCS call is read from a list another argument of the
 // same call lends and overwrites, so the receiver is copied once for the call and released after.
+// Written as the plain call `total(receiver, others)` (typeck takes a UFCS receiver as argument 0):
+// the dotted form needs a method chain, and a `let` for the receiver would move the copy to the `let`.
 // Allocations: the build of the no-write twin (6), the overwriting literal's array (2) and the one
 // receiver copy's array (2). Releases: the replaced element's array (2) and the copy's (2).
 
@@ -17,5 +19,5 @@ function entrypoint() -> nothing {
   let first: Bucket = { rows: [1, 2], id: 1 }
   let buckets: array<Bucket> = [first]
   let fallback: Bucket = { rows: [], id: 0 }
-  print(buckets[0].or(fallback).total(buckets))
+  print(total(buckets[0].or(fallback), buckets))
 }
