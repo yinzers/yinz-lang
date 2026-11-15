@@ -7920,6 +7920,7 @@ fn flush_crossing_local_if_needed<'ctx>(
         stmt,
         cg.sm_crossing_names.as_deref().unwrap_or(&[]),
         &mut written_names,
+        &cg.typed.release_plan,
     );
 
     for name in &written_names {
@@ -7950,8 +7951,20 @@ fn flush_crossing_local_if_needed<'ctx>(
 /// the outer crossing local's frame slot. Only `Stmt::Assign` in nested scopes
 /// counts as a mutation. This prevents Bug 6: `let x` inside an if arm from
 /// clobbering the outer x frame slot with the shadow's value.
-fn collect_crossing_writes(stmt: &Stmt, crossing_names: &[String], out: &mut Vec<String>) {
+/// Also counts the founders a read inside `stmt` moves out of (`ReleasePlan::founders_moved_in`):
+/// the move nulls the founder's slot, so the slot is written there and must be flushed.
+fn collect_crossing_writes(
+    stmt: &Stmt,
+    crossing_names: &[String],
+    out: &mut Vec<String>,
+    release_plan: &ynz_typeck::release_plan::ReleasePlan,
+) {
     collect_crossing_writes_impl(stmt, crossing_names, out, false);
+    for founder in release_plan.founders_moved_in(stmt) {
+        if crossing_names.contains(&founder) && !out.contains(&founder) {
+            out.push(founder);
+        }
+    }
 }
 
 fn collect_crossing_writes_impl(

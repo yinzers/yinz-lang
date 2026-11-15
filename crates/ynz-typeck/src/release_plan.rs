@@ -812,6 +812,21 @@ impl ReleasePlan {
         self.move_sites.get(&span_of(span))
     }
 
+    /// The codegen names of the founders whose slot a read inside `stmt` nulls (every move site
+    /// within the statement's span, nested blocks included), sorted and deduplicated. A move is
+    /// a write to the founder's slot, so a state-machine walk flushes it like an assignment
+    /// (`collect_crossing_writes`). O(move sites).
+    pub fn founders_moved_in(&self, stmt: &Stmt) -> Vec<String> {
+        let span = stmt_span(stmt);
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        for (site_span, site) in &self.move_sites {
+            if encloses(span, *site_span) {
+                names.insert(site.founder_codegen_name.clone());
+            }
+        }
+        names.into_iter().collect()
+    }
+
     /// Every move site, as (read span, founder).
     pub fn move_sites(&self) -> impl Iterator<Item = (Span, &MoveSite)> + '_ {
         self.move_sites.iter().map(|(span, site)| (*span, site))

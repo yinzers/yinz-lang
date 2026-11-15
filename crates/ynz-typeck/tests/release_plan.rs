@@ -560,3 +560,24 @@ fn the_plan_agrees_with_the_live_scope_and_the_record_over_the_whole_corpus() {
     }
     assert!(findings.is_empty(), "{} findings:\n{}", findings.len(), findings.join("\n"));
 }
+
+/// Bug: a move that nulls the founder's slot is not seen as a write to it, so the state machine
+/// never flushes the nulled slot and a resumed release frees the moved value (S3 probe `c2`).
+#[test]
+fn a_statement_holding_a_move_site_names_its_founder_as_written() {
+    let output = clean(&format!(
+        "{}function some(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n  print(`done`)\n}}\n",
+        support::EAT
+    ));
+    let function = function_of(&output, "some");
+    let plan = &output.typed_module.release_plan;
+    assert_eq!(
+        plan.founders_moved_in(&function.body.stmts[1]),
+        vec!["rows".to_string()],
+        "the `if` holding the give writes `rows`' slot"
+    );
+    assert!(
+        plan.founders_moved_in(&function.body.stmts[2]).is_empty(),
+        "a statement with no move site writes no slot"
+    );
+}
