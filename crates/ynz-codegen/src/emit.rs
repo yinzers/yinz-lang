@@ -23697,23 +23697,13 @@ fn emit_owned_copy<'ctx>(
                         .map_err(|err| format!("{site} map string clone: {err}"))?;
                 }
             }
-            // DEFERRED, four fields, for the SpawnArg case only.
-            // WHAT: the task's own copy of a `map` argument is not released when the task
-            //   retires, so a spawn that passes a map leaks that copy.
-            // WHY: releasing it needs a new `BG_ARG_KIND_*` wire value, which the runtime's
-            //   retire ladder, the channel-side release rewrite, and both of their
-            //   kind-enumerating parity tests all read. That is a wire-format change, and
-            //   this change is a correctness fix that must land BEFORE the scope-exit release
-            //   pass (a release pass landing first would emit frees on the pointers this fix
-            //   exists to stop aliasing). Shipping the wire change here would invert that
-            //   order for a leak, to fix an alias.
-            // COST to fix later: one `BG_ARG_KIND_HEAP_MAP` constant, one arm in the runtime
-            //   retire ladder calling `ynz_map_drop`, one arm here, and the `ALL_BG_ARG_KINDS`
-            //   / releasable-payload parity tests that enumerate the kinds.
-            // TRIGGER: the scope-exit release pass, which owns the release ladder — or the
-            //   first program that spawns with a `map` argument from inside a loop.
-            // Until then this is strictly better than what it replaces: the task used to
-            //   share the spawner's map outright.
+            // A value that is itself heap (an array, a map, a `maybe` cell, a shape owning heap, a
+            // union slot) was copied as bits too: copy each through the one owned-copy emitter.
+            if let Type::BuiltinMap { key, val: value } = &resolved {
+                emit_map_values_deep_copy(cg, cloned.into_pointer_value(), key, value, site)?;
+            }
+            // The task's copy is released by the type's release glue (`release_glue_free_kind`,
+            // parked 68), so the arm itself reports no flat free.
             Ok((cloned, BgArgFreeKind::None))
         }
 
@@ -23897,6 +23887,132 @@ fn emit_fixed_string_cells_copy<'ctx>(
         .build_unconditional_branch(head)
         .map_err(|err| format!("{site} fixed copy loop br: {err}"))?;
 
+    cg.builder.position_at_end(done);
+    Ok(())
+}
+
+/// Give every entry of an already-cloned map a copy of the heap its value owns, when the value is
+/// not a plain string (strings are copied by `ynz_map_clone_strings`): a counted loop over the
+/// insertion order that reads the entry, copies the value (`deepen_shape_fields` for a shape,
+/// `union_deepen_fn` for an envelope union, `emit_owned_copy` for a pointer value) and writes it
+/// back over the same key without releasing the old cell (it is the source's). O(n) time in the
+/// entries plus the copies, O(1) memory here.
+fn emit_map_values_deep_copy<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    map: PointerValue<'ctx>,
+    key_ty: &Type,
+    value_ty: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let value_ty = cg.resolve_type(value_ty);
+    if is_string_like(&value_ty) || !cg.field_needs_deepen(&value_ty) {
+        return Ok(());
+    }
+    let is_str_key = is_string_like(&cg.resolve_type(key_ty));
+    let i64_ty = cg.i64();
+    let count = cg.map_count_val(map, &format!("{site}_values_count"))?;
+    let position_slot = cg.alloca_in_entry_llvm(i64_ty, &format!("{site}_values_i"))?;
+    let key_slot = cg.alloca_in_entry_llvm(i64_ty, &format!("{site}_values_key"))?;
+    let value_buffer = cg.array_elem_out_buffer(&value_ty, &format!("{site}_values"))?;
+    cg.builder
+        .build_store(position_slot, i64_ty.const_zero())
+        .map_err(|err| format!("{site} map values init: {err}"))?;
+    let head = cg.append_block(&format!("{site}_values_head"));
+    let body = cg.append_block(&format!("{site}_values_body"));
+    let done = cg.append_block(&format!("{site}_values_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} map values br: {err}"))?;
+    cg.builder.position_at_end(head);
+    let position = cg
+        .builder
+        .build_load(i64_ty, position_slot, &format!("{site}_values_pos"))
+        .map_err(|err| format!("{site} map values pos: {err}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(IntPredicate::SLT, position, count, &format!("{site}_values_more"))
+        .map_err(|err| format!("{site} map values cmp: {err}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|err| format!("{site} map values cond: {err}"))?;
+    cg.builder.position_at_end(body);
+    cg.map_iter_get_into(map, position, is_str_key, key_slot, value_buffer, &format!("{site}_values_get"))?;
+    if let Some(variants) = cg.envelope_union_variants(&value_ty) {
+        let deepen = cg.union_deepen_fn(&variants)?;
+        cg.builder
+            .build_call(deepen, &[value_buffer.into()], "")
+            .map_err(|err| format!("{site} map values union: {err}"))?;
+    } else if let Type::Shape { name } = &value_ty {
+        cg.deepen_shape_fields(value_buffer, name)?;
+    } else {
+        let bits = cg
+            .builder
+            .build_load(i64_ty, value_buffer, &format!("{site}_values_bits"))
+            .map_err(|err| format!("{site} map values bits: {err}"))?
+            .into_int_value();
+        let original = cg
+            .builder
+            .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_values_item"))
+            .map_err(|err| format!("{site} map values inttoptr: {err}"))?;
+        let (copied, _) = emit_owned_copy(
+            cg,
+            None,
+            original.into(),
+            &value_ty,
+            CopyMode::Body,
+            &format!("{site}_values_item"),
+        )?;
+        let copied_bits = cg
+            .builder
+            .build_ptr_to_int(
+                copied.into_pointer_value(),
+                i64_ty,
+                &format!("{site}_values_new"),
+            )
+            .map_err(|err| format!("{site} map values ptrtoint: {err}"))?;
+        cg.builder
+            .build_store(value_buffer, copied_bits)
+            .map_err(|err| format!("{site} map values store: {err}"))?;
+    }
+    let key_bits = cg
+        .builder
+        .build_load(i64_ty, key_slot, &format!("{site}_values_key_bits"))
+        .map_err(|err| format!("{site} map values key: {err}"))?
+        .into_int_value();
+    let null = cg.ptr().const_null();
+    let zero = cg.i32().const_zero();
+    if is_str_key {
+        let key = cg
+            .builder
+            .build_int_to_ptr(key_bits, cg.ptr(), &format!("{site}_values_key_ptr"))
+            .map_err(|err| format!("{site} map values key ptr: {err}"))?;
+        cg.builder
+            .build_call(
+                cg.rt.ynz_map_set_str,
+                &[map.into(), key.into(), value_buffer.into(), null.into(), null.into(), zero.into()],
+                "",
+            )
+            .map_err(|err| format!("{site} map values set: {err}"))?;
+    } else {
+        cg.builder
+            .build_call(
+                cg.rt.ynz_map_set,
+                &[map.into(), key_bits.into(), value_buffer.into(), null.into(), zero.into()],
+                "",
+            )
+            .map_err(|err| format!("{site} map values set: {err}"))?;
+    }
+    let next = cg
+        .builder
+        .build_int_add(position, i64_ty.const_int(1, false), &format!("{site}_values_next"))
+        .map_err(|err| format!("{site} map values add: {err}"))?;
+    cg.builder
+        .build_store(position_slot, next)
+        .map_err(|err| format!("{site} map values step: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} map values loop br: {err}"))?;
     cg.builder.position_at_end(done);
     Ok(())
 }
