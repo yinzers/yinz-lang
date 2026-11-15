@@ -5411,7 +5411,7 @@ impl<'b> Checker<'b> {
     /// templates), once per read span. Its callers are the read check above and the sinks
     /// (`check_transfer`, `check_read_of_same_call_consumed`), which see the reads the read check
     /// could not: an operand inferred while its binding was live and consumed by a LATER operand
-    /// of the same statement (`eat2(a, [a])`, `[a, eatBack(a)]`).
+    /// of the same statement (`eatBoth(rows, [rows])`, `[rows, eatBack(rows)]`).
     fn report_consumed_read(&mut self, span: &SourceSpan, name: &str, cause: &ConsumedBy) {
         if self.reported_consumed_reads.insert((span.start, span.end)) {
             let diag = consumed_read_diag(span.clone(), name, cause);
@@ -6608,7 +6608,7 @@ impl<'b> Checker<'b> {
     /// (`report_consumed_read`). Every call form, literal and store infers its operands first and
     /// only then decides, so an operand consumed by an EARLIER position of the same call
     /// (`eat2(rows, other)` with `other` a piece of `rows`) or by a LATER operand of the same
-    /// statement (`eat2(a, [a])`, `[a, eatBack(a)]`) was inferred live, and this is the only
+    /// statement (`eatBoth(rows, [rows])`, `[rows, eatBack(rows)]`) was inferred live, and this is the only
     /// site that sees the read.
     fn check_transfer(&mut self, expr: &Expr, sink: &TransferSink<'_>) -> bool {
         let span = expr.span().clone();
@@ -6804,9 +6804,6 @@ impl<'b> Checker<'b> {
         ownerships: &[Option<OwnershipModifier>],
         param_names: &[String],
     ) {
-        // The pre-call snapshot: which alias classes were consumed before THIS call touched
-        // anything. A later position whose class is consumed but absent here was consumed by
-        // an earlier position of this same call — `check_transfer` reports that read.
         for (i, arg) in normalized_args.iter().enumerate() {
             let declared = ownerships.get(i).and_then(|o| o.as_ref());
             match declared {
@@ -12014,6 +12011,16 @@ fn stmts_ref_target_non_shadowed_sequential(stmts: &[Stmt], target: &str) -> boo
     false
 }
 
+/// The span of the binding read in `expr` that `provenance` classifies `Whole`: the expression
+/// itself, or the operand of a `wait` (whose provenance is its operand's). It is the span the
+/// read check reported, so the sinks do not report one read twice. O(depth) time, O(1) memory.
+fn binding_read_span(expr: &Expr) -> &SourceSpan {
+    match expr {
+        Expr::Wait(inner, _) => binding_read_span(inner),
+        _ => expr.span(),
+    }
+}
+
 /// Returns `true` if `expr` reads the binding `target`: an `Expr::Ident` of that name, or `self`
 /// when `target` is `self` (the `self` parameter is a binding like any other).
 fn expr_refs_ident(expr: &Expr, target: &str) -> bool {
@@ -15555,15 +15562,5 @@ mod suspends_parity_tests {
             "suspends-set / conservative-predicate parity broken:\n{}",
             failures.join("\n")
         );
-    }
-}
-
-/// The span of the binding read in `expr` that `provenance` classifies `Whole`: the expression
-/// itself, or the operand of a `wait` (whose provenance is its operand's). It is the span the
-/// read check reported, so the sinks do not report one read twice. O(depth) time, O(1) memory.
-fn binding_read_span(expr: &Expr) -> &SourceSpan {
-    match expr {
-        Expr::Wait(inner, _) => binding_read_span(inner),
-        _ => expr.span(),
     }
 }
