@@ -316,7 +316,7 @@ impl<'a, 'ctx> ShapeTypeBuilder<'a, 'ctx> {
     /// across `background` tasks as ONE byte copy of this struct layout, so its allowlist is
     /// exactly the field kinds stored INLINE here that a byte copy shares soundly (`int`/
     /// `float`/`bool` value bits, plus the `string` pointer the copy path already shares). A
-    /// union field stays out of it: its slot may own a heap cell.
+    /// union field stays out of it: its slot may own a heap cell (a recursive union boxes one).
     fn field_type(&mut self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         let ptr = self.ctx.ptr_type(AddressSpace::default());
         Ok(match ty {

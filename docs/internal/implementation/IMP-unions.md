@@ -59,6 +59,53 @@ The payload is a single pointer (8 bytes on 64-bit); no additional payload space
 
 LLVM emits explicit padding bytes to maintain alignment. The largest variant's value is stored inline in the payload bytes; smaller variants leave trailing bytes unused (the tag discriminates access).
 
+
+---
+
+## Stored union slot (v0.3-M9 C1f)
+
+The lowering table above names the logical representation. What a union value is when it is
+*stored* (an array element, a map value, a shape field, a binding that crosses a `wait`, a
+return, a staged argument) is one layout, computed once.
+
+**Slot.** An *envelope union* (one with a shape variant) is stored as `{ i64 tag, payload }`, laid
+out like a Rust `enum`: the payload area is as large as the largest variant (at least 8 bytes for
+the non-shape variants), at the shape alignment (8, or 16 with a `number` field), and the slot size
+is a multiple of that alignment. `Thing = Tiny | Big` is 24 bytes when `Big` is 16. `none` (a union
+that lists `nothing`, or a `maybe` of the union) is the tag `u64::MAX`. The layout is
+`UnionLayout` in `crates/ynz-codegen/src/shape_types.rs`; the frame layout, codegen and any
+release helper read that one answer.
+
+**Value form.** Inside an expression a union is a pointer to a per-site `{tag, data}` view envelope
+(`data` = the payload's address for a shape variant, the value's bits otherwise), null for `none`.
+`union_slot_to_value` builds the view over a slot; `union_persist_into` copies a value into a slot.
+A view is valid as long as the slot it views.
+
+**By value, no heap home.** Every store copies the payload into the slot: a container element, a
+map value and a shape field (a hidden default into a union field included), a binding (an entry
+slot owned by the binding, so rebinding the source never changes the copy), a `return` (the slot
+comes back by value), an `errors` result (`{ err, slot }`) and a `maybe<Thing>` return (the slot,
+`none` the none tag), and a `wait`-staged or `background` argument (a `Param` region of the
+callee's own frame). A suspending function returns the slot through a `Return` region of its frame;
+the waiting caller copies it out before the frame is freed. A binding that crosses a `wait` lives in
+a region of the function's frame (`crossing_local_slot_count`); every resume rebuilds the view from
+it, so no pointer into a resume function's stack survives a suspension. None of these allocates.
+
+**Recursive unions** (a variant reaches the union through shape fields, so no finite inline size)
+are the one exception: the slot is `{ tag, word }` and a shape variant's bytes live in a heap cell
+the slot owns, one per store, as `Box<T>` in a Rust enum. Copying such a union into a binding
+clones its cell too.
+
+**Ownership.** A `share` union parameter cannot be stored (`ParamNeedsGive`); a `give` union is
+copied into the slot. A slot owns its payload: a shape variant owns the shape's fields (and, boxed,
+its cell), a `string`, array or map variant owns that value, scalar variants and `none` own nothing.
+
+**Equality.** Two union fields are equal when their tags match and the stored variants are equal
+as values of that variant (field by field for a shape variant, the payload word otherwise).
+
+**Not stored.** A `maybe<Thing>` binding held across a `wait`, and a union indexed-set into an
+array, are refused by typeck.
+
 ---
 
 ## No User Override on Layout

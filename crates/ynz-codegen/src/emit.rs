@@ -390,7 +390,8 @@ pub fn build_frame_layouts_with_unions(
                 // crossing set the resume fn flushes/reloads — one producer verdict.
                 typed.back_edge_yield_admitted.contains(&f.name),
             );
-            let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_table, shape_abi_sizes);
+            let crossing_slots =
+                crossing_local_total_slots(f, &crossing, typed, shape_table, shape_abi_sizes);
 
             // v0.3-M3d CPU-group slots. A promoted host (admitted by spike_cpu_candidates)
             // reserves a handle+result region immediately after the frame header, BEFORE its
@@ -854,8 +855,13 @@ fn compute_frame_size(
                         // widened crossing reservation exactly — same producer verdict.
                         typed.back_edge_yield_admitted.contains(&f.name),
                     );
-                    let crossing_slots =
-                        crossing_local_total_slots(f, &crossing, typed, shape_table, shape_abi_sizes);
+                    let crossing_slots = crossing_local_total_slots(
+                        f,
+                        &crossing,
+                        typed,
+                        shape_table,
+                        shape_abi_sizes,
+                    );
                     let (_, reserve) =
                         cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
                     return Some((
@@ -2019,8 +2025,7 @@ fn abi_return_type<'ctx>(
         // A `maybe` of an envelope union comes back as the union's slot, `none` its `UNION_NONE_TAG`
         // (`Cg::maybe_union_variants`): a `{flag, bits}` pair's bits would point at a view in the
         // callee's frame.
-        Type::Maybe { inner }
-            if matches!(inner.as_ref(), union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union)) =>
+        Type::Maybe { inner } if matches!(inner.as_ref(), union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union)) =>
         {
             let Type::Union { variants } = inner.as_ref() else {
                 return Err("abi_return_type: a maybe of a union lost its variants".to_string());
@@ -6036,12 +6041,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                             .map_err(|e| format!("{e}"))?;
                         let this_or_other = self
                             .builder
-                            .build_select(
-                                is_variant,
-                                shape_equal,
-                                variant_equal,
-                                "ueq_pick",
-                            )
+                            .build_select(is_variant, shape_equal, variant_equal, "ueq_pick")
                             .map_err(|e| format!("{e}"))?
                             .into_int_value();
                         variant_equal = this_or_other;
@@ -6737,7 +6737,8 @@ fn lower_function_with_waits<'ctx, 'g>(
             + spike_slot_reserve
             + crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes)
     } else {
-        n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes)
+        n_params
+            + crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes)
     };
 
     // Look up the composed frame layout for this function. The total_size covers
@@ -6907,8 +6908,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_shape_embed_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_ec_struct_allocas: HashMap::new(), // populated during alloca creation below
         sm_crossing_shape_names: HashMap::new(),    // populated during alloca creation below
-        sm_crossing_shape_allocas: HashMap::new(),
-        sm_crossing_unions: HashMap::new(),  // populated during alloca creation below
+        sm_crossing_shape_allocas: HashMap::new(),  // populated during alloca creation below
+        sm_crossing_unions: HashMap::new(),         // populated in Step 1b' below
         sm_crossing_ec_number_set: HashSet::new(),  // populated during alloca creation below
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
@@ -10626,10 +10627,8 @@ fn load_sm_return_value_typed<'ctx>(
                 .builder
                 .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_maybe_union_region"))
                 .map_err(|e| format!("sm maybe union region cast: {e}"))?;
-            let slot = cg.alloca_in_entry_llvm(
-                cg.union_slot_llvm(&layout),
-                &format!("{tag}_maybe_union"),
-            )?;
+            let slot = cg
+                .alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{tag}_maybe_union"))?;
             cg.builder
                 .build_memcpy(
                     slot,
@@ -11358,9 +11357,7 @@ fn crossing_local_slot_count(
         // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
         // The i128 decimal bits are stored directly so same-callee calls that reuse
         // the callee's staging slot cannot clobber a live crossing binding.
-        Some(Type::ErrorsCapable { ref inner })
-            if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) =>
-        {
+        Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
             3
         }
         // An `errors` union result: {err, ok}, then the region its success slot lives in.
@@ -17427,7 +17424,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         region_offset,
                         "sm_ec_union_region",
                     )?;
-                    cg.union_persist_if_ok(err_i64, view, region, &variants, maybe, "sm_ec_union_ret")?;
+                    cg.union_persist_if_ok(
+                        err_i64,
+                        view,
+                        region,
+                        &variants,
+                        maybe,
+                        "sm_ec_union_ret",
+                    )?;
                     let region_bits = cg
                         .builder
                         .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_ec_union_region_bits")
@@ -17735,11 +17739,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         // A `maybe` of an envelope union rides the frame's `Return` region like
                         // the union itself (`none` its none tag): the pair's bits would point at a
                         // view in this resume invocation's dead stack.
-                        Type::Maybe { ref inner } if cg.envelope_union_variants(inner).is_some() => {
+                        Type::Maybe { ref inner }
+                            if cg.envelope_union_variants(inner).is_some() =>
+                        {
                             let variants = cg
                                 .envelope_union_variants(inner)
                                 .ok_or("sm maybe union return: lost the variants")?;
-                            let (flag, bits) = cg.load_maybe_env_pair(val.into_pointer_value(), "sm_ret_maybe")?;
+                            let (flag, bits) =
+                                cg.load_maybe_env_pair(val.into_pointer_value(), "sm_ret_maybe")?;
                             let present = cg
                                 .builder
                                 .build_int_compare(
@@ -17751,7 +17758,12 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 .map_err(|e| format!("sm maybe union present: {e}"))?;
                             let view_bits = cg
                                 .builder
-                                .build_select(present, bits, cg.i64().const_zero(), "sm_ret_maybe_view_bits")
+                                .build_select(
+                                    present,
+                                    bits,
+                                    cg.i64().const_zero(),
+                                    "sm_ret_maybe_view_bits",
+                                )
                                 .map_err(|e| format!("sm maybe union view bits: {e}"))?
                                 .into_int_value();
                             let view = cg
@@ -17766,10 +17778,20 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 region_offset,
                                 "sm_maybe_union_ret_region",
                             )?;
-                            cg.union_persist_into_as(view, region, &variants, true, "sm_maybe_union_ret")?;
+                            cg.union_persist_into_as(
+                                view,
+                                region,
+                                &variants,
+                                true,
+                                "sm_maybe_union_ret",
+                            )?;
                             let region_bits = cg
                                 .builder
-                                .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_maybe_union_ret_bits")
+                                .build_ptr_to_int(
+                                    region,
+                                    cg.ctx.i64_type(),
+                                    "sm_maybe_union_ret_bits",
+                                )
                                 .map_err(|e| format!("sm maybe union ret ptr_to_int: {e}"))?;
                             state_machine::store_return_value_i64(
                                 cg.ctx,
@@ -18046,7 +18068,8 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     let layout = cg.union_layout(&variants)?;
                     let slot_ty = cg.union_slot_llvm(&layout);
                     let scratch = cg.alloca_in_entry_llvm(slot_ty, "maybe_union_ret_slot")?;
-                    let (flag, bits) = cg.load_maybe_env_pair(val.into_pointer_value(), "ret_maybe")?;
+                    let (flag, bits) =
+                        cg.load_maybe_env_pair(val.into_pointer_value(), "ret_maybe")?;
                     let present = cg
                         .builder
                         .build_int_compare(

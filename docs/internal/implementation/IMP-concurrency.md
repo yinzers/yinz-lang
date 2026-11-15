@@ -426,7 +426,9 @@ Several types cannot yet cross a `wait` boundary. The type classifier is complet
 
 The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. All others fall into buckets with safety problems:
 
-- **`union` / `maybe<T>` / `dynamic Contract`**: internally represented as a pointer to a `{tag, payload}` struct alloca on the RESUME FUNCTION'S STACK. Flushing the alloca pointer to the frame slot and reloading it after the next resume stores and re-reads a dangling stack address. LLVM may detect this ("Instruction does not dominate all uses!") or silently corrupt the stack.
+- **`maybe<T>` / `dynamic Contract`**: internally represented as a pointer to a `{tag, payload}` struct alloca on the RESUME FUNCTION'S STACK. Flushing the alloca pointer to the frame slot and reloading it after the next resume stores and re-reads a dangling stack address. LLVM may detect this ("Instruction does not dominate all uses!") or silently corrupt the stack.
+
+- **`union` (envelope union)**: a crossing union binding, used after the `wait` only as an argument to a suspending call, is held in a frame region of its own (the union slot, payload inline, [`IMP-unions.md`](IMP-unions.md) "Stored union slot"): a bind persists the value into the region and every resume rebuilds the view from it, so no stack pointer is flushed. Any other use of a crossing union is refused.
 
 - **`fixed<T>` binding (crossing local)**: fixed arrays are stack-allocated allocas in the resume function's stack frame. When the resume function returns to the scheduler after a `wait`, that stack frame is freed. The crossing-local frame slot holds a dangling pointer — reading elements after resume is UB. (`fixed<T>` as a for-loop iterator is caught separately by `FixedArrayIterWithWait`.) Registry entry: `fixed-crossing-local-with-wait`.
 
@@ -468,13 +470,13 @@ because `-O0` lowers i128 ops alignment-indifferently.
 
 | Type | Workaround |
 |---|---|
-| `union` / `maybe<T>` / `dynamic Contract` | Extract the inner value before `wait`; use the primitive after |
+| `maybe<T>` / `dynamic Contract`, and a `union` used after the `wait` other than as an argument to a suspending call | Extract the inner value before `wait`; use the primitive after |
 | `fixed<T>` binding (crossing `wait`) | Redeclare as `array<T>` — heap-allocated, pointer survives suspension |
 | `range` binding (crossing `wait`) | Inline the range in the `for` header: `for (i in range(0,n))` |
 | `MapEntry<K,V>` after `wait` | Read `entry.key`/`entry.value` before `wait`, bind to separate `let k`/`let v`, use those after |
 
 **What it costs to lift each**:
-- `union`/`maybe`/`dynamic`: per-type flush/reload strategies (store tag + payload fields to separate frame slots). ~half a session each.
+- `maybe`/`dynamic`: per-type flush/reload strategies (store tag + payload fields to separate frame slots). ~half a session each. (`union` as a call argument already holds its slot in a frame region.)
 - `fixed<T>` crossing local: embed the fixed-array bytes directly in the composed heap frame (similar to Shape frame-embedding), using compile-time size to compute slot count. ~1 session.
 - `range` crossing local: store lo/hi bounds as two consecutive i64 frame slots and reconstruct the range alloca on reload. ~half a session.
 - `MapEntry<K,V>`: two consecutive frame slots (mirroring the ErrorsCapable 2-slot path). ~half a session.

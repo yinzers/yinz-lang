@@ -34,7 +34,12 @@ fn errors_return_allocates_nothing() {
 
 /// `fixture` and its `baseline` (the same program over `int`) must allocate the same number of
 /// times: the union adds nothing. Both must print what they print and run clean.
-fn assert_allocates_like_int(fixture: &str, expected: &str, baseline: &str, baseline_expected: &str) {
+fn assert_allocates_like_int(
+    fixture: &str,
+    expected: &str,
+    baseline: &str,
+    baseline_expected: &str,
+) {
     let union_allocations = heap_allocations(fixture, expected);
     let int_allocations = heap_allocations(baseline, baseline_expected);
     assert_eq!(

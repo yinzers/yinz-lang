@@ -1820,9 +1820,9 @@ impl<'b> Checker<'b> {
             );
             for crossing_name in &crossings {
                 // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
-                // whose ONLY crossing provenance is arg-escape is bind-time promoted to
-                // counted heap cells (envelope + tag-resolved payload deep-copy via
-                // `union_to_heap_cell`) — nothing is frame-embedded, so the nested-shape
+                // whose ONLY crossing provenance is arg-escape is held in a frame region of its
+                // own (the union slot, payload inline; `crossing_local_slot_count` in codegen) —
+                // no shape is frame-embedded, so the nested-shape
                 // limitation this check guards cannot apply. Its RHS resolves to the
                 // CONCRETE variant shape (`let fig: Figure = s` types as `Square`),
                 // which is exactly why this check would otherwise fire on it.
@@ -1971,8 +1971,8 @@ impl<'b> Checker<'b> {
                     .cloned();
                 // v0.3-M6 Phase 1c (FRAGOs 013/014): a `maybe` or `union` local whose
                 // ONLY crossing provenance is the arg-escape collector is legal — codegen
-                // promotes the binding to a counted heap cell at bind time
-                // (`maybe_to_heap_cell` / `union_to_heap_cell`), so the pointer the
+                // promotes a `maybe` to a counted heap cell at bind time (`maybe_to_heap_cell`) and
+                // keeps a `union` in a frame region of its own (`flush_crossing_union`), so the pointer the
                 // callee holds across its own suspension targets surviving heap, not the
                 // dead resume-fn stack. Membership is the SPAN rule, not collector
                 // order (`crossing_local_names_with_provenance`): every crossing span the
@@ -3560,7 +3560,7 @@ impl<'b> Checker<'b> {
     /// binding still holds the 16-byte `{tag, data}` union storage, so codegen's Shape
     /// heap-upgrade would `load` `sizeof(shape)` bytes from it — a confirmed
     /// out-of-bounds read (CWE-125), 48+ bytes past the storage for every variant.
-    /// The durable fix (extracting the variant's payload via `union_to_heap_cell`) is
+    /// The durable fix (extracting the variant's payload from the union slot) is
     /// deferred as Future Requirements #21; until it lands, the spawn is a
     /// deterministic compile error, never a silent OOB (the Check 2b / FRAGO 005
     /// precedent: un-embeddable crossings teach, never ship silently wrong).
@@ -13156,7 +13156,7 @@ fn collect_aggregate_args_in_expr(
 /// envelope on the resume fn's stack; marking it crossing routes the binding into
 /// bind-time promotion to a counted heap cell, giving the default pointer flush a stable
 /// heap pointee), or a `union` (v0.3-M6 Phase 1c step 3c / FRAGO 014: bind-time
-/// promotion via `union_to_heap_cell`; the codegen classification loop overrides the
+/// it is kept in a frame region of its own via `flush_crossing_union`); the codegen classification loop overrides the
 /// RHS variant type with the resolved Union ANNOTATION so the binding never lands in
 /// the shape-embed path — this widen and that override are load-bearing coupled).
 /// Bignum (`number` with precision > 34) is deliberately excluded: its slot stores a
@@ -14774,7 +14774,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
         // UnsupportedCrossingLocalType guard's [ann, rhs, for_var] preference order.
         let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
             .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
-        // Arg-escape-only union: bind-time promotion (`union_to_heap_cell`) handles the
+        // Arg-escape-only union: its frame region (`flush_crossing_union`) handles the
         // crossing — mirrors Check 2's AND Check 2b's union skips exactly (step 3c).
         let arg_escape_union_ok = arg_escape_only.contains(crossing_name.as_str())
             && matches!(ann_ty, Some(Type::Union { .. }));
