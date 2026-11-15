@@ -521,11 +521,7 @@ fn expr_source_text(expr: &Expr) -> String {
         } => format!("{}.{field}", operand_text(receiver)),
         Expr::IndexAccess {
             receiver, index, ..
-        } => format!(
-            "{}[{}]",
-            operand_text(receiver),
-            expr_source_text(index)
-        ),
+        } => format!("{}[{}]", operand_text(receiver), expr_source_text(index)),
         Expr::Call(call) => format!(
             "{}({})",
             expr_source_text(&call.callee),

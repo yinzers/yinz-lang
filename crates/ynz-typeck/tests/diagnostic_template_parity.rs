@@ -1196,10 +1196,7 @@ fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles
          }",
         &[
             ("name", "a"),
-            (
-                "place",
-                "the literal `{ first: a, count: (n + 1) * 2 }`",
-            ),
+            ("place", "the literal `{ first: a, count: (n + 1) * 2 }`"),
             ("stored", "a"),
             ("copy_form", "{ first: a.copy(), count: (n + 1) * 2 }"),
             ("via", ""),

@@ -63,6 +63,7 @@ pub fn assert_use_after_give(source: &str) {
 
 /// One named test per program: `cases!(check; name: source, "bug it catches (High)";)` expands to
 /// `#[test] fn name() { check(&source) }` with the bug line as its doc.
+#[allow(unused_macros)]
 macro_rules! cases {
     ($check:ident; $($case:ident: $source:expr, $bug:literal;)+) => {
         $(
