@@ -19663,10 +19663,19 @@ fn release_call_copies<'ctx>(cg: &Cg<'ctx, '_>, copies: &CallCopies<'ctx>) -> Re
 }
 
 /// Release the item a `fixed` list cell holds before a write replaces it: a `fixed<string>` cell
-/// holds a string, a `fixed<Shape>` cell a heap cell owning the shape (`release_step`'s `Fixed`).
-/// The same glue an array `set` and a shape field assignment replace with (`stored_release`), so
-/// one dispatch frees every overwritten item. A cell no write has filled holds null: nothing to
-/// release. Other item types own no heap a copy made.
+/// holds a string, a `fixed<Shape>` a heap cell owning the shape, a `fixed<array<T>>`, map or
+/// `maybe` the pointer the list owns. The same glue an array `set` and a shape field assignment
+/// replace with (`stored_release`), so one dispatch frees every overwritten item, and an item
+/// type it cannot release is an error naming the type, never a skipped release. A cell no write
+/// has filled holds null: nothing to release.
+///
+/// DEFERRED, four fields — a `fixed` list of unions:
+/// - WHAT: a replaced union item is not released.
+/// - WHY: a union item's cell layout (inline envelope or pointer to one) is not pinned by a
+///   test, and releasing it as the wrong one reads the cell as a tag.
+/// - COST: the replaced member's heap (a string field) leaks per overwrite; no memory is freed
+///   wrongly.
+/// - TRIGGER: C7 (#384) releases a `fixed` list at scope exit, which must pin that layout.
 ///
 /// O(1) time at the call site plus the item's release; O(1) space.
 fn release_replaced_fixed_cell<'ctx>(
@@ -19676,7 +19685,7 @@ fn release_replaced_fixed_cell<'ctx>(
     site: &str,
 ) -> Result<(), String> {
     let element_type = cg.resolve_type(element_type);
-    if !(is_string_like(&element_type) || matches!(element_type, Type::Shape { .. })) {
+    if matches!(element_type, Type::Union { .. }) {
         return Ok(());
     }
     let Some(glue) = cg.stored_release(&element_type, ReleaseHome::Field)? else {

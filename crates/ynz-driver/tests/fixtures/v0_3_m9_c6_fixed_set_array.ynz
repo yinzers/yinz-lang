@@ -1,0 +1,16 @@
+// v0.3-M9 C6 fixture: `fixed<array<int>>` `set` and index assignment release the array they
+// replace. The list's cells own the arrays moved into them, so the replaced one is freed.
+// Expected output: the sizes of the two arrays the list holds at the end.
+
+function entrypoint() -> nothing {
+  let first: array<int> = [1, 2]
+  let second: array<int> = [3]
+  let third: array<int> = [4, 5, 6]
+  let fourth: array<int> = [7]
+  let value: fixed<array<int> > = [first, second]
+  value.set(0, third)
+  value[1] = fourth
+  let fallback: array<int> = []
+  print(value[0].or(fallback).count())
+  print(value[1].or(fallback).count())
+}

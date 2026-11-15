@@ -63,3 +63,32 @@ fixed_set_case!(
     4,
     1
 );
+// Items that are not strings or shapes: the cell holds a pointer the list owns, so the write
+// frees what it replaces through the same dispatch (`stored_release`).
+fixed_set_case!(
+    fixed_array_set_and_index_assign,
+    "v0_3_m9_c6_fixed_set_array.ynz",
+    "3\n1\n",
+    10,
+    4,
+    0,
+    0
+);
+fixed_set_case!(
+    fixed_map_set,
+    "v0_3_m9_c6_fixed_set_map.ynz",
+    "2\n1\n",
+    20,
+    5,
+    4,
+    1
+);
+fixed_set_case!(
+    fixed_maybe_set_and_index_assign,
+    "v0_3_m9_c6_fixed_set_maybe.ynz",
+    "2\n",
+    6,
+    2,
+    8,
+    2
+);
