@@ -29,7 +29,7 @@ function entrypoint() -> nothing {
   let holder: Holder = { best: zero }
   for (p in parts) {
     if (p.qty == 1) {
-      holder.best = p
+      holder.best = p.copy()
     }
   }
   print(holder.best.qty)

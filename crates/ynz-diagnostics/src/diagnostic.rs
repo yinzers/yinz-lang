@@ -36,6 +36,9 @@ pub enum DiagnosticKind {
     Consumed,
     /// Value was sent into a channel and read afterward (use-after-send) — v0.3-M8 Phase 4.
     ConsumedBySend,
+    /// Value was stored into a container, a field, an index or another binding and read
+    /// afterward (use-after-store) — v0.3-M9 C5a.
+    ConsumedByStore,
     /// A parameter is given away (sent, or passed to a `give` position) without being
     /// declared `give` — v0.3-M8 Phase 4.
     ParamNeedsGive,
@@ -130,6 +133,7 @@ impl DiagnosticKind {
             DiagnosticKind::ImportNotFound => "ImportNotFound",
             DiagnosticKind::Consumed => "Consumed",
             DiagnosticKind::ConsumedBySend => "ConsumedBySend",
+            DiagnosticKind::ConsumedByStore => "ConsumedByStore",
             DiagnosticKind::ParamNeedsGive => "ParamNeedsGive",
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
@@ -167,6 +171,7 @@ impl DiagnosticKind {
         "ImportNotFound",
         "Consumed",
         "ConsumedBySend",
+        "ConsumedByStore",
         "ParamNeedsGive",
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
@@ -198,6 +203,7 @@ impl DiagnosticKind {
             DiagnosticKind::ImportNotFound => "not found".to_string(),
             DiagnosticKind::Consumed => "given away".to_string(),
             DiagnosticKind::ConsumedBySend => "sent away".to_string(),
+            DiagnosticKind::ConsumedByStore => "handed over".to_string(),
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),

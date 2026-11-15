@@ -21,15 +21,15 @@ function entrypoint() -> nothing {
     { qty: qc, price: qc * 10 }
   ]
   let empty: maybe<Part> = parts[9]
-  let cells: fixed<maybe<Part> > = [empty, empty]
+  let cells: fixed<maybe<Part> > = [empty.copy(), empty.copy()]
   let i: int = 0
   while (i < 3) {
     let cur: maybe<Part> = parts[i]
     if (i == 0) {
-      cells.set(0, cur)
+      cells.set(0, cur.copy())
     }
     if (i == 1) {
-      cells[1] = cur
+      cells[1] = cur.copy()
     }
     i = i + 1
   }

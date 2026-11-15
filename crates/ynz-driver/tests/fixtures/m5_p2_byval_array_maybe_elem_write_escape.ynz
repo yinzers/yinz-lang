@@ -24,15 +24,15 @@ function entrypoint() -> nothing {
   ]
   let empty: maybe<Part> = parts[9]
   // Inference route: element type comes from `empty`'s maybe<Part>.
-  let inferred = [empty]
+  let inferred = [empty.copy()]
   // Annotation route: explicit nested-generic element type.
-  let annotated: array<maybe<Part> > = [empty]
+  let annotated: array<maybe<Part> > = [empty.copy()]
   let i: int = 0
   while (i < 3) {
     let cur: maybe<Part> = parts[i]
     if (i == 0) {
-      inferred.set(0, cur)
-      annotated.set(0, cur)
+      inferred.set(0, cur.copy())
+      annotated.set(0, cur.copy())
     }
     i = i + 1
   }

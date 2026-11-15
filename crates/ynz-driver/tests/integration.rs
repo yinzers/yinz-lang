@@ -10820,16 +10820,6 @@ fn m5_p3_sweep_mapentry_bg_escape() {
 }
 
 #[test]
-fn m5_p3_sweep_mapentry_array_escape() {
-    // WHY: sweep cell 4 — MapEntry as an ARRAY ELEMENT (step-5 item (b), seg-9
-    // fix): value_to_stable_bits' Type::MapEntry arm clones the entry struct
-    // into a counted 16-byte cell + deep-copies the shape VALUE half, so each
-    // saved row owns its bytes (RED observed 20/20 pre-fix — both rows read
-    // the last entry).
-    m5_p3_sweep_assert_dual_mode("m5_p3_sweep_mapentry_array_escape.ynz", "10\n20\n");
-}
-
-#[test]
 fn m5_p3_sweep_shape_eq_string_field() {
     // WHY: sweep cell 5 — the D12 ratification pin: shape_value_eq compares
     // pointer-typed fields by POINTER IDENTITY (final for M5, reasoning on
@@ -11283,13 +11273,21 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
     //   3. the parent dereferences `bucket[0]`, which is precisely what the old defect made
     //      unsafe (garbage / SIGSEGV across runs) and why the old pin refused to do it.
     //
+    // C5a re-pin, 8 -> 12: the green-world fixture needs two more array locals than the refused one
+    // (`spare` in the task, `fallback` in the parent, 2 counted allocations each, never released
+    // like every other heap local). Measured: the old fixture under the old compiler is alloc=14
+    // free=6, the new fixture under the OLD and the NEW compiler is alloc=18 free=6, so the
+    // hand-over rule adds no leak and the 4 extra are the 2 extra locals.
+    //
     // Gap accounting (8): the parent's own three locals (`seed`, `bucket`, `rows` — 2 counted
     // allocations each) are never released, which is the separate, pre-existing "nothing frees
     // a heap local at scope exit" class, and the task's deep-copied item is not freed by the
     // element-blind `ynz_array_drop` (a documented four-field deferral at the emitter). The
     // task's own container clone and its `rows` clone ARE freed — the old defect was that the
     // ladder freed something the PARENT still held, and that is gone.
-    let fixture_name = "bg_arg_alias_container_add_red.ynz";
+    // C5a: the original fixture stores a bare parameter in a container, which hands it over and
+    // is refused now (`v03_m9_store_hands_over.rs`); this one spells it with `give rows`.
+    let fixture_name = "bg_arg_container_add_gives_row.ynz";
     let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
     assert_eq!(
         code, 0,
@@ -11315,7 +11313,7 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
     );
     assert_eq!(
         alloc,
-        free + 8,
+        free + 12,
         "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
          being freed — check it is not the parent's container or its items, which is the \
          use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \

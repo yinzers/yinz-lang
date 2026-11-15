@@ -29,8 +29,8 @@ function show(share picked: Big | Tiny) -> nothing {
 function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let u: Big | Tiny = big
-  let v: Big | Tiny = tiny
+  let u: Big | Tiny = big.copy()
+  let v: Big | Tiny = tiny.copy()
   show(pickA(tiny, big))
   show(pickA(u, u))
   show(pickA(u, v))

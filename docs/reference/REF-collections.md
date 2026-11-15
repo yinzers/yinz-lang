@@ -135,11 +135,10 @@ rgb[5] = 100
 
 ---
 
-## Storing a shape makes a copy
+## Storing a shape hands it over
 
 When you store a shape value — into an array, a map, or another shape's field — the collection
-keeps a copy of the value as it is at that moment. Changing the original afterward does not
-change the stored copy:
+becomes its owner. The name you stored it from cannot be used after that line:
 
 ```
 shape Position {
@@ -151,13 +150,23 @@ let path: array<Position> = []
 let p: Position = { x: 1.0, y: 2.0 }
 path.add(p)
 p.x = 99.0
-// The element inside path still has x == 1.0 — .add(p) stored a copy of p,
-// not p itself.
+// COMPILE ERROR: `p` was stored in `path` and cannot be used here — storing a value hands it over.
+//   If you still need `p` after the store, store a copy instead: `path.add(p.copy())`.
+//   If you only need it before the store, put this line above the store.
 ```
 
-If you're coming from JavaScript, watch out: this is the opposite of what you're used to.
-In JavaScript, the array and `p` would share one object, so setting `p.x = 99.0` would change
-what the array sees. In Yinz, the stored copy keeps the values it had when you stored it.
+If you want to keep changing `p`, store a copy. The stored copy keeps the values it had when
+you stored it:
+
+```
+path.add(p.copy())
+p.x = 99.0
+// The element inside path still has x == 1.0.
+```
+
+If you're coming from JavaScript, watch out: in JavaScript, the array and `p` would share one
+object, so setting `p.x = 99.0` would change what the array sees. In Yinz, one value never has
+two names, so you choose: hand it over, or store a copy.
 
 To change a stored element, write through the collection:
 

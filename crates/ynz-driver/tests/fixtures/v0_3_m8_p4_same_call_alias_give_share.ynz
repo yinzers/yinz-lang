@@ -1,15 +1,21 @@
 // WHY: v0.3-M8 Phase 4 fix round 2 (Producer C1) — the mixed form: `rows` at a `give`
-// position and its class-mate `other` at a `share` position of the SAME call. The callee
-// frees `a` and reads `b` — one allocation, read after free. The `share` position runs no
-// transfer decision at all, so nothing in the old per-position loop could see that its
-// binding was consumed one position earlier in the same call.
+// position and its class-mate `other` (a piece of `rows`) at a `share` position of the SAME
+// call. The callee frees `a` and reads `b` — one allocation, read after free. The `share`
+// position runs no transfer decision at all, so nothing in the old per-position loop could see
+// that its binding was consumed one position earlier in the same call.
+// C5a: the class-mate is a piece view (`rows.items`), since `let other = rows` now hands `rows`
+// over and is refused on its own (`ConsumedByStore`).
 // RED today: compiles. GREEN: refused with the use-after-give error naming `other` and `rows`.
-function mix(give a: array<int>, share b: array<int>) -> nothing {
-  print(`${a.count()} ${b.count()}`)
+shape Rows {
+  items: array<int>
+}
+
+function mix(give owner: Rows, share piece: array<int>) -> nothing {
+  print(`${owner.items.count()} ${piece.count()}`)
 }
 
 function entrypoint() -> nothing {
-  let rows: array<int> = [1, 2, 3]
-  let other = rows
+  let rows: Rows = { items: [1, 2, 3] }
+  let other: array<int> = rows.items
   mix(rows, other)
 }

@@ -52,7 +52,7 @@ function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
   let holder: Holder = { inner: tiny }
   print(describe(holder.inner))
-  let bigHolder: Holder = { inner: big }
+  let bigHolder: Holder = { inner: big.copy() }
   print(describe(bigHolder.inner))
   let flipped: Flipped = { inner: big }
   print(describeReversed(flipped.inner))

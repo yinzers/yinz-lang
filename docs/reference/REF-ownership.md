@@ -4,7 +4,7 @@ description: "Yinz manages memory automatically — without a garbage collector.
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-14"
 status: "active"
 author: "patrick"
 metadata:
@@ -60,6 +60,59 @@ print(data)
 // COMPILE ERROR: data was transferred to consume() on the previous line.
 // It no longer exists here. Use .copy() if you need to keep a copy.
 ```
+
+---
+
+## Giving away inside a loop
+
+A loop runs its body again and again, so a value given away on one pass is gone on the next. The compiler refuses it:
+
+```ynz
+let rows: array<int> = [1, 2, 3]
+for (turn in [1, 2]) {
+  consume(rows)
+  // COMPILE ERROR: `rows` was already given away and cannot be used here, because the previous
+  // pass through this loop already gave it to `consume`.
+}
+```
+
+Give a copy each pass (`consume(rows.copy())`), or make a new value inside the loop. Reassigning `rows` before the end of the body also works, as long as every path through the body does it.
+
+---
+
+## Giving away, then reassigning
+
+A reassignment gives the name a new value, so the name is usable again after it, but only for the code the reassignment is sure to have run before:
+
+```ynz
+consume(rows)
+rows = [4, 5]
+print(rows.count())      // fine: every path got here through the reassignment
+
+consume(rows)
+if (ready) {
+  rows = [4, 5]
+}
+print(rows.count())
+// COMPILE ERROR: `rows` was already given away and cannot be used here, because the path where
+// the `if` above did not run never reassigned it.
+```
+
+After an `if`, a `match` or a loop, `rows` is usable again only if every arm assigned it (a match needs an `else` arm, or to cover every variant). A loop body may run zero times, so a reassignment inside it does not count after the loop.
+
+Putting a list, a map or a shape into a place hands it over, just like giving it to a function. That covers `bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`, a list or shape built from named values (`[rows, more]`) and `let moved = rows`. The place owns the value from then on, and reading `rows` afterwards is an error:
+
+```ynz
+let rows: array<int> = [1, 2, 3]
+let bucket: array<array<int>> = []
+bucket.add(rows)
+print(rows.count())
+// COMPILE ERROR: `rows` was stored in `bucket` and cannot be used here — storing a value hands it over.
+//   If you still need `rows` after the store, store a copy instead: `bucket.add(rows.copy())`.
+//   If you only need it before the store, put this line above the store.
+```
+
+Numbers, booleans, options, strings and ranges are copied, so storing them gives nothing away.
 
 ---
 

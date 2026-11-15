@@ -23,7 +23,7 @@ function entrypoint() -> nothing {
   let picks: map<string, Part> = { `pick`: zero }
   for (p in parts) {
     if (p.qty == 1) {
-      picks.set(`pick`, p)
+      picks.set(`pick`, p.copy())
     }
   }
   let got = picks[`pick`]

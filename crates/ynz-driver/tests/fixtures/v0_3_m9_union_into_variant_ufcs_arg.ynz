@@ -20,6 +20,6 @@ function useBig(share first: Big, share second: Big) -> int {
 
 function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
-  let thing: Thing = big
+  let thing: Thing = big.copy()
   print(big.useBig(thing).toString())
 }

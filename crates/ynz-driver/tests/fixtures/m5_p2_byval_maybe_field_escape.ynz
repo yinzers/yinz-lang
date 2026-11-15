@@ -23,12 +23,12 @@ function entrypoint() -> nothing {
     { qty: qc, price: qc * 10 }
   ]
   let empty: maybe<Part> = parts[9]
-  let holder: Holder = { found: empty }
+  let holder: Holder = { found: empty.copy() }
   let i: int = 0
   while (i < 3) {
     let cur: maybe<Part> = parts[i]
     if (i == 0) {
-      holder.found = cur
+      holder.found = cur.copy()
     }
     i = i + 1
   }

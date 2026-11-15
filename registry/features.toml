@@ -1637,7 +1637,11 @@ why_template = "Yinz import paths are root-relative, not relative to the current
 # Rendered from this entry by typeck's consumed-read rendering (`consumed_read_diag`). `{via}`
 # is empty when the name read is the name that was given; otherwise it names the alias-class
 # mate that was given away instead (e.g. " — it shares its value with `rows`, which is what
-# was given away"), mirroring ConsumedBySend. Decided v0.3-M8 Phase 4: `git log --grep=m8-p4`.
+# was given away"), mirroring ConsumedBySend; for a give carried into the next pass of a loop it
+# names the loop (", because the previous pass through this loop already ..."); for a binding that one
+# path reassigned and another did not it names the path that did not (", because the path where the
+# `if` above did not run never reassigned it"; likewise a `match` path or a loop that ran zero times).
+# Decided v0.3-M8 Phase 4: `git log --grep=m8-p4`.
 [[diagnostic_template]]
 kind_name = "Consumed"
 what_template = "`{name}` was already given away and cannot be used here{via}."
@@ -1653,6 +1657,19 @@ kind_name = "ConsumedBySend"
 what_template = "`{name}` was sent into `{channel}` and cannot be used here — `send()` gave it away{via}."
 what_instead_template = "If you still need `{name}` after sending it, send a copy instead: `{channel}.send({sent}.copy())`. If you only need it before the send, put this line above the `send()`."
 why_template = "A channel hands the value to whichever task receives it, and that task may already be reading or changing it by the time this line runs. If both sides kept the same value, two tasks could change it at once and neither would know. So `send()` gives `{sent}` away, and the compiler refuses to build any line that reads it afterward. Nothing happens at runtime — `{name}` is not cleared or set to `none`; the program simply does not compile until this read is placed above the `send()` or the send takes a copy."
+
+# v0.3-M9 C5a (Patrick, 2026-11-13, on the Chief Architect's recommendation: "Storing a heap
+# value hands it over"). Rendered by `consumed_diag` from the cause `Scope::consume` stamped when
+# a store (`list.add(v)`, `table.set(k, v)`, `x.field = v`, `x[i] = v`, a container literal built
+# from named values, `let b = a`, `b = a`) handed the value over. `{place}` names the place with
+# its backticks (`list`, `x.field`, the literal `[a, c]`, `b`); `{copy_form}` is the same store
+# written with `.copy()`; `{via}` is as in `Consumed`.
+# Decided v0.3-M9 C5a: `git log --grep="hands it over"`.
+[[diagnostic_template]]
+kind_name = "ConsumedByStore"
+what_template = "`{name}` was stored in {place} and cannot be used here — storing a value hands it over{via}."
+what_instead_template = "If you still need `{name}` after the store, store a copy instead: `{copy_form}`. If you only need it before the store, put this line above the store."
+why_template = "Every value has one owner. Storing `{stored}` in {place} makes {place} its owner, and when {place} is done with it, it frees it. If `{name}` could still read the same value, two names would reach one value and one of them would free it under the other. So a store hands the value over, and the compiler refuses any line that reads `{stored}` afterward. Nothing happens at runtime — `{name}` is not cleared or set to `none`; the program simply does not compile until this read is placed above the store or the store takes a copy."
 
 [[diagnostic_template]]
 kind_name = "ParamNeedsGive"
@@ -2515,6 +2532,13 @@ placement_category = "Informational"
 description = "Shows the ownership modifier the compiler picks at a function call site; also fires at background call sites when .copy() arg exceeds 64 bytes to suggest .give instead"
 example_source = "foo(player)"
 example_hint_rendered = "share (read-only — matches foo's signature)"
+# Rule 11 hover docs. One domain, two hint forms, so one tooltip explains both: the ownership word
+# at a call (`share`/`lend`/`give`) and the store hint (`handed to `list``, v0.3-M9 C5a, Patrick
+# 2026-11-13: `git log --grep="hands it over"`). The store wording is the one the ConsumedByStore
+# diagnostic uses ("storing a value hands it over").
+hover_what = "Shows who holds a value at this line. After a call it is the ownership word the compiler picked: `share` (the function only reads it), `lend` (the function may change it, you keep it) or `give` (the function takes it over). After a store it reads `handed to` and the place: storing a value hands it over, so that place is now its one owner and the name before the hint cannot be read after this line."
+hover_what_instead = "Nothing to type for a call; write `share`, `lend` or `give` in the function's signature to make the choice visible. For a store, if you read the value again, store a copy instead (`list.add(a.copy())`), or move the line that reads it above the store."
+hover_why = "Every value has one owner, and the owner frees the value when it is done with it. If two names could reach one value, one of them would free it under the other, so a store hands the value over and a call tells you whether you still hold it. A copy is a separate value, so both names can keep theirs."
 # v0.3-M1 extension: fires at `background fn(largeStruct.copy)` call sites when
 # estimated copy size > 64 bytes. LSP inlayHint handler: crates/ynz-lsp/src/inlay_hint.rs.
 # Firing condition: BackgroundLargeStructCopy warning present at call site span.

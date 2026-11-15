@@ -245,7 +245,7 @@ pub enum Provenance {
     /// origin permits; consumes the binding's whole alias class.
     Whole(String),
     /// A value someone still reaches through the named roots — a field, an index, a loop
-    /// cell, a literal built from named values, a call that returns a piece of its argument.
+    /// cell, a call that returns a piece of its argument.
     /// Never transferable; the fix is `.copy()` on the reached piece. `Reaches([])` is a
     /// piece of a fresh temporary (`makeBucket().rows`) — still not transferable.
     Reaches(Vec<String>),
@@ -299,6 +299,9 @@ pub(crate) fn value_like(ty: &Type) -> bool {
     match ty {
         // A `maybe` of bits is an inline envelope of bits: it holds no heap pointer either.
         Type::Maybe { inner } => value_like(inner),
+        // `sensitive string` is the string pointer with a label: its copy is the receiver's bits
+        // (`owned_copy_plan`), so storing it hands nothing over.
+        Type::Sensitive { inner } => value_like(inner),
         _ => matches!(
             ty,
             Type::Int
@@ -306,6 +309,8 @@ pub(crate) fn value_like(ty: &Type) -> bool {
                 | Type::Bool
                 | Type::Number { .. }
                 | Type::String
+                // A range is its start and end; `owned_copy_plan` calls its copy the receiver's bits.
+                | Type::Range { .. }
                 | Type::Options { .. }
                 | Type::Nothing
                 | Type::Error
@@ -321,6 +326,13 @@ fn roots_of(p: Provenance) -> Option<Vec<String>> {
         Provenance::Reaches(rs) => Some(rs),
         Provenance::Unknown => None,
     }
+}
+
+/// The bindings a receiver expression reaches (`None` = untraceable). A piece of the receiver
+/// is a piece of each of them, so field/index/method results inherit the whole set — not just
+/// the root of a name chain, which loses every receiver that is a call or method result.
+fn receiver_roots(receiver: &Expr, ctx: &ProvenanceCtx<'_>) -> Option<Vec<String>> {
+    roots_of(provenance(receiver, ctx))
 }
 
 /// Fold the provenance of an aggregate's parts (a literal's elements, a call's arguments):
@@ -397,20 +409,18 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
         // Exactly the value a binding names — the binding's ORIGIN decides transferability.
         Expr::Ident(name, _) => Provenance::Whole(name.clone()),
         Expr::SelfValue { .. } => Provenance::Whole("self".to_string()),
-        // A piece of whatever the receiver chain roots in; a piece of a fresh temp is
-        // `Reaches([])` — still not transferable.
+        // A piece of whatever the receiver reaches: a binding chain roots in its binding, a call
+        // or method result in the bindings that result may hold (`firstBag(bags).items` is a
+        // piece of `bags`). A piece of a fresh temp is `Reaches([])` — still not transferable.
         Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } => {
-            Provenance::Reaches(
-                root_binding_name(receiver)
-                    .map(|r| vec![r.to_string()])
-                    .unwrap_or_default(),
-            )
+            match receiver_roots(receiver, ctx) {
+                Some(roots) => Provenance::Reaches(roots),
+                None => Provenance::Unknown,
+            }
         }
-        Expr::ArrayLit { elements, .. } => fold_parts(elements.iter(), ctx, true),
-        Expr::MapLit { entries, .. } => {
-            fold_parts(entries.iter().flat_map(|(k, v)| [k, v]), ctx, true)
-        }
-        Expr::StructLit { fields, .. } => fold_parts(fields.iter().map(|f| &f.value), ctx, true),
+        // A container literal stores each named heap part (`check.rs::hand_literal_parts_over`):
+        // it takes them over, so it is the sole holder of everything in it.
+        Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => Provenance::Fresh,
         Expr::PostfixOp { receiver, op, .. } => match op {
             // `.copy()` is fresh iff the copy is genuinely independent for the receiver's
             // type (parity-tested against codegen's `PostfixOpKind::Copy` arms); the FR#10
@@ -471,9 +481,9 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             // The result may be (a piece of) the receiver OR of a heap argument the method hands
             // back or builds from: `maybe.or(default)`, `a.concat(b)`, `a.append(b)`. Every
             // heap argument's roots are roots of the result (value-typed arguments drop out).
-            let mut roots: Vec<String> = root_binding_name(receiver)
-                .map(|r| vec![r.to_string()])
-                .unwrap_or_default();
+            let Some(mut roots) = receiver_roots(receiver, ctx) else {
+                return Provenance::Unknown;
+            };
             match fold_parts(args.iter(), ctx, true) {
                 Provenance::Fresh => {}
                 Provenance::Reaches(argument_roots) => {
@@ -2631,5 +2641,66 @@ function entrypoint() -> nothing { }
             receiver_kind_ownership(&ReceiverKind::Share),
             EffectiveOwnership::Reads
         );
+    }
+}
+
+#[cfg(test)]
+mod value_like_parity {
+    use super::value_like;
+    use crate::owned_copy::{owned_copy_plan, OwnedCopy};
+    use crate::types::Type;
+
+    /// (High) `value_like` is "storing it hands nothing over", the question `owned_copy_plan`
+    /// answers with "the receiver's bits ARE the copy" (`ReceiverIsCopy`) or immutable contents
+    /// with nothing to free (`FrameLocalImmutable`). Two answers to one question drift (the
+    /// `range` store refusal was exactly that drift), so every type the copy table calls bits
+    /// must be bits here too.
+    #[test]
+    fn every_type_the_copy_table_calls_bits_is_value_like() {
+        let string = Type::String;
+        let samples = [
+            Type::Int,
+            Type::Float,
+            Type::Bool,
+            Type::String,
+            Type::Number { precision: 34 },
+            Type::Options {
+                name: "Color".to_string(),
+            },
+            Type::Range {
+                element: Box::new(Type::Int),
+                end_inclusive: false,
+            },
+            Type::Sensitive {
+                inner: Box::new(string.clone()),
+            },
+            Type::Maybe {
+                inner: Box::new(string),
+            },
+        ];
+        for sample in &samples {
+            let copy_is_bits = matches!(
+                owned_copy_plan(sample),
+                OwnedCopy::ReceiverIsCopy | OwnedCopy::FrameLocalImmutable { .. }
+            );
+            if copy_is_bits {
+                assert!(
+                    value_like(sample),
+                    "{sample:?}: its copy is the receiver's bits, so storing it must hand nothing over"
+                );
+            }
+        }
+    }
+
+    /// (High) The other direction: a type that owns heap storage is handed over when stored.
+    #[test]
+    fn a_heap_type_is_not_value_like() {
+        let array_of_ints = Type::BuiltinArray {
+            elem: Box::new(Type::Int),
+        };
+        assert!(!value_like(&array_of_ints));
+        assert!(!value_like(&Type::Shape {
+            name: "Order".to_string()
+        }));
     }
 }

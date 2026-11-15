@@ -52,7 +52,7 @@ function route(share t: Thing) -> string {
 function viaField(share t: Thing) -> string {
   if (t) {
     is Big => {
-      let h: Holder = { inner: t }
+      let h: Holder = { inner: t.copy() }
       return describeOther(h.inner)
     }
     is Tiny => {

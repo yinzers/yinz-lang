@@ -1,3 +1,8 @@
+// v0.3-M9 C5a: REFUSED since storing hands the value over — `stash` stores its bare parameter
+// `rows` in `bucket`, but the caller keeps `rows` (`ParamNeedsGive`, asserted in
+// `v03_m9_store_hands_over.rs`). The green-world lock below moved to
+// `bg_arg_container_add_gives_row.ynz`, where `stash` declares `give rows`.
+//
 // GREEN-WORLD LOCK since the v0.3 concurrency-hardening owned-copy fix (FRAGO 002 cluster C2 /
 // M8 Future Requirements #9). This file was a KNOWN-DEFECT pin asserting the wrong behaviour on
 // purpose; the producer it documented is closed, so it now asserts the right one. Its name is

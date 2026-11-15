@@ -24,7 +24,7 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
-    scope::{ConsumedBy, ConsumedEntry, Origin, Scope, ScopeEntry},
+    scope::{BranchKind, ConsumedBy, ConsumedEntry, Origin, Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
     suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
@@ -56,6 +56,14 @@ enum TransferSink<'s> {
         callee: &'s str,
         chain_param: Option<&'s str>,
     },
+    /// A store (`list.add(v)`, `x.field = v`, `let b = a`, a container literal): the place takes
+    /// the value over. `place` is the place as the diagnostic names it, with its backticks;
+    /// `copy_template` is the store written with the stored value as `{value}`, so a copy of any
+    /// argument of the store can be spelled out.
+    Store {
+        place: &'s str,
+        copy_template: &'s str,
+    },
 }
 
 impl TransferSink<'_> {
@@ -66,10 +74,21 @@ impl TransferSink<'_> {
             TransferSink::Send { channel } => ConsumedBy::Sent {
                 channel: channel.to_string(),
                 sent: sent.to_string(),
+                missed_revive: None,
             },
             TransferSink::Give { callee, .. } => ConsumedBy::Given {
                 callee: callee.to_string(),
                 given: sent.to_string(),
+                missed_revive: None,
+            },
+            TransferSink::Store {
+                place,
+                copy_template,
+            } => ConsumedBy::Stored {
+                place: place.to_string(),
+                stored: sent.to_string(),
+                copy_form: copy_template.replace("{value}", &format!("{sent}.copy()")),
+                missed_revive: None,
             },
         }
     }
@@ -94,6 +113,13 @@ impl TransferSink<'_> {
             } => (
                 format!("given to `{callee}`, whose `{p}` parameter gives it away"),
                 format!("{callee}({name}.copy(), …)"),
+            ),
+            TransferSink::Store {
+                place,
+                copy_template,
+            } => (
+                format!("handed to {place}"),
+                copy_template.replace("{value}", &format!("{name}.copy()")),
             ),
         }
     }
@@ -136,6 +162,17 @@ fn registry_diag_template(
         fill(template.why_template),
     )
     .with_kind(kind)
+}
+
+/// Every name `expr` mentions, sorted so the order does not depend on hashing. The one place the
+/// transfer record's "an untraceable value may hold anything it mentions" rule reads the
+/// mentions from (`heap_holders_of`, `mentioned_declarations`). O(n log n) for n mentions.
+fn mentioned_names(expr: &Expr) -> Vec<String> {
+    let mut mentioned: HashSet<String> = HashSet::new();
+    crate::independence::collect_ident_names(expr, &mut mentioned);
+    let mut sorted: Vec<String> = mentioned.into_iter().collect();
+    sorted.sort();
+    sorted
 }
 
 /// Which recovery the WHAT-INSTEAD may name for a union reaching a variant slot. Only code that
@@ -372,79 +409,150 @@ fn role_evidence_of(origin: &Origin) -> RoleEvidence {
     }
 }
 
-/// THE rendering of a read of a consumed binding — the use-after-give (`Consumed`) or
+/// THE rendering of a consumed-binding diagnostic — the use-after-give (`Consumed`) or
 /// use-after-send (`ConsumedBySend`) template, selected by the cause `Scope::consume` stamped
-/// on the alias class, with the `{via}` slot naming the class-mate that was actually given or
-/// sent when it is not the name being read (v0.3-M8 Phase 4; parked items 7/8 reconciled the
-/// `Consumed` template with this rendering, fix round 2 gave it the `{via}` slot). Two callers,
-/// one text: `resolve_ident` (a read inferred after the consume) and `check_transfer` (a read
-/// at a later position of the call that consumed it).
-fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagnostic {
+/// on the alias class. `name` is the binding the message talks about and `via` fills the `{via}`
+/// slot. The two callers below pass different `name`/`via` and share every other slot, so the
+/// canonical explanation stays one text.
+fn consumed_diag(span: SourceSpan, name: &str, cause: &ConsumedBy, via: &str) -> Diagnostic {
     match cause {
-        ConsumedBy::Given { given, .. } => {
-            let via = if given == name {
-                String::new()
-            } else {
-                format!(" — it shares its value with `{given}`, which is what was given away")
-            };
-            registry_diag(
-                span,
-                DiagnosticKind::Consumed,
-                &[("name", name), ("given", given), ("via", &via)],
-            )
+        ConsumedBy::Given { given, .. } => registry_diag(
+            span,
+            DiagnosticKind::Consumed,
+            &[("name", name), ("given", given), ("via", via)],
+        ),
+        ConsumedBy::Sent { channel, sent, .. } => registry_diag(
+            span,
+            DiagnosticKind::ConsumedBySend,
+            &[
+                ("name", name),
+                ("channel", channel),
+                ("sent", sent),
+                ("via", via),
+            ],
+        ),
+        ConsumedBy::Stored {
+            place,
+            stored,
+            copy_form,
+            ..
+        } => registry_diag(
+            span,
+            DiagnosticKind::ConsumedByStore,
+            &[
+                ("name", name),
+                ("place", place),
+                ("stored", stored),
+                ("copy_form", copy_form),
+                ("via", via),
+            ],
+        ),
+    }
+}
+
+/// The rendering of a READ of a consumed binding, with the `{via}` slot naming the class-mate
+/// that was actually given or sent when it is not the name being read (v0.3-M8 Phase 4; parked
+/// items 7/8 reconciled the `Consumed` template with this rendering, fix round 2 gave it the
+/// `{via}` slot). Two callers, one text: `resolve_ident` (a read inferred after the consume)
+/// and `check_transfer` (a read at a later position of the call that consumed it).
+fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagnostic {
+    let via = match cause {
+        ConsumedBy::Given { given, .. } if given != name => {
+            format!(" — it shares its value with `{given}`, which is what was given away")
         }
-        ConsumedBy::Sent { channel, sent } => {
-            let via = if sent == name {
-                String::new()
-            } else {
-                format!(" — it shares its value with `{sent}`, which is what was sent")
-            };
-            registry_diag(
-                span,
-                DiagnosticKind::ConsumedBySend,
-                &[
-                    ("name", name),
-                    ("channel", channel),
-                    ("sent", sent),
-                    ("via", &via),
-                ],
-            )
+        ConsumedBy::Sent { sent, .. } if sent != name => {
+            format!(" — it shares its value with `{sent}`, which is what was sent")
+        }
+        ConsumedBy::Stored { stored, .. } if stored != name => {
+            format!(" — it shares its value with `{stored}`, which is what was stored")
+        }
+        ConsumedBy::Given { .. } | ConsumedBy::Sent { .. } | ConsumedBy::Stored { .. } => {
+            String::new()
+        }
+    };
+    let via = match cause.missed_revive() {
+        Some(kind) => format!("{via}{}", missed_revive_clause(kind)),
+        None => via,
+    };
+    consumed_diag(span, name, cause, &via)
+}
+
+/// The `{via}` clause of a READ of a binding that one path reassigned and another did not: the
+/// path that was left without a new value, named by the statement that split the paths (typeck has
+/// no source buffer, so it names the statement, not its line). The give itself is still explained
+/// by the canonical `Consumed` text.
+fn missed_revive_clause(kind: BranchKind) -> &'static str {
+    match kind {
+        BranchKind::If => ", because the path where the `if` above did not run never reassigned it",
+        BranchKind::Match => ", because a path through the `match` above never reassigned it",
+        BranchKind::Loop => {
+            ", because the path where the loop above ran zero times never reassigned it"
         }
     }
 }
 
 /// The use-after-give of a LOOP-CARRIED give: the loop gave a binding declared outside it away on
-/// one pass and the next pass reads it again. Same templates and slots as `consumed_read_diag`
-/// (one canonical explanation per concept); the loop is named in the `{via}` slot.
+/// one pass and the next pass reads it again. The same templates as `consumed_read_diag` (one
+/// canonical explanation per concept) about the binding that was given, with the loop named in
+/// the `{via}` slot.
 fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
     match cause {
-        ConsumedBy::Given { callee, given } => registry_diag(
+        ConsumedBy::Given { callee, given, .. } => {
+            let via = format!(
+                ", because the previous pass through this loop already gave it to `{callee}`"
+            );
+            consumed_diag(span, given, cause, &via)
+        }
+        ConsumedBy::Sent { sent, .. } => consumed_diag(
             span,
-            DiagnosticKind::Consumed,
-            &[
-                ("name", given),
-                ("given", given),
-                (
-                    "via",
-                    &format!(
-                        ", because the previous pass through this loop already gave it to `{callee}`"
-                    ),
-                ),
-            ],
+            sent,
+            cause,
+            ", because the previous pass through this loop already sent it",
         ),
-        ConsumedBy::Sent { channel, sent } => registry_diag(
-            span,
-            DiagnosticKind::ConsumedBySend,
-            &[
-                ("name", sent),
-                ("channel", channel),
-                ("sent", sent),
-                (
-                    "via",
-                    " — the previous pass through this loop already sent it",
-                ),
-            ],
-        ),
+        ConsumedBy::Stored { stored, place, .. } => {
+            let via = format!(
+                ", because the previous pass through this loop already stored it in {place}"
+            );
+            consumed_diag(span, stored, cause, &via)
+        }
+    }
+}
+
+/// The parts of a container literal, in source order: the elements of `[a, c]`, the keys and
+/// values of a map literal, the field values of `{ first: a, second: c }`. Empty for any other
+/// expression.
+fn literal_parts(literal: &Expr) -> Vec<&Expr> {
+    match literal {
+        Expr::ArrayLit { elements, .. } => elements.iter().collect(),
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .flat_map(|(key, value)| [key, value])
+            .collect(),
+        Expr::StructLit { fields, .. } => fields.iter().map(|field| &field.value).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A container literal written out with `part_texts` standing for its parts (one text per entry
+/// of `literal_parts`): `[a, c]`, `{ `key`: value }`, `{ first: a, second: c }`. The one
+/// rendering of a literal in diagnostic text, so the literal a message names and the literal its
+/// WHAT-INSTEAD suggests (`{ first: a.copy(), second: c }`) are typeable Yinz.
+fn literal_text(literal: &Expr, part_texts: &[String]) -> String {
+    match literal {
+        Expr::ArrayLit { .. } => format!("[{}]", part_texts.join(", ")),
+        Expr::MapLit { .. } => {
+            let entries: Vec<String> = part_texts.chunks(2).map(|entry| entry.join(": ")).collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
+        Expr::StructLit { fields, .. } => {
+            let entries: Vec<String> = fields
+                .iter()
+                .zip(part_texts)
+                .map(|(field, text)| format!("{}: {text}", field.name))
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
+        other => expr_source_text(other),
     }
 }
 
@@ -457,14 +565,10 @@ fn expr_source_text(expr: &Expr) -> String {
         Expr::SelfValue { .. } => "self".to_string(),
         Expr::FieldAccess {
             receiver, field, ..
-        } => format!("{}.{field}", expr_source_text(receiver)),
+        } => format!("{}.{field}", operand_text(receiver)),
         Expr::IndexAccess {
             receiver, index, ..
-        } => format!(
-            "{}[{}]",
-            expr_source_text(receiver),
-            expr_source_text(index)
-        ),
+        } => format!("{}[{}]", operand_text(receiver), expr_source_text(index)),
         Expr::Call(call) => format!(
             "{}({})",
             expr_source_text(&call.callee),
@@ -481,25 +585,22 @@ fn expr_source_text(expr: &Expr) -> String {
             ..
         } => format!(
             "{}.{method}({})",
-            expr_source_text(receiver),
+            operand_text(receiver),
             args.iter()
                 .map(expr_source_text)
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Expr::ArrayLit { elements, .. } => format!(
-            "[{}]",
-            elements
-                .iter()
+        Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
+            let part_texts: Vec<String> = literal_parts(expr)
+                .into_iter()
                 .map(expr_source_text)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Expr::MapLit { .. } => "{ … }".to_string(),
-        Expr::StructLit { .. } => "{ … }".to_string(),
+                .collect();
+            literal_text(expr, &part_texts)
+        }
         Expr::PostfixOp { receiver, op, .. } => match op {
-            PostfixOpKind::Copy => format!("{}.copy()", expr_source_text(receiver)),
-            PostfixOpKind::Freeze => format!("{}.freeze()", expr_source_text(receiver)),
+            PostfixOpKind::Copy => format!("{}.copy()", operand_text(receiver)),
+            PostfixOpKind::Freeze => format!("{}.freeze()", operand_text(receiver)),
         },
         Expr::IntLit(n, _) => n.to_string(),
         Expr::NumberLit(s, _) => s.clone(),
@@ -508,11 +609,71 @@ fn expr_source_text(expr: &Expr) -> String {
         Expr::NoneLit { .. } => "none".to_string(),
         Expr::Wait(inner, _) => format!("wait {}", expr_source_text(inner)),
         Expr::Background(inner, _) => format!("background {}", expr_source_text(inner)),
-        Expr::BinOp { .. }
-        | Expr::UnaryOp { .. }
-        | Expr::Is { .. }
-        | Expr::InterpolatedString(..)
-        | Expr::Error(..) => "this value".to_string(),
+        Expr::InterpolatedString(parts, _) => {
+            let written: String = parts
+                .iter()
+                .map(|part| match part {
+                    ynz_ast::nodes::StringPart::Lit(bytes, _) => {
+                        String::from_utf8_lossy(bytes).into_owned()
+                    }
+                    ynz_ast::nodes::StringPart::Expr(inner, _) => {
+                        format!("${{{}}}", expr_source_text(inner))
+                    }
+                })
+                .collect();
+            format!("`{written}`")
+        }
+        Expr::BinOp { op, lhs, rhs, .. } => format!(
+            "{} {} {}",
+            operand_text(lhs),
+            binop_symbol(op),
+            operand_text(rhs)
+        ),
+        Expr::UnaryOp { op, operand, .. } => {
+            let symbol = match op {
+                UnaryOpKind::Neg => "-",
+                UnaryOpKind::Not => "!",
+                UnaryOpKind::BitNot => "~",
+            };
+            format!("{symbol}{}", operand_text(operand))
+        }
+        Expr::Is { expr, ty, .. } => format!("{} is {}", operand_text(expr), ty.name),
+        Expr::Error(..) => "this value".to_string(),
+    }
+}
+
+/// `expr_source_text` of an operand or receiver, in parentheses when it is itself an operator
+/// expression, so the text keeps the grouping the AST has (`(a + b).len()`, `-(a + b)`). Typeck has
+/// no precedence table, so a nested operator expression is always grouped.
+fn operand_text(expr: &Expr) -> String {
+    match expr {
+        Expr::BinOp { .. } | Expr::UnaryOp { .. } | Expr::Is { .. } => {
+            format!("({})", expr_source_text(expr))
+        }
+        _ => expr_source_text(expr),
+    }
+}
+
+fn binop_symbol(op: &BinOpKind) -> &'static str {
+    match op {
+        BinOpKind::Add => "+",
+        BinOpKind::Sub => "-",
+        BinOpKind::Mul => "*",
+        BinOpKind::Div => "/",
+        BinOpKind::Rem => "%",
+        BinOpKind::Lt => "<",
+        BinOpKind::LtEq => "<=",
+        BinOpKind::GtEq => ">=",
+        BinOpKind::Gt => ">",
+        BinOpKind::EqEq => "==",
+        BinOpKind::NotEq => "!=",
+        BinOpKind::And => "&&",
+        BinOpKind::Or => "||",
+        BinOpKind::BitAnd => "&",
+        BinOpKind::BitOr => "|",
+        BinOpKind::BitXor => "^",
+        BinOpKind::Shl => "<<",
+        BinOpKind::Shr => ">>",
     }
 }
 
@@ -685,6 +846,12 @@ pub struct TypedModule {
     ///   and neither is the default-deny `Give` a non-ident argument gets, which consumes
     ///   nothing either (`background eat(b.items)` leaves `b` holding the map).
     pub background_arg_sole_holder: std::collections::HashMap<(usize, usize), SoleHolder>,
+    /// v0.3-M9 C5a: every named heap value a store handed over, keyed by the stored expression's
+    /// `(span.start, span.end)`, with the place as the diagnostic names it (`` `list` ``,
+    /// `` `x.field` ``, the literal `` `[a, c]` ``, `` `b` ``). Written by the ONE store decision
+    /// (`Checker::store_value`); the muted hint at the store reads it, so the IDE says what the
+    /// compiler decided and re-derives nothing.
+    pub stores_handed_over: std::collections::HashMap<(usize, usize), String>,
     /// v0.3-M9 C1e (#421): every expression whose plain value flows into a slot of an envelope
     /// union type, keyed by the expression's `(span.start, span.end)`: the slot's union and the
     /// variant's tag. Written by the ONE recording function (`Checker::record_union_coercion`)
@@ -720,17 +887,21 @@ impl TypedModule {
     /// codegen name (`binding_names`), so name-keyed backend structures hold one binding each.
     /// `self` — the AST diagnostics, lints and the LSP read — keeps the user's names.
     ///
-    /// Hard error when the record has a hole (see `BindingNames::apply`); never falls back to
-    /// the raw names.
+    /// Hard error when the record has a hole (see `BindingNames::apply`,
+    /// `TransferRecord::internal_errors`); never falls back to the raw names.
     ///
     /// O(size of the module and its type map) time and memory: one clone.
     pub fn with_codegen_names(&self) -> Result<TypedModule, String> {
+        if !self.transfers.internal_errors().is_empty() {
+            return Err(self.transfers.internal_errors().join("; "));
+        }
         let module = self.binding_names.apply(&self.module)?;
         Ok(TypedModule {
             module,
             expr_types: self.expr_types.clone(),
             background_arg_inferred_ownership: self.background_arg_inferred_ownership.clone(),
             background_arg_sole_holder: self.background_arg_sole_holder.clone(),
+            stores_handed_over: self.stores_handed_over.clone(),
             union_coercions: self.union_coercions.clone(),
             cross_thread_padded_shapes: self.cross_thread_padded_shapes.clone(),
             back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
@@ -810,6 +981,7 @@ pub fn check(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        stores_handed_over: HashMap::new(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -823,6 +995,8 @@ pub fn check(
         transfers: crate::transfer_record::TransferRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
+        stored_literals: HashSet::new(),
+        reported_consumed_reads: HashSet::new(),
     };
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
@@ -832,6 +1006,7 @@ pub fn check(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        stores_handed_over: checker.stores_handed_over,
         union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
@@ -907,6 +1082,7 @@ pub fn check_with_kernel_mode(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        stores_handed_over: HashMap::new(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -920,6 +1096,8 @@ pub fn check_with_kernel_mode(
         transfers: crate::transfer_record::TransferRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
+        stored_literals: HashSet::new(),
+        reported_consumed_reads: HashSet::new(),
     };
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
@@ -929,6 +1107,7 @@ pub fn check_with_kernel_mode(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        stores_handed_over: checker.stores_handed_over,
         union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
@@ -1121,6 +1300,8 @@ struct Checker<'b> {
     /// `TypedModule::background_arg_sole_holder` is moved from. Written by the ONE spawn-arg
     /// recording function (`record_spawn_arg_ownership`).
     bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
+    /// The record `TypedModule::stores_handed_over` is moved from (`store_value`).
+    stores_handed_over: HashMap<(usize, usize), String>,
     /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
     union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
@@ -1194,6 +1375,13 @@ struct Checker<'b> {
     loop_gives: Vec<LoopGive>,
     /// Frame index of the body of each enclosing loop, outermost first.
     loop_body_frames: Vec<usize>,
+    /// The literals whose parts were already handed over (`hand_literal_parts_over`), by span: a
+    /// literal inferred twice hands its parts over once.
+    stored_literals: HashSet<(usize, usize)>,
+    /// The reads already reported as a read of a consumed binding, by span
+    /// (`report_consumed_read`): a sink reports a consumed argument unless its read was reported
+    /// here, which is how an operand consumed by a LATER operand of the same statement is caught.
+    reported_consumed_reads: HashSet<(usize, usize)>,
 }
 
 impl<'b> Checker<'b> {
@@ -1394,12 +1582,6 @@ impl<'b> Checker<'b> {
                 },
             );
         }
-        let parameter_declarations: Vec<DeclKey> = f
-            .params
-            .iter()
-            .map(|param| decl_key(&param.name_span, &param.name))
-            .collect();
-        self.transfers.set_parameters(parameter_declarations);
 
         // Option-B deferral checks: emit clean teaching errors for wait patterns
         // that require the M3 coroutine-locals transform rather than silently
@@ -2181,12 +2363,6 @@ impl<'b> Checker<'b> {
                 },
             );
         }
-        let parameter_declarations: Vec<DeclKey> = f
-            .params
-            .iter()
-            .map(|param| decl_key(&param.name_span, &param.name))
-            .collect();
-        self.transfers.set_parameters(parameter_declarations);
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
 
@@ -2277,9 +2453,11 @@ impl<'b> Checker<'b> {
                     // The NEXT pass of an enclosing loop reads a binding declared outside it as
                     // surely as a later statement does, and `remaining` ends at this block's end.
                     let used_after = self.bound_outside_current_loop(name)
-                        || remaining
-                            .iter()
-                            .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
+                        || remaining.iter().any(|stmt| {
+                            members
+                                .iter()
+                                .any(|member| ident_read_in_stmt(stmt, member.as_str()))
+                        });
                     if origin_ok && !used_after {
                         BgOwnership::Give
                     } else {
@@ -2615,6 +2793,7 @@ impl<'b> Checker<'b> {
                                             ConsumedBy::Given {
                                                 callee: spawn_callee.clone(),
                                                 given: name.clone(),
+                                                missed_revive: None,
                                             },
                                             expr.span(),
                                         );
@@ -2889,7 +3068,7 @@ impl<'b> Checker<'b> {
         // and alias class come from the initializer's provenance — a NEW entry; a shadowed
         // outer entry keeps its own origin, class and consumed state (it still names its
         // old value). The same rule `check_assign` applies on a reassignment.
-        let event = self.binding_event_origin(value);
+        let event = self.binding_event_origin(value, name, &format!("let {name} = {{value}}"));
         let declaration = decl_key(name_span, name);
         self.declare_binding(
             name.to_string(),
@@ -3673,14 +3852,15 @@ impl<'b> Checker<'b> {
                 // reassigned names a NEW value — revive-on-reassign: `eat(rows); rows =
                 // [4, 5]; rows.count()` is a correct program), and it joins the new value's
                 // class per the initializer table.
-                let event = self.binding_event_origin(value);
+                let event =
+                    self.binding_event_origin(value, target, &format!("{target} = {{value}}"));
                 let declaration = self.declaration_of(target);
                 self.transfers_note_reassign(declaration.as_ref(), &event);
-                if let Some(e) = self.scope.lookup_mut(target) {
-                    e.origin = event.origin;
-                    e.alias_class = event.alias_class;
-                    e.consumed = None;
-                }
+                // A reassignment names a NEW value, so the binding is no longer given away, and
+                // takes the new value's origin and class, on the path that reaches here only; a
+                // branch join decides what holds after it (`Scope::rebind`,
+                // `Scope::end_branches`).
+                self.scope.rebind(target, event.origin, event.alias_class);
                 if value_ty != Type::Error && value_ty != bound_ty {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -3747,9 +3927,10 @@ impl<'b> Checker<'b> {
             self.errors_failed_true_branch.push(*class);
         }
 
-        self.scope.push();
-        self.check_stmts(&body.stmts);
-        self.scope.pop();
+        // The body runs on one path; the other path (condition false) enters no arm.
+        self.scope.begin_branches(BranchKind::If);
+        self.check_branch_body(body);
+        self.scope.end_branches(true);
 
         for class in &failed_binding_classes {
             debug_assert_eq!(
@@ -3836,6 +4017,7 @@ impl<'b> Checker<'b> {
 
     fn check_stmt_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], else_arm: Option<&Block>) {
         let scrutinee_ty = self.infer_expr(scrutinee, None);
+        self.scope.begin_branches(BranchKind::Match);
 
         for arm in arms {
             match &arm.pattern.kind {
@@ -3895,9 +4077,7 @@ impl<'b> Checker<'b> {
                             );
                         }
                     }
-                    self.scope.push();
-                    self.check_stmts(&arm.body.stmts);
-                    self.scope.pop();
+                    self.check_branch_body(&arm.body);
                     if let Some(ref name) = narrowed_name {
                         match enclosing_narrowing {
                             Some(enclosing) => {
@@ -3915,9 +4095,7 @@ impl<'b> Checker<'b> {
                     self.check_option_name_arm(&scrutinee_ty, variant_name, &arm.pattern.span);
                 }
             }
-            self.scope.push();
-            self.check_stmts(&arm.body.stmts);
-            self.scope.pop();
+            self.check_branch_body(&arm.body);
         }
 
         // Exhaustiveness check for options multi-case.
@@ -4019,13 +4197,64 @@ impl<'b> Checker<'b> {
         }
 
         if let Some(else_body) = else_arm {
-            self.scope.push();
-            self.check_stmts(&else_body.stmts);
-            self.scope.pop();
+            self.check_branch_body(else_body);
+        }
+        // A path enters no arm unless the arms cover every value (`match_covers_every_value`).
+        let exhaustive = else_arm.is_some() || self.match_covers_every_value(&scrutinee_ty, arms);
+        self.scope.end_branches(!exhaustive);
+    }
+
+    /// True only when `arms` (no `else`) provably cover every value of `scrutinee_ty`: an options
+    /// type whose every variant has its arm, or a union whose every variant is a shape with its
+    /// `is` arm. Decided from the arms themselves, not from the exhaustiveness diagnostics above:
+    /// those skip a union's non-shape variants (`Circle | int` with only `is Circle` is not
+    /// diagnosed), and the branch join must not believe a path enters an arm when it may not.
+    /// O(arms + variants) time.
+    fn match_covers_every_value(&self, scrutinee_ty: &Type, arms: &[MatchArm]) -> bool {
+        match scrutinee_ty {
+            Type::Options { name } => {
+                let Some(entry) = self.options_table.get(name) else {
+                    return false;
+                };
+                entry.variants.iter().all(|variant| {
+                    arms.iter().any(|arm| {
+                        matches!(&arm.pattern.kind, MatchPatternKind::OptionName(covered) if covered == variant)
+                    })
+                })
+            }
+            Type::Union { variants } => variants.iter().all(|variant| match variant {
+                Type::Shape { name } => arms.iter().any(|arm| {
+                    matches!(&arm.pattern.kind, MatchPatternKind::Is(type_path) if &type_path.name == name)
+                }),
+                _ => false,
+            }),
+            _ => false,
         }
     }
 
+    /// One arm of an open branch point (an `if` body, a match arm): its own frame, and what it
+    /// revived is handed to the join. Not for loops, which interleave the loop-carried check.
+    fn check_branch_body(&mut self, body: &Block) {
+        self.scope.push();
+        self.scope.begin_arm();
+        self.check_stmts(&body.stmts);
+        self.end_branch_arm(body);
+        self.scope.pop();
+    }
+
+    /// Close the arm `body` of the open branch point: an arm that always returns never reaches the
+    /// join. O(size of `body`) for the return-path analysis.
+    fn end_branch_arm(&mut self, body: &Block) {
+        let returns = crate::return_paths::analyze_stmts(&body.stmts).all_paths_return;
+        self.scope.end_arm(returns);
+    }
+
     fn check_stmt_while(&mut self, cond: &Expr, body: &Block) {
+        // The loop is open before the condition is checked: the condition runs at the top of
+        // EVERY pass, so a give made in it (`while (ok(x))` with `ok(give rows)`) reaches the next
+        // pass exactly as a give in the body does.
+        self.scope.push();
+        let loop_mark = self.begin_loop_body();
         let cond_ty = self.infer_expr(cond, None);
         if cond_ty != Type::Error && cond_ty != Type::Bool {
             self.diags.push(Diagnostic::error(
@@ -4035,11 +4264,17 @@ impl<'b> Checker<'b> {
                 "`while` loops until the condition becomes `false`. Any other type cannot be used as a condition.",
             ));
         }
-        self.scope.push();
-        let loop_mark = self.begin_loop_body();
+        // The body's branch point opens AFTER the condition: the condition also runs on the path
+        // that leaves the loop (the last check that is false), so its gives hold on every path
+        // after the loop, the zero-trip one included. A body may run zero times: a reassignment
+        // in it covers only its own pass.
+        self.scope.begin_branches(BranchKind::Loop);
+        self.scope.begin_arm();
         self.check_stmts(&body.stmts);
-        self.end_loop_body(loop_mark);
+        self.end_loop_body(loop_mark, Some(cond), body);
+        self.end_branch_arm(body);
         self.scope.pop();
+        self.scope.end_branches(true);
     }
 
     fn check_stmt_for(&mut self, var: &str, var_span: &SourceSpan, iter: &Expr, body: &Block) {
@@ -4073,19 +4308,29 @@ impl<'b> Checker<'b> {
             }
         };
 
+        self.scope.begin_branches(BranchKind::Loop);
         self.scope.push();
+        self.scope.begin_arm();
         // A loop variable is one CELL of the iterated value — never transferable — and joins
-        // the iterated root's alias class (if a root is given away, the cells go with it).
-        let iterated_root = root_binding_name(iter).map(str::to_string);
-        let alias_class = match iterated_root
-            .as_deref()
-            .and_then(|r| self.scope.class_of(r))
+        // the alias class of every binding the iterated value reaches (if a root is given away,
+        // the cells go with it). Computed before the variable is declared: `for (a in a.items)`.
+        let iterated_holders = self.heap_holders_of(iter);
+        let alias_class = match iterated_holders
+            .iter()
+            .find_map(|(name, _)| self.scope.class_of(name))
         {
-            Some(c) => c,
+            Some(kept) => {
+                for (name, _) in &iterated_holders {
+                    if let Some(other) = self.scope.class_of(name) {
+                        self.scope.merge_classes(kept, other);
+                    }
+                }
+                kept
+            }
             None => self.scope.new_class(),
         };
-        let cell_reason = match &iterated_root {
-            Some(r) => format!("one cell of `{r}`, which this loop is walking"),
+        let cell_reason = match iterated_holders.first() {
+            Some((root, _)) => format!("one cell of `{root}`, which this loop is walking"),
             None => "one cell of the value this loop is walking".to_string(),
         };
         self.declare_binding(
@@ -4102,15 +4347,17 @@ impl<'b> Checker<'b> {
                 defined_at: var_span.clone(),
             },
         );
-        if let (Some(declaration), Some(root)) = (self.declaration_of(var), &iterated_root) {
-            if let Some(root_declaration) = self.declaration_of(root) {
-                self.transfers.join(&declaration, &root_declaration);
+        if let Some(declaration) = self.declaration_of(var) {
+            for (_, holder) in &iterated_holders {
+                self.transfers.join(&declaration, holder);
             }
         }
         let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
-        self.end_loop_body(loop_mark);
+        self.end_loop_body(loop_mark, None, body);
+        self.end_branch_arm(body);
         self.scope.pop();
+        self.scope.end_branches(true);
     }
 
     /// M7 P3c: look up the element type T for iterating over a user-defined shape.
@@ -4410,8 +4657,14 @@ impl<'b> Checker<'b> {
                     self.infer_field_access(receiver, field, field_span)
                 }
             }
-            Expr::StructLit { fields, span } => self.check_struct_lit(fields, hint, span),
+            Expr::StructLit { fields, span } => {
+                let ty = self.check_struct_lit(fields, hint, span);
+                self.hand_literal_parts_over(expr);
+                ty
+            }
             Expr::PostfixOp { receiver, op, span } => self.check_postfix_op(receiver, op, span),
+            // `self` is a binding like any other: a `give self` handed over is not read again.
+            Expr::SelfValue { span } if self.check_consumed_read("self", span) => Type::Error,
             Expr::SelfValue { span } => match self.scope.lookup("self") {
                 Some(entry) => entry.ty.clone(),
                 None => {
@@ -4502,8 +4755,16 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            Expr::ArrayLit { elements, span } => self.check_array_lit(elements, hint, span),
-            Expr::MapLit { entries, span } => self.check_map_lit(entries, hint, span),
+            Expr::ArrayLit { elements, span } => {
+                let ty = self.check_array_lit(elements, hint, span);
+                self.hand_literal_parts_over(expr);
+                ty
+            }
+            Expr::MapLit { entries, span } => {
+                let ty = self.check_map_lit(entries, hint, span);
+                self.hand_literal_parts_over(expr);
+                ty
+            }
             // M6: `x is Foo` type-narrowing predicate — returns bool.
             Expr::Is {
                 expr: inner,
@@ -4945,13 +5206,7 @@ impl<'b> Checker<'b> {
             Provenance::Fresh => Vec::new(),
             Provenance::Whole(name) => vec![name],
             Provenance::Reaches(roots) => roots,
-            Provenance::Unknown => {
-                let mut mentioned: HashSet<String> = HashSet::new();
-                crate::independence::collect_ident_names(value, &mut mentioned);
-                let mut sorted: Vec<String> = mentioned.into_iter().collect();
-                sorted.sort();
-                sorted
-            }
+            Provenance::Unknown => mentioned_names(value),
         };
         names
             .into_iter()
@@ -4959,33 +5214,100 @@ impl<'b> Checker<'b> {
             .collect()
     }
 
-    /// A heap value stored into a place (`o.add(a)`, `o.set(i, a)`, `o[i] = a`, `b.f = a`):
-    /// the place's root binding and the value's holders now reach one value, so they join —
-    /// in the live scope (giving or returning either covers both) and in the record. A store
-    /// does NOT consume the source: that would reject programs that compile today, and would
-    /// need new user-facing syntax (B4).
-    fn record_store(&mut self, place: &Expr, value: &Expr) {
-        let holders = self.heap_holders_of(value);
-        if holders.is_empty() {
+    /// True when `expr` is typed as bits (int, float, bool, number, options, string, a `maybe` of
+    /// those): copying it is the value, so storing it hands nothing over.
+    fn expr_is_bits(&self, expr: &Expr) -> bool {
+        let span = expr.span();
+        self.expr_types
+            .get(&(span.start, span.end))
+            .is_some_and(crate::effective_ownership::value_like)
+    }
+
+    /// A heap value stored into a place (`o.add(a)`, `o.set(k, a)`, `o[i] = a`, `b.f = a`,
+    /// `let b = a`, a part of a container literal): the place takes the value over, so the store
+    /// is a transfer like a give or a send, decided by the ONE `check_transfer`. A value that is
+    /// bits is not handed over. Returns true when the value was admitted.
+    fn store_value(&mut self, value: &Expr, place: &str, copy_template: &str) -> bool {
+        if self.expr_is_bits(value) {
+            return true;
+        }
+        let sink = TransferSink::Store {
+            place,
+            copy_template,
+        };
+        let admitted = self.check_transfer(value, &sink);
+        // A named binding handed over is what the muted hint at the store says.
+        if admitted && matches!(self.provenance_of(value), Provenance::Whole(_)) {
+            let span = value.span();
+            self.stores_handed_over
+                .insert((span.start, span.end), place.to_string());
+        }
+        admitted
+    }
+
+    /// The stores of one collection-method call (`o.add(a)`, `m.set(k, a)`): each argument at a
+    /// store position is handed to the receiver `receiver`. `positions` comes from
+    /// `builtins::collection_store_positions`. The second store of
+    /// `m.set(a, a)` finds `a` consumed and reports that read (`check_transfer`).
+    fn store_into_collection(
+        &mut self,
+        receiver: &Expr,
+        method: &str,
+        args: &[Expr],
+        positions: &[usize],
+    ) {
+        if positions.is_empty() {
             return;
         }
-        let root = root_binding_name(place).map(str::to_string);
-        let Some(root) = root.filter(|name| self.scope.lookup(name).is_some()) else {
-            for (_, holder) in holders {
-                self.transfers.escape(&holder, Escape::StoredIntoTemporary);
-            }
+        let place = format!("`{}`", expr_source_text(receiver));
+        for &position in positions {
+            let Some(stored) = args.get(position) else {
+                continue;
+            };
+            let written_args = args
+                .iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    if index == position {
+                        "{value}".to_string()
+                    } else {
+                        expr_source_text(arg)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let copy_template = format!("{}.{method}({written_args})", expr_source_text(receiver));
+            self.store_value(stored, &place, &copy_template);
+        }
+    }
+
+    /// A container literal built from named heap values (`[a, c]`, `{ first: a, second: c }`)
+    /// takes them over: each part is stored in the literal (`store_value`), so the literal is the
+    /// one owner of everything in it and `a`, `c` are gone. A part that is bits is copied.
+    /// Runs once per literal, after every part is inferred. O(parts) time.
+    fn hand_literal_parts_over(&mut self, literal: &Expr) {
+        if !self
+            .stored_literals
+            .insert((literal.span().start, literal.span().end))
+        {
             return;
-        };
-        let (Some(place_declaration), Some(place_class)) =
-            (self.declaration_of(&root), self.scope.class_of(&root))
-        else {
-            return;
-        };
-        for (name, holder) in holders {
-            if let Some(holder_class) = self.scope.class_of(&name) {
-                self.scope.merge_classes(place_class, holder_class);
-            }
-            self.transfers.join(&place_declaration, &holder);
+        }
+        let parts = literal_parts(literal);
+        let place = format!("the literal `{}`", expr_source_text(literal));
+        for (position, part) in parts.iter().enumerate() {
+            let written_parts: Vec<String> = parts
+                .iter()
+                .enumerate()
+                .map(|(index, other)| {
+                    if index == position {
+                        "{value}".to_string()
+                    } else {
+                        expr_source_text(other)
+                    }
+                })
+                .collect();
+            let copy_template = literal_text(literal, &written_parts);
+            self.store_value(part, &place, &copy_template);
         }
     }
 
@@ -5011,6 +5333,9 @@ impl<'b> Checker<'b> {
                     },
                     ConsumedBy::Sent { channel, .. } => Escape::Sent {
                         channel: channel.clone(),
+                    },
+                    ConsumedBy::Stored { place, .. } => Escape::Stored {
+                        place: place.clone(),
                     },
                 },
             );
@@ -5045,7 +5370,13 @@ impl<'b> Checker<'b> {
     /// `check_stmts` drops the gives of a block that always returns). Rust rejects the same
     /// program: use of a moved value in a later iteration. The text is the one canonical
     /// use-after-give wording with the loop named in the `{via}` slot.
-    fn end_loop_body(&mut self, mark: usize) {
+    ///
+    /// Only an entry the next pass READS (by name, in `condition` or `body`) is carried: a
+    /// class-mate the loop never mentions stays consumed but nothing reads it, and a read after the
+    /// loop is the ordinary use-after-give. A give this loop does not carry passes to the
+    /// enclosing loop, if any, which checks it the same way. O(entries . loop size) per give
+    /// per enclosing loop.
+    fn end_loop_body(&mut self, mark: usize, condition: Option<&Expr>, body: &Block) {
         let Some(body_frame) = self.loop_body_frames.pop() else {
             return;
         };
@@ -5053,6 +5384,11 @@ impl<'b> Checker<'b> {
         for give in gives {
             let carried = give.reached.iter().any(|entry| {
                 entry.frame_index < body_frame
+                    && (condition.is_some_and(|cond| expr_refs_ident(cond, &entry.name))
+                        || body
+                            .stmts
+                            .iter()
+                            .any(|stmt| ident_read_in_stmt(stmt, &entry.name)))
                     && self
                         .scope
                         .entry_in_frame(entry.frame_index, &entry.name)
@@ -5063,6 +5399,12 @@ impl<'b> Checker<'b> {
             if carried {
                 let diag = loop_carried_give_diag(give.span, &give.cause);
                 self.diags.push(diag);
+            } else if !self.loop_body_frames.is_empty() {
+                // Not carried into THIS loop's next pass, but every enclosing loop runs this
+                // whole loop again: hand the give up so the enclosing loop checks it against
+                // its own next pass (`for j { let y = x; for i { eat(y); y = [0] } }` gives
+                // `x`'s value once per outer pass).
+                self.loop_gives.push(give);
             }
         }
     }
@@ -5105,30 +5447,52 @@ impl<'b> Checker<'b> {
         (current.defined_at == *narrowed_binding).then(|| narrowed_ty.clone())
     }
 
+    /// Report the read of `name` at `span` when its binding is consumed (given, sent or stored);
+    /// true when it is. The consumed-read check of every read the type checker infers, a name or
+    /// `self`.
+    fn check_consumed_read(&mut self, name: &str, span: &SourceSpan) -> bool {
+        let Some(cause) = self
+            .scope
+            .lookup(name)
+            .and_then(|entry| entry.consumed.clone())
+        else {
+            return false;
+        };
+        self.report_consumed_read(span, name, &cause);
+        true
+    }
+
+    /// THE emit of a read of a consumed binding: a use-after-give / use-after-send /
+    /// use-after-store, rendered by `consumed_read_diag` (the ONE rendering of the `Consumed*`
+    /// templates), once per read span. Its callers are the read check above and the sinks
+    /// (`check_transfer`, `check_read_of_same_call_consumed`), which see the reads the read check
+    /// could not: an operand inferred while its binding was live and consumed by a LATER operand
+    /// of the same statement (`eatBoth(rows, [rows])`, `[rows, eatBack(rows)]`).
+    fn report_consumed_read(&mut self, span: &SourceSpan, name: &str, cause: &ConsumedBy) {
+        if self.reported_consumed_reads.insert((span.start, span.end)) {
+            let diag = consumed_read_diag(span.clone(), name, cause);
+            self.diags.push(diag);
+        }
+    }
+
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
         self.note_binding_use(name, span);
+        // The consumed check runs BEFORE the `is` overlay below: a read of the narrowed binding
+        // is a read of the same value, and the arm that handed it over
+        // (`circles.add(figure)`) must not read it again.
+        if self.check_consumed_read(name, span) {
+            return Type::Error;
+        }
         // M6: if inside a union `is` arm, the binding is narrowed to a specific variant.
         // The overlay branch reads through `binding_ty_narrowed` (the one narrowing-aware
         // source); only the narrowed case returns here — the un-narrowed path continues
-        // below to the side-effecting scope checks (use-after-give, ErrorsCapable
-        // narrowing) the overlay window bypasses.
+        // below to the ErrorsCapable narrowing the overlay window bypasses.
         if self.active_union_narrowing(name).is_some() {
             if let Some(narrowed_ty) = self.binding_ty_narrowed(name) {
                 return narrowed_ty;
             }
         }
         if let Some(entry) = self.scope.lookup(name) {
-            // The consumed-read site for every read the type checker infers: a use-after-give
-            // / use-after-send is rendered by `consumed_read_diag` (the ONE rendering of the
-            // `Consumed` / `ConsumedBySend` templates). Its other caller is `check_transfer`,
-            // for the one read this site cannot see — an argument consumed by an earlier
-            // position of the SAME call, which was inferred before the call consumed anything.
-            if let Some(cause) = entry.consumed.clone() {
-                let diag = consumed_read_diag(span.clone(), name, &cause);
-                self.diags.push(diag);
-                return Type::Error;
-            }
-
             // M7 P3a: ErrorsCapable binding use handling.
             // Return the ErrorsCapable type as-is so method dispatch (.failed, .or, etc.)
             // can handle it. Auto-propagation fires when the binding is passed to a function
@@ -5692,8 +6056,7 @@ impl<'b> Checker<'b> {
                         let sink = TransferSink::Send {
                             channel: receiver_name.as_str(),
                         };
-                        let consumed_before = self.scope.consumed_classes();
-                        self.check_transfer(&args[0], &sink, &consumed_before);
+                        self.check_transfer(&args[0], &sink);
                     }
                     // Lock 8: `.send()` is `-> nothing errors` — a dropped/closed receiver
                     // yields a typed channel-closed error, never a silent drop.
@@ -5804,8 +6167,7 @@ impl<'b> Checker<'b> {
                         let sink = TransferSink::Send {
                             channel: receiver_name.as_str(),
                         };
-                        let consumed_before = self.scope.consumed_classes();
-                        self.check_transfer(&args[0], &sink, &consumed_before);
+                        self.check_transfer(&args[0], &sink);
                     }
                     Type::ErrorsCapable {
                         inner: Box::new(Type::Nothing),
@@ -6178,39 +6540,45 @@ impl<'b> Checker<'b> {
     /// `Fresh` → `Owned`, own class; `Whole(b)` → b's origin, JOINS b's class (two names, one
     /// value); `Reaches(roots)` → `Reaches`, joins every root's class (giving a root away
     /// consumes this name with it); `Unknown` → `Unknown`, own class.
-    fn binding_event_origin(&mut self, value: &Expr) -> BindingEvent {
+    fn binding_event_origin(
+        &mut self,
+        value: &Expr,
+        target: &str,
+        copy_template: &str,
+    ) -> BindingEvent {
         match self.provenance_of(value) {
             Provenance::Fresh => BindingEvent {
                 origin: Origin::Owned,
                 alias_class: self.scope.new_class(),
                 joined: Vec::new(),
             },
-            Provenance::Whole(b) => match self.scope.lookup(&b) {
-                Some(entry) => BindingEvent {
-                    origin: entry.origin.clone(),
-                    alias_class: entry.alias_class,
-                    joined: vec![decl_key(&entry.defined_at, &b)],
-                },
-                // An undefined name — already diagnosed by `resolve_ident`.
-                None => BindingEvent {
-                    origin: Origin::Unknown,
+            // `let b = a`, `b = a`: the binding takes the value over (`store_value`), so `b` owns it
+            // and `a` is gone. Bits are copied, so `b` is a fresh value of its own.
+            Provenance::Whole(_) => {
+                let admitted = self.store_value(value, &format!("`{target}`"), copy_template);
+                BindingEvent {
+                    // A refused store was reported at `a`; `b` must not be given away on top of it.
+                    origin: if admitted {
+                        Origin::Owned
+                    } else {
+                        Origin::Unknown
+                    },
                     alias_class: self.scope.new_class(),
                     joined: Vec::new(),
-                },
-            },
+                }
+            }
             Provenance::Reaches(roots) => {
-                let reason = self.reaches_reason(value, &roots);
-                // Join EVERY root's class: the roots of one initializer are all held by the
-                // value it builds (`{ first: a, second: c }` holds both), so giving or
-                // returning any one of them must reach this name, and this name must reach
-                // them. Joining only the first root left `c` free to be released while the
-                // returned literal still held it (spike S3 probe t7).
+                let reason = self.reaches_reason(value);
+                // Join EVERY root's class: a piece of a call result (`pick(a, c)`) may be held
+                // by any of the roots, so giving or returning any one of them must reach this
+                // name, and this name must reach them. (A container literal is not here: it
+                // takes its named parts over, `hand_literal_parts_over`.)
                 let root_entries: Vec<(u64, DeclKey)> = roots
                     .iter()
-                    .filter_map(|r| {
+                    .filter_map(|root| {
                         self.scope
-                            .lookup(r)
-                            .map(|e| (e.alias_class, decl_key(&e.defined_at, r)))
+                            .lookup(root)
+                            .map(|entry| (entry.alias_class, decl_key(&entry.defined_at, root)))
                     })
                     .collect();
                 let alias_class = match root_entries.first() {
@@ -6241,19 +6609,15 @@ impl<'b> Checker<'b> {
 
     /// Every binding the expression names, as declarations. For the transfer record only.
     fn mentioned_declarations(&self, expr: &Expr) -> Vec<DeclKey> {
-        let mut names: HashSet<String> = HashSet::new();
-        crate::independence::collect_ident_names(expr, &mut names);
-        let mut keys: Vec<DeclKey> = names
+        mentioned_names(expr)
             .iter()
             .filter_map(|name| self.declaration_of(name))
-            .collect();
-        keys.sort();
-        keys
+            .collect()
     }
 
     /// The `{reason}` slot of `TransferNeedsCopy` for a `Reaches` expression: who still
     /// holds the value, said from the expression's own shape.
-    fn reaches_reason(&self, expr: &Expr, roots: &[String]) -> String {
+    fn reaches_reason(&self, expr: &Expr) -> String {
         match expr {
             Expr::FieldAccess { receiver, .. } => match root_binding_name(receiver) {
                 Some(r) => format!("a field of `{r}`"),
@@ -6263,14 +6627,6 @@ impl<'b> Checker<'b> {
                 Some(r) => format!("an item inside `{r}`"),
                 None => "an item inside a value that is not held in a named binding".to_string(),
             },
-            Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
-                let names = roots
-                    .iter()
-                    .map(|r| format!("`{r}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("built from {names}, which are still named here")
-            }
             Expr::Call(call) => match &call.callee {
                 Expr::Ident(callee, _) => self.returns_piece_reason(callee),
                 _ => "a value the compiler cannot trace to one owner".to_string(),
@@ -6285,7 +6641,7 @@ impl<'b> Checker<'b> {
                 Some(r) => format!("an item inside `{r}`"),
                 None => "a value the compiler cannot trace to one owner".to_string(),
             },
-            Expr::Wait(inner, _) => self.reaches_reason(inner, roots),
+            Expr::Wait(inner, _) => self.reaches_reason(inner),
             _ => "a value the compiler cannot trace to one owner".to_string(),
         }
     }
@@ -6304,21 +6660,13 @@ impl<'b> Checker<'b> {
     /// value moved). Emits `ParamNeedsGive` / `TransferNeedsCopy` / the const refusal;
     /// consumes an admitted `Whole` binding's whole alias class with the sink's cause.
     ///
-    /// `consumed_before` is the caller's snapshot of `Scope::consumed_classes()` taken BEFORE
-    /// the call form ran any transfer decision. Every call form infers all of its arguments
-    /// first and only then walks the positions, so a name whose class was consumed before the
-    /// call had its read reported by `resolve_ident` at inference — nothing to re-report. A
-    /// name whose class is consumed but NOT in the snapshot was consumed by an earlier
-    /// position of THIS call (`eat2(rows, other)` with `let other = rows`) — no other site
-    /// ever sees that read, so it is reported here, naming both bindings (v0.3-M8 Phase 4 fix
-    /// round 2; the earlier unconditional early return let the alias pair compile and print
-    /// `3 3`).
-    fn check_transfer(
-        &mut self,
-        expr: &Expr,
-        sink: &TransferSink<'_>,
-        consumed_before: &HashSet<u64>,
-    ) -> bool {
+    /// A consumed `Whole` binding is reported here unless its read was reported already
+    /// (`report_consumed_read`). Every call form, literal and store infers its operands first and
+    /// only then decides, so an operand consumed by an EARLIER position of the same call
+    /// (`eat2(rows, other)` with `other` a piece of `rows`) or by a LATER operand of the same
+    /// statement (`eatBoth(rows, [rows])`, `[rows, eatBack(rows)]`) was inferred live, and this is the only
+    /// site that sees the read.
+    fn check_transfer(&mut self, expr: &Expr, sink: &TransferSink<'_>) -> bool {
         let span = expr.span().clone();
         match self.provenance_of(expr) {
             Provenance::Fresh => true,
@@ -6327,10 +6675,7 @@ impl<'b> Checker<'b> {
                     return false; // undefined — already diagnosed
                 };
                 if let Some(cause) = entry.consumed.clone() {
-                    if !consumed_before.contains(&entry.alias_class) {
-                        let diag = consumed_read_diag(span, &name, &cause);
-                        self.diags.push(diag);
-                    }
+                    self.report_consumed_read(binding_read_span(expr), &name, &cause);
                     return false;
                 }
                 if entry.is_const {
@@ -6343,6 +6688,14 @@ impl<'b> Checker<'b> {
                         TransferSink::Give { callee, .. } => format!(
                             "Declare `{name}` with `let` if you need to hand it over for good, \
                              or give `{callee}` a copy: `{name}.copy()`."
+                        ),
+                        TransferSink::Store {
+                            place,
+                            copy_template,
+                        } => format!(
+                            "Declare `{name}` with `let` if you need to hand it over for good, \
+                             or store a copy in {place}: `{}`.",
+                            copy_template.replace("{value}", &format!("{name}.copy()"))
                         ),
                     };
                     self.diags.push(Diagnostic::error(
@@ -6409,21 +6762,11 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            Provenance::Reaches(roots) => {
+            Provenance::Reaches(_) => {
                 let text = expr_source_text(expr);
                 let ty = self.expr_type_name(expr);
-                let reason = self.reaches_reason(expr, &roots);
-                let fix = match expr {
-                    Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
-                        let parts = roots
-                            .iter()
-                            .map(|r| format!("{r}.copy()"))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("[{parts}, …]")
-                    }
-                    _ => format!("{text}.copy()"),
-                };
+                let reason = self.reaches_reason(expr);
+                let fix = format!("{text}.copy()");
                 self.emit_transfer_needs_copy(span, &text, &ty, &reason, &fix, sink);
                 false
             }
@@ -6517,22 +6860,6 @@ impl<'b> Checker<'b> {
         ownerships: &[Option<OwnershipModifier>],
         param_names: &[String],
     ) {
-        // The pre-call snapshot: which alias classes were consumed before THIS call touched
-        // anything. A later position whose class is consumed but absent here was consumed by
-        // an earlier position of this same call — `check_transfer` reports that read.
-        // A callee may store one argument into another; whether it does is decided from its own
-        // record once every function is walked (`TransferRecorder::finish`).
-        let holders_per_position: Vec<Vec<DeclKey>> = normalized_args
-            .iter()
-            .map(|arg| {
-                self.heap_holders_of(arg)
-                    .into_iter()
-                    .map(|(_, declaration)| declaration)
-                    .collect()
-            })
-            .collect();
-        self.transfers.note_call(callee, holders_per_position);
-        let consumed_before = self.scope.consumed_classes();
         for (i, arg) in normalized_args.iter().enumerate() {
             let declared = ownerships.get(i).and_then(|o| o.as_ref());
             match declared {
@@ -6541,7 +6868,7 @@ impl<'b> Checker<'b> {
                         callee,
                         chain_param: None,
                     };
-                    self.check_transfer(arg, &sink, &consumed_before);
+                    self.check_transfer(arg, &sink);
                 }
                 _ if self.ownership.consumed_of(callee, i) => {
                     // Not declared `give`, but the callee's body gives this position away:
@@ -6553,27 +6880,26 @@ impl<'b> Checker<'b> {
                         callee,
                         chain_param: chain.as_deref(),
                     };
-                    self.check_transfer(arg, &sink, &consumed_before);
+                    self.check_transfer(arg, &sink);
                 }
                 Some(OwnershipModifier::Lend) => {
                     if let Some(binding_name) = simple_ident_name(arg) {
                         self.check_lend_arg(binding_name, callee, arg.span());
                     }
-                    self.check_read_of_same_call_consumed(arg, &consumed_before);
+                    self.check_read_of_same_call_consumed(arg);
                 }
                 // share or bare: no transfer, but the value is READ by the callee — a read of
                 // a class-mate an earlier `give` position of this same call consumed
                 // (`mix(rows, other)` with `mix(give a, share b)`) is a read after free.
-                _ => self.check_read_of_same_call_consumed(arg, &consumed_before),
+                _ => self.check_read_of_same_call_consumed(arg),
             }
         }
     }
 
-    /// A non-`give` position of a call whose argument names a binding consumed by an
-    /// earlier position of the SAME call: `resolve_ident` inferred it before the consume, so
-    /// this is the only place that read can be reported. Anything consumed before the call
-    /// was already reported at inference (`consumed_before`).
-    fn check_read_of_same_call_consumed(&mut self, arg: &Expr, consumed_before: &HashSet<u64>) {
+    /// A non-`give` position of a call whose argument names a binding consumed by another
+    /// operand of the same statement (an earlier `give` position, a literal argument that stored
+    /// it): the argument was inferred live, so this is the only place that read is reported.
+    fn check_read_of_same_call_consumed(&mut self, arg: &Expr) {
         let Provenance::Whole(name) = self.provenance_of(arg) else {
             return;
         };
@@ -6581,10 +6907,7 @@ impl<'b> Checker<'b> {
             return;
         };
         if let Some(cause) = entry.consumed.clone() {
-            if !consumed_before.contains(&entry.alias_class) {
-                let diag = consumed_read_diag(arg.span().clone(), &name, &cause);
-                self.diags.push(diag);
-            }
+            self.report_consumed_read(binding_read_span(arg), &name, &cause);
         }
     }
 
@@ -7502,14 +7825,15 @@ impl<'b> Checker<'b> {
             return sensitive_method_return(method, &inner, method_span, &mut self.diags);
         }
 
-        // A heap value stored by an in-place collection method (`add`, `set`) joins the
-        // receiver's alias class — the same edge as a field or index store.
+        // A heap value stored by an in-place collection method (`add`, `set`) is handed over to the
+        // receiver, like a field or index store.
         if let Some(receiver) = receiver_expr {
-            for position in collection_store_positions(receiver_ty, method) {
-                if let Some(stored) = args.get(*position) {
-                    self.record_store(receiver, stored);
-                }
-            }
+            self.store_into_collection(
+                receiver,
+                method,
+                args,
+                collection_store_positions(receiver_ty, method),
+            );
         }
 
         // M5 P3b: built-in collection method dispatch.
@@ -9490,7 +9814,12 @@ impl<'b> Checker<'b> {
         // Resolve the field and check the value type.
         let field_ty = self.infer_field_access(receiver, field, field_span);
         let value_ty = self.infer_expr(value, Some(&field_ty));
-        self.record_store(receiver, value);
+        let place_text = format!("{}.{field}", expr_source_text(receiver));
+        self.store_value(
+            value,
+            &format!("`{place_text}`"),
+            &format!("{place_text} = {{value}}"),
+        );
 
         // Int literal assigned to a `number`-typed field — the hinted infer
         // silently types it `number` and ICEs at codegen (Future-Req #14).
@@ -9673,7 +10002,16 @@ impl<'b> Checker<'b> {
     ) {
         self.check_index_assign_types(receiver, index, value, span);
         // The value is inferred by now on every path, so its provenance is answerable.
-        self.record_store(receiver, value);
+        let place_text = format!(
+            "{}[{}]",
+            expr_source_text(receiver),
+            expr_source_text(index)
+        );
+        self.store_value(
+            value,
+            &format!("`{place_text}`"),
+            &format!("{place_text} = {{value}}"),
+        );
     }
 
     fn check_index_assign_types(
@@ -11850,10 +12188,22 @@ fn stmts_ref_target_non_shadowed_sequential(stmts: &[Stmt], target: &str) -> boo
     false
 }
 
-/// Returns `true` if `expr` contains an `Expr::Ident` node whose name is `target`.
+/// The span of the binding read in `expr` that `provenance` classifies `Whole`: the expression
+/// itself, or the operand of a `wait` (whose provenance is its operand's). It is the span the
+/// read check reported, so the sinks do not report one read twice. O(depth) time, O(1) memory.
+fn binding_read_span(expr: &Expr) -> &SourceSpan {
+    match expr {
+        Expr::Wait(inner, _) => binding_read_span(inner),
+        _ => expr.span(),
+    }
+}
+
+/// Returns `true` if `expr` reads the binding `target`: an `Expr::Ident` of that name, or `self`
+/// when `target` is `self` (the `self` parameter is a binding like any other).
 fn expr_refs_ident(expr: &Expr, target: &str) -> bool {
     match expr {
         Expr::Ident(name, _) => name == target,
+        Expr::SelfValue { .. } => target == "self",
         Expr::Wait(inner, _) | Expr::Background(inner, _) => expr_refs_ident(inner, target),
         Expr::Call(c) => {
             expr_refs_ident(&c.callee, target) || c.args.iter().any(|a| expr_refs_ident(a, target))
@@ -11887,7 +12237,6 @@ fn expr_refs_ident(expr: &Expr, target: &str) -> bool {
         | Expr::IntLit(_, _)
         | Expr::NumberLit(_, _)
         | Expr::BoolLit(_, _)
-        | Expr::SelfValue { .. }
         | Expr::NoneLit { .. }
         | Expr::Error(_) => false,
     }
