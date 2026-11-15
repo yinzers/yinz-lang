@@ -301,6 +301,79 @@ cases! { assert_read_after_store_rejected;
 }}"), "(High) t7: `{ first: a, second: c }` then reading `c`: every part is handed over, not only the first";
 }
 
+// ── a read inside the `is` arm that narrowed the handed-over binding ────────
+
+/// A union with one shape variant that holds heap data, and a callee that takes it over.
+const FIGURE: &str = "shape Circle {
+  label: array<int>
+}
+shape Square {
+  side: int
+}
+shape Figure = Circle | Square
+function eat_circle(give circle: Circle) -> nothing {
+  print(circle.label.count().toString())
+}
+";
+
+cases! { assert_read_after_store_rejected;
+    read_after_store_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function f(give figure: Figure) -> nothing {{
+  let circles: array<Circle> = []
+  if (figure) {{
+    is Circle => {{
+      circles.add(figure)
+      print(figure.label.count().toString())
+    }}
+    is Square => {{ }}
+  }}
+}}"), "(High) `circles.add(figure)` inside the `is Circle` arm, then reading `figure` in the same arm: the arm's narrowed read skipped the consumed check, so a release pass freed the label under the container";
+    read_after_let_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function f(give figure: Figure) -> nothing {{
+  if (figure) {{
+    is Circle => {{
+      let owner: Circle = figure
+      print(figure.label.count().toString())
+    }}
+    is Square => {{ }}
+  }}
+}}"), "(High) `let owner = figure` inside the arm, then reading `figure`: the same narrowed read, through a `let` store";
+}
+
+cases! { assert_use_after_give;
+    read_after_give_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function f(give figure: Figure) -> nothing {{
+  if (figure) {{
+    is Circle => {{
+      eat_circle(figure)
+      print(figure.label.count().toString())
+    }}
+    is Square => {{ }}
+  }}
+}}"), "(High) a give inside the `is Circle` arm, then reading `figure` in the arm: the narrowed read skipped the use-after-give check";
+    second_give_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function f(give figure: Figure) -> nothing {{
+  if (figure) {{
+    is Circle => {{
+      eat_circle(figure)
+      eat_circle(figure)
+    }}
+    is Square => {{ }}
+  }}
+}}"), "(High) two gives of the narrowed binding in one arm: a double free under a release pass";
+}
+
+cases! { assert_accepted;
+    reads_before_the_store_in_a_narrowed_arm_are_accepted: format!("{FIGURE}function f(give figure: Figure) -> nothing {{
+  let circles: array<Circle> = []
+  if (figure) {{
+    is Circle => {{
+      print(figure.label.count().toString())
+      circles.add(figure)
+    }}
+    is Square => {{
+      print(figure.side.toString())
+    }}
+  }}
+}}"), "(High) over-rejection: a narrowed read before the store, and a read in the other arm, stay legal";
+}
+
 // ── t3: a move inside a loop, rejected ──────────────────────────────────────
 
 /// The program must be rejected with the canonical use-after-give text and the loop wording.
