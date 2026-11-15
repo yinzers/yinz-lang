@@ -379,3 +379,15 @@ by_value_tests!(
     v03_m9_union_move_copy_reassign_asan_optimized,
     v03_m9_union_move_copy_reassign_asan_no_optimize
 );
+
+// Bug: a binding of a place read made a view although the place was replaced while the binding
+// was still read: the view read the new chain (`1`) where the binding must keep the old one (`3`).
+// Condition (b) of a view failed, so it owns a deep copy. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_view_root_written.ynz",
+    "3\n1\n",
+    v03_m9_union_view_root_written_optimized,
+    v03_m9_union_view_root_written_no_optimize,
+    v03_m9_union_view_root_written_asan_optimized,
+    v03_m9_union_view_root_written_asan_no_optimize
+);

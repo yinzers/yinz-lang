@@ -249,3 +249,25 @@ fn maybe_payload_binding_clones_the_boxes_it_reads() {
         "99 more reads of a `maybe<Holder>` element, four cells each"
     );
 }
+
+// Bug caught: `let rest = head.next` copied the whole remaining chain at every step of a recursive
+// walk (N(N+1)/2 cells per walk: 55 at N=10, 5050 at N=100), where a Rust borrow costs none
+// (Golden Rule 8). The binding only reads a field of a `share` parameter, so it is a view and the
+// walks (`sum` and `depth`) allocate nothing: the same cells as only building the chain.
+#[test]
+fn recursive_walk_over_a_field_read_allocates_nothing() {
+    for (chain_length, walk_output) in [(10, "45\n10\n"), (100, "4950\n100\n")] {
+        let built = heap_allocations(
+            &format!("v0_3_m9_union_view_build_{chain_length}.ynz"),
+            "built\n",
+        );
+        let walked = heap_allocations(
+            &format!("v0_3_m9_union_view_walk_{chain_length}.ynz"),
+            walk_output,
+        );
+        assert_eq!(
+            walked, built,
+            "a walk of {chain_length} links must add no cells to the {built} the build made"
+        );
+    }
+}

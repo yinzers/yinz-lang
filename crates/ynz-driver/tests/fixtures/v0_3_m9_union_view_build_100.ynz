@@ -1,0 +1,48 @@
+// v0.3-M9 C1f (#423) round 2: baseline of `v0_3_m9_union_view_walk_N.ynz`: builds an N-link chain by
+// moves and does not walk it. Correct behavior: prints `built`.
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+
+function sum(share head: Node | End) -> int {
+  if (head) {
+    is Node => {
+      let rest = head.next
+      return head.value + sum(rest)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function depth(share head: Node | End) -> int {
+  if (head) {
+    is Node => {
+      let rest = head.next
+      return 1 + depth(rest)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let stop: End = { flag: true }
+  let list: Node | End = stop
+  let count = 0
+  while (count < 100) {
+    let node: Node = { value: count, next: list }
+    let wrapped: Node | End = node
+    list = wrapped
+    count = count + 1
+  }
+  print(`built`)
+}
