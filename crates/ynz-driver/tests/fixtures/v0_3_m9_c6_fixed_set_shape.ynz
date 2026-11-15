@@ -1,0 +1,24 @@
+// v0.3-M9 C6 fixture: `fixed<Tag>` `set` releases the heap cell and the name of the item it
+// replaces, as the array `set` of an `array<Tag>` does.
+// Counted allocations: a cell for each of the list's two items and one for the replacement: 3.
+// Heap strings: `a-1` and `b-2` (moved into their shapes, then into the list's cells) and `c-3`
+// (the replacement's name) and the copy `fallback` makes of its literal: 4 allocated.
+// `value.set(0, replacement)` releases the cell of `first`
+// and its name `a-1`: 1 string and 1 counted cell released.
+// Expected output: the name the list holds at index 0 at the end, and the untouched one.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let first: Tag = { name: `a-${1}`, id: 1 }
+  let second: Tag = { name: `b-${2}`, id: 2 }
+  let replacement: Tag = { name: `c-${3}`, id: 3 }
+  let fallback: Tag = { name: `none`, id: 0 }
+  let value: fixed<Tag> = [first, second]
+  value.set(0, replacement)
+  print(value[0].or(fallback).name)
+  print(value[1].or(fallback).name)
+}
