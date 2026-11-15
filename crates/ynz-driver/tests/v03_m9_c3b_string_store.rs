@@ -183,3 +183,19 @@ store_case!(
     4,
     "binding or returning a `maybe<Tag>` memcpys the payload shape, so its `name` is the array element's pointer and a release of both frees it twice (High)"
 );
+
+store_case!(
+    string_entering_a_union_slot,
+    "v0_3_m9_c3b_union_slot.ynz",
+    "2\n2\n2\n2\n2\nb-1\n",
+    6,
+    "a string wrapped into a union slot (`let`, field, argument) was never copied, because `lower_expr` asked for the expression's type after the slot type replaced it, so a literal or a still-read string was shared with the envelope (High)"
+);
+
+store_case!(
+    array_of_strings_copy_has_strings_of_its_own,
+    "v0_3_m9_c3b_array_string_copy.ynz",
+    "a-1\nb-1\nc-1\nb-1\n",
+    5,
+    "`array<string>.copy()` clones the buffer and shares each string pointer with the original (High)"
+);

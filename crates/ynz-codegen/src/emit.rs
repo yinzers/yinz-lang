@@ -16495,14 +16495,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     };
     let outer = cg.coercion_inner.replace(key);
     let lowered = lower_expr_node(cg, expr);
+    // The plain type is read while `coercion_inner` still names this node: once it is restored,
+    // `expr_type` answers with the union slot, which is never a string.
+    let plain_ty = cg.expr_type(expr);
+    if let (Ok(val), false) = (&lowered, cg.is_narrowed_envelope_ident(expr)) {
+        // A string entering a union slot is stored in the envelope: the slot owns its bytes.
+        remember_movable_string(cg, expr, *val);
+    }
     cg.coercion_inner = outer;
     let val = lowered?;
     if cg.is_narrowed_envelope_ident(expr) {
         return Ok(val);
     }
-    // A string entering a union slot is stored in the envelope: the slot owns its own bytes.
-    remember_movable_string(cg, expr, val);
-    let plain_ty = cg.expr_type(expr);
     let val = own_string_for_store(cg, val, &plain_ty, "union_wrap")?;
     cg.wrap_into_union_envelope(expr, val, &coercion)
 }
