@@ -1,0 +1,17 @@
+// v0.3-M9 C3b fixture: a function that shares a built-in method's name (`or`) does not make the
+// built-in's borrowed result look fresh. `names[0].or(`none`)` is the element itself, so `got`
+// must hold a copy of it.
+// Allocations: the array literal copies the literal `a` 1; `let got` copies the `.or()` result 1;
+// `[got]` stores `got` at its last use by move 0. Total 1+1 = 2.
+// Expected output: one value per line below.
+
+function or(first: string, second: string) -> string {
+  return second
+}
+
+function entrypoint() -> nothing {
+  let names: array<string> = [`a`]
+  let got = names[0].or(`none`)
+  let more: array<string> = [got]
+  print(more[0].or(`z`))
+}

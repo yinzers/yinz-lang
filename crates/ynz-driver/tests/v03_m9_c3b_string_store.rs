@@ -207,3 +207,11 @@ store_case!(
     9,
     "the defaults initializer stores a hidden string default without the store rule (copy a borrowed string, move a fresh one), so an instance holds a string no one owns (High)"
 );
+
+store_case!(
+    builtin_method_named_like_a_function_stays_borrowed,
+    "v0_3_m9_c3b_builtin_name_clash.ynz",
+    "a\n",
+    2,
+    "`names[0].or(...)` is classified as a call of a function that is also named `or`, so `let got` takes the element's own pointer and the element and `got` free one string twice (High)"
+);

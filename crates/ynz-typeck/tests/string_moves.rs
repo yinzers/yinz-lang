@@ -124,6 +124,16 @@ move_cases! {
         ],
         "a fresh string copied at its store, or an `int` toString (a heap string since C3a) treated as borrowed (cost)";
 
+    a_builtin_method_is_not_a_function_call_of_the_same_name:
+        "function or(first: string, second: string) -> string {\n  return second\n}\nfunction entrypoint() -> nothing {\n  let names: array<string> = [`a`]\n  let got: string = names[0].or(`none`)\n  print(got)\n}\n",
+        [("names[0].or(`none`)", 1, false)],
+        "a function that shares a built-in method's name makes the built-in's borrowed result look fresh, so a store takes an element's string without a copy and a release frees it twice (High)";
+
+    a_function_called_with_a_shape_receiver_is_fresh:
+        "shape Tag {\n  name: string\n}\nfunction label(tag: Tag) -> string {\n  return `L-${tag.name}`\n}\nfunction entrypoint() -> nothing {\n  let tag: Tag = { name: `t` }\n  let text: string = tag.label()\n  print(text)\n}\n",
+        [("tag.label()", 1, true)],
+        "a dot-call of a function on a shape receiver copied where Rust moves (cost)";
+
     borrowed_strings_are_not_moves:
         "function entrypoint() -> nothing {\n  let n: int = 1\n  let flag: boolean = true\n  let names: array<string> = [`a`]\n  let literal: string = `plain`\n  let element: string = names[0].or(`none`)\n  let shown: string = flag.toString()\n  print(`${literal}${element}${shown}${n}`)\n}\n",
         [

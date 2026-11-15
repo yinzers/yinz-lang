@@ -265,7 +265,15 @@ impl Recorder<'_> {
             Expr::MethodCall {
                 receiver, method, ..
             } => {
-                if self.callable_fns.contains(method) {
+                // A dot-call reaches a Yinz function only on a shape (or `dynamic` contract)
+                // receiver, and only after every built-in method of that name is ruled out
+                // (`Checker::check_method_call`). On any other receiver the name is a built-in
+                // such as `.or()`, whose result is borrowed even when a function shares its name.
+                let reaches_function = matches!(
+                    self.type_of(receiver),
+                    Some(Type::Shape { .. } | Type::Dynamic { .. })
+                );
+                if reaches_function && self.callable_fns.contains(method) {
                     return true;
                 }
                 match self.type_of(receiver) {
