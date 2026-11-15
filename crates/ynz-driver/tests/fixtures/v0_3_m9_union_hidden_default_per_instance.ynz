@@ -39,7 +39,7 @@ function showOwn(share self: Derived) -> string {
   return describe(own)
 }
 
-function replaceSlot(lend self: Derived, share replacement: Big | int) -> nothing {
+function replaceSlot(lend self: Derived, give replacement: Big | int) -> nothing {
   self.slot = replacement
 }
 
