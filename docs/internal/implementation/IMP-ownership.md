@@ -364,13 +364,13 @@ The crossing set reads only the kinds with a frame slot across a suspension toda
 | errors-capable | the error object, or the ok payload |
 | `dynamic`, type parameter | internal error: no such value exists in generated code |
 
-Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a `fixed` `set` or index assignment, a map `set` over a present key, whose handed-in key copy is freed too). `emit_errors_capable_release`'s ok payload and a plain union view release through the same `stored_release`: one dispatch decides what a stored value's release is. The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for every argument until C7's move sites null their slots. Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
+Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a `fixed` `set` or index assignment, a map `set` over a present key, whose handed-in key copy is freed too). `emit_errors_capable_release`'s ok payload and a plain union view release through the same `stored_release`: one dispatch decides what a stored value's release is. The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for every argument (deferred, see "Non-owned reads"). Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
 
-### Non-owned reads — view or copy (v0.3-M9 C6 round 2)
+### Non-owned reads — view or copy
 
 A read of a place someone else owns (`b.rows`, `rows[i].or(d)`, a loop's element, a call's argument) has two honest forms. A **view** points at the place: no allocation, as a Rust borrow. A **copy** owns a value of its own. Overwriting a place releases the value it held (the helper above), so a view that is still read after its place is written reads freed memory. Typeck therefore decides, per read, and codegen copies unless typeck proved a view. **Cost: no write while the reader lives means no copy; a write means one copy per affected `let`, loop iteration or call** (what Rust's `.clone()` costs where its borrow checker refuses a borrow), so Golden Rule 8 holds and the language gains no rule. Pinned by `v03_m9_c6_borrow_cost`.
 
-**The record.** `TypedModule::non_owned_reads` (`crates/ynz-typeck/src/non_owned_reads.rs`) maps the span of the expression that reads the place to `View` or `MustCopy`. It is built in the ONE liveness walk of `string_ownership` (the same `after` sets as `string_moves`); nothing re-derives it. Five sites are judged:
+**The record.** `TypedModule::non_owned_reads` (`crates/ynz-typeck/src/non_owned_reads.rs`) maps the span of the expression that reads the place to `View` or `MustCopy`. It is built in the ONE liveness walk of `string_ownership` (the same `after` sets as `string_moves`); nothing re-derives it. These sites are judged:
 
 | site | reader | key | judged types |
 |---|---|---|---|
@@ -385,10 +385,11 @@ A read is a `View` when (a) the reader is never written, stored, returned, given
 
 **Returns.** A function returns an owned value: a fresh value or an owned local at its last use moves, any other read (a parameter, a field, an element) is copied at the `return`. The caller binds a call result by move (`Provenance::Fresh`), so a returned copy is not copied again. The same copy closes a task's return of its own argument, which the release glue frees at retire.
 
-**Parked for C7/C8** (the record gives them the facts; none is a use-after-free, each is a leak the helper's scope-exit calls close):
-- *A `MustCopy` binding is an owner in fact* but keeps `Origin::Reaches`: the release plan lists it `NotOwner` until C7 reads the record.
-- *Early returns leak the loop copy*: a `return` inside a loop body skips the iteration's release (the release plan does not list loop cells).
-- *Suspending calls and loop bodies*: an argument copy of a call that suspends, and the copy of a loop variable (or map entry) a body that suspends reads before its `wait` and not after it, are released at C8's frame release. WHAT: those copies; WHY: no frame slot holds their pointer and a slot is a frame-layout change C8 owns; COST: one copy leaked per such call or iteration, only when a write follows the read; TRIGGER: C8 (#385) frame release.
+**Deferred to C7/C8** (none is a use-after-free: each is a leak the helper's scope-exit calls close):
+- *The flat free of a `give` callee's arguments.* WHAT: every `background` argument of a call whose callee declares any `give` parameter keeps the flat free, so its items, entries and string fields are not released by the task ladder. WHY: the callee owns what it was given and may store it in a container the ladder also owns, so a deep release would free one pointer twice until a move site nulls the slot. COST: the item bytes of such arguments leak per spawn (the container itself is freed). TRIGGER: C7 (#384) lands move-site slot nulling.
+- *A `MustCopy` binding is an owner in fact.* WHAT: it keeps `Origin::Reaches`, so the release plan lists it `NotOwner` and nothing releases its copy. WHY: the release plan is C7's input, and reading this record into it is C7's change. COST: one copy leaked per such binding per run of its scope. TRIGGER: C7 (#384) reads `non_owned_reads` in the release plan.
+- *Early returns leak the loop copy.* WHAT: a `return` inside a loop body skips the iteration's release of the loop variable's copy. WHY: the release plan does not list loop cells, so no exit edge carries the release. COST: one copy leaked per such early return, only when the body writes the iterated collection. TRIGGER: C7 (#384) lists loop cells on the exit edges.
+- *Suspending calls and loop bodies.* WHAT: an argument copy of a call that suspends, and the copy of a loop variable (or map entry) that a suspending body reads before its `wait` and not after it, are released at C8's frame release. WHY: no frame slot holds their pointer and a slot is a frame-layout change C8 owns. COST: one copy leaked per such call or iteration, only when a write follows the read. TRIGGER: C8 (#385) frame release.
 
 ### The parameter rule and how far it travels (FRAGO 007, re-derived)
 
