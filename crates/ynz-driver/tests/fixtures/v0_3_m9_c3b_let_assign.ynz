@@ -1,0 +1,23 @@
+// v0.3-M9 C3b fixture: a `let` and a reassignment store a string.
+// A string still read afterwards is stored as an owned copy; the last read of a binding and a
+// fresh string are stored by move; a literal is borrowed, so it is copied.
+// Heap strings allocated: `source` 1 (fresh), `copied` 1 (copy: `source` is read again),
+// `handedOn` 1 (fresh), `moved` 0 (last use of `handedOn`), `fromLiteral` 1 (copy of a literal),
+// `second` 1 (fresh), `second = fromLiteral` 1 (copy: `fromLiteral` is read again). Total 6.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let count: int = 4
+  let source: string = `item-${count}`
+  let copied: string = source
+  print(source)
+  print(copied)
+  let handedOn: string = `next-${count}`
+  let moved: string = handedOn
+  print(moved)
+  let fromLiteral: string = `plain`
+  let second: string = `x-${count}`
+  second = fromLiteral
+  print(second)
+  print(fromLiteral)
+}

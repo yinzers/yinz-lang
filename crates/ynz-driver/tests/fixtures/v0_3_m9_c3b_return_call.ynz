@@ -1,0 +1,37 @@
+// v0.3-M9 C3b fixture: a string returned from a function, and the result of a call.
+// A returned local at its last use moves (`build`); a returned parameter or `.or()` result is
+// borrowed, so the caller gets an owned copy. A call result is fresh: `let` takes it by move.
+// Allocations: `names` literal elements 2 (copies). `pick(names, 0)` copies the element 1, and
+// `pick(names, 9)` copies the literal default 1 (both bound by move). `build(2)` 1 fresh, moved out
+// 0. `echoed(built)` copies the borrowed parameter 1. `count.toString()` is a fresh heap string
+// 1, `let shown = text` at its last use moves 0. Total 2+1+1+1+0+1+1+0 = 7.
+// Expected output: one value per line below.
+
+function pick(names: array<string>, index: int) -> string {
+  return names[index].or(`none`)
+}
+
+function build(count: int) -> string {
+  let text: string = `built-${count}`
+  return text
+}
+
+function echoed(label: string) -> string {
+  return label
+}
+
+function entrypoint() -> nothing {
+  let names: array<string> = [`a`, `b`]
+  let inside = pick(names, 0)
+  let outside = pick(names, 9)
+  let built = build(2)
+  let again = echoed(built)
+  print(inside)
+  print(outside)
+  print(built)
+  print(again)
+  let count: int = 12
+  let text: string = count.toString()
+  let shown: string = text
+  print(shown)
+}

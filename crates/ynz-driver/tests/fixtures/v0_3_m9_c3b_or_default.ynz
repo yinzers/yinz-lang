@@ -1,0 +1,13 @@
+// v0.3-M9 C3b fixture: runtime-dependent provenance. `names[index].or(`none`)` is the stored
+// element for two iterations and the static default for the others, so what it is cannot be
+// decided from the value; the expression is borrowed either way and `let` copies it every time.
+// Allocations: `names` literal elements 2 (copies); 4 iterations each copy once 4. Total 6.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let names: array<string> = [`a`, `b`]
+  for (index in range(0, 4)) {
+    let chosen: string = names[index].or(`none`)
+    print(chosen)
+  }
+}

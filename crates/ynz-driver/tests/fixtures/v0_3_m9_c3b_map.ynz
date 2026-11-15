@@ -1,0 +1,20 @@
+// v0.3-M9 C3b fixture: a string stored in a map as a value and as a key (the key is stored by
+// its pointer).
+// Allocations: `valueText` 1 (fresh), `keyText` 1 (fresh). `{ `a`: valueText }` copies the literal
+// key 1 and `valueText` (read again) 1. `table.set(keyText, `v`)` moves the last use of `keyText`
+// 0 and copies the literal value 1. `table.set(`b`, valueText)` copies the literal key 1 and
+// `valueText` (last use) moves 0. Total 1+1+1+1+0+1+1+0 = 6.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let count: int = 2
+  let valueText: string = `value-${count}`
+  let keyText: string = `key-${count}`
+  let table: map<string, string> = { `a`: valueText }
+  print(valueText)
+  table.set(keyText, `v`)
+  table.set(`b`, valueText)
+  print(table.get(`a`).or(`none`))
+  print(table.get(`key-2`).or(`none`))
+  print(table.get(`b`).or(`none`))
+}
