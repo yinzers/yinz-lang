@@ -168,7 +168,8 @@ fn union_recovery(value: &Expr, source_union: &Type, expected_variant: &Type) ->
 /// (`value.f(a)` is `f(value, a)`, so the dot call counts the receiver as the first argument).
 ///
 /// `expected` and `given` always count the receiver of a dot call. `dot_receiver` is the source
-/// text of the value before the dot, `None` for a plain call. The first sentence of the WHAT is
+/// text of the value before the dot, `None` for a plain call (a dot call whose receiver text is
+/// unknown gets the plain call's text, which is still true, never an invented name). The first sentence of the WHAT is
 /// the same for every form; a dot call adds to WHAT-INSTEAD and WHY what the plain call has no
 /// need of: that the value before the dot is one of the arguments (without it, "takes 2, but 1
 /// were given" for `big.useBig()` has nothing to point at, since the parentheses are empty).
@@ -206,13 +207,6 @@ fn wrong_argument_count_diag(
             "Every function call must match the number of arguments the function declares. A dot call counts the value before the dot, `{receiver}`, as the first argument."
         ),
     )
-}
-
-/// The text of the value before the dot in a dot-call diagnostic. `Checker::check_method_call`
-/// is only reached from the method-call expression, which always has a receiver; the `None` arm
-/// states what is true of any dot call instead of printing an empty name.
-fn dot_receiver_text(receiver_expr: Option<&Expr>) -> String {
-    receiver_expr.map_or_else(|| "the receiver".to_string(), expr_source_text)
 }
 
 /// The teaching diagnostic for a union value reaching a slot that expects one of its variants
@@ -7629,12 +7623,13 @@ impl<'b> Checker<'b> {
                     // The contract lists its parameters without `self`; the receiver is the
                     // first argument of the call (same count and text as the shape path).
                     if args.len() != sig.param_tys.len() {
+                        let receiver_text = receiver_expr.map(expr_source_text);
                         self.diags.push(wrong_argument_count_diag(
                             method_span.clone(),
                             method,
                             sig.param_tys.len() + 1,
                             args.len() + 1,
-                            Some(&dot_receiver_text(receiver_expr)),
+                            receiver_text.as_deref(),
                         ));
                         return Type::Error;
                     }
@@ -7704,12 +7699,13 @@ impl<'b> Checker<'b> {
                         // extra one was dropped, and LLVM refused the call as a compiler bug
                         // (C1g rework, #424). Same text as the plain call form.
                         if args.len() + 1 != sig.params.len() {
+                            let receiver_text = receiver_expr.map(expr_source_text);
                             self.diags.push(wrong_argument_count_diag(
                                 method_span.clone(),
                                 method,
                                 sig.params.len(),
                                 args.len() + 1,
-                                Some(&dot_receiver_text(receiver_expr)),
+                                receiver_text.as_deref(),
                             ));
                             return Type::Error;
                         }
