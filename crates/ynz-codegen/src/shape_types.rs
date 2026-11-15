@@ -205,7 +205,7 @@ fn field_unions(shape_table: &ShapeTable, shape_name: &str) -> Vec<Vec<Type>> {
 /// Time: O(u * (s + f)) for u field unions, s shapes, f fields  Space: O(s)
 fn recursive_unions(shape_table: &ShapeTable) -> HashSet<String> {
     let mut recursive = HashSet::new();
-    let mut names = layout_shape_names(shape_table);
+    let names = layout_shape_names(shape_table);
     for name in names {
         for variants in field_unions(shape_table, &name) {
             let key = union_key(&variants);

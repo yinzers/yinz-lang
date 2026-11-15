@@ -1049,3 +1049,27 @@ pub fn default_target_machine(
         )
         .ok_or_else(|| "LLVM: failed to create target machine".to_string())
 }
+
+/// Return a GEP pointer to the frame region at `region_byte_offset` within `frame_ptr` (a union
+/// slot a `UnionRegion` reserves). Produces a pointer without reading or writing it.
+///
+/// Time: O(1)  Space: O(1)
+pub fn frame_region_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    region_byte_offset: u64,
+    name: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    // SAFETY: the offset comes from `FrameLayout::union_regions`, inside the composed frame.
+    unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                frame_ptr,
+                &[ctx.i64_type().const_int(region_byte_offset, false)],
+                name,
+            )
+            .map_err(|e| format!("frame_region_ptr gep {name}: {e}"))
+    }
+}

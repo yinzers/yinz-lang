@@ -163,6 +163,27 @@ pub struct CpuGroupSlot {
     pub result_offset: u64,
 }
 
+/// What a union region of a suspending function's composed frame holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UnionRegionRole {
+    /// The returned union (or the union success value of an `errors` result): the resume
+    /// function writes the slot here and puts its address in the return slot, so the pair of
+    /// 8-byte words the return slot holds never has to carry the whole slot.
+    Return,
+    /// The `n`th parameter, a union: a `wait`ing caller writes the argument's slot here, in the
+    /// callee's own frame, so it survives the caller's suspension.
+    Param(usize),
+}
+
+/// One union slot a composed frame reserves, `size` bytes (a `UnionLayout::slot_size`) at
+/// `offset` from the frame base.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnionRegion {
+    pub role: UnionRegionRole,
+    pub offset: u64,
+    pub size: u64,
+}
+
 /// Composed-frame layout for one suspending function.
 ///
 /// A composed frame embeds the sub-frames of all directly-called suspending children
@@ -190,6 +211,9 @@ pub struct FrameLayout {
     /// read. It is placed after all own-local slots and before child sub-frames so it lives
     /// inside the single composed frame allocation (zero extra `ynz_alloc`).
     pub number_errors_staging_offset: Option<u64>,
+    /// Union slots this function reserves after the `number errors` staging slot and before
+    /// the child sub-frames (`UnionRegion`), in `union_region_roles` order.
+    pub union_regions: Vec<UnionRegion>,
     /// CPU-parallel-group member slots (v0.3-M3d), keyed by `(group_id, member_index)`.
     ///
     /// Empty for every function that does not contain a promoted CPU group — non-promoted
@@ -250,6 +274,29 @@ pub fn build_frame_layouts_with_resolver(
     shape_abi_sizes: &HashMap<String, u64>,
     callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
 ) -> HashMap<String, FrameLayout> {
+    build_frame_layouts_with_unions(
+        typed,
+        suspend_set,
+        base_suspends,
+        shape_abi_sizes,
+        &HashMap::new(),
+        callee_size_resolver,
+    )
+}
+
+/// `build_frame_layouts_with_resolver` for a module that may pass or return an envelope union:
+/// `union_roles` (`union_region_roles`) says which union slots each suspending function
+/// reserves in its frame, and how large they are.
+///
+/// Time: as `build_frame_layouts_with_resolver`  Space: as there
+pub fn build_frame_layouts_with_unions(
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
+    shape_abi_sizes: &HashMap<String, u64>,
+    union_roles: &HashMap<String, Vec<(UnionRegionRole, u64)>>,
+    callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
+) -> HashMap<String, FrameLayout> {
     // Step 1: collect direct suspending callees for each suspending fn.
     let mut direct_children: HashMap<String, Vec<String>> = HashMap::new();
     for item in &typed.module.items {
@@ -301,6 +348,7 @@ pub fn build_frame_layouts_with_resolver(
             suspend_set,
             base_suspends,
             shape_abi_sizes,
+            union_roles,
             &mut sizes,
             &mut visiting,
         );
@@ -373,7 +421,21 @@ pub fn build_frame_layouts_with_resolver(
                 None
             };
             // Child sub-frames start after the optional staging slot.
-            let children_start = own_base + number_errors_staging_offset.map_or(0, |_| 16);
+            let mut union_regions: Vec<UnionRegion> = Vec::new();
+            let mut union_cursor = own_base + number_errors_staging_offset.map_or(0, |_| 16);
+            for (role, size) in union_roles
+                .get(&f.name)
+                .map(|r| r.as_slice())
+                .unwrap_or(&[])
+            {
+                union_regions.push(UnionRegion {
+                    role: *role,
+                    offset: union_cursor,
+                    size: *size,
+                });
+                union_cursor += size;
+            }
+            let children_start = union_cursor;
 
             // Build child offset list, detecting recursion edges.
             let mut children: Vec<(String, u64)> = Vec::new();
@@ -426,6 +488,7 @@ pub fn build_frame_layouts_with_resolver(
                     children,
                     recursion_slot,
                     number_errors_staging_offset,
+                    union_regions,
                     cpu_group_slots,
                 },
             );
@@ -736,6 +799,7 @@ fn compute_frame_size(
     suspend_set: &SuspendSet,
     base_suspends: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
+    union_roles: &HashMap<String, Vec<(UnionRegionRole, u64)>>,
     sizes: &mut HashMap<String, u64>,
     visiting: &mut HashSet<String>,
 ) -> u64 {
@@ -805,7 +869,10 @@ fn compute_frame_size(
         ynz_abi::FRAME_HEADER_SIZE + cpu_reserve + state_machine::own_locals_size(n_locals);
     // Include the 16-byte `number errors` staging slot in the own-locals region when needed.
     let staging_size = if needs_number_errors_staging { 16 } else { 0 };
-    let mut total = own_base + staging_size;
+    let union_bytes: u64 = union_roles
+        .get(fn_name)
+        .map_or(0, |roles| roles.iter().map(|(_, size)| size).sum());
+    let mut total = own_base + staging_size + union_bytes;
 
     if let Some(children) = direct_children.get(fn_name) {
         let mut seen_recursive: HashSet<String> = HashSet::new();
@@ -823,6 +890,7 @@ fn compute_frame_size(
                     suspend_set,
                     base_suspends,
                     shape_abi_sizes,
+                    union_roles,
                     sizes,
                     visiting,
                 );
@@ -1920,10 +1988,11 @@ fn abi_return_type<'ctx>(
             })?;
             Some((*struct_ty).into())
         }
-        // C1f (#423): an envelope union comes back BY VALUE as its `{tag, data}` pair, like a
-        // `maybe`; the shape payload it points to is a heap cell, never the callee's frame.
-        union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union) => {
-            Some(crate::shape_types::union_envelope_type(ctx).into())
+        // C1f (#423): an envelope union comes back BY VALUE as its slot (`UnionLayout`), like a
+        // `maybe`; its payload is inline, so nothing it points to lives in the callee's frame.
+        union @ Type::Union { variants } if ynz_typeck::check::is_envelope_union(union) => {
+            let layout = shape_types.union_layout(variants)?;
+            Some(shape_types.union_slot_llvm(ctx, &layout).into())
         }
         _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
     })
@@ -2178,6 +2247,8 @@ struct Cg<'ctx, 'g> {
     // Used by lower_stmt_return to write the i128 decimal to a frame-stable location so
     // the EC ok-pointer survives the resume function returning.
     sm_number_errors_staging_offset: Option<u64>,
+    /// The union slots this state machine's frame reserves (`FrameLayout::union_regions`).
+    sm_union_regions: Vec<UnionRegion>,
     // v0.3-M3b Phase 4: when true, the auto-parallelize pass is disabled.
     // All suspending statements lower in pure source order via the existing
     // single inline-poll path. This is the TRUE dumb-sequential baseline used
@@ -3784,20 +3855,21 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|e| format!("{e}"))?;
                 Ok(slot.into())
             }
-            // C1f (#423): the returned `{tag, data}` pair lands in a CALLER-owned slot; `none`
-            // (tag UNION_NONE_TAG) is the null value again.
+            // C1f (#423): the returned slot lands in a CALLER-owned slot, and the value is a view
+            // of it (null for `none`).
             union @ Type::Union { .. } if self.envelope_union_variants(&union).is_some() => {
                 let variants = self
                     .envelope_union_variants(&union)
                     .ok_or("wrap_abi_call_result: union lost its variants")?;
+                let layout = self.union_layout(&variants)?;
                 let slot = self.alloca_in_entry_llvm(
-                    self.union_envelope_type(),
+                    self.union_slot_llvm(&layout),
                     &format!("{site}_union_ret"),
                 )?;
                 self.builder
                     .build_store(slot, val.into_struct_value())
                     .map_err(|e| format!("{e}"))?;
-                Ok(self.union_pair_to_value(slot, &variants, site)?.into())
+                Ok(self.union_slot_to_value(slot, &variants, site)?.into())
             }
             _ => Ok(val),
         }
@@ -4483,55 +4555,23 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
         Ok(())
     }
-
-    /// READ a persisted union slot as a union value: a pointer to the slot's own 16 bytes, or
-    /// null when the slot holds `none` (only a union with a `nothing` variant can). The pointer
-    /// is valid as long as the slot is: an element read passes its per-site out buffer, a field
-    /// read passes the field's address.
+    /// The byte offset, in this state machine's frame, of the union slot reserved for `role`
+    /// (`FrameLayout::union_regions`). Missing means the layout and the lowering disagree about
+    /// which union slots this function has: a compiler bug.
     ///
-    /// Time: O(1)  Space: O(1)
-    fn union_pair_to_value(
-        &self,
-        slot: PointerValue<'ctx>,
-        variants: &[Type],
-        site: &str,
-    ) -> Result<PointerValue<'ctx>, String> {
-        if !self.union_has_nothing(variants) {
-            return Ok(slot);
-        }
-        let tag_gep = self
-            .builder
-            .build_struct_gep(
-                self.union_envelope_type(),
-                slot,
-                0,
-                &format!("{site}_slot_tag"),
-            )
-            .map_err(|err| format!("union slot tag gep {site}: {err}"))?;
-        let tag = self
-            .builder
-            .build_load(self.i64(), tag_gep, &format!("{site}_slot_tag"))
-            .map_err(|err| format!("union slot tag load {site}: {err}"))?
-            .into_int_value();
-        let is_none = self
-            .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                tag,
-                self.i64().const_int(UNION_NONE_TAG, false),
-                &format!("{site}_slot_is_none"),
-            )
-            .map_err(|err| format!("union slot compare {site}: {err}"))?;
-        Ok(self
-            .builder
-            .build_select(
-                is_none,
-                self.ptr().const_null(),
-                slot,
-                &format!("{site}_slot_val"),
-            )
-            .map_err(|err| format!("union slot select {site}: {err}"))?
-            .into_pointer_value())
+    /// Time: O(r) for r regions  Space: O(1)
+    fn sm_union_region(&self, role: UnionRegionRole) -> Result<u64, String> {
+        self.sm_union_regions
+            .iter()
+            .find(|region| region.role == role)
+            .map(|region| region.offset)
+            .ok_or_else(|| {
+                format!(
+                    "codegen: the frame layout reserves no union region for {role:?}; the frame \
+                     layout and the lowering disagree about this function's union slots, which \
+                     is a compiler bug"
+                )
+            })
     }
 
     /// The slot layout of the envelope union `variants`: the one answer, owned by
@@ -5992,6 +6032,7 @@ fn plain_cg<'ctx, 'g>(
         coercion_inner: None,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
+        sm_union_regions: Vec::new(),
         // Non-SM functions cannot contain independent suspending groups.
         no_auto_parallel: false,
         // Non-SM functions have no frame and cannot yield — the documented residual.
@@ -6418,6 +6459,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         coercion_inner: None,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
+        sm_union_regions: frame_layout
+            .map(|l| l.union_regions.clone())
+            .unwrap_or_default(),
         // When set, lower_sm_block skips independence analysis and lowers all stmts
         // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
         no_auto_parallel,
@@ -7066,24 +7110,37 @@ fn lower_function_with_waits<'ctx, 'g>(
                     .build_return(Some(&i128_val))
                     .map_err(|e| format!("wrapper number ret: {e}"))?;
             }
-            // C1f (#423): the resume fn stored the union's `{tag, data}` pair in the return slot
-            // (same +0/+8 pair layout); return it BY VALUE per `abi_return_type`.
-            union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union) => {
-                let (tag, data) =
-                    state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+            // C1f (#423): the resume fn wrote the union's slot into the frame's `Return` region
+            // and put its address in the return slot. Load the slot BY VALUE (per
+            // `abi_return_type`) before the frame is freed. The region is only 8-aligned inside
+            // the composed frame, so the load claims no more.
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(&ret_ty) => {
+                let layout = shape_types.union_layout(variants)?;
+                let slot_ty = shape_types.union_slot_llvm(ctx, &layout);
+                let region_bits = state_machine::load_return_value_i64(
+                    ctx,
+                    &builder,
+                    frame_ptr,
+                    "ret_union_bits",
+                )?;
+                let region = builder
+                    .build_int_to_ptr(
+                        region_bits,
+                        ctx.ptr_type(AddressSpace::default()),
+                        "ret_union_region",
+                    )
+                    .map_err(|e| format!("wrapper union region cast: {e}"))?;
+                let slot_value = builder
+                    .build_load(slot_ty, region, "ret_union_slot")
+                    .map_err(|e| format!("wrapper union load: {e}"))?;
+                slot_value
+                    .as_instruction_value()
+                    .ok_or("wrapper union load: no instruction value")?
+                    .set_alignment(8)
+                    .map_err(|e| format!("wrapper union load alignment: {e}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
-                let pair_ty = crate::shape_types::union_envelope_type(ctx);
-                let mut pair = pair_ty.const_zero();
-                pair = builder
-                    .build_insert_value(pair, tag, 0, "wrap_union_tag")
-                    .map_err(|e| format!("wrapper union tag insert: {e}"))?
-                    .into_struct_value();
-                pair = builder
-                    .build_insert_value(pair, data, 1, "wrap_union_data")
-                    .map_err(|e| format!("wrapper union data insert: {e}"))?
-                    .into_struct_value();
                 builder
-                    .build_return(Some(&pair))
+                    .build_return(Some(&slot_value))
                     .map_err(|e| format!("wrapper union ret: {e}"))?;
             }
             Type::Maybe { .. } => {
@@ -9869,18 +9926,33 @@ fn load_sm_return_value_typed<'ctx>(
             let i128_val = state_machine::load_return_value_i128(ctx, &cg.builder, frame_ptr, tag)?;
             Ok(i128_val.into())
         }
-        // C1f (#423): a union-returning callee's resume fn stores the `{tag, data}` pair in the
-        // return slot; rebuild it in a CALLER-owned slot and hand back the value form.
+        // C1f (#423): a union-returning callee's resume fn wrote its slot into the callee
+        // frame's `Return` region and put the region's address in the return slot. Copy the slot
+        // into a CALLER-owned one now (a heap-boxed child frame is freed right after this read),
+        // and hand back a view of the copy.
         Some(union @ Type::Union { .. }) if cg.envelope_union_variants(&union).is_some() => {
             let variants = cg
                 .envelope_union_variants(&union)
                 .ok_or("sm union return load: lost the variants")?;
-            let (union_tag, union_data) =
-                state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+            let layout = cg.union_layout(&variants)?;
+            let region_bits =
+                state_machine::load_return_value_i64(ctx, &cg.builder, frame_ptr, tag)?;
+            let region = cg
+                .builder
+                .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_union_region"))
+                .map_err(|e| format!("sm union region cast: {e}"))?;
             let slot =
-                cg.alloca_in_entry_llvm(cg.union_envelope_type(), &format!("{tag}_union"))?;
-            cg.store_union_slot_words(slot, union_tag, union_data, tag)?;
-            Ok(cg.union_pair_to_value(slot, &variants, tag)?.into())
+                cg.alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{tag}_union"))?;
+            cg.builder
+                .build_memcpy(
+                    slot,
+                    1,
+                    region,
+                    1,
+                    cg.i64().const_int(layout.slot_size, false),
+                )
+                .map_err(|e| format!("sm union slot copy: {e}"))?;
+            Ok(cg.union_slot_to_value(slot, &variants, tag)?.into())
         }
         Some(Type::Maybe { .. }) => {
             // v0.3-M7 R9: a maybe-returning callee's resume fn stores the envelope's
@@ -16827,32 +16899,39 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 stable_bits,
                             )?;
                         }
-                        // C1f (#423): an envelope union's `{tag, data}` pair rides the 16-byte return
-                        // slot by value, like a `maybe`'s pair; a shape payload is cloned to a heap
-                        // cell first (the resume stack dies when this function returns).
+                        // C1f (#423): an envelope union is written, payload inline, into the union
+                        // region this function's frame reserves for it; the return slot carries the
+                        // region's address. The wrapper, or the state machine that called this one,
+                        // copies the slot out before the frame is freed.
                         union @ Type::Union { .. }
                             if cg.envelope_union_variants(union).is_some() =>
                         {
                             let variants = cg
                                 .envelope_union_variants(union)
                                 .ok_or("sm union return: lost the variants")?;
-                            let scratch = cg.alloca_in_entry_llvm(
-                                cg.union_envelope_type(),
-                                "sm_union_ret_slot",
-                            )?;
-                            cg.union_pair_clone_into(
-                                val.into_pointer_value(),
-                                scratch,
-                                &variants,
-                                "sm_union_ret",
-                            )?;
-                            let (tag, data) = cg.load_maybe_env_pair(scratch, "sm_union_ret")?;
-                            state_machine::store_return_value_errors(
+                            let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
+                            let region = state_machine::frame_region_ptr(
                                 cg.ctx,
                                 &cg.builder,
                                 frame_ptr,
-                                tag,
-                                data,
+                                region_offset,
+                                "sm_union_ret_region",
+                            )?;
+                            cg.union_persist_into(
+                                val.into_pointer_value(),
+                                region,
+                                &variants,
+                                "sm_union_ret",
+                            )?;
+                            let region_bits = cg
+                                .builder
+                                .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_union_ret_bits")
+                                .map_err(|e| format!("sm union ret ptr_to_int: {e}"))?;
+                            state_machine::store_return_value_i64(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_bits,
                             )?;
                         }
                         Type::String
@@ -17048,28 +17127,29 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         .build_return(Some(&env))
                         .map_err(|e| format!("ret maybe: {e}"))?;
                 }
-                // C1f (#423): an envelope union returns its `{tag, data}` pair BY VALUE. The
-                // persist routine copies the pair into a scratch slot and clones a shape
-                // payload into a heap cell, so neither this frame's envelope nor its payload
-                // is read after `ret`.
+                // C1f (#423): an envelope union returns its slot BY VALUE, payload inline. The
+                // persist routine copies the value into a scratch slot (a shape variant's bytes
+                // included), so neither this frame's envelope nor a payload in this frame is read
+                // after `ret`.
                 union @ Type::Union { .. } if cg.envelope_union_variants(&union).is_some() => {
                     let variants = cg
                         .envelope_union_variants(&union)
                         .ok_or("union return: lost the variants")?;
-                    let scratch =
-                        cg.alloca_in_entry_llvm(cg.union_envelope_type(), "union_ret_slot")?;
-                    cg.union_pair_clone_into(
+                    let layout = cg.union_layout(&variants)?;
+                    let slot_ty = cg.union_slot_llvm(&layout);
+                    let scratch = cg.alloca_in_entry_llvm(slot_ty, "union_ret_slot")?;
+                    cg.union_persist_into(
                         val.into_pointer_value(),
                         scratch,
                         &variants,
                         "union_ret",
                     )?;
-                    let pair = cg
+                    let returned = cg
                         .builder
-                        .build_load(cg.union_envelope_type(), scratch, "union_ret_pair")
+                        .build_load(slot_ty, scratch, "union_ret_value")
                         .map_err(|e| format!("ret union load: {e}"))?;
                     cg.builder
-                        .build_return(Some(&pair))
+                        .build_return(Some(&returned))
                         .map_err(|e| format!("ret union: {e}"))?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {
@@ -24610,6 +24690,7 @@ mod tests {
             children: Vec::new(),
             recursion_slot: None,
             number_errors_staging_offset: None,
+            union_regions: Vec::new(),
             cpu_group_slots,
         }
     }
@@ -25400,4 +25481,57 @@ mod tests {
             "a base suspension intrinsic must be excluded from the block_on fallback guard"
         );
     }
+}
+
+/// The union slots each function's composed frame reserves (`UnionRegion`), with their sizes:
+/// one `Return` slot when the function returns an envelope union (or an `errors` result whose
+/// success value is one), and one `Param(n)` slot for every envelope-union parameter. Computed
+/// once from the slot layouts (`ShapeLlvmTypes::union_layout`) and read by both frame-size
+/// computations, so a frame and its embedding parent agree on every byte.
+///
+/// Generic functions are skipped: they are never suspending state machines
+/// (`build_frame_layouts_with_unions` only lays out non-generic ones).
+///
+/// Time: O(f * p) for f functions of p parameters  Space: O(f * p)
+pub fn union_region_roles(
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+    shape_types: &ShapeLlvmTypes<'_>,
+) -> HashMap<String, Vec<(UnionRegionRole, u64)>> {
+    let slot_size = |ty: &Type| -> Option<u64> {
+        let Type::Union { variants } = ty else {
+            return None;
+        };
+        if !ynz_typeck::check::is_envelope_union(ty) {
+            return None;
+        }
+        shape_types
+            .union_layout(variants)
+            .ok()
+            .map(|layout| layout.slot_size)
+    };
+    let mut roles: HashMap<String, Vec<(UnionRegionRole, u64)>> = HashMap::new();
+    for item in &typed.module.items {
+        let Item::Function(f) = item else { continue };
+        if !f.generics.is_empty() {
+            continue;
+        }
+        let mut function_roles = Vec::new();
+        let returned = match &f.return_type {
+            ynz_ast::nodes::Type::ErrorCapable { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        if let Some(size) = slot_size(&ast_type_to_typeck_type(returned, shape_table)) {
+            function_roles.push((UnionRegionRole::Return, size));
+        }
+        for (index, param) in f.params.iter().enumerate() {
+            if let Some(size) = slot_size(&ast_type_to_typeck_type(&param.ty, shape_table)) {
+                function_roles.push((UnionRegionRole::Param(index), size));
+            }
+        }
+        if !function_roles.is_empty() {
+            roles.insert(f.name.clone(), function_roles);
+        }
+    }
+    roles
 }
