@@ -5356,6 +5356,7 @@ impl<'b> Checker<'b> {
     fn declare_binding(&mut self, name: String, entry: ScopeEntry) {
         let declaration = decl_key(&entry.defined_at, &name);
         self.binding_names.declare(declaration.clone());
+        self.release.note_declared(&declaration);
         self.transfers.declare(
             declaration,
             self.scope.path(),

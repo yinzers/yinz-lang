@@ -378,6 +378,9 @@ struct FunctionExits {
     edges: Vec<RawEdge>,
     move_sites: Vec<RawMoveSite>,
     reassigned: HashSet<DeclKey>,
+    /// Every binding the function declares (heap or not): a user name that two of them share
+    /// names no single binding, so no read is fed under it (`resolve_function`).
+    declared: HashSet<DeclKey>,
 }
 
 /// The names a list is written in: what the user wrote, or the unique codegen name.
@@ -597,6 +600,7 @@ impl ReleaseRecorder {
             edges: Vec::new(),
             move_sites: Vec::new(),
             reassigned: HashSet::new(),
+            declared: HashSet::new(),
         });
     }
 
@@ -658,6 +662,15 @@ impl ReleaseRecorder {
         }
     }
 
+    /// The checker declared the binding `decl` (the one place a binding enters the scope).
+    pub fn note_declared(&mut self, decl: &DeclKey) {
+        let Some(function) = self.current.as_mut() else {
+            self.outside_function("a declaration");
+            return;
+        };
+        function.declared.insert(decl.clone());
+    }
+
     /// The binding `decl` is reassigned.
     pub fn note_reassign(&mut self, decl: DeclKey) {
         let Some(function) = self.current.as_mut() else {
@@ -676,7 +689,9 @@ impl ReleaseRecorder {
             return ReleaseReads::default();
         };
         let lookup = |decl: &DeclKey| anchors.get(decl).cloned();
-        match resolve_function(&function, &lookup, None, &|decl: &DeclKey| decl.2.clone()) {
+        match resolve_function(&function, &lookup, None, Names::User, &|decl: &DeclKey| {
+            decl.2.clone()
+        }) {
             Ok(resolved) => {
                 let reads = resolved.reads;
                 self.early_reads
@@ -721,12 +736,18 @@ impl ReleaseRecorder {
             };
             let codegen_name_of =
                 |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
-            let resolved =
-                resolve_function(function, &lookup, Some(&moves_by_binding), &codegen_name_of);
+            let resolved = resolve_function(
+                function,
+                &lookup,
+                Some(&moves_by_binding),
+                Names::Codegen,
+                &codegen_name_of,
+            );
             let user_reads = resolve_function(
                 function,
                 &lookup,
                 Some(&moves_by_binding),
+                Names::User,
                 &|decl: &DeclKey| decl.2.clone(),
             );
             match (resolved, user_reads) {
@@ -769,13 +790,22 @@ struct ResolvedFunction {
 
 /// The fate of every listed binding at every edge of `function`, and the reads they imply.
 /// `moves_by_binding` is `None` for the early pass, which does not know the string moves yet; a
-/// string then reads as `Release`, which reads exactly as `ReleaseIfLive` does.
+/// string then reads as `Release`, which reads exactly as `ReleaseIfLive` does. `names` says which
+/// name space `name_of` writes the reads in: the user's names are shared by bindings of different
+/// blocks, so an owner whose user name the function declares twice is not read in that space (the
+/// crossing producer and its guards are name-based and would judge the name by the wrong binding).
+/// Codegen's names are unique, so every owner is read there.
 fn resolve_function(
     function: &FunctionExits,
     anchor_of: &dyn Fn(&DeclKey) -> Option<ReleaseAnchor>,
     moves_by_binding: Option<&HashMap<DeclKey, Vec<Span>>>,
+    names: Names,
     name_of: &dyn Fn(&DeclKey) -> String,
 ) -> Result<ResolvedFunction, String> {
+    let ambiguous = match names {
+        Names::User => ambiguous_user_names(function),
+        Names::Codegen => HashSet::new(),
+    };
     let mut edges = Vec::with_capacity(function.edges.len());
     let mut reads = ReleaseReads {
         file: function.file.clone(),
@@ -789,7 +819,7 @@ fn resolve_function(
             let fate = fate_of(function, edge, entry, anchor_of, moves_by_binding)?;
             // A release is a read at its edge, for the kinds with a frame slot across a suspension.
             if let Fate::Release(kind) | Fate::ReleaseIfLive(kind) = fate {
-                if kind.has_frame_backing() {
+                if kind.has_frame_backing() && !ambiguous.contains(entry.decl.2.as_str()) {
                     owners.push(name_of(&entry.decl));
                 }
             }
@@ -806,6 +836,18 @@ fn resolve_function(
         edges.push((edge.kind, edge.span, fates));
     }
     Ok(ResolvedFunction { edges, reads })
+}
+
+/// The user names that two or more bindings of `function` share. O(declared bindings).
+fn ambiguous_user_names(function: &FunctionExits) -> HashSet<&str> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut repeated: HashSet<&str> = HashSet::new();
+    for decl in &function.declared {
+        if !seen.insert(decl.2.as_str()) {
+            repeated.insert(decl.2.as_str());
+        }
+    }
+    repeated
 }
 
 /// THE fate rule. One function, read by the early and the final pass alike.
