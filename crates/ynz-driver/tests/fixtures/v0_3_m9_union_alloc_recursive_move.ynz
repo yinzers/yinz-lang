@@ -1,0 +1,46 @@
+// v0.3-M9 C1f (#423): storing a recursive union value whose source is not read again MOVES it, as
+// `Box::new(chain)` does in Rust: the chain's boxes change owner and are not cloned. Each of 100
+// rounds builds a chain (`top` -> `middle` -> `last` -> an `End`) and moves it into a `Node | End`
+// binding, which needs one box of its own for `top`.
+// Correct behavior: prints the summed lengths of the stored chains, 300. The counter test pins the
+// allocations: 100 more than `v0_3_m9_union_alloc_recursive_chain.ynz`, one cell per move.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+
+function build() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function length(share chain: Node | End) -> int {
+  if (chain) {
+    is Node => {
+      return 1 + length(chain.next)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let top = build()
+    let chain: Node | End = top
+    total = total + length(chain)
+    round = round + 1
+  }
+  print(total)
+}
