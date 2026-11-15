@@ -95,6 +95,8 @@ fn pad_field_to_cache_line<'ctx>(
         BasicTypeEnum::IntType(it) => it.get_bit_width().div_ceil(8),
         BasicTypeEnum::FloatType(_) => 8,
         BasicTypeEnum::PointerType(_) => 8,
+        // An envelope union field: the 16-byte `{i64 tag, i64 data}` slot (`llvm_field_type`).
+        BasicTypeEnum::StructType(st) if st == union_slot_type(ctx) => 16,
         // No other field payload type is emitted by llvm_field_type today; a new one
         // must be classified here so its pad keeps the 64-byte slot exact.
         other => panic!("pad_field_to_cache_line: unsupported field payload type {other:?}"),
@@ -129,7 +131,18 @@ pub fn llvm_field_type<'ctx>(ctx: &'ctx Context, ty: &Type) -> BasicTypeEnum<'ct
         // N > 34: bignum stored as a pointer to the heap decimal string.
         Type::Number { precision } if *precision <= 34 => ctx.i128_type().into(),
         Type::Number { .. } => ptr.into(),
+        // C1f (#423): an envelope union (a union with a shape variant) is stored INLINE as its
+        // 16-byte `{i64 tag, i64 data}` slot, so a shape that leaves its frame carries the
+        // union with it. The payload of a shape variant is a heap cell the slot owns.
+        // `arc_shareable` must keep such a shape out: a byte copy would share that cell.
+        union if ynz_typeck::check::is_envelope_union(union) => union_slot_type(ctx).into(),
         // String, Shape, Dynamic, and all else: opaque pointer.
         _ => ptr.into(),
     }
+}
+
+/// The `{ i64 tag, i64 data }` LLVM type of an envelope union slot: the one definition the field
+/// layout and the lowering (`Cg::union_slot_type`) share.
+pub fn union_slot_type<'ctx>(ctx: &'ctx Context) -> StructType<'ctx> {
+    ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
 }

@@ -4293,8 +4293,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// The 16-byte `{i64 tag, i64 data}` LLVM type of a union envelope, in a frame and in a
     /// slot alike.
     fn union_slot_type(&self) -> inkwell::types::StructType<'ctx> {
-        self.ctx
-            .struct_type(&[self.i64().into(), self.i64().into()], false)
+        crate::shape_types::union_slot_type(self.ctx)
     }
 
     /// Whether `variants` include `nothing`, i.e. whether a union value of this type can be
@@ -5201,6 +5200,41 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .build_int_compare(IntPredicate::EQ, a, b, &format!("{site}_eq_{fname}"))
                         .map_err(|e| format!("{e}"))?
                 }
+                // An envelope union field is the inline 16-byte slot: both words compare by bit
+                // equality, the payload's pointer identity like the pointer fields below
+                // (a `none` slot is {UNION_NONE_TAG, 0}, so two none slots are equal).
+                union if ynz_typeck::check::is_envelope_union(union) => {
+                    let mut slots_equal = self.bool().const_int(1, false);
+                    for word in 0..2u32 {
+                        let a_word_gep = self
+                            .builder
+                            .build_struct_gep(self.union_slot_type(), a_gep, word, "ueq_a")
+                            .map_err(|e| format!("{e}"))?;
+                        let b_word_gep = self
+                            .builder
+                            .build_struct_gep(self.union_slot_type(), b_gep, word, "ueq_b")
+                            .map_err(|e| format!("{e}"))?;
+                        let a_word = self
+                            .builder
+                            .build_load(self.i64(), a_word_gep, "ueq_av")
+                            .map_err(|e| format!("{e}"))?
+                            .into_int_value();
+                        let b_word = self
+                            .builder
+                            .build_load(self.i64(), b_word_gep, "ueq_bv")
+                            .map_err(|e| format!("{e}"))?
+                            .into_int_value();
+                        let word_equal = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, a_word, b_word, "ueq_word")
+                            .map_err(|e| format!("{e}"))?;
+                        slots_equal = self
+                            .builder
+                            .build_and(slots_equal, word_equal, "ueq_acc")
+                            .map_err(|e| format!("{e}"))?;
+                    }
+                    slots_equal
+                }
                 // Pointer payload (string, nested shape, bignum, everything else):
                 // pointer identity — the Risk-3 heap-field deferral.
                 _ => {
@@ -5534,18 +5568,10 @@ fn lower_shape_defaults_initializer<'ctx, 'g>(
                 )
                 .map_err(|err| format!("hidden default GEP `{}`: {err}", ast_field.name))?;
             let lowered_default = lower_expr(&mut cg, default_expr)?;
-            // `lower_expr` wraps a plain variant in an envelope that is a slot in THIS frame,
-            // and this frame ends at the `ret`: the instance's field would point at a dead
-            // slot. Re-home a freshly wrapped union value on counted heap cells, the same home
-            // a wrapped value staged into a suspending callee's frame gets.
-            let stored_default = cg.home_union_on_heap(
-                default_expr,
-                lowered_default,
-                &field_ty,
-                EnvelopeHome::Heap,
-                "hidden_default_union",
-            )?;
-            store_field(&mut cg, stored_default, &field_ty, field_slot)?;
+            // `lower_expr` wraps a plain variant in an envelope that is a slot in THIS frame, and
+            // this frame ends at the `ret`. `store_field` copies a union into the field's own
+            // 16 bytes and clones a shape payload into a heap cell, so nothing dies with it.
+            store_field(&mut cg, lowered_default, &field_ty, field_slot)?;
         }
         let Some((parent_name, _)) = &current.extends else {
             break;
@@ -20091,6 +20117,9 @@ fn to_c_string<'ctx>(
                         .build_int_z_extend(raw, cg.i64(), "dbg_opt_ext")
                         .map_err(|e| format!("{e}"))?;
                     extended.into()
+                } else if let Some(variants) = cg.envelope_union_variants(field_ty) {
+                    // An envelope union field is the inline 16-byte slot, not a pointer cell.
+                    cg.union_slot_to_value(gep, &variants, "dbg_union")?.into()
                 } else {
                     let bits = cg
                         .builder
@@ -20775,6 +20804,13 @@ fn lower_field_access<'ctx>(
     }
 
     let (field_ptr, field_ty) = field_gep(cg, receiver, field_name)?;
+    // An envelope union field is read in place: a pointer to the field's own 16 bytes, or null
+    // for `none`.
+    if let Some(variants) = cg.envelope_union_variants(&field_ty) {
+        return Ok(cg
+            .union_slot_to_value(field_ptr, &variants, field_name)?
+            .into());
+    }
     load(cg, field_ptr, &field_ty, field_name)
 }
 
@@ -23821,6 +23857,19 @@ fn store_field<'ctx>(
             cg.builder
                 .build_store(field_ptr, cell)
                 .map_err(|e| format!("{e}"))?;
+        }
+        // C1f (#423): an envelope union field is the inline 16-byte slot; the payload of a shape
+        // variant is cloned into a heap cell the field owns, so the shape can leave the frame.
+        union @ Type::Union { .. } if cg.envelope_union_variants(union).is_some() => {
+            let variants = cg
+                .envelope_union_variants(union)
+                .ok_or("store_field: union lost its variants")?;
+            cg.union_persist_into(
+                val.into_pointer_value(),
+                field_ptr,
+                &variants,
+                "field_union",
+            )?;
         }
         Type::Number { precision } if *precision <= 34 => {
             // N ≤ 34: field stores i128 bits inline; val is ptr-to-i128.
