@@ -1,0 +1,14 @@
+// v0.3-M9 C6 security r1 red fixture: a for-loop variable reads a shape item whose string the body releases
+// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+
+shape Tag {
+  name: string
+  id: int
+}
+function entrypoint() -> nothing {
+  let tags: array<Tag> = [{ name: `a-${1}`, id: 1 }]
+  for (t in tags) {
+    tags[0] = { name: `b-${2}`, id: 2 }
+    print(t.name)
+  }
+}

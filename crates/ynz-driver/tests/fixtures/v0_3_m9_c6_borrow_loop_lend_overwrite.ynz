@@ -1,0 +1,13 @@
+// v0.3-M9 C6 security r1 red fixture: a for-loop variable reads an item a lend callee overwrites
+// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+
+function clobber(lend items: array<string>) -> nothing {
+  items[0] = `z-${3}`
+}
+function entrypoint() -> nothing {
+  let items: array<string> = [`a-${1}`, `b-${2}`]
+  for (s in items) {
+    clobber(items)
+    print(s)
+  }
+}

@@ -1,0 +1,13 @@
+// v0.3-M9 C6 security r1 red fixture: returning a parameter hands the caller an alias of an element
+// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+
+function echo(rows: array<int>) -> array<int> {
+  return rows
+}
+function entrypoint() -> nothing {
+  let holder: array<array<int>> = [[10, 20, 30]]
+  let fallback: array<int> = []
+  let r = echo(holder[0].or(fallback))
+  holder[0] = [9]
+  print(r.count())
+}

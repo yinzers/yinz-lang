@@ -1,0 +1,10 @@
+// v0.3-M9 C6 security r1 red fixture: let of a map value .or() aliases it; the map set frees it
+// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+
+function entrypoint() -> nothing {
+  let outer: map<string, map<string, string>> = { `a`: { `k`: `v-${1}` } }
+  let fallback: map<string, string> = {}
+  let inner = outer.get(`a`).or(fallback)
+  outer[`a`] = { `k`: `w-${2}` }
+  print(inner.get(`k`).or(`none`))
+}

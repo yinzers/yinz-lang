@@ -1,0 +1,20 @@
+// v0.3-M9 C6 security r1 red fixture: a task returns its argument's map field; the glue frees it
+// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+
+shape Bucket {
+  table: map<string, string>
+  id: int
+}
+function pick(b: Bucket) -> map<string, string> {
+  wait sleep(1)
+  return b.table
+}
+function entrypoint() -> nothing {
+  let b: Bucket = { table: { `k`: `v-${1}` }, id: 1 }
+  let h = background pick(b)
+  wait sleep(50)
+  let got = h.receive()
+  let fallback: map<string, string> = {}
+  let m = got.or(fallback)
+  print(m.get(`k`).or(`none`))
+}

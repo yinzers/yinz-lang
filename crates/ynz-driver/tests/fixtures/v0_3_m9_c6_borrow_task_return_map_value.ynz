@@ -1,0 +1,18 @@
+// v0.3-M9 C6 security r1 red fixture: a task returns its argument's map value; the glue frees it
+// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+
+function pick(table: map<string, array<int>>) -> array<int> {
+  wait sleep(1)
+  let fallback: array<int> = []
+  return table.get(`k`).or(fallback)
+}
+function entrypoint() -> nothing {
+  let table: map<string, array<int>> = { `k`: [1, 2, 3] }
+  let h = background pick(table)
+  wait sleep(50)
+  let got = h.receive()
+  let fallback: array<int> = []
+  let arr = got.or(fallback)
+  print(arr.count())
+  print(arr[0].or(-1))
+}
