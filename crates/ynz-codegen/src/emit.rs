@@ -3107,12 +3107,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `ynz_array_set` call with the ORIGINAL idx — the runtime's own abort
     /// path fires (byte-identical observable behavior to the AoS set; the raw
     /// call is legal because this helper lives inside the choke section).
+    ///
+    /// `release_replaced` says the slots hold an element the array owns, whose heap the write
+    /// replaces and so releases; the constructor writes into a fresh buffer holding nothing.
     fn soa_scatter(
         &self,
         info: &SoaArrayInfo<'ctx>,
         arr: PointerValue<'ctx>,
         idx: inkwell::values::IntValue<'ctx>,
         src: PointerValue<'ctx>,
+        release_replaced: bool,
         site: &str,
     ) -> Result<(), String> {
         let struct_ty = self.shape_types.get(&info.shape_name).ok_or_else(|| {
@@ -3135,6 +3139,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("soa scatter br: {e}"))?;
 
         self.builder.position_at_end(hit_bb);
+        // The element being replaced owns what its fields hold, so each is released (with the
+        // glue of the field type, as the AoS `ynz_array_set` releases the whole element) before
+        // the new element's fields are written over it.
+        let replaced_releases = if release_replaced {
+            self.shape_field_releases(&info.shape_name)?
+        } else {
+            Vec::new()
+        };
+        for (field_index, glue, inline) in replaced_releases {
+            let seg = info.segments.get(field_index as usize).ok_or_else(|| {
+                format!(
+                    "soa scatter: shape `{}` has no segment for field {field_index}",
+                    info.shape_name
+                )
+            })?;
+            let addr = self.soa_field_addr(data, seg, idx, site)?;
+            self.call_stored_release((glue, inline), addr, &format!("{site}_soa_old"))?;
+        }
         for (i, seg) in info.segments.iter().enumerate() {
             let sp = self
                 .builder
@@ -3411,7 +3433,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 ));
             }
             let src = self.array_elem_src_ptr(val, elem_ty, site)?;
-            return self.soa_scatter(info, arr, idx, src, site);
+            return self.soa_scatter(info, arr, idx, src, true, site);
         }
         let src = self.array_elem_src_ptr(val, elem_ty, site)?;
         // The item being replaced is released with the element type's glue.
@@ -16825,7 +16847,7 @@ fn lower_soa_construction<'ctx>(
         let ev = lower_expr(cg, elem_expr)?;
         let src = ev.into_pointer_value();
         let idx = cg.i64().const_int(k as u64, false);
-        cg.soa_scatter(&info, arr, idx, src, "soa_ctor")?;
+        cg.soa_scatter(&info, arr, idx, src, false, "soa_ctor")?;
     }
     cg.soa_bindings.insert(name.to_string(), info);
     Ok(arr.into())
@@ -23421,13 +23443,42 @@ fn lower_stmt_field_assign<'ctx>(
     let (field_ptr, field_ty) = field_gep(cg, receiver, field)?;
     let val = lower_expr(cg, value)?;
     // The shape owns what its field holds, so the value this assignment replaces has no other
-    // holder: release it with the field type's glue before the new one is stored. The new value
-    // is lowered first, so an assignment that reads the old value (`tag.name = tag.name`) has
-    // already made its own copy.
-    if let Some(glue) = cg.stored_release(&field_ty, ReleaseHome::Field)? {
-        cg.call_stored_release(glue, field_ptr, "field_assign")?;
-    }
-    store_field(cg, val, &field_ty, field_ptr)
+    // holder: release it with the field type's glue. The store is what copies a borrowed value
+    // (`own_string_for_store`), so an assignment that reads the old value (`tag.name = tag.name`)
+    // copies it first: the old value is set aside, the new one stored, and only then is the old
+    // one released.
+    let Some(glue) = cg.stored_release(&field_ty, ReleaseHome::Field)? else {
+        return store_field(cg, val, &field_ty, field_ptr);
+    };
+    let old_slot = match cg.envelope_union_variants(&cg.resolve_type(&field_ty)) {
+        // An inline union slot: keep a copy of its bytes.
+        Some(variants) => {
+            let layout = cg.union_layout(&variants)?;
+            let slot_ty = cg.union_slot_llvm(&layout);
+            let size = slot_ty
+                .size_of()
+                .ok_or("field assign: union slot size unavailable")?;
+            let saved = cg.alloca_in_entry_llvm(slot_ty, "field_old_union")?;
+            cg.builder
+                .build_memcpy(saved, 1, field_ptr, 1, size)
+                .map_err(|err| format!("field assign save union: {err}"))?;
+            saved
+        }
+        // A stored pointer: keep it.
+        None => {
+            let old_value = cg
+                .builder
+                .build_load(cg.ptr(), field_ptr, "field_old")
+                .map_err(|err| format!("field assign save: {err}"))?;
+            let saved = cg.alloca_in_entry_llvm(cg.ptr(), "field_old_slot")?;
+            cg.builder
+                .build_store(saved, old_value)
+                .map_err(|err| format!("field assign save store: {err}"))?;
+            saved
+        }
+    };
+    store_field(cg, val, &field_ty, field_ptr)?;
+    cg.call_stored_release(glue, old_slot, "field_assign")
 }
 
 /// PostfixOp lowering: `.copy()` and `.freeze()`.
@@ -23630,12 +23681,13 @@ fn emit_owned_copy<'ctx>(
                     cg.i64().const_int(bytes, false),
                 )
                 .map_err(|e| format!("{site} fixed memcpy: {e}"))?;
-            // A `fixed<string>` holds string pointers in its cells: the block copy above shares
-            // them, so copy each string into its own cell (the same `emit_owned_copy` plan an
-            // `array<string>` element takes).
+            // A `fixed<string>` or `fixed<Shape>` holds pointers to items in its cells: the block
+            // copy above shares them, so give each cell an item of its own (a string copy, or a
+            // fresh heap cell holding a deep copy of the shape).
             if let Type::BuiltinFixed { elem, .. } = &resolved {
-                if is_string_like(&cg.resolve_type(elem)) {
-                    emit_fixed_string_cells_copy(cg, dst, n, elem, site)?;
+                let elem = cg.resolve_type(elem);
+                if is_string_like(&elem) || matches!(elem, Type::Shape { .. }) {
+                    emit_fixed_item_cells_copy(cg, dst, n, &elem, site)?;
                 }
             }
             let free = match mode {
@@ -23827,11 +23879,12 @@ fn sole_holder_transfer_free_kind<'ctx>(
     }
 }
 
-/// Copy every string in the `cell_count` i64 cells at `cells` (a `fixed<string>` block just
-/// byte-copied from its source), through [`emit_owned_copy`]: a counted loop that loads a cell,
-/// copies the string it points at and stores the copy back. O(n) time in the cells and the
-/// bytes they hold.
-fn emit_fixed_string_cells_copy<'ctx>(
+/// Copy the item in each of the `cell_count` i64 cells at `cells` (a `fixed<string>` or
+/// `fixed<Shape>` block just byte-copied from its source): a counted loop that loads a cell,
+/// copies the string it points at (`emit_owned_copy`) or the shape (a fresh heap cell and a deep
+/// copy of its fields, `shape_bytes_to_heap_cell`) and stores the copy back. The release helper
+/// frees exactly these (`ReleaseStep::Fixed`). O(n) time in the cells and what they hold.
+fn emit_fixed_item_cells_copy<'ctx>(
     cg: &Cg<'ctx, '_>,
     cells: PointerValue<'ctx>,
     cell_count: u64,
@@ -23887,14 +23940,22 @@ fn emit_fixed_string_cells_copy<'ctx>(
         .builder
         .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_fixed_item"))
         .map_err(|err| format!("{site} fixed copy inttoptr: {err}"))?;
-    let (copied, _free) = emit_owned_copy(
-        cg,
-        None,
-        item.into(),
-        elem_ty,
-        CopyMode::Body,
-        &format!("{site}_item"),
-    )?;
+    let copied: BasicValueEnum<'ctx> = match elem_ty {
+        Type::Shape { name } => cg
+            .shape_bytes_to_heap_cell(item, name, &format!("{site}_item"))?
+            .into(),
+        _ => {
+            emit_owned_copy(
+                cg,
+                None,
+                item.into(),
+                elem_ty,
+                CopyMode::Body,
+                &format!("{site}_item"),
+            )?
+            .0
+        }
+    };
     let copied_bits = cg
         .builder
         .build_ptr_to_int(
@@ -24311,9 +24372,11 @@ enum ReleaseStep {
     Array { elem: Type },
     /// A `map<K, V>`: each occupied entry's key and value, then the buffers.
     Map { key: Type, value: Type },
-    /// A `fixed<string>`: each string cell. (Any other heap item of a `fixed` list is
-    /// [`ReleaseStep::Unsupported`]: its copy shares the cells, so nothing could free them once.)
-    Fixed { size: u64 },
+    /// A `fixed<string>` or `fixed<Shape>`: each of its `size` cells holds a pointer to an item
+    /// the list owns (a string, or a heap cell holding a shape), released by `elem`'s step. (Any
+    /// other heap item of a `fixed` list is [`ReleaseStep::Unsupported`]: the copy table refuses
+    /// it, so nothing allocates it for a release to free.)
+    Fixed { elem: Type, size: u64 },
     /// A shape: each field that owns heap, by the field type's step.
     Shape { name: String },
     /// A `maybe<T>` envelope `{flag, bits}`: the payload it owns (a string, a shape's heap cell,
@@ -24357,13 +24420,16 @@ fn release_step(ty: &Type) -> ReleaseStep {
         },
         Type::BuiltinFixed { elem, size } => match (release_step(elem), size) {
             (ReleaseStep::Nothing, _) => ReleaseStep::Nothing,
-            (ReleaseStep::String, Some(size)) => ReleaseStep::Fixed { size: *size as u64 },
-            (ReleaseStep::String, None) => ReleaseStep::Unsupported(
+            (ReleaseStep::String | ReleaseStep::Shape { .. }, Some(size)) => ReleaseStep::Fixed {
+                elem: elem.as_ref().clone(),
+                size: *size as u64,
+            },
+            (ReleaseStep::String | ReleaseStep::Shape { .. }, None) => ReleaseStep::Unsupported(
                 "the length of this `fixed` list is not known here, so its cells cannot be walked",
             ),
             _ => ReleaseStep::Unsupported(
-                "a `fixed` list of heap items other than strings is copied by sharing its cells, \
-                 so a release could not free them exactly once",
+                "a `fixed` list of heap items other than strings and shapes has no copy, so \
+                 nothing allocates them for a release to free",
             ),
         },
         Type::Shape { name } => ReleaseStep::Shape { name: name.clone() },
@@ -24527,7 +24593,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .build_int_z_extend(raw, self.i64(), "release_env_size")
                     .map_err(|err| format!("release env size: {err}"))
             }
-            ReleaseStep::Fixed { size } => Ok(self.i64().const_int(size * 8, false)),
+            ReleaseStep::Fixed { size, .. } => Ok(self.i64().const_int(size * 8, false)),
             other => Err(format!("internal: {other:?} has no heap cell of its own")),
         }
     }
@@ -24693,7 +24759,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     )
                     .map_err(|err| format!("release map {site}: {err}"))?;
             }
-            ReleaseStep::Fixed { size } => self.emit_fixed_string_releases(value, *size, site)?,
+            ReleaseStep::Fixed { elem, size } => {
+                self.emit_fixed_cell_releases(value, elem, *size, site)?
+            }
             ReleaseStep::Shape { name } => {
                 let struct_ty = self
                     .shape_types
@@ -24737,10 +24805,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
-    /// Release the string held in each of a `fixed<string>`'s `size` i64 cells at `cells`.
-    fn emit_fixed_string_releases(
+    /// Release the item each of a `fixed` list's `size` i64 cells at `cells` points at, with the
+    /// element type's glue (a string, or a shape's heap cell and what it owns). O(size) time.
+    fn emit_fixed_cell_releases(
         &self,
         cells: PointerValue<'ctx>,
+        elem: &Type,
         size: u64,
         site: &str,
     ) -> Result<(), String> {
@@ -24749,6 +24819,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get_insert_block()
             .and_then(|block| block.get_parent())
             .ok_or_else(|| format!("{site}: no function to walk the cells in"))?;
+        let glue = self
+            .stored_release(elem, ReleaseHome::Field)?
+            .ok_or_else(|| format!("{site}: the items of this `fixed` list own nothing"))?;
         let counter = self
             .builder
             .build_alloca(self.i64(), "release_fixed_i")
@@ -24787,13 +24860,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_gep(self.i64(), cells, &[index], "fixed_cell")
                 .map_err(|err| format!("{site} fixed gep: {err}"))?
         };
-        let string = self
-            .builder
-            .build_load(self.ptr(), cell, "fixed_string")
-            .map_err(|err| format!("{site} fixed load: {err}"))?;
-        self.builder
-            .build_call(self.rt.ynz_string_release, &[string.into()], "")
-            .map_err(|err| format!("{site} fixed release: {err}"))?;
+        self.call_stored_release(glue, cell, site)?;
         let next = self
             .builder
             .build_int_add(index, self.i64().const_int(1, false), "fixed_next")
