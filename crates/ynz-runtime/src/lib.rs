@@ -1802,12 +1802,24 @@ pub unsafe extern "C" fn ynz_array_get(arr: *const YnzArray, idx: i64, out: *mut
 /// `arr` must be a valid non-null pointer. `idx` must be in [0, len).
 /// `src` must be valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_array_set(arr: *mut YnzArray, idx: i64, src: *const u8) {
+pub unsafe extern "C" fn ynz_array_set(
+    arr: *mut YnzArray,
+    idx: i64,
+    src: *const u8,
+    item_glue: Option<ReleaseGlue>,
+    items_inline: i32,
+) {
     if idx < 0 || idx >= (*arr).len {
         std::process::abort();
     }
     let elem_size = (*arr).elem_size;
     let slot = (*arr).data.add((idx * elem_size) as usize);
+    // The array owns its items, so the one being replaced has no other holder: release it with
+    // the glue for the element type (none when the caller overwrites a cell it does not own, or
+    // the items own nothing).
+    if let Some(glue) = item_glue {
+        glue(item_argument(slot, items_inline));
+    }
     std::ptr::copy_nonoverlapping(src, slot, elem_size as usize);
 }
 
@@ -3385,7 +3397,7 @@ mod array_runtime {
             assert!(!arr.is_null(), "ynz_array_new_sized must return non-null");
             assert_eq!(ynz_array_count(arr), 5, "len must be pre-set to cap");
             let v: i64 = 42;
-            ynz_array_set(arr, 4, (&v as *const i64) as *const u8);
+            ynz_array_set(arr, 4, (&v as *const i64) as *const u8, None, 0);
             let (flag, got) = get_i64(arr, 4);
             assert_eq!(flag, 1, "index 4 must be in range (len == cap == 5)");
             assert_eq!(got, 42, "set/get roundtrip through the sized buffer");
@@ -3475,7 +3487,7 @@ mod array_runtime {
             );
 
             let replacement = [7i64, 70];
-            ynz_array_set(arr, 4, replacement.as_ptr() as *const u8);
+            ynz_array_set(arr, 4, replacement.as_ptr() as *const u8, None, 0);
             let flag = ynz_array_get(arr, 4, out.as_mut_ptr() as *mut u8);
             assert_eq!(flag, 1);
             assert_eq!(out, [7, 70], "set must overwrite the full 16-byte cell");

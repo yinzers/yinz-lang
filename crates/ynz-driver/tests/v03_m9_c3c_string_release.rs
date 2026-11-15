@@ -97,3 +97,21 @@ release_case!(
     4,
     "`set` on a present key stores the new value over the old one without freeing it, and drops the key copy the set was handed, so a string-keyed map leaks both on every overwrite (High)"
 );
+
+release_case!(
+    array_set_and_index_assign_free_the_replaced_string,
+    "v0_3_m9_c3c_array_overwrite.ynz",
+    "1\nthird\n",
+    3,
+    3,
+    "`set` and `items[i] = ...` store over a string item without freeing it, so every replacement leaks the old bytes (High)"
+);
+
+release_case!(
+    field_assign_frees_the_replaced_string,
+    "v0_3_m9_c3c_field_assign.ynz",
+    "renamed\n",
+    3,
+    2,
+    "`tag.name = ...` stores over a string field without freeing it, so every assignment leaks the old bytes (High)"
+);

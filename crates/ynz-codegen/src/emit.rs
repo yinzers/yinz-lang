@@ -3157,7 +3157,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_call(
                 self.rt.ynz_array_set,
-                &[arr.into(), idx.into(), src.into()],
+                &[arr.into(), idx.into(), src.into(), self.ptr().const_null().into(), self.i32().const_zero().into()],
                 &format!("{site}_soa_abort"),
             )
             .map_err(|e| format!("soa scatter oob set: {e}"))?;
@@ -3186,7 +3186,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// re-derivation); the raw `ynz_array_new_sized` call is legal here
     /// because this helper lives inside the choke section (E7).
     fn soa_copy_to_aos(
-        &mut self,
+        &self,
         info: &SoaArrayInfo<'ctx>,
         arr: PointerValue<'ctx>,
         site: &str,
@@ -3323,7 +3323,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Non-shape: i64-bit marshal into a per-site ENTRY-BLOCK staging slot (a
     /// body-block alloca would grow the stack every loop iteration — S1 discovery).
     fn array_elem_src_ptr(
-        &mut self,
+        &self,
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
         site: &str,
@@ -3390,7 +3390,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// staging semantics: for shape values `array_elem_src_ptr` IS the value
     /// pointer, and admission guarantees SoA elements are shapes).
     fn array_elem_set(
-        &mut self,
+        &self,
         arr: PointerValue<'ctx>,
         idx: inkwell::values::IntValue<'ctx>,
         val: BasicValueEnum<'ctx>,
@@ -3408,10 +3408,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return self.soa_scatter(info, arr, idx, src, site);
         }
         let src = self.array_elem_src_ptr(val, elem_ty, site)?;
+        // The item being replaced is released with the element type's glue.
+        let (glue, inline) = self
+            .stored_release(elem_ty, ReleaseHome::Element)?
+            .unwrap_or((self.ptr().const_null(), false));
         self.builder
             .build_call(
                 self.rt.ynz_array_set,
-                &[arr.into(), idx.into(), src.into()],
+                &[
+                    arr.into(),
+                    idx.into(),
+                    src.into(),
+                    glue.into(),
+                    self.i32().const_int(inline as u64, false).into(),
+                ],
                 site,
             )
             .map_err(|e| format!("array_set: {e}"))?;
@@ -6056,12 +6066,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         };
         // What a set over a present key replaces is released: the old value by the value type's
         // glue, and the key copy this set was handed (the map keeps the key it owns).
-        // C3c: a value type whose release is not lowered yet passes no glue, so its replaced
-        // value leaks as before; C6 lowers the rest and removes this fallback.
         let null = self.ptr().const_null();
         let (value_glue, value_inline) = self
-            .release_item_glue(val_ty)
-            .unwrap_or(None)
+            .stored_release(val_ty, ReleaseHome::Element)?
             .unwrap_or((null, false));
         let value_inline = self.i32().const_int(value_inline as u64, false);
         let args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = if is_str {
@@ -19016,7 +19023,7 @@ fn is_string_like(ty: &Type) -> bool {
 ///
 /// O(1) time at the call site; the copy it emits is O(n) in the string's length.
 fn own_string_for_store<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
+    cg: &Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
     site: &str,
@@ -23300,8 +23307,16 @@ fn lower_stmt_field_assign<'ctx>(
 
     let (field_ptr, field_ty) = field_gep(cg, receiver, field)?;
     let val = lower_expr(cg, value)?;
+    // The shape owns what its field holds, so the value this assignment replaces has no other
+    // holder: release it with the field type's glue before the new one is stored. The new value
+    // is lowered first, so an assignment that reads the old value (`tag.name = tag.name`) has
+    // already made its own copy.
+    if let Some(glue) = cg.stored_release(&field_ty, ReleaseHome::Field)? {
+        cg.call_stored_release(glue, field_ptr, "field_assign")?;
+    }
     store_field(cg, val, &field_ty, field_ptr)
 }
+
 
 /// PostfixOp lowering: `.copy()` and `.freeze()`.
 fn lower_postfix_op<'ctx>(
@@ -23363,7 +23378,7 @@ enum CopyMode {
 /// the shared table fails to compile here until someone says how to emit it, which is the same
 /// forcing function `owned_copy_plan` itself uses over `Type`.
 fn emit_owned_copy<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
+    cg: &Cg<'ctx, '_>,
     receiver: Option<&Expr>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
@@ -23717,7 +23732,7 @@ fn sole_holder_transfer_free_kind<'ctx>(
 /// copies the string it points at and stores the copy back. O(n) time in the cells and the
 /// bytes they hold.
 fn emit_fixed_string_cells_copy<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
+    cg: &Cg<'ctx, '_>,
     cells: PointerValue<'ctx>,
     cell_count: u64,
     elem_ty: &Type,
@@ -23830,7 +23845,7 @@ fn emit_fixed_string_cells_copy<'ctx>(
 /// - TRIGGER: the scope-exit release pass, which is where a body-local array's own release
 ///   lands and where this element walk has to exist anyway.
 fn emit_array_elem_deep_copy<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
+    cg: &Cg<'ctx, '_>,
     arr: PointerValue<'ctx>,
     elem_ty: &Type,
     mode: CopyMode,
@@ -23919,7 +23934,7 @@ fn emit_array_elem_deep_copy<'ctx>(
     cg.builder
         .build_call(
             cg.rt.ynz_array_set,
-            &[arr.into(), i.into(), cell_slot.into()],
+            &[arr.into(), i.into(), cell_slot.into(), cg.ptr().const_null().into(), cg.i32().const_zero().into()],
             &format!("{site}_deep_set"),
         )
         .map_err(|e| format!("{site} deep set: {e}"))?;
@@ -23944,7 +23959,7 @@ fn emit_array_elem_deep_copy<'ctx>(
 /// copies its string fields ([`Cg::copy_shape_string_fields`], the same copy a shape `.copy()`
 /// makes) and writes it back. O(n) time in the elements plus one string copy per string field.
 fn emit_array_shape_string_fields_copy<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
+    cg: &Cg<'ctx, '_>,
     arr: PointerValue<'ctx>,
     shape_name: &str,
     site: &str,
@@ -24001,7 +24016,7 @@ fn emit_array_shape_string_fields_copy<'ctx>(
     cg.builder
         .build_call(
             cg.rt.ynz_array_set,
-            &[arr.into(), i.into(), element_slot.into()],
+            &[arr.into(), i.into(), element_slot.into(), cg.ptr().const_null().into(), cg.i32().const_zero().into()],
             &format!("{site}_shape_set"),
         )
         .map_err(|err| format!("{site} shape copy set: {err}"))?;
@@ -24022,16 +24037,16 @@ fn emit_array_shape_string_fields_copy<'ctx>(
 
 // ── The one release helper (v0.3-M9 C3c / C6) ───────────────────────────────────────────────
 //
-// Releasing a value frees EXACTLY what a copy of it allocates: `emit_owned_copy` is the one place
-// a copy is made, and the release functions below are the one place a copy is undone. Nothing
-// else decides how a heap value is freed (`.claude/rules/authoritative-derivation.md`): the
-// task drop ladder, the channel's element glue and C7/C8's scope exits all call
-// [`Cg::release_fn`].
+// Releasing a value frees EXACTLY what a copy of it allocates: `emit_owned_copy` (and the
+// `deepen_shape_fields` seam it shares with every shape copy) is the one place a copy is made,
+// and the release functions below are the one place a copy is undone. Nothing else decides how
+// a heap value is freed (`.claude/rules/authoritative-derivation.md`): the task drop ladder, the
+// channel's element glue and C7/C8's scope exits all call [`Cg::release_fn`].
 
 /// What releasing a value of one type does. THE per-type release table: [`release_step`] is
 /// exhaustive over `Type` with no `_` arm, and `copy_parity_tests` holds it to
-/// `owned_copy_plan` for every type variant, so a copy plan with no release (or the reverse)
-/// fails a test instead of leaking or double-freeing.
+/// `owned_copy_plan` and to the release plan's `ReleaseKind`s for every type variant, so a copy
+/// plan with no release (or the reverse) fails a test instead of leaking or double-freeing.
 #[derive(Clone, Debug, PartialEq)]
 enum ReleaseStep {
     /// The value owns no heap memory.
@@ -24042,10 +24057,25 @@ enum ReleaseStep {
     Array { elem: Type },
     /// A `map<K, V>`: each occupied entry's key and value, then the buffers.
     Map { key: Type, value: Type },
+    /// A `fixed<string>`: each string cell. (Any other heap item of a `fixed` list is
+    /// [`ReleaseStep::Unsupported`]: its copy shares the cells, so nothing could free them once.)
+    Fixed { size: u64 },
     /// A shape: each field that owns heap, by the field type's step.
     Shape { name: String },
-    /// A type with a heap value but no release lowered yet, or none to lower. Reaching one is an
-    /// internal error naming the type, never a silent skip.
+    /// A `maybe<T>` envelope `{flag, bits}`: the payload it owns (a string, a shape's heap cell,
+    /// a `number`'s cell), and, in the cell flavor, the envelope cell.
+    Maybe { inner: Type },
+    /// A union: the variant its tag names (an envelope union is a slot, any other a `{tag, data}`
+    /// view).
+    Union { variants: Vec<Type> },
+    /// A `channel<T>`: one counted reference (`ynz_channel_free`).
+    Channel,
+    /// A background task handle: aborts the task and frees the handle (`ynz_handle_free`).
+    Handle,
+    /// An errors-capable `{err, ok}` value: the error object, or the payload when it is ok.
+    ErrorsCapable { inner: Type },
+    /// A type with a heap value that cannot be released as written, or none to release. Reaching
+    /// one is an internal error naming the type, never a silent skip.
     Unsupported(&'static str),
 }
 
@@ -24071,15 +24101,29 @@ fn release_step(ty: &Type) -> ReleaseStep {
             key: key.as_ref().clone(),
             value: val.as_ref().clone(),
         },
+        Type::BuiltinFixed { elem, size } => match (release_step(elem), size) {
+            (ReleaseStep::Nothing, _) => ReleaseStep::Nothing,
+            (ReleaseStep::String, Some(size)) => ReleaseStep::Fixed { size: *size as u64 },
+            (ReleaseStep::String, None) => ReleaseStep::Unsupported(
+                "the length of this `fixed` list is not known here, so its cells cannot be walked",
+            ),
+            _ => ReleaseStep::Unsupported(
+                "a `fixed` list of heap items other than strings is copied by sharing its cells, \
+                 so a release could not free them exactly once",
+            ),
+        },
         Type::Shape { name } => ReleaseStep::Shape { name: name.clone() },
-        Type::BuiltinFixed { .. }
-        | Type::Maybe { .. }
-        | Type::Union { .. }
-        | Type::BuiltinChannel { .. }
-        | Type::BackgroundHandle { .. }
-        | Type::ErrorsCapable { .. } => {
-            ReleaseStep::Unsupported("this type's release is not lowered in this build")
-        }
+        Type::Maybe { inner } => ReleaseStep::Maybe {
+            inner: inner.as_ref().clone(),
+        },
+        Type::Union { variants } => ReleaseStep::Union {
+            variants: variants.clone(),
+        },
+        Type::BuiltinChannel { .. } => ReleaseStep::Channel,
+        Type::BackgroundHandle { .. } => ReleaseStep::Handle,
+        Type::ErrorsCapable { inner } => ReleaseStep::ErrorsCapable {
+            inner: inner.as_ref().clone(),
+        },
         Type::Dynamic { .. } => ReleaseStep::Unsupported(
             "a `dynamic` value cannot be released: dynamic dispatch is not lowered yet, so no \
              such value exists in generated code",
@@ -24091,236 +24135,20 @@ fn release_step(ty: &Type) -> ReleaseStep {
     }
 }
 
-/// What a container walk calls on each item: the release function and whether the item lives
-/// inline in its cell (a shape's bytes) rather than behind a pointer.
-type ItemGlue<'ctx> = Option<(PointerValue<'ctx>, bool)>;
+/// Where a released value is stored: an array or map cell holds a shape's bytes inline, but a
+/// shape's own field holds a nested shape as a pointer to a heap cell.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReleaseHome {
+    Element,
+    Field,
+}
+
+/// What a container walk or a field release calls on one stored value: the release function and
+/// whether the value lives inline at the storage address (so the function gets the address) or
+/// behind the pointer the storage holds.
+type StoredRelease<'ctx> = Option<(PointerValue<'ctx>, bool)>;
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
-    /// Does shape `shape_name` hold a field whose release frees something (a string today)?
-    ///
-    /// Time: O(f)  Space: O(1)
-    fn shape_owns_released_fields(&self, shape_name: &str) -> bool {
-        self.shape_table.get(shape_name).is_some_and(|shape| {
-            shape
-                .fields
-                .iter()
-                .any(|field| is_string_like(&self.resolve_type(&field.ty)))
-        })
-    }
-
-    /// The glue a container walk calls on each item of type `elem`; `None` when the items own
-    /// nothing, so the walk is skipped. Errors for an item whose release is unsupported.
-    ///
-    /// Time: O(1) plus emitting the item's release function once  Space: O(1)
-    fn release_item_glue(&self, elem: &Type) -> Result<ItemGlue<'ctx>, String> {
-        let elem = self.resolve_type(elem);
-        match release_step(&elem) {
-            ReleaseStep::Nothing => Ok(None),
-            ReleaseStep::String => Ok(Some((
-                self.rt
-                    .ynz_string_release
-                    .as_global_value()
-                    .as_pointer_value(),
-                false,
-            ))),
-            ReleaseStep::Shape { .. } => Ok(self
-                .release_fn(&elem, false)?
-                .map(|glue| (glue.as_global_value().as_pointer_value(), true))),
-            ReleaseStep::Array { .. } | ReleaseStep::Map { .. } => {
-                let glue = self.release_fn(&elem, false)?.ok_or_else(|| {
-                    format!(
-                        "internal: a container of type `{}` has no release function",
-                        ynz_typeck::types::type_name(&elem)
-                    )
-                })?;
-                Ok(Some((glue.as_global_value().as_pointer_value(), false)))
-            }
-            ReleaseStep::Unsupported(reason) => Err(format!(
-                "internal: cannot release an item of type `{}`: {reason}",
-                ynz_typeck::types::type_name(&elem)
-            )),
-        }
-    }
-
-    /// The module function `void(ptr value)` that releases a value of `ty`, or `None` when the
-    /// value owns nothing. `owns_cell` says the value sits in a heap cell of its own (a spawn
-    /// argument's shape copy), which the function frees after its contents; a value that is its
-    /// own heap object (a string, an array, a map) ignores it.
-    ///
-    /// One function per type, declared before its body is emitted so a type that reaches itself
-    /// is a call, as in `union_deepen_fn`.
-    ///
-    /// Time: O(size of the type) to emit once; at run time O(n) in the heap the value owns
-    /// Space: O(1) here
-    fn release_fn(
-        &self,
-        ty: &Type,
-        owns_cell: bool,
-    ) -> Result<Option<FunctionValue<'ctx>>, String> {
-        let resolved = self.resolve_type(ty);
-        let step = release_step(&resolved);
-        let owns_cell = owns_cell && matches!(step, ReleaseStep::Shape { .. });
-        let name = format!(
-            "ynz_release_{}{}",
-            mangle_type(&resolved),
-            if owns_cell { "_cell" } else { "" }
-        );
-        match &step {
-            ReleaseStep::Nothing => return Ok(None),
-            ReleaseStep::Unsupported(reason) => {
-                return Err(format!(
-                    "internal: cannot release a value of type `{}`: {reason}",
-                    ynz_typeck::types::type_name(&resolved)
-                ))
-            }
-            ReleaseStep::Shape { name: shape_name }
-                if !self.shape_owns_released_fields(shape_name) =>
-            {
-                return Ok(None)
-            }
-            _ => {}
-        }
-        if let Some(existing) = self.module.get_function(&name) {
-            return Ok(Some(existing));
-        }
-        let release = self.module.add_function(
-            &name,
-            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
-            Some(inkwell::module::Linkage::Internal),
-        );
-        let saved_block = self.builder.get_insert_block();
-        let entry = self.ctx.append_basic_block(release, "entry");
-        self.builder.position_at_end(entry);
-        let value = release
-            .get_nth_param(0)
-            .ok_or("release: missing value parameter")?
-            .into_pointer_value();
-        self.emit_release_body(&step, value, owns_cell, &name)?;
-        self.builder
-            .build_return(None)
-            .map_err(|err| format!("release return {name}: {err}"))?;
-        if let Some(block) = saved_block {
-            self.builder.position_at_end(block);
-        }
-        Ok(Some(release))
-    }
-
-    /// The body of one release function: `step` applied to the value at `value`.
-    ///
-    /// Time: O(f) for a shape's f fields, O(1) otherwise  Space: O(1)
-    fn emit_release_body(
-        &self,
-        step: &ReleaseStep,
-        value: PointerValue<'ctx>,
-        owns_cell: bool,
-        site: &str,
-    ) -> Result<(), String> {
-        let null = self.ptr().const_null();
-        match step {
-            ReleaseStep::String => {
-                self.builder
-                    .build_call(self.rt.ynz_string_release, &[value.into()], "")
-                    .map_err(|err| format!("release string {site}: {err}"))?;
-            }
-            ReleaseStep::Array { elem } => {
-                let glue = self.release_item_glue(elem)?;
-                let (glue_ptr, inline) = glue.unwrap_or((null, false));
-                self.builder
-                    .build_call(
-                        self.rt.ynz_array_release,
-                        &[
-                            value.into(),
-                            glue_ptr.into(),
-                            self.i32().const_int(inline as u64, false).into(),
-                        ],
-                        "",
-                    )
-                    .map_err(|err| format!("release array {site}: {err}"))?;
-            }
-            ReleaseStep::Map {
-                key,
-                value: value_ty,
-            } => {
-                let key_glue = match release_step(&self.resolve_type(key)) {
-                    ReleaseStep::String => Some((
-                        self.rt
-                            .ynz_string_release
-                            .as_global_value()
-                            .as_pointer_value(),
-                        false,
-                    )),
-                    _ => None,
-                };
-                let value_glue = self.release_item_glue(value_ty)?;
-                let (value_ptr, value_inline) = value_glue.unwrap_or((null, false));
-                self.builder
-                    .build_call(
-                        self.rt.ynz_map_release,
-                        &[
-                            value.into(),
-                            key_glue.map_or(null, |(glue, _)| glue).into(),
-                            value_ptr.into(),
-                            self.i32().const_int(value_inline as u64, false).into(),
-                        ],
-                        "",
-                    )
-                    .map_err(|err| format!("release map {site}: {err}"))?;
-            }
-            ReleaseStep::Shape { name } => {
-                self.emit_shape_field_releases(value, name, site)?;
-                if owns_cell {
-                    let size = self.shape_abi_size_const(name, site)?;
-                    self.builder
-                        .build_call(self.rt.ynz_free, &[value.into(), size.into()], "")
-                        .map_err(|err| format!("release shape cell {site}: {err}"))?;
-                }
-            }
-            ReleaseStep::Nothing | ReleaseStep::Unsupported(_) => {
-                return Err(format!("internal: {site} has no release body"))
-            }
-        }
-        Ok(())
-    }
-
-    /// Release every field of the shape at `shape_ptr` whose type owns heap: the string fields
-    /// (what `copy_shape_string_fields` copies).
-    ///
-    /// Time: O(f) to emit  Space: O(1)
-    fn emit_shape_field_releases(
-        &self,
-        shape_ptr: PointerValue<'ctx>,
-        shape_name: &str,
-        site: &str,
-    ) -> Result<(), String> {
-        let struct_ty = self
-            .shape_types
-            .get(shape_name)
-            .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
-        let fields = self
-            .shape_table
-            .get(shape_name)
-            .ok_or_else(|| format!("{site}: shape `{shape_name}` not in the shape table"))?
-            .fields
-            .clone();
-        for (index, field) in fields.iter().enumerate() {
-            if !is_string_like(&self.resolve_type(&field.ty)) {
-                continue;
-            }
-            let field_ptr = self
-                .builder
-                .build_struct_gep(struct_ty, shape_ptr, index as u32, "release_field")
-                .map_err(|err| format!("{site} release field gep: {err}"))?;
-            let string = self
-                .builder
-                .build_load(self.ptr(), field_ptr, "release_field_string")
-                .map_err(|err| format!("{site} release field load: {err}"))?;
-            self.builder
-                .build_call(self.rt.ynz_string_release, &[string.into()], "")
-                .map_err(|err| format!("{site} release field string: {err}"))?;
-        }
-        Ok(())
-    }
-
     /// Does the callee take any parameter written `give`? Unknown callees (imported, generic
     /// instances) answer yes: the safe side. A given parameter can be stored into another
     /// parameter's container, so one `give` anywhere makes every deep release of the call
@@ -24345,10 +24173,610 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             })
             .unwrap_or(true)
     }
+
+    /// The release of one stored value of type `ty` in `home`; `None` when it owns nothing.
+    /// Errors, naming the type, for a value whose release is unsupported.
+    ///
+    /// Time: O(1) plus emitting the value's release function once  Space: O(1)
+    fn stored_release(&self, ty: &Type, home: ReleaseHome) -> Result<StoredRelease<'ctx>, String> {
+        let ty = self.resolve_type(ty);
+        let as_pointer = |glue: FunctionValue<'ctx>| glue.as_global_value().as_pointer_value();
+        match release_step(&ty) {
+            ReleaseStep::Nothing => Ok(None),
+            ReleaseStep::String => Ok(Some((
+                self.rt.ynz_string_release.as_global_value().as_pointer_value(),
+                false,
+            ))),
+            ReleaseStep::Array { .. }
+            | ReleaseStep::Map { .. }
+            | ReleaseStep::Channel
+            | ReleaseStep::Handle
+            | ReleaseStep::ErrorsCapable { .. } => Ok(self
+                .release_fn(&ty, false)?
+                .map(|glue| (as_pointer(glue), false))),
+            // An element holds a shape's bytes in its cell; a field holds a heap cell.
+            ReleaseStep::Shape { .. } => match home {
+                ReleaseHome::Element => Ok(self
+                    .release_fn(&ty, false)?
+                    .map(|glue| (as_pointer(glue), true))),
+                ReleaseHome::Field => Ok(self
+                    .release_fn(&ty, true)?
+                    .map(|glue| (as_pointer(glue), false))),
+            },
+            // A stored `maybe` is a pointer to a heap envelope cell.
+            ReleaseStep::Maybe { .. } => Ok(self
+                .release_fn(&ty, true)?
+                .map(|glue| (as_pointer(glue), false))),
+            ReleaseStep::Union { variants } => {
+                if self.envelope_union_variants(&ty).is_some() {
+                    Ok(self
+                        .release_fn(&ty, false)?
+                        .map(|glue| (as_pointer(glue), true)))
+                } else {
+                    Err(format!(
+                        "internal: a union of {} variants with no shape variant has no stored \
+                         form to release",
+                        variants.len()
+                    ))
+                }
+            }
+            ReleaseStep::Fixed { .. } => Err(format!(
+                "internal: cannot release a stored `{}`: a `fixed` list is not stored by pointer",
+                ynz_typeck::types::type_name(&ty)
+            )),
+            ReleaseStep::Unsupported(reason) => Err(format!(
+                "internal: cannot release a stored value of type `{}`: {reason}",
+                ynz_typeck::types::type_name(&ty)
+            )),
+        }
+    }
+
+    /// The fields of shape `shape_name` that own heap, each with its release: `(field index,
+    /// glue, inline)`. Empty when the shape owns nothing a release frees.
+    ///
+    /// Time: O(f)  Space: O(f)
+    fn shape_field_releases(
+        &self,
+        shape_name: &str,
+    ) -> Result<Vec<(u32, PointerValue<'ctx>, bool)>, String> {
+        let fields = self
+            .shape_table
+            .layout_shape(shape_name)
+            .ok_or_else(|| format!("release: shape `{shape_name}` not in the shape table"))?
+            .fields
+            .clone();
+        let mut releases = Vec::new();
+        for (index, field) in fields.iter().enumerate() {
+            if let Some((glue, inline)) = self.stored_release(&field.ty, ReleaseHome::Field)? {
+                releases.push((index as u32, glue, inline));
+            }
+        }
+        Ok(releases)
+    }
+
+    /// The byte size of the heap cell a value of `step` lives in when it owns its cell.
+    fn release_cell_size(&self, step: &ReleaseStep) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        match step {
+            ReleaseStep::Shape { name } => self.shape_abi_size_const(name, "release cell"),
+            ReleaseStep::Maybe { .. } => {
+                let raw = self
+                    .maybe_type()
+                    .size_of()
+                    .ok_or("release: maybe envelope size_of unavailable")?;
+                self.builder
+                    .build_int_z_extend(raw, self.i64(), "release_env_size")
+                    .map_err(|err| format!("release env size: {err}"))
+            }
+            ReleaseStep::Fixed { size } => Ok(self.i64().const_int(size * 8, false)),
+            other => Err(format!("internal: {other:?} has no heap cell of its own")),
+        }
+    }
+
+    /// The module function `void(ptr value)` that releases a value of `ty`, or `None` when the
+    /// value owns nothing. `owns_cell` says the value sits in a heap cell of its own (a spawn
+    /// argument's shape copy, a stored `maybe`, a nested shape field), which the function frees
+    /// after the value's contents; a value that is its own heap object (a string, an array, a
+    /// map) ignores it.
+    ///
+    /// One function per type and flavor, declared before its body is emitted so a type that
+    /// reaches itself is a call, as in `union_deepen_fn`.
+    ///
+    /// Time: O(size of the type) to emit once; at run time O(n) in the heap the value owns
+    /// Space: O(1) here
+    fn release_fn(&self, ty: &Type, owns_cell: bool) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let resolved = self.resolve_type(ty);
+        let step = release_step(&resolved);
+        let owns_cell = owns_cell
+            && matches!(
+                step,
+                ReleaseStep::Shape { .. } | ReleaseStep::Maybe { .. } | ReleaseStep::Fixed { .. }
+            );
+        let name = format!(
+            "ynz_release_{}{}",
+            mangle_type(&resolved),
+            if owns_cell { "_cell" } else { "" }
+        );
+        match &step {
+            ReleaseStep::Nothing => return Ok(None),
+            ReleaseStep::Unsupported(reason) => {
+                return Err(format!(
+                    "internal: cannot release a value of type `{}`: {reason}",
+                    ynz_typeck::types::type_name(&resolved)
+                ))
+            }
+            // A shape that owns nothing still frees its cell when it lives in one.
+            ReleaseStep::Shape { name: shape_name }
+                if !owns_cell && self.shape_field_releases(shape_name)?.is_empty() =>
+            {
+                return Ok(None)
+            }
+            _ => {}
+        }
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let value = release
+            .get_nth_param(0)
+            .ok_or("release: missing value parameter")?
+            .into_pointer_value();
+        self.emit_release_body(release, &step, &resolved, value, &name)?;
+        if owns_cell {
+            let size = self.release_cell_size(&step)?;
+            self.builder
+                .build_call(self.rt.ynz_free, &[value.into(), size.into()], "")
+                .map_err(|err| format!("release cell free {name}: {err}"))?;
+        }
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("release return {name}: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
+
+    /// Call the stored-value release `glue` on the value at `address`: the address itself for an
+    /// inline value, the pointer it holds otherwise.
+    fn call_stored_release(
+        &self,
+        glue: (PointerValue<'ctx>, bool),
+        address: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let (function, inline) = glue;
+        let argument = if inline {
+            address
+        } else {
+            self.builder
+                .build_load(self.ptr(), address, &format!("{site}_stored"))
+                .map_err(|err| format!("release load {site}: {err}"))?
+                .into_pointer_value()
+        };
+        let function_type = self.ctx.void_type().fn_type(&[self.ptr().into()], false);
+        self.builder
+            .build_indirect_call(function_type, function, &[argument.into()], "")
+            .map_err(|err| format!("release call {site}: {err}"))?;
+        Ok(())
+    }
+
+    /// The body of one release function: `step` applied to the value at `value`.
+    ///
+    /// Time: O(f) for a shape's f fields or a union's variants, O(1) otherwise  Space: O(1)
+    fn emit_release_body(
+        &self,
+        function: FunctionValue<'ctx>,
+        step: &ReleaseStep,
+        ty: &Type,
+        value: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let null = self.ptr().const_null();
+        match step {
+            ReleaseStep::String => {
+                self.builder
+                    .build_call(self.rt.ynz_string_release, &[value.into()], "")
+                    .map_err(|err| format!("release string {site}: {err}"))?;
+            }
+            ReleaseStep::Array { elem } => {
+                let (glue, inline) = self
+                    .stored_release(elem, ReleaseHome::Element)?
+                    .unwrap_or((null, false));
+                self.builder
+                    .build_call(
+                        self.rt.ynz_array_release,
+                        &[
+                            value.into(),
+                            glue.into(),
+                            self.i32().const_int(inline as u64, false).into(),
+                        ],
+                        "",
+                    )
+                    .map_err(|err| format!("release array {site}: {err}"))?;
+            }
+            ReleaseStep::Map { key, value: value_ty } => {
+                let key_glue = match release_step(&self.resolve_type(key)) {
+                    ReleaseStep::String => self
+                        .rt
+                        .ynz_string_release
+                        .as_global_value()
+                        .as_pointer_value(),
+                    _ => null,
+                };
+                let (value_glue, value_inline) = self
+                    .stored_release(value_ty, ReleaseHome::Element)?
+                    .unwrap_or((null, false));
+                self.builder
+                    .build_call(
+                        self.rt.ynz_map_release,
+                        &[
+                            value.into(),
+                            key_glue.into(),
+                            value_glue.into(),
+                            self.i32().const_int(value_inline as u64, false).into(),
+                        ],
+                        "",
+                    )
+                    .map_err(|err| format!("release map {site}: {err}"))?;
+            }
+            ReleaseStep::Fixed { size } => self.emit_fixed_string_releases(value, *size, site)?,
+            ReleaseStep::Shape { name } => {
+                let struct_ty = self
+                    .shape_types
+                    .get(name)
+                    .ok_or_else(|| format!("{site}: LLVM type for `{name}` not found"))?;
+                for (index, glue, inline) in self.shape_field_releases(name)? {
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(struct_ty, value, index, "release_field")
+                        .map_err(|err| format!("{site} release field gep: {err}"))?;
+                    self.call_stored_release((glue, inline), field_ptr, site)?;
+                }
+            }
+            ReleaseStep::Maybe { inner } => self.emit_maybe_payload_release(function, value, inner, site)?,
+            ReleaseStep::Union { variants } => {
+                if self.envelope_union_variants(ty).is_some() {
+                    self.emit_union_slot_release(function, value, variants, site)?;
+                } else {
+                    self.emit_union_view_release(function, value, variants, site)?;
+                }
+            }
+            ReleaseStep::Channel => {
+                self.builder
+                    .build_call(self.rt.ynz_channel_free, &[value.into()], "")
+                    .map_err(|err| format!("release channel {site}: {err}"))?;
+            }
+            ReleaseStep::Handle => {
+                self.builder
+                    .build_call(self.rt.ynz_handle_free, &[value.into()], "")
+                    .map_err(|err| format!("release handle {site}: {err}"))?;
+            }
+            ReleaseStep::ErrorsCapable { inner } => {
+                self.emit_errors_capable_release(function, value, inner, site)?;
+            }
+            ReleaseStep::Nothing | ReleaseStep::Unsupported(_) => {
+                return Err(format!("internal: {site} has no release body"))
+            }
+        }
+        Ok(())
+    }
+
+    /// Release the string held in each of a `fixed<string>`'s `size` i64 cells at `cells`.
+    fn emit_fixed_string_releases(
+        &self,
+        cells: PointerValue<'ctx>,
+        size: u64,
+        site: &str,
+    ) -> Result<(), String> {
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|block| block.get_parent())
+            .ok_or_else(|| format!("{site}: no function to walk the cells in"))?;
+        let counter = self.alloca_in_entry_llvm(self.i64(), "release_fixed_i")?;
+        self.builder
+            .build_store(counter, self.i64().const_zero())
+            .map_err(|err| format!("{site} fixed counter init: {err}"))?;
+        let head = self.ctx.append_basic_block(function, "fixed_head");
+        let body = self.ctx.append_basic_block(function, "fixed_body");
+        let done = self.ctx.append_basic_block(function, "fixed_done");
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|err| format!("{site} fixed br: {err}"))?;
+        self.builder.position_at_end(head);
+        let index = self
+            .builder
+            .build_load(self.i64(), counter, "fixed_index")
+            .map_err(|err| format!("{site} fixed index: {err}"))?
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULT,
+                index,
+                self.i64().const_int(size, false),
+                "fixed_more",
+            )
+            .map_err(|err| format!("{site} fixed cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(more, body, done)
+            .map_err(|err| format!("{site} fixed cond: {err}"))?;
+        self.builder.position_at_end(body);
+        // SAFETY: `index` < `size`, the number of i64 cells in the block.
+        let cell = unsafe {
+            self.builder
+                .build_gep(self.i64(), cells, &[index], "fixed_cell")
+                .map_err(|err| format!("{site} fixed gep: {err}"))?
+        };
+        let string = self
+            .builder
+            .build_load(self.ptr(), cell, "fixed_string")
+            .map_err(|err| format!("{site} fixed load: {err}"))?;
+        self.builder
+            .build_call(self.rt.ynz_string_release, &[string.into()], "")
+            .map_err(|err| format!("{site} fixed release: {err}"))?;
+        let next = self
+            .builder
+            .build_int_add(index, self.i64().const_int(1, false), "fixed_next")
+            .map_err(|err| format!("{site} fixed add: {err}"))?;
+        self.builder
+            .build_store(counter, next)
+            .map_err(|err| format!("{site} fixed counter store: {err}"))?;
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|err| format!("{site} fixed loop br: {err}"))?;
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// Release what a `maybe<inner>` envelope's payload owns when it is present: a string, the
+    /// heap cell of a shape (its contents and the cell), or the 16-byte cell of a `number`.
+    /// Anything else in a payload is not allocated by a copy of the envelope, so it is not freed
+    /// here (an array or map payload is the producer's, `MaybeCellClone` refuses to copy one).
+    fn emit_maybe_payload_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        envelope: PointerValue<'ctx>,
+        inner: &Type,
+        site: &str,
+    ) -> Result<(), String> {
+        let inner = self.resolve_type(inner);
+        let payload_release: Option<(PointerValue<'ctx>, Option<u64>)> = match release_step(&inner)
+        {
+            ReleaseStep::String => Some((
+                self.rt.ynz_string_release.as_global_value().as_pointer_value(),
+                None,
+            )),
+            ReleaseStep::Shape { .. } => self
+                .release_fn(&inner, true)?
+                .map(|glue| (glue.as_global_value().as_pointer_value(), None)),
+            _ if matches!(inner, Type::Number { precision } if precision <= 34) => {
+                Some((self.rt.ynz_number_cell_free.as_global_value().as_pointer_value(), None))
+            }
+            _ => None,
+        };
+        let Some((glue, _)) = payload_release else {
+            return Ok(());
+        };
+        let present_bb = self.ctx.append_basic_block(function, "maybe_present");
+        let done_bb = self.ctx.append_basic_block(function, "maybe_done");
+        let flag_ptr = self
+            .builder
+            .build_struct_gep(self.maybe_type(), envelope, 0, "maybe_flag_ptr")
+            .map_err(|err| format!("{site} maybe flag gep: {err}"))?;
+        let flag = self
+            .builder
+            .build_load(self.i64(), flag_ptr, "maybe_flag")
+            .map_err(|err| format!("{site} maybe flag load: {err}"))?
+            .into_int_value();
+        let present = self
+            .builder
+            .build_int_compare(IntPredicate::NE, flag, self.i64().const_zero(), "maybe_has")
+            .map_err(|err| format!("{site} maybe cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, present_bb, done_bb)
+            .map_err(|err| format!("{site} maybe cond: {err}"))?;
+        self.builder.position_at_end(present_bb);
+        let bits_ptr = self
+            .builder
+            .build_struct_gep(self.maybe_type(), envelope, 1, "maybe_bits_ptr")
+            .map_err(|err| format!("{site} maybe bits gep: {err}"))?;
+        self.call_stored_release((glue, false), bits_ptr, site)?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("{site} maybe br: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// The release a union variant's payload word gets: a string, an array or a map the slot
+    /// owns. Errors for a variant whose release is unsupported; `None` for one that owns nothing.
+    fn union_variant_release(&self, variant: &Type) -> Result<Option<PointerValue<'ctx>>, String> {
+        let variant = self.resolve_type(variant);
+        match release_step(&variant) {
+            ReleaseStep::Nothing => Ok(None),
+            ReleaseStep::String => Ok(Some(
+                self.rt.ynz_string_release.as_global_value().as_pointer_value(),
+            )),
+            ReleaseStep::Array { .. } | ReleaseStep::Map { .. } => Ok(self
+                .release_fn(&variant, false)?
+                .map(|glue| glue.as_global_value().as_pointer_value())),
+            _ => Err(format!(
+                "internal: cannot release a union variant of type `{}`",
+                ynz_typeck::types::type_name(&variant)
+            )),
+        }
+    }
+
+    /// Release the variant an envelope union SLOT `{tag, payload}` holds: a shape variant frees
+    /// the shape's fields (inline) or its box cell (a recursive union), a string, array or map
+    /// variant frees that value, every other variant and `none` own nothing.
+    fn emit_union_slot_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        slot: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<(), String> {
+        let layout = self.union_layout(variants)?;
+        let tag = self
+            .builder
+            .build_load(self.i64(), slot, "release_tag")
+            .map_err(|err| format!("{site} union tag load: {err}"))?
+            .into_int_value();
+        let payload_addr = self.union_payload_addr(slot, &layout, site)?;
+        let done = self.ctx.append_basic_block(function, "union_done");
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let mut bodies: Vec<(BasicBlock<'ctx>, Option<(PointerValue<'ctx>, bool)>)> = Vec::new();
+        for (index, variant) in variants.iter().enumerate() {
+            let release = match self.resolve_type(variant) {
+                Type::Shape { ref name } if layout.boxed => self
+                    .release_fn(&Type::Shape { name: name.clone() }, true)?
+                    .map(|glue| (glue.as_global_value().as_pointer_value(), false)),
+                Type::Shape { ref name } => self
+                    .release_fn(&Type::Shape { name: name.clone() }, false)?
+                    .map(|glue| (glue.as_global_value().as_pointer_value(), true)),
+                other => self
+                    .union_variant_release(&other)?
+                    .map(|glue| (glue, false)),
+            };
+            if release.is_some() {
+                let block = self.ctx.append_basic_block(function, &format!("union_variant{index}"));
+                cases.push((self.i64().const_int(index as u64, false), block));
+                bodies.push((block, release));
+            }
+        }
+        self.builder
+            .build_switch(tag, done, &cases)
+            .map_err(|err| format!("{site} union switch: {err}"))?;
+        for (block, release) in bodies {
+            self.builder.position_at_end(block);
+            if let Some(glue) = release {
+                self.call_stored_release(glue, payload_addr, site)?;
+            }
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("{site} union case br: {err}"))?;
+        }
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// Release the variant a plain (no shape variant) union VIEW `{tag, data}` holds; a null view
+    /// is `none`. The data word is the value's bits: a string, array or map pointer is owned.
+    fn emit_union_view_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        view: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<(), String> {
+        let present_bb = self.ctx.append_basic_block(function, "view_present");
+        let done = self.ctx.append_basic_block(function, "view_done");
+        let is_none = self
+            .builder
+            .build_is_null(view, "view_is_none")
+            .map_err(|err| format!("{site} view null: {err}"))?;
+        self.builder
+            .build_conditional_branch(is_none, done, present_bb)
+            .map_err(|err| format!("{site} view cond: {err}"))?;
+        self.builder.position_at_end(present_bb);
+        let tag = self.union_tag_bits(view, site)?;
+        let payload = self.union_payload_ptr(view, site)?;
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let mut bodies: Vec<(BasicBlock<'ctx>, PointerValue<'ctx>)> = Vec::new();
+        for (index, variant) in variants.iter().enumerate() {
+            if let Some(glue) = self.union_variant_release(variant)? {
+                let block = self.ctx.append_basic_block(function, &format!("view_variant{index}"));
+                cases.push((self.i64().const_int(index as u64, false), block));
+                bodies.push((block, glue));
+            }
+        }
+        self.builder
+            .build_switch(tag, done, &cases)
+            .map_err(|err| format!("{site} view switch: {err}"))?;
+        let function_type = self.ctx.void_type().fn_type(&[self.ptr().into()], false);
+        for (block, glue) in bodies {
+            self.builder.position_at_end(block);
+            self.builder
+                .build_indirect_call(function_type, glue, &[payload.into()], "")
+                .map_err(|err| format!("{site} view release: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("{site} view case br: {err}"))?;
+        }
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// Release an errors-capable `{err, ok}` value: the error object when it holds one, else the
+    /// ok payload when it is a string, array or map.
+    fn emit_errors_capable_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        result: PointerValue<'ctx>,
+        inner: &Type,
+        site: &str,
+    ) -> Result<(), String> {
+        let result_ty = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let err_ptr = self
+            .builder
+            .build_struct_gep(result_ty, result, 0, "ec_err_ptr")
+            .map_err(|err| format!("{site} ec err gep: {err}"))?;
+        let err_bits = self
+            .builder
+            .build_load(self.i64(), err_ptr, "ec_err")
+            .map_err(|err| format!("{site} ec err load: {err}"))?
+            .into_int_value();
+        let failed_bb = self.ctx.append_basic_block(function, "ec_failed");
+        let ok_bb = self.ctx.append_basic_block(function, "ec_ok");
+        let done = self.ctx.append_basic_block(function, "ec_done");
+        let failed = self
+            .builder
+            .build_int_compare(IntPredicate::NE, err_bits, self.i64().const_zero(), "ec_failed")
+            .map_err(|err| format!("{site} ec cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(failed, failed_bb, ok_bb)
+            .map_err(|err| format!("{site} ec cond: {err}"))?;
+        self.builder.position_at_end(failed_bb);
+        let error_object = self
+            .builder
+            .build_int_to_ptr(err_bits, self.ptr(), "ec_error_object")
+            .map_err(|err| format!("{site} ec inttoptr: {err}"))?;
+        self.builder
+            .build_call(self.rt.ynz_error_drop, &[error_object.into()], "")
+            .map_err(|err| format!("{site} ec drop: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done)
+            .map_err(|err| format!("{site} ec br: {err}"))?;
+        self.builder.position_at_end(ok_bb);
+        if let Some(glue) = self.union_variant_release(inner)? {
+            let ok_ptr = self
+                .builder
+                .build_struct_gep(result_ty, result, 1, "ec_ok_ptr")
+                .map_err(|err| format!("{site} ec ok gep: {err}"))?;
+            self.call_stored_release((glue, false), ok_ptr, site)?;
+        }
+        self.builder
+            .build_unconditional_branch(done)
+            .map_err(|err| format!("{site} ec ok br: {err}"))?;
+        self.builder.position_at_end(done);
+        Ok(())
+    }
 }
 
 /// Upgrade the flat free kind of a `background` argument to the type's release glue, when the
-/// glue frees more than the flat free does and the task may free it deeply.
+/// glue frees more than the flat free does and the task may free it deeply. A type whose release
+/// is not supported is an internal error, not a silent fall back to the flat free.
 ///
 /// DEFERRED, four fields — the items of a `give` parameter's argument:
 /// - WHAT: every argument of a call whose callee declares any `give` parameter keeps the flat
@@ -24371,23 +24799,25 @@ fn release_glue_free_kind<'ctx>(
     }
     let resolved = cg.resolve_type(ty);
     let upgrade = match (&kind, &resolved) {
-        (BgArgFreeKind::HeapArrayPrimitive, Type::BuiltinArray { elem }) => {
-            matches!(cg.release_item_glue(elem), Ok(Some(_)))
-        }
+        (BgArgFreeKind::HeapArrayPrimitive, Type::BuiltinArray { elem }) => cg
+            .stored_release(elem, ReleaseHome::Element)?
+            .is_some(),
         (BgArgFreeKind::None, Type::BuiltinMap { .. }) => true,
         (BgArgFreeKind::HeapShape { .. }, Type::Shape { name }) => {
-            cg.shape_owns_released_fields(name)
+            !cg.shape_field_releases(name)?.is_empty()
         }
+        (BgArgFreeKind::HeapShape { .. }, Type::BuiltinFixed { .. }) => true,
+        (BgArgFreeKind::HeapMaybeEnv { .. }, Type::Maybe { .. }) => true,
         _ => false,
     };
     if !upgrade {
         return Ok(kind);
     }
-    match cg.release_fn(&resolved, true) {
-        Ok(Some(glue)) => Ok(BgArgFreeKind::ReleaseGlue {
+    match cg.release_fn(&resolved, true)? {
+        Some(glue) => Ok(BgArgFreeKind::ReleaseGlue {
             glue_name: glue.get_name().to_string_lossy().into_owned(),
         }),
-        Ok(None) | Err(_) => Ok(kind),
+        None => Ok(kind),
     }
 }
 

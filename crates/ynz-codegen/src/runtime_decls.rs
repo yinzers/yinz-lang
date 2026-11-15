@@ -484,11 +484,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_array_get",
                 i64.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
-            // ynz_array_set: (ptr arr, i64 idx, ptr src) -> void
+            // ynz_array_set: (ptr arr, i64 idx, ptr src) + item glue + inline flag -> void
             ynz_array_set: declare_fn(
                 module,
                 "ynz_array_set",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into(), i32.into()], false),
             ),
             ynz_array_count: declare_fn(
                 module,
