@@ -691,3 +691,96 @@ fn a_statement_holding_a_move_site_names_its_founder_as_written() {
         "a statement with no move site writes no slot"
     );
 }
+
+// ── Fixer round 1 (code): the propagated error leaves the function; a shadowed binding stays ─
+
+/// Bug: the auto-propagation returns the failed value's error to the caller, yet the edge lists
+/// the failed binding as `Release` (the error object is freed and returned: a double free). The
+/// edge must omit it as returned, and the transfer record must say it escapes by return.
+/// Producer: `Checker::resolve_ident` recorded the propagation edge with no returned classes.
+#[test]
+fn an_auto_propagation_omits_the_propagated_binding_as_returned() {
+    let output = clean(
+        "function risky() -> int errors {\n  return 1\n}\nfunction chained() -> int errors {\n  let rows = [1, 2]\n  let value = risky()\n  return value\n}\n",
+    );
+    let function = function_of(&output, "chained");
+    let Stmt::Return {
+        value: Some(ynz_ast::nodes::Expr::Ident(_, span)),
+        ..
+    } = &function.body.stmts[2]
+    else {
+        panic!("the third statement returns the errors-capable value")
+    };
+    let list: Vec<(String, Fate)> = output
+        .typed_module
+        .release_plan
+        .propagation_edge(span)
+        .expect("the read of `value` fires an auto-propagation")
+        .iter()
+        .map(|entry| (entry.decl.2.clone(), entry.fate))
+        .collect();
+    assert_eq!(
+        fate_of(&list, "value"),
+        Fate::Omitted(OmitReason::Returned),
+        "the propagated error is the function's result"
+    );
+    assert_eq!(fate_of(&list, "rows"), Fate::Release(ARRAY));
+    assert!(
+        output
+            .typed_module
+            .release_plan
+            .parity_violations(&output.typed_module.transfers)
+            .is_empty(),
+        "plan and record agree"
+    );
+}
+
+/// Bug: `let x` twice in one block replaced the first binding in the scope's frame, so the first
+/// array was in no list at all (a leak on every path). Both bindings leave scope with the block.
+/// Producer: `Scope::insert` dropped the shadowed entry.
+#[test]
+fn a_binding_shadowed_in_its_own_block_is_still_released() {
+    let output = clean(
+        "function twice() -> nothing {\n  let x = [1]\n  let x = [2]\n  print(x.count().toString())\n}\n",
+    );
+    let list = body_end(&output, "twice");
+    assert_eq!(
+        list.iter().filter(|(name, _)| name == "x").count(),
+        2,
+        "both `x` bindings are listed: {list:?}"
+    );
+    assert!(
+        list.iter().all(|(_, fate)| *fate == Fate::Release(ARRAY)),
+        "{list:?}"
+    );
+}
+
+/// Bug: a shadowed owner whose class is returned through a class-mate is released anyway (double
+/// free with the caller) when the scope forgets it or freezes its state at the shadowing.
+#[test]
+fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
+    let output = clean(
+        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction shadowed() -> array<int> {\n  let x = [1]\n  let y = pass(x)\n  let x = [9]\n  return y\n}\n",
+    );
+    let returns = return_edges(&output, "shadowed");
+    let list = &returns[0];
+    let firsts: Vec<Fate> = list
+        .iter()
+        .filter(|(name, _)| name == "x")
+        .map(|(_, fate)| *fate)
+        .collect();
+    assert_eq!(firsts.len(), 2, "both `x` are listed: {list:?}");
+    assert_eq!(
+        firsts.iter().filter(|fate| fate.releases()).count(),
+        1,
+        "only the unrelated second `x` releases: {list:?}"
+    );
+    assert!(
+        output
+            .typed_module
+            .release_plan
+            .parity_violations(&output.typed_module.transfers)
+            .is_empty(),
+        "{list:?}"
+    );
+}

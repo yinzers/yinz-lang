@@ -201,6 +201,25 @@ fn entry_key(frame_index: usize, name: &str, defined_at: &SourceSpan) -> EntryKe
     )
 }
 
+/// Separates a shadowed binding's name from its declaration offset in its frame key. No source
+/// name contains it.
+const SHADOWED_MARK: char = '\u{0}';
+
+/// The frame key of a binding hidden by a same-frame redeclaration of `name`.
+fn shadowed_key(name: &str, defined_at: &SourceSpan) -> String {
+    format!("{name}{SHADOWED_MARK}{}", defined_at.start)
+}
+
+/// True for a key made by `shadowed_key`.
+fn is_shadowed_key(frame_key: &str) -> bool {
+    frame_key.contains(SHADOWED_MARK)
+}
+
+/// The name a binding was declared with, from its frame key.
+fn declared_name(frame_key: &str) -> &str {
+    frame_key.split(SHADOWED_MARK).next().unwrap_or(frame_key)
+}
+
 /// The part of an entry a path can change and a join must reconcile: whether it is given away,
 /// where its value came from, and which alias class it is in. A reassignment changes all three
 /// (`Scope::rebind`); a give changes the first (`Scope::consume`).
@@ -328,8 +347,16 @@ impl Scope {
         id
     }
 
+    /// Declare `name` in the innermost frame. A second declaration of the same name in the SAME
+    /// frame hides the first (`lookup` finds the new one) but does not end it: the first binding
+    /// still leaves scope with its frame, so it stays in the frame under a key no source name
+    /// equals (`shadowed_key`), where class merges, gives and the scope-exit lists still reach
+    /// it. O(1).
     pub fn insert(&mut self, name: String, entry: ScopeEntry) {
         if let Some(frame) = self.frames.last_mut() {
+            if let Some(shadowed) = frame.remove(&name) {
+                frame.insert(shadowed_key(&name, &shadowed.defined_at), shadowed);
+            }
             frame.insert(name, entry);
         }
     }
@@ -356,6 +383,9 @@ impl Scope {
         let mut members: Vec<String> = Vec::new();
         for frame in self.frames.iter().rev() {
             for (name, entry) in frame {
+                if is_shadowed_key(name) {
+                    continue;
+                }
                 // The innermost occurrence of a name is the entry `lookup` finds; an outer
                 // entry hidden behind it is not visible and is not listed.
                 if seen.contains(&name.as_str()) {
@@ -384,21 +414,24 @@ impl Scope {
             return Vec::new();
         };
         let mut reached = Vec::new();
+        // The frame's own key of each reached entry (a shadowed entry's differs from its name).
+        let mut frame_keys: Vec<String> = Vec::new();
         for (frame_index, frame) in self.frames.iter().enumerate() {
             for (entry_name, entry) in frame {
                 if entry.alias_class == class && entry.consumed.is_none() {
                     reached.push(ConsumedEntry {
                         frame_index,
-                        name: entry_name.clone(),
+                        name: declared_name(entry_name).to_string(),
                         defined_at: entry.defined_at.clone(),
                     });
+                    frame_keys.push(entry_name.clone());
                 }
             }
         }
-        for reached_entry in &reached {
+        for (reached_entry, frame_key) in reached.iter().zip(&frame_keys) {
             let key = entry_key(
                 reached_entry.frame_index,
-                &reached_entry.name,
+                frame_key,
                 &reached_entry.defined_at,
             );
             self.touch(&key);
@@ -633,7 +666,7 @@ impl Scope {
         };
         let mut entries: Vec<(&str, &ScopeEntry)> = frame
             .iter()
-            .map(|(name, entry)| (name.as_str(), entry))
+            .map(|(name, entry)| (declared_name(name), entry))
             .collect();
         // A declaration span is unique per binding except for the parser's desugared pairs
         // (`for ((k, v) in m)` gives `__entry` and `k` one span), so the name breaks ties.
@@ -663,7 +696,12 @@ impl Scope {
     pub fn all_names(&self) -> Vec<&str> {
         let mut names = Vec::new();
         for frame in &self.frames {
-            names.extend(frame.keys().map(String::as_str));
+            names.extend(
+                frame
+                    .keys()
+                    .filter(|name| !is_shadowed_key(name))
+                    .map(String::as_str),
+            );
         }
         names
     }

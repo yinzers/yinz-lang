@@ -5707,10 +5707,20 @@ impl<'b> Checker<'b> {
                     // Inside an errors function: auto-propagation fires — narrow the
                     // binding to its success type. The compiler will insert early-return-
                     // on-failure IR at P4a; for typeck, just return the inner type.
-                    self.errors_success_narrowed.insert(entry.alias_class);
-                    self.errors_consumed.insert(entry.alias_class);
-                    // Auto-propagation returns early from here: every open frame leaves scope.
-                    self.record_exit(EdgeKind::Propagation, span, &HashSet::new());
+                    let propagated_class = entry.alias_class;
+                    self.errors_success_narrowed.insert(propagated_class);
+                    self.errors_consumed.insert(propagated_class);
+                    // Auto-propagation returns early from here: every open frame leaves scope,
+                    // and the failed value is what the function returns, so its class is not
+                    // released there (the caller owns the error).
+                    if let Some(declaration) = self.declaration_of(name) {
+                        self.transfers.escape(&declaration, Escape::Returned);
+                    }
+                    self.record_exit(
+                        EdgeKind::Propagation,
+                        span,
+                        &HashSet::from([propagated_class]),
+                    );
                     return inner;
                 }
                 // Outside an errors function: return the full ErrorsCapable type.
