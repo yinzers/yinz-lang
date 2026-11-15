@@ -279,6 +279,7 @@ pub fn build_frame_layouts_with_resolver(
         suspend_set,
         base_suspends,
         shape_abi_sizes,
+        &ShapeTable::default(),
         &HashMap::new(),
         callee_size_resolver,
     )
@@ -294,6 +295,7 @@ pub fn build_frame_layouts_with_unions(
     suspend_set: &SuspendSet,
     base_suspends: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
+    shape_table: &ShapeTable,
     union_roles: &HashMap<String, Vec<(UnionRegionRole, u64)>>,
     callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
 ) -> HashMap<String, FrameLayout> {
@@ -348,6 +350,7 @@ pub fn build_frame_layouts_with_unions(
             suspend_set,
             base_suspends,
             shape_abi_sizes,
+            shape_table,
             union_roles,
             &mut sizes,
             &mut visiting,
@@ -387,7 +390,7 @@ pub fn build_frame_layouts_with_unions(
                 // crossing set the resume fn flushes/reloads — one producer verdict.
                 typed.back_edge_yield_admitted.contains(&f.name),
             );
-            let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
+            let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_table, shape_abi_sizes);
 
             // v0.3-M3d CPU-group slots. A promoted host (admitted by spike_cpu_candidates)
             // reserves a handle+result region immediately after the frame header, BEFORE its
@@ -799,6 +802,7 @@ fn compute_frame_size(
     suspend_set: &SuspendSet,
     base_suspends: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
+    shape_table: &ShapeTable,
     union_roles: &HashMap<String, Vec<(UnionRegionRole, u64)>>,
     sizes: &mut HashMap<String, u64>,
     visiting: &mut HashSet<String>,
@@ -851,7 +855,7 @@ fn compute_frame_size(
                         typed.back_edge_yield_admitted.contains(&f.name),
                     );
                     let crossing_slots =
-                        crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
+                        crossing_local_total_slots(f, &crossing, typed, shape_table, shape_abi_sizes);
                     let (_, reserve) =
                         cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
                     return Some((
@@ -890,6 +894,7 @@ fn compute_frame_size(
                     suspend_set,
                     base_suspends,
                     shape_abi_sizes,
+                    shape_table,
                     union_roles,
                     sizes,
                     visiting,
@@ -1275,7 +1280,7 @@ fn build_module<'ctx, 'g>(
         let dl_owned = module.get_data_layout();
         let dl_str = dl_owned.as_str().to_str().unwrap_or("");
         let target_data = inkwell::targets::TargetData::create(dl_str);
-        let sizes: HashMap<String, u64> = shape_types
+        let mut sizes: HashMap<String, u64> = shape_types
             .named
             .iter()
             .map(|(name, &struct_ty)| {
@@ -1283,6 +1288,7 @@ fn build_module<'ctx, 'g>(
                 (name.clone(), bytes)
             })
             .collect();
+        sizes.extend(union_frame_sizes(typed, &shape_types));
         // Compile-time link for `FRAME_SHAPE_REGION_ALIGN` (hotfix `bgarg-number`): a
         // frame-embedded shape region is rounded up to that alignment and no further,
         // so a shape struct whose measured ABI alignment exceeds it would be read
@@ -2077,15 +2083,17 @@ struct SoaArrayInfo<'ctx> {
     segments: Vec<SoaSegment<'ctx>>,
 }
 
-/// Where a union value that must outlive its frame is re-homed (`Cg::home_union_on_heap`). A value
-/// that only flows into a borrowed slot (an argument, a binding, a field) keeps the envelope
-/// `lower_expr` built in this frame and is never re-homed.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EnvelopeHome {
-    /// A `return`: a union value the callee built itself, a returned parameter and a freshly
-    /// wrapped value move to heap cells (their envelope is a slot in the frame about to die); a
-    /// call result already is a heap cell.
-    Return,
+/// A crossing local that holds an envelope union (or an `errors` result of one) in a frame
+/// region of its own: the persistent home of its value across suspensions. The local's alloca
+/// holds a view of the region, so every reader sees the value form it always did.
+struct CrossingUnion<'ctx> {
+    /// The union's variants (the success type's, for an `errors` result).
+    variants: Vec<Type>,
+    /// The local is an `errors` result: its `{err, ok}` pair keeps `ok` a view of the region.
+    errors: bool,
+    /// The region inside the composed frame (`shape_frame_region_ptr`), `UnionLayout::slot_size`
+    /// bytes, stable for the task's lifetime.
+    region: PointerValue<'ctx>,
 }
 
 /// One union `is`-arm narrowing in force (see `Cg::narrowed_unions`).
@@ -2250,6 +2258,9 @@ struct Cg<'ctx, 'g> {
     // - flush:  memcpy this alloca → frame slot region
     // cg.locals[name] points to this alloca so field access GEPs work correctly.
     sm_crossing_shape_allocas: HashMap<String, PointerValue<'ctx>>,
+    // Crossing locals holding an envelope union, by name (`CrossingUnion`): their value lives in
+    // a frame region, so a resume reads it back instead of a pointer into a dead stack.
+    sm_crossing_unions: HashMap<String, CrossingUnion<'ctx>>,
     // Nesting depth inside if/while/for/match bodies in a SM resume function.
     // Used for the snapshot/restore protocol that prevents non-crossing locals introduced
     // inside a nested scope from leaking into cg.locals after the scope exits. Every binding
@@ -3910,7 +3921,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// (`wrap_into_union_envelope`); for any other variant they are the value's own i64 bits.
     ///
     /// The ONE place the envelope's `data` field is read: `union_payload_ptr` (variant
-    /// narrowing) and `union_to_heap_cell` (binding promotion) both go through it, so
+    /// narrowing) and `union_persist_into` (slot stores) both go through it, so
     /// the layout lives in one derivation (authoritative-derivation).
     ///
     /// Time: O(1)  Space: O(1)
@@ -3935,7 +3946,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// Envelope → payload pointer: the pointer to a SHAPE variant's own storage, read
     /// out of a non-null union envelope. The ONE routine both consumers call:
-    /// `union_to_heap_cell` (deep-copies the payload into a counted cell) and the
+    /// `union_persist_into` (copies the payload into its slot) and the
     /// `is`-arm narrowing (`narrow_union_local_to_variant`, re-points the narrowed
     /// binding at the payload so shape field reads and `let inner: Variant = fig`
     /// copies see the variant, not the 16-byte envelope).
@@ -4122,8 +4133,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// word — for a shape variant the `ptr_to_int` of the payload's storage, for any other
     /// variant the value's own i64 bits (`wrap_into_union_envelope` picks which). The slot is a
     /// per-site entry-block alloca (this function's frame): the callee borrows it for the call.
-    /// Anything that must outlive the frame goes through `union_to_heap_cell` after
-    /// (`home_union_on_heap`).
+    /// Anything that must outlive the frame is persisted into a slot by value
+    /// (`union_persist_into`).
     ///
     /// Time: O(1)  Space: O(1)
     fn build_union_envelope(
@@ -4211,7 +4222,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///
     /// The envelope lives in this function's frame (a per-site entry-block slot): a callee only borrows it,
     /// and a binding or field holds the pointer. A value that must outlive the frame is
-    /// promoted afterwards (`home_union_on_heap`). A union with no shape variant never reaches
+    /// persisted into a slot by value afterwards (`union_persist_into`). A union with no shape variant never reaches
     /// here: typeck records only envelope unions (`T | nothing` with a non-shape `T` stays the
     /// raw pointer).
     ///
@@ -4300,61 +4311,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into())
     }
 
-    /// Move a union value that must outlive this frame onto counted heap cells
-    /// (`union_to_heap_cell`: envelope AND payload). The ONE use left after C1f (#423) is the
-    /// union success value of a `-> Thing errors` function (`Return` home): the errors result is
-    /// `{err, ok}` with an 8-byte ok word, which cannot hold a slot, so the value still rides a
-    /// heap envelope and payload (two counted cells per present value, freed by no pass yet).
-    /// Every other union store, return and staged argument is by value in a slot
-    /// (`union_persist_into`). Replacing this last home needs a wider errors result.
-    ///
-    /// A union a callee built itself, a returned PARAMETER and a freshly wrapped value all
-    /// promote; a call result already is a heap cell. A non-envelope union (no shape variant)
-    /// is the raw pointer and passes through.
-    ///
-    /// Time: O(1) + the heap-cell copy  Space: O(1), two counted heap cells per present value
-    fn home_union_on_heap(
-        &mut self,
-        expr: &Expr,
-        val: BasicValueEnum<'ctx>,
-        slot_ty: &Type,
-        home: EnvelopeHome,
-        site: &str,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        let Type::Union { variants } = self.resolve_type(slot_ty) else {
-            return Ok(val);
-        };
-        let variants: Vec<Type> = variants
-            .iter()
-            .map(|variant| self.resolve_type(variant))
-            .collect();
-        if !variants
-            .iter()
-            .any(|variant| matches!(variant, Type::Shape { .. }))
-        {
-            return Ok(val);
-        }
-        let span = expr.span();
-        let wrapped_here = self.coercion_at((span.start, span.end)).is_some()
-            && !self.is_narrowed_envelope_ident(expr);
-        let is_union_value = matches!(self.expr_type(expr), Type::Union { .. });
-        let already_homed = !wrapped_here
-            && matches!(
-                expr,
-                Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..)
-            );
-        let promote = match home {
-            EnvelopeHome::Return => is_union_value && !already_homed,
-        };
-        if promote {
-            Ok(self
-                .union_to_heap_cell(val.into_pointer_value(), &variants, site)?
-                .into())
-        } else {
-            Ok(val)
-        }
-    }
-
     /// The envelope for the identifier `name` at `span` when that use belongs to an active
     /// `is`-arm narrowing and flows into a union-typed slot (`TypedModule::union_coercions`);
     /// `None` for every other use, which reads the payload through `cg.locals`.
@@ -4428,132 +4384,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         variants
             .iter()
             .any(|variant| matches!(self.resolve_type(variant), Type::Nothing))
-    }
-
-    /// PERSIST a union value into a slot that outlives this frame: the one routine behind an
-    /// array element, a map value, a shape field and a by-value return (C1f, #423).
-    ///
-    /// The slot holds the 16-byte envelope BY VALUE, so no envelope is allocated:
-    /// - `src` is null (`none`): the slot gets tag `UNION_NONE_TAG`, data 0.
-    /// - a shape variant: the tag is copied and the payload's bytes are cloned into a counted
-    ///   heap cell the slot owns; `data` is the cell. The source's payload may be a frame
-    ///   alloca (a value wrapped in this frame) or any other shape's storage, so it is always
-    ///   cloned, as `store_field` clones a shape stored in a shape.
-    /// - any other variant (`int`, `boolean`, `float`, `string`, array, map, wide `number`):
-    ///   tag and data are copied as they are; `data` is the value's own bits or a pointer the
-    ///   store hands over.
-    ///
-    /// Ownership for the release helper (C6/C7): a slot owns its shape payload cell, so
-    /// releasing the slot is a tag switch: a shape variant releases the shape's fields, then
-    /// frees the cell; a `string`, array or map variant releases that value; the scalar
-    /// variants and `none` own nothing.
-    ///
-    /// Time: O(1) + one memcpy of the selected variant's size  Space: O(1), one heap cell per
-    /// stored shape variant, none for any other variant
-    fn union_pair_clone_into(
-        &self,
-        src: PointerValue<'ctx>,
-        dst: PointerValue<'ctx>,
-        variants: &[Type],
-        site: &str,
-    ) -> Result<(), String> {
-        let slot_ty = self.union_envelope_type();
-        let done_bb = self.append_block(&format!("{site}_persist_done"));
-        let has_nothing = self.union_has_nothing(variants);
-        if has_nothing {
-            let none_bb = self.append_block(&format!("{site}_persist_none"));
-            let present_bb = self.append_block(&format!("{site}_persist_some"));
-            let is_none = self
-                .builder
-                .build_is_null(src, &format!("{site}_persist_is_none"))
-                .map_err(|err| format!("union persist is_null {site}: {err}"))?;
-            self.builder
-                .build_conditional_branch(is_none, none_bb, present_bb)
-                .map_err(|err| format!("union persist branch {site}: {err}"))?;
-            self.builder.position_at_end(none_bb);
-            self.store_union_slot_words(
-                dst,
-                self.i64().const_int(UNION_NONE_TAG, false),
-                self.i64().const_zero(),
-                site,
-            )?;
-            self.builder
-                .build_unconditional_branch(done_bb)
-                .map_err(|err| format!("union persist none branch {site}: {err}"))?;
-            self.builder.position_at_end(present_bb);
-        }
-
-        let tag_gep = self
-            .builder
-            .build_struct_gep(slot_ty, src, 0, &format!("{site}_src_tag"))
-            .map_err(|err| format!("union persist tag gep {site}: {err}"))?;
-        let tag = self
-            .builder
-            .build_load(self.i64(), tag_gep, &format!("{site}_tag"))
-            .map_err(|err| format!("union persist tag load {site}: {err}"))?
-            .into_int_value();
-        let data = self.union_data_bits(src, site)?;
-        let dst_tag_gep = self
-            .builder
-            .build_struct_gep(slot_ty, dst, 0, &format!("{site}_dst_tag"))
-            .map_err(|err| format!("union persist dst tag gep {site}: {err}"))?;
-        self.builder
-            .build_store(dst_tag_gep, tag)
-            .map_err(|err| format!("union persist tag store {site}: {err}"))?;
-        let dst_data_gep = self
-            .builder
-            .build_struct_gep(slot_ty, dst, 1, &format!("{site}_dst_data"))
-            .map_err(|err| format!("union persist dst data gep {site}: {err}"))?;
-
-        let shape_cases: Vec<(u64, String)> = variants
-            .iter()
-            .enumerate()
-            .filter_map(|(index, variant)| match self.resolve_type(variant) {
-                Type::Shape { name } => Some((index as u64, name)),
-                _ => None,
-            })
-            .collect();
-        let raw_bb = self.append_block(&format!("{site}_persist_raw"));
-        let case_blocks: Vec<BasicBlock<'ctx>> = shape_cases
-            .iter()
-            .map(|(index, _)| self.append_block(&format!("{site}_persist_pay{index}")))
-            .collect();
-        let switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = shape_cases
-            .iter()
-            .zip(case_blocks.iter())
-            .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
-            .collect();
-        self.builder
-            .build_switch(tag, raw_bb, &switch_cases)
-            .map_err(|err| format!("union persist tag switch {site}: {err}"))?;
-        for ((index, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
-            self.builder.position_at_end(*case_bb);
-            let payload = self.union_payload_ptr(src, &format!("{site}_src_pay{index}"))?;
-            let size = self.shape_abi_size_const(shape_name, "union_pair_clone_into")?;
-            let cell = self.heap_cell(size, &format!("{site}_pay{index}"))?;
-            self.builder
-                .build_memcpy(cell, 1, payload, 1, size)
-                .map_err(|err| format!("union persist payload memcpy {site}: {err}"))?;
-            let own_bits = self
-                .builder
-                .build_ptr_to_int(cell, self.i64(), &format!("{site}_own_bits{index}"))
-                .map_err(|err| format!("union persist payload bits {site}: {err}"))?;
-            self.builder
-                .build_store(dst_data_gep, own_bits)
-                .map_err(|err| format!("union persist payload store {site}: {err}"))?;
-            self.builder
-                .build_unconditional_branch(done_bb)
-                .map_err(|err| format!("union persist case branch {site}: {err}"))?;
-        }
-        self.builder.position_at_end(raw_bb);
-        self.builder
-            .build_store(dst_data_gep, data)
-            .map_err(|err| format!("union persist raw store {site}: {err}"))?;
-        self.builder
-            .build_unconditional_branch(done_bb)
-            .map_err(|err| format!("union persist raw branch {site}: {err}"))?;
-        self.builder.position_at_end(done_bb);
-        Ok(())
     }
 
     /// Write both words of a union slot.
@@ -5132,6 +4962,148 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.ec_standard_over_slot(err, slot, variants, site)
     }
 
+    /// The frame region and variants of the crossing union local `name`.
+    fn crossing_union(&self, name: &str) -> Result<&CrossingUnion<'ctx>, String> {
+        self.sm_crossing_unions.get(name).ok_or_else(|| {
+            format!(
+                "codegen: crossing local `{name}` has no union frame region; the classification \
+                 of crossing locals and the lowering disagree, a compiler bug"
+            )
+        })
+    }
+
+    /// Persist the current value of the crossing union local `name` into its frame region, then
+    /// point the local at a view of the region, so from here on the region is the value's one
+    /// home and a later resume reads the same bytes back (`reload_crossing_union`). Nothing is
+    /// allocated; the payload moves inline into the region (`union_persist_into`).
+    ///
+    /// For an `errors` result, `err` goes to frame slot `slot_idx` and the success slot is
+    /// persisted only when `err` is 0 (`ok` is no union value otherwise); `ok` then names the
+    /// region's view.
+    ///
+    /// Time: O(v) for v shape variants + one memmove of the variant's size  Space: O(1)
+    fn flush_crossing_union(
+        &self,
+        name: &str,
+        alloca: PointerValue<'ctx>,
+        frame_ptr: PointerValue<'ctx>,
+        slot_idx: usize,
+    ) -> Result<(), String> {
+        let crossing = self.crossing_union(name)?;
+        let site = format!("{name}_cross");
+        if !crossing.errors {
+            let view = self
+                .builder
+                .build_load(self.ptr(), alloca, &format!("{site}_view"))
+                .map_err(|e| format!("{site}: load the union view: {e}"))?
+                .into_pointer_value();
+            self.union_persist_into(view, crossing.region, &crossing.variants, &site)?;
+            let region_view =
+                self.union_slot_to_value(crossing.region, &crossing.variants, &site)?;
+            self.builder
+                .build_store(alloca, region_view)
+                .map_err(|e| format!("{site}: point the local at its region: {e}"))?;
+            return Ok(());
+        }
+        let ec_ty = errors_result_type(self.ctx);
+        let struct_ptr = self
+            .builder
+            .build_load(self.ptr(), alloca, &format!("{site}_ec_ptr"))
+            .map_err(|e| format!("{site}: load the errors pair: {e}"))?
+            .into_pointer_value();
+        let err_ptr = self
+            .builder
+            .build_struct_gep(ec_ty, struct_ptr, 0, &format!("{site}_err_gep"))
+            .map_err(|e| format!("{site}: err gep: {e}"))?;
+        let ok_ptr = self
+            .builder
+            .build_struct_gep(ec_ty, struct_ptr, 1, &format!("{site}_ok_gep"))
+            .map_err(|e| format!("{site}: ok gep: {e}"))?;
+        let err = self
+            .builder
+            .build_load(self.i64(), err_ptr, &format!("{site}_err"))
+            .map_err(|e| format!("{site}: load err: {e}"))?
+            .into_int_value();
+        state_machine::store_local_slot(self.ctx, &self.builder, frame_ptr, slot_idx, err)?;
+        let ok_bits = self
+            .builder
+            .build_load(self.i64(), ok_ptr, &format!("{site}_ok"))
+            .map_err(|e| format!("{site}: load ok: {e}"))?
+            .into_int_value();
+        let view = self
+            .builder
+            .build_int_to_ptr(ok_bits, self.ptr(), &format!("{site}_ok_view"))
+            .map_err(|e| format!("{site}: ok view cast: {e}"))?;
+        self.union_persist_if_ok(err, view, crossing.region, &crossing.variants, &site)?;
+        let region_ok = self.crossing_union_ok_word(name, err)?;
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{site}_flush_is_ok"),
+            )
+            .map_err(|e| format!("{site}: err compare: {e}"))?;
+        let new_ok = self
+            .builder
+            .build_select(is_ok, region_ok, ok_bits, &format!("{site}_new_ok"))
+            .map_err(|e| format!("{site}: select ok: {e}"))?
+            .into_int_value();
+        self.builder
+            .build_store(ok_ptr, new_ok)
+            .map_err(|e| format!("{site}: store ok: {e}"))?;
+        Ok(())
+    }
+
+    /// The value form (view pointer, null for `none`) of the crossing union local `name`, read
+    /// back from its frame region after a resume.
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn reload_crossing_union(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
+        let crossing = self.crossing_union(name)?;
+        self.union_slot_to_value(
+            crossing.region,
+            &crossing.variants,
+            &format!("{name}_reload"),
+        )
+    }
+
+    /// The `ok` word of the crossing `errors` union local `name` after a resume: a view of its
+    /// frame region when `err` is 0, 0 otherwise (the standard failed pair).
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn crossing_union_ok_word(
+        &self,
+        name: &str,
+        err: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let view = self.reload_crossing_union(name)?;
+        let view_bits = self
+            .builder
+            .build_ptr_to_int(view, self.i64(), &format!("{name}_reload_ok_bits"))
+            .map_err(|e| format!("{name}: region view bits: {e}"))?;
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{name}_reload_is_ok"),
+            )
+            .map_err(|e| format!("{name}: err compare: {e}"))?;
+        Ok(self
+            .builder
+            .build_select(
+                is_ok,
+                view_bits,
+                self.i64().const_zero(),
+                &format!("{name}_reload_ok"),
+            )
+            .map_err(|e| format!("{name}: select ok: {e}"))?
+            .into_int_value())
+    }
+
     /// Read the `tag` word of a non-null union envelope `{i64 tag, i64 data}`.
     ///
     /// Time: O(1)  Space: O(1)
@@ -5171,88 +5143,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
             _ => None,
         }
-    }
-
-    /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
-    /// FRAGOs 006/007/013) — the union sibling of `maybe_to_heap_cell`: clone a
-    /// union value into counted heap cells so a CROSSING binding's pointer
-    /// survives suspension (the resume fn's stack dies on every Pending return).
-    ///
-    /// A union value is an opaque pointer with a NON-uniform repr:
-    ///   - NULL for the `T | nothing` none case (the `is`-none path
-    ///     `build_is_null`s the value directly), or
-    ///   - a pointer to a `{i64 tag, i64 data}` tagged struct whose `data` holds
-    ///     `ptr_to_int` of the payload shape's storage (`wrap_into_union_envelope`).
-    ///
-    /// The clone preserves BOTH reprs:
-    ///   - **null → null**: a heap cell pointer is never null, so cloning a none
-    ///     through a cell would flip `is`-none from true to false — the null
-    ///     sentinel IS the none value and must pass through untouched;
-    ///   - **non-null → fresh {tag,data} heap cell**, with the payload
-    ///     deep-copied into its OWN heap cell selected by a tag switch (variant
-    ///     shapes have different ABI sizes, read from the ONE `shape_abi_sizes`
-    ///     source via `shape_abi_size_const`); a non-shape variant's data is
-    ///     self-contained i64 bits (or an already-heap-stable pointer) and
-    ///     copies as-is through the switch default.
-    ///
-    /// BINDING surface only: `value_to_stable_bits` deliberately keeps NO Union
-    /// arm (its KNOWN-HOLE doc — the persist surfaces stay loud-fail-pinned
-    /// until the union ABI gets one authoritative layout), so this helper is
-    /// reachable only from the binding funnel (`store_binding`'s Union arm) and the
-    /// frame-outliving homes (`home_union_on_heap`).
-    ///
-    /// Time: O(1) + one memcpy of the selected variant's ABI size  Space: O(1)
-    /// (two heap cells per present value; zero for a none)
-    fn union_to_heap_cell(
-        &self,
-        src: PointerValue<'ctx>,
-        variants: &[Type],
-        site: &str,
-    ) -> Result<PointerValue<'ctx>, String> {
-        let union_st = self
-            .ctx
-            .struct_type(&[self.i64().into(), self.i64().into()], false);
-        let pre_bb = self
-            .builder
-            .get_insert_block()
-            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
-        let copy_bb = self.append_block(&format!("{site}_ucopy"));
-        let cont_bb = self.append_block(&format!("{site}_ucont"));
-        let is_none = self
-            .builder
-            .build_is_null(src, &format!("{site}_is_none"))
-            .map_err(|e| format!("union cell is_null {site}: {e}"))?;
-        self.builder
-            .build_conditional_branch(is_none, cont_bb, copy_bb)
-            .map_err(|e| format!("{e}"))?;
-
-        // Present value: clone the {tag,data} envelope into a counted heap cell.
-        self.builder.position_at_end(copy_bb);
-        let raw = union_st
-            .size_of()
-            .ok_or_else(|| format!("{site}: union envelope size_of unavailable"))?;
-        let env_size = self
-            .builder
-            .build_int_z_extend(raw, self.i64(), &format!("{site}_env_sz"))
-            .map_err(|e| format!("union env size zext {site}: {e}"))?;
-        let cell = self.heap_cell(env_size, &format!("{site}_env"))?;
-        self.union_pair_clone_into(src, cell, variants, site)?;
-        self.builder
-            .build_unconditional_branch(cont_bb)
-            .map_err(|e| format!("{e}"))?;
-        let done_bb = self
-            .builder
-            .get_insert_block()
-            .ok_or_else(|| format!("{site}: builder has no insert block after persist"))?;
-
-        // Merge: null flows through unchanged; present values yield the cell.
-        self.builder.position_at_end(cont_bb);
-        let phi = self
-            .builder
-            .build_phi(self.ptr(), &format!("{site}_ucell"))
-            .map_err(|e| format!("{e}"))?;
-        phi.add_incoming(&[(&cell, done_bb), (&src, pre_bb)]);
-        Ok(phi.as_basic_value().into_pointer_value())
     }
 
     /// Get-side ownership (v0.3-M5 P2 fix-loop): copy shape bytes INTO the frame
@@ -5436,8 +5326,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// surface, surfaced to the deviation-judge, deliberately NOT built as a
     /// sweep ride-along. Owned by the fix-round deviation record until the
     /// union ABI gets one authoritative layout. NOTE (v0.3-M6 Phase 1c step
-    /// 3c): the BINDING surface now has its own null-preserving heap promotion
-    /// (`union_to_heap_cell`, reachable only from the two binding funnels) —
+    /// 3c): the BINDING surface persists a crossing union into a frame region
+    /// (`flush_crossing_union`, nothing allocated) —
     /// that does NOT close this hole and deliberately adds NO Union arm here:
     /// an arm would silently widen the persist surfaces past the pins above.
     fn value_to_stable_bits(
@@ -6351,6 +6241,7 @@ fn plain_cg<'ctx, 'g>(
         sm_crossing_ec_struct_allocas: HashMap::new(),
         sm_crossing_shape_names: HashMap::new(),
         sm_crossing_shape_allocas: HashMap::new(),
+        sm_crossing_unions: HashMap::new(),
         sm_scope_depth: 0,
         narrowed_unions: Vec::new(),
         coercion_inner: None,
@@ -6580,19 +6471,13 @@ fn lower_function_with_waits<'ctx, 'g>(
         let mut cursor = crossing_slot_base;
         for cname in &crossing_names {
             indices.push(cursor);
-            let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
-            let slots = match ty {
-                Some(Type::Number { precision }) if precision <= 34 => 2,
-                // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
-                Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
-                    3
-                }
-                // All other ErrorsCapable {i64,i64}: 2 frame slots for the two fields.
-                Some(Type::ErrorsCapable { .. }) => 2,
-                Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
-                _ => 1,
-            };
-            cursor += slots;
+            cursor += crossing_local_slot_count(
+                &f.body.stmts,
+                cname.as_str(),
+                typed,
+                shape_table,
+                shape_abi_sizes,
+            );
         }
         indices
     };
@@ -6603,9 +6488,9 @@ fn lower_function_with_waits<'ctx, 'g>(
     let n_locals = if spike_active_here {
         n_params
             + spike_slot_reserve
-            + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
+            + crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes)
     } else {
-        n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
+        n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes)
     };
 
     // Look up the composed frame layout for this function. The total_size covers
@@ -6775,7 +6660,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_shape_embed_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_ec_struct_allocas: HashMap::new(), // populated during alloca creation below
         sm_crossing_shape_names: HashMap::new(),    // populated during alloca creation below
-        sm_crossing_shape_allocas: HashMap::new(),  // populated during alloca creation below
+        sm_crossing_shape_allocas: HashMap::new(),
+        sm_crossing_unions: HashMap::new(),  // populated during alloca creation below
         sm_crossing_ec_number_set: HashSet::new(),  // populated during alloca creation below
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
@@ -7108,6 +6994,52 @@ fn lower_function_with_waits<'ctx, 'g>(
                 .build_store(*alloca, shape_region_ptr)
                 .map_err(|e| format!("sm shape wire store {cname}: {e}"))?;
         }
+    }
+
+    // Step 1b' — Locate the frame region of every crossing local that holds an envelope union.
+    //
+    // The region (`union_frame_slots` slots after the local's own slots) is the persistent home
+    // of the union's value: a bind persists the value into it (`Cg::flush_crossing_union`) and
+    // every resume reads a view of it back, so no pointer into a dead resume stack and no heap
+    // cell outlives a suspension. Computed here, in sm_entry, so it dominates every state.
+    {
+        let mut crossing_unions: HashMap<String, CrossingUnion<'ctx>> = HashMap::new();
+        for (pos, cname) in crossing_names.iter().enumerate() {
+            let Some(ty) = crossing_frame_type(&f.body.stmts, cname, typed, shape_table) else {
+                continue;
+            };
+            let Some(variants) = crossing_union_variants(&ty) else {
+                continue;
+            };
+            let errors = matches!(ty, Type::ErrorsCapable { .. });
+            if !shape_abi_sizes.contains_key(&crate::shape_types::union_key(&variants)) {
+                return Err(format!(
+                    "codegen: crossing local `{cname}` of `{}` holds a union the frame layout \
+                     did not size; the layout and the lowering disagree, a compiler bug",
+                    f.name
+                ));
+            }
+            // An `errors` result keeps its `{err, ok}` words in the first two slots.
+            let region_slot = crossing_slot_indices[pos] + if errors { 2 } else { 0 };
+            let region_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + (region_slot as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                region_offset,
+                &format!("{cname}_union"),
+            )?;
+            crossing_unions.insert(
+                cname.clone(),
+                CrossingUnion {
+                    variants,
+                    errors,
+                    region,
+                },
+            );
+        }
+        cg_resume.sm_crossing_unions = crossing_unions;
     }
 
     // Step 2 — Emit the switch on resume_point (still in sm_entry, after allocas).
@@ -8042,6 +7974,13 @@ fn reload_params_from_frame<'ctx>(
                             cg.builder
                                 .build_store(f1_ptr, f1_as_i64)
                                 .map_err(|e| format!("reload ec num f1 store {cname}: {e}"))?;
+                        } else if cg.sm_crossing_unions.contains_key(cname.as_str()) {
+                            // `errors` union result: `ok` is a view of the frame region, rebuilt
+                            // here because the view pointer died with the previous resume.
+                            let ok_word = cg.crossing_union_ok_word(cname, bits)?;
+                            cg.builder
+                                .build_store(f1_ptr, ok_word)
+                                .map_err(|e| format!("reload ec union ok store {cname}: {e}"))?;
                         } else {
                             // All other ErrorsCapable: slot N+1 holds f1 (ok-word as i64).
                             let hi_bits = state_machine::load_local_slot(
@@ -8059,6 +7998,13 @@ fn reload_params_from_frame<'ctx>(
                         cg.builder
                             .build_store(alloca, struct_alloca)
                             .map_err(|e| format!("reload ec ptr store {cname}: {e}"))?;
+                    } else if cg.sm_crossing_unions.contains_key(cname.as_str()) {
+                        // Envelope union: a view of the frame region, rebuilt because the
+                        // view pointer died with the previous resume.
+                        let view = cg.reload_crossing_union(cname)?;
+                        cg.builder
+                            .build_store(alloca, view)
+                            .map_err(|e| format!("sm crossing reload union store {cname}: {e}"))?;
                     } else if is_shape_embed {
                         // Shape crossing local: frame-embedded. The ptr alloca is re-wired
                         // to the frame's slot region in Step 1b on every resume call — no
@@ -8556,6 +8502,10 @@ fn flush_var_slot_to_frame<'ctx>(
     slot_idx: usize,
 ) -> Result<(), String> {
     let ctx = cg.ctx;
+    if cg.sm_crossing_unions.contains_key(name) {
+        // Envelope union (or `errors` union result): its value lives in a frame region.
+        return cg.flush_crossing_union(name, alloca, frame_ptr, slot_idx);
+    }
     if cg.sm_crossing_scalar_set.contains(name) {
         // Int: i64 alloca — raw i64 load, 1 slot.
         let bits = cg
@@ -10868,6 +10818,11 @@ fn bind_sm_result_and_flush<'ctx>(
                 state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
             }
         }
+        // An envelope union result: persist it into the local's frame region (and point the local at
+        // the region's view), so it outlives this resume.
+        if cg.sm_crossing_unions.contains_key(name) {
+            cg.flush_crossing_union(name, alloca, frame_ptr, slot_idx)?;
+        }
         Ok(alloca)
     } else {
         // Non-crossing: copy-on-bind for wide-EC (-> number errors) before delegating to
@@ -11013,29 +10968,99 @@ fn crossing_local_total_slots(
     f: &ynz_ast::nodes::FunctionDecl,
     crossing_names: &[String],
     typed: &TypedModule,
+    shape_table: &ShapeTable,
     shape_abi_sizes: &HashMap<String, u64>,
 ) -> usize {
-    let mut total = 0usize;
-    for cname in crossing_names {
-        let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
-        let slots = match ty {
-            // decimal128: 16-byte value stored in 2 consecutive i64 frame slots.
-            Some(Type::Number { precision }) if precision <= 34 => 2,
-            // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
-            // The i128 decimal bits are stored directly so same-callee calls that reuse
-            // the callee's staging slot cannot clobber a live crossing binding.
-            Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
-                3
-            }
-            // All other ErrorsCapable {i64,i64}: 2 frame slots for the two fields.
-            Some(Type::ErrorsCapable { .. }) => 2,
-            // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
-            Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
-            _ => 1,
-        };
-        total += slots;
+    crossing_names
+        .iter()
+        .map(|cname| {
+            crossing_local_slot_count(&f.body.stmts, cname, typed, shape_table, shape_abi_sizes)
+        })
+        .sum()
+}
+
+/// The type that decides how the crossing local `target` is held in the frame: a union
+/// ANNOTATION wins over the type of the value (`let thing: Thing = big` types its value as the
+/// variant `Big`, but the binding is the union), otherwise the typeck type of its value. The one
+/// classification both the frame layout (slot counts) and the resume function's allocas read.
+///
+/// Time: O(s) for s statements  Space: O(1)
+fn crossing_frame_type(
+    stmts: &[Stmt],
+    target: &str,
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+) -> Option<Type> {
+    find_let_annotation_type_in_stmts(stmts, target)
+        .map(|ast_ann| ast_type_to_typeck_type(&ast_ann, shape_table))
+        .filter(|ty| matches!(ty, Type::Union { .. }))
+        .or_else(|| find_let_typeck_type_in_stmts(stmts, target, typed))
+}
+
+/// The variants of the envelope union a crossing local of type `ty` holds in a frame region of
+/// its own: the local's type when it is an envelope union, or the success type of an `errors`
+/// result whose success value is one. `None` for every other crossing local.
+fn crossing_union_variants(ty: &Type) -> Option<Vec<Type>> {
+    let union = match ty {
+        Type::ErrorsCapable { inner } => inner.as_ref(),
+        other => other,
+    };
+    match union {
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(union) => {
+            Some(variants.clone())
+        }
+        _ => None,
     }
-    total
+}
+
+/// Frame slots a union region of `variants` takes: the slot's bytes (the `union_key` entry of
+/// the sizes map, the one `UnionLayout::slot_size`) rounded up to whole slots, plus the
+/// alignment slack `shape_frame_region_ptr` rounds into.
+fn union_frame_slots(variants: &[Type], sizes: &HashMap<String, u64>) -> usize {
+    // A missing entry is a compiler bug: `Cg::sm_union_region_ptr` refuses to lower the local,
+    // so the module never reaches a binary with a region the frame did not reserve.
+    let bytes = sizes
+        .get(&crate::shape_types::union_key(variants))
+        .copied()
+        .unwrap_or(8);
+    (bytes.max(8) as usize).div_ceil(8) + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
+}
+
+/// Frame slots the crossing local `cname` takes: decimal128 two, a decimal `errors` result
+/// three, any other `errors` result two (plus a union region when its success value is an
+/// envelope union), a shape its bytes, an envelope union its region, everything else one.
+/// The ONE count behind the frame layout, the frame size and the resume function's slot indices.
+fn crossing_local_slot_count(
+    stmts: &[Stmt],
+    cname: &str,
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+    shape_abi_sizes: &HashMap<String, u64>,
+) -> usize {
+    match crossing_frame_type(stmts, cname, typed, shape_table) {
+        // decimal128: 16-byte value stored in 2 consecutive i64 frame slots.
+        Some(Type::Number { precision }) if precision <= 34 => 2,
+        // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
+        // The i128 decimal bits are stored directly so same-callee calls that reuse
+        // the callee's staging slot cannot clobber a live crossing binding.
+        Some(Type::ErrorsCapable { ref inner })
+            if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) =>
+        {
+            3
+        }
+        // An `errors` union result: {err, ok}, then the region its success slot lives in.
+        Some(ref errors @ Type::ErrorsCapable { .. }) => match crossing_union_variants(errors) {
+            Some(variants) => 2 + union_frame_slots(&variants, shape_abi_sizes),
+            None => 2,
+        },
+        // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
+        Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
+        Some(ref union @ Type::Union { .. }) => match crossing_union_variants(union) {
+            Some(variants) => union_frame_slots(&variants, shape_abi_sizes),
+            None => 1,
+        },
+        _ => 1,
+    }
 }
 
 /// Look up the typeck-inferred `Type` for a let binding or for-loop variable by scanning
@@ -17283,9 +17308,9 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                     })?
                                             }
                                             // String, Array, Map: heap-allocated (global
-                                            // literals or ynz_alloc). Union: `home_union_on_heap`
-                                            // above already put an envelope union's envelope and
-                                            // payload in counted heap cells (a raw-pointer union is
+                                            // literals or ynz_alloc). An envelope union never lands
+                                            // here: its success slot rides the `Return` region
+                                            // (`UnionRegionRole::Return`); a raw-pointer union is
                                             // heap-backed like Map). The pointer survives resume fn
                                             // return — ptr_to_int is safe.
                                             _ => cg
@@ -24850,27 +24875,9 @@ fn store_binding<'ctx>(
                 .map_err(|e| format!("store_binding maybe {name}: {e}"))?;
             Ok(())
         }
-        // v0.3-M6 Phase 1c step 3c: a CROSSING union binding promotes to counted
-        // heap cells — same stable-pointer contract as the maybe arm above; see
-        // `union_to_heap_cell` for the null-preserving envelope + payload clone.
-        // A non-crossing union stores its pointer exactly as the default arm
-        // always did (byte-identical outside SM crossing contexts —
-        // `sm_crossing_names` is None there by construction).
-        Type::Union { ref variants } => {
-            let is_crossing = cg
-                .sm_crossing_names
-                .as_deref()
-                .is_some_and(|v| v.iter().any(|n| n == name));
-            if is_crossing {
-                let cell = cg.union_to_heap_cell(val.into_pointer_value(), variants, name)?;
-                cg.builder
-                    .build_store(slot, cell)
-                    .map_err(|e| format!("store_binding union {name}: {e}"))?;
-                Ok(())
-            } else {
-                store(cg, val, ty, slot)
-            }
-        }
+        // A union binding stores its view pointer like any other. A CROSSING one is persisted into
+        // its frame region by the flush after the statement (`Cg::flush_crossing_union`), which
+        // allocates nothing.
         _ => store(cg, val, ty, slot),
     }
 }
@@ -26111,4 +26118,44 @@ pub fn union_region_roles(
         }
     }
     roles
+}
+
+/// The frame bytes of every envelope union a crossing local of `typed` can hold, keyed by
+/// `union_key`: the one `UnionLayout::slot_size` answer, merged into the shape-size map the frame
+/// layout and the resume function both read (`union_frame_slots`), so a frame and its lowering
+/// agree on every region byte. Collected from the types of all expressions, from the slots of
+/// all union coercions (`let thing: Thing = big` types its value as `Big`, the slot is `Thing`),
+/// and from the success type of every `errors` result.
+///
+/// A union whose layout cannot be computed is left out; lowering a crossing local of it reports
+/// the missing entry (`lower_function_with_waits`).
+///
+/// Time: O(e * v) for e expressions of v variants  Space: O(u) for u distinct unions
+pub fn union_frame_sizes(
+    typed: &TypedModule,
+    shape_types: &ShapeLlvmTypes<'_>,
+) -> HashMap<String, u64> {
+    fn collect(ty: &Type, out: &mut Vec<Vec<Type>>) {
+        match ty {
+            Type::ErrorsCapable { inner } => collect(inner, out),
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(ty) => {
+                out.push(variants.clone());
+            }
+            _ => {}
+        }
+    }
+    let mut unions: Vec<Vec<Type>> = Vec::new();
+    for ty in typed.expr_types.values() {
+        collect(ty, &mut unions);
+    }
+    for coercion in typed.union_coercions.values() {
+        collect(&coercion.slot, &mut unions);
+    }
+    let mut sizes = HashMap::new();
+    for variants in unions {
+        if let Ok(layout) = shape_types.union_layout(&variants) {
+            sizes.insert(crate::shape_types::union_key(&variants), layout.slot_size);
+        }
+    }
+    sizes
 }

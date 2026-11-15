@@ -238,7 +238,7 @@ pub fn frame_layouts_query(
             // Codegen builds the same types with `?` and reports the error first.
             Err(_) => return Arc::new(HashMap::new()),
         };
-        let sizes: HashMap<String, u64> = shape_types
+        let mut sizes: HashMap<String, u64> = shape_types
             .named
             .iter()
             .map(|(name, &struct_ty)| {
@@ -246,6 +246,7 @@ pub fn frame_layouts_query(
                 (name.clone(), bytes)
             })
             .collect();
+        sizes.extend(crate::emit::union_frame_sizes(&codegen_typed, &shape_types));
         let roles = union_region_roles(&codegen_typed, &sig_output.shape_table, &shape_types);
         (sizes, roles)
         // ctx and module drop here — no inkwell types escape past this block.
@@ -283,6 +284,7 @@ pub fn frame_layouts_query(
         &effective_suspend_set,
         &base_suspend_set,
         &shape_abi_sizes,
+        &sig_output.shape_table,
         &union_roles,
         &callee_size_resolver,
     );

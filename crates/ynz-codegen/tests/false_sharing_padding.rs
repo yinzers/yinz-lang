@@ -70,7 +70,8 @@ fn measure(padded: &HashSet<String>) -> (Vec<u64>, u64) {
     let target_data = inkwell::targets::TargetData::create(dl_str);
 
     let table = tally_shape_table();
-    let shape_types = emit_shape_types(&ctx, &table, padded);
+    let shape_types =
+        emit_shape_types(&ctx, &table, padded, &target_data).expect("shape types emit");
     let struct_ty = shape_types.get("Tally").expect("Tally struct type");
 
     let n = struct_ty.count_fields();
