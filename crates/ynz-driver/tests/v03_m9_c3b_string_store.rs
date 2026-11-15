@@ -83,9 +83,9 @@ store_case!(
 store_case!(
     map_key_and_value,
     "v0_3_m9_c3b_map.ynz",
-    "value-2\nvalue-2\nv\nvalue-2\n",
-    6,
-    "a map stores a string key by its raw pointer and a value by its pointer, aliasing a still-read local or a literal (High)"
+    "value-2\nshared-2\nvalue-2\nv\nvalue-2\ns\n",
+    9,
+    "a map stores a string key by its raw pointer and a value by its pointer, aliasing a still-read local (key or value) or a literal (High)"
 );
 
 store_case!(
@@ -214,4 +214,12 @@ store_case!(
     "a\n",
     2,
     "`names[0].or(...)` is classified as a call of a function that is also named `or`, so `let got` takes the element's own pointer and the element and `got` free one string twice (High)"
+);
+
+store_case!(
+    map_copy_copies_only_the_string_side,
+    "v0_3_m9_c3b_map_copy_kinds.ynz",
+    "7\nv-1\n7\nv-1\n",
+    4,
+    "`.copy()` of a `map<string, int>` or `map<int, string>` clones the wrong side: an `int` read as a string pointer (crash), or the string side shared with the source (High)"
 );

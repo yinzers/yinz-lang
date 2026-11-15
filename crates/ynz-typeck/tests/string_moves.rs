@@ -129,6 +129,41 @@ move_cases! {
         [("names[0].or(`none`)", 1, false)],
         "a function that shares a built-in method's name makes the built-in's borrowed result look fresh, so a store takes an element's string without a copy and a release frees it twice (High)";
 
+    a_read_in_a_while_loop_of_an_outer_binding_is_not_a_move:
+        "function entrypoint() -> nothing {\n  let n: int = 1\n  let keep: string = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  let pass: int = 0\n  while (pass < 3) {\n    bag.items.add(keep)\n    pass = pass + 1\n  }\n}\n",
+        [("keep", 2, false)],
+        "a `while` pass stores the string it already moved on the previous pass (High)";
+
+    a_read_in_an_inner_loop_of_a_binding_of_the_outer_loop_is_not_a_move:
+        "function entrypoint() -> nothing {\n  let n: int = 1\n  let bag: Bag = { items: [`x`], label: `y` }\n  for (i in range(0, 2)) {\n    let each: string = `a-${n}`\n    for (j in range(0, 2)) {\n      bag.items.add(each)\n    }\n  }\n}\n",
+        [("each", 2, false)],
+        "the inner loop's second pass stores the string its first pass moved, because the binding belongs to the outer loop (High)";
+
+    a_read_in_an_if_branch_followed_by_a_read_after_it_is_not_a_move_in_a_multi_arm_if:
+        "function entrypoint() -> nothing {\n  let n: int = 1\n  let keep: string = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  if (n) {\n    1 => {\n      bag.items.add(keep)\n    }\n    else => {\n      print(`other`)\n    }\n  }\n  print(keep)\n}\n",
+        [("keep", 2, false), ("keep", 3, true)],
+        "a multi-case `if` arm moves a string the code after the `if` still reads (High)";
+
+    a_read_in_each_of_two_arms_is_a_move_in_both:
+        "function entrypoint() -> nothing {\n  let n: int = 1\n  let keep: string = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  if (n) {\n    1 => {\n      bag.items.add(keep)\n    }\n    else => {\n      bag.items.add(keep)\n    }\n  }\n}\n",
+        [("keep", 2, true), ("keep", 3, true)],
+        "an arm's last use treated as live because a sibling arm, which never runs after it, reads the same binding (cost)";
+
+    a_binding_moved_into_another_and_then_reassigned_is_a_move:
+        "function entrypoint() -> nothing {\n  let n: int = 1\n  let first: string = `a-${n}`\n  let second: string = first\n  first = `b-${n}`\n  print(second)\n}\n",
+        [("first", 2, true)],
+        "`let b = a; a = x`: the read of `a` copied although the assignment overwrites `a`, so no later read of the old value exists (cost)";
+
+    a_binding_moved_into_another_and_read_after_reassignment_is_not_a_move:
+        "function entrypoint() -> nothing {\n  let n: int = 1\n  let first: string = `a-${n}`\n  let second: string = first\n  first = `b-${n}`\n  print(first)\n  print(second)\n}\n",
+        [("first", 2, false), ("first", 4, true)],
+        "`let b = a; a = x; print(a)`: the first read moved because the assignment between looked like the end of `a`'s uses, so `a` and `b` share one string (High)";
+
+    a_binding_read_twice_in_one_loop_pass_is_not_a_move_at_the_first_read:
+        "function entrypoint() -> nothing {\n  let n: int = 1\n  let bag: Bag = { items: [`x`], label: `y` }\n  for (i in range(0, 2)) {\n    let each: string = `a-${n}`\n    bag.items.add(each)\n    bag.label = each\n  }\n}\n",
+        [("each", 2, false), ("each", 3, true)],
+        "a per-pass binding moved at its first read and read again later in the same pass (High)";
+
     a_function_called_with_a_shape_receiver_is_fresh:
         "shape Tag {\n  name: string\n}\nfunction label(tag: Tag) -> string {\n  return `L-${tag.name}`\n}\nfunction entrypoint() -> nothing {\n  let tag: Tag = { name: `t` }\n  let text: string = tag.label()\n  print(text)\n}\n",
         [("tag.label()", 1, true)],
