@@ -1819,8 +1819,11 @@ mod tests {
         }
         use ynz_abi::{
             bg_arg_kind_is_releasable_payload, ALL_BG_ARG_KINDS, BG_ARG_KIND_ARC_SHAPE,
-            BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_SHARED_CHANNEL,
+            BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASE_GLUE, BG_ARG_KIND_SHARED_CHANNEL,
         };
+        unsafe extern "C" fn free_sixteen_byte_cell(cell: *mut u8) {
+            crate::ynz_free(cell, 16);
+        }
         crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
         let alloc_before = crate::ynz_alloc_count();
         let free_before = crate::ynz_free_count();
@@ -1867,6 +1870,16 @@ mod tests {
                     (
                         crate::ynz_alloc(16) as i64,
                         16,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_RELEASE_GLUE {
+                    // A 16-byte counted cell and the glue that frees it: the address of the glue rides
+                    // the descriptor's `size`.
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        free_sixteen_byte_cell as usize as u64,
                         1,
                         std::ptr::null_mut(),
                         std::ptr::null_mut(),

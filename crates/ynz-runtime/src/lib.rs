@@ -1803,6 +1803,92 @@ pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
     ynz_free(arr as *mut u8, std::mem::size_of::<YnzArray>());
 }
 
+
+/// The release glue codegen emits for a type (`ynz_release_<type>`): frees everything the value at
+/// the pointer owns. THE one callback shape every container walk and the task drop ladder share.
+pub type ReleaseGlue = unsafe extern "C" fn(*mut u8);
+
+/// Release an array and everything its cells own: call `item_glue` on each item, then
+/// [`ynz_array_drop`] the header and buffer. The array does not record what its cells are, so the
+/// caller passes the glue for the element type, or none when the cells own nothing (`int`, `float`,
+/// `bool`, a `number` cell that points into a frame).
+///
+/// `items_inline` says where the item lives: non-zero for an element stored inline in the cell (a
+/// shape's bytes, an envelope-union slot) where the glue gets the cell's address; zero for a cell
+/// holding a pointer (a `string`, an `array`, a `map`) where the glue gets that pointer.
+///
+/// A null array is a no-op. O(len) time plus what the glue costs per item; O(1) memory.
+///
+/// # Safety
+/// `arr` is null or a live array not yet dropped, and `item_glue` frees exactly what the element
+/// type owns.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_release(
+    arr: *mut YnzArray,
+    item_glue: Option<ReleaseGlue>,
+    items_inline: i32,
+) {
+    if arr.is_null() {
+        return;
+    }
+    if let Some(glue) = item_glue {
+        let elem_size = (*arr).elem_size as usize;
+        for index in 0..(*arr).len as usize {
+            let cell = (*arr).data.add(index * elem_size);
+            glue(item_argument(cell, items_inline));
+        }
+    }
+    ynz_array_drop(arr);
+}
+
+/// What a glue receives for one cell: the cell's own address for an inline item, the pointer the
+/// cell holds otherwise.
+unsafe fn item_argument(cell: *mut u8, inline: i32) -> *mut u8 {
+    if inline != 0 {
+        cell
+    } else {
+        *(cell as *const *mut u8)
+    }
+}
+
+/// Release a map and everything its entries own: for each occupied slot call `key_glue` on the key
+/// (a string key is a raw pointer the map owns) and `value_glue` on the value, then
+/// [`ynz_map_drop`] the buffers. `values_inline` is as in [`ynz_array_release`]. Either glue may
+/// be none (an `int` key, a value that owns nothing). The insertion-order buffer repeats the keys
+/// as pointers it does not own, so keys are released from the key buffer only.
+///
+/// A null map is a no-op. O(capacity) time plus the glue's cost per entry; O(1) memory.
+///
+/// # Safety
+/// `map` is null or a live map not yet dropped; the glues free exactly what the key and value
+/// types own.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_release(
+    map: *mut YnzMap,
+    key_glue: Option<ReleaseGlue>,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
+    if map.is_null() {
+        return;
+    }
+    if key_glue.is_some() || value_glue.is_some() {
+        for slot in 0..(*map).capacity as usize {
+            let control = *(*map).ctrl.add(slot);
+            if control == CTRL_EMPTY || control == CTRL_DELETED {
+                continue;
+            }
+            if let Some(glue) = key_glue {
+                glue(*(*map).keys.add(slot) as *mut u8);
+            }
+            if let Some(glue) = value_glue {
+                glue(item_argument(val_slot(map, slot), values_inline));
+            }
+        }
+    }
+    ynz_map_drop(map);
+}
+
 /// Clone an array of primitive elements (int/float/bool — each an 8-byte i64 bit
 /// pattern, elem_size = 8) into a fresh independent heap allocation.
 ///
@@ -5260,6 +5346,90 @@ mod print_text_tests {
             );
             assert_eq!(text, expected);
             ynz_string_release(joined);
+        }
+    }
+}
+
+#[cfg(test)]
+mod release_walk_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ARRAY_POINTER_ITEMS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static ARRAY_INLINE_ITEMS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static MAP_KEYS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static MAP_VALUES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn record_array_pointer_item(item: *mut u8) {
+        ARRAY_POINTER_ITEMS.lock().unwrap().push(item as usize);
+    }
+    unsafe extern "C" fn record_array_inline_item(item: *mut u8) {
+        ARRAY_INLINE_ITEMS.lock().unwrap().push(item as usize);
+    }
+    unsafe extern "C" fn record_map_key(key: *mut u8) {
+        MAP_KEYS.lock().unwrap().push(key as usize);
+    }
+    unsafe extern "C" fn record_map_value(value: *mut u8) {
+        MAP_VALUES.lock().unwrap().push(value as usize);
+    }
+
+    /// Bug: the array walk hands the glue the cell's address where the item is a pointer (or the
+    /// pointer where the item is inline), so a string or a shape is released from the wrong
+    /// address; or it skips an item. High: data integrity (a wrong release is a double free).
+    #[test]
+    fn an_array_release_walks_every_item_with_the_right_argument() {
+        unsafe {
+            let pointers = ynz_array_new(8);
+            let fake_items: [usize; 3] = [0x1000, 0x2000, 0x3000];
+            for item in fake_items {
+                ynz_array_push(pointers, &item as *const usize as *const u8);
+            }
+            ynz_array_release(pointers, Some(record_array_pointer_item), 0);
+            assert_eq!(*ARRAY_POINTER_ITEMS.lock().unwrap(), fake_items.to_vec());
+
+            let inline = ynz_array_new(16);
+            let first_cell = inline_data_address(inline);
+            let cell = [1u8; 16];
+            for _ in 0..2 {
+                ynz_array_push(inline, cell.as_ptr());
+            }
+            let data = (*inline).data as usize;
+            assert_eq!(data, first_cell);
+            ynz_array_release(inline, Some(record_array_inline_item), 1);
+            assert_eq!(*ARRAY_INLINE_ITEMS.lock().unwrap(), vec![data, data + 16]);
+        }
+    }
+
+    unsafe fn inline_data_address(array: *mut YnzArray) -> usize {
+        (*array).data as usize
+    }
+
+    /// Bug: the map walk releases a deleted or empty slot, releases a key twice (the insertion
+    /// order buffer repeats every key), or ignores the key glue, so a string key (a raw pointer
+    /// the map owns) leaks. High: data integrity.
+    #[test]
+    fn a_map_release_walks_each_occupied_slot_once_keys_and_values() {
+        unsafe {
+            let map = ynz_map_new(8);
+            let keys: [usize; 3] = [0x11, 0x22, 0x33];
+            for key in keys {
+                let value = key * 2;
+                ynz_map_set(map, key as i64, &value as *const usize as *const u8);
+            }
+            ynz_map_release(map, Some(record_map_key), Some(record_map_value), 0);
+            let mut seen_keys = MAP_KEYS.lock().unwrap().clone();
+            seen_keys.sort();
+            assert_eq!(seen_keys, keys.to_vec());
+            assert_eq!(MAP_VALUES.lock().unwrap().len(), 3);
+        }
+    }
+
+    /// Bug: a null container (a moved-out slot) makes the release dereference null.
+    #[test]
+    fn releasing_a_null_container_is_a_no_op() {
+        unsafe {
+            ynz_array_release(std::ptr::null_mut(), None, 0);
+            ynz_map_release(std::ptr::null_mut(), None, None, 0);
         }
     }
 }

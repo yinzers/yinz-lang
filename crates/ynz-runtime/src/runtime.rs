@@ -175,7 +175,8 @@ impl Drop for PendingBlockingGuard {
 // zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
 use ynz_abi::{
     bg_arg_kind_is_releasable_payload, BG_ARG_KIND_ARC_SHAPE, BG_ARG_KIND_HEAP_ARRAY,
-    BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASED, BG_ARG_KIND_SHARED_CHANNEL,
+    BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASE_GLUE, BG_ARG_KIND_RELEASED,
+    BG_ARG_KIND_SHARED_CHANNEL,
     FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE, SPIKE_FRAME_DISCRIMINATOR_OFFSET,
     SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
 };
@@ -1170,6 +1171,15 @@ impl Drop for SpawnStateFnFuture {
                             // every exit path including cancellation. Never rewritten to
                             // RELEASED (`bg_arg_kind_is_releasable_payload` is false for it).
                             crate::arc::ynz_arc_free(heap_ptr, desc.size as usize);
+                        }
+                        BG_ARG_KIND_RELEASE_GLUE => {
+                            // v0.3-M9 C3c/C6: the value is released by the glue codegen emitted for
+                            // its type; `size` holds the glue's address. The glue frees everything
+                            // the value owns (items, entries, fields, its own allocation).
+                            // SAFETY: codegen wrote the address of a `void(ptr)` function of this
+                            // module for this kind and no other.
+                            let glue: crate::ReleaseGlue = std::mem::transmute(desc.size as usize);
+                            glue(heap_ptr);
                         }
                         _ => {
                             // Unknown kind — defensive no-op; avoids a bad free on future

@@ -129,6 +129,13 @@ pub const BG_ARG_KIND_RELEASED: u64 = 3;
 /// `background` Boundaries", topology (B)): released with `ynz_arc_free(ptr, size)`; the LAST
 /// release frees the block. `size` is the shape's ABI byte size (the `ynz_arc_new` size).
 pub const BG_ARG_KIND_ARC_SHAPE: u64 = 4;
+/// A task-owned value released by the program's own release glue (v0.3-M9 C3c/C6): the slot
+/// holds the pointer, and the descriptor's `size` holds the ADDRESS of a `void glue(ptr)` function
+/// codegen emitted for the value's type (`ynz_release_<type>`). The glue frees everything the
+/// value owns: array items, map entries (string keys included), shape fields, promoted cells and
+/// the value's own allocation. One kind for every type whose release is more than one flat free,
+/// so a new heap type adds a glue function, never a wire value.
+pub const BG_ARG_KIND_RELEASE_GLUE: u64 = 5;
 
 /// Every `BG_ARG_KIND_*` value, for the runtime's per-kind alloc/free parity test that links
 /// [`bg_arg_kind_is_releasable_payload`] to the drop ladder's free match: a kind added here
@@ -139,6 +146,7 @@ pub const ALL_BG_ARG_KINDS: &[u64] = &[
     BG_ARG_KIND_SHARED_CHANNEL,
     BG_ARG_KIND_RELEASED,
     BG_ARG_KIND_ARC_SHAPE,
+    BG_ARG_KIND_RELEASE_GLUE,
 ];
 
 /// Is a ladder slot of this kind a heap PAYLOAD the task can hand off (send into a channel,
