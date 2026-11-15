@@ -100,7 +100,7 @@ The r4 text this replaced — "`.copy()` is only legal when every field is trans
 | `int`, `float`, `bool`, `string`, an `options` value, `sensitive string` | The receiver's bits ARE the copy — nothing can change what is behind them |
 | `number` (≤ 34 digits), `range` | Immutable contents in storage the producing frame owns: the receiver, inside a body. A `background` argument of one is re-homed onto the heap first (`number`) or refused (`range` — no re-homing path exists) |
 | `shape` | Its own bytes into fresh storage. A pointer-valued FIELD (a nested shape, an `array`, a `map`, a `maybe`) is still copied as a pointer — a named residual, not a claim |
-| `fixed<T>` | Its N inline cells into a fresh slot, when the items are inline ones. `fixed` of a pointer-item type is refused: a `fixed` has no per-item pointer to follow |
+| `fixed<T>` | Its N inline cells into a fresh slot, and for a `string` or `shape` item a copy of each (a string copy, or a fresh heap cell holding a deep shape copy). `fixed` of any other pointer-item type is refused: a `fixed` has no per-item pointer to follow |
 | `array<T>` | A fresh header and buffer, and — when the cells hold pointers — every item copied through the same table, all the way down |
 | `map<K, V>` | A fresh header and its four buffers. A value cell holding a pointer is copied as a pointer, the same residual as a shape field |
 | `maybe<T>` | A fresh envelope cell, for the inner types the shared maybe-ownership core can follow: a simple value, a `number`/`range`, or a `shape`. `maybe<array<T>>`, `maybe<map<K, V>>`, `maybe<fixed<T>>` and `maybe<maybe<T>>` are refused |
@@ -359,7 +359,7 @@ The crossing set reads only the kinds with a frame slot across a suspension toda
 | shape | each field by its type: strings, arrays, maps, a nested shape (its heap cell: contents, then the cell), a `maybe` (its heap envelope cell), a union slot, a channel (one counted reference) |
 | `maybe<T>` | the payload a copy allocates (a string, a shape's heap cell, a `number`'s cell); in the cell flavor, the envelope cell. An array or map payload is not the envelope's (copy refuses it) |
 | union | an envelope union is a slot: a shape variant's fields (inline) or its box cell (recursive union), a string, array or map variant; any other union is a `{tag, data}` view |
-| `fixed<string>` | each string cell; any other heap item of a `fixed` is an internal error (its copy shares the cells) |
+| `fixed<string>`, `fixed<Shape>` | each cell's item (a string, or a shape's heap cell and what it owns); any other heap item of a `fixed` is an internal error (the copy table refuses it) |
 | channel, task handle | one counted reference (`ynz_channel_free`); the handle aborts its task (`ynz_handle_free`) |
 | errors-capable | the error object, or the ok payload |
 | `dynamic`, type parameter | internal error: no such value exists in generated code |

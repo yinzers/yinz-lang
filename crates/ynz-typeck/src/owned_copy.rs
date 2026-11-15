@@ -173,7 +173,8 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
         Type::BuiltinFixed { elem, .. } => match elem_copy(elem) {
             Some(ElemCopy::Inline) => OwnedCopy::FixedMemcpy,
             // A `fixed<string>` copies its block of cells and then each string in it (the emitter
-            // walks the cells), so the two lists own separate strings.
+            // walks the cells), so the two lists own separate strings; a `fixed<Shape>` is the Inline
+            // arm above and gets a fresh heap cell per item the same way.
             Some(ElemCopy::Nested) if matches!(owned_copy_plan(elem), OwnedCopy::StringClone) => {
                 OwnedCopy::FixedMemcpy
             }
