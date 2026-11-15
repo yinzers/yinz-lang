@@ -18970,8 +18970,8 @@ fn extract_range_bounds<'ctx>(
 /// bool value bits; `string`'s DELIBERATELY glue-less immortal bytes — raw-malloc'd, invisible
 /// to the alloc counter, freeing would be unsound); `Some(kind)` → an EXHAUSTIVE match whose
 /// arms are function values, so a new kind cannot register a null:
-///   - `Array`      → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
-///   - `Map`        → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+///   - `Array`      → `void glue(i64 bits) { ynz_release_<array>(bits as ptr) }`
+///   - `Map`        → `void glue(i64 bits) { ynz_release_<map>(bits as ptr) }`
 ///   - `NumberCell` → `void glue(i64 bits) { ynz_number_cell_free(bits as ptr) }` (fr12: the
 ///     16-byte cell a `number` send mints)
 ///
@@ -18994,8 +18994,16 @@ fn channel_drop_glue<'ctx>(
     let drop_fn = match channel_elem_drop(&elem) {
         None => return Ok(cg.ptr().const_null()),
         Some(kind) => match kind {
-            ChannelElemDrop::Array => cg.rt.ynz_array_drop,
-            ChannelElemDrop::Map => cg.rt.ynz_map_drop,
+            // An array or map payload is released by the one release function of its type: its
+            // items, entries and strings go with it (`release_fn`).
+            ChannelElemDrop::Array | ChannelElemDrop::Map => {
+                cg.release_fn(&elem, false)?.ok_or_else(|| {
+                    format!(
+                        "internal: channel element `{}` has no release function",
+                        ynz_typeck::types::type_name(&elem)
+                    )
+                })?
+            }
             ChannelElemDrop::NumberCell => cg.rt.ynz_number_cell_free,
         },
     };
