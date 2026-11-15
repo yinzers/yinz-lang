@@ -132,6 +132,25 @@ pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
     let directory = tempfile::tempdir().expect("create temp directory");
     let is_project = fixture_path(fixture_name).is_dir();
     let source = stage_fixture(directory.path(), fixture_name);
+    build_staged(directory, source, is_project, fixture_name, no_optimize)
+}
+
+/// [`build`] for a program given as text: for the suites that generate a family of programs from
+/// a template (one per spawn count, say) rather than keeping a file for each.
+pub fn build_source(program: &str, label: &str, no_optimize: bool) -> Built {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let source = directory.path().join("program.ynz");
+    std::fs::write(&source, program).expect("write generated program");
+    build_staged(directory, source, false, label, no_optimize)
+}
+
+fn build_staged(
+    directory: tempfile::TempDir,
+    source: PathBuf,
+    is_project: bool,
+    fixture_name: &str,
+    no_optimize: bool,
+) -> Built {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ynz"));
     command.arg("build").arg(&source).arg("--emit-ir");
     if no_optimize {

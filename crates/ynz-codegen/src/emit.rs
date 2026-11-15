@@ -24560,7 +24560,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get_insert_block()
             .and_then(|block| block.get_parent())
             .ok_or_else(|| format!("{site}: no function to walk the cells in"))?;
-        let counter = self.alloca_in_entry_llvm(self.i64(), "release_fixed_i")?;
+        let counter = self
+            .builder
+            .build_alloca(self.i64(), "release_fixed_i")
+            .map_err(|err| format!("{site} fixed counter alloca: {err}"))?;
         self.builder
             .build_store(counter, self.i64().const_zero())
             .map_err(|err| format!("{site} fixed counter init: {err}"))?;
