@@ -277,3 +277,25 @@ by_value_tests!(
     v03_m9_union_shape_equality_asan_optimized,
     v03_m9_union_shape_equality_asan_no_optimize
 );
+
+// Probe: a `maybe<Thing>` bound before a `wait` and read after it, and one returned by a
+// suspending function (its slot rides the frame's `Return` region). Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_maybe_crossing.ynz",
+    "tiny\nbig slow\nnone\nend\n",
+    v03_m9_union_maybe_crossing_optimized,
+    v03_m9_union_maybe_crossing_no_optimize,
+    v03_m9_union_maybe_crossing_asan_optimized,
+    v03_m9_union_maybe_crossing_asan_no_optimize
+);
+
+// Probe: a `maybe<Thing>` returned by an `errors` function, plain and suspending: the result
+// carries the union's slot, not a pointer into the callee frame. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_maybe_errors.ynz",
+    "big kept\ntiny\nnone\nbig kept\nend\n",
+    v03_m9_union_maybe_errors_optimized,
+    v03_m9_union_maybe_errors_no_optimize,
+    v03_m9_union_maybe_errors_asan_optimized,
+    v03_m9_union_maybe_errors_asan_no_optimize
+);
