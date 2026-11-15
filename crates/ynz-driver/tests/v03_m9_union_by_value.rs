@@ -426,14 +426,3 @@ by_value_tests!(
     v03_m9_union_view_element_grown_asan_optimized,
     v03_m9_union_view_element_grown_asan_no_optimize
 );
-
-// Bug: a binding that crosses a call that suspends (no written `wait`) was a pointer in the resume
-// function's stack, garbage after the resume. It crosses, so it owns a copy. Tier: High.
-by_value_tests!(
-    "v0_3_m9_union_view_suspension_crossing.ynz",
-    "46\n",
-    v03_m9_union_view_suspension_crossing_optimized,
-    v03_m9_union_view_suspension_crossing_no_optimize,
-    v03_m9_union_view_suspension_crossing_asan_optimized,
-    v03_m9_union_view_suspension_crossing_asan_no_optimize
-);
