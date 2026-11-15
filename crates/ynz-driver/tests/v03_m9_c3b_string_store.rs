@@ -111,3 +111,19 @@ store_case!(
     6,
     "`names[index].or(`none`)` is an element or a static literal depending on `index`, so the bound copy must be made for the expression, not decided from the value (High)"
 );
+
+store_case!(
+    equal_text_compares_equal_after_a_copy,
+    "v0_3_m9_c3b_content_equality.ynz",
+    "true\ntrue\ntrue\nfalse\ntrue\n5\n5\n",
+    6,
+    "`array<string>.contains` and `array<shape>.contains` compared string cells by pointer, so the copy a store now makes is never found by the text it was copied from (High: wrong answer)"
+);
+
+store_case!(
+    fixed_string_copy_has_strings_of_its_own,
+    "v0_3_m9_c3b_fixed_copy.ynz",
+    "p\nchanged\nq\n",
+    5,
+    "`fixed<string>.copy()` is refused once a string is not plain bits, or builds but shares its strings with the original (High: a program that built stops building; two owners of one string)"
+);

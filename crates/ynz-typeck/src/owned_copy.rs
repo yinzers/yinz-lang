@@ -178,6 +178,11 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
 
         Type::BuiltinFixed { elem, .. } => match elem_copy(elem) {
             Some(ElemCopy::Inline) => OwnedCopy::FixedMemcpy,
+            // A `fixed<string>` copies its block of cells and then each string in it (the emitter
+            // walks the cells), so the two lists own separate strings.
+            Some(ElemCopy::Nested) if matches!(owned_copy_plan(elem), OwnedCopy::StringClone) => {
+                OwnedCopy::FixedMemcpy
+            }
             // A `fixed` list stores its items inline in one block of cells; there is no
             // per-item pointer to follow, so an item that needs following cannot live here.
             Some(ElemCopy::Nested) | None => {

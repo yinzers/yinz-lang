@@ -4841,9 +4841,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// layout-correct for padded and unpadded shapes alike.
     ///
     /// Field payloads compare by BIT equality, matching the non-shape element cells
-    /// (float compares as its i64 bit pattern). Pointer-typed fields (string,
-    /// nested shape) compare by pointer identity — **D12 RATIFIED (P3 step 5(a),
-    /// final for M5)**: the by-value cut FORCED field-wise equality at the
+    /// (float compares as its i64 bit pattern). A `string` field compares by its bytes
+    /// (`ynz_string_eq`): every store copies a borrowed string (v0.3-M9 C3b), so two equal
+    /// strings are never one pointer. Other pointer-typed fields (nested shape) compare by
+    /// pointer identity — **D12 RATIFIED (P3 step 5(a), final for M5)**: the by-value cut FORCED field-wise equality at the
     /// element grain (pointer identity has no by-value analogue), but
     /// pointer-typed FIELDS underwent no repr change, so bit-identity is the
     /// minimal behavior-preserving semantics, consistent with the non-shape
@@ -4963,7 +4964,41 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .build_int_compare(IntPredicate::EQ, a, b, &format!("{site}_eq_{fname}"))
                         .map_err(|e| format!("{e}"))?
                 }
-                // Pointer payload (string, nested shape, bignum, everything else):
+                // A string field compares by its bytes (`ynz_string_eq`, as `==` does): a store
+                // copies a borrowed string, so two shapes built from one string hold two
+                // pointers, and equal text must still be equal.
+                Type::String => {
+                    let a = self
+                        .builder
+                        .build_load(self.ptr(), a_gep, &format!("{site}_av_{fname}"))
+                        .map_err(|e| format!("{e}"))?;
+                    let b = self
+                        .builder
+                        .build_load(self.ptr(), b_gep, &format!("{site}_bv_{fname}"))
+                        .map_err(|e| format!("{e}"))?;
+                    let call = self
+                        .builder
+                        .build_call(
+                            self.rt.string_eq,
+                            &[a.into(), b.into()],
+                            &format!("{site}_seq_{fname}"),
+                        )
+                        .map_err(|e| format!("{e}"))?;
+                    let result = call
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or("shape_value_eq string_eq returned void")?
+                        .into_int_value();
+                    self.builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            result,
+                            self.i32().const_int(0, false),
+                            &format!("{site}_eq_{fname}"),
+                        )
+                        .map_err(|e| format!("{e}"))?
+                }
+                // Pointer payload (nested shape, bignum, everything else):
                 // pointer identity — the Risk-3 heap-field deferral.
                 _ => {
                     let a = self
@@ -20856,6 +20891,14 @@ fn emit_owned_copy<'ctx>(
                     cg.i64().const_int(bytes, false),
                 )
                 .map_err(|e| format!("{site} fixed memcpy: {e}"))?;
+            // A `fixed<string>` holds string pointers in its cells: the block copy above shares
+            // them, so copy each string into its own cell (the same `emit_owned_copy` plan an
+            // `array<string>` element takes).
+            if let Type::BuiltinFixed { elem, .. } = &resolved {
+                if is_string_like(&cg.resolve_type(elem)) {
+                    emit_fixed_string_cells_copy(cg, dst, n, elem, site)?;
+                }
+            }
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape { byte_size: bytes },
@@ -21026,6 +21069,100 @@ fn sole_holder_transfer_free_kind<'ctx>(
         // No copy exists; the caller's own refusal arm handles it.
         ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
     }
+}
+
+/// Copy every string in the `cell_count` i64 cells at `cells` (a `fixed<string>` block just
+/// byte-copied from its source), through [`emit_owned_copy`]: a counted loop that loads a cell,
+/// copies the string it points at and stores the copy back. O(n) time in the cells and the
+/// bytes they hold.
+fn emit_fixed_string_cells_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    cells: PointerValue<'ctx>,
+    cell_count: u64,
+    elem_ty: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let idx_slot = cg
+        .builder
+        .build_alloca(i64_ty, &format!("{site}_fixed_i"))
+        .map_err(|e| format!("{site} fixed copy idx alloca: {e}"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|e| format!("{site} fixed copy idx init: {e}"))?;
+    let head = cg.append_block(&format!("{site}_fixed_head"));
+    let body = cg.append_block(&format!("{site}_fixed_body"));
+    let done = cg.append_block(&format!("{site}_fixed_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} fixed copy br: {e}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_fixed_iv"))
+        .map_err(|e| format!("{site} fixed copy idx load: {e}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::SLT,
+            i,
+            i64_ty.const_int(cell_count, false),
+            &format!("{site}_fixed_more"),
+        )
+        .map_err(|e| format!("{site} fixed copy cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|e| format!("{site} fixed copy cond: {e}"))?;
+
+    cg.builder.position_at_end(body);
+    let cell = unsafe {
+        cg.builder
+            .build_gep(i64_ty, cells, &[i], &format!("{site}_fixed_cell"))
+            .map_err(|e| format!("{site} fixed copy gep: {e}"))?
+    };
+    let bits = cg
+        .builder
+        .build_load(i64_ty, cell, &format!("{site}_fixed_bits"))
+        .map_err(|e| format!("{site} fixed copy load: {e}"))?
+        .into_int_value();
+    let item = cg
+        .builder
+        .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_fixed_item"))
+        .map_err(|e| format!("{site} fixed copy inttoptr: {e}"))?;
+    let (copied, _free) = emit_owned_copy(
+        cg,
+        None,
+        item.into(),
+        elem_ty,
+        CopyMode::Body,
+        &format!("{site}_item"),
+    )?;
+    let copied_bits = cg
+        .builder
+        .build_ptr_to_int(
+            copied.into_pointer_value(),
+            i64_ty,
+            &format!("{site}_fixed_new_bits"),
+        )
+        .map_err(|e| format!("{site} fixed copy ptrtoint: {e}"))?;
+    cg.builder
+        .build_store(cell, copied_bits)
+        .map_err(|e| format!("{site} fixed copy store: {e}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_fixed_next"))
+        .map_err(|e| format!("{site} fixed copy add: {e}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|e| format!("{site} fixed copy idx store: {e}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} fixed copy loop br: {e}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
 }
 
 /// Copy every element of an already-cloned array whose cells hold pointers to separately
@@ -21811,8 +21948,9 @@ fn lower_array_method<'ctx>(
             //
             // Element comparison semantics (v0.3-M5 P2):
             //   - non-shape elements: 8-byte cell BIT equality (int/bool value; float
-            //     bit pattern; string/number pointer identity — behavior-preserving
+            //     bit pattern; number pointer identity — behavior-preserving
             //     vs the uniform-slot ABI, locked by the step-1 matrix goldens);
+            //   - string elements: byte equality (`ynz_string_eq`, as `==`);
             //   - shape elements: field-wise VALUE equality via `shape_value_eq`
             //     (pointer identity has no by-value analogue; locked by the two RED
             //     matrix contract cells).
@@ -21890,6 +22028,36 @@ fn lower_array_method<'ctx>(
                 // Field-wise value equality between the copied element bytes and
                 // the target shape pointer.
                 cg.shape_value_eq(target_val.into_pointer_value(), out, shape_name, "c_eq")?
+            } else if matches!(cg.resolve_type(elem), Type::String) {
+                // A string element is found by its bytes (`ynz_string_eq`, the same equality
+                // as `==`), never by its pointer: every stored string is a copy of the one
+                // that was put in, so two equal strings are never one pointer.
+                let elem_bits = cg.array_elem_bits_from_out(out, elem, "c_get")?;
+                let elem_ptr = cg
+                    .builder
+                    .build_int_to_ptr(elem_bits, cg.ptr(), "c_elem_str")
+                    .map_err(|e| format!("contains string inttoptr: {e}"))?;
+                let call = cg
+                    .builder
+                    .build_call(
+                        cg.rt.string_eq,
+                        &[elem_ptr.into(), target_val.into()],
+                        "c_str_eq",
+                    )
+                    .map_err(|e| format!("contains string_eq: {e}"))?;
+                let result = call
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("contains string_eq returned void")?
+                    .into_int_value();
+                cg.builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        result,
+                        cg.i32().const_int(0, false),
+                        "c_str_eq_b",
+                    )
+                    .map_err(|e| format!("{e}"))?
             } else {
                 let elem_bits = cg.array_elem_bits_from_out(out, elem, "c_get")?;
                 cg.builder

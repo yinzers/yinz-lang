@@ -1,0 +1,14 @@
+// v0.3-M9 C3b fixture: `.copy()` of a `fixed<string>` still builds and gives the copy strings of
+// its own (it was refused for a moment when strings stopped being plain bits).
+// Allocations: the literal `[`p`, `q`]` copies 2 into the list; `.copy()` copies each of the 2
+// strings 2; `copy.set(0, `changed`)` copies the literal 1. Total 5.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let list: fixed<string> = [`p`, `q`]
+  let copy = list.copy()
+  copy.set(0, `changed`)
+  print(list[0].or(`none`))
+  print(copy[0].or(`none`))
+  print(copy[1].or(`none`))
+}
