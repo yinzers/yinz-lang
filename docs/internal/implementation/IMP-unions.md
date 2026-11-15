@@ -92,11 +92,32 @@ it, so no pointer into a resume function's stack survives a suspension. None of 
 
 **Recursive unions** (a variant reaches the union through shape fields, so no finite inline size)
 are the one exception: the slot is `{ tag, word }` and a shape variant's bytes live in a heap cell
-the slot owns, one per box, as `Box<T>` in a Rust enum. Every copy of such a union (a store into a
-container, a field or a binding) is DEEP, like `Box::clone`: the copy clones the cell and every cell
-the cell's own union fields own, so two slots never share a cell. Cost: O(n) for the n cells a value
-owns, so a chain built link by link by stores copies each link's tail once more. The same holds for
-a non-recursive union whose shape variant has such a field.
+the slot owns, one per box, as `Box<T>` in a Rust enum. A store MOVES such a value when it is
+a move and COPIES it deep otherwise (next section), exactly where Rust moves or clones. The same
+holds for a non-recursive union whose shape variant has such a field.
+
+**Moving and copying a value that owns boxes.** A shape, union or `maybe` that owns
+a recursive union's boxes is never copied by bytes alone, because the copy would share its boxes
+with the source and a release would free each box twice. Typeck records which stores are MOVES
+(`TypedModule::heap_moves`, `crates/ynz-typeck/src/heap_moves.rs`): the checker's admitted transfer
+of a fresh value (a literal, a call whose every return is fresh, a `.copy()`) or of an owned
+binding the store consumed (a later read is a compile error), and a `return` of either. Codegen
+reads the record and decides nothing (`lower_expr` marks the value, `Cg::is_moved_cells` asks):
+
+- a MOVED store takes the boxes as they are: one new cell for the value's own box, none for the
+  boxes it owns (building a chain link by link makes one cell per link);
+- every other store deep-copies, like `Clone`: `.copy()` (always, even when its source is not
+  read again), a binding made from a place that stays where it is (`let copied = outer.inner`, a
+  `maybe` read of an element, a returned parameter's alias binding) and an element store of a value
+  that is not moved. The copy clones each box the value owns (`deepen_unless_moved`,
+  `union_deepen_fn`): O(n) cells for n boxes.
+
+One seam makes the choice for every copy of a shape's bytes: union slot persist
+(`union_persist_into_as`), `shape_bytes_to_owned`, `shape_bytes_to_heap_cell`,
+`maybe_payload_stable_bits`, the embed slot and the staged element of an array or map store. A
+value absent from the record is copied deep, so a hole costs cells and never a double free. A
+`return` of a parameter copies nothing: its caller treats the result as an alias and the binding
+that takes it copies.
 
 **Ownership.** A `share` union parameter cannot be stored (`ParamNeedsGive`); a `give` union is
 copied into the slot. A slot owns its payload: a shape variant owns the shape's fields (and, boxed,

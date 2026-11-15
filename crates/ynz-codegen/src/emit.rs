@@ -4704,10 +4704,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `UnionLayout`; the payload lives INLINE in it, so nothing is allocated:
     /// - `src` null (`none`): the slot gets tag `UNION_NONE_TAG`.
     /// - a shape variant: the shape's bytes are copied into the slot's payload area (a
-    ///   recursive, boxed union clones them into a heap cell and keeps the cell pointer). The copy
-    ///   is DEEP, like `Box::clone`: every cell the shape's union fields own is cloned too
-    ///   (`clone_shape_variant_into_slot`), so a stored value shares no cell with its source and
-    ///   releasing one never frees the other's.
+    ///   recursive, boxed union clones them into a heap cell and keeps the cell pointer). When
+    ///   `src` is a MOVED value (`is_moved_cells`: typeck's `heap_moves`) the slot takes the boxes
+    ///   the shape's union fields own, as Rust moves a `Box`; otherwise the copy is DEEP, like
+    ///   `Box::clone`: every cell they own is cloned too (`clone_shape_variant_into_slot`), so a
+    ///   stored value shares no cell with a source that is still held and releasing one never
+    ///   frees the other's.
     /// - any other variant: its 8 bytes of bits (the value, or the pointer the store hands
     ///   over) are copied into the payload area.
     ///
@@ -4719,8 +4721,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// cell), a `string`, array or map variant releases that value, the scalar variants and
     /// `none` own nothing.
     ///
-    /// Time: O(1) + one memmove of the variant's size, plus O(n) for the n cells a recursive value
-    /// owns  Space: O(1); a heap cell for each cell a boxed (recursive) union's shape variant owns
+    /// Time: O(1) + one memmove of the variant's size for a moved value; plus O(n) for the n cells
+    /// a recursive value owns when it is copied deep  Space: O(1); a heap cell for the value's own
+    /// box (boxed union), and one for each cell it owns when copied deep
     fn union_persist_into(
         &self,
         src: PointerValue<'ctx>,
@@ -4828,10 +4831,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Store a SHAPE variant's bytes (`payload_src`) into the slot whose payload area is at
     /// `payload_addr`, as a value of its own: the copy shares no cell with the source. An inline
     /// slot receives the bytes; a boxed (recursive) slot gets a fresh heap cell holding them, and
-    /// its address in the payload word. Either way, every box the shape's union fields own is
-    /// cloned too (`deepen_shape_fields`), like `Box::clone` in a Rust enum.
+    /// its address in the payload word. When `deep`, every box the shape's union fields own is
+    /// cloned too (`deepen_shape_fields`), like `Box::clone` in a Rust enum; a moved value
+    /// (`deep` false) keeps them, as Rust moves a `Box`.
     ///
-    /// Time: O(n) for the n cells the value owns  Space: O(n) heap cells
+    /// Time: O(1) moved; O(n) deep for the n cells the value owns  Space: O(1) moved; O(n) deep
     fn clone_shape_variant_into_slot(
         &self,
         payload_src: PointerValue<'ctx>,
