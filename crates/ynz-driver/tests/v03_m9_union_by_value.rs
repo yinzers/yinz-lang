@@ -366,3 +366,16 @@ by_value_tests!(
     v03_m9_union_recursive_copy_asan_optimized,
     v03_m9_union_recursive_copy_asan_no_optimize
 );
+
+// Bug: a copy of a value that owns a recursive union's boxes (`.copy()`, a binding made from a
+// field, an array element, a `maybe` read) shared them with its source, and a moved value read
+// a box its old owner had given up. Reassigning one side and reading the other's whole chain
+// shows a shared or dangling box under AddressSanitizer. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_move_copy_reassign.ynz",
+    "3 2\n3 1\n3 1\nend\n",
+    v03_m9_union_move_copy_reassign_optimized,
+    v03_m9_union_move_copy_reassign_no_optimize,
+    v03_m9_union_move_copy_reassign_asan_optimized,
+    v03_m9_union_move_copy_reassign_asan_no_optimize
+);
