@@ -10727,12 +10727,13 @@ fn v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak() {
     // promotion sites). Paper-Trace (predicted BEFORE first run; observed matched
     // exactly, stable across repeated runs):
     //   +5  maybe loop, 5 iterations — 1 envelope cell per promotion (non-shape payload)
-    //   +6  union loop, 3 iterations — 2 cells per promotion (envelope + Square payload)
+    //   +0  union loop, 3 iterations — the union binding is a frame region (C1f #423: by value,
+    //       no promotion; it was +6, two cells per iteration)
     //   ±0  frames — the composed task frame is alloc'd AND freed (free=1 observed;
     //       free>0 keeps the probe non-vacuous: the suspension machinery genuinely ran)
     // The stdout assertion (200 = 5×40; `square`×3) proves each iteration's binding
     // survived its suspension — the gap measures real crossing promotions, not dead
-    // code. A larger gap = a NEW leak class; free growing by 11 = a drop story landed
+    // code. A larger gap = a NEW leak class; free growing by 5 = a drop story landed
     // (update this pin + the step-3d verdict record); any other drift = investigate.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m6_heap_cell_loop_parity.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
@@ -10750,10 +10751,10 @@ fn v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak() {
     );
     assert_eq!(
         alloc,
-        free + 11,
-        "heap-cell loop parity drifted: expected alloc = free + 11 (5 maybe envelope \
-         cells + 3×2 union cells, per-iteration bind-time promotions held to process \
-         exit). alloc={alloc} free={free}"
+        free + 5,
+        "heap-cell loop parity drifted: expected alloc = free + 5 (5 maybe envelope \
+         cells, per-iteration bind-time promotions held to process exit; the union loop \
+         allocates nothing). alloc={alloc} free={free}"
     );
 }
 
