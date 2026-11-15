@@ -107,8 +107,9 @@ reads the record and decides nothing (`lower_expr` marks the value, `Cg::is_move
 - a MOVED store takes the boxes as they are: one new cell for the value's own box, none for the
   boxes it owns (building a chain link by link makes one cell per link);
 - every other store deep-copies, like `Clone`: `.copy()` (always, even when its source is not
-  read again), a binding made from a place that stays where it is (`let copied = outer.inner`, a
-  `maybe` read of an element, a returned parameter's alias binding) and an element store of a value
+  read again), a binding made from a place that stays where it is and is not a view (`let copied = outer.inner` with
+  the field written while the binding is read, a `maybe` read of an element, a returned parameter's
+  alias binding) and an element store of a value
   that is not moved. The copy clones each box the value owns (`deepen_unless_moved`,
   `union_deepen_fn`): O(n) cells for n boxes.
 
@@ -118,6 +119,28 @@ One seam makes the choice for every copy of a shape's bytes: union slot persist
 value absent from the record is copied deep, so a hole costs cells and never a double free. A
 `return` of a parameter copies nothing: its caller treats the result as an alias and the binding
 that takes it copies.
+
+**Views.** A `let` of a place read (`let rest = head.next`) names a place that stays where it
+is. Copying it into the binding is a clone, one box for every box the value owns, so a recursive
+walk that peels one link per call would copy the whole tail at every step: O(n²) cells where a Rust
+borrow costs none. A binding that only READS what it names is a read-only VIEW instead: it points at
+the place (a union field's slot, a shape field's bytes), owns nothing and clones nothing, and the
+language's value semantics are unchanged. Typeck proves it (`TypedModule::view_bindings`,
+`crates/ynz-typeck/src/view_bindings.rs`), inside the same liveness walk as `string_moves`, and
+codegen only reads the record:
+
+- (a) the view is never written, stored, returned, given or sent;
+- (b) the root of the place is not assigned, written through a field or index, or passed to a
+  position that may write or consume it, anywhere in the view's live range; a parameter the function
+  only reads (`share`) satisfies (b) for the whole body;
+- (c) no `wait` or `background` lies in the live range, and the function has no state-machine
+  frames (a view never crosses a suspension).
+
+Every other binding keeps the deep copy, as Rust needs `.clone()` where it refuses the borrow. The
+decided form is a field-read chain from a parameter or a plain `let`; an element read (`arr[i]`,
+`.get(i)`) is a copy into per-site staging and keeps its copy, because whether a built-in collection
+method writes its receiver has no table to read, and an annotated `let` (a possible union wrap) is
+never a view.
 
 **Ownership.** A `share` union parameter cannot be stored (`ParamNeedsGive`); a `give` union is
 copied into the slot. A slot owns its payload: a shape variant owns the shape's fields (and, boxed,
