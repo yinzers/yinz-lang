@@ -3513,6 +3513,66 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_pointer_value())
     }
 
+    /// Does shape `shape_name` hold a direct `string` field? Decides whether a shape's byte copy
+    /// owes its strings a copy of their own.
+    fn shape_has_string_field(&self, shape_name: &str) -> bool {
+        self.shape_table.get(shape_name).is_some_and(|shape| {
+            shape
+                .fields
+                .iter()
+                .any(|field| is_string_like(&self.resolve_type(&field.ty)))
+        })
+    }
+
+    /// Copy every direct `string` field of the shape at `shape_ptr`, in place, through the one
+    /// string copy ([`Cg::string_clone_call`], the call `emit_owned_copy`'s `StringClone` arm
+    /// makes): the shape's bytes were just copied, so each string field still points at the
+    /// source's string, and two shapes holding one string would free it twice. Fields that hold
+    /// a pointer to something else (a nested shape, an `array`, a `map`) stay shared: the
+    /// residual named in `ynz_typeck::owned_copy`'s header.
+    /// O(fields) time, plus one string copy per string field.
+    fn copy_shape_string_fields(
+        &self,
+        shape_ptr: PointerValue<'ctx>,
+        shape_name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let struct_ty = self
+            .shape_types
+            .get(shape_name)
+            .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
+        let fields = self
+            .shape_table
+            .get(shape_name)
+            .ok_or_else(|| format!("{site}: shape `{shape_name}` not in the shape table"))?
+            .fields
+            .clone();
+        for (index, field) in fields.iter().enumerate() {
+            if !is_string_like(&self.resolve_type(&field.ty)) {
+                continue;
+            }
+            let field_ptr = self
+                .builder
+                .build_struct_gep(
+                    struct_ty,
+                    shape_ptr,
+                    index as u32,
+                    &format!("{site}_sf_{}", field.name),
+                )
+                .map_err(|e| format!("{site} string field gep: {e}"))?;
+            let original = self
+                .builder
+                .build_load(self.ptr(), field_ptr, &format!("{site}_sfv_{}", field.name))
+                .map_err(|e| format!("{site} string field load: {e}"))?;
+            let copied =
+                self.string_clone_call(original, &format!("{site}_field_{}", field.name))?;
+            self.builder
+                .build_store(field_ptr, copied)
+                .map_err(|e| format!("{site} string field store: {e}"))?;
+        }
+        Ok(())
+    }
+
     /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
     /// `maybe_to_owned_dest`, v0.3-M7 Phase 3 / R9): given a maybe envelope's
     /// loaded `flag` and `bits`, return payload bits that are STABLE past the
@@ -3597,6 +3657,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.builder
                     .build_memcpy(owned_pay, 1, src_pay, 1, size)
                     .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
+                // The bytes were copied, so the payload's string fields still point at the
+                // source's strings: copy them so the payload owns its strings.
+                self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
                 owned_pay
             }
             // Number reaches here only with `heap = true` (the match above passes
@@ -20808,18 +20871,8 @@ fn emit_owned_copy<'ctx>(
         // (C6/C7) owns every string release, so until it lands the copy leaks, which is
         // strictly better than the alias it replaces.
         OwnedCopy::StringClone => {
-            let cloned = cg
-                .builder
-                .build_call(
-                    cg.rt.ynz_string_clone,
-                    &[val.into()],
-                    &format!("{site}_str"),
-                )
-                .map_err(|e| format!("{site} string clone: {e}"))?
-                .try_as_basic_value()
-                .basic()
-                .ok_or_else(|| format!("{site} string clone: returned void"))?;
-            Ok((cloned, BgArgFreeKind::None))
+            let cloned = cg.string_clone_call(val, &format!("{site}_str"))?;
+            Ok((cloned.into(), BgArgFreeKind::None))
         }
 
         // Immutable, but living in storage the producing frame owns.
@@ -20887,7 +20940,7 @@ fn emit_owned_copy<'ctx>(
             cg.builder
                 .build_store(dst, struct_val)
                 .map_err(|e| format!("{site} store: {e}"))?;
-            emit_shape_string_fields_copy(cg, dst, name, site)?;
+            cg.copy_shape_string_fields(dst, name, site)?;
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape {
@@ -20988,6 +21041,13 @@ fn emit_owned_copy<'ctx>(
             };
             if elem == ElemCopy::Nested {
                 emit_array_elem_deep_copy(cg, cloned, &elem_ty, mode, site)?;
+            }
+            // Shape elements live inline in the buffer, so the clone's strings are the
+            // source's: copy each element's string fields.
+            if let Type::Shape { name } = cg.resolve_type(&elem_ty) {
+                if cg.shape_has_string_field(&name) {
+                    emit_array_shape_string_fields_copy(cg, cloned, &name, site)?;
+                }
             }
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
@@ -21137,59 +21197,6 @@ fn sole_holder_transfer_free_kind<'ctx>(
         // No copy exists; the caller's own refusal arm handles it.
         ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
     }
-}
-
-/// Copy every direct `string` field of the shape at `shape_ptr`, in place, through
-/// [`emit_owned_copy`]: the shape's bytes were just copied, so each string field still points at
-/// the source's string, and two shapes holding one string would free it twice. Fields that hold
-/// a pointer to something else (a nested shape, an `array`, a `map`) stay shared: the residual
-/// named in `ynz_typeck::owned_copy`'s header. O(fields) time, plus one string copy per field.
-fn emit_shape_string_fields_copy<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
-    shape_ptr: PointerValue<'ctx>,
-    shape_name: &str,
-    site: &str,
-) -> Result<(), String> {
-    let struct_ty = cg
-        .shape_types
-        .get(shape_name)
-        .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
-    let fields = cg
-        .shape_table
-        .get(shape_name)
-        .ok_or_else(|| format!("{site}: shape `{shape_name}` not in the shape table"))?
-        .fields
-        .clone();
-    for (index, field) in fields.iter().enumerate() {
-        if !is_string_like(&cg.resolve_type(&field.ty)) {
-            continue;
-        }
-        let field_ptr = cg
-            .builder
-            .build_struct_gep(
-                struct_ty,
-                shape_ptr,
-                index as u32,
-                &format!("{site}_sf_{}", field.name),
-            )
-            .map_err(|e| format!("{site} string field gep: {e}"))?;
-        let original = cg
-            .builder
-            .build_load(cg.ptr(), field_ptr, &format!("{site}_sfv_{}", field.name))
-            .map_err(|e| format!("{site} string field load: {e}"))?;
-        let (copied, _free) = emit_owned_copy(
-            cg,
-            None,
-            original,
-            &field.ty,
-            CopyMode::Body,
-            &format!("{site}_field"),
-        )?;
-        cg.builder
-            .build_store(field_ptr, copied)
-            .map_err(|e| format!("{site} string field store: {e}"))?;
-    }
-    Ok(())
 }
 
 /// Copy every string in the `cell_count` i64 cells at `cells` (a `fixed<string>` block just
@@ -21413,6 +21420,88 @@ fn emit_array_elem_deep_copy<'ctx>(
     cg.builder
         .build_unconditional_branch(head)
         .map_err(|e| format!("{site} deep loop br: {e}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
+}
+
+/// Give every element of an already-cloned `array<Shape>` strings of its own, when the shape has
+/// a direct `string` field: the clone's buffer was byte-copied, so each element's string fields
+/// still point at the source's strings. A counted loop that reads an element into a scratch slot,
+/// copies its string fields ([`Cg::copy_shape_string_fields`], the same copy a shape `.copy()`
+/// makes) and writes it back. O(n) time in the elements plus one string copy per string field.
+fn emit_array_shape_string_fields_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arr: PointerValue<'ctx>,
+    shape_name: &str,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let struct_ty = cg
+        .shape_types
+        .get(shape_name)
+        .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
+    let len = cg
+        .builder
+        .build_call(cg.rt.ynz_array_count, &[arr.into()], &format!("{site}_len"))
+        .map_err(|e| format!("{site} shape copy count: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| format!("{site} shape copy count: returned void"))?
+        .into_int_value();
+    let idx_slot = cg.alloca_in_entry_llvm(i64_ty, &format!("{site}_shape_i"))?;
+    let element_slot = cg.alloca_in_entry_llvm(struct_ty, &format!("{site}_shape_elem"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|e| format!("{site} shape copy idx init: {e}"))?;
+
+    let head = cg.append_block(&format!("{site}_shape_head"));
+    let body = cg.append_block(&format!("{site}_shape_body"));
+    let done = cg.append_block(&format!("{site}_shape_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} shape copy br: {e}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_shape_iv"))
+        .map_err(|e| format!("{site} shape copy idx load: {e}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(IntPredicate::SLT, i, len, &format!("{site}_shape_more"))
+        .map_err(|e| format!("{site} shape copy cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|e| format!("{site} shape copy cond: {e}"))?;
+
+    cg.builder.position_at_end(body);
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_get,
+            &[arr.into(), i.into(), element_slot.into()],
+            &format!("{site}_shape_get"),
+        )
+        .map_err(|e| format!("{site} shape copy get: {e}"))?;
+    cg.copy_shape_string_fields(element_slot, shape_name, &format!("{site}_elem"))?;
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_set,
+            &[arr.into(), i.into(), element_slot.into()],
+            &format!("{site}_shape_set"),
+        )
+        .map_err(|e| format!("{site} shape copy set: {e}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_shape_next"))
+        .map_err(|e| format!("{site} shape copy add: {e}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|e| format!("{site} shape copy idx store: {e}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} shape copy loop br: {e}"))?;
 
     cg.builder.position_at_end(done);
     Ok(())
