@@ -335,9 +335,11 @@ Entries are keyed by `DeclKey` and the unique codegen name (`BindingNames`), nev
 | `Omitted(Returned)` | the returned value is or reaches its class | the returned value's holders |
 | `Omitted(NotOwner / CallerOwns / NoStaticFounder)` | another member founds the class; a borrowed parameter is in it; a non-owner outlives every owner (C7's run-time flag) | transfer-record anchor |
 | `Omitted(Reassigned)` | reassigned anywhere in its function: the old value leaks, never frees early | `check_assign` |
-| `Omitted(UnsupportedType / TypeParameter)` | the type holds heap this plan has no release for (`maybe`/`union`/`dynamic`/`fixed` of heap, errors-capable values, nested shapes, generic instances); a value of a type parameter | `heap_class_of` |
+| `Omitted(TypeParameter)` | the value's type is, or holds, a type parameter of a generic function: the body alone cannot say whether it owns heap | `heap_class_of` |
 
-Kinds with a release: `string`, `array`, `map`, `channel`, background task handle, and a flat shape (no shape-typed field) with heap fields. Generic bodies are checked once, so their lists apply to every instance.
+**Every binding whose value owns heap is listed, whatever the kind** (`heap_class_of`, one type fact): `string`, `array`, `map`, `channel`, background task handle, a flat shape with heap fields, a shape holding a shape (each shape-typed field is a heap cell; a recursive or undescribed shape is assumed to own heap), `maybe` / union / `fixed` with a heap-owning content, `dynamic`, a map entry with a heap-owning key or value, and every errors-capable value (the error object is heap). A type that cannot own heap (`int`, `boolean`, `options`, a shape of ints, a `maybe` of bits) is not listed. How codegen releases each kind is C6/C7's job; the record only has to be complete, and the corpus parity test rejects an omission with no reason. Generic bodies are checked once, so their lists apply to every instance.
+
+The crossing set reads only the kinds with a frame slot across a suspension today (`ReleaseKind::has_frame_backing`: string, array, map, channel, handle, flat shape). The others cannot cross a `wait` yet (Check 2/2b), so reading them would reject programs that compile now; C6 widens that one predicate together with the frame backing of the kind it starts releasing in a state machine.
 
 **Strings.** A string is never statically moved: `string_moves` says a read MAY be taken by a store, and codegen decides at the store site. A `let`/`const` string with a record-listed last-use read that can precede the edge is `ReleaseIfLive`, otherwise `Release`; the listed reads are its move sites, so the plan and `string_moves` are one fact.
 

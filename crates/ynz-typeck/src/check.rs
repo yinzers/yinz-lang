@@ -33,7 +33,9 @@ use crate::{
 };
 
 use crate::binding_names::{decl_key, DeclKey};
-use crate::release_plan::{heap_class_of, EdgeKind, HeapClass, Moved, RawEntry, ReleaseReads};
+use crate::release_plan::{
+    heap_class_of, EdgeKind, HeapClass, Moved, RawEntry, ReleaseReads, TypeTables,
+};
 
 /// One give made while a loop body was being checked: where it happened, why the entries it
 /// reached are gone, and which entries those are. At the loop's end each is checked against the
@@ -5469,8 +5471,14 @@ impl<'b> Checker<'b> {
         let mut entries: Vec<RawEntry> = Vec::new();
         for frame_index in frames {
             for (name, entry) in self.scope.frame_entries(frame_index).into_iter().rev() {
-                let heap = heap_class_of(&entry.ty, self.shape_table);
-                if matches!(heap, HeapClass::NotHeap) {
+                let heap = heap_class_of(
+                    &entry.ty,
+                    &TypeTables {
+                        shapes: self.shape_table,
+                        generic_shapes: self.generic_shape_table,
+                    },
+                );
+                if matches!(heap, HeapClass::NoHeap) {
                     continue;
                 }
                 let moved = match (&entry.consumed, entry.consumed_on_every_path) {

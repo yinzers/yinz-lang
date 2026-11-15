@@ -36,12 +36,17 @@
 //!
 //! * A binding reassigned anywhere in its function is `Omitted(Reassigned)`: the old value is
 //!   leaked, never freed early.
-//! * A type this plan has no release for (`maybe`/`union`/`dynamic`/`fixed` of heap, errors-capable
-//!   values, nested shapes, generic instances) is `Omitted(UnsupportedType)`; a value of a type
+//! * Every binding whose value owns heap memory is classified with a real fate, of whatever kind
+//!   (`maybe`, `union`, `dynamic`, `fixed`, errors-capable values, nested shapes and generic
+//!   instances included); how codegen releases each kind is C6/C7's job. A value of a type
 //!   parameter is `Omitted(TypeParameter)` (a generic body is checked once, with the parameter
-//!   unresolved, and its lists apply to every instance).
+//!   unresolved, and its lists apply to every instance). A type that cannot own heap is not listed.
 //! * The release owners (bindings with a releasing fate at some edge) feed the ONE crossing-set
-//!   producer: a release is a read at its edge, see [`ReleaseReads`].
+//!   producer: a release is a read at its edge, see [`ReleaseReads`]. Only a kind with a frame
+//!   slot across a suspension ([`ReleaseKind::has_frame_backing`]) is read today: the others
+//!   cannot cross a `wait` yet (Check 2/2b), so reading them would reject programs that compile
+//!   now. Releasing such a kind inside a state machine is C6's change, made together with the
+//!   frame backing, by widening that one predicate.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -49,16 +54,17 @@ use ynz_ast::nodes::{Block, Expr, Stmt};
 use ynz_diagnostics::SourceSpan;
 
 use crate::binding_names::{BindingNames, DeclKey};
+use crate::generics::{apply_substitution, GenericShapeTable};
 use crate::shapes::ShapeTable;
 use crate::string_ownership::StringMoves;
 use crate::transfer_record::{ReleaseAnchor, TransferRecord};
-use crate::types::Type;
+use crate::types::{type_name, Type};
 
 /// `(span.start, span.end)`.
 pub type Span = (usize, usize);
 
 /// What the release frees, by runtime mechanism.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReleaseKind {
     /// A heap or static string (`ynz_string_release` accepts any).
     String,
@@ -72,6 +78,37 @@ pub enum ReleaseKind {
     TaskHandle,
     /// A flat shape (no shape-typed field) with heap fields.
     Shape,
+    /// A shape with a shape-typed field (each such field is a heap cell), or a recursive or
+    /// undescribed shape.
+    NestedShape,
+    /// `maybe<T>` of a heap-owning `T`: the envelope and its payload.
+    Maybe,
+    /// A union with a heap-owning variant: the envelope and its payload.
+    Union,
+    /// `dynamic Contract`: the boxed data behind the fat pointer.
+    Dynamic,
+    /// `fixed<T>` of a heap-owning `T`: the items it holds.
+    Fixed,
+    /// A map-iteration entry whose key or value owns heap (a loop cell: never an owner).
+    MapEntry,
+    /// An errors-capable value: the error object, and the payload when it owns heap.
+    ErrorsCapable,
+}
+
+impl ReleaseKind {
+    /// True when a binding of this kind has a frame slot that survives a suspension today. The
+    /// crossing set reads only these kinds (see the module docs).
+    pub fn has_frame_backing(&self) -> bool {
+        matches!(
+            self,
+            ReleaseKind::String
+                | ReleaseKind::Array
+                | ReleaseKind::Map
+                | ReleaseKind::Channel
+                | ReleaseKind::TaskHandle
+                | ReleaseKind::Shape
+        )
+    }
 }
 
 /// Why a binding is not released at an edge.
@@ -89,8 +126,6 @@ pub enum OmitReason {
     NoStaticFounder,
     /// The binding is reassigned somewhere in its function.
     Reassigned,
-    /// The type holds heap this plan has no release for.
-    UnsupportedType,
     /// The type is a type parameter of a generic function.
     TypeParameter,
 }
@@ -150,15 +185,57 @@ pub enum Moved {
 /// What a binding of some type needs at scope exit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeapClass {
-    /// Bits only: nothing to release, not listed.
-    NotHeap,
-    Supported(ReleaseKind),
-    Unsupported,
+    /// Its value owns no heap memory: nothing to release, not listed.
+    NoHeap,
+    /// Its value owns heap memory, of this kind.
+    Heap(ReleaseKind),
+    /// Its type is (or holds) a type parameter of a generic function, so the body alone cannot
+    /// say whether it owns heap.
     TypeParameter,
 }
 
-/// The release class of a binding's type. O(fields) for a shape, O(1) otherwise.
-pub fn heap_class_of(ty: &Type, shapes: &ShapeTable) -> HeapClass {
+/// The type tables a classification reads.
+#[derive(Clone, Copy)]
+pub struct TypeTables<'a> {
+    pub shapes: &'a ShapeTable,
+    pub generic_shapes: &'a GenericShapeTable,
+}
+
+/// Whether, and as what, a value of `ty` owns heap memory: the ONE answer the release plan lists
+/// a binding by. A shape owns heap when a field does or a field is a shape (each shape-typed
+/// field is a heap cell); a recursive or undescribed shape is assumed to (releasing a value that
+/// owns nothing is a no-op, leaking one that does is not).
+///
+/// O(size of the type, with shapes expanded once each).
+pub fn heap_class_of(ty: &Type, tables: &TypeTables<'_>) -> HeapClass {
+    classify(ty, tables, &mut Vec::new())
+}
+
+/// The class of a shape from its (substituted) field types.
+fn shape_class(fields: &[Type], tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> HeapClass {
+    if fields
+        .iter()
+        .any(|field| matches!(field, Type::Shape { .. } | Type::Generic { .. }))
+    {
+        return HeapClass::Heap(ReleaseKind::NestedShape);
+    }
+    let classes: Vec<HeapClass> = fields
+        .iter()
+        .map(|field| classify(field, tables, visiting))
+        .collect();
+    if classes
+        .iter()
+        .any(|class| matches!(class, HeapClass::Heap(_)))
+    {
+        HeapClass::Heap(ReleaseKind::Shape)
+    } else if classes.contains(&HeapClass::TypeParameter) {
+        HeapClass::TypeParameter
+    } else {
+        HeapClass::NoHeap
+    }
+}
+
+fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> HeapClass {
     match ty {
         Type::Nothing
         | Type::Error
@@ -167,50 +244,91 @@ pub fn heap_class_of(ty: &Type, shapes: &ShapeTable) -> HeapClass {
         | Type::Number { .. }
         | Type::Bool
         | Type::Range { .. }
-        | Type::Options { .. } => HeapClass::NotHeap,
-        Type::String => HeapClass::Supported(ReleaseKind::String),
-        Type::Sensitive { inner } => heap_class_of(inner, shapes),
-        Type::BuiltinArray { .. } => HeapClass::Supported(ReleaseKind::Array),
-        Type::BuiltinMap { .. } => HeapClass::Supported(ReleaseKind::Map),
-        Type::BuiltinChannel { .. } => HeapClass::Supported(ReleaseKind::Channel),
-        Type::BackgroundHandle { .. } => HeapClass::Supported(ReleaseKind::TaskHandle),
+        | Type::Options { .. } => HeapClass::NoHeap,
+        Type::String => HeapClass::Heap(ReleaseKind::String),
+        Type::Sensitive { inner } => classify(inner, tables, visiting),
+        Type::BuiltinArray { .. } => HeapClass::Heap(ReleaseKind::Array),
+        Type::BuiltinMap { .. } => HeapClass::Heap(ReleaseKind::Map),
+        Type::BuiltinChannel { .. } => HeapClass::Heap(ReleaseKind::Channel),
+        Type::BackgroundHandle { .. } => HeapClass::Heap(ReleaseKind::TaskHandle),
+        Type::Dynamic { .. } => HeapClass::Heap(ReleaseKind::Dynamic),
+        // The error object is a heap allocation whatever the payload is.
+        Type::ErrorsCapable { .. } => HeapClass::Heap(ReleaseKind::ErrorsCapable),
         Type::TypeParam { .. } => HeapClass::TypeParameter,
-        Type::Shape { name } => match shapes.shapes.get(name) {
-            Some(definition) => {
-                let field_classes: Vec<HeapClass> = definition
-                    .fields
-                    .iter()
-                    .map(|field| heap_class_of(&field.ty, shapes))
-                    .collect();
-                if field_classes
-                    .iter()
-                    .all(|class| matches!(class, HeapClass::NotHeap))
-                {
-                    HeapClass::NotHeap
-                } else if definition
-                    .fields
-                    .iter()
-                    .any(|field| matches!(field.ty, Type::Shape { .. }))
-                {
-                    // A nested shape cannot be frame-embedded across a suspension (Check 2).
-                    HeapClass::Unsupported
-                } else {
-                    HeapClass::Supported(ReleaseKind::Shape)
-                }
+        Type::Shape { name } => {
+            if visiting.contains(name) {
+                // A shape that holds itself is boxed.
+                return HeapClass::Heap(ReleaseKind::NestedShape);
             }
-            // Imported or anonymous: the table does not describe it.
-            None => HeapClass::Unsupported,
-        },
-        Type::Maybe { inner } => match heap_class_of(inner, shapes) {
-            HeapClass::NotHeap => HeapClass::NotHeap,
-            _ => HeapClass::Unsupported,
-        },
-        Type::Dynamic { .. }
-        | Type::Generic { .. }
-        | Type::BuiltinFixed { .. }
-        | Type::MapEntry { .. }
-        | Type::Union { .. }
-        | Type::ErrorsCapable { .. } => HeapClass::Unsupported,
+            let Some(definition) = tables.shapes.shapes.get(name) else {
+                return HeapClass::Heap(ReleaseKind::NestedShape);
+            };
+            visiting.push(name.clone());
+            let fields: Vec<Type> = definition.fields.iter().map(|f| f.ty.clone()).collect();
+            let class = shape_class(&fields, tables, visiting);
+            visiting.pop();
+            class
+        }
+        Type::Generic { name, args } => {
+            let Some(definition) = tables.generic_shapes.get(name) else {
+                return HeapClass::Heap(ReleaseKind::NestedShape);
+            };
+            let key = type_name(ty);
+            if visiting.contains(&key) {
+                return HeapClass::Heap(ReleaseKind::NestedShape);
+            }
+            let substitution = definition.make_substitution(args);
+            visiting.push(key);
+            let fields: Vec<Type> = definition
+                .fields
+                .iter()
+                .map(|field| apply_substitution(&field.ty, &substitution))
+                .collect();
+            let class = shape_class(&fields, tables, visiting);
+            visiting.pop();
+            class
+        }
+        Type::Maybe { inner } => wrapped(classify(inner, tables, visiting), ReleaseKind::Maybe),
+        Type::BuiltinFixed { elem, .. } => {
+            wrapped(classify(elem, tables, visiting), ReleaseKind::Fixed)
+        }
+        Type::Union { variants } => {
+            let classes: Vec<HeapClass> = variants
+                .iter()
+                .map(|variant| classify(variant, tables, visiting))
+                .collect();
+            if classes
+                .iter()
+                .any(|class| matches!(class, HeapClass::Heap(_)))
+            {
+                HeapClass::Heap(ReleaseKind::Union)
+            } else if classes.contains(&HeapClass::TypeParameter) {
+                HeapClass::TypeParameter
+            } else {
+                HeapClass::NoHeap
+            }
+        }
+        Type::MapEntry { key, val } => {
+            let key_class = classify(key, tables, visiting);
+            let val_class = classify(val, tables, visiting);
+            if matches!(key_class, HeapClass::Heap(_)) || matches!(val_class, HeapClass::Heap(_)) {
+                HeapClass::Heap(ReleaseKind::MapEntry)
+            } else if key_class == HeapClass::TypeParameter || val_class == HeapClass::TypeParameter
+            {
+                HeapClass::TypeParameter
+            } else {
+                HeapClass::NoHeap
+            }
+        }
+    }
+}
+
+/// A container whose own value owns heap exactly when its content does.
+fn wrapped(content: HeapClass, kind: ReleaseKind) -> HeapClass {
+    match content {
+        HeapClass::NoHeap => HeapClass::NoHeap,
+        HeapClass::TypeParameter => HeapClass::TypeParameter,
+        HeapClass::Heap(_) => HeapClass::Heap(kind),
     }
 }
 
@@ -671,8 +789,11 @@ fn resolve_function(
         let mut owners: Vec<String> = Vec::new();
         for entry in &edge.entries {
             let fate = fate_of(function, edge, entry, anchor_of, moves_by_binding)?;
-            if fate.releases() {
-                owners.push(name_of(&entry.decl));
+            // A release is a read at its edge, for the kinds with a frame slot across a suspension.
+            if let Fate::Release(kind) | Fate::ReleaseIfLive(kind) = fate {
+                if kind.has_frame_backing() {
+                    owners.push(name_of(&entry.decl));
+                }
             }
             fates.push((entry.decl.clone(), fate));
         }
@@ -698,15 +819,14 @@ fn fate_of(
     moves_by_binding: Option<&HashMap<DeclKey, Vec<Span>>>,
 ) -> Result<Fate, String> {
     let kind = match entry.heap {
-        HeapClass::NotHeap => {
+        HeapClass::NoHeap => {
             return Err(format!(
                 "internal: `{}` in `{}` is listed at an exit edge but holds no heap",
                 entry.decl.2, function.name
             ))
         }
-        HeapClass::Unsupported => return Ok(Fate::Omitted(OmitReason::UnsupportedType)),
         HeapClass::TypeParameter => return Ok(Fate::Omitted(OmitReason::TypeParameter)),
-        HeapClass::Supported(kind) => kind,
+        HeapClass::Heap(kind) => kind,
     };
     if function.reassigned.contains(&entry.decl) {
         return Ok(Fate::Omitted(OmitReason::Reassigned));
@@ -951,12 +1071,18 @@ impl ReleasePlan {
     }
 
     /// Where the plan disagrees with the live scope's consumed classes or the transfer record.
-    /// Per edge and listed founder of a supported non-string kind that is not reassigned:
+    /// Every listed binding must be classified with a real fate; an omission needs its reason:
     ///
-    /// * its class is in `consumed_classes` and not returned => `Omitted(Moved)` or
-    ///   `ReleaseIfLive`, and the record holds a given/sent/stored escape for the class;
-    /// * not consumed and not returned => `Release`;
-    /// * returned => `Omitted(Returned)` and the record holds a returned escape.
+    /// * a binding that owns no heap is never listed; a type-parameter value is
+    ///   `Omitted(TypeParameter)` and nothing else is;
+    /// * a string is released (`Release`/`ReleaseIfLive`) or `NotOwner` (a parameter, a cell) or
+    ///   `Reassigned`;
+    /// * any other heap owner that is not reassigned: when it is the founder of its class, its
+    ///   class in `consumed_classes` and not returned => `Omitted(Moved)` or `ReleaseIfLive`, and
+    ///   the record holds a given/sent/stored escape for the class; not consumed and not returned
+    ///   => `Release`; returned => `Omitted(Returned)` and a returned escape; when it is not the
+    ///   founder, the omission is the one the record's anchor gives (`NotOwner`, `CallerOwns`,
+    ///   `NoStaticFounder`).
     ///
     /// Empty when they agree. O(entries · class size).
     pub fn parity_violations(&self, transfers: &TransferRecord) -> Vec<String> {
@@ -968,22 +1094,67 @@ impl ReleasePlan {
                 continue;
             };
             for entry in &edge.entries {
-                let HeapClass::Supported(kind) = entry.heap else {
-                    continue;
+                let place = format!(
+                    "{:?} edge at {:?} in `{}`: `{}`",
+                    edge.kind, edge.span, edge.function, entry.codegen_name
+                );
+                let kind = match entry.heap {
+                    HeapClass::NoHeap => {
+                        violations.push(format!("{place} owns no heap but is listed"));
+                        continue;
+                    }
+                    HeapClass::TypeParameter => {
+                        if entry.fate != Fate::Omitted(OmitReason::TypeParameter) {
+                            violations.push(format!(
+                                "{place} is a type-parameter value with fate {:?}",
+                                entry.fate
+                            ));
+                        }
+                        continue;
+                    }
+                    HeapClass::Heap(kind) => kind,
                 };
+                if entry.fate == Fate::Omitted(OmitReason::TypeParameter) {
+                    violations.push(format!(
+                        "{place} owns heap ({kind:?}) but is omitted as a type parameter"
+                    ));
+                    continue;
+                }
+                if matches!(entry.fate, Fate::Omitted(OmitReason::Reassigned)) {
+                    continue;
+                }
                 if kind == ReleaseKind::String {
+                    let allowed = matches!(
+                        entry.fate,
+                        Fate::Release(_)
+                            | Fate::ReleaseIfLive(_)
+                            | Fate::Omitted(OmitReason::NotOwner)
+                    );
+                    if !allowed {
+                        violations.push(format!("{place} is a string with fate {:?}", entry.fate));
+                    }
                     continue;
                 }
                 let Some(class) = function_transfers.class_of(&entry.codegen_name) else {
-                    violations.push(format!(
-                        "`{}` has no class in the record",
-                        entry.codegen_name
-                    ));
+                    violations.push(format!("{place} has no class in the record"));
                     continue;
                 };
                 let is_founder = matches!(&class.anchor,
                     ReleaseAnchor::Founder { decl, .. } if *decl == entry.decl);
-                if !is_founder || matches!(entry.fate, Fate::Omitted(OmitReason::Reassigned)) {
+                if !is_founder {
+                    let expected = match &class.anchor {
+                        ReleaseAnchor::CallerOwns { .. } => OmitReason::CallerOwns,
+                        ReleaseAnchor::NoStaticFounder(_) => OmitReason::NoStaticFounder,
+                        ReleaseAnchor::NoOwner | ReleaseAnchor::Founder { .. } => {
+                            OmitReason::NotOwner
+                        }
+                    };
+                    if entry.fate != Fate::Omitted(expected) {
+                        violations.push(format!(
+                            "{place} ({kind:?}) has fate {:?}; the record's anchor {:?} says {expected:?}",
+                            entry.fate, class.anchor
+                        ));
+                    }
                     continue;
                 }
                 let consumed = edge.consumed_classes.contains(&entry.class);
@@ -1006,15 +1177,9 @@ impl ReleasePlan {
                 };
                 if !ok {
                     violations.push(format!(
-                        "{:?} edge at {:?} in `{}`: `{}` has fate {:?} but consumed={consumed}, \
-                         returned={}, record escapes {:?}",
-                        edge.kind,
-                        edge.span,
-                        edge.function,
-                        entry.codegen_name,
-                        entry.fate,
-                        entry.returned,
-                        class.escapes
+                        "{place} ({kind:?}) has fate {:?} but consumed={consumed}, returned={}, \
+                         record escapes {:?}",
+                        entry.fate, entry.returned, class.escapes
                     ));
                 }
             }

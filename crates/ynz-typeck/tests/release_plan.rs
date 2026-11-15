@@ -28,8 +28,9 @@ use std::sync::Mutex;
 use support::{errors, run};
 use ynz_ast::nodes::{Block, FunctionDecl, Item, Stmt};
 use ynz_parser::{CompilerDb, SourceFile};
+use ynz_typeck::generics::GenericShapeTable;
 use ynz_typeck::release_plan::{
-    heap_class_of, Fate, HeapClass, Names, OmitReason, ReleaseKind, ReleasePlan,
+    heap_class_of, Fate, HeapClass, Names, OmitReason, ReleaseKind, ReleasePlan, TypeTables,
 };
 use ynz_typeck::shapes::ShapeTable;
 use ynz_typeck::types::Type;
@@ -317,58 +318,141 @@ fn a_string_is_released_if_live_exactly_when_the_record_lists_a_read() {
 
 // ── What a type needs ───────────────────────────────────────────────────────────────────────
 
-/// Bug: a type is classified as releasable that has no release (a maybe of heap) or a value type
-/// is listed. High tier: the table decides which bindings are ever freed.
+/// Bug: a type that owns heap is classified as owning none (a leak for good: C6 has nothing to
+/// release it from) or the reverse (a value type is listed). High tier: this table decides which
+/// bindings are ever freed, so every heap-owning kind has a case.
 #[test]
 fn heap_class_of_each_type() {
     let shapes = ShapeTable::default();
+    let generic_shapes = GenericShapeTable::default();
+    let tables = TypeTables {
+        shapes: &shapes,
+        generic_shapes: &generic_shapes,
+    };
     let array = Type::BuiltinArray {
         elem: Box::new(Type::Int),
     };
+    let string_list = Type::BuiltinFixed {
+        elem: Box::new(Type::String),
+        size: None,
+    };
     let cases: Vec<(Type, HeapClass)> = vec![
-        (Type::Int, HeapClass::NotHeap),
-        (Type::Bool, HeapClass::NotHeap),
-        (Type::String, HeapClass::Supported(ReleaseKind::String)),
-        (array.clone(), HeapClass::Supported(ARRAY)),
+        (Type::Int, HeapClass::NoHeap),
+        (Type::Bool, HeapClass::NoHeap),
+        (Type::String, HeapClass::Heap(ReleaseKind::String)),
+        (array.clone(), HeapClass::Heap(ARRAY)),
         (
             Type::BuiltinMap {
                 key: Box::new(Type::Int),
                 val: Box::new(Type::Int),
             },
-            HeapClass::Supported(ReleaseKind::Map),
+            HeapClass::Heap(ReleaseKind::Map),
         ),
         (
             Type::Maybe {
                 inner: Box::new(Type::Int),
             },
-            HeapClass::NotHeap,
+            HeapClass::NoHeap,
         ),
         (
             Type::Maybe {
                 inner: Box::new(array.clone()),
             },
-            HeapClass::Unsupported,
+            HeapClass::Heap(ReleaseKind::Maybe),
         ),
         (
             Type::Union {
-                variants: vec![Type::Int, array],
+                variants: vec![Type::Int, array.clone()],
             },
-            HeapClass::Unsupported,
+            HeapClass::Heap(ReleaseKind::Union),
+        ),
+        (
+            Type::Union {
+                variants: vec![Type::Int, Type::Bool],
+            },
+            HeapClass::NoHeap,
+        ),
+        (string_list, HeapClass::Heap(ReleaseKind::Fixed)),
+        (
+            Type::BuiltinFixed {
+                elem: Box::new(Type::Int),
+                size: None,
+            },
+            HeapClass::NoHeap,
+        ),
+        (
+            Type::Dynamic {
+                contract: "Drawable".into(),
+            },
+            HeapClass::Heap(ReleaseKind::Dynamic),
+        ),
+        (
+            Type::ErrorsCapable {
+                inner: Box::new(Type::Int),
+            },
+            HeapClass::Heap(ReleaseKind::ErrorsCapable),
+        ),
+        (
+            Type::Maybe {
+                inner: Box::new(Type::TypeParam { name: "T".into() }),
+            },
+            HeapClass::TypeParameter,
         ),
         (
             Type::TypeParam { name: "T".into() },
             HeapClass::TypeParameter,
         ),
+        // A shape the tables do not describe is assumed to own heap: leaking is the wrong error.
         (
             Type::Shape {
                 name: "Unknown".into(),
             },
-            HeapClass::Unsupported,
+            HeapClass::Heap(ReleaseKind::NestedShape),
         ),
     ];
     for (ty, expected) in cases {
-        assert_eq!(heap_class_of(&ty, &shapes), expected, "{ty:?}");
+        assert_eq!(heap_class_of(&ty, &tables), expected, "{ty:?}");
     }
+}
+
+/// Bug: a shape's heap is judged by its name or its first field: a shape of ints owns nothing
+/// (not listed), a shape with a string owns heap, a shape holding a shape owns that shape's cell.
+#[test]
+fn shapes_are_classified_by_their_fields() {
+    let output = clean(
+        "shape Label {\n  text: string\n}\nshape Plain {\n  size: int\n}\nshape Holder {\n  inner: Plain\n}\nfunction risky() -> int errors {\n  return 1\n}\nfunction kinds() -> nothing {\n  let label: Label = { text: `a` }\n  let plain: Plain = { size: 1 }\n  let holder: Holder = { inner: { size: 2 } }\n  let words: fixed<string> = [`a`, `b`]\n  let result = risky()\n  if (result.failed()) {\n    print(`bad`)\n  }\n  print(plain.size.toString())\n  print(label.text)\n  print(holder.inner.size.toString())\n  print(words.count().toString())\n  print(result.toString())\n}\n",
+    );
+    let list = body_end(&output, "kinds");
+    assert_eq!(fate_of(&list, "label"), Fate::Release(ReleaseKind::Shape));
+    assert_eq!(
+        fate_of(&list, "holder"),
+        Fate::Release(ReleaseKind::NestedShape)
+    );
+    assert_eq!(fate_of(&list, "words"), Fate::Release(ReleaseKind::Fixed));
+    assert_eq!(
+        fate_of(&list, "result"),
+        Fate::Release(ReleaseKind::ErrorsCapable)
+    );
+    assert!(
+        list.iter().all(|(name, _)| name != "plain"),
+        "a shape of ints owns no heap, so it is not listed: {list:?}"
+    );
+}
+
+/// Bug: reading a kind with no frame slot across a suspension as a release rejects programs that
+/// compile today (Check 2/2b); only a kind with frame backing feeds the crossing set.
+#[test]
+fn only_a_kind_with_frame_backing_feeds_the_crossing_set() {
+    let output = clean(
+        "shape Label {\n  text: string\n}\nfunction sleeper() -> nothing {\n  let words: fixed<string> = [`a`, `b`]\n  let label: Label = { text: `a` }\n  wait sleep(1)\n}\n",
+    );
+    assert_eq!(
+        crossing_names(&output, "sleeper", Names::User),
+        vec!["label".to_string()],
+        "the shape crosses (frame backed); `fixed<string>` cannot cross a `wait` yet"
+    );
+    assert!(ReleaseKind::Shape.has_frame_backing());
+    assert!(!ReleaseKind::Fixed.has_frame_backing());
 }
 
 // ── The crossing set ────────────────────────────────────────────────────────────────────────
@@ -450,6 +534,7 @@ struct Tally {
     released_if_live: AtomicUsize,
     moved: AtomicUsize,
     returned: AtomicUsize,
+    kinds: Mutex<HashSet<ReleaseKind>>,
 }
 
 /// Findings for one file: empty when it does not type-check (not this test's subject) or the plan
@@ -479,6 +564,9 @@ fn parity_findings(path: &Path, tally: &Tally) -> (bool, Vec<String>) {
     for edge in plan.facts() {
         tally.edges.fetch_add(1, Ordering::Relaxed);
         for entry in &edge.entries {
+            if let HeapClass::Heap(kind) = entry.heap {
+                tally.kinds.lock().expect("mutex").insert(kind);
+            }
             match entry.fate {
                 Fate::Release(_) => tally.released.fetch_add(1, Ordering::Relaxed),
                 Fate::ReleaseIfLive(_) => tally.released_if_live.fetch_add(1, Ordering::Relaxed),
@@ -557,6 +645,22 @@ fn the_plan_agrees_with_the_live_scope_and_the_record_over_the_whole_corpus() {
             count.load(Ordering::Relaxed) > 0,
             "the corpus exercised no `{name}` fate over {} edges",
             tally.edges.load(Ordering::Relaxed)
+        );
+    }
+    // Every kind the corpus holds is classified; none is omitted for being unsupported (the
+    // parity check rejects an omission without a reason). Print what it exercised on failure.
+    let kinds = tally.kinds.lock().expect("mutex").clone();
+    for expected in [
+        ReleaseKind::String,
+        ReleaseKind::Array,
+        ReleaseKind::Map,
+        ReleaseKind::Shape,
+        ReleaseKind::Maybe,
+        ReleaseKind::Union,
+    ] {
+        assert!(
+            kinds.contains(&expected),
+            "the corpus never exercised {expected:?}; it did {kinds:?}"
         );
     }
     assert!(
