@@ -27,11 +27,13 @@
 //! The live range comes from the one liveness walk of `string_ownership` (the same `after` sets
 //! C3b's `string_moves` uses): this module only judges the expressions that walk evaluates.
 //!
-//! Only a place made of field reads from a parameter or a `let` that is not itself a candidate
-//! qualifies: an element read (`arr[i]`, `.get(i)`) is a copy into per-site staging, and whether a
-//! built-in collection method writes its receiver has no table to read, so an element read
-//! keeps its deep copy. A place read with a declared type annotation (a possible union wrap) is
-//! not a view either.
+//! A place qualifies when it is a field-read chain from a parameter or a `let` (`head.next`), a
+//! read through another view (`a.g` with `a` a view of `x`), or an element read of a built-in
+//! array, fixed list or map (`arr[i]`, `arr[i].f`, `arr.get(i)`, `.first()`, `.last()`). An
+//! element read copies the element's bytes into per-site staging and so shares its boxes: it stays
+//! valid while the collection is not written, and every in-place mutator or growth of the
+//! collection breaks (b) (`call_position_reads`). A place read with a declared type annotation (a
+//! possible union wrap) is not a view.
 //!
 //! Cost: O(c) per evaluated expression for the c candidates declared so far.
 
@@ -159,8 +161,8 @@ impl<'a> ViewTracker<'a> {
         self.views
     }
 
-    /// A `let name = value` was just evaluated. It becomes a candidate when `value` is a field
-    /// read from a parameter or a plain `let`, of a heap type, with no annotation.
+    /// A `let name = value` was just evaluated. It becomes a candidate when `value` is a place
+    /// read (`view_place`) from a parameter or a `let`, of a heap type, with no annotation.
     pub(crate) fn declare(
         &mut self,
         name: &str,
