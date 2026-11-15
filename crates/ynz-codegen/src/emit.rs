@@ -13793,9 +13793,9 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
     let value_bits = if is_send {
         let arg = &args[0];
         let arg_ty = cg.expr_type(arg);
-        let v = lower_expr(cg, arg)?;
+        let lowered_value = lower_expr(cg, arg)?;
         // The channel owns what it carries: a borrowed string is copied, a movable one is sent.
-        let v = own_string_for_store(cg, v, &arg_ty, "conduit_send_str")?;
+        let sent_value = own_string_for_store(cg, lowered_value, &arg_ty, "conduit_send_str")?;
         // fr12 (v0.3-M8 Phase 4 step 3d): a decimal128 payload lives on the sender's frame
         // (a pointer to per-site i128 storage) and would dangle in the buffer. Mint a fresh
         // counted 16-byte cell through the ONE `number_to_heap_cell` helper the `background`
@@ -13807,12 +13807,13 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         // classification (`channel_elem_drop == NumberCell`), never by a re-derived
         // precision test beside it (authoritative-derivation; fix round 2 replaced the twin).
         if channel_elem_drop(&cg.resolve_type(&arg_ty)) == Some(ChannelElemDrop::NumberCell) {
-            let cell = cg.number_to_heap_cell(v.into_pointer_value(), "conduit_send_num")?;
+            let cell =
+                cg.number_to_heap_cell(sent_value.into_pointer_value(), "conduit_send_num")?;
             cg.builder
                 .build_ptr_to_int(cell, i64t, "conduit_send_num_bits")
                 .map_err(|e| format!("conduit send number cell bits: {e}"))?
         } else {
-            cg.to_i64_bits(v, &arg_ty)
+            cg.to_i64_bits(sent_value, &arg_ty)
                 .map_err(|e| format!("conduit send value bits: {e}"))?
         }
     } else {
