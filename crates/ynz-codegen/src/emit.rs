@@ -78,6 +78,11 @@ pub type WaitCache = HashMap<String, bool>;
 /// Empty WaitCache used by generic-function lowering (generics cannot contain `wait` in M2).
 ///
 /// Process-global OnceLock avoids allocating a new empty HashMap per generic instantiation.
+/// The tag a persisted union slot holds for `none` (a union with a `nothing` variant): no variant
+/// has this position. The value form of `none` stays the null pointer; a slot cannot hold a
+/// pointer, so `union_persist_into` and `union_slot_to_value` translate at the slot boundary.
+const UNION_NONE_TAG: u64 = u64::MAX;
+
 static EMPTY_WAIT_CACHE: std::sync::OnceLock<WaitCache> = std::sync::OnceLock::new();
 
 fn empty_wait_cache() -> &'static WaitCache {
@@ -2676,6 +2681,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Shape { ref name } => self.shape_abi_sizes.get(name).copied().ok_or_else(|| {
                 format!("array elem size: shape `{name}` missing from shape_abi_sizes")
             }),
+            // C1f: an envelope union is stored BY VALUE as its 16-byte `{tag, data}` slot.
+            Type::Union { .. } if self.envelope_union_variants(elem_ty).is_some() => Ok(16),
             _ => Ok(8),
         }
     }
@@ -3147,6 +3154,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
             return Ok(val.into_pointer_value());
         }
+        // C1f: an envelope union persists as its own 16 bytes (payload cloned to a heap cell by
+        // `union_persist_into`); the runtime memcpys the 16 staged bytes into the element cell.
+        if let Some(variants) = self.envelope_union_variants(elem_ty) {
+            let staging =
+                self.alloca_in_entry_llvm(self.union_slot_type(), &format!("{site}_stage"))?;
+            self.union_persist_into(val.into_pointer_value(), staging, &variants, site)?;
+            return Ok(staging);
+        }
         // PERSIST boundary: the runtime memcpys these bits into the element
         // cell, which persists past the site's next execution — so maybe
         // values must clone through the ONE stable-bits choke point
@@ -3279,6 +3294,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 })?;
                 self.alloca_in_entry_llvm(struct_ty, &format!("{site}_out"))
             }
+            Type::Union { .. } if self.envelope_union_variants(elem_ty).is_some() => {
+                self.alloca_in_entry_llvm(self.union_slot_type(), &format!("{site}_out"))
+            }
             _ => self.alloca_in_entry_llvm(self.i64(), &format!("{site}_out")),
         }
     }
@@ -3324,6 +3342,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
             return Ok(out.into());
         }
+        if let Some(variants) = self.envelope_union_variants(elem_ty) {
+            return Ok(self.union_slot_to_value(out, &variants, site)?.into());
+        }
         let bits = self
             .builder
             .build_load(self.i64(), out, &format!("{site}_bits"))
@@ -3346,6 +3367,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .builder
                 .build_ptr_to_int(out, self.i64(), &format!("{site}_ptrbits"))
                 .map_err(|e| format!("array out ptr bits: {e}"));
+        }
+        if let Some(variants) = self.envelope_union_variants(elem_ty) {
+            let value = self.union_slot_to_value(out, &variants, site)?;
+            return self
+                .builder
+                .build_ptr_to_int(value, self.i64(), &format!("{site}_ptrbits"))
+                .map_err(|e| format!("array out union bits: {e}"));
         }
         self.builder
             .build_load(self.i64(), out, &format!("{site}_bits"))
@@ -4262,6 +4290,232 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
+    /// The 16-byte `{i64 tag, i64 data}` LLVM type of a union envelope, in a frame and in a
+    /// slot alike.
+    fn union_slot_type(&self) -> inkwell::types::StructType<'ctx> {
+        self.ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false)
+    }
+
+    /// Whether `variants` include `nothing`, i.e. whether a union value of this type can be
+    /// the null pointer (the value form of `none`).
+    fn union_has_nothing(&self, variants: &[Type]) -> bool {
+        variants
+            .iter()
+            .any(|variant| matches!(self.resolve_type(variant), Type::Nothing))
+    }
+
+    /// PERSIST a union value into a slot that outlives this frame: the one routine behind an
+    /// array element, a map value, a shape field and a by-value return (C1f, #423).
+    ///
+    /// The slot holds the 16-byte envelope BY VALUE, so no envelope is allocated:
+    /// - `src` is null (`none`): the slot gets tag `UNION_NONE_TAG`, data 0.
+    /// - a shape variant: the tag is copied and the payload's bytes are cloned into a counted
+    ///   heap cell the slot owns; `data` is the cell. The source's payload may be a frame
+    ///   alloca (a value wrapped in this frame) or any other shape's storage, so it is always
+    ///   cloned, as `store_field` clones a shape stored in a shape.
+    /// - any other variant (`int`, `boolean`, `float`, `string`, array, map, wide `number`):
+    ///   tag and data are copied as they are; `data` is the value's own bits or a pointer the
+    ///   store hands over.
+    ///
+    /// Ownership for the release helper (C6/C7): a slot owns its shape payload cell, so
+    /// releasing the slot is a tag switch: a shape variant releases the shape's fields, then
+    /// frees the cell; a `string`, array or map variant releases that value; the scalar
+    /// variants and `none` own nothing.
+    ///
+    /// Time: O(1) + one memcpy of the selected variant's size  Space: O(1), one heap cell per
+    /// stored shape variant, none for any other variant
+    fn union_persist_into(
+        &self,
+        src: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<(), String> {
+        let slot_ty = self.union_slot_type();
+        let done_bb = self.append_block(&format!("{site}_persist_done"));
+        let has_nothing = self.union_has_nothing(variants);
+        if has_nothing {
+            let none_bb = self.append_block(&format!("{site}_persist_none"));
+            let present_bb = self.append_block(&format!("{site}_persist_some"));
+            let is_none = self
+                .builder
+                .build_is_null(src, &format!("{site}_persist_is_none"))
+                .map_err(|err| format!("union persist is_null {site}: {err}"))?;
+            self.builder
+                .build_conditional_branch(is_none, none_bb, present_bb)
+                .map_err(|err| format!("union persist branch {site}: {err}"))?;
+            self.builder.position_at_end(none_bb);
+            self.store_union_slot_words(
+                dst,
+                self.i64().const_int(UNION_NONE_TAG, false),
+                self.i64().const_zero(),
+                site,
+            )?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|err| format!("union persist none branch {site}: {err}"))?;
+            self.builder.position_at_end(present_bb);
+        }
+
+        let tag_gep = self
+            .builder
+            .build_struct_gep(slot_ty, src, 0, &format!("{site}_src_tag"))
+            .map_err(|err| format!("union persist tag gep {site}: {err}"))?;
+        let tag = self
+            .builder
+            .build_load(self.i64(), tag_gep, &format!("{site}_tag"))
+            .map_err(|err| format!("union persist tag load {site}: {err}"))?
+            .into_int_value();
+        let data = self.union_data_bits(src, site)?;
+        let dst_tag_gep = self
+            .builder
+            .build_struct_gep(slot_ty, dst, 0, &format!("{site}_dst_tag"))
+            .map_err(|err| format!("union persist dst tag gep {site}: {err}"))?;
+        self.builder
+            .build_store(dst_tag_gep, tag)
+            .map_err(|err| format!("union persist tag store {site}: {err}"))?;
+        let dst_data_gep = self
+            .builder
+            .build_struct_gep(slot_ty, dst, 1, &format!("{site}_dst_data"))
+            .map_err(|err| format!("union persist dst data gep {site}: {err}"))?;
+
+        let shape_cases: Vec<(u64, String)> = variants
+            .iter()
+            .enumerate()
+            .filter_map(|(index, variant)| match self.resolve_type(variant) {
+                Type::Shape { name } => Some((index as u64, name)),
+                _ => None,
+            })
+            .collect();
+        let raw_bb = self.append_block(&format!("{site}_persist_raw"));
+        let case_blocks: Vec<BasicBlock<'ctx>> = shape_cases
+            .iter()
+            .map(|(index, _)| self.append_block(&format!("{site}_persist_pay{index}")))
+            .collect();
+        let switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = shape_cases
+            .iter()
+            .zip(case_blocks.iter())
+            .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
+            .collect();
+        self.builder
+            .build_switch(tag, raw_bb, &switch_cases)
+            .map_err(|err| format!("union persist tag switch {site}: {err}"))?;
+        for ((index, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
+            self.builder.position_at_end(*case_bb);
+            let payload = self.union_payload_ptr(src, &format!("{site}_src_pay{index}"))?;
+            let size = self.shape_abi_size_const(shape_name, "union_persist_into")?;
+            let cell = self.heap_cell(size, &format!("{site}_pay{index}"))?;
+            self.builder
+                .build_memcpy(cell, 1, payload, 1, size)
+                .map_err(|err| format!("union persist payload memcpy {site}: {err}"))?;
+            let own_bits = self
+                .builder
+                .build_ptr_to_int(cell, self.i64(), &format!("{site}_own_bits{index}"))
+                .map_err(|err| format!("union persist payload bits {site}: {err}"))?;
+            self.builder
+                .build_store(dst_data_gep, own_bits)
+                .map_err(|err| format!("union persist payload store {site}: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|err| format!("union persist case branch {site}: {err}"))?;
+        }
+        self.builder.position_at_end(raw_bb);
+        self.builder
+            .build_store(dst_data_gep, data)
+            .map_err(|err| format!("union persist raw store {site}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("union persist raw branch {site}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// Write both words of a union slot.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn store_union_slot_words(
+        &self,
+        dst: PointerValue<'ctx>,
+        tag: inkwell::values::IntValue<'ctx>,
+        data: inkwell::values::IntValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let slot_ty = self.union_slot_type();
+        for (index, word) in [(0u32, tag), (1u32, data)] {
+            let gep = self
+                .builder
+                .build_struct_gep(slot_ty, dst, index, &format!("{site}_slot_word{index}"))
+                .map_err(|err| format!("union slot gep {site}: {err}"))?;
+            self.builder
+                .build_store(gep, word)
+                .map_err(|err| format!("union slot store {site}: {err}"))?;
+        }
+        Ok(())
+    }
+
+    /// READ a persisted union slot as a union value: a pointer to the slot's own 16 bytes, or
+    /// null when the slot holds `none` (only a union with a `nothing` variant can). The pointer
+    /// is valid as long as the slot is: an element read passes its per-site out buffer, a field
+    /// read passes the field's address.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_slot_to_value(
+        &self,
+        slot: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        if !self.union_has_nothing(variants) {
+            return Ok(slot);
+        }
+        let tag_gep = self
+            .builder
+            .build_struct_gep(self.union_slot_type(), slot, 0, &format!("{site}_slot_tag"))
+            .map_err(|err| format!("union slot tag gep {site}: {err}"))?;
+        let tag = self
+            .builder
+            .build_load(self.i64(), tag_gep, &format!("{site}_slot_tag"))
+            .map_err(|err| format!("union slot tag load {site}: {err}"))?
+            .into_int_value();
+        let is_none = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                self.i64().const_int(UNION_NONE_TAG, false),
+                &format!("{site}_slot_is_none"),
+            )
+            .map_err(|err| format!("union slot compare {site}: {err}"))?;
+        Ok(self
+            .builder
+            .build_select(
+                is_none,
+                self.ptr().const_null(),
+                slot,
+                &format!("{site}_slot_val"),
+            )
+            .map_err(|err| format!("union slot select {site}: {err}"))?
+            .into_pointer_value())
+    }
+
+    /// The variants of `ty` when it is an envelope union (a union with a shape variant), the
+    /// one answer to "does a slot of this type hold the 16-byte envelope by value"
+    /// (`ynz_typeck::check::is_envelope_union` decides; typeck's coercion record uses the same).
+    ///
+    /// Time: O(v)  Space: O(v)
+    fn envelope_union_variants(&self, ty: &Type) -> Option<Vec<Type>> {
+        match self.resolve_type(ty) {
+            resolved @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(&resolved) => {
+                let Type::Union { variants } = resolved else {
+                    return None;
+                };
+                Some(variants.iter().map(|v| self.resolve_type(v)).collect())
+            }
+            _ => None,
+        }
+    }
+
     /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
     /// FRAGOs 006/007/013) — the union sibling of `maybe_to_heap_cell`: clone a
     /// union value into counted heap cells so a CROSSING binding's pointer
@@ -4325,83 +4579,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_int_z_extend(raw, self.i64(), &format!("{site}_env_sz"))
             .map_err(|e| format!("union env size zext {site}: {e}"))?;
         let cell = self.heap_cell(env_size, &format!("{site}_env"))?;
-        let src_tag_gep = self
-            .builder
-            .build_struct_gep(union_st, src, 0, &format!("{site}_src_tag"))
-            .map_err(|e| format!("{e}"))?;
-        let tag = self
-            .builder
-            .build_load(self.i64(), src_tag_gep, &format!("{site}_tag"))
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
-        let dst_tag_gep = self
-            .builder
-            .build_struct_gep(union_st, cell, 0, &format!("{site}_dst_tag"))
-            .map_err(|e| format!("{e}"))?;
-        self.builder
-            .build_store(dst_tag_gep, tag)
-            .map_err(|e| format!("{e}"))?;
-        let data = self.union_data_bits(src, site)?;
-        let dst_data_gep = self
-            .builder
-            .build_struct_gep(union_st, cell, 1, &format!("{site}_dst_data"))
-            .map_err(|e| format!("{e}"))?;
-
-        // Tag switch: shape variants deep-copy their payload bytes into an own
-        // heap cell; anything else (default) copies the raw i64 bits.
-        let done_bb = self.append_block(&format!("{site}_udata_done"));
-        let raw_bb = self.append_block(&format!("{site}_udata_raw"));
-        let mut shape_cases: Vec<(u64, String)> = Vec::new();
-        for (i, v) in variants.iter().enumerate() {
-            if let Type::Shape { ref name } = self.resolve_type(v) {
-                shape_cases.push((i as u64, name.clone()));
-            }
-        }
-        let case_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = shape_cases
-            .iter()
-            .map(|(i, _)| self.append_block(&format!("{site}_upay{i}")))
-            .collect();
-        let switch_cases: Vec<(
-            inkwell::values::IntValue<'ctx>,
-            inkwell::basic_block::BasicBlock<'ctx>,
-        )> = shape_cases
-            .iter()
-            .zip(case_blocks.iter())
-            .map(|((i, _), bb)| (self.i64().const_int(*i, false), *bb))
-            .collect();
-        self.builder
-            .build_switch(tag, raw_bb, &switch_cases)
-            .map_err(|e| format!("union cell tag switch {site}: {e}"))?;
-        for ((i, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
-            self.builder.position_at_end(*case_bb);
-            let src_pay = self.union_payload_ptr(src, &format!("{site}_src_pay{i}"))?;
-            let size = self.shape_abi_size_const(shape_name, "union_to_heap_cell")?;
-            let pay_cell = self.heap_cell(size, &format!("{site}_pay{i}"))?;
-            self.builder
-                .build_memcpy(pay_cell, 1, src_pay, 1, size)
-                .map_err(|e| format!("union cell payload memcpy {site}: {e}"))?;
-            let own_bits = self
-                .builder
-                .build_ptr_to_int(pay_cell, self.i64(), &format!("{site}_own_bits{i}"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_store(dst_data_gep, own_bits)
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_unconditional_branch(done_bb)
-                .map_err(|e| format!("{e}"))?;
-        }
-        self.builder.position_at_end(raw_bb);
-        self.builder
-            .build_store(dst_data_gep, data)
-            .map_err(|e| format!("{e}"))?;
-        self.builder
-            .build_unconditional_branch(done_bb)
-            .map_err(|e| format!("{e}"))?;
-        self.builder.position_at_end(done_bb);
+        self.union_persist_into(src, cell, variants, site)?;
         self.builder
             .build_unconditional_branch(cont_bb)
             .map_err(|e| format!("{e}"))?;
+        let done_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block after persist"))?;
 
         // Merge: null flows through unchanged; present values yield the cell.
         self.builder.position_at_end(cont_bb);

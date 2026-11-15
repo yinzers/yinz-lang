@@ -11008,7 +11008,7 @@ fn union_coercion_for(slot_ty: &Type, value_ty: &Type) -> Option<UnionCoercion> 
 /// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
 /// `{tag, data}` envelope. Any other union (`map<..> | nothing`) is the variant's raw pointer,
 /// null for `nothing`, and has no envelope to build.
-fn is_envelope_union(candidate: &Type) -> bool {
+pub fn is_envelope_union(candidate: &Type) -> bool {
     match candidate {
         Type::Union { variants } => variants
             .iter()
