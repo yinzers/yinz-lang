@@ -313,6 +313,38 @@ A hole in the recorder's own bookkeeping (an event with no function being walked
 
 Releasing a class must free every distinct object in it exactly once, container and stored elements alike (C6/C7); leaks are acceptable meanwhile, an early or double free never.
 
+### The persisted release plan
+
+`TypedModule::release_plan` (`crates/ynz-typeck/src/release_plan.rs`) is the ONE record of what each scope exit releases; C6/C7 emit releases from it and derive no transfer fact of their own (`authoritative-derivation.md`). It holds one **total** list per exit edge, every binding of a heap-capable type that leaves scope there, last declared first:
+
+| edge | key | lists |
+|---|---|---|
+| end of a block (function body, `if` body, loop body per iteration, match arm) | the `Block` span | that block's frame |
+| `return` | the `Stmt::Return` span | every open frame, innermost first |
+| errors auto-propagation | the span of the identifier read that fires it | every open frame, innermost first |
+
+Entries are keyed by `DeclKey` and the unique codegen name (`BindingNames`), never the user's name. A binding with no heap in its type (`int`, `boolean`, `options`, a `maybe` of those) is not listed.
+
+**Fates and where each comes from** (one source per fact):
+
+| fate | meaning | source |
+|---|---|---|
+| `Release(kind)` | sole owner, not moved on any path to this edge | transfer-record anchor + live scope |
+| `ReleaseIfLive(kind)` | moved on some paths: release if the slot is non-null; every move site nulls the founder's slot (`MoveSite`) | live scope (`ScopeEntry::consumed_on_every_path`), or `string_moves` for strings |
+| `Omitted(Moved)` | given, sent or stored on every path | live scope |
+| `Omitted(Returned)` | the returned value is or reaches its class | the returned value's holders |
+| `Omitted(NotOwner / CallerOwns / NoStaticFounder)` | another member founds the class; a borrowed parameter is in it; a non-owner outlives every owner (C7's run-time flag) | transfer-record anchor |
+| `Omitted(Reassigned)` | reassigned anywhere in its function: the old value leaks, never frees early | `check_assign` |
+| `Omitted(UnsupportedType / TypeParameter)` | the type holds heap this plan has no release for (`maybe`/`union`/`dynamic`/`fixed` of heap, errors-capable values, nested shapes, generic instances); a value of a type parameter | `heap_class_of` |
+
+Kinds with a release: `string`, `array`, `map`, `channel`, background task handle, and a flat shape (no shape-typed field) with heap fields. Generic bodies are checked once, so their lists apply to every instance.
+
+**Strings.** A string is never statically moved: `string_moves` says a read MAY be taken by a store, and codegen decides at the store site. A `let`/`const` string with a record-listed last-use read that can precede the edge is `ReleaseIfLive`, otherwise `Release`; the listed reads are its move sites, so the plan and `string_moves` are one fact.
+
+**Crossing set.** A release is a read at its edge. `crossing_local_names_with_provenance` scans the statements with those reads added (`ReleaseReads::with_reads`), so an owner crosses a suspension exactly when one separates its declaration from its release, by the one suspension detection; the typeck guards, the admission and M3d probes and codegen's frame layout pass the same reads (user names in typeck, codegen names in codegen). A move is a write to the founder's slot (`collect_crossing_writes`).
+
+**Parity.** `ReleasePlan::parity_violations` checks, per edge and founder, the fate against `Scope::consumed_classes` at the edge and the transfer record's escapes (`typeck/tests/release_plan.rs`, over every fixture and example).
+
 ### The parameter rule and how far it travels (FRAGO 007, re-derived)
 
 A whole binding that is a parameter transfers only if declared `give`. With `give` declared, the EXISTING call-site path consumes the caller's binding (sink 2) at every call and every spawn — one mechanism. The obligation therefore transits the whole chain: A relays to B relays to C, C sends; C's parameter needs `give`; B passes its parameter to a give position, so B's needs `give`; up to the frame that owns the value as a local. `share` and `lend` parameters are refused by the same test — they are explicit statements that the caller keeps the value.
