@@ -1,0 +1,24 @@
+// v0.3-M9 C3c fixture: the strings a map owns, keys and values alike, are released with the map.
+// `build` makes a `map<string, string>` of two entries from fresh strings (the keys are stored by
+// their raw pointer); the spawn hands it to the task and the task's drop ladder releases it.
+// Heap strings: 4 (two keys, two values); every one is released by the task.
+// Expected output: the entry count.
+
+function build(count: int) -> map<string, string> {
+  let firstKey: string = `key-a-${count}`
+  let firstValue: string = `value-a-${count}`
+  let secondKey: string = `key-b-${count}`
+  let secondValue: string = `value-b-${count}`
+  let table: map<string, string> = { firstKey: firstValue }
+  table.set(secondKey, secondValue)
+  return table
+}
+
+function show(table: map<string, string>) -> nothing {
+  print(table.count())
+}
+
+function entrypoint() -> nothing {
+  background show(build(1))
+  wait sleep(80)
+}
