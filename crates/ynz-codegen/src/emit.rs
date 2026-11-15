@@ -6927,6 +6927,10 @@ fn lower_function<'ctx, 'g>(
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
+    #[cfg(test)]
+    if is_main {
+        run_cg_probe(&cg);
+    }
 
     // Initialize SipHash key from OS entropy before any map operations.
     // Also initialise the Tokio runtime (v0.3-M1: spawns the blocking thread pool).
@@ -7154,6 +7158,21 @@ fn lower_shape_defaults_initializer<'ctx, 'g>(
         .build_return(None)
         .map_err(|err| format!("defaults of `{shape_name}`: ret: {err}"))?;
     Ok(())
+}
+
+/// A test hook: a function the entrypoint's lowering context is handed to, so a unit test can ask
+/// the context for something no source program reaches yet (a release of an `errors` value, which
+/// C7 first emits).
+#[cfg(test)]
+thread_local! {
+    static CG_PROBE: std::cell::Cell<Option<fn(&Cg<'_, '_>)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn run_cg_probe(cg: &Cg<'_, '_>) {
+    if let Some(probe) = CG_PROBE.with(|slot| slot.get()) {
+        probe(cg);
+    }
 }
 
 /// The lowering context for one plain (non-state-machine) function body: no frame, no
@@ -25313,28 +25332,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
-    /// The release a union variant's payload word gets: a string, an array or a map the slot
-    /// owns. Errors for a variant whose release is unsupported; `None` for one that owns nothing.
-    fn union_variant_release(&self, variant: &Type) -> Result<Option<PointerValue<'ctx>>, String> {
-        let variant = self.resolve_type(variant);
-        match release_step(&variant) {
-            ReleaseStep::Nothing => Ok(None),
-            ReleaseStep::String => Ok(Some(
-                self.rt
-                    .ynz_string_release
-                    .as_global_value()
-                    .as_pointer_value(),
-            )),
-            ReleaseStep::Array { .. } | ReleaseStep::Map { .. } => Ok(self
-                .release_fn(&variant, false)?
-                .map(|glue| glue.as_global_value().as_pointer_value())),
-            _ => Err(format!(
-                "internal: cannot release a union variant of type `{}`",
-                ynz_typeck::types::type_name(&variant)
-            )),
-        }
-    }
-
     /// Release the variant an envelope union SLOT `{tag, payload}` holds: a shape variant frees
     /// the shape's fields (inline) or its box cell (a recursive union), a string, array or map
     /// variant frees that value, every other variant and `none` own nothing.
@@ -25363,9 +25360,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 Type::Shape { ref name } => self
                     .release_fn(&Type::Shape { name: name.clone() }, false)?
                     .map(|glue| (glue.as_global_value().as_pointer_value(), true)),
-                other => self
-                    .union_variant_release(&other)?
-                    .map(|glue| (glue, false)),
+                other => self.stored_release(&other, ReleaseHome::Field)?,
             };
             if release.is_some() {
                 let block = self
@@ -25415,7 +25410,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
         let mut bodies: Vec<(BasicBlock<'ctx>, PointerValue<'ctx>)> = Vec::new();
         for (index, variant) in variants.iter().enumerate() {
-            if let Some(glue) = self.union_variant_release(variant)? {
+            if let Some((glue, _)) = self.stored_release(variant, ReleaseHome::Field)? {
                 let block = self
                     .ctx
                     .append_basic_block(function, &format!("view_variant{index}"));
@@ -25441,7 +25436,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Release an errors-capable `{err, ok}` value: the error object when it holds one, else the
-    /// ok payload when it is a string, array or map.
+    /// ok payload (any stored value: `stored_release`).
     fn emit_errors_capable_release(
         &self,
         function: FunctionValue<'ctx>,
@@ -25488,12 +25483,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_unconditional_branch(done)
             .map_err(|err| format!("{site} ec br: {err}"))?;
         self.builder.position_at_end(ok_bb);
-        if let Some(glue) = self.union_variant_release(inner)? {
+        // The ok word holds the payload as a stored value of its type (a string, array or map
+        // pointer, a shape's or `maybe`'s heap cell, a channel reference): the one dispatch
+        // every stored value releases through.
+        if let Some(glue) = self.stored_release(inner, ReleaseHome::Field)? {
             let ok_ptr = self
                 .builder
                 .build_struct_gep(result_ty, result, 1, "ec_ok_ptr")
                 .map_err(|err| format!("{site} ec ok gep: {err}"))?;
-            self.call_stored_release((glue, false), ok_ptr, site)?;
+            self.call_stored_release(glue, ok_ptr, site)?;
         }
         self.builder
             .build_unconditional_branch(done)
@@ -29415,4 +29413,102 @@ pub fn union_frame_sizes(
         }
     }
     sizes
+}
+
+#[cfg(test)]
+mod errors_capable_release_tests {
+    use super::{run_cg_probe, Cg, CG_PROBE};
+    use std::cell::RefCell;
+    use ynz_parser::{CompilerDb, SourceFile};
+    use ynz_typeck::types::Type;
+
+    thread_local! {
+        static OUTCOMES: RefCell<Vec<(String, Result<bool, String>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    const PROGRAM: &str = "shape Tag {\n  name: string\n  id: int\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n";
+
+    /// The `ok` payloads an `errors` value can carry, each a stored value of its own kind.
+    fn payloads() -> Vec<(&'static str, Type)> {
+        vec![
+            ("string", Type::String),
+            (
+                "array",
+                Type::BuiltinArray {
+                    elem: Box::new(Type::String),
+                },
+            ),
+            (
+                "map",
+                Type::BuiltinMap {
+                    key: Box::new(Type::String),
+                    val: Box::new(Type::String),
+                },
+            ),
+            (
+                "shape",
+                Type::Shape {
+                    name: "Tag".to_string(),
+                },
+            ),
+            (
+                "maybe of a shape",
+                Type::Maybe {
+                    inner: Box::new(Type::Shape {
+                        name: "Tag".to_string(),
+                    }),
+                },
+            ),
+            (
+                "channel",
+                Type::BuiltinChannel {
+                    elem: Box::new(Type::String),
+                },
+            ),
+        ]
+    }
+
+    fn probe(cg: &Cg<'_, '_>) {
+        for (label, inner) in payloads() {
+            let errors = Type::ErrorsCapable {
+                inner: Box::new(inner),
+            };
+            let outcome = cg.release_fn(&errors, false).map(|glue| glue.is_some());
+            OUTCOMES.with(|outcomes| outcomes.borrow_mut().push((label.to_string(), outcome)));
+        }
+    }
+
+    /// Bug: `emit_errors_capable_release` asked a second per-type dispatch (`union_variant_release`,
+    /// which knew a string, array and map) for the `ok` payload, so the release of a `Tag errors`,
+    /// `maybe<Tag> errors` or `channel<T> errors` value failed with an internal error where every
+    /// other stored value releases through `stored_release` (High: C7 releases every local, so the
+    /// first `errors` local of a shape would stop the compile).
+    #[test]
+    fn every_ok_payload_of_an_errors_value_has_a_release() {
+        OUTCOMES.with(|outcomes| outcomes.borrow_mut().clear());
+        CG_PROBE.with(|slot| slot.set(Some(probe)));
+        let db = CompilerDb::default();
+        let source = SourceFile::new(&db, "probe.ynz".to_string(), PROGRAM.to_string());
+        let output = crate::queries::codegen_query(&db, source);
+        CG_PROBE.with(|slot| slot.set(None));
+        assert!(
+            output.diagnostics.is_empty(),
+            "the probe program must compile: {:?}",
+            output.diagnostics
+        );
+        let outcomes = OUTCOMES.with(|outcomes| outcomes.borrow().clone());
+        assert_eq!(
+            outcomes.len(),
+            payloads().len(),
+            "the probe ran once: {outcomes:?}"
+        );
+        for (label, outcome) in outcomes {
+            assert_eq!(
+                outcome,
+                Ok(true),
+                "an `errors` value with a {label} ok payload must have a release"
+            );
+        }
+        let _ = run_cg_probe;
+    }
 }
