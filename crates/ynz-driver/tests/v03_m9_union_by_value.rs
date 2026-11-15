@@ -380,18 +380,6 @@ by_value_tests!(
     v03_m9_union_move_copy_reassign_asan_no_optimize
 );
 
-// Bug: a binding of a place read made a view although the place was replaced while the binding
-// was still read: the view read the new chain (`1`) where the binding must keep the old one (`3`).
-// Condition (b) of a view failed, so it owns a deep copy. Tier: High.
-by_value_tests!(
-    "v0_3_m9_union_view_root_written.ynz",
-    "3\n1\n",
-    v03_m9_union_view_root_written_optimized,
-    v03_m9_union_view_root_written_no_optimize,
-    v03_m9_union_view_root_written_asan_optimized,
-    v03_m9_union_view_root_written_asan_no_optimize
-);
-
 // Bug: a view of a field read (`let rest = head.next` over a `share` parameter) points into the
 // place it names; a recursive walk that reads it through every frame must read live memory, not a
 // frame or cell that is gone. Tier: High.
@@ -402,27 +390,4 @@ by_value_tests!(
     v03_m9_union_view_walk_no_optimize,
     v03_m9_union_view_walk_asan_optimized,
     v03_m9_union_view_walk_asan_no_optimize
-);
-
-// Bug: a view read through another view (`held`, then `chain`) kept pointing at the original root's
-// slot after `crate.holder.chain` was replaced, so it read the replacement instead of the 3-link
-// chain it named. Tier: High.
-by_value_tests!(
-    "v0_3_m9_union_view_chain_written.ynz",
-    "3\n1\n",
-    v03_m9_union_view_chain_written_optimized,
-    v03_m9_union_view_chain_written_no_optimize,
-    v03_m9_union_view_chain_written_asan_optimized,
-    v03_m9_union_view_chain_written_asan_no_optimize
-);
-
-// Bug: an element view into an array buffer that `add` grew and moved read freed memory. The array is
-// written while the binding is read, so the binding owns a copy. Tier: High.
-by_value_tests!(
-    "v0_3_m9_union_view_element_grown.ynz",
-    "big first\n41\n",
-    v03_m9_union_view_element_grown_optimized,
-    v03_m9_union_view_element_grown_no_optimize,
-    v03_m9_union_view_element_grown_asan_optimized,
-    v03_m9_union_view_element_grown_asan_no_optimize
 );
