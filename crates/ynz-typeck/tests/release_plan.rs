@@ -127,7 +127,7 @@ const ARRAY: ReleaseKind = ReleaseKind::Array;
 #[test]
 fn a_plain_local_is_released_at_the_end_of_its_block() {
     let output = clean(
-        "function plain() -> nothing {\n  let rows = [1, 2, 3]\n  print(rows.count().toString())\n}\n",
+        "function plain() -> nothing {\n  let rows = [1, 2, 3]\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "plain"), "rows"),
@@ -200,7 +200,7 @@ fn the_returned_binding_is_omitted_at_its_return() {
 #[test]
 fn a_borrowed_parameter_is_the_callers_and_a_give_parameter_is_released() {
     let output = clean(
-        "function borrowed(share rows: array<int>) -> nothing {\n  print(rows.count().toString())\n}\nfunction owned(give rows: array<int>) -> nothing {\n  print(rows.count().toString())\n}\n",
+        "function borrowed(share rows: array<int>) -> nothing {\n  print(`${rows.count()}`)\n}\nfunction owned(give rows: array<int>) -> nothing {\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "borrowed"), "rows"),
@@ -216,7 +216,7 @@ fn a_borrowed_parameter_is_the_callers_and_a_give_parameter_is_released() {
 #[test]
 fn a_reassigned_binding_is_never_released() {
     let output = clean(
-        "function again() -> nothing {\n  let rows = [1, 2, 3]\n  rows = [4, 5]\n  print(rows.count().toString())\n}\n",
+        "function again() -> nothing {\n  let rows = [1, 2, 3]\n  rows = [4, 5]\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "again"), "rows"),
@@ -229,7 +229,7 @@ fn a_reassigned_binding_is_never_released() {
 #[test]
 fn a_generic_body_is_covered_and_its_parameter_values_are_omitted() {
     let output = clean(
-        "function keep<T>(give value: T) -> T {\n  let spare = [1, 2]\n  print(spare.count().toString())\n  return value\n}\n",
+        "function keep<T>(give value: T) -> T {\n  let spare = [1, 2]\n  print(`${spare.count()}`)\n  return value\n}\n",
     );
     let list = body_end(&output, "keep");
     assert_eq!(fate_of(&list, "spare"), Fate::Release(ARRAY));
@@ -244,7 +244,7 @@ fn a_generic_body_is_covered_and_its_parameter_values_are_omitted() {
 #[test]
 fn a_loop_body_has_its_own_list() {
     let output = clean(
-        "function looped() -> nothing {\n  let count = 3\n  while (count > 0) {\n    let row = [1]\n    print(row.count().toString())\n    count = count - 1\n  }\n}\n",
+        "function looped() -> nothing {\n  let count = 3\n  while (count > 0) {\n    let row = [1]\n    print(`${row.count()}`)\n    count = count - 1\n  }\n}\n",
     );
     let function = function_of(&output, "looped");
     let Stmt::While { body, .. } = &function.body.stmts[1] else {
@@ -459,7 +459,11 @@ fn only_a_kind_with_frame_backing_feeds_the_crossing_set() {
 
 fn crossing_names(output: &CheckOutput, function: &str, names: Names) -> Vec<String> {
     let function = function_of(output, function);
-    let params: Vec<&str> = function.params.iter().map(|p| p.name.as_str()).collect();
+    let params: Vec<&str> = function
+        .params
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect();
     let reads = output
         .typed_module
         .release_plan
@@ -490,7 +494,7 @@ fn an_owner_declared_before_a_wait_crosses_it() {
 #[test]
 fn an_owner_declared_after_the_last_wait_does_not_cross() {
     let output = clean(
-        "function late() -> nothing {\n  wait sleep(1)\n  let rows = [1, 2, 3]\n  print(rows.count().toString())\n}\n",
+        "function late() -> nothing {\n  wait sleep(1)\n  let rows = [1, 2, 3]\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         crossing_names(&output, "late", Names::User),
@@ -747,19 +751,19 @@ fn an_auto_propagation_omits_the_propagated_binding_as_returned() {
     );
 }
 
-/// Bug: `let x` twice in one block replaced the first binding in the scope's frame, so the first
+/// Bug: `let rows` twice in one block replaced the first binding in the scope's frame, so the first
 /// array was in no list at all (a leak on every path). Both bindings leave scope with the block.
 /// Producer: `Scope::insert` dropped the shadowed entry.
 #[test]
 fn a_binding_shadowed_in_its_own_block_is_still_released() {
     let output = clean(
-        "function twice() -> nothing {\n  let x = [1]\n  let x = [2]\n  print(x.count().toString())\n}\n",
+        "function twice() -> nothing {\n  let rows = [1]\n  let rows = [2]\n  print(`${rows.count()}`)\n}\n",
     );
     let list = body_end(&output, "twice");
     assert_eq!(
-        list.iter().filter(|(name, _)| name == "x").count(),
+        list.iter().filter(|(name, _)| name == "rows").count(),
         2,
-        "both `x` bindings are listed: {list:?}"
+        "both `rows` bindings are listed: {list:?}"
     );
     assert!(
         list.iter().all(|(_, fate)| *fate == Fate::Release(ARRAY)),
@@ -772,20 +776,20 @@ fn a_binding_shadowed_in_its_own_block_is_still_released() {
 #[test]
 fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
     let output = clean(
-        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction shadowed() -> array<int> {\n  let x = [1]\n  let y = pass(x)\n  let x = [9]\n  return y\n}\n",
+        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction shadowed() -> array<int> {\n  let rows = [1]\n  let passed = pass(rows)\n  let rows = [9]\n  return passed\n}\n",
     );
     let returns = return_edges(&output, "shadowed");
     let list = &returns[0];
     let firsts: Vec<Fate> = list
         .iter()
-        .filter(|(name, _)| name == "x")
+        .filter(|(name, _)| name == "rows")
         .map(|(_, fate)| *fate)
         .collect();
-    assert_eq!(firsts.len(), 2, "both `x` are listed: {list:?}");
+    assert_eq!(firsts.len(), 2, "both `rows` are listed: {list:?}");
     assert_eq!(
         firsts.iter().filter(|fate| fate.releases()).count(),
         1,
-        "only the unrelated second `x` releases: {list:?}"
+        "only the unrelated second `rows` releases: {list:?}"
     );
     assert!(
         output
@@ -803,18 +807,18 @@ fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
 #[test]
 fn a_spawn_that_gives_two_bindings_moves_both_founders() {
     let output = clean(
-        "function work(a: array<int>, b: array<int>) -> nothing {\n  print(a.count().toString())\n}\nfunction spawns(flag: boolean) -> nothing {\n  let a: array<int> = [1]\n  let b: array<int> = [2]\n  if (flag) {\n    background work(a, b)\n  }\n}\n",
+        "function work(first: array<int>, second: array<int>) -> nothing {\n  print(`${first.count()}`)\n}\nfunction spawns(flag: boolean) -> nothing {\n  let first: array<int> = [1]\n  let second: array<int> = [2]\n  if (flag) {\n    background work(first, second)\n  }\n}\n",
     );
     let list = body_end(&output, "spawns");
-    assert_eq!(fate_of(&list, "a"), Fate::ReleaseIfLive(ARRAY));
-    assert_eq!(fate_of(&list, "b"), Fate::ReleaseIfLive(ARRAY));
+    assert_eq!(fate_of(&list, "first"), Fate::ReleaseIfLive(ARRAY));
+    assert_eq!(fate_of(&list, "second"), Fate::ReleaseIfLive(ARRAY));
     let function = function_of(&output, "spawns");
     let mut founders = output
         .typed_module
         .release_plan
         .founders_moved_in(&function.body.stmts[2]);
     founders.sort();
-    assert_eq!(founders, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(founders, vec!["first".to_string(), "second".to_string()]);
 }
 
 // ── Fixer round 1 (test): the rules each fate comes from, at their boundaries ────────────────
@@ -892,7 +896,7 @@ fn a_string_parameter_is_not_released_by_the_callee() {
 #[test]
 fn a_class_mate_of_the_founder_is_not_an_owner() {
     let output = clean(
-        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction mate() -> nothing {\n  let first = [1]\n  let second = pass(first)\n  print(second.count().toString())\n}\n",
+        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction mate() -> nothing {\n  let first = [1]\n  let second = pass(first)\n  print(`${second.count()}`)\n}\n",
     );
     let list = body_end(&output, "mate");
     assert_eq!(fate_of(&list, "first"), Fate::Release(ARRAY));
@@ -935,7 +939,7 @@ fn a_class_with_no_static_founder_releases_nothing_at_either_scope_end() {
 #[test]
 fn a_return_lists_the_innermost_frame_first_and_the_last_declared_first() {
     let output = clean(
-        "function ordered(flag: boolean) -> nothing {\n  let outer_first = [1]\n  let outer_second = [2]\n  if (flag) {\n    let inner_first = [3]\n    let inner_second = [4]\n    return\n  }\n  print(outer_first.count().toString())\n  print(outer_second.count().toString())\n}\n",
+        "function ordered(flag: boolean) -> nothing {\n  let outer_first = [1]\n  let outer_second = [2]\n  if (flag) {\n    let inner_first = [3]\n    let inner_second = [4]\n    return\n  }\n  print(`${outer_first.count()}`)\n  print(`${outer_second.count()}`)\n}\n",
     );
     let names: Vec<String> = return_edges(&output, "ordered")[0]
         .iter()
@@ -1096,7 +1100,7 @@ fn only_the_owners_that_release_cross_a_wait() {
 fn with_reads_adds_one_read_per_owner_at_each_edge_it_belongs_to() {
     use ynz_ast::nodes::Expr;
     let output = clean(&format!(
-        "{}function placed(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    let inner = [4]\n    return\n  }}\n  print(rows.count().toString())\n}}\n",
+        "{}function placed(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    let inner = [4]\n    return\n  }}\n  print(`${{rows.count()}}`)\n}}\n",
         support::EAT
     ));
     let function = function_of(&output, "placed");
