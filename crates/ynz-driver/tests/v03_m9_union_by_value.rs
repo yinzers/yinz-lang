@@ -81,7 +81,7 @@ by_value_tests!(
     v03_m9_union_container_loop_asan_no_optimize
 );
 
-// Bug: `list.add(t)` in a callee stored the caller-frame envelope pointer. Tier: High.
+// Bug: `list.add(thing)` in a callee stored the caller-frame envelope pointer. Tier: High.
 by_value_tests!(
     "v0_3_m9_union_keep_give.ynz",
     "big kept\nbig old\ntiny\nend\n",
@@ -342,9 +342,9 @@ fn v03_m9_union_share_param_stored_in_list_is_refused() {
         compiled.diagnostics
     );
     for fragment in [
-        "`t` is a parameter of `keep` that is declared `share`",
+        "`thing` is a parameter of `keep` that is declared `share`",
         "needs `give`",
-        "function keep(give t: Tiny | Big, …)",
+        "function keep(give thing: Tiny | Big, …)",
     ] {
         assert!(
             compiled.diagnostics.contains(fragment),
