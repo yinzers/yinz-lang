@@ -1070,6 +1070,6 @@ pub fn frame_region_ptr<'ctx>(
                 &[ctx.i64_type().const_int(region_byte_offset, false)],
                 name,
             )
-            .map_err(|e| format!("frame_region_ptr gep {name}: {e}"))
+            .map_err(|err| format!("frame_region_ptr gep {name}: {err}"))
     }
 }

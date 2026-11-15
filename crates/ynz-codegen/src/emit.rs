@@ -429,7 +429,7 @@ pub fn build_frame_layouts_with_unions(
             let mut union_cursor = own_base + number_errors_staging_offset.map_or(0, |_| 16);
             for (role, size) in union_roles
                 .get(&f.name)
-                .map(|r| r.as_slice())
+                .map(|region_roles| region_roles.as_slice())
                 .unwrap_or(&[])
             {
                 union_regions.push(UnionRegion {
@@ -3521,7 +3521,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return self
                 .builder
                 .build_ptr_to_int(value, self.i64(), &format!("{site}_ptrbits"))
-                .map_err(|e| format!("array out union bits: {e}"));
+                .map_err(|err| format!("array out union bits: {err}"));
         }
         self.builder
             .build_load(self.i64(), out, &format!("{site}_bits"))
@@ -3895,7 +3895,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 )?;
                 self.builder
                     .build_store(slot, val.into_struct_value())
-                    .map_err(|e| format!("{e}"))?;
+                    .map_err(|err| format!("{err}"))?;
                 let view = self.union_slot_to_value_as(slot, &variants, true, site)?;
                 Ok(self.maybe_pair_over_view(view, site)?.into())
             }
@@ -3946,7 +3946,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 )?;
                 self.builder
                     .build_store(slot, val.into_struct_value())
-                    .map_err(|e| format!("{e}"))?;
+                    .map_err(|err| format!("{err}"))?;
                 Ok(self.union_slot_to_value(slot, &variants, site)?.into())
             }
             _ => Ok(val),
@@ -4464,12 +4464,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             let slot = self
                 .builder
                 .build_int_to_ptr(frame_bits, self.ptr(), "sm_param_union_slot")
-                .map_err(|e| format!("sm union param slot cast: {e}"))?;
+                .map_err(|err| format!("sm union param slot cast: {err}"))?;
             let view = self.union_slot_to_value(slot, &variants, "sm_param_union")?;
             return self
                 .builder
                 .build_ptr_to_int(view, self.i64(), "sm_param_union_bits")
-                .map_err(|e| format!("sm union param view bits: {e}"));
+                .map_err(|err| format!("sm union param view bits: {err}"));
         }
         self.to_i64_bits(self.i64_bits_to(frame_bits, param_ty)?, param_ty)
     }
@@ -4514,7 +4514,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.union_persist_into(value, region, variants, "staged_union_arg")?;
         self.builder
             .build_ptr_to_int(region, self.i64(), "staged_union_arg_bits")
-            .map_err(|e| format!("staged union arg bits: {e}"))
+            .map_err(|err| format!("staged union arg bits: {err}"))
     }
 
     /// The byte offset, in this state machine's frame, of the union slot reserved for `role`
@@ -4886,10 +4886,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_zero(),
                 &format!("{site}_is_ok"),
             )
-            .map_err(|e| format!("{site}: err compare: {e}"))?;
+            .map_err(|err| format!("{site}: err compare: {err}"))?;
         self.builder
             .build_conditional_branch(is_ok, present_bb, join_bb)
-            .map_err(|e| format!("{site}: branch: {e}"))?;
+            .map_err(|err| format!("{site}: branch: {err}"))?;
         self.builder.position_at_end(present_bb);
         let view = if maybe {
             self.maybe_pair_to_view(view, site)?
@@ -4905,7 +4905,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         )?;
         self.builder
             .build_unconditional_branch(join_bb)
-            .map_err(|e| format!("{site}: present->join: {e}"))?;
+            .map_err(|err| format!("{site}: present->join: {err}"))?;
         self.builder.position_at_end(join_bb);
         Ok(())
     }
@@ -4928,12 +4928,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let scratch = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
         self.builder
             .build_store(scratch, slot_ty.const_zero())
-            .map_err(|e| format!("{site}: zero the result slot: {e}"))?;
+            .map_err(|err| format!("{site}: zero the result slot: {err}"))?;
         self.union_persist_if_ok(err, view, scratch, variants, maybe, site)?;
         let slot = self
             .builder
             .build_load(slot_ty, scratch, &format!("{site}_slot_value"))
-            .map_err(|e| format!("{site}: load the result slot: {e}"))?;
+            .map_err(|err| format!("{site}: load the result slot: {err}"))?;
         let result_ty = ec_result_type(
             self.ctx,
             self.shape_types,
@@ -4944,12 +4944,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let with_err = self
             .builder
             .build_insert_value(result_ty.const_zero(), err, 0, &format!("{site}_err"))
-            .map_err(|e| format!("{site}: insert err: {e}"))?
+            .map_err(|err| format!("{site}: insert err: {err}"))?
             .into_struct_value();
         Ok(self
             .builder
             .build_insert_value(with_err, slot, 1, &format!("{site}_val"))
-            .map_err(|e| format!("{site}: insert slot: {e}"))?
+            .map_err(|err| format!("{site}: insert slot: {err}"))?
             .into_struct_value())
     }
 
@@ -4971,16 +4971,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let err = self
             .builder
             .build_extract_value(result, 0, &format!("{site}_err"))
-            .map_err(|e| format!("{site}: extract err: {e}"))?
+            .map_err(|err| format!("{site}: extract err: {err}"))?
             .into_int_value();
         let slot_value = self
             .builder
             .build_extract_value(result, 1, &format!("{site}_slot_value"))
-            .map_err(|e| format!("{site}: extract slot: {e}"))?;
+            .map_err(|err| format!("{site}: extract slot: {err}"))?;
         let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
         self.builder
             .build_store(slot, slot_value)
-            .map_err(|e| format!("{site}: store the result slot: {e}"))?;
+            .map_err(|err| format!("{site}: store the result slot: {err}"))?;
         self.ec_standard_over_slot(err, slot, variants, maybe, site)
     }
 
@@ -5011,17 +5011,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let ok_bits = self
             .builder
             .build_ptr_to_int(ok_value, self.i64(), &format!("{site}_ok_bits"))
-            .map_err(|e| format!("{site}: view bits: {e}"))?;
+            .map_err(|err| format!("{site}: view bits: {err}"))?;
         let standard = errors_result_type(self.ctx);
         let with_err = self
             .builder
             .build_insert_value(standard.const_zero(), err, 0, &format!("{site}_std_err"))
-            .map_err(|e| format!("{site}: insert err: {e}"))?
+            .map_err(|err| format!("{site}: insert err: {err}"))?
             .into_struct_value();
         Ok(self
             .builder
             .build_insert_value(with_err, ok_bits, 1, &format!("{site}_std_ok"))
-            .map_err(|e| format!("{site}: insert ok: {e}"))?
+            .map_err(|err| format!("{site}: insert ok: {err}"))?
             .into_struct_value())
     }
 
@@ -5044,7 +5044,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
         self.builder
             .build_store(slot, slot_ty.const_zero())
-            .map_err(|e| format!("{site}: zero the copied slot: {e}"))?;
+            .map_err(|err| format!("{site}: zero the copied slot: {err}"))?;
         let copy_bb = self.append_block(&format!("{site}_copy"));
         let join_bb = self.append_block(&format!("{site}_copied"));
         let is_ok = self
@@ -5055,15 +5055,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_zero(),
                 &format!("{site}_is_ok"),
             )
-            .map_err(|e| format!("{site}: err compare: {e}"))?;
+            .map_err(|err| format!("{site}: err compare: {err}"))?;
         self.builder
             .build_conditional_branch(is_ok, copy_bb, join_bb)
-            .map_err(|e| format!("{site}: branch: {e}"))?;
+            .map_err(|err| format!("{site}: branch: {err}"))?;
         self.builder.position_at_end(copy_bb);
         let region = self
             .builder
             .build_int_to_ptr(region_bits, self.ptr(), &format!("{site}_region"))
-            .map_err(|e| format!("{site}: region cast: {e}"))?;
+            .map_err(|err| format!("{site}: region cast: {err}"))?;
         self.builder
             .build_memcpy(
                 slot,
@@ -5072,10 +5072,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 1,
                 self.i64().const_int(layout.slot_size, false),
             )
-            .map_err(|e| format!("{site}: copy the slot: {e}"))?;
+            .map_err(|err| format!("{site}: copy the slot: {err}"))?;
         self.builder
             .build_unconditional_branch(join_bb)
-            .map_err(|e| format!("{site}: copy->join: {e}"))?;
+            .map_err(|err| format!("{site}: copy->join: {err}"))?;
         self.builder.position_at_end(join_bb);
         self.ec_standard_over_slot(err, slot, variants, maybe, site)
     }
@@ -5119,7 +5119,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_zero(),
                 &format!("{site}_maybe_present"),
             )
-            .map_err(|e| format!("{site}: maybe flag compare: {e}"))?;
+            .map_err(|err| format!("{site}: maybe flag compare: {err}"))?;
         let view_bits = self
             .builder
             .build_select(
@@ -5128,11 +5128,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_zero(),
                 &format!("{site}_maybe_view_bits"),
             )
-            .map_err(|e| format!("{site}: maybe view bits: {e}"))?
+            .map_err(|err| format!("{site}: maybe view bits: {err}"))?
             .into_int_value();
         self.builder
             .build_int_to_ptr(view_bits, self.ptr(), &format!("{site}_maybe_view"))
-            .map_err(|e| format!("{site}: maybe view cast: {e}"))
+            .map_err(|err| format!("{site}: maybe view cast: {err}"))
     }
 
     /// The `{ flag, bits }` maybe envelope of the union view `view` (null for `none`): an
@@ -5147,24 +5147,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let present = self
             .builder
             .build_is_not_null(view, &format!("{site}_maybe_present"))
-            .map_err(|e| format!("{site}: view null check: {e}"))?;
+            .map_err(|err| format!("{site}: view null check: {err}"))?;
         let flag = self
             .builder
             .build_int_z_extend(present, self.i64(), &format!("{site}_maybe_flag"))
-            .map_err(|e| format!("{site}: flag widen: {e}"))?;
+            .map_err(|err| format!("{site}: flag widen: {err}"))?;
         let bits = self
             .builder
             .build_ptr_to_int(view, self.i64(), &format!("{site}_maybe_bits"))
-            .map_err(|e| format!("{site}: view bits: {e}"))?;
+            .map_err(|err| format!("{site}: view bits: {err}"))?;
         let env = self.alloca_in_entry_llvm(self.maybe_type(), &format!("{site}_maybe_pair"))?;
         for (index, word) in [(0u32, flag), (1u32, bits)] {
             let gep = self
                 .builder
                 .build_struct_gep(self.maybe_type(), env, index, &format!("{site}_maybe_word"))
-                .map_err(|e| format!("{site}: maybe gep: {e}"))?;
+                .map_err(|err| format!("{site}: maybe gep: {err}"))?;
             self.builder
                 .build_store(gep, word)
-                .map_err(|e| format!("{site}: maybe word store: {e}"))?;
+                .map_err(|err| format!("{site}: maybe word store: {err}"))?;
         }
         Ok(env)
     }
@@ -5202,45 +5202,45 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             let view = self
                 .builder
                 .build_load(self.ptr(), alloca, &format!("{site}_view"))
-                .map_err(|e| format!("{site}: load the union view: {e}"))?
+                .map_err(|err| format!("{site}: load the union view: {err}"))?
                 .into_pointer_value();
             self.union_persist_into(view, crossing.region, &crossing.variants, &site)?;
             let region_view =
                 self.union_slot_to_value(crossing.region, &crossing.variants, &site)?;
             self.builder
                 .build_store(alloca, region_view)
-                .map_err(|e| format!("{site}: point the local at its region: {e}"))?;
+                .map_err(|err| format!("{site}: point the local at its region: {err}"))?;
             return Ok(());
         }
         let ec_ty = errors_result_type(self.ctx);
         let struct_ptr = self
             .builder
             .build_load(self.ptr(), alloca, &format!("{site}_ec_ptr"))
-            .map_err(|e| format!("{site}: load the errors pair: {e}"))?
+            .map_err(|err| format!("{site}: load the errors pair: {err}"))?
             .into_pointer_value();
         let err_ptr = self
             .builder
             .build_struct_gep(ec_ty, struct_ptr, 0, &format!("{site}_err_gep"))
-            .map_err(|e| format!("{site}: err gep: {e}"))?;
+            .map_err(|err| format!("{site}: err gep: {err}"))?;
         let ok_ptr = self
             .builder
             .build_struct_gep(ec_ty, struct_ptr, 1, &format!("{site}_ok_gep"))
-            .map_err(|e| format!("{site}: ok gep: {e}"))?;
+            .map_err(|err| format!("{site}: ok gep: {err}"))?;
         let err = self
             .builder
             .build_load(self.i64(), err_ptr, &format!("{site}_err"))
-            .map_err(|e| format!("{site}: load err: {e}"))?
+            .map_err(|err| format!("{site}: load err: {err}"))?
             .into_int_value();
         state_machine::store_local_slot(self.ctx, &self.builder, frame_ptr, slot_idx, err)?;
         let ok_bits = self
             .builder
             .build_load(self.i64(), ok_ptr, &format!("{site}_ok"))
-            .map_err(|e| format!("{site}: load ok: {e}"))?
+            .map_err(|err| format!("{site}: load ok: {err}"))?
             .into_int_value();
         let view = self
             .builder
             .build_int_to_ptr(ok_bits, self.ptr(), &format!("{site}_ok_view"))
-            .map_err(|e| format!("{site}: ok view cast: {e}"))?;
+            .map_err(|err| format!("{site}: ok view cast: {err}"))?;
         self.union_persist_if_ok(err, view, crossing.region, &crossing.variants, false, &site)?;
         let region_ok = self.crossing_union_ok_word(name, err)?;
         let is_ok = self
@@ -5251,15 +5251,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_zero(),
                 &format!("{site}_flush_is_ok"),
             )
-            .map_err(|e| format!("{site}: err compare: {e}"))?;
+            .map_err(|err| format!("{site}: err compare: {err}"))?;
         let new_ok = self
             .builder
             .build_select(is_ok, region_ok, ok_bits, &format!("{site}_new_ok"))
-            .map_err(|e| format!("{site}: select ok: {e}"))?
+            .map_err(|err| format!("{site}: select ok: {err}"))?
             .into_int_value();
         self.builder
             .build_store(ok_ptr, new_ok)
-            .map_err(|e| format!("{site}: store ok: {e}"))?;
+            .map_err(|err| format!("{site}: store ok: {err}"))?;
         Ok(())
     }
 
@@ -5289,7 +5289,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let view_bits = self
             .builder
             .build_ptr_to_int(view, self.i64(), &format!("{name}_reload_ok_bits"))
-            .map_err(|e| format!("{name}: region view bits: {e}"))?;
+            .map_err(|err| format!("{name}: region view bits: {err}"))?;
         let is_ok = self
             .builder
             .build_int_compare(
@@ -5298,7 +5298,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_zero(),
                 &format!("{name}_reload_is_ok"),
             )
-            .map_err(|e| format!("{name}: err compare: {e}"))?;
+            .map_err(|err| format!("{name}: err compare: {err}"))?;
         Ok(self
             .builder
             .build_select(
@@ -5307,7 +5307,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_zero(),
                 &format!("{name}_reload_ok"),
             )
-            .map_err(|e| format!("{name}: select ok: {e}"))?
+            .map_err(|err| format!("{name}: select ok: {err}"))?
             .into_int_value())
     }
 
@@ -5346,7 +5346,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 let Type::Union { variants } = resolved else {
                     return None;
                 };
-                Some(variants.iter().map(|v| self.resolve_type(v)).collect())
+                Some(
+                    variants
+                        .iter()
+                        .map(|variant| self.resolve_type(variant))
+                        .collect(),
+                )
             }
             _ => None,
         }
@@ -5368,11 +5373,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let dest = self
             .builder
             .build_load(self.ptr(), slot, &format!("{site}_frame_ptr"))
-            .map_err(|e| format!("embed slot frame ptr load {site}: {e}"))?
+            .map_err(|err| format!("embed slot frame ptr load {site}: {err}"))?
             .into_pointer_value();
         self.builder
             .build_memcpy(dest, 1, src, 1, size)
-            .map_err(|e| format!("embed slot memcpy {site}: {e}"))?;
+            .map_err(|err| format!("embed slot memcpy {site}: {err}"))?;
         Ok(())
     }
 
@@ -5509,34 +5514,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `shape`-/`maybe_to_heap_cell` — directly; the `to_i64_bits` after them
     /// marshals an already-stable heap pointer).
     ///
-    /// KNOWN HOLE — Union (documented, no arm; BLOCKED-class, surfaced fix
-    /// round 3; state refreshed P3 step 5(d) sweep): a union value's
-    /// representation is NOT one derivable layout — a `{i64 tag, i64 data}`
-    /// tagged-struct alloca from the annotated-Let ctor (with `data` an
-    /// interior ptr_to_int of a STACK shape alloca), but a NULL pointer for
-    /// the `T | nothing` none case (the union print path `build_is_null`s the
-    /// value directly). A blind 16-byte clone would segfault on the null repr
-    /// and would still persist the interior stack payload pointer one level
-    /// down. CONSTRUCTIBILITY (P3 step-5 probes, superseding the earlier
-    /// "unobservable today for maps" claim): the WRITE side IS constructible —
-    /// `map<int, UnionAlias>.set(...)` and an `array<UnionAlias>` literal both
-    /// compile AND run (the union bits fall through to `to_i64_bits` and the
-    /// raw interior-stack pointer persists silently); a union-typed SHAPE
-    /// FIELD is cleanly typeck-rejected (that surface is closed). READ-BACK
-    /// from either collection (`is`-narrowing after get) fails as a LOUD
-    /// codegen ICE — no binary is produced, so no end-to-end silent wrong is
-    /// observable today. The pins `m5_p3_sweep_union_readback_blocked_{array,
-    /// map}` assert the read-back build keeps failing loud: if it ever starts
-    /// compiling, the marshalling question must be answered consciously here.
-    /// A loud-reject GATE at the persist surfaces is a NEW user-facing
-    /// diagnostic (feature-registry + gallery obligations) — FRAGO-grade plan
-    /// surface, surfaced to the deviation-judge, deliberately NOT built as a
-    /// sweep ride-along. Owned by the fix-round deviation record until the
-    /// union ABI gets one authoritative layout. NOTE (v0.3-M6 Phase 1c step
-    /// 3c): the BINDING surface persists a crossing union into a frame region
-    /// (`flush_crossing_union`, nothing allocated) —
-    /// that does NOT close this hole and deliberately adds NO Union arm here:
-    /// an arm would silently widen the persist surfaces past the pins above.
+    /// Union — deliberately no arm. An envelope union is stored as its own slot, payload inline
+    /// (`union_persist_into`; `IMP-unions.md` "Stored union slot"), by the heap array, map and
+    /// shape-field persist sites BEFORE they reach this helper, so no union is marshalled as
+    /// bits here. A union's value form is a pointer to a per-site `{tag, data}` view (null for
+    /// `none`), which no blind clone can copy: an arm here would persist the view's interior
+    /// pointer into a stack payload.
     fn value_to_stable_bits(
         &self,
         val: BasicValueEnum<'ctx>,
@@ -5842,9 +5825,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let fn_ty = self
             .bool()
             .fn_type(&[self.ptr().into(), self.ptr().into()], false);
-        let eq_fn = self
-            .module
-            .add_function(&name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        let eq_fn =
+            self.module
+                .add_function(&name, fn_ty, Some(inkwell::module::Linkage::Internal));
         let saved_block = self.builder.get_insert_block();
         let entry = self.ctx.append_basic_block(eq_fn, "entry");
         let tags_match = self.ctx.append_basic_block(eq_fn, "tags_match");
@@ -5862,24 +5845,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let tag_a = self
             .builder
             .build_load(self.i64(), slot_a, "tag_a")
-            .map_err(|e| format!("{e}"))?
+            .map_err(|err| format!("{err}"))?
             .into_int_value();
         let tag_b = self
             .builder
             .build_load(self.i64(), slot_b, "tag_b")
-            .map_err(|e| format!("{e}"))?
+            .map_err(|err| format!("{err}"))?
             .into_int_value();
         let same_tag = self
             .builder
             .build_int_compare(IntPredicate::EQ, tag_a, tag_b, "same_tag")
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         self.builder
             .build_conditional_branch(same_tag, tags_match, differ)
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         self.builder.position_at_end(differ);
         self.builder
             .build_return(Some(&self.bool().const_zero()))
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         self.builder.position_at_end(tags_match);
         let case_blocks: Vec<BasicBlock<'ctx>> = layout
             .shape_variants
@@ -5897,7 +5880,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .collect();
         self.builder
             .build_switch(tag_a, by_word, &switch_cases)
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         for ((_, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
             self.builder.position_at_end(*case_bb);
             let mut cells = Vec::new();
@@ -5906,14 +5889,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 cells.push(
                     self.builder
                         .build_load(self.ptr(), word_addr, "cell")
-                        .map_err(|e| format!("{e}"))?
+                        .map_err(|err| format!("{err}"))?
                         .into_pointer_value(),
                 );
             }
             let equal = self.shape_value_eq(cells[0], cells[1], shape_name, "boxed_eq")?;
             self.builder
                 .build_return(Some(&equal))
-                .map_err(|e| format!("{e}"))?;
+                .map_err(|err| format!("{err}"))?;
         }
         self.builder.position_at_end(by_word);
         let mut words = Vec::new();
@@ -5922,14 +5905,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             words.push(
                 self.builder
                     .build_load(self.i64(), word_addr, "word")
-                    .map_err(|e| format!("{e}"))?
+                    .map_err(|err| format!("{err}"))?
                     .into_int_value(),
             );
         }
         let same_word = self
             .builder
             .build_int_compare(IntPredicate::EQ, words[0], words[1], "same_word")
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         let is_none = self
             .builder
             .build_int_compare(
@@ -5938,14 +5921,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.i64().const_int(UNION_NONE_TAG, false),
                 "is_none",
             )
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         let equal = self
             .builder
             .build_or(same_word, is_none, "plain_equal")
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         self.builder
             .build_return(Some(&equal))
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
         }
@@ -6109,7 +6092,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                                 &[a_gep.into(), b_gep.into()],
                                 &format!("{site}_ueq_{fname}"),
                             )
-                            .map_err(|e| format!("{e}"))?
+                            .map_err(|err| format!("{err}"))?
                             .try_as_basic_value()
                             .basic()
                             .ok_or("boxed union equality returned void")?
@@ -6117,39 +6100,39 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         acc = self
                             .builder
                             .build_and(acc, equal, &format!("{site}_acc_{fname}"))
-                            .map_err(|e| format!("{e}"))?;
+                            .map_err(|err| format!("{err}"))?;
                         continue;
                     }
                     let tag_a = self
                         .builder
                         .build_load(self.i64(), a_gep, "ueq_ta")
-                        .map_err(|e| format!("{e}"))?
+                        .map_err(|err| format!("{err}"))?
                         .into_int_value();
                     let tag_b = self
                         .builder
                         .build_load(self.i64(), b_gep, "ueq_tb")
-                        .map_err(|e| format!("{e}"))?
+                        .map_err(|err| format!("{err}"))?
                         .into_int_value();
                     let same_tag = self
                         .builder
                         .build_int_compare(IntPredicate::EQ, tag_a, tag_b, "ueq_tag")
-                        .map_err(|e| format!("{e}"))?;
+                        .map_err(|err| format!("{err}"))?;
                     let payload_a = self.union_payload_addr(a_gep, &layout, "ueq_a")?;
                     let payload_b = self.union_payload_addr(b_gep, &layout, "ueq_b")?;
                     let word_a = self
                         .builder
                         .build_load(self.i64(), payload_a, "ueq_wa")
-                        .map_err(|e| format!("{e}"))?
+                        .map_err(|err| format!("{err}"))?
                         .into_int_value();
                     let word_b = self
                         .builder
                         .build_load(self.i64(), payload_b, "ueq_wb")
-                        .map_err(|e| format!("{e}"))?
+                        .map_err(|err| format!("{err}"))?
                         .into_int_value();
                     let same_word = self
                         .builder
                         .build_int_compare(IntPredicate::EQ, word_a, word_b, "ueq_word")
-                        .map_err(|e| format!("{e}"))?;
+                        .map_err(|err| format!("{err}"))?;
                     let is_none = self
                         .builder
                         .build_int_compare(
@@ -6158,12 +6141,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                             self.i64().const_int(UNION_NONE_TAG, false),
                             "ueq_none",
                         )
-                        .map_err(|e| format!("{e}"))?;
+                        .map_err(|err| format!("{err}"))?;
                     // Not a shape variant: the payload word, or nothing for `none`.
                     let mut variant_equal = self
                         .builder
                         .build_or(same_word, is_none, "ueq_plain")
-                        .map_err(|e| format!("{e}"))?;
+                        .map_err(|err| format!("{err}"))?;
                     for (index, variant_shape) in &layout.shape_variants {
                         let (variant_a, variant_b) = (payload_a, payload_b);
                         let shape_equal = self.shape_value_eq(
@@ -6180,17 +6163,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                                 self.i64().const_int(*index, false),
                                 "ueq_is_variant",
                             )
-                            .map_err(|e| format!("{e}"))?;
+                            .map_err(|err| format!("{err}"))?;
                         let this_or_other = self
                             .builder
                             .build_select(is_variant, shape_equal, variant_equal, "ueq_pick")
-                            .map_err(|e| format!("{e}"))?
+                            .map_err(|err| format!("{err}"))?
                             .into_int_value();
                         variant_equal = this_or_other;
                     }
                     self.builder
                         .build_and(same_tag, variant_equal, "ueq_slot")
-                        .map_err(|e| format!("{e}"))?
+                        .map_err(|err| format!("{err}"))?
                 }
                 // Pointer payload (string, nested shape, bignum, everything else):
                 // pointer identity — the Risk-3 heap-field deferral.
@@ -7060,7 +7043,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
         sm_union_regions: frame_layout
-            .map(|l| l.union_regions.clone())
+            .map(|layout| layout.union_regions.clone())
             .unwrap_or_default(),
         // When set, lower_sm_block skips independence analysis and lowers all stmts
         // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
@@ -7487,7 +7470,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         // parameter's frame bits name its slot, which the alloca holds as a view).
         let bits_for_store = cg_resume
             .sm_param_bits(bits, &param_ty)
-            .map_err(|e| format!("sm param bits: {e}"))?;
+            .map_err(|err| format!("sm param bits: {err}"))?;
         cg_resume
             .builder
             .build_store(alloca, bits_for_store)
@@ -7568,7 +7551,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             staged
         } else {
             value_to_i64_bits(&builder, ctx.i64_type(), llvm_param, &param_ty)
-                .map_err(|e| format!("param to bits: {e}"))?
+                .map_err(|err| format!("param to bits: {err}"))?
         };
         state_machine::store_local_slot(ctx, &builder, frame_ptr, slot_idx, bits)?;
     }
@@ -7649,10 +7632,10 @@ fn lower_function_with_waits<'ctx, 'g>(
                 let result_ty = ec_result_type(ctx, shape_types, &ret_ty)?;
                 let slot = builder
                     .build_alloca(slot_ty, "wrap_ec_union_slot")
-                    .map_err(|e| format!("ec wrapper union slot: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union slot: {err}"))?;
                 builder
                     .build_store(slot, slot_ty.const_zero())
-                    .map_err(|e| format!("ec wrapper union zero: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union zero: {err}"))?;
                 let is_ok = builder
                     .build_int_compare(
                         IntPredicate::EQ,
@@ -7660,12 +7643,12 @@ fn lower_function_with_waits<'ctx, 'g>(
                         ctx.i64_type().const_zero(),
                         "wrap_ec_union_isok",
                     )
-                    .map_err(|e| format!("ec wrapper union isok: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union isok: {err}"))?;
                 let copy_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_union_copy");
                 let merge_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_union_merge");
                 builder
                     .build_conditional_branch(is_ok, copy_bb, merge_bb)
-                    .map_err(|e| format!("ec wrapper union branch: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union branch: {err}"))?;
                 builder.position_at_end(copy_bb);
                 let region = builder
                     .build_int_to_ptr(
@@ -7673,7 +7656,7 @@ fn lower_function_with_waits<'ctx, 'g>(
                         ctx.ptr_type(AddressSpace::default()),
                         "wrap_ec_union_region",
                     )
-                    .map_err(|e| format!("ec wrapper union region: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union region: {err}"))?;
                 builder
                     .build_memcpy(
                         slot,
@@ -7682,26 +7665,26 @@ fn lower_function_with_waits<'ctx, 'g>(
                         1,
                         ctx.i64_type().const_int(layout.slot_size, false),
                     )
-                    .map_err(|e| format!("ec wrapper union copy: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union copy: {err}"))?;
                 builder
                     .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("ec wrapper union copy->merge: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union copy->merge: {err}"))?;
                 builder.position_at_end(merge_bb);
                 let slot_value = builder
                     .build_load(slot_ty, slot, "wrap_ec_union_value")
-                    .map_err(|e| format!("ec wrapper union load: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union load: {err}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 let with_err = builder
                     .build_insert_value(result_ty.const_zero(), err_i64, 0, "wrap_ec_union_err")
-                    .map_err(|e| format!("ec wrapper union err: {e}"))?
+                    .map_err(|err| format!("ec wrapper union err: {err}"))?
                     .into_struct_value();
                 let result = builder
                     .build_insert_value(with_err, slot_value, 1, "wrap_ec_union_ok")
-                    .map_err(|e| format!("ec wrapper union ok: {e}"))?
+                    .map_err(|err| format!("ec wrapper union ok: {err}"))?
                     .into_struct_value();
                 builder
                     .build_return(Some(&result))
-                    .map_err(|e| format!("ec wrapper union ret: {e}"))?;
+                    .map_err(|err| format!("ec wrapper union ret: {err}"))?;
                 return Ok(());
             }
         }
@@ -7873,19 +7856,19 @@ fn lower_function_with_waits<'ctx, 'g>(
                         ctx.ptr_type(AddressSpace::default()),
                         "ret_union_region",
                     )
-                    .map_err(|e| format!("wrapper union region cast: {e}"))?;
+                    .map_err(|err| format!("wrapper union region cast: {err}"))?;
                 let slot_value = builder
                     .build_load(slot_ty, region, "ret_union_slot")
-                    .map_err(|e| format!("wrapper union load: {e}"))?;
+                    .map_err(|err| format!("wrapper union load: {err}"))?;
                 slot_value
                     .as_instruction_value()
                     .ok_or("wrapper union load: no instruction value")?
                     .set_alignment(8)
-                    .map_err(|e| format!("wrapper union load alignment: {e}"))?;
+                    .map_err(|err| format!("wrapper union load alignment: {err}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
                     .build_return(Some(&slot_value))
-                    .map_err(|e| format!("wrapper union ret: {e}"))?;
+                    .map_err(|err| format!("wrapper union ret: {err}"))?;
             }
             // A `maybe` of an envelope union: the slot rides the `Return` region like a union's.
             Type::Maybe { inner } if ynz_typeck::check::is_envelope_union(inner) => {
@@ -7906,19 +7889,19 @@ fn lower_function_with_waits<'ctx, 'g>(
                         ctx.ptr_type(AddressSpace::default()),
                         "ret_maybe_union_region",
                     )
-                    .map_err(|e| format!("wrapper maybe union region cast: {e}"))?;
+                    .map_err(|err| format!("wrapper maybe union region cast: {err}"))?;
                 let slot_value = builder
                     .build_load(slot_ty, region, "ret_maybe_union_slot")
-                    .map_err(|e| format!("wrapper maybe union load: {e}"))?;
+                    .map_err(|err| format!("wrapper maybe union load: {err}"))?;
                 slot_value
                     .as_instruction_value()
                     .ok_or("wrapper maybe union load: no instruction value")?
                     .set_alignment(8)
-                    .map_err(|e| format!("wrapper maybe union load alignment: {e}"))?;
+                    .map_err(|err| format!("wrapper maybe union load alignment: {err}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
                     .build_return(Some(&slot_value))
-                    .map_err(|e| format!("wrapper maybe union ret: {e}"))?;
+                    .map_err(|err| format!("wrapper maybe union ret: {err}"))?;
             }
             Type::Maybe { .. } => {
                 // v0.3-M7 R9: the resume fn stored the maybe envelope's (flag, bits)
@@ -8406,9 +8389,9 @@ fn reload_params_from_frame<'ctx>(
                             // `errors` union result: `ok` is a view of the frame region, rebuilt
                             // here because the view pointer died with the previous resume.
                             let ok_word = cg.crossing_union_ok_word(cname, bits)?;
-                            cg.builder
-                                .build_store(f1_ptr, ok_word)
-                                .map_err(|e| format!("reload ec union ok store {cname}: {e}"))?;
+                            cg.builder.build_store(f1_ptr, ok_word).map_err(|err| {
+                                format!("reload ec union ok store {cname}: {err}")
+                            })?;
                         } else {
                             // All other ErrorsCapable: slot N+1 holds f1 (ok-word as i64).
                             let hi_bits = state_machine::load_local_slot(
@@ -8430,9 +8413,9 @@ fn reload_params_from_frame<'ctx>(
                         // Envelope union: a view of the frame region, rebuilt because the
                         // view pointer died with the previous resume.
                         let view = cg.reload_crossing_union(cname)?;
-                        cg.builder
-                            .build_store(alloca, view)
-                            .map_err(|e| format!("sm crossing reload union store {cname}: {e}"))?;
+                        cg.builder.build_store(alloca, view).map_err(|err| {
+                            format!("sm crossing reload union store {cname}: {err}")
+                        })?;
                     } else if is_shape_embed {
                         // Shape crossing local: frame-embedded. The ptr alloca is re-wired
                         // to the frame's slot region in Step 1b on every resume call — no
@@ -10741,7 +10724,7 @@ fn load_sm_return_value_typed<'ctx>(
             let region = cg
                 .builder
                 .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_union_region"))
-                .map_err(|e| format!("sm union region cast: {e}"))?;
+                .map_err(|err| format!("sm union region cast: {err}"))?;
             let slot =
                 cg.alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{tag}_union"))?;
             cg.builder
@@ -10752,7 +10735,7 @@ fn load_sm_return_value_typed<'ctx>(
                     1,
                     cg.i64().const_int(layout.slot_size, false),
                 )
-                .map_err(|e| format!("sm union slot copy: {e}"))?;
+                .map_err(|err| format!("sm union slot copy: {err}"))?;
             Ok(cg.union_slot_to_value(slot, &variants, tag)?.into())
         }
         // A callee returning a `maybe` of an envelope union wrote its slot to the `Return` region
@@ -10768,7 +10751,7 @@ fn load_sm_return_value_typed<'ctx>(
             let region = cg
                 .builder
                 .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_maybe_union_region"))
-                .map_err(|e| format!("sm maybe union region cast: {e}"))?;
+                .map_err(|err| format!("sm maybe union region cast: {err}"))?;
             let slot = cg
                 .alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{tag}_maybe_union"))?;
             cg.builder
@@ -10779,7 +10762,7 @@ fn load_sm_return_value_typed<'ctx>(
                     1,
                     cg.i64().const_int(layout.slot_size, false),
                 )
-                .map_err(|e| format!("sm maybe union slot copy: {e}"))?;
+                .map_err(|err| format!("sm maybe union slot copy: {err}"))?;
             let view = cg.union_slot_to_value_as(slot, &variants, true, tag)?;
             Ok(cg.maybe_pair_over_view(view, tag)?.into())
         }
@@ -14906,18 +14889,18 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
                 .into()
         } else {
             let struct_ty = errors_result_type(ctx);
-            let mut r = struct_ty.const_zero();
-            r = cg
+            let mut errors_result = struct_ty.const_zero();
+            errors_result = cg
                 .builder
-                .build_insert_value(r, err_i64, 0, "rec_ret_err")
-                .map_err(|e| format!("rec_ret_err: {e}"))?
+                .build_insert_value(errors_result, err_i64, 0, "rec_ret_err")
+                .map_err(|err| format!("rec_ret_err: {err}"))?
                 .into_struct_value();
-            r = cg
+            errors_result = cg
                 .builder
-                .build_insert_value(r, ok_i64, 1, "rec_ret_ok")
-                .map_err(|e| format!("rec_ret_ok: {e}"))?
+                .build_insert_value(errors_result, ok_i64, 1, "rec_ret_ok")
+                .map_err(|err| format!("rec_ret_ok: {err}"))?
                 .into_struct_value();
-            r.into()
+            errors_result.into()
         }
     } else {
         load_sm_return_value_typed(cg, ctx, rec_frame_post, callee_name, "rec_ret")?
@@ -17511,17 +17494,17 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                             let err = cg
                                 .builder
                                 .build_extract_value(pair, 0, "sm_ec_union_err")
-                                .map_err(|e| format!("sm ec union err: {e}"))?
+                                .map_err(|err| format!("sm ec union err: {err}"))?
                                 .into_int_value();
                             let ok_bits = cg
                                 .builder
                                 .build_extract_value(pair, 1, "sm_ec_union_ok")
-                                .map_err(|e| format!("sm ec union ok: {e}"))?
+                                .map_err(|err| format!("sm ec union ok: {err}"))?
                                 .into_int_value();
                             let view = cg
                                 .builder
                                 .build_int_to_ptr(ok_bits, cg.ptr(), "sm_ec_union_view")
-                                .map_err(|e| format!("sm ec union view: {e}"))?;
+                                .map_err(|err| format!("sm ec union view: {err}"))?;
                             (err, view)
                         }
                         inkwell::values::BasicValueEnum::PointerValue(ptr)
@@ -17530,22 +17513,22 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                             let pair = cg
                                 .builder
                                 .build_load(errors_result_type(cg.ctx), ptr, "sm_ec_union_pair")
-                                .map_err(|e| format!("sm ec union pair: {e}"))?
+                                .map_err(|err| format!("sm ec union pair: {err}"))?
                                 .into_struct_value();
                             let err = cg
                                 .builder
                                 .build_extract_value(pair, 0, "sm_ec_union_pair_err")
-                                .map_err(|e| format!("sm ec union pair err: {e}"))?
+                                .map_err(|err| format!("sm ec union pair err: {err}"))?
                                 .into_int_value();
                             let ok_bits = cg
                                 .builder
                                 .build_extract_value(pair, 1, "sm_ec_union_pair_ok")
-                                .map_err(|e| format!("sm ec union pair ok: {e}"))?
+                                .map_err(|err| format!("sm ec union pair ok: {err}"))?
                                 .into_int_value();
                             let view = cg
                                 .builder
                                 .build_int_to_ptr(ok_bits, cg.ptr(), "sm_ec_union_pair_view")
-                                .map_err(|e| format!("sm ec union pair view: {e}"))?;
+                                .map_err(|err| format!("sm ec union pair view: {err}"))?;
                             (err, view)
                         }
                         inkwell::values::BasicValueEnum::PointerValue(ptr) => {
@@ -17577,7 +17560,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     let region_bits = cg
                         .builder
                         .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_ec_union_region_bits")
-                        .map_err(|e| format!("sm ec union region bits: {e}"))?;
+                        .map_err(|err| format!("sm ec union region bits: {err}"))?;
                     state_machine::store_return_value_errors(
                         cg.ctx,
                         &cg.builder,
@@ -17897,7 +17880,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                     cg.i64().const_zero(),
                                     "sm_ret_maybe_present",
                                 )
-                                .map_err(|e| format!("sm maybe union present: {e}"))?;
+                                .map_err(|err| format!("sm maybe union present: {err}"))?;
                             let view_bits = cg
                                 .builder
                                 .build_select(
@@ -17906,12 +17889,12 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                     cg.i64().const_zero(),
                                     "sm_ret_maybe_view_bits",
                                 )
-                                .map_err(|e| format!("sm maybe union view bits: {e}"))?
+                                .map_err(|err| format!("sm maybe union view bits: {err}"))?
                                 .into_int_value();
                             let view = cg
                                 .builder
                                 .build_int_to_ptr(view_bits, cg.ptr(), "sm_ret_maybe_view")
-                                .map_err(|e| format!("sm maybe union view: {e}"))?;
+                                .map_err(|err| format!("sm maybe union view: {err}"))?;
                             let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
                             let region = state_machine::frame_region_ptr(
                                 cg.ctx,
@@ -17934,7 +17917,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                     cg.ctx.i64_type(),
                                     "sm_maybe_union_ret_bits",
                                 )
-                                .map_err(|e| format!("sm maybe union ret ptr_to_int: {e}"))?;
+                                .map_err(|err| format!("sm maybe union ret ptr_to_int: {err}"))?;
                             state_machine::store_return_value_i64(
                                 cg.ctx,
                                 &cg.builder,
@@ -17996,7 +17979,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                             let region_bits = cg
                                 .builder
                                 .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_union_ret_bits")
-                                .map_err(|e| format!("sm union ret ptr_to_int: {e}"))?;
+                                .map_err(|err| format!("sm union ret ptr_to_int: {err}"))?;
                             state_machine::store_return_value_i64(
                                 cg.ctx,
                                 &cg.builder,
@@ -18088,22 +18071,22 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 val.into_pointer_value(),
                                 "ec_union_pair",
                             )
-                            .map_err(|e| format!("ec union ret load: {e}"))?
+                            .map_err(|err| format!("ec union ret load: {err}"))?
                             .into_struct_value();
                         let err = cg
                             .builder
                             .build_extract_value(pair, 0, "ec_union_pair_err")
-                            .map_err(|e| format!("ec union ret err: {e}"))?
+                            .map_err(|err| format!("ec union ret err: {err}"))?
                             .into_int_value();
                         let ok_bits = cg
                             .builder
                             .build_extract_value(pair, 1, "ec_union_pair_ok")
-                            .map_err(|e| format!("ec union ret ok: {e}"))?
+                            .map_err(|err| format!("ec union ret ok: {err}"))?
                             .into_int_value();
                         let view = cg
                             .builder
                             .build_int_to_ptr(ok_bits, cg.ptr(), "ec_union_pair_view")
-                            .map_err(|e| format!("ec union ret view: {e}"))?;
+                            .map_err(|err| format!("ec union ret view: {err}"))?;
                         (err, view)
                     } else {
                         (cg.i64().const_zero(), val.into_pointer_value())
@@ -18111,7 +18094,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     let result = cg.ec_union_result(err, view, &variants, maybe, "ec_union_ret")?;
                     cg.builder
                         .build_return(Some(&result))
-                        .map_err(|e| format!("ec union ret: {e}"))?;
+                        .map_err(|err| format!("ec union ret: {err}"))?;
                     return Ok(());
                 }
                 // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
@@ -18220,24 +18203,24 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                             cg.i64().const_zero(),
                             "ret_maybe_present",
                         )
-                        .map_err(|e| format!("maybe union ret present: {e}"))?;
+                        .map_err(|err| format!("maybe union ret present: {err}"))?;
                     let view_bits = cg
                         .builder
                         .build_select(present, bits, cg.i64().const_zero(), "ret_maybe_view_bits")
-                        .map_err(|e| format!("maybe union ret view bits: {e}"))?
+                        .map_err(|err| format!("maybe union ret view bits: {err}"))?
                         .into_int_value();
                     let view = cg
                         .builder
                         .build_int_to_ptr(view_bits, cg.ptr(), "ret_maybe_view")
-                        .map_err(|e| format!("maybe union ret view: {e}"))?;
+                        .map_err(|err| format!("maybe union ret view: {err}"))?;
                     cg.union_persist_into_as(view, scratch, &variants, true, "maybe_union_ret")?;
                     let slot_value = cg
                         .builder
                         .build_load(slot_ty, scratch, "maybe_union_ret_value")
-                        .map_err(|e| format!("maybe union ret load: {e}"))?;
+                        .map_err(|err| format!("maybe union ret load: {err}"))?;
                     cg.builder
                         .build_return(Some(&slot_value))
-                        .map_err(|e| format!("maybe union ret: {e}"))?;
+                        .map_err(|err| format!("maybe union ret: {err}"))?;
                 }
                 Type::Maybe { ref inner } => {
                     let env_ptr = val.into_pointer_value();
@@ -18284,10 +18267,10 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     let returned = cg
                         .builder
                         .build_load(slot_ty, scratch, "union_ret_value")
-                        .map_err(|e| format!("ret union load: {e}"))?;
+                        .map_err(|err| format!("ret union load: {err}"))?;
                     cg.builder
                         .build_return(Some(&returned))
-                        .map_err(|e| format!("ret union: {e}"))?;
+                        .map_err(|err| format!("ret union: {err}"))?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {
                     let ptr_v = val.into_pointer_value();
@@ -26680,25 +26663,27 @@ pub fn union_region_roles(
     };
     let mut roles: HashMap<String, Vec<(UnionRegionRole, u64)>> = HashMap::new();
     for item in &typed.module.items {
-        let Item::Function(f) = item else { continue };
-        if !f.generics.is_empty() {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if !function.generics.is_empty() {
             continue;
         }
         let mut function_roles = Vec::new();
-        let returned = match &f.return_type {
+        let returned = match &function.return_type {
             ynz_ast::nodes::Type::ErrorCapable { inner, .. } => inner.as_ref(),
             other => other,
         };
         if let Some(size) = return_slot_size(&ast_type_to_typeck_type(returned, shape_table)) {
             function_roles.push((UnionRegionRole::Return, size));
         }
-        for (index, param) in f.params.iter().enumerate() {
+        for (index, param) in function.params.iter().enumerate() {
             if let Some(size) = slot_size(&ast_type_to_typeck_type(&param.ty, shape_table)) {
                 function_roles.push((UnionRegionRole::Param(index), size));
             }
         }
         if !function_roles.is_empty() {
-            roles.insert(f.name.clone(), function_roles);
+            roles.insert(function.name.clone(), function_roles);
         }
     }
     roles
