@@ -1,0 +1,23 @@
+// v0.3-M9 C6 fixture: `.copy()` of a `fixed<Tag>` owns a copy of every item. A fixed list holds a
+// heap cell per shape, so a copy that shares the cells has two lists releasing one cell.
+// Counted allocations: `first` and `second` each own 1 string (`a-1`, `b-2`) moved into their
+// literals, and the list's literal moves a heap cell for each: 2 cells. `value.copy()` gives the
+// twin 2 cells of its own and a copy of each name: 2 cells, 2 strings. Total 4 counted
+// allocations and 4 heap strings. Before the deep copy the twin shared the original's 2 cells and
+// 2 names: 2 and 2.
+// Expected output: the two names the lists hold.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let first: Tag = { name: `a-${1}`, id: 1 }
+  let second: Tag = { name: `b-${2}`, id: 2 }
+  let fallback: Tag = { name: `none`, id: 0 }
+  let value: fixed<Tag> = [first, second]
+  let twin = value.copy()
+  print(value[0].or(fallback).name)
+  print(twin[1].or(fallback).name)
+}

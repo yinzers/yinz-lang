@@ -59,3 +59,37 @@ deep_case!(
     4,
     "a shape stored at its last use is copied deep anyway, paying one array per move where Rust moves for free (High: Golden Rule 8 cost)"
 );
+
+/// Bug: `fixed<Tag>.copy()` copies the block of cells and shares every heap cell and name in it,
+/// so the twin and the original hold the same `Tag`s and releasing both frees them twice (High:
+/// data integrity). The copy must allocate 2 cells and 2 names of its own.
+mod fixed_shape_copy_owns_its_items {
+    use crate::support::{assert_asan_clean_and_prints, build, run_counted};
+
+    const FIXTURE: &str = "v0_3_m9_c6_fixed_shape_copy.ynz";
+    const EXPECTED: &str = "a-1\nb-2\n";
+
+    #[test]
+    fn counted_allocations() {
+        let built = build(FIXTURE, false);
+        let (output, counters) = run_counted(&built);
+        assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
+        assert_eq!(output.stdout, EXPECTED);
+        assert_eq!(
+            (counters.alloc, counters.string_alloc),
+            (4, 5),
+            "expected 4 counted allocations (2 cells for the list, 2 for its copy) and 5 heap \
+             strings (`a-1`, `b-2`, `none`, and a copy of each name): {counters:?}"
+        );
+    }
+
+    #[test]
+    fn asan_optimized() {
+        assert_asan_clean_and_prints(FIXTURE, false, EXPECTED);
+    }
+
+    #[test]
+    fn asan_no_optimize() {
+        assert_asan_clean_and_prints(FIXTURE, true, EXPECTED);
+    }
+}

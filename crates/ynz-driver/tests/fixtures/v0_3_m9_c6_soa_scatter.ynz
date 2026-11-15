@@ -1,0 +1,100 @@
+// v0.3-M9 C6 fixture: the SoA scatter of `pts[0] = ...` frees the strings of the element it
+// replaces, as the array `set` of an AoS array does (one release path for an overwritten shape
+// element).
+// `pts` is a 72-element literal (above the SoA size threshold) whose only use is the hot loop
+// reading `name` and `x`, so it is admitted as SoA. Each of the 72 names is a heap string
+// (`n-<index>`, moved into its literal): 72 allocated. The assignment's value allocates its own
+// name (`z-9`): 73 allocated. Writing it over element 0 releases `n-0`: 1 released. Nothing else
+// releases a local's strings until the scope-exit pass (C7).
+// Expected output: the hot loop's sum of `x` and the sum of the name lengths.
+
+shape Part {
+  name: string
+  x: int
+}
+
+function entrypoint() -> nothing {
+  let pts: array<Part> = [
+    { name: `n-${0}`, x: 0 },
+    { name: `n-${1}`, x: 1 },
+    { name: `n-${2}`, x: 2 },
+    { name: `n-${3}`, x: 3 },
+    { name: `n-${4}`, x: 4 },
+    { name: `n-${5}`, x: 5 },
+    { name: `n-${6}`, x: 6 },
+    { name: `n-${7}`, x: 7 },
+    { name: `n-${8}`, x: 8 },
+    { name: `n-${9}`, x: 9 },
+    { name: `n-${10}`, x: 10 },
+    { name: `n-${11}`, x: 11 },
+    { name: `n-${12}`, x: 12 },
+    { name: `n-${13}`, x: 13 },
+    { name: `n-${14}`, x: 14 },
+    { name: `n-${15}`, x: 15 },
+    { name: `n-${16}`, x: 16 },
+    { name: `n-${17}`, x: 17 },
+    { name: `n-${18}`, x: 18 },
+    { name: `n-${19}`, x: 19 },
+    { name: `n-${20}`, x: 20 },
+    { name: `n-${21}`, x: 21 },
+    { name: `n-${22}`, x: 22 },
+    { name: `n-${23}`, x: 23 },
+    { name: `n-${24}`, x: 24 },
+    { name: `n-${25}`, x: 25 },
+    { name: `n-${26}`, x: 26 },
+    { name: `n-${27}`, x: 27 },
+    { name: `n-${28}`, x: 28 },
+    { name: `n-${29}`, x: 29 },
+    { name: `n-${30}`, x: 30 },
+    { name: `n-${31}`, x: 31 },
+    { name: `n-${32}`, x: 32 },
+    { name: `n-${33}`, x: 33 },
+    { name: `n-${34}`, x: 34 },
+    { name: `n-${35}`, x: 35 },
+    { name: `n-${36}`, x: 36 },
+    { name: `n-${37}`, x: 37 },
+    { name: `n-${38}`, x: 38 },
+    { name: `n-${39}`, x: 39 },
+    { name: `n-${40}`, x: 40 },
+    { name: `n-${41}`, x: 41 },
+    { name: `n-${42}`, x: 42 },
+    { name: `n-${43}`, x: 43 },
+    { name: `n-${44}`, x: 44 },
+    { name: `n-${45}`, x: 45 },
+    { name: `n-${46}`, x: 46 },
+    { name: `n-${47}`, x: 47 },
+    { name: `n-${48}`, x: 48 },
+    { name: `n-${49}`, x: 49 },
+    { name: `n-${50}`, x: 50 },
+    { name: `n-${51}`, x: 51 },
+    { name: `n-${52}`, x: 52 },
+    { name: `n-${53}`, x: 53 },
+    { name: `n-${54}`, x: 54 },
+    { name: `n-${55}`, x: 55 },
+    { name: `n-${56}`, x: 56 },
+    { name: `n-${57}`, x: 57 },
+    { name: `n-${58}`, x: 58 },
+    { name: `n-${59}`, x: 59 },
+    { name: `n-${60}`, x: 60 },
+    { name: `n-${61}`, x: 61 },
+    { name: `n-${62}`, x: 62 },
+    { name: `n-${63}`, x: 63 },
+    { name: `n-${64}`, x: 64 },
+    { name: `n-${65}`, x: 65 },
+    { name: `n-${66}`, x: 66 },
+    { name: `n-${67}`, x: 67 },
+    { name: `n-${68}`, x: 68 },
+    { name: `n-${69}`, x: 69 },
+    { name: `n-${70}`, x: 70 },
+    { name: `n-${71}`, x: 71 }
+  ]
+  pts[0] = { name: `z-${9}`, x: 100 }
+  let total: int = 0
+  let longest: int = 0
+  for (part in pts) {
+    total = total + part.x
+    longest = longest + part.name.count()
+  }
+  print(total)
+  print(longest)
+}

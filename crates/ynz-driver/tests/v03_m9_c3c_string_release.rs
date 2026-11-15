@@ -115,3 +115,21 @@ release_case!(
     2,
     "`tag.name = ...` stores over a string field without freeing it, so every assignment leaks the old bytes (High)"
 );
+
+release_case!(
+    field_assign_from_the_same_field_copies_before_it_releases,
+    "v0_3_m9_c3c_field_self_assign.ynz",
+    "x-1\n",
+    2,
+    1,
+    "`tag.name = tag.name` releases the old string and only then copies it, reading freed bytes (High)"
+);
+
+release_case!(
+    soa_scatter_frees_the_replaced_elements_strings,
+    "v0_3_m9_c6_soa_scatter.ynz",
+    "2656\n278\n",
+    73,
+    1,
+    "`pts[0] = ...` on a SoA array writes each field segment over the old element's without freeing its strings, while the same assignment on an AoS array frees them (High)"
+);

@@ -233,6 +233,17 @@ release_cases!(
 );
 
 release_cases!(
+    fixed_of_shapes,
+    "a `fixed<Tag>` copy shares the original's heap cells and strings, so the task's release frees what the spawner still holds, or the helper refuses the type (High)",
+    Case {
+        declarations: TAG,
+        value_type: "fixed<Tag>",
+        setup: "  let first: Tag = { name: `a`, id: 1 }\n  let second: Tag = { name: `b`, id: 2 }\n  let fallback: Tag = { name: `none`, id: 0 }\n  let value: fixed<Tag> = [first, second]\n",
+        read: "  print(value[0].or(fallback).id)\n",
+    }
+);
+
+release_cases!(
     shape_with_a_union_field,
     "a shape's union slot copy (string variant) is shared with the original or never freed (High)",
     Case {
