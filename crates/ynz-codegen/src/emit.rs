@@ -1853,7 +1853,8 @@ fn declare_function<'ctx>(
         // M7 P4a: errors-capable functions return `{i64 error_ptr, i64 success_val}`.
         // field 0 = error pointer (0 = success, non-zero = *YnzError)
         // field 1 = success value as i64 (valid only when field 0 = 0)
-        let result_ty = errors_result_type(ctx);
+        let success_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+        let result_ty = ec_result_type(ctx, shape_types, &success_ty)?;
         result_ty.fn_type(&params, false)
     } else {
         // The return ABI comes from the ONE authoritative mapping (`abi_return_type`,
@@ -1931,6 +1932,38 @@ fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
     ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
 }
 
+/// The LLVM struct an `errors` function RETURNS, by its success type (C1f, #423).
+///
+/// - an envelope union (a union with a shape variant): `{ i64 err, <slot> }`, the success value
+///   as the union's inline slot (`UnionLayout`), so a call allocates nothing and the caller
+///   reads nothing from the callee's frame;
+/// - everything else: `{ i64 err, i64 ok }` (`errors_result_type`).
+///
+/// Inside a function an `errors` VALUE is always the standard `{ err, ok }` pair (`ok` for a
+/// union is the view pointer a union value is everywhere): `ec_union_result_to_standard` converts
+/// at the call boundary, `ec_union_result` builds the slot form at the `return`.
+///
+/// Time: O(v) for v variants  Space: O(1)
+fn ec_result_type<'ctx>(
+    ctx: &'ctx Context,
+    shape_types: &ShapeLlvmTypes<'ctx>,
+    success: &Type,
+) -> Result<inkwell::types::StructType<'ctx>, String> {
+    match success {
+        union @ Type::Union { variants } if ynz_typeck::check::is_envelope_union(union) => {
+            let layout = shape_types.union_layout(variants)?;
+            Ok(ctx.struct_type(
+                &[
+                    ctx.i64_type().into(),
+                    shape_types.union_slot_llvm(ctx, &layout).into(),
+                ],
+                false,
+            ))
+        }
+        _ => Ok(errors_result_type(ctx)),
+    }
+}
+
 /// The ONE C-ABI return-type mapping for user functions (v0.3-M7 Phase 3, R9/FRAGO 005).
 ///
 /// Consumed by ALL THREE declaration sites — local `declare_function`, the imported-fn
@@ -1973,7 +2006,7 @@ fn abi_return_type<'ctx>(
         Type::Float => Some(ctx.f64_type().into()),
         Type::Bool => Some(ctx.bool_type().into()),
         Type::Number { precision } if *precision <= 34 => Some(ctx.i128_type().into()),
-        Type::ErrorsCapable { .. } => Some(errors_result_type(ctx).into()),
+        Type::ErrorsCapable { inner } => Some(ec_result_type(ctx, shape_types, inner)?.into()),
         Type::Maybe { .. } => Some(
             ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
                 .into(),
@@ -4866,6 +4899,239 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_pointer_value())
     }
 
+    /// The variants of the union a call to the `errors` function `callee` yields on success, when
+    /// that success type is an envelope union: such a callee returns its slot by value
+    /// (`ec_result_type`) and a suspending one a `Return` region address, so a caller converts the
+    /// result at the call boundary (`ec_union_result_to_standard`, `ec_region_to_standard`).
+    ///
+    /// Time: O(f) for f items in the module  Space: O(v)
+    fn callee_ec_union_variants(&self, callee: &str) -> Option<Vec<Type>> {
+        let success = self
+            .typed
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == callee && function.errors_capable => {
+                    Some(ast_type_to_typeck_type(
+                        &function.return_type,
+                        self.shape_table,
+                    ))
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                self.imported_fns
+                    .get(callee)
+                    .and_then(|sig| match &sig.ret {
+                        Type::ErrorsCapable { inner } => Some((**inner).clone()),
+                        _ => None,
+                    })
+            })?;
+        self.envelope_union_variants(&success)
+    }
+
+    /// The LLVM struct the CURRENT (non-suspending) `errors` function returns
+    /// (`ec_result_type` of its success type).
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn ec_result_llvm(&self) -> Result<inkwell::types::StructType<'ctx>, String> {
+        match self.union_return_slot_ty() {
+            Some(success) => ec_result_type(self.ctx, self.shape_types, &success),
+            None => Ok(errors_result_type(self.ctx)),
+        }
+    }
+
+    /// Persist the union value `view` into the slot `dst` only when `err` is 0: on a failed call
+    /// the success word is not a union value (it is 0), so it is never read.
+    ///
+    /// Time: O(1) + one memmove of the variant's size  Space: O(1)
+    fn union_persist_if_ok(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        view: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<(), String> {
+        let present_bb = self.append_block(&format!("{site}_present"));
+        let join_bb = self.append_block(&format!("{site}_join"));
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{site}_is_ok"),
+            )
+            .map_err(|e| format!("{site}: err compare: {e}"))?;
+        self.builder
+            .build_conditional_branch(is_ok, present_bb, join_bb)
+            .map_err(|e| format!("{site}: branch: {e}"))?;
+        self.builder.position_at_end(present_bb);
+        self.union_persist_into(view, dst, variants, site)?;
+        self.builder
+            .build_unconditional_branch(join_bb)
+            .map_err(|e| format!("{site}: present->join: {e}"))?;
+        self.builder.position_at_end(join_bb);
+        Ok(())
+    }
+
+    /// Build the by-value result `{ err, slot }` of an `errors` function whose success type is
+    /// the union `variants`: the slot holds `view`'s value (payload inline) when `err` is 0 and
+    /// stays zero otherwise (`view` is not a union value then, so it is never read).
+    ///
+    /// Time: O(1) + one memmove of the variant's size  Space: O(1) entry-block scratch slot
+    fn ec_union_result(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        view: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let scratch = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
+        self.builder
+            .build_store(scratch, slot_ty.const_zero())
+            .map_err(|e| format!("{site}: zero the result slot: {e}"))?;
+        self.union_persist_if_ok(err, view, scratch, variants, site)?;
+        let slot = self
+            .builder
+            .build_load(slot_ty, scratch, &format!("{site}_slot_value"))
+            .map_err(|e| format!("{site}: load the result slot: {e}"))?;
+        let result_ty = ec_result_type(
+            self.ctx,
+            self.shape_types,
+            &Type::Union {
+                variants: variants.to_vec(),
+            },
+        )?;
+        let with_err = self
+            .builder
+            .build_insert_value(result_ty.const_zero(), err, 0, &format!("{site}_err"))
+            .map_err(|e| format!("{site}: insert err: {e}"))?
+            .into_struct_value();
+        Ok(self
+            .builder
+            .build_insert_value(with_err, slot, 1, &format!("{site}_val"))
+            .map_err(|e| format!("{site}: insert slot: {e}"))?
+            .into_struct_value())
+    }
+
+    /// Turn the by-value result `{ err, slot }` of a call to an `errors` function whose success
+    /// type is the union `variants` into the standard `{ err, ok }` pair, `ok` the view pointer of
+    /// a caller-owned copy of the slot, so `.failed()`, `.or(...)`, auto-propagation and every
+    /// use of the binding read it like any other `errors` value.
+    ///
+    /// Time: O(v) for v shape variants  Space: O(1) entry-block slot and view
+    fn ec_union_result_to_standard(
+        &self,
+        result: inkwell::values::StructValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let err = self
+            .builder
+            .build_extract_value(result, 0, &format!("{site}_err"))
+            .map_err(|e| format!("{site}: extract err: {e}"))?
+            .into_int_value();
+        let slot_value = self
+            .builder
+            .build_extract_value(result, 1, &format!("{site}_slot_value"))
+            .map_err(|e| format!("{site}: extract slot: {e}"))?;
+        let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
+        self.builder
+            .build_store(slot, slot_value)
+            .map_err(|e| format!("{site}: store the result slot: {e}"))?;
+        self.ec_standard_over_slot(err, slot, variants, site)
+    }
+
+    /// Build the standard `{ err, ok }` pair whose `ok` is the view pointer of the union slot at
+    /// `slot`.
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn ec_standard_over_slot(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        slot: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let view = self.union_slot_to_value(slot, variants, site)?;
+        let ok_bits = self
+            .builder
+            .build_ptr_to_int(view, self.i64(), &format!("{site}_ok_bits"))
+            .map_err(|e| format!("{site}: view bits: {e}"))?;
+        let standard = errors_result_type(self.ctx);
+        let with_err = self
+            .builder
+            .build_insert_value(standard.const_zero(), err, 0, &format!("{site}_std_err"))
+            .map_err(|e| format!("{site}: insert err: {e}"))?
+            .into_struct_value();
+        Ok(self
+            .builder
+            .build_insert_value(with_err, ok_bits, 1, &format!("{site}_std_ok"))
+            .map_err(|e| format!("{site}: insert ok: {e}"))?
+            .into_struct_value())
+    }
+
+    /// The suspending-callee face of `ec_union_result_to_standard`: the return slot's success
+    /// word is the address of the callee frame's `Return` union region (0 when the call failed).
+    /// Copy the slot out into a caller-owned one (the child frame is freed or reused after this
+    /// read) and return the standard `{ err, ok }` pair over the copy.
+    ///
+    /// Time: O(v) + one memcpy of the slot  Space: O(1) entry-block slot and view
+    fn ec_region_to_standard(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        region_bits: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
+        self.builder
+            .build_store(slot, slot_ty.const_zero())
+            .map_err(|e| format!("{site}: zero the copied slot: {e}"))?;
+        let copy_bb = self.append_block(&format!("{site}_copy"));
+        let join_bb = self.append_block(&format!("{site}_copied"));
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{site}_is_ok"),
+            )
+            .map_err(|e| format!("{site}: err compare: {e}"))?;
+        self.builder
+            .build_conditional_branch(is_ok, copy_bb, join_bb)
+            .map_err(|e| format!("{site}: branch: {e}"))?;
+        self.builder.position_at_end(copy_bb);
+        let region = self
+            .builder
+            .build_int_to_ptr(region_bits, self.ptr(), &format!("{site}_region"))
+            .map_err(|e| format!("{site}: region cast: {e}"))?;
+        self.builder
+            .build_memcpy(
+                slot,
+                1,
+                region,
+                1,
+                self.i64().const_int(layout.slot_size, false),
+            )
+            .map_err(|e| format!("{site}: copy the slot: {e}"))?;
+        self.builder
+            .build_unconditional_branch(join_bb)
+            .map_err(|e| format!("{site}: copy->join: {e}"))?;
+        self.builder.position_at_end(join_bb);
+        self.ec_standard_over_slot(err, slot, variants, site)
+    }
+
     /// Read the `tag` word of a non-null union envelope `{i64 tag, i64 data}`.
     ///
     /// Time: O(1)  Space: O(1)
@@ -5847,7 +6113,7 @@ fn lower_function<'ctx, 'g>(
             cg.builder
                 .build_call(cg.rt.ynz_frame_pop, &[], "ec_pop_implicit")
                 .map_err(|e| format!("frame_pop: {e}"))?;
-            let zero_result = errors_result_type(ctx).const_zero();
+            let zero_result = cg.ec_result_llvm()?.const_zero();
             cg.builder
                 .build_return(Some(&zero_result))
                 .map_err(|e| format!("implicit ec ret: {e}"))?;
@@ -7044,6 +7310,74 @@ fn lower_function_with_waits<'ctx, 'g>(
         // no staging slot is involved, so the two-step read-then-free is safe as-is.
         let (err_i64, mut ok_i64) =
             state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+
+        // C1f (#423): an envelope union success value is the slot in the frame's `Return`
+        // region (the ok word is its address, 0 on a failed call). The wrapper returns the
+        // by-value `{ err, slot }` (`ec_result_type`), copying the slot out before the frame is
+        // freed.
+        if let Type::Union { variants } = &ret_ty {
+            if ynz_typeck::check::is_envelope_union(&ret_ty) {
+                let layout = shape_types.union_layout(variants)?;
+                let slot_ty = shape_types.union_slot_llvm(ctx, &layout);
+                let result_ty = ec_result_type(ctx, shape_types, &ret_ty)?;
+                let slot = builder
+                    .build_alloca(slot_ty, "wrap_ec_union_slot")
+                    .map_err(|e| format!("ec wrapper union slot: {e}"))?;
+                builder
+                    .build_store(slot, slot_ty.const_zero())
+                    .map_err(|e| format!("ec wrapper union zero: {e}"))?;
+                let is_ok = builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err_i64,
+                        ctx.i64_type().const_zero(),
+                        "wrap_ec_union_isok",
+                    )
+                    .map_err(|e| format!("ec wrapper union isok: {e}"))?;
+                let copy_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_union_copy");
+                let merge_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_union_merge");
+                builder
+                    .build_conditional_branch(is_ok, copy_bb, merge_bb)
+                    .map_err(|e| format!("ec wrapper union branch: {e}"))?;
+                builder.position_at_end(copy_bb);
+                let region = builder
+                    .build_int_to_ptr(
+                        ok_i64,
+                        ctx.ptr_type(AddressSpace::default()),
+                        "wrap_ec_union_region",
+                    )
+                    .map_err(|e| format!("ec wrapper union region: {e}"))?;
+                builder
+                    .build_memcpy(
+                        slot,
+                        1,
+                        region,
+                        1,
+                        ctx.i64_type().const_int(layout.slot_size, false),
+                    )
+                    .map_err(|e| format!("ec wrapper union copy: {e}"))?;
+                builder
+                    .build_unconditional_branch(merge_bb)
+                    .map_err(|e| format!("ec wrapper union copy->merge: {e}"))?;
+                builder.position_at_end(merge_bb);
+                let slot_value = builder
+                    .build_load(slot_ty, slot, "wrap_ec_union_value")
+                    .map_err(|e| format!("ec wrapper union load: {e}"))?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                let with_err = builder
+                    .build_insert_value(result_ty.const_zero(), err_i64, 0, "wrap_ec_union_err")
+                    .map_err(|e| format!("ec wrapper union err: {e}"))?
+                    .into_struct_value();
+                let result = builder
+                    .build_insert_value(with_err, slot_value, 1, "wrap_ec_union_ok")
+                    .map_err(|e| format!("ec wrapper union ok: {e}"))?
+                    .into_struct_value();
+                builder
+                    .build_return(Some(&result))
+                    .map_err(|e| format!("ec wrapper union ret: {e}"))?;
+                return Ok(());
+            }
+        }
 
         // `-> number errors`: copy the i128 out of the staging slot before freeing the frame.
         let is_number_errors_inner =
@@ -9965,6 +10299,12 @@ fn load_sm_return_value_typed<'ctx>(
     if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+        // C1f (#423): a union success word is the address of the callee frame's `Return` region.
+        if let Some(variants) = cg.callee_ec_union_variants(callee_name) {
+            return Ok(cg
+                .ec_region_to_standard(err_i64, ok_i64, &variants, tag)?
+                .into());
+        }
         let struct_ty = errors_result_type(ctx);
         let mut result = struct_ty.const_zero();
         result = cg
@@ -13705,6 +14045,11 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     if is_errors_capable_fn(cg.typed, cg.imported_fns, &callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, child_frame_post)?;
+        if let Some(variants) = cg.callee_ec_union_variants(&callee_name) {
+            return Ok(cg
+                .ec_region_to_standard(err_i64, ok_i64, &variants, "child_ret")?
+                .into());
+        }
         let struct_ty = errors_result_type(ctx);
         let mut result = struct_ty.const_zero();
         result = cg
@@ -14075,19 +14420,26 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     let ret_val = if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, rec_frame_post)?;
-        let struct_ty = errors_result_type(ctx);
-        let mut r = struct_ty.const_zero();
-        r = cg
-            .builder
-            .build_insert_value(r, err_i64, 0, "rec_ret_err")
-            .map_err(|e| format!("rec_ret_err: {e}"))?
-            .into_struct_value();
-        r = cg
-            .builder
-            .build_insert_value(r, ok_i64, 1, "rec_ret_ok")
-            .map_err(|e| format!("rec_ret_ok: {e}"))?
-            .into_struct_value();
-        r.into()
+        if let Some(variants) = cg.callee_ec_union_variants(callee_name) {
+            // C1f (#423): copy the slot out of the child's `Return` region before the heap frame
+            // is freed below.
+            cg.ec_region_to_standard(err_i64, ok_i64, &variants, "rec_ret")?
+                .into()
+        } else {
+            let struct_ty = errors_result_type(ctx);
+            let mut r = struct_ty.const_zero();
+            r = cg
+                .builder
+                .build_insert_value(r, err_i64, 0, "rec_ret_err")
+                .map_err(|e| format!("rec_ret_err: {e}"))?
+                .into_struct_value();
+            r = cg
+                .builder
+                .build_insert_value(r, ok_i64, 1, "rec_ret_ok")
+                .map_err(|e| format!("rec_ret_ok: {e}"))?
+                .into_struct_value();
+            r.into()
+        }
     } else {
         load_sm_return_value_typed(cg, ctx, rec_frame_post, callee_name, "rec_ret")?
     };
@@ -16659,26 +17011,95 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 )?;
             }
             Some(expr) => {
-                let mut val = lower_expr(cg, expr)?;
+                let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
-                // A union return value rides the 16-byte return slot BY VALUE (below). Only the
-                // `errors` result's 8-byte ok word cannot hold the pair, so that one case keeps
-                // the heap home (`home_union_on_heap`, `Return`).
-                if let (Some(union_ty), Type::ErrorsCapable { .. }) =
-                    (cg.union_return_slot_ty(), cg.resolve_type(&ret_ty))
-                {
-                    val = cg.home_union_on_heap(
-                        expr,
-                        val,
-                        &union_ty,
-                        EnvelopeHome::Return,
-                        "sm_union_ret",
-                    )?;
-                }
+                // C1f (#423): an `errors` function whose success value is an envelope union
+                // writes the slot, payload inline, into its frame's `Return` region and puts the
+                // region's address in the result's ok word (`ec_region_to_standard` reads it).
+                // The value is the success union itself, or an `errors` result carrying one.
+                let ec_union_variants = match cg.resolve_type(&ret_ty) {
+                    Type::ErrorsCapable { .. } => cg
+                        .union_return_slot_ty()
+                        .and_then(|union_ty| cg.envelope_union_variants(&union_ty)),
+                    _ => None,
+                };
                 // Detect errors-capable return: the Yinz return type is ErrorsCapable, OR
                 // the actual value is a struct (from __testFallibleAsync or a nested SM errors call).
                 let is_ec_return = matches!(val, inkwell::values::BasicValueEnum::StructValue(_));
-                if is_ec_return {
+                if let Some(variants) = ec_union_variants {
+                    let (err_i64, view) = match val {
+                        inkwell::values::BasicValueEnum::StructValue(pair) => {
+                            let err = cg
+                                .builder
+                                .build_extract_value(pair, 0, "sm_ec_union_err")
+                                .map_err(|e| format!("sm ec union err: {e}"))?
+                                .into_int_value();
+                            let ok_bits = cg
+                                .builder
+                                .build_extract_value(pair, 1, "sm_ec_union_ok")
+                                .map_err(|e| format!("sm ec union ok: {e}"))?
+                                .into_int_value();
+                            let view = cg
+                                .builder
+                                .build_int_to_ptr(ok_bits, cg.ptr(), "sm_ec_union_view")
+                                .map_err(|e| format!("sm ec union view: {e}"))?;
+                            (err, view)
+                        }
+                        inkwell::values::BasicValueEnum::PointerValue(ptr)
+                            if matches!(val_ty, Type::ErrorsCapable { .. }) =>
+                        {
+                            let pair = cg
+                                .builder
+                                .build_load(errors_result_type(cg.ctx), ptr, "sm_ec_union_pair")
+                                .map_err(|e| format!("sm ec union pair: {e}"))?
+                                .into_struct_value();
+                            let err = cg
+                                .builder
+                                .build_extract_value(pair, 0, "sm_ec_union_pair_err")
+                                .map_err(|e| format!("sm ec union pair err: {e}"))?
+                                .into_int_value();
+                            let ok_bits = cg
+                                .builder
+                                .build_extract_value(pair, 1, "sm_ec_union_pair_ok")
+                                .map_err(|e| format!("sm ec union pair ok: {e}"))?
+                                .into_int_value();
+                            let view = cg
+                                .builder
+                                .build_int_to_ptr(ok_bits, cg.ptr(), "sm_ec_union_pair_view")
+                                .map_err(|e| format!("sm ec union pair view: {e}"))?;
+                            (err, view)
+                        }
+                        inkwell::values::BasicValueEnum::PointerValue(ptr) => {
+                            (cg.i64().const_zero(), ptr)
+                        }
+                        other => {
+                            return Err(format!(
+                                "codegen: an `errors` union return produced `{other:?}`, neither \
+                                 a union value nor an errors result; this is a compiler bug"
+                            ))
+                        }
+                    };
+                    let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
+                    let region = state_machine::frame_region_ptr(
+                        cg.ctx,
+                        &cg.builder,
+                        frame_ptr,
+                        region_offset,
+                        "sm_ec_union_region",
+                    )?;
+                    cg.union_persist_if_ok(err_i64, view, region, &variants, "sm_ec_union_ret")?;
+                    let region_bits = cg
+                        .builder
+                        .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_ec_union_region_bits")
+                        .map_err(|e| format!("sm ec union region bits: {e}"))?;
+                    state_machine::store_return_value_errors(
+                        cg.ctx,
+                        &cg.builder,
+                        frame_ptr,
+                        err_i64,
+                        region_bits,
+                    )?;
+                } else if is_ec_return {
                     // errors-capable return: val may be {i64, i64} struct (unauto-propagated),
                     // OR an IntValue (auto-propagated success value after `.failed()` narrowing).
                     match val {
@@ -17092,27 +17513,56 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         match value {
             None => {
                 // `-> nothing errors` function returning without a value.
-                let zero_result = errors_result_type(cg.ctx).const_zero();
+                let zero_result = cg.ec_result_llvm()?.const_zero();
                 cg.builder
                     .build_return(Some(&zero_result))
                     .map_err(|e| format!("ec void ret: {e}"))?;
             }
             Some(expr) => {
-                let mut val = lower_expr(cg, expr)?;
-                let mut val_ty = cg.expr_type(expr);
-                // A union success value's envelope must not live in this frame
-                // (`home_union_on_heap`, `Return` home); the coerced value IS a union.
-                if let Some(union_ty) = cg.union_return_slot_ty() {
-                    val = cg.home_union_on_heap(
-                        expr,
-                        val,
-                        &union_ty,
-                        EnvelopeHome::Return,
-                        "ec_union_ret",
-                    )?;
-                    if !matches!(val_ty, Type::ErrorsCapable { .. }) {
-                        val_ty = union_ty;
-                    }
+                let val = lower_expr(cg, expr)?;
+                let val_ty = cg.expr_type(expr);
+                // C1f (#423): an envelope union success value returns BY VALUE as the result's
+                // slot (`ec_result_type`), payload inline, so neither this frame's envelope nor a
+                // payload in this frame is read after `ret`. An `errors` value (a call result or
+                // an `errors` local returned as it is) is the standard `{ err, ok = view }` pair:
+                // its error passes through and its view is copied into the slot.
+                if let Some(variants) = cg
+                    .union_return_slot_ty()
+                    .and_then(|union_ty| cg.envelope_union_variants(&union_ty))
+                {
+                    let (err, view) = if matches!(val_ty, Type::ErrorsCapable { .. }) {
+                        let pair = cg
+                            .builder
+                            .build_load(
+                                errors_result_type(cg.ctx),
+                                val.into_pointer_value(),
+                                "ec_union_pair",
+                            )
+                            .map_err(|e| format!("ec union ret load: {e}"))?
+                            .into_struct_value();
+                        let err = cg
+                            .builder
+                            .build_extract_value(pair, 0, "ec_union_pair_err")
+                            .map_err(|e| format!("ec union ret err: {e}"))?
+                            .into_int_value();
+                        let ok_bits = cg
+                            .builder
+                            .build_extract_value(pair, 1, "ec_union_pair_ok")
+                            .map_err(|e| format!("ec union ret ok: {e}"))?
+                            .into_int_value();
+                        let view = cg
+                            .builder
+                            .build_int_to_ptr(ok_bits, cg.ptr(), "ec_union_pair_view")
+                            .map_err(|e| format!("ec union ret view: {e}"))?;
+                        (err, view)
+                    } else {
+                        (cg.i64().const_zero(), val.into_pointer_value())
+                    };
+                    let result = cg.ec_union_result(err, view, &variants, "ec_union_ret")?;
+                    cg.builder
+                        .build_return(Some(&result))
+                        .map_err(|e| format!("ec union ret: {e}"))?;
+                    return Ok(());
                 }
                 // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
                 // pointer into the callee's own stack. maybe / shape / number
@@ -17948,6 +18398,17 @@ fn lower_expr_node<'ctx>(
                                 format!("errors-capable call `{effective_name}` returned void")
                             })?
                             .into_struct_value();
+                        // C1f (#423): a union success value comes back as the slot; hand the
+                        // rest of the lowering the standard `{ err, ok = view }` pair over a
+                        // caller-owned copy.
+                        let result_struct = match cg.callee_ec_union_variants(&effective_name) {
+                            Some(variants) => cg.ec_union_result_to_standard(
+                                result_struct,
+                                &variants,
+                                "ec_call_union",
+                            )?,
+                            None => result_struct,
+                        };
                         return lower_errors_capable_call_result(
                             cg,
                             result_struct,

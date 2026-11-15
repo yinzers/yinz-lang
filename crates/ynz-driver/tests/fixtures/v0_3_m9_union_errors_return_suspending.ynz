@@ -1,0 +1,65 @@
+// v0.3-M9 C1f (#423): a union returned from a SUSPENDING `errors` function. The resume function
+// writes the slot into the callee frame's `Return` region and puts that region's address in the
+// result's success word; the waiting caller copies the slot out before the child frame is
+// freed. Covers a shape variant, a plain variant and a call that failed.
+// Correct behavior: each result names the variant that was returned (`failed` for the call that
+// failed), clean under AddressSanitizer at both optimization levels.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label} ${t.count}`
+    }
+  }
+  return `none`
+}
+
+function slowBig(count: int) -> Thing errors {
+  wait sleep(1)
+  let big: Big = { label: `slow`, count: count }
+  return big
+}
+
+function slowTiny() -> Thing errors {
+  wait sleep(1)
+  let tiny: Tiny = { flag: true }
+  return tiny
+}
+
+function slowFailing() -> Thing errors {
+  let value = wait __testFallibleAsync(true)
+  let tiny: Tiny = { flag: value > 0 }
+  return tiny
+}
+
+function clobber(depth: int) -> int {
+  let filler: Big = { label: `filler`, count: depth }
+  return filler.count
+}
+
+function entrypoint() -> nothing {
+  let first = slowBig(5)
+  let second = slowTiny()
+  let third = slowFailing()
+  let ignored = clobber(7)
+  let fallback: Tiny = { flag: false }
+  let fallbackThing: Thing = fallback
+  print(describe(first.or(fallbackThing)))
+  print(describe(second.or(fallbackThing)))
+  if (third.failed()) {
+    print(`failed`)
+  }
+  print(`end`)
+}

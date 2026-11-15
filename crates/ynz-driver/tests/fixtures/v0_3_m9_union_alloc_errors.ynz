@@ -1,0 +1,43 @@
+// v0.3-M9 C1f (#423): a union returned from an `errors` function allocates NOTHING, however
+// often it is called: the result carries the slot by value.
+// Correct behavior: the heap allocation count is the same for 3 calls and for 300 (here: the
+// count the counter test pins).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> int {
+  if (t) {
+    is Tiny => {
+      return 0
+    }
+    is Big => {
+      return t.count
+    }
+  }
+  return -1
+}
+
+function makeBig(count: int) -> Thing errors {
+  let big: Big = { label: `made`, count: count }
+  return big
+}
+
+function entrypoint() -> nothing {
+  let fallback: Tiny = { flag: false }
+  let fallbackThing: Thing = fallback
+  let total = 0
+  let round = 0
+  while (round < 300) {
+    let made = makeBig(round)
+    total = total + describe(made.or(fallbackThing))
+    round = round + 1
+  }
+  print(total)
+}

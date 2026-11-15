@@ -208,3 +208,26 @@ fn v03_m9_union_background_arg_asan_no_optimize() {
         "big spawned 7\nend\n",
     );
 }
+
+// Bug caught: an `errors` result's 8-byte success word cannot hold a union slot; the value used to
+// ride heap cells and, if re-pointed at the callee's frame, would dangle. The result carries the
+// slot by value. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_errors_return.ynz",
+    "big made 1\ntiny\nbig source 2\nbig made 4\nend\n",
+    v03_m9_union_errors_return_optimized,
+    v03_m9_union_errors_return_no_optimize,
+    v03_m9_union_errors_return_asan_optimized,
+    v03_m9_union_errors_return_asan_no_optimize
+);
+
+// Bug caught: a suspending `errors` function's slot lives in its frame's `Return` region, which
+// the waiting caller must copy out before the child frame is freed. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_errors_return_suspending.ynz",
+    "big slow 5\ntiny\nfailed\nend\n",
+    v03_m9_union_errors_return_suspending_optimized,
+    v03_m9_union_errors_return_suspending_no_optimize,
+    v03_m9_union_errors_return_suspending_asan_optimized,
+    v03_m9_union_errors_return_suspending_asan_no_optimize
+);
