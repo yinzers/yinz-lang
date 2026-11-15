@@ -124,3 +124,11 @@ borrow_case!(
     "v0_3_m9_c6_borrow_soa_scatter_reader.ynz",
     "n-0\n2656\n"
 );
+
+// Cross-module glue: the same `array<Tag>` is overwritten by the module that declares `Tag` and by
+// the one that imports it, each releasing with the glue its own module emitted.
+borrow_case!(
+    cross_module_glue,
+    "v0_3_m9_c6_cross_module_glue",
+    "lib-3\nmain-4\n"
+);

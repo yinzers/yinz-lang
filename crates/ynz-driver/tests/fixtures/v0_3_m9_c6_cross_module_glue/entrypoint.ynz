@@ -1,0 +1,10 @@
+import { Tag, makeTags, replaceFirst } from `tags`
+
+function entrypoint() -> nothing {
+  let tags = makeTags()
+  tags[1] = { name: `main-${4}`, id: 4 }
+  replaceFirst(tags)
+  let fallback: Tag = { name: `none`, id: 0 }
+  print(tags[0].or(fallback).name)
+  print(tags[1].or(fallback).name)
+}
