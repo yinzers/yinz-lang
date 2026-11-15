@@ -444,14 +444,16 @@ fn shapes_are_classified_by_their_fields() {
 #[test]
 fn only_a_kind_with_frame_backing_feeds_the_crossing_set() {
     let output = clean(
-        "shape Label {\n  text: string\n}\nfunction sleeper() -> nothing {\n  let words: fixed<string> = [`a`, `b`]\n  let label: Label = { text: `a` }\n  wait sleep(1)\n}\n",
+        "shape Label {\n  text: string\n}\nfunction sleeper() -> nothing {\n  let words: fixed<string> = [`a`, `b`]\n  let label: Label = { text: `a` }\n  let rows = [1, 2]\n  wait sleep(1)\n}\n",
     );
     assert_eq!(
         crossing_names(&output, "sleeper", Names::User),
-        vec!["label".to_string()],
-        "the shape crosses (frame backed); `fixed<string>` cannot cross a `wait` yet"
+        vec!["rows".to_string()],
+        "the array crosses (frame backed); `fixed<string>` cannot cross a `wait` yet, and a flat \
+         shape is left out until a shape local survives a `wait` in a match arm"
     );
-    assert!(ReleaseKind::Shape.has_frame_backing());
+    assert!(ReleaseKind::Array.has_frame_backing());
+    assert!(!ReleaseKind::Shape.has_frame_backing());
     assert!(!ReleaseKind::Fixed.has_frame_backing());
 }
 

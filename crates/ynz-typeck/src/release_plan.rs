@@ -45,7 +45,9 @@
 //!   producer: a release is a read at its edge, see [`ReleaseReads`]. Only a kind with a frame
 //!   slot across a suspension ([`ReleaseKind::has_frame_backing`]) is read today: the others
 //!   cannot cross a `wait` yet (Check 2/2b), so reading them would reject programs that compile
-//!   now. Releasing such a kind inside a state machine is C6's change, made together with the
+//!   now. A flat shape is left out too: reading it made `v0_3_m9_union_narrow_sm_host` crash (a shape
+//!   local that crosses a `wait` inside an `is` arm of a state-machine match, found when C1f folded
+//!   in). Releasing such a kind inside a state machine is C6's change, made together with the
 //!   frame backing, by widening that one predicate.
 
 use std::cell::RefCell;
@@ -97,8 +99,10 @@ pub enum ReleaseKind {
 }
 
 impl ReleaseKind {
-    /// True when a binding of this kind has a frame slot that survives a suspension today. The
-    /// crossing set reads only these kinds (see the module docs).
+    /// True when a binding of this kind has a frame slot that survives every suspension today. The
+    /// crossing set reads only these kinds (see the module docs). A flat shape is not one: a shape
+    /// local that crosses a `wait` inside an `is` arm of a state-machine match reads freed frame
+    /// bytes (`v0_3_m9_union_narrow_sm_host`, optimized).
     pub fn has_frame_backing(&self) -> bool {
         matches!(
             self,
@@ -107,7 +111,6 @@ impl ReleaseKind {
                 | ReleaseKind::Map
                 | ReleaseKind::Channel
                 | ReleaseKind::TaskHandle
-                | ReleaseKind::Shape
         )
     }
 }
