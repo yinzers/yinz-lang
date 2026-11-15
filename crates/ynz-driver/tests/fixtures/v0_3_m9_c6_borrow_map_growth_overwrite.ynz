@@ -1,0 +1,15 @@
+// v0.3-M9 C6 borrow probe: overwriting and growing a map while a reader holds an old value
+function entrypoint() -> nothing {
+  let table: map<string, string> = {}
+  for (index in range(0, 40)) {
+    table[`k${index}`] = `v${index}`
+  }
+  let first: string = table.get(`k0`).or(`none`)
+  for (index in range(0, 40)) {
+    table[`k${index}`] = `w${index}`
+  }
+  table[`extra`] = `e`
+  print(first)
+  print(table.get(`k0`).or(`none`))
+  print(table.count())
+}

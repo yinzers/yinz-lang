@@ -138,18 +138,28 @@ fn binding_holds_place(ty: &Type) -> bool {
         | Type::Union { .. }
         | Type::BuiltinArray { .. }
         | Type::BuiltinMap { .. } => true,
-        Type::Maybe { inner } => matches!(inner.as_ref(), Type::Shape { .. } | Type::Union { .. }),
+        Type::Maybe { inner } => matches!(
+            inner.as_ref(),
+            Type::Shape { .. }
+                | Type::Union { .. }
+                | Type::BuiltinArray { .. }
+                | Type::BuiltinMap { .. }
+        ),
         _ => false,
     }
 }
 
 /// True when a value of `ty` owns heap a reader may share and the store seam copies: a string,
-/// array, map or shape. The types a loop variable or a call argument is judged for (a union or a
-/// `maybe` has its own copy forms, used by `let` and reassignment only).
+/// array, map, shape or union. The types a loop variable or a call argument is judged for (a
+/// `maybe` has its own copy form, used by `let` and reassignment only).
 fn reader_holds_heap(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::Shape { .. }
+        Type::String
+            | Type::BuiltinArray { .. }
+            | Type::BuiltinMap { .. }
+            | Type::Shape { .. }
+            | Type::Union { .. }
     ) || matches!(ty, Type::Sensitive { inner } if matches!(inner.as_ref(), Type::String))
 }
 

@@ -1,0 +1,33 @@
+// v0.3-M9 C6 borrow probe: a loop variable of a union with a string variant reads an item the body overwrites
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  name: string
+  weight: int
+}
+shape Thing = Tiny | Big
+
+function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Big => {
+      return thing.name
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { name: `big-${1}`, weight: 5 }
+  let first: Thing = big
+  let things: array<Thing> = [first]
+  for (thing in things) {
+    let replacement: Big = { name: `other-${2}`, weight: 6 }
+    let wrapped: Thing = replacement
+    things[0] = wrapped
+    print(describe(thing))
+  }
+}

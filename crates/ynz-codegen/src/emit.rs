@@ -17816,7 +17816,7 @@ fn lower_stmt_for<'ctx>(
 
         if !is_block_terminated(cg) {
             if owned_elem.copied {
-                release_owned_read(cg, elem_val, &elem, "for_elem")?;
+                release_owned_read(cg, owned_elem.release_value(), &elem, "for_elem")?;
             }
             let next_i = cg
                 .builder
@@ -17908,7 +17908,7 @@ fn lower_stmt_for<'ctx>(
 
         if !is_block_terminated(cg) {
             if owned_elem.copied {
-                release_owned_read(cg, elem_val, &elem, "ff_elem")?;
+                release_owned_read(cg, owned_elem.release_value(), &elem, "ff_elem")?;
             }
             let next_i = cg
                 .builder
@@ -19302,6 +19302,17 @@ struct OwnedRead<'ctx> {
     value: BasicValueEnum<'ctx>,
     /// True when the seam allocated `value`: its holder releases it (`release_owned_read`).
     copied: bool,
+    /// What the release is called on when that is not `value` itself: a union copy is read through
+    /// a view, and released through the slot that holds it.
+    release_target: Option<PointerValue<'ctx>>,
+}
+
+impl<'ctx> OwnedRead<'ctx> {
+    /// The value `release_owned_read` is handed for a copy.
+    fn release_value(&self) -> BasicValueEnum<'ctx> {
+        self.release_target
+            .map_or(self.value, |target| target.into())
+    }
 }
 
 /// THE store seam of a read of a place that someone else owns (`IMP-ownership.md`
@@ -19329,6 +19340,7 @@ fn own_read_for_store<'ctx>(
     let kept = OwnedRead {
         value: val,
         copied: false,
+        release_target: None,
     };
     if !val.is_pointer_value() {
         return Ok(kept);
@@ -19347,6 +19359,7 @@ fn own_read_for_store<'ctx>(
             Ok(OwnedRead {
                 value: copied,
                 copied: true,
+                release_target: None,
             })
         }
         Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => {
@@ -19357,6 +19370,7 @@ fn own_read_for_store<'ctx>(
             Ok(OwnedRead {
                 value: copied,
                 copied: true,
+                release_target: None,
             })
         }
         Type::Shape { name } => {
@@ -19368,6 +19382,25 @@ fn own_read_for_store<'ctx>(
             Ok(OwnedRead {
                 value: owned.into(),
                 copied: !moved,
+                release_target: None,
+            })
+        }
+        union @ Type::Union { .. } if cg.envelope_union_variants(union).is_some() => {
+            if may_point {
+                return Ok(kept);
+            }
+            let variants = cg
+                .envelope_union_variants(union)
+                .ok_or("store seam: union lost its variants")?;
+            let layout = cg.union_layout(&variants)?;
+            let slot =
+                cg.alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{site}_owned"))?;
+            cg.union_persist_into(pointer, slot, &variants, &format!("{site}_owned"))?;
+            let view = cg.union_slot_to_value(slot, &variants, &format!("{site}_owned"))?;
+            Ok(OwnedRead {
+                value: view.into(),
+                copied: !cg.is_moved_cells(pointer),
+                release_target: Some(slot),
             })
         }
         _ => Ok(kept),
@@ -19413,7 +19446,78 @@ fn store_binding_of_read<'ctx>(
         let owned = own_read_for_store(cg, expr, val, ty, false, name)?;
         return store(cg, owned.value, ty, slot);
     }
+    // A `maybe` of an array or map holds the container's pointer as its payload, which a copy of
+    // the envelope shares: a read of a place that is not a view copies the payload as well.
+    if let Type::Maybe { inner } = cg.resolve_type(ty) {
+        if matches!(
+            cg.resolve_type(&inner),
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+        ) && val.is_pointer_value()
+        {
+            let envelope = val.into_pointer_value();
+            let moved = cg.is_moved_cells(envelope);
+            let owned = cg.maybe_to_owned(envelope, &inner, name)?;
+            if !moved {
+                copy_maybe_container_payload(cg, expr, owned, &inner, name)?;
+            }
+            return store(cg, owned.into(), ty, slot);
+        }
+    }
     store_binding(cg, val, ty, slot, name)
+}
+
+/// Replace the array or map a `maybe` envelope holds by a copy of it (when the maybe is set), so
+/// the envelope's holder owns its payload.
+///
+/// O(1) time at the call site; the copy it emits is O(n) in the container's size.
+fn copy_maybe_container_payload<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    expr: &Expr,
+    envelope: PointerValue<'ctx>,
+    inner: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let flag_ptr = cg
+        .builder
+        .build_struct_gep(cg.maybe_type(), envelope, 0, &format!("{site}_mc_flag_ptr"))
+        .map_err(|err| format!("maybe payload copy flag gep {site}: {err}"))?;
+    let flag = cg
+        .builder
+        .build_load(cg.i64(), flag_ptr, &format!("{site}_mc_flag"))
+        .map_err(|err| format!("maybe payload copy flag load {site}: {err}"))?
+        .into_int_value();
+    let is_set = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            flag,
+            cg.i64().const_zero(),
+            &format!("{site}_mc_set"),
+        )
+        .map_err(|err| format!("maybe payload copy cmp {site}: {err}"))?;
+    let copy_bb = cg.append_block(&format!("{site}_mc_copy"));
+    let done_bb = cg.append_block(&format!("{site}_mc_done"));
+    cg.builder
+        .build_conditional_branch(is_set, copy_bb, done_bb)
+        .map_err(|err| format!("maybe payload copy branch {site}: {err}"))?;
+    cg.builder.position_at_end(copy_bb);
+    let bits_ptr = cg
+        .builder
+        .build_struct_gep(cg.maybe_type(), envelope, 1, &format!("{site}_mc_bits_ptr"))
+        .map_err(|err| format!("maybe payload copy bits gep {site}: {err}"))?;
+    let payload = cg
+        .builder
+        .build_load(cg.ptr(), bits_ptr, &format!("{site}_mc_payload"))
+        .map_err(|err| format!("maybe payload copy load {site}: {err}"))?;
+    let (copied, _free) = emit_owned_copy(cg, Some(expr), payload, inner, CopyMode::Body, site)?;
+    cg.builder
+        .build_store(bits_ptr, copied)
+        .map_err(|err| format!("maybe payload copy store {site}: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(done_bb)
+        .map_err(|err| format!("maybe payload copy join {site}: {err}"))?;
+    cg.builder.position_at_end(done_bb);
+    Ok(())
 }
 
 /// The element a `for` loop variable reads from `iter`'s collection: the element itself when
@@ -19459,13 +19563,13 @@ fn own_map_entry<'ctx>(
     let owned_key = own_loop_element(cg, iter, key_value, key_type, "mf_key_own")?;
     if owned_key.copied {
         entry.key_bits = cg.to_i64_bits(owned_key.value, key_type)?;
-        entry.key = Some(owned_key.value);
+        entry.key = Some(owned_key.release_value());
     }
     let value_value = cg.i64_bits_to(value_bits, value_type)?;
     let owned_value = own_loop_element(cg, iter, value_value, value_type, "mf_val_own")?;
     if owned_value.copied {
         entry.value_bits = cg.to_i64_bits(owned_value.value, value_type)?;
-        entry.value = Some(owned_value.value);
+        entry.value = Some(owned_value.release_value());
     }
     Ok(entry)
 }
@@ -19507,7 +19611,7 @@ fn lower_call_argument<'ctx>(
     let ty = cg.expr_type(arg);
     let owned = own_read_for_store(cg, arg, val, &ty, false, "call_arg")?;
     if owned.copied {
-        copies.push((owned.value, ty));
+        copies.push((owned.release_value(), ty));
     }
     Ok(owned.value)
 }
@@ -23484,7 +23588,7 @@ fn lower_ufcs_call<'ctx>(
         let receiver_ty = cg.expr_type(receiver);
         let owned = own_read_for_store(cg, receiver, recv_val, &receiver_ty, false, "ufcs_recv")?;
         if owned.copied {
-            copies.push((owned.value, receiver_ty));
+            copies.push((owned.release_value(), receiver_ty));
         }
         owned.value
     } else {

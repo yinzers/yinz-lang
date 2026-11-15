@@ -1,0 +1,9 @@
+// v0.3-M9 C6 borrow probe: a `let` of a `maybe<array>` element read keeps its payload while the element is overwritten
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[10, 20, 30]]
+  let picked = rows.get(0)
+  rows[0] = [9]
+  let fallback: array<int> = []
+  let arr = picked.or(fallback)
+  print(arr.count())
+}

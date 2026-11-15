@@ -97,3 +97,30 @@ borrow_case!(
     "v0_3_m9_c6_borrow_task_return_map_field.ynz",
     "v-1\n"
 );
+
+// Round 2 probes of the same class, each one a High-tier memory-safety case.
+borrow_case!(
+    loop_union_overwrite,
+    "v0_3_m9_c6_borrow_loop_union_overwrite.ynz",
+    "big-1\n"
+);
+borrow_case!(
+    let_maybe_array_payload,
+    "v0_3_m9_c6_borrow_let_maybe_array_payload.ynz",
+    "3\n"
+);
+borrow_case!(
+    expr_interpolation_order,
+    "v0_3_m9_c6_borrow_expr_interpolation_order.ynz",
+    "a-1-r\n"
+);
+borrow_case!(
+    map_growth_overwrite,
+    "v0_3_m9_c6_borrow_map_growth_overwrite.ynz",
+    "v0\nw0\n41\n"
+);
+borrow_case!(
+    soa_scatter_reader,
+    "v0_3_m9_c6_borrow_soa_scatter_reader.ynz",
+    "n-0\n2656\n"
+);
