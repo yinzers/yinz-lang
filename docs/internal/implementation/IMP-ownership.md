@@ -379,6 +379,21 @@ A read of a place someone else owns (`b.rows`, `rows[i].or(d)`, a loop's element
 | call argument at a position the callee only reads | the callee's parameter, live for the call | the argument | the same |
 | `return` | none: it outlives its frame | no entry | string, array, map, shape (`copied_at_return`) |
 
+**The copy sites, for C10's Golden Rule 8 check.** These are every place a non-owned read can allocate a copy. Each has a no-write case pinned at zero extra copies and a write case pinned at one, in `v03_m9_c6_borrow_cost` (`crates/ynz-driver/tests/`).
+
+| copy site | codegen | no-write pin (0 extra copies) | write pin (1 copy) |
+|---|---|---|---|
+| `let` and reassignment of a place | `own_read_for_store` | `a_let_of_a_field_nobody_overwrites_copies_nothing`, `a_reassignment_from_a_field_nobody_writes_copies_nothing` | `a_let_of_a_field_that_is_overwritten_copies_it_once` |
+| `let` of a `maybe<array>` or `maybe<map>` payload | `copy_maybe_container_payload` | `a_let_of_a_maybe_array_element_nobody_writes_copies_no_payload`, `a_let_of_a_maybe_map_element_nobody_writes_copies_no_payload` | none: shares the `let` rule |
+| loop variable (plain and state-machine) | `own_loop_element` | `a_loop_whose_body_writes_nothing_copies_nothing`, `a_state_machine_loop_whose_body_writes_nothing_copies_nothing` | `a_loop_that_overwrites_an_item_copies_one_item_per_iteration`, `a_state_machine_loop_that_overwrites_an_item_copies_and_releases_one_item_per_iteration` |
+| map-entry and union loop variable | `own_map_entry`, `own_loop_element` | `a_map_loop_whose_body_writes_nothing_copies_no_entry`, `a_union_loop_whose_body_writes_nothing_copies_no_item` | none: shares the loop rule |
+| call argument (a `share` or bare position) | `lower_call_argument` | `share_arguments_with_no_lend_of_their_collection_copy_nothing` | `a_share_argument_read_from_a_lent_collection_is_copied_once_and_released` |
+| UFCS receiver (argument 0) | `lower_call_argument` | `a_ufcs_receiver_nobody_writes_is_not_copied` | `a_ufcs_receiver_read_from_a_lent_list_is_copied_once_and_released` |
+| argument staged into a suspending callee's frame | `lower_call_argument` | `an_argument_of_a_suspending_call_nobody_writes_is_staged_without_a_copy` | released at C8's frame release (deferred below) |
+| `return` of a non-owned place | `own_returned_value` | `a_returned_field_is_copied_once_and_the_caller_binds_it_without_a_second_copy` (the one copy is at the `return`) | the same |
+
+A shape or `fixed` copy is deep at `deepen_unless_moved`; a value `heap_moves` marks as moved, and a `View`, cost nothing (`v03_m9_c6_shape_deep_copy`).
+
 A read is a `View` when (a) the reader is never written, stored, returned, given or sent, and (b) no root of the place is written, lent, given or released anywhere in the reader's live range: for a loop variable the whole body, a `lend` callee included; for an argument, any other argument of the same call (`both(items[0].or(d), items)` copies the first argument); a parameter the function only reads satisfies (b) for the whole body. (c) A `let` or reassignment view never crosses a suspension (it may point at per-site staging); a loop variable or argument does not end at a `wait`, only at a write. A reassigned binding never points through another reader (a loop variable's staging). `.or(default)` reads the place or the default: both are roots.
 
 **The seam.** `own_read_for_store` (`ynz-codegen/src/emit.rs`) is the one store seam for a string, array, map, shape and envelope union: a value typeck says moves (`string_moves`, `heap_moves`) is taken, a `View` stays a pointer, anything else is copied by `emit_owned_copy` / `shape_bytes_to_owned` / `union_persist_into`. `let`, reassignment, loop variables (plain and state-machine, `own_loop_element`, `own_map_entry`), call arguments (`lower_call_argument`) and returns (`own_returned_value`) read the record through it. A `maybe` of an array or map copies its payload too (`copy_maybe_container_payload`). A loop variable's copy is released after its iteration and an argument's copy after the call, both through `release_fn`.
