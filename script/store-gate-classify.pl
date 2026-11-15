@@ -8,15 +8,15 @@
 #   perl script/store-gate-classify.pl <gate-dir-new> <newly-rejected-list>
 use strict; use warnings;
 my ($gate_dir, $list) = @ARGV;
-open my $fh, '<', $list or die $!; chomp(my @files = <$fh>); close $fh;
-my (%group, %lines);
+open my $list_handle, '<', $list or die $!; chomp(my @files = <$list_handle>); close $list_handle;
+my %group;
 for my $file (@files) {
   (my $name = $file) =~ s{/}{__}g;
-  open my $nd, '<', "$gate_dir/$name.ndjson" or die "$name: $!";
-  open my $src, '<', $file or die "$file: $!";
-  my $text = do { local $/; <$src> }; close $src;
+  open my $ndjson_handle, '<', "$gate_dir/$name.ndjson" or die "$name: $!";
+  open my $source_handle, '<', $file or die "$file: $!";
+  my $text = do { local $/; <$source_handle> }; close $source_handle;
   my ($let, $store) = (0, 0);
-  while (my $line = <$nd>) {
+  while (my $line = <$ndjson_handle>) {
     next unless $line =~ /"severity":"error"/;
     next unless $line =~ /"start_byte":(\d+)/;
     my $start = $1;
@@ -33,13 +33,12 @@ for my $file (@files) {
     my $source_line = substr($text, $from, $to - $from);
     $class //= $source_line =~ /^\s*(?:let|const)?\s*\w+\s*(?::\s*[^=]+?)?=\s*\w+\s*(?:\/\/.*)?$/ ? "let" : "store";
     if ($class eq "let") { $let++ } else { $store++ }
-    push @{ $lines{$file} }, $source_line =~ s/^\s+//r;
   }
   $group{$file} = ($store == 0 && $let > 0) ? 'a' : 'b';
 }
-for my $g ('a', 'b') {
-  my @in = grep { $group{$_} eq $g } @files;
-  my $bytes = 0; $bytes += -s $_ for @in;
-  printf "group (%s): %d files, %d bytes\n", $g, scalar(@in), $bytes;
-  print "  $_\n" for @in;
+for my $group_name ('a', 'b') {
+  my @members = grep { $group{$_} eq $group_name } @files;
+  my $bytes = 0; $bytes += -s $_ for @members;
+  printf "group (%s): %d files, %d bytes\n", $group_name, scalar(@members), $bytes;
+  print "  $_\n" for @members;
 }
