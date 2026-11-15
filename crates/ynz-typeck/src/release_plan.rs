@@ -247,6 +247,7 @@ struct RawMoveSite {
 #[derive(Clone, Debug)]
 struct FunctionExits {
     name: String,
+    file: String,
     body_span: Span,
     edges: Vec<RawEdge>,
     move_sites: Vec<RawMoveSite>,
@@ -266,6 +267,7 @@ pub enum Names {
 /// suspension detection stays the single one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseReads {
+    file: String,
     body_span: Span,
     block_end: HashMap<Span, Vec<String>>,
     return_edge: HashMap<Span, Vec<String>>,
@@ -298,10 +300,10 @@ impl ReleaseReads {
     /// expression has (a propagation read is zero-width at the end of the identifier).
     ///
     /// O(n + e) time and memory for n statements and e edges.
-    pub fn with_reads(&self, body: &[Stmt], file: &str) -> Vec<Stmt> {
+    pub fn with_reads(&self, body: &[Stmt]) -> Vec<Stmt> {
         let mut context = ReadsContext {
             reads: self,
-            file,
+            file: &self.file,
         };
         context.statements(body, Some(self.body_span))
     }
@@ -385,7 +387,7 @@ impl ReadsContext<'_> {
             fired.sort();
             for (key, names) in fired {
                 for name in names {
-                    out.push(self.read_of(name, *key));
+                    out.push(self.read_of(name, (key.1, key.1)));
                 }
             }
         }
@@ -478,6 +480,7 @@ impl ReleaseRecorder {
         self.close_current();
         self.current = Some(FunctionExits {
             name: name.to_string(),
+            file: body_span.file.clone(),
             body_span: span_of(body_span),
             edges: Vec::new(),
             move_sites: Vec::new(),
@@ -652,6 +655,7 @@ fn resolve_function(
 ) -> Result<ResolvedFunction, String> {
     let mut edges = Vec::with_capacity(function.edges.len());
     let mut reads = ReleaseReads {
+        file: function.file.clone(),
         body_span: function.body_span,
         ..ReleaseReads::default()
     };

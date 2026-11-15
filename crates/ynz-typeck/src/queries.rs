@@ -758,6 +758,7 @@ pub fn cpu_promotion_query(
         &check_out.typed_module.expr_types,
         kernel_mode,
         no_auto_parallel,
+        &check_out.typed_module.release_plan,
     );
 
     Arc::new(PromotionOutput { promoted })
@@ -955,6 +956,7 @@ pub(crate) fn compute_cpu_promotions(
     expr_types: &std::collections::HashMap<(usize, usize), crate::types::Type>,
     kernel_mode: bool,
     no_auto_parallel: bool,
+    release_plan: &crate::release_plan::ReleasePlan,
 ) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
 
@@ -1133,6 +1135,8 @@ pub(crate) fn compute_cpu_promotions(
                 // M3d decline probe: baseline crossing set, never the Phase 6 widening
                 // (only back_edge_yield_admission probes with true).
                 false,
+                // The release owners cross where their release is (a read at its edge).
+                &release_plan.reads(&f.name, crate::release_plan::Names::User),
             ) {
                 // Every promoted candidate reachable from `f` is a cause; remove all.
                 let reachable =
@@ -1329,6 +1333,7 @@ mod promotion_tests {
         imported_fns: std::collections::HashMap<String, FunctionSig>,
         base_suspends: std::collections::HashSet<String>,
         expr_types: std::collections::HashMap<(usize, usize), crate::types::Type>,
+        release_plan: crate::release_plan::ReleasePlan,
     }
 
     fn build_inputs(src: &str) -> PromoInputs {
@@ -1363,6 +1368,7 @@ mod promotion_tests {
             imported_fns: sig_output.imported_fns.clone(),
             base_suspends: check_out.suspends_set.clone(),
             expr_types: check_out.typed_module.expr_types.clone(),
+            release_plan: check_out.typed_module.release_plan.clone(),
         }
     }
 
@@ -1390,6 +1396,7 @@ mod promotion_tests {
             &inputs.expr_types,
             kernel,
             no_auto,
+            &inputs.release_plan,
         )
     }
 

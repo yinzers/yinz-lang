@@ -33,6 +33,7 @@ use crate::{
 };
 
 use crate::binding_names::{decl_key, DeclKey};
+use crate::release_plan::{heap_class_of, EdgeKind, HeapClass, Moved, RawEntry, ReleaseReads};
 
 /// One give made while a loop body was being checked: where it happened, why the entries it
 /// reached are gone, and which entries those are. At the loop's end each is checked against the
@@ -1536,6 +1537,7 @@ impl<'b> Checker<'b> {
 
         self.binding_names.begin_function(&f.span);
         self.transfers.begin_function(&f.name);
+        self.release.begin_function(&f.name, &f.body.span);
 
         // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
         let ret_ty = self.ast_type_to_type(&f.return_type);
@@ -1722,7 +1724,12 @@ impl<'b> Checker<'b> {
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
         self.check_stmts(&f.body.stmts);
+        self.record_exit(EdgeKind::BlockEnd, &f.body.span, &HashSet::new());
         self.scope.pop();
+
+        // The release owners in the user's names, for the suspension guards below: the same
+        // owners (and so the same crossing set) codegen's frame layout reads.
+        let release_reads = self.release.end_function(&self.transfers.current_anchors());
 
         // Check 3 runs AFTER check_stmts (v0.3-M6 P1-1 site 9 reorder, mirroring checks
         // 1a–1c below): the UFCS arm of the sub-expression walker reads receiver types
@@ -1843,6 +1850,7 @@ impl<'b> Checker<'b> {
             &self.union_aliases,
             &self.expr_types,
             self.kernel_mode,
+            &release_reads,
         ) {
             self.back_edge_yield_admitted.insert(f.name.clone());
         }
@@ -1872,6 +1880,8 @@ impl<'b> Checker<'b> {
                 // user-facing compile error (it stays codegen-internal, caught by the
                 // RED fixture set instead).
                 false,
+                // A release is a read at its edge: the owners cross where it does.
+                &release_reads,
             );
             for crossing_name in &crossings {
                 // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
@@ -2434,6 +2444,7 @@ impl<'b> Checker<'b> {
     fn check_generic_function_body(&mut self, f: &FunctionDecl) {
         self.binding_names.begin_function(&f.span);
         self.transfers.begin_function(&f.name);
+        self.release.begin_function(&f.name, &f.body.span);
         // Push type param names into the type_param_scope.
         for gp in &f.generics {
             self.type_param_scope.insert(gp.name.clone(), ());
@@ -2472,9 +2483,13 @@ impl<'b> Checker<'b> {
             );
         }
         self.check_stmts(&f.body.stmts);
+        self.record_exit(EdgeKind::BlockEnd, &f.body.span, &HashSet::new());
         self.scope.pop();
 
+        self.release.end_function(&self.transfers.current_anchors());
+
         // Clear type params when done with this function.
+
         for gp in &f.generics {
             self.type_param_scope.remove(&gp.name);
         }
@@ -3967,6 +3982,9 @@ impl<'b> Checker<'b> {
                     self.binding_event_origin(value, target, &format!("{target} = {{value}}"));
                 let declaration = self.declaration_of(target);
                 self.transfers_note_reassign(declaration.as_ref(), &event);
+                if let Some(declaration) = &declaration {
+                    self.release.note_reassign(declaration.clone());
+                }
                 // A reassignment names a NEW value, so the binding is no longer given away, and
                 // takes the new value's origin and class, on the path that reaches here only; a
                 // branch join decides what holds after it (`Scope::rebind`,
@@ -4356,6 +4374,7 @@ impl<'b> Checker<'b> {
     /// Close the arm `body` of the open branch point: an arm that always returns never reaches the
     /// join. O(size of `body`) for the return-path analysis.
     fn end_branch_arm(&mut self, body: &Block) {
+        self.record_exit(EdgeKind::BlockEnd, &body.span, &HashSet::new());
         let returns = crate::return_paths::analyze_stmts(&body.stmts).all_paths_return;
         self.scope.end_arm(returns);
     }
@@ -4511,6 +4530,19 @@ impl<'b> Checker<'b> {
     }
 
     fn check_stmt_return(&mut self, value: Option<&Expr>, span: &SourceSpan) {
+        self.check_stmt_return_value(value, span);
+        // The release edge: every open frame leaves scope, minus whatever the returned value is
+        // or reaches. After the value was inferred, so a give inside it is already consumed.
+        let returned_classes: HashSet<u64> = value
+            .map(|expr| self.heap_holders_of(expr))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|(name, _)| self.scope.class_of(name))
+            .collect();
+        self.record_exit(EdgeKind::Return, span, &returned_classes);
+    }
+
+    fn check_stmt_return_value(&mut self, value: Option<&Expr>, span: &SourceSpan) {
         let expected = self.current_fn_ret.clone();
         match (value, &expected) {
             (None, Type::Nothing) => {}
@@ -5423,6 +5455,51 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// Record the exit edge `kind` at `span`: the bindings of heap-capable type that leave scope
+    /// there, as the live scope shows them (`crate::release_plan`). A block end lists the
+    /// innermost frame; a `return` and an auto-propagation list every open frame, innermost first.
+    /// Each frame lists its last declared binding first. `returned_classes` are the alias
+    /// classes the returned value is or reaches. O(open entries).
+    fn record_exit(
+        &mut self,
+        kind: EdgeKind,
+        span: &SourceSpan,
+        returned_classes: &HashSet<u64>,
+    ) {
+        let innermost = self.scope.innermost_frame();
+        let frames: Vec<usize> = match kind {
+            EdgeKind::BlockEnd => vec![innermost],
+            EdgeKind::Return | EdgeKind::Propagation => (0..=innermost).rev().collect(),
+        };
+        let mut entries: Vec<RawEntry> = Vec::new();
+        for frame_index in frames {
+            for (name, entry) in self.scope.frame_entries(frame_index).into_iter().rev() {
+                let heap = heap_class_of(&entry.ty, self.shape_table);
+                if matches!(heap, HeapClass::NotHeap) {
+                    continue;
+                }
+                let moved = match (&entry.consumed, entry.consumed_on_every_path) {
+                    (None, _) => Moved::No,
+                    (Some(_), true) => Moved::EveryPath,
+                    (Some(_), false) => Moved::SomePaths,
+                };
+                entries.push(RawEntry {
+                    decl: decl_key(&entry.defined_at, name),
+                    heap,
+                    // A `let`/`const` string owns its bytes; a parameter, a loop cell does not.
+                    string_owner: !entry.is_param
+                        && !entry.is_loop_var
+                        && !matches!(entry.origin, Origin::Cell(_)),
+                    class: entry.alias_class,
+                    moved,
+                    returned: returned_classes.contains(&entry.alias_class),
+                });
+            }
+        }
+        let consumed_classes = self.scope.consumed_classes();
+        self.release.note_exit(kind, span, consumed_classes, entries);
+    }
+
     /// A `return`: every binding holding (a piece of) the returned value escapes.
     fn record_return(&mut self, value: &Expr) {
         for (_, holder) in self.heap_holders_of(value) {
@@ -5436,6 +5513,9 @@ impl<'b> Checker<'b> {
     fn consume_binding(&mut self, name: &str, cause: ConsumedBy, span: &SourceSpan) {
         let declaration = self.declaration_of(name);
         let reached = self.scope.consume(name, cause.clone());
+        if let Some(declaration) = &declaration {
+            self.release.note_move_site(span, declaration.clone());
+        }
         if let Some(declaration) = &declaration {
             self.transfers.escape(
                 declaration,
@@ -5625,6 +5705,8 @@ impl<'b> Checker<'b> {
                     // on-failure IR at P4a; for typeck, just return the inner type.
                     self.errors_success_narrowed.insert(entry.alias_class);
                     self.errors_consumed.insert(entry.alias_class);
+                    // Auto-propagation returns early from here: every open frame leaves scope.
+                    self.record_exit(EdgeKind::Propagation, span, &HashSet::new());
                     return inner;
                 }
                 // Outside an errors function: return the full ErrorsCapable type.
@@ -12703,6 +12785,7 @@ pub(crate) fn back_edge_yield_admission(
     union_aliases: &HashMap<String, Type>,
     expr_types: &HashMap<(usize, usize), Type>,
     kernel_mode: bool,
+    release_reads: &ReleaseReads,
 ) -> bool {
     if kernel_mode || !is_sm {
         return false;
@@ -12727,6 +12810,7 @@ pub(crate) fn back_edge_yield_admission(
         expr_types,
         kernel_mode,
         true, // back_edge_yield: probe the WIDENED crossing set
+        release_reads,
     )
 }
 
@@ -12735,6 +12819,7 @@ pub fn crossing_local_names(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    release_reads: &ReleaseReads,
 ) -> Vec<String> {
     crossing_local_names_with_cpu_spike(
         stmts,
@@ -12743,6 +12828,7 @@ pub fn crossing_local_names(
         &std::collections::HashSet::new(),
         expr_types,
         false,
+        release_reads,
     )
 }
 
@@ -12775,6 +12861,7 @@ pub fn crossing_local_names_with_cpu_spike(
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
     back_edge_yield: bool,
+    release_reads: &ReleaseReads,
 ) -> Vec<String> {
     crossing_local_names_with_provenance(
         stmts,
@@ -12783,6 +12870,7 @@ pub fn crossing_local_names_with_cpu_spike(
         cpu_supported,
         expr_types,
         back_edge_yield,
+        release_reads,
     )
     .names
 }
@@ -12826,9 +12914,20 @@ pub fn crossing_local_names_with_provenance(
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
     back_edge_yield: bool,
+    release_reads: &ReleaseReads,
 ) -> CrossingNames {
+    // A scope-exit release is a read at its edge: scan the statements with those reads added,
+    // so an owner declared before a suspension that precedes its release crosses it, by the
+    // ONE suspension detection. Every other collector below reads the statements as written.
+    let with_reads;
+    let scanned: &[Stmt] = if release_reads.is_empty() {
+        stmts
+    } else {
+        with_reads = release_reads.with_reads(stmts);
+        &with_reads
+    };
     let crossings = locals_crossing_wait(
-        stmts,
+        scanned,
         param_names,
         suspending,
         cpu_supported,
@@ -14770,6 +14869,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
     expr_types: &HashMap<(usize, usize), Type>,
     kernel_mode: bool,
     back_edge_yield: bool,
+    release_reads: &ReleaseReads,
 ) -> bool {
     if kernel_mode {
         return false;
@@ -14826,6 +14926,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
         // un-frame-backable type to cross is DECLINED rather than miscompiled. Every
         // other caller (the M3d decline probe) passes false — baseline behavior.
         back_edge_yield,
+        release_reads,
     );
 
     for crossing_name in &crossings {
