@@ -43,6 +43,10 @@ use crate::types::Type;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StringMoves {
     spans: HashSet<(usize, usize)>,
+    /// The expressions of `spans` that are the last use of a `let`/`const` binding, with that
+    /// binding. The scope-exit release plan reads this to know which binding a move may take the
+    /// string from (`crate::release_plan`); a fresh string has no binding.
+    last_uses: HashMap<(usize, usize), DeclKey>,
 }
 
 impl StringMoves {
@@ -55,6 +59,17 @@ impl StringMoves {
     /// The `(start, end)` span of every expression in the record.
     pub fn spans(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         self.spans.iter().copied()
+    }
+
+    /// The binding whose last use is the expression at `start..end`, when the expression is in the
+    /// record as a last use (not as a fresh string).
+    pub fn last_use_binding(&self, start: usize, end: usize) -> Option<&DeclKey> {
+        self.last_uses.get(&(start, end))
+    }
+
+    /// Every last-use expression in the record: its `(start, end)` span and the binding it reads.
+    pub fn last_uses(&self) -> impl Iterator<Item = ((usize, usize), &DeclKey)> + '_ {
+        self.last_uses.iter().map(|(span, declaration)| (*span, declaration))
     }
 
     /// The number of expressions in the record.
@@ -242,13 +257,17 @@ impl Recorder<'_> {
 
     fn walk(&mut self, expr: &Expr, counts: &HashMap<DeclKey, usize>, after: &HashSet<DeclKey>) {
         if matches!(self.type_of(expr), Some(Type::String)) {
-            let movable = self.is_fresh_string(expr)
-                || self.let_decl_of(expr).is_some_and(|declaration| {
-                    counts.get(&declaration) == Some(&1) && !after.contains(&declaration)
-                });
-            if movable {
+            let last_use = self.let_decl_of(expr).filter(|declaration| {
+                counts.get(declaration) == Some(&1) && !after.contains(declaration)
+            });
+            if self.is_fresh_string(expr) || last_use.is_some() {
                 let span = expr.span();
                 self.moves.spans.insert((span.start, span.end));
+                if let Some(declaration) = last_use {
+                    self.moves
+                        .last_uses
+                        .insert((span.start, span.end), declaration);
+                }
             }
         }
         for child in children(expr) {

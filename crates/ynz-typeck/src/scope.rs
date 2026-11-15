@@ -154,6 +154,11 @@ pub struct ScopeEntry {
     /// into an owned-heap channel). Any subsequent use of this binding — or of any member
     /// of its alias class — produces the use-after-give / use-after-send error.
     pub consumed: Option<ConsumedBy>,
+    /// True while `consumed` holds on EVERY path that reaches this point: set by a transfer on the
+    /// current path, kept by a branch join only when every path reaching the join had it, and
+    /// cleared by a reassignment. A consumed entry with this false is given away on some paths
+    /// only (the scope-exit release cannot omit it statically).
+    pub consumed_on_every_path: bool,
     /// Where the currently-bound value came from (see [`Origin`]).
     pub origin: Origin,
     /// The alias class this entry belongs to: every live entry that denotes or reaches one
@@ -202,6 +207,7 @@ fn entry_key(frame_index: usize, name: &str, defined_at: &SourceSpan) -> EntryKe
 #[derive(Clone, Debug)]
 struct PathState {
     consumed: Option<ConsumedBy>,
+    consumed_on_every_path: bool,
     origin: Origin,
     alias_class: u64,
 }
@@ -210,6 +216,7 @@ impl PathState {
     fn of(entry: &ScopeEntry) -> PathState {
         PathState {
             consumed: entry.consumed.clone(),
+            consumed_on_every_path: entry.consumed_on_every_path,
             origin: entry.origin.clone(),
             alias_class: entry.alias_class,
         }
@@ -397,6 +404,7 @@ impl Scope {
             self.touch(&key);
             if let Some(entry) = self.entry_mut(&key) {
                 entry.consumed = Some(cause.clone());
+                entry.consumed_on_every_path = true;
             }
         }
         reached
@@ -426,6 +434,7 @@ impl Scope {
         }
         if let Some(entry) = self.entry_mut(&key) {
             entry.consumed = None;
+            entry.consumed_on_every_path = false;
             entry.origin = origin;
             entry.alias_class = alias_class;
         }
@@ -463,6 +472,7 @@ impl Scope {
     fn set_path_state(&mut self, key: &EntryKey, state: PathState) {
         if let Some(entry) = self.entry_mut(key) {
             entry.consumed = state.consumed;
+            entry.consumed_on_every_path = state.consumed_on_every_path;
             entry.origin = state.origin;
             entry.alias_class = state.alias_class;
         }
@@ -548,6 +558,9 @@ impl Scope {
                 // No path reaches the join (every arm returns): nothing after it runs.
                 continue;
             };
+            let consumed_on_every_path = paths
+                .iter()
+                .all(|path| path.consumed.is_some() && path.consumed_on_every_path);
             let consumed = match paths.iter().find_map(|path| path.consumed.clone()) {
                 Some(cause) if branch.reassigned.contains(&key) => {
                     Some(cause.marked_missed_revive(branch.kind))
@@ -578,6 +591,7 @@ impl Scope {
                 &key,
                 PathState {
                     consumed,
+                    consumed_on_every_path,
                     origin,
                     alias_class: kept,
                 },
@@ -604,6 +618,45 @@ impl Scope {
         for branch in self.branches.iter_mut() {
             branch.rename_class(kept, absorbed);
         }
+    }
+
+    /// The number of open frames (1 = the function's own frame).
+    pub fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// The entries of the frame at `frame_index` (0 = outermost) in declaration order: the
+    /// bindings that leave scope when that frame pops. O(n log n) for n entries.
+    pub fn frame_entries(&self, frame_index: usize) -> Vec<(&str, &ScopeEntry)> {
+        let Some(frame) = self.frames.get(frame_index) else {
+            return Vec::new();
+        };
+        let mut entries: Vec<(&str, &ScopeEntry)> = frame
+            .iter()
+            .map(|(name, entry)| (name.as_str(), entry))
+            .collect();
+        // A declaration span is unique per binding except for the parser's desugared pairs
+        // (`for ((k, v) in m)` gives `__entry` and `k` one span), so the name breaks ties.
+        entries.sort_by(|first, second| {
+            (first.1.defined_at.start, first.1.defined_at.end, first.0).cmp(&(
+                second.1.defined_at.start,
+                second.1.defined_at.end,
+                second.0,
+            ))
+        });
+        entries
+    }
+
+    /// The alias classes given away on the current path: every class with a consumed entry in an
+    /// open frame. This is the live scope's own answer to "which values has this path handed
+    /// over?" that the persisted release plan is checked against. O(entries).
+    pub fn consumed_classes(&self) -> BTreeSet<u64> {
+        self.frames
+            .iter()
+            .flat_map(|frame| frame.values())
+            .filter(|entry| entry.consumed.is_some())
+            .map(|entry| entry.alias_class)
+            .collect()
     }
 
     /// All names currently in scope (all frames), for Levenshtein suggestions.

@@ -361,6 +361,37 @@ impl TransferRecorder {
         function.escapes.push((position, escape));
     }
 
+    /// The release anchor of every binding the current function has declared so far, keyed by
+    /// declaration: the class partition as it stands. Used when a function's walk ends, before
+    /// `BindingNames` has named its bindings, so a pass that needs the anchors inside the walk
+    /// (the release plan's owner set, which the suspension guards read) asks the same partition
+    /// `finish` will build. A hole in the partition is recorded in `internal_errors` and yields an
+    /// empty map. O(b · d) time and O(b) memory for b bindings at frame depth d.
+    pub fn current_anchors(&mut self) -> HashMap<DeclKey, ReleaseAnchor> {
+        let Some(function) = self.current.clone() else {
+            self.internal_errors
+                .push(outside_function_message("a request for anchors", None));
+            return HashMap::new();
+        };
+        let declared_name = |decl: &DeclKey| Some(decl.2.clone());
+        match build_function(function, &declared_name) {
+            Ok(transfers) => transfers
+                .classes
+                .iter()
+                .flat_map(|class| {
+                    class
+                        .members
+                        .iter()
+                        .map(|member| (member.decl.clone(), class.anchor.clone()))
+                })
+                .collect(),
+            Err(message) => {
+                self.internal_errors.push(message);
+                HashMap::new()
+            }
+        }
+    }
+
     /// Close the last function and build the record. Codegen names come from `names`, which
     /// must have named every declaration this recorder saw (the checker declares both at the
     /// same event). An event the recorder could not place, or a declaration `names` lacks, ends
@@ -377,7 +408,8 @@ impl TransferRecorder {
         };
         for function in self.finished {
             let name = function.name.clone();
-            match build_function(function, names) {
+            let codegen_name_of = |decl: &DeclKey| names.codegen_name(decl).map(str::to_string);
+            match build_function(function, &codegen_name_of) {
                 Ok(transfers) => {
                     record.functions.insert(name, transfers);
                 }
@@ -392,7 +424,7 @@ impl TransferRecorder {
 /// anchor candidate (a hole in the record, see `TransferRecord::internal_errors`).
 fn build_function(
     mut function: FunctionState,
-    names: &BindingNames,
+    codegen_name_of: &dyn Fn(&DeclKey) -> Option<String>,
 ) -> Result<FunctionTransfers, String> {
     let count = function.bindings.len();
     let mut roots: Vec<usize> = Vec::with_capacity(count);
@@ -422,12 +454,11 @@ fn build_function(
                 } else {
                     MemberRole::Owner
                 };
-                let codegen_name = names
-                    .codegen_name(&binding.decl)
+                let codegen_name = codegen_name_of(&binding.decl)
                     .ok_or_else(|| undeclared_in_names_message(&function.name, &binding.decl))?;
                 Ok(ClassMember {
                     decl: binding.decl.clone(),
-                    codegen_name: codegen_name.to_string(),
+                    codegen_name,
                     role,
                 })
             })
