@@ -10822,15 +10822,12 @@ fn m5_p3_sweep_mapentry_bg_escape() {
 
 #[test]
 fn m5_p3_sweep_shape_eq_string_field() {
-    // WHY: sweep cell 5 — the D12 ratification pin: shape_value_eq compares
-    // pointer-typed fields by POINTER IDENTITY (final for M5, reasoning on
-    // shape_value_eq's header). Cell 3 (runtime-interpolated same text →
-    // false) is the discriminator vs deep equality; cell 2 is true only via
-    // LLVM's unnamed_addr literal merging (artifact, documented in the
-    // fixture's WHY — a flip there means constant merging changed, not D12).
+    // WHY: sweep cell 5 — shape_value_eq compares a `string` field by its bytes. Every store
+    // copies a borrowed string (C3b), so equal text is never one pointer; cell 3 (runtime-
+    // interpolated same text) is the discriminator against a pointer-identity compare.
     m5_p3_sweep_assert_dual_mode(
         "m5_p3_sweep_shape_eq_string_field.ynz",
-        "true\ntrue\nfalse\n",
+        "true\ntrue\ntrue\n",
     );
 }
 

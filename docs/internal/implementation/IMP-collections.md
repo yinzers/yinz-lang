@@ -507,9 +507,11 @@ shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
   M4's false-sharing cache-line pads. Per-field compares are the only layout-honest form; for
   padded shapes the wrapper GEP at offset 0 is layout-correct.
 
-**Pointer-typed fields (string, nested shape/collection) compare by identity** — ratified as final
-for M5 after the E8-class review. Deep value equality for those fields is a future extension, not
-an M5 gap-fix.
+**String fields compare by content** (`shape_value_eq`; `array<string>.contains` does the same):
+copy-on-store gives a stored string no stable identity, so an identity compare of a stored copy
+with the text it was copied from is always false (`IMP-strings.md` "String Ownership and
+Release"). This follows D12's value-semantics direction. **Nested shape and collection fields
+still compare by identity**; deep value equality for those is a future extension.
 
 ### Field-assign = copy-on-persist snapshot semantics (D13)
 

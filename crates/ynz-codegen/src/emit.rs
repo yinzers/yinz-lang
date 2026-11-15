@@ -21,7 +21,7 @@ use inkwell::{
     targets::FileType,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
     values::{
-        BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+        AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
         PointerValue,
     },
     AddressSpace, IntPredicate,
@@ -2192,6 +2192,10 @@ struct Cg<'ctx, 'g> {
     // spawn-site lowering immediately after the spawn call — never by the drop ladder,
     // which frees only the TASKS' references.
     arc_pending_release: Vec<(PointerValue<'ctx>, u64)>,
+    // v0.3-M9 C3b: the string values the expression that produced them says a store may take
+    // by move (typeck's `TypedModule::string_moves`), keyed by the LLVM value. Written by
+    // `lower_expr` and read by `own_string_for_store`; a string absent from it is copied.
+    owned_string_values: std::collections::HashSet<usize>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -2566,6 +2570,31 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// Move the builder to where a new entry-block alloca belongs: after the entry block's
+    /// existing leading allocas and before its first other instruction, so every entry alloca
+    /// executes before anything else in the function.
+    ///
+    /// Why not "at the end of the entry block": a loop's `llvm.stacksave` is an entry-block
+    /// instruction, and `llvm.stackrestore` releases every alloca executed after it. An alloca
+    /// added at the end of the entry block after a loop was lowered sits after that stacksave,
+    /// so the back-edge restore would hand its slot back to the stack and a callee's frame
+    /// would overwrite a live local (AddressSanitizer turns entry allocas into dynamic ones,
+    /// which exposed it: `v03_m9_union_coerce_let` once a callee's frame grew). Allocas at the
+    /// top of the entry block are never after a stacksave.
+    ///
+    /// O(k) time for k instructions before the first non-alloca one.
+    fn position_for_entry_alloca(&self, entry_bb: BasicBlock<'ctx>) {
+        let mut instruction = entry_bb.get_first_instruction();
+        while let Some(current) = instruction {
+            if current.get_opcode() != inkwell::values::InstructionOpcode::Alloca {
+                self.builder.position_before(&current);
+                return;
+            }
+            instruction = current.get_next_instruction();
+        }
+        self.builder.position_at_end(entry_bb);
+    }
+
     /// Build an alloca in the function's ENTRY block, regardless of where the builder
     /// currently points. LLVM SSA requires allocas to dominate every use; placing them
     /// in the entry block is the canonical way to satisfy this for values that may be
@@ -2586,11 +2615,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // We save and restore the builder's current insertion point so the caller's
         // ongoing block emission is unaffected.
         let saved_bb = self.builder.get_insert_block();
-        if let Some(term) = entry_bb.get_terminator() {
-            self.builder.position_before(&term);
-        } else {
-            self.builder.position_at_end(entry_bb);
-        }
+        self.position_for_entry_alloca(entry_bb);
         let slot = self.alloca(ty, name)?;
         // Restore the builder to wherever it was before we moved it.
         if let Some(bb) = saved_bb {
@@ -2616,11 +2641,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get_first_basic_block()
             .ok_or_else(|| format!("alloca_in_entry_llvm: no entry block for `{name}`"))?;
         let saved_bb = self.builder.get_insert_block();
-        if let Some(term) = entry_bb.get_terminator() {
-            self.builder.position_before(&term);
-        } else {
-            self.builder.position_at_end(entry_bb);
-        }
+        self.position_for_entry_alloca(entry_bb);
         let slot = self
             .builder
             .build_alloca(llvm_ty, name)
@@ -3152,7 +3173,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// re-derivation); the raw `ynz_array_new_sized` call is legal here
     /// because this helper lives inside the choke section (E7).
     fn soa_copy_to_aos(
-        &self,
+        &mut self,
         info: &SoaArrayInfo<'ctx>,
         arr: PointerValue<'ctx>,
         site: &str,
@@ -3289,7 +3310,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Non-shape: i64-bit marshal into a per-site ENTRY-BLOCK staging slot (a
     /// body-block alloca would grow the stack every loop iteration — S1 discovery).
     fn array_elem_src_ptr(
-        &self,
+        &mut self,
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
         site: &str,
@@ -3312,6 +3333,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // (`value_to_stable_bits`), never marshal bare envelope-pointer bits
         // (the escape-the-iteration miscompile; fix round 3, tripwire
         // `m5_p2_byval_array_maybe_elem_write_escape`).
+        // A string cell owns its bytes: copy a borrowed string, take a movable one.
+        let val = own_string_for_store(self, val, elem_ty, site)?;
         let stable = self.value_to_stable_bits(val, elem_ty, site)?;
         let bits = self.zext_bits64(stable)?;
         let staging = self.alloca_in_entry_llvm(self.i64(), &format!("{site}_stage"))?;
@@ -3325,7 +3348,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `soa` must be None: growth is a Phase 4 admission decline (D3 — `add`
     /// escapes), so a Some here is an entry-gate breach, not a lowering case.
     fn array_elem_push(
-        &self,
+        &mut self,
         arr: PointerValue<'ctx>,
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
@@ -3349,7 +3372,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// staging semantics: for shape values `array_elem_src_ptr` IS the value
     /// pointer, and admission guarantees SoA elements are shapes).
     fn array_elem_set(
-        &self,
+        &mut self,
         arr: PointerValue<'ctx>,
         idx: inkwell::values::IntValue<'ctx>,
         val: BasicValueEnum<'ctx>,
@@ -3710,6 +3733,84 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(owned_env)
     }
 
+    /// THE codegen call that copies a string (`ynz_string_clone`): a fresh counted heap string
+    /// with the same bytes. The `StringClone` arm of `emit_owned_copy` and the payload copy of a
+    /// `maybe<string>` (`maybe_payload_stable_bits`, which only has `&self`) both come here.
+    fn string_clone_call(
+        &self,
+        string: BasicValueEnum<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        Ok(self
+            .builder
+            .build_call(self.rt.ynz_string_clone, &[string.into()], name)
+            .map_err(|err| format!("{name} string clone: {err}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("{name} string clone: returned void"))?
+            .into_pointer_value())
+    }
+
+    /// Does shape `shape_name` hold a direct `string` field? Decides whether a shape's byte copy
+    /// owes its strings a copy of their own.
+    fn shape_has_string_field(&self, shape_name: &str) -> bool {
+        self.shape_table.get(shape_name).is_some_and(|shape| {
+            shape
+                .fields
+                .iter()
+                .any(|field| is_string_like(&self.resolve_type(&field.ty)))
+        })
+    }
+
+    /// Copy every direct `string` field of the shape at `shape_ptr`, in place, through the one
+    /// string copy ([`Cg::string_clone_call`], the call `emit_owned_copy`'s `StringClone` arm
+    /// makes): the shape's bytes were just copied, so each string field still points at the
+    /// source's string, and two shapes holding one string would free it twice. Fields that hold
+    /// a pointer to something else (a nested shape, an `array`, a `map`) stay shared: the
+    /// residual named in `ynz_typeck::owned_copy`'s header.
+    /// O(fields) time, plus one string copy per string field.
+    fn copy_shape_string_fields(
+        &self,
+        shape_ptr: PointerValue<'ctx>,
+        shape_name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let struct_ty = self
+            .shape_types
+            .get(shape_name)
+            .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
+        let fields = self
+            .shape_table
+            .get(shape_name)
+            .ok_or_else(|| format!("{site}: shape `{shape_name}` not in the shape table"))?
+            .fields
+            .clone();
+        for (index, field) in fields.iter().enumerate() {
+            if !is_string_like(&self.resolve_type(&field.ty)) {
+                continue;
+            }
+            let field_ptr = self
+                .builder
+                .build_struct_gep(
+                    struct_ty,
+                    shape_ptr,
+                    index as u32,
+                    &format!("{site}_sf_{}", field.name),
+                )
+                .map_err(|err| format!("{site} string field gep: {err}"))?;
+            let original = self
+                .builder
+                .build_load(self.ptr(), field_ptr, &format!("{site}_sfv_{}", field.name))
+                .map_err(|err| format!("{site} string field load: {err}"))?;
+            let copied =
+                self.string_clone_call(original, &format!("{site}_field_{}", field.name))?;
+            self.builder
+                .build_store(field_ptr, copied)
+                .map_err(|err| format!("{site} string field store: {err}"))?;
+        }
+        Ok(())
+    }
+
     /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
     /// `maybe_to_owned_dest`, v0.3-M7 Phase 3 / R9): given a maybe envelope's
     /// loaded `flag` and `bits`, return payload bits that are STABLE past the
@@ -3745,10 +3846,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         enum WidePayload {
             Shape(String),
             Number,
+            String,
         }
         let wide = match self.resolve_type(inner_ty) {
             Type::Shape { name } => WidePayload::Shape(name),
             Type::Number { precision } if precision <= 34 && heap => WidePayload::Number,
+            // A `maybe<string>` owns its payload string: a store copies it like any other string.
+            Type::String => WidePayload::String,
             _ => return Ok(bits),
         };
         let has = self
@@ -3791,11 +3895,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.builder
                     .build_memcpy(owned_pay, 1, src_pay, 1, size)
                     .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
+                // The bytes were copied, so the payload's string fields still point at the
+                // source's strings: copy them so the payload owns its strings.
+                self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
                 owned_pay
             }
             // Number reaches here only with `heap = true` (the match above passes
             // in-frame copies through) — the one authoritative i128 promotion.
             WidePayload::Number => self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?,
+            WidePayload::String => {
+                self.string_clone_call(src_pay.into(), &format!("{site}_str_pay"))?
+            }
         };
         let own_bits = self
             .builder
@@ -5854,7 +5964,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// maybe/non-shape values marshal through `value_to_stable_bits` into an
     /// 8-byte staging cell, keeping the stable-bits persist discipline unchanged.
     fn map_val_set(
-        &self,
+        &mut self,
         map: PointerValue<'ctx>,
         key: inkwell::values::BasicMetadataValueEnum<'ctx>,
         is_str: bool,
@@ -5862,6 +5972,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         val_ty: &Type,
         site: &str,
     ) -> Result<(), String> {
+        // A string key is stored by its pointer: the map owns its own copy of it.
+        let key: inkwell::values::BasicMetadataValueEnum<'ctx> = if is_str {
+            let key_value = BasicValueEnum::try_from(key)
+                .map_err(|_| format!("map_val_set {site}: a string key is not a value"))?;
+            own_string_for_store(self, key_value, &Type::String, "map_key_str")?.into()
+        } else {
+            key
+        };
         let src = self.array_elem_src_ptr(val, val_ty, site)?;
         let callee = if is_str {
             self.rt.ynz_map_set_str
@@ -6148,10 +6266,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// layout-correct for padded and unpadded shapes alike.
     ///
     /// Field payloads compare by BIT equality, matching the non-shape element cells
-    /// (float compares as its i64 bit pattern). Pointer-typed fields (string,
-    /// nested shape) compare by pointer identity — **D12 RATIFIED (P3 step 5(a),
-    /// final for M5)**: the by-value cut FORCED field-wise equality at the
-    /// element grain (pointer identity has no by-value analogue), but
+    /// (float compares as its i64 bit pattern). A `string` field compares by its bytes
+    /// (`ynz_string_eq`): every store copies a borrowed string (v0.3-M9 C3b), so two equal
+    /// strings are never one pointer. Other pointer-typed fields (nested shape) compare by
+    /// pointer identity — **D12 RATIFIED (P3 step 5(a), final for M5)**: the by-value cut
+    /// FORCED field-wise equality at the element grain (pointer identity has no by-value
+    /// analogue), but
     /// pointer-typed FIELDS underwent no repr change, so bit-identity is the
     /// minimal behavior-preserving semantics, consistent with the non-shape
     /// cells' bit-equality locked by the step-1 matrix goldens. Deep equality
@@ -6349,14 +6469,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .builder
                         .build_or(same_word, is_none, "ueq_plain")
                         .map_err(|err| format!("{err}"))?;
+                    // A shape variant's fields are compared only when BOTH slots hold that
+                    // variant (a branch per variant): a string field compares through
+                    // `ynz_string_eq`, which must never read the bytes of another variant.
                     for (index, variant_shape) in &layout.shape_variants {
                         let (variant_a, variant_b) = (payload_a, payload_b);
-                        let shape_equal = self.shape_value_eq(
-                            variant_a,
-                            variant_b,
-                            variant_shape,
-                            &format!("{site}_u{index}"),
-                        )?;
                         let is_variant = self
                             .builder
                             .build_int_compare(
@@ -6366,18 +6483,83 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                                 "ueq_is_variant",
                             )
                             .map_err(|err| format!("{err}"))?;
-                        let this_or_other = self
+                        let both_this_variant = self
                             .builder
-                            .build_select(is_variant, shape_equal, variant_equal, "ueq_pick")
-                            .map_err(|err| format!("{err}"))?
-                            .into_int_value();
-                        variant_equal = this_or_other;
+                            .build_and(is_variant, same_tag, "ueq_both_variant")
+                            .map_err(|err| format!("{err}"))?;
+                        let before_block = self
+                            .builder
+                            .get_insert_block()
+                            .ok_or("shape_value_eq: no insert block")?;
+                        let compare_block = self.append_block(&format!("{site}_ueq_cmp{index}"));
+                        let after_block = self.append_block(&format!("{site}_ueq_after{index}"));
+                        self.builder
+                            .build_conditional_branch(both_this_variant, compare_block, after_block)
+                            .map_err(|err| format!("{err}"))?;
+                        self.builder.position_at_end(compare_block);
+                        let shape_equal = self.shape_value_eq(
+                            variant_a,
+                            variant_b,
+                            variant_shape,
+                            &format!("{site}_u{index}"),
+                        )?;
+                        let compare_end_block = self
+                            .builder
+                            .get_insert_block()
+                            .ok_or("shape_value_eq: no insert block")?;
+                        self.builder
+                            .build_unconditional_branch(after_block)
+                            .map_err(|err| format!("{err}"))?;
+                        self.builder.position_at_end(after_block);
+                        let merged = self
+                            .builder
+                            .build_phi(self.ctx.bool_type(), "ueq_pick")
+                            .map_err(|err| format!("{err}"))?;
+                        merged.add_incoming(&[
+                            (&shape_equal, compare_end_block),
+                            (&variant_equal, before_block),
+                        ]);
+                        variant_equal = merged.as_basic_value().into_int_value();
                     }
                     self.builder
                         .build_and(same_tag, variant_equal, "ueq_slot")
                         .map_err(|err| format!("{err}"))?
                 }
-                // Pointer payload (string, nested shape, bignum, everything else):
+                // A string field compares by its bytes (`ynz_string_eq`, as `==` does): a store
+                // copies a borrowed string, so two shapes built from one string hold two
+                // pointers, and equal text must still be equal.
+                Type::String => {
+                    let left_string = self
+                        .builder
+                        .build_load(self.ptr(), a_gep, &format!("{site}_av_{fname}"))
+                        .map_err(|err| format!("{err}"))?;
+                    let right_string = self
+                        .builder
+                        .build_load(self.ptr(), b_gep, &format!("{site}_bv_{fname}"))
+                        .map_err(|err| format!("{err}"))?;
+                    let call = self
+                        .builder
+                        .build_call(
+                            self.rt.string_eq,
+                            &[left_string.into(), right_string.into()],
+                            &format!("{site}_seq_{fname}"),
+                        )
+                        .map_err(|err| format!("{err}"))?;
+                    let result = call
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or("shape_value_eq string_eq returned void")?
+                        .into_int_value();
+                    self.builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            result,
+                            self.i32().const_int(0, false),
+                            &format!("{site}_eq_{fname}"),
+                        )
+                        .map_err(|err| format!("{err}"))?
+                }
+                // Pointer payload (nested shape, bignum, everything else):
                 // pointer identity — the Risk-3 heap-field deferral.
                 _ => {
                     let a = self
@@ -6794,6 +6976,7 @@ fn plain_cg<'ctx, 'g>(
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
+        owned_string_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -7217,6 +7400,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
+        owned_string_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -15382,7 +15566,9 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
     let value_bits = if is_send {
         let arg = &args[0];
         let arg_ty = cg.expr_type(arg);
-        let v = lower_expr(cg, arg)?;
+        let lowered_value = lower_expr(cg, arg)?;
+        // The channel owns what it carries: a borrowed string is copied, a movable one is sent.
+        let sent_value = own_string_for_store(cg, lowered_value, &arg_ty, "conduit_send_str")?;
         // fr12 (v0.3-M8 Phase 4 step 3d): a decimal128 payload lives on the sender's frame
         // (a pointer to per-site i128 storage) and would dangle in the buffer. Mint a fresh
         // counted 16-byte cell through the ONE `number_to_heap_cell` helper the `background`
@@ -15394,12 +15580,13 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         // classification (`channel_elem_drop == NumberCell`), never by a re-derived
         // precision test beside it (authoritative-derivation; fix round 2 replaced the twin).
         if channel_elem_drop(&cg.resolve_type(&arg_ty)) == Some(ChannelElemDrop::NumberCell) {
-            let cell = cg.number_to_heap_cell(v.into_pointer_value(), "conduit_send_num")?;
+            let cell =
+                cg.number_to_heap_cell(sent_value.into_pointer_value(), "conduit_send_num")?;
             cg.builder
                 .build_ptr_to_int(cell, i64t, "conduit_send_num_bits")
                 .map_err(|e| format!("conduit send number cell bits: {e}"))?
         } else {
-            cg.to_i64_bits(v, &arg_ty)
+            cg.to_i64_bits(sent_value, &arg_ty)
                 .map_err(|e| format!("conduit send value bits: {e}"))?
         }
     } else {
@@ -16707,6 +16894,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                         // STABLE: shape/maybe values heap-clone via the ONE marshalling
                         // choke point (fix round 4 — the round-3 closer's probe showed
                         // slots aliasing the loop binding's reused storage).
+                        let elem_val =
+                            own_string_for_store(cg, elem_val, &elem_ty, "fixed_ia_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty, "fixed_ia_val")?;
                         let arr_ptr = recv_val.into_pointer_value();
                         let gep = unsafe {
@@ -17677,6 +17866,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                let val = own_returned_string(cg, expr, val, "sm_return_str")?;
                 // C1f (#423): an `errors` function whose success value is an envelope union
                 // writes the slot, payload inline, into its frame's `Return` region and puts the
                 // region's address in the result's ok word (`ec_region_to_standard` reads it).
@@ -18256,6 +18446,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                let val = own_returned_string(cg, expr, val, "ec_return_str")?;
                 // C1f (#423): an envelope union success value returns BY VALUE as the result's
                 // slot (`ec_result_type`), payload inline, so neither this frame's envelope nor a
                 // payload in this frame is read after `ret`. An `errors` value (a call result or
@@ -18359,7 +18550,8 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 .map_err(|e| format!("void ret: {e}"))?;
         }
         Some(expr) => {
-            let val = lower_expr(cg, expr)?;
+            let mut val = lower_expr(cg, expr)?;
+            val = own_returned_string(cg, expr, val, "return_str")?;
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -18612,16 +18804,91 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     let span = expr.span();
     let key = (span.start, span.end);
     let Some(coercion) = cg.coercion_at(key).cloned() else {
-        return lower_expr_node(cg, expr);
+        let val = lower_expr_node(cg, expr)?;
+        remember_movable_string(cg, expr, val);
+        return Ok(val);
     };
     let outer = cg.coercion_inner.replace(key);
     let lowered = lower_expr_node(cg, expr);
+    // The plain type is read while `coercion_inner` still names this node: once it is restored,
+    // `expr_type` answers with the union slot, which is never a string.
+    let plain_ty = cg.expr_type(expr);
+    if let (Ok(val), false) = (&lowered, cg.is_narrowed_envelope_ident(expr)) {
+        // A string entering a union slot is stored in the envelope: the slot owns its bytes.
+        remember_movable_string(cg, expr, *val);
+    }
     cg.coercion_inner = outer;
     let val = lowered?;
     if cg.is_narrowed_envelope_ident(expr) {
         return Ok(val);
     }
+    let val = own_string_for_store(cg, val, &plain_ty, "union_wrap")?;
     cg.wrap_into_union_envelope(expr, val, &coercion)
+}
+
+/// A string typeck says nobody else holds (a fresh string, or the last use of its binding:
+/// `TypedModule::string_moves`) is remembered, so the store that takes it can move it instead
+/// of copying it.
+fn remember_movable_string<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValueEnum<'ctx>) {
+    let span = expr.span();
+    if val.is_pointer_value()
+        && cg.typed.string_moves.contains(span.start, span.end)
+        && is_string_like(&cg.resolve_type(&cg.expr_type(expr)))
+    {
+        cg.owned_string_values.insert(val.as_value_ref() as usize);
+    }
+}
+
+/// True for the types whose value is a string pointer (`string`, `sensitive string`).
+fn is_string_like(ty: &Type) -> bool {
+    match ty {
+        Type::String => true,
+        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
+        _ => false,
+    }
+}
+
+/// THE seam every store of a string goes through: the string a place keeps. A string typeck
+/// recorded as movable (`TypedModule::string_moves`, remembered by `lower_expr`) is taken as it
+/// is; any other is copied by `emit_owned_copy`, the one routine that copies a string, so the
+/// place owns bytes no other holder can free. Types that are not strings pass through.
+///
+/// O(1) time at the call site; the copy it emits is O(n) in the string's length.
+fn own_string_for_store<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    site: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    if !is_string_like(&cg.resolve_type(ty)) || !val.is_pointer_value() {
+        return Ok(val);
+    }
+    if cg
+        .owned_string_values
+        .contains(&(val.as_value_ref() as usize))
+    {
+        return Ok(val);
+    }
+    let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
+    Ok(copied)
+}
+
+/// The string a `return` hands its caller: a function returns an owned string (the caller
+/// binds a call result by move), so a borrowed one (a parameter, a field or element read, a
+/// literal) is copied here and a returned local at its last use is moved. A value coerced into
+/// a union slot was owned when it entered the envelope (`lower_expr`), so it is left alone.
+fn own_returned_string<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    site: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let span = expr.span();
+    if cg.coercion_at((span.start, span.end)).is_some() {
+        return Ok(val);
+    }
+    let ty = cg.expr_type(expr);
+    own_string_for_store(cg, val, &ty, site)
 }
 
 fn lower_expr_node<'ctx>(
@@ -19399,6 +19666,8 @@ fn lower_expr_node<'ctx>(
                         // bits must be stable (heap-cloned via the ONE choke point, fix
                         // round 4), or a later mutation of the source binding silently
                         // rewrites the stored element.
+                        let elem_val =
+                            own_string_for_store(cg, elem_val, &elem_ty2, "fixed_lit_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty2, "fixed_lit_val")?;
                         let idx = cg.i64().const_int(i as u64, false);
                         let gep = unsafe {
@@ -19756,14 +20025,16 @@ fn lower_expr_node<'ctx>(
 /// What the background task closure must do with a heap-copied arg after the call returns.
 ///
 /// Each `background` arg that was heap-copied (to survive the spawner's frame return) needs
-/// exactly one matching free call inside the closure. Primitives and strings need no free:
-/// primitives are i64 by-value, strings are immutable heap pointers that outlive the frame.
+/// exactly one matching free call inside the closure. Primitives need no free (i64 by-value). A
+/// string the task owns (moved, or an owned copy) gets no free call either: the scope-exit
+/// release pass (C6/C7) owns every string release (`IMP-strings.md` "Storing a string").
 ///
 /// This enum is produced by `prepare_bg_arg_for_ctx` at the spawn site and consumed by the
 /// closure body emitter to generate the matching `ynz_free` / `ynz_array_drop` calls.
 #[derive(Clone, Debug)]
 enum BgArgFreeKind {
-    /// No heap allocation to free — primitives (int/float/bool) and strings.
+    /// No free call in the closure — primitives (int/float/bool), and strings (owned by the task,
+    /// released by the scope-exit pass).
     None,
     /// Shape heap copy: call `ynz_free(ptr, byte_size)` after the fn call.
     HeapShape { byte_size: u64 },
@@ -19836,7 +20107,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // returns, matching the ynz_alloc emitted here.
     //
     // Primitives (Int/Bool/Float) are i64 by-value and need no heap-upgrade.
-    // Strings are immutable heap bytes; the pointer itself survives any frame.
+    // Strings are handled before this point: the task owns its string, moved or copied.
     // v0.3-M4: a channel argument is SHARED with the task — refcounted alias via
     // ynz_channel_share (both sides must operate on the SAME bounded buffer; neither give
     // nor copy is correct for a conduit). The task's drop ladder releases the reference
@@ -19971,6 +20242,32 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             }
             return Ok((task_ref, BgArgFreeKind::ArcShape { byte_size: size }));
         }
+    }
+
+    // A `string` argument: the task owns its bytes. A string nobody else holds goes over as it
+    // is: one typeck recorded as movable (`string_moves`: fresh, or the last use of its
+    // binding) or a binding this spawn consumes. Every other (a field, element, parameter or
+    // `.or()` result the spawner or a container still holds) is copied by `emit_owned_copy`.
+    // Decided here, before the generic `is_heap_arg` gate, because a borrowed string reaches
+    // that gate as "provably safe" and would otherwise be passed through uncopied.
+    if is_string_like(&cg.resolve_type(ty)) {
+        let arg_span = arg.span();
+        let consumed_by_spawn = matches!(
+            cg.typed
+                .background_arg_sole_holder
+                .get(&(arg_span.start, arg_span.end)),
+            Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
+        );
+        if consumed_by_spawn
+            || val.is_pointer_value()
+                && cg
+                    .owned_string_values
+                    .contains(&(val.as_value_ref() as usize))
+        {
+            return Ok((val, BgArgFreeKind::None));
+        }
+        let resolved = cg.resolve_type(ty);
+        return emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg");
     }
 
     let is_heap_arg = match arg {
@@ -22869,6 +23166,15 @@ fn emit_owned_copy<'ctx>(
         // the first, so the receiver IS the copy — in a body and across a spawn alike.
         OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
 
+        // A `string`: a fresh heap copy, the same one in a body and across a spawn. The copy is
+        // not released when the task retires or the frame ends: the scope-exit release pass
+        // (C6/C7) owns every string release, so until it lands the copy leaks, which is
+        // strictly better than the alias it replaces.
+        OwnedCopy::StringClone => {
+            let cloned = cg.string_clone_call(val, &format!("{site}_str"))?;
+            Ok((cloned.into(), BgArgFreeKind::None))
+        }
+
         // Immutable, but living in storage the producing frame owns.
         OwnedCopy::FrameLocalImmutable { heap_cell } => match (mode, heap_cell) {
             (CopyMode::Body, _) => Ok((val, BgArgFreeKind::None)),
@@ -22934,6 +23240,7 @@ fn emit_owned_copy<'ctx>(
             cg.builder
                 .build_store(dst, struct_val)
                 .map_err(|e| format!("{site} store: {e}"))?;
+            cg.copy_shape_string_fields(dst, name, site)?;
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape {
@@ -22985,6 +23292,14 @@ fn emit_owned_copy<'ctx>(
                     cg.i64().const_int(bytes, false),
                 )
                 .map_err(|e| format!("{site} fixed memcpy: {e}"))?;
+            // A `fixed<string>` holds string pointers in its cells: the block copy above shares
+            // them, so copy each string into its own cell (the same `emit_owned_copy` plan an
+            // `array<string>` element takes).
+            if let Type::BuiltinFixed { elem, .. } = &resolved {
+                if is_string_like(&cg.resolve_type(elem)) {
+                    emit_fixed_string_cells_copy(cg, dst, n, elem, site)?;
+                }
+            }
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape { byte_size: bytes },
@@ -23027,6 +23342,13 @@ fn emit_owned_copy<'ctx>(
             if elem == ElemCopy::Nested {
                 emit_array_elem_deep_copy(cg, cloned, &elem_ty, mode, site)?;
             }
+            // Shape elements live inline in the buffer, so the clone's strings are the
+            // source's: copy each element's string fields.
+            if let Type::Shape { name } = cg.resolve_type(&elem_ty) {
+                if cg.shape_has_string_field(&name) {
+                    emit_array_shape_string_fields_copy(cg, cloned, &name, site)?;
+                }
+            }
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapArrayPrimitive,
@@ -23047,6 +23369,26 @@ fn emit_owned_copy<'ctx>(
                 .try_as_basic_value()
                 .basic()
                 .ok_or_else(|| format!("{site} map clone: returned void"))?;
+            // The cells were copied, so a `string` key or value still points at the source's
+            // string: give the clone strings of its own (`ynz_map_clone_strings`).
+            if let Type::BuiltinMap { key, val: value } = &resolved {
+                let clone_keys = is_string_like(&cg.resolve_type(key));
+                let clone_values = is_string_like(&cg.resolve_type(value));
+                if clone_keys || clone_values {
+                    let flag = |on: bool| cg.i32().const_int(on as u64, false);
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_map_clone_strings,
+                            &[
+                                cloned.into_pointer_value().into(),
+                                flag(clone_keys).into(),
+                                flag(clone_values).into(),
+                            ],
+                            "",
+                        )
+                        .map_err(|err| format!("{site} map string clone: {err}"))?;
+                }
+            }
             // DEFERRED, four fields, for the SpawnArg case only.
             // WHAT: the task's own copy of a `map` argument is not released when the task
             //   retires, so a spawn that passes a map leaks that copy.
@@ -23149,9 +23491,106 @@ fn sole_holder_transfer_free_kind<'ctx>(
         // into frame storage the SpawnArg path must re-home (or refuse) for itself.
         ynz_typeck::owned_copy::OwnedCopy::ReceiverIsCopy
         | ynz_typeck::owned_copy::OwnedCopy::FrameLocalImmutable { .. } => None,
+        // A string a task solely holds (a fresh one, or a binding the spawn consumes) is the
+        // task's already: copying it would leave the original held by nobody.
+        ynz_typeck::owned_copy::OwnedCopy::StringClone => Some(BgArgFreeKind::None),
         // No copy exists; the caller's own refusal arm handles it.
         ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
     }
+}
+
+/// Copy every string in the `cell_count` i64 cells at `cells` (a `fixed<string>` block just
+/// byte-copied from its source), through [`emit_owned_copy`]: a counted loop that loads a cell,
+/// copies the string it points at and stores the copy back. O(n) time in the cells and the
+/// bytes they hold.
+fn emit_fixed_string_cells_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    cells: PointerValue<'ctx>,
+    cell_count: u64,
+    elem_ty: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let idx_slot = cg
+        .builder
+        .build_alloca(i64_ty, &format!("{site}_fixed_i"))
+        .map_err(|err| format!("{site} fixed copy idx alloca: {err}"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|err| format!("{site} fixed copy idx init: {err}"))?;
+    let head = cg.append_block(&format!("{site}_fixed_head"));
+    let body = cg.append_block(&format!("{site}_fixed_body"));
+    let done = cg.append_block(&format!("{site}_fixed_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} fixed copy br: {err}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_fixed_iv"))
+        .map_err(|err| format!("{site} fixed copy idx load: {err}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::SLT,
+            i,
+            i64_ty.const_int(cell_count, false),
+            &format!("{site}_fixed_more"),
+        )
+        .map_err(|err| format!("{site} fixed copy cmp: {err}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|err| format!("{site} fixed copy cond: {err}"))?;
+
+    cg.builder.position_at_end(body);
+    let cell = unsafe {
+        cg.builder
+            .build_gep(i64_ty, cells, &[i], &format!("{site}_fixed_cell"))
+            .map_err(|err| format!("{site} fixed copy gep: {err}"))?
+    };
+    let bits = cg
+        .builder
+        .build_load(i64_ty, cell, &format!("{site}_fixed_bits"))
+        .map_err(|err| format!("{site} fixed copy load: {err}"))?
+        .into_int_value();
+    let item = cg
+        .builder
+        .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_fixed_item"))
+        .map_err(|err| format!("{site} fixed copy inttoptr: {err}"))?;
+    let (copied, _free) = emit_owned_copy(
+        cg,
+        None,
+        item.into(),
+        elem_ty,
+        CopyMode::Body,
+        &format!("{site}_item"),
+    )?;
+    let copied_bits = cg
+        .builder
+        .build_ptr_to_int(
+            copied.into_pointer_value(),
+            i64_ty,
+            &format!("{site}_fixed_new_bits"),
+        )
+        .map_err(|err| format!("{site} fixed copy ptrtoint: {err}"))?;
+    cg.builder
+        .build_store(cell, copied_bits)
+        .map_err(|err| format!("{site} fixed copy store: {err}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_fixed_next"))
+        .map_err(|err| format!("{site} fixed copy add: {err}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|err| format!("{site} fixed copy idx store: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} fixed copy loop br: {err}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
 }
 
 /// Copy every element of an already-cloned array whose cells hold pointers to separately
@@ -23286,6 +23725,88 @@ fn emit_array_elem_deep_copy<'ctx>(
     Ok(())
 }
 
+/// Give every element of an already-cloned `array<Shape>` strings of its own, when the shape has
+/// a direct `string` field: the clone's buffer was byte-copied, so each element's string fields
+/// still point at the source's strings. A counted loop that reads an element into a scratch slot,
+/// copies its string fields ([`Cg::copy_shape_string_fields`], the same copy a shape `.copy()`
+/// makes) and writes it back. O(n) time in the elements plus one string copy per string field.
+fn emit_array_shape_string_fields_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arr: PointerValue<'ctx>,
+    shape_name: &str,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let struct_ty = cg
+        .shape_types
+        .get(shape_name)
+        .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
+    let len = cg
+        .builder
+        .build_call(cg.rt.ynz_array_count, &[arr.into()], &format!("{site}_len"))
+        .map_err(|err| format!("{site} shape copy count: {err}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| format!("{site} shape copy count: returned void"))?
+        .into_int_value();
+    let idx_slot = cg.alloca_in_entry_llvm(i64_ty, &format!("{site}_shape_i"))?;
+    let element_slot = cg.alloca_in_entry_llvm(struct_ty, &format!("{site}_shape_elem"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|err| format!("{site} shape copy idx init: {err}"))?;
+
+    let head = cg.append_block(&format!("{site}_shape_head"));
+    let body = cg.append_block(&format!("{site}_shape_body"));
+    let done = cg.append_block(&format!("{site}_shape_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} shape copy br: {err}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_shape_iv"))
+        .map_err(|err| format!("{site} shape copy idx load: {err}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(IntPredicate::SLT, i, len, &format!("{site}_shape_more"))
+        .map_err(|err| format!("{site} shape copy cmp: {err}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|err| format!("{site} shape copy cond: {err}"))?;
+
+    cg.builder.position_at_end(body);
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_get,
+            &[arr.into(), i.into(), element_slot.into()],
+            &format!("{site}_shape_get"),
+        )
+        .map_err(|err| format!("{site} shape copy get: {err}"))?;
+    cg.copy_shape_string_fields(element_slot, shape_name, &format!("{site}_elem"))?;
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_set,
+            &[arr.into(), i.into(), element_slot.into()],
+            &format!("{site}_shape_set"),
+        )
+        .map_err(|err| format!("{site} shape copy set: {err}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_shape_next"))
+        .map_err(|err| format!("{site} shape copy add: {err}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|err| format!("{site} shape copy idx store: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} shape copy loop br: {err}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
+}
+
 #[cfg(test)]
 mod copy_parity_tests {
     use super::CopyMode;
@@ -23370,6 +23891,10 @@ mod copy_parity_tests {
                     matches!(ty, Type::Maybe { .. }),
                     "{ty:?}: planned MaybeCellClone, which the emitter destructures as \
                      Type::Maybe"
+                ),
+                OwnedCopy::StringClone => assert!(
+                    matches!(ty, Type::String | Type::Sensitive { .. }),
+                    "{ty:?}: planned StringClone, which the emitter copies with ynz_string_clone"
                 ),
                 OwnedCopy::ReceiverIsCopy
                 | OwnedCopy::FrameLocalImmutable { .. }
@@ -23933,8 +24458,9 @@ fn lower_array_method<'ctx>(
             //
             // Element comparison semantics (v0.3-M5 P2):
             //   - non-shape elements: 8-byte cell BIT equality (int/bool value; float
-            //     bit pattern; string/number pointer identity — behavior-preserving
+            //     bit pattern; number pointer identity — behavior-preserving
             //     vs the uniform-slot ABI, locked by the step-1 matrix goldens);
+            //   - string elements: byte equality (`ynz_string_eq`, as `==`);
             //   - shape elements: field-wise VALUE equality via `shape_value_eq`
             //     (pointer identity has no by-value analogue; locked by the two RED
             //     matrix contract cells).
@@ -24012,6 +24538,36 @@ fn lower_array_method<'ctx>(
                 // Field-wise value equality between the copied element bytes and
                 // the target shape pointer.
                 cg.shape_value_eq(target_val.into_pointer_value(), out, shape_name, "c_eq")?
+            } else if matches!(cg.resolve_type(elem), Type::String) {
+                // A string element is found by its bytes (`ynz_string_eq`, the same equality
+                // as `==`), never by its pointer: every stored string is a copy of the one
+                // that was put in, so two equal strings are never one pointer.
+                let elem_bits = cg.array_elem_bits_from_out(out, elem, "c_get")?;
+                let elem_ptr = cg
+                    .builder
+                    .build_int_to_ptr(elem_bits, cg.ptr(), "c_elem_str")
+                    .map_err(|err| format!("contains string inttoptr: {err}"))?;
+                let call = cg
+                    .builder
+                    .build_call(
+                        cg.rt.string_eq,
+                        &[elem_ptr.into(), target_val.into()],
+                        "c_str_eq",
+                    )
+                    .map_err(|err| format!("contains string_eq: {err}"))?;
+                let result = call
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("contains string_eq returned void")?
+                    .into_int_value();
+                cg.builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        result,
+                        cg.i32().const_int(0, false),
+                        "c_str_eq_b",
+                    )
+                    .map_err(|err| format!("{err}"))?
             } else {
                 let elem_bits = cg.array_elem_bits_from_out(out, elem, "c_get")?;
                 cg.builder
@@ -24168,6 +24724,7 @@ fn lower_fixed_method<'ctx>(
             // Persist surface: the fixed slot outlives the value expr's site —
             // shape/maybe bits route through the ONE stable-bits choke point
             // (fix round 4).
+            let val = own_string_for_store(cg, val, &vty, "fs_str")?;
             let bits = cg.value_to_stable_bits(val, &vty, "fs_val")?;
             let gep = unsafe {
                 cg.builder
@@ -25640,6 +26197,11 @@ fn store_binding<'ctx>(
             };
             store(cg, view.into(), ty, slot)
         }
+        // A string binding owns its bytes: a borrowed string is copied, a movable one is taken.
+        Type::String | Type::Sensitive { .. } => {
+            let owned = own_string_for_store(cg, val, ty, name)?;
+            store(cg, owned, ty, slot)
+        }
         _ => store(cg, val, ty, slot),
     }
 }
@@ -25713,6 +26275,13 @@ fn store_field<'ctx>(
             cg.builder
                 .build_store(field_ptr, val)
                 .map_err(|e| format!("{e}"))?;
+        }
+        // A string field owns its bytes: a borrowed string is copied, a movable one is taken.
+        Type::String | Type::Sensitive { .. } => {
+            let owned = own_string_for_store(cg, val, ty, "field_str")?;
+            cg.builder
+                .build_store(field_ptr, owned)
+                .map_err(|err| format!("{err}"))?;
         }
         _ => {
             cg.builder

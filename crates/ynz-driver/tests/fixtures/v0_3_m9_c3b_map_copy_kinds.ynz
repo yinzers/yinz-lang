@@ -1,0 +1,25 @@
+// v0.3-M9 C3b fixture: `.copy()` of a map copies only the side that holds strings: a
+// `map<string, int>` copies its keys and leaves the `int` values alone, a `map<int, string>`
+// copies its values and leaves the `int` keys alone (a wrong side would read an `int` as a
+// string pointer).
+// Allocations: the literal key of `counts` copies 1; `counts.copy()` copies that key 1; the value
+// of `names` is fresh and stored by move 1; `names.copy()` copies that value 1. The two
+// `maybe<string>` results (`namesCopy.get(5)`, `names.get(5)`) are bound to a name and each `let`
+// copies the payload 2 (the `int` results copy nothing). Total 1+1+1+1+2 = 6.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let count: int = 1
+  let counts: map<string, int> = { `a`: 7 }
+  let countsCopy = counts.copy()
+  let names: map<int, string> = { 5: `v-${count}` }
+  let namesCopy = names.copy()
+  let copiedCount = countsCopy.get(`a`)
+  print(copiedCount.or(0))
+  let copiedName = namesCopy.get(5)
+  print(copiedName.or(`none`))
+  let originalCount = counts.get(`a`)
+  print(originalCount.or(0))
+  let originalName = names.get(5)
+  print(originalName.or(`none`))
+}

@@ -1,0 +1,34 @@
+// v0.3-M9 C3b fixture: a stored string is a copy, so equal text must compare equal by its
+// bytes, never by its pointer: `contains` on an array of strings, `contains` on an array of
+// shapes with a string field, and a map lookup by a string built at run time.
+// Allocations: `key` 1 (fresh), `names.add(key)` copies 1 (`key` is read again), `same` 1
+// (fresh), `{ name: key }` copies 1 (`key` is read again), `{ name: same }` copies 1 (`same` is
+// read again), the map literal's key literal 1, `table.set(key, 5)` moves `key` at its last use
+// 0. Total 6.
+// Expected output: one value per line below.
+
+shape Tag {
+  name: string
+}
+
+function entrypoint() -> nothing {
+  let count: int = 1
+  let key: string = `k-${count}`
+  let names: array<string> = []
+  names.add(key)
+  let same: string = `k-${count}`
+  print(names.contains(key))
+  print(names.contains(same))
+  print(names.contains(`k-1`))
+  print(names.contains(`other`))
+  let first: Tag = { name: key }
+  let second: Tag = { name: same }
+  let tags: array<Tag> = [first]
+  print(tags.contains(second))
+  let table: map<string, int> = { `x`: 1 }
+  table.set(key, 5)
+  let bySame = table.get(same)
+  print(bySame.or(-1))
+  let byLiteral = table.get(`k-1`)
+  print(byLiteral.or(-1))
+}

@@ -179,10 +179,42 @@ Rules:
 
 - Every string source that can reach Yinz code carries the header: codegen emits static strings as `{ i64 0, [N x i8] }`, and `heap_string_buffer` (the one string allocator, counted by `YNZ_ALLOC_COUNTER`) writes the capacity. Compiler-internal C strings (panic text, file names, debug-print fragments) are not `string` values and have no header.
 - `ynz_string_release(ptr)` is the one release entry point: null and static bytes are no-ops; heap bytes are freed and counted. It accepts any string, so a caller never needs to know where one came from.
-- A heap string has exactly one owner when it is released. Copy-on-store and last-use moves (the way an owner is guaranteed) are specified with the ownership pass, not here.
+- A heap string has exactly one owner when it is released. A store guarantees that with the rule in "Storing a string" below.
 - A conversion result is never shared: two `.toString()` results alive together are two strings.
 - `print(n)` and `${n}` of an `int`, `float` or `number` build no string: the text is read once and dropped, so codegen calls a runtime entry that formats and writes (`ynz_{int,float,decimal}_print`) or appends to the string builder (`ynz_{int,float,decimal}_append`), with nothing to release. `int` formats into a stack buffer owned by that call (never shared across calls or threads); `float` prints from one and appends by formatting straight into the builder; `number` keeps the one `String` the numerics crate returns (the only allocation left). Only `.toString()` returns an owned heap string. Test: `v03_m9_string_ownership` counts heap strings for each case.
 - Cost: 8 header bytes per string (Rust `String` is a 24-byte handle, `&'static str` a 16-byte fat pointer; Yinz pointer plus header is 16 bytes at most), one 8-byte store per allocation, one load and compare per release, no atomics.
+
+### Storing a string
+
+One rule, applied at every place that keeps a string: **a store takes a string by move when typeck's record says nothing else can reach it, and otherwise by an owned copy.** The record is `TypedModule::string_moves` (`ynz-typeck/src/string_ownership.rs`); codegen reads it and decides nothing itself. The copy is `OwnedCopy::StringClone` (`ynz_string_clone`, a fresh counted heap string with the same bytes), made through the one `emit_owned_copy` seam. Codegen reaches that seam through one function, `own_string_for_store`; there is no second copy routine. A string missing from the record is copied, so a gap in the record costs an allocation, never a double free.
+
+The stores that take the rule: a `let`/`const` binding and an assignment, a shape field, an array literal element, `add` and index assignment, a `fixed` element, a map key (stored by raw pointer) and a map value, a channel `send`, a `background` argument, a value entering a union slot (`let`, field, argument, `.or()` fallback), a `return`, and the payload of a `maybe<string>` that is bound, stored or returned.
+
+| An expression is | When | Store |
+|---|---|---|
+| Fresh | an interpolation with a `${}` part; `toUpperCase`, `toLowerCase`, `trim`, `substring`, `replace`; `int`, `float` and `number` `.toString()`; `.copy()`; a call to a Yinz function | move |
+| The last use of its binding | a `let`/`const` string read once, with no mention of the binding on any path after it | move |
+| Borrowed | a literal or pure-text backtick string, `boolean.toString()` (static bytes); an element, field, map value or parameter read; an `.or()` result; a loop cell; a read of a binding that is used again | owned copy |
+
+A function returns an owned string, so a caller binds a call result by move; inside the callee a returned local at its last use moves and anything else is copied at the `return`. A parameter is never movable: the caller owns it.
+
+Containers copy their strings with themselves. `.copy()` and a `background` copy of a shape (its direct `string` fields), a `map<string, V>` or `map<K, string>` (keys and values), an `array<string>`, a `fixed<string>`, an `array<Shape>` whose shape has `string` fields, and a `maybe<string>` or `maybe<Shape>` payload each give the copy strings of its own. Equality follows: string fields and `array<string>.contains` compare by content, since a stored copy has no pointer identity with its source.
+
+Constraints for the scope-exit release pass (C6/C7):
+
+- A binding whose last use was a move has handed its string to the place that took it. The pass must not release that binding at scope exit; it consults the same record, not its own liveness test.
+- A binding read at its last use by something that is not a store (a `print`, a call argument that is only read) still owns its string and is released.
+- Every stored string is released by its owner once: the binding, field, element, map cell, envelope or channel slot that holds it.
+
+Cost: clone where Rust clones, move where Rust moves. Above Rust only where a borrowed string is stored that Rust would keep as `&str` (a literal, a field or parameter read, an `.or()` result), and where a `maybe<string>` or `maybe<Shape>` payload is bound or stored (Rust keeps an `Option<&T>`).
+
+Residuals:
+
+- A nested shape, `array`, `map` or `maybe` field of a copied shape is copied as a pointer, so the copy and the original share it (and the strings inside it). This is the named residual of `ynz_typeck::owned_copy`.
+- A `map` value cell that holds a pointer other than a string is shared the same way.
+- The release story for the strings inside a copied container (element-aware drop) belongs to C6/C7: until it lands, nothing frees a string, and the stored copies leak instead of aliasing.
+
+Test: `v03_m9_c3b_string_store` counts heap strings for each store kind and runs each under AddressSanitizer at both optimization levels.
 
 Under the 24-byte layout above, the rules carry over unchanged. What changes is where the "static" marker lives: inline strings (23 bytes or fewer) own nothing, so releasing one is a no-op; for the heap form the marker moves from the pre-header into the value (`len` bit 0, which this layout reserves, is the proposed "static, not owned" bit), the header word and the 8-byte allocation prefix go away, and `ynz_string_release` takes the 24-byte value.
 

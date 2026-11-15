@@ -1,0 +1,20 @@
+// v0.3-M9 C3b fixture: `list[i] = value` on a `fixed<string>` stores a string the list owns.
+// A fresh string and the last use of a local are stored by move; an element read is borrowed, so
+// it is copied.
+// Allocations: the literal `[`p`, `q`, `r`]` copies 3 into the list; `fresh` 1 (fresh), stored at
+// `list[0]` at its last use 0; `named` 1 (copy of a literal), stored at `list[1]` at its last use
+// 0; `list[2] = list[0]` copies the element read 1. Total 3+1+1+1 = 6.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let count: int = 3
+  let list: fixed<string> = [`p`, `q`, `r`]
+  let fresh: string = `fresh-${count}`
+  list[0] = fresh
+  let named: string = `named`
+  list[1] = named
+  list[2] = list[0].or(`none`)
+  print(list[0].or(`none`))
+  print(list[1].or(`none`))
+  print(list[2].or(`none`))
+}

@@ -1,0 +1,43 @@
+// v0.3-M9 C3b fixture: a string entering a union-typed slot (an annotated `let`, a shape field, an
+// argument) is stored in the envelope, so the slot owns its own bytes: a fresh string or a last use
+// moves in, a literal or a still-read string is copied.
+// Allocations: `fresh` 1 (fresh); `let held: Mixed = fresh` moves its last use 0; `let lit: Mixed
+// = `lit`` copies a literal 1; `origin` 1 (fresh); `let kept: Mixed = origin` copies because
+// `origin` is read again below 1; `{ held: `boxed` }` copies a literal 1; `kind(`arg`)` copies a
+// literal 1. Total 1+0+1+1+1+1+1 = 6.
+// Expected output: one value per line below.
+
+shape Circle {
+  radius: float
+}
+shape Mixed = Circle | string
+shape Box {
+  held: Circle | string
+}
+
+function kind(share value: Mixed) -> int {
+  if (value) {
+    is Circle => {
+      return 1
+    }
+    else => {
+      return 2
+    }
+  }
+}
+
+function entrypoint() -> nothing {
+  let count: int = 1
+  let fresh: string = `a-${count}`
+  let held: Mixed = fresh
+  let lit: Mixed = `lit`
+  let origin: string = `b-${count}`
+  let kept: Mixed = origin
+  print(kind(held))
+  print(kind(lit))
+  print(kind(kept))
+  let box: Box = { held: `boxed` }
+  print(kind(box.held))
+  print(kind(`arg`))
+  print(origin)
+}

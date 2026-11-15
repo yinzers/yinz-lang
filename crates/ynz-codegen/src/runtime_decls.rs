@@ -166,6 +166,14 @@ pub struct RuntimeDecls<'ctx> {
     // static bytes alone, ignores null. ABI: (ptr) → void
     pub ynz_string_release: FunctionValue<'ctx>,
 
+    // C3b: copy a string into a fresh heap string the caller owns — the copy a store makes of a
+    // borrowed string. ABI: (ptr) → ptr
+    pub ynz_string_clone: FunctionValue<'ctx>,
+
+    // C3b: give a just-cloned map strings of its own (keys and/or values).
+    // ABI: (map: ptr, clone_keys: i32, clone_values: i32) → void
+    pub ynz_map_clone_strings: FunctionValue<'ctx>,
+
     // M7 P4a: errors runtime — frame stack + error allocation.
     // ynz_frame_push(file: ptr, line: i64, function: ptr) → void
     pub ynz_frame_push: FunctionValue<'ctx>,
@@ -628,6 +636,16 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_string_release",
                 void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_clone: declare_fn(
+                module,
+                "ynz_string_clone",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_map_clone_strings: declare_fn(
+                module,
+                "ynz_map_clone_strings",
+                void.fn_type(&[ptr.into(), i32.into(), i32.into()], false),
             ),
             // M7 P4a: errors runtime.
             ynz_frame_push: declare_fn(

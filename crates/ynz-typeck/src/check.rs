@@ -687,6 +687,19 @@ fn receiver_kind_modifier(kind: &ynz_ast::nodes::ReceiverKind) -> OwnershipModif
     }
 }
 
+/// The record of strings a store takes by move (`crate::string_ownership`), for the finished
+/// check of `module`. `local_fns` and `imported_fns` are every Yinz function a call can reach.
+fn record_string_moves_of(
+    module: &Module,
+    expr_types: &HashMap<(usize, usize), Type>,
+    binding_names: &crate::binding_names::BindingNames,
+    local_fns: &HashSet<String>,
+    imported_fns: &HashSet<String>,
+) -> crate::string_ownership::StringMoves {
+    let callable: HashSet<String> = local_fns.union(imported_fns).cloned().collect();
+    crate::string_ownership::record_string_moves(module, expr_types, binding_names, &callable)
+}
+
 /// The names of the functions `module` defines — the local half of the call-graph boundary
 /// `provenance` reads (an imported name is the other half).
 fn local_fn_names(module: &Module) -> HashSet<String> {
@@ -877,6 +890,10 @@ pub struct TypedModule {
     /// v0.3-M9 C5a: the persisted transfer record — the final alias-class partition of every
     /// function with its release anchor and escapes (see `crate::transfer_record`).
     pub transfers: crate::transfer_record::TransferRecord,
+    /// v0.3-M9 C3b: every string-typed expression a store takes by move — a fresh string or the
+    /// last use of a `let` binding (`crate::string_ownership`). Codegen copies every other
+    /// string it stores and consults nothing else.
+    pub string_moves: crate::string_ownership::StringMoves,
     /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
     /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
@@ -908,6 +925,7 @@ impl TypedModule {
             binding_names: self.binding_names.clone(),
             transfers: self.transfers.clone(),
             generic_call_instances: self.generic_call_instances.clone(),
+            string_moves: self.string_moves.clone(),
         })
     }
 }
@@ -1001,6 +1019,13 @@ pub fn check(
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
+    let string_moves = record_string_moves_of(
+        module,
+        &checker.expr_types,
+        &binding_names,
+        &checker.local_fn_names,
+        checker.imported_fn_names,
+    );
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1013,6 +1038,7 @@ pub fn check(
         binding_names,
         transfers,
         generic_call_instances: checker.generic_call_instances,
+        string_moves,
     };
     (
         typed,
@@ -1102,6 +1128,13 @@ pub fn check_with_kernel_mode(
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
+    let string_moves = record_string_moves_of(
+        module,
+        &checker.expr_types,
+        &binding_names,
+        &checker.local_fn_names,
+        checker.imported_fn_names,
+    );
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1114,6 +1147,7 @@ pub fn check_with_kernel_mode(
         binding_names,
         transfers,
         generic_call_instances: checker.generic_call_instances,
+        string_moves,
     };
     (typed, checker.mono_table, checker.diags)
 }

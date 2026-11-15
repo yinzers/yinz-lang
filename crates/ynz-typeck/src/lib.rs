@@ -62,6 +62,7 @@ pub mod scope;
 pub mod shapes;
 pub mod signatures;
 pub mod soa;
+pub mod string_ownership;
 pub mod suspension_source;
 pub mod symbol_lookup;
 pub mod transfer_record;

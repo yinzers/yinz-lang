@@ -688,6 +688,25 @@ pub unsafe extern "C" fn ynz_string_release(string: *const u8) {
     free(allocation as *mut core::ffi::c_void);
 }
 
+/// Copy a string: a fresh heap string with the same bytes, which the caller owns
+/// (`ynz_string_release` frees it). THE copy a store makes of a borrowed string (a literal, a
+/// field or element read, a parameter, an `.or()` result) so the place holds bytes of its own;
+/// accepts static and heap strings alike, and a null string stays null (the `none` of a
+/// `T | nothing` union).
+///
+/// Cost: one `strlen`, one allocation, one `memcpy`; O(n) time, n + 9 bytes of memory.
+///
+/// # Safety
+/// `string` must be null or a valid pointer to a null-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_clone(string: *const u8) -> *const u8 {
+    if string.is_null() {
+        return string;
+    }
+    let bytes = unsafe { std::ffi::CStr::from_ptr(string as *const i8) }.to_bytes();
+    heap_string_from_bytes(bytes)
+}
+
 /// Read the current heap-string alloc count. Zero when counter not enabled.
 #[no_mangle]
 pub extern "C" fn ynz_string_alloc_count() -> u64 {
@@ -1320,7 +1339,9 @@ pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8)
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 /// - `key` must be a non-null pointer to a valid null-terminated byte string that
-///   remains valid for the lifetime of the map (the map stores the pointer, not a copy).
+///   remains valid for the lifetime of the map (the map stores the pointer, not a copy of the
+///   bytes: codegen hands it a string the map owns, an owned copy of a borrowed key or a moved
+///   fresh one, `IMP-strings.md` "Storing a string").
 /// - `src` must be valid for `elem_size` bytes.
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
@@ -1532,6 +1553,57 @@ pub unsafe extern "C" fn ynz_map_clone(src: *mut YnzMap) -> *mut YnzMap {
         elem_size: s.elem_size,
     };
     hdr
+}
+
+/// Give a just-cloned map strings of its own: replace, in place, every string key (when
+/// `clone_keys` is non-zero) and every string value (when `clone_values` is non-zero) of
+/// `map` with a fresh copy (`ynz_string_clone`). [`ynz_map_clone`] copies the cells, so a clone
+/// of a `map<string, V>` or `map<K, string>` still points at the source's strings, and two
+/// maps holding one string would free it twice. The caller passes the flags because the map does
+/// not record what its keys and values are.
+///
+/// A key lives in two places (`keys` and `insert_order`); both get the same copy.
+///
+/// O(capacity + count) time, one allocation per string copied; O(distinct keys) memory.
+///
+/// # Safety
+/// `map` must be a valid non-null pointer returned by [`ynz_map_clone`] (or `ynz_map_new`), whose
+/// keys (when `clone_keys` is set) and values (when `clone_values` is set) are string pointers.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_clone_strings(
+    map: *mut YnzMap,
+    clone_keys: i32,
+    clone_values: i32,
+) {
+    if map.is_null() {
+        return;
+    }
+    let capacity = (*map).capacity as usize;
+    let mut renamed_keys: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    for slot in 0..capacity {
+        let control = *(*map).ctrl.add(slot);
+        if control == CTRL_EMPTY || control == CTRL_DELETED {
+            continue;
+        }
+        if clone_keys != 0 {
+            let old_key = *(*map).keys.add(slot);
+            let new_key = ynz_string_clone(old_key as *const u8) as i64;
+            *(*map).keys.add(slot) = new_key;
+            renamed_keys.insert(old_key, new_key);
+        }
+        if clone_values != 0 {
+            let value_slot = val_slot(map, slot) as *mut *const u8;
+            *value_slot = ynz_string_clone(*value_slot);
+        }
+    }
+    if clone_keys != 0 {
+        for position in 0..(*map).count as usize {
+            let entry = (*map).insert_order.add(position);
+            if let Some(new_key) = renamed_keys.get(&*entry) {
+                *entry = *new_key;
+            }
+        }
+    }
 }
 
 // ── Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) ──────────

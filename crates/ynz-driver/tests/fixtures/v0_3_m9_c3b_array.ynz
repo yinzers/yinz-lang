@@ -1,0 +1,21 @@
+// v0.3-M9 C3b fixture: a string stored in an array (literal, `add`, index assignment).
+// Allocations: `built` 1 (fresh). `[built, `lit`]`: `built` is read again so it is copied 1, the
+// literal is copied 1. `names.add(`more`)` copies a literal 1. `names.add(last)` moves the last
+// use of `last` 0 (`last` itself is 1 fresh). `names[0] = built` copies (read again below) 1.
+// Total 1+1+1+1+1+0+1 = 6.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let count: int = 5
+  let built: string = `built-${count}`
+  let names: array<string> = [built, `lit`]
+  names.add(`more`)
+  let last: string = `last-${count}`
+  names.add(last)
+  names[0] = built
+  print(built)
+  print(names[0].or(`none`))
+  print(names[1].or(`none`))
+  print(names[2].or(`none`))
+  print(names[3].or(`none`))
+}
