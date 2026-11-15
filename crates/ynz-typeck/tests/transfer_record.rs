@@ -381,7 +381,8 @@ cases! { assert_accepted;
 // skipped any binding already consumed when the sink started, on the belief that its read had been
 // reported. The index store was refused already; it guards the statement form with no call.
 
-const EATERS: &str = "function eat_both(give x: array<int>, give rows: array<array<int>>) -> nothing {
+const EATERS: &str =
+    "function eat_both(give x: array<int>, give rows: array<array<int>>) -> nothing {
   print(x.count().toString())
 }
 function read_and_eat(share x: array<int>, give rows: array<array<int>>) -> nothing {

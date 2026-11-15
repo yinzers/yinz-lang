@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use ynz_ast::nodes::OwnershipModifier;
 use ynz_diagnostics::SourceSpan;
@@ -604,23 +604,6 @@ impl Scope {
         for branch in self.branches.iter_mut() {
             branch.rename_class(kept, absorbed);
         }
-    }
-
-    /// Every alias class with at least one consumed entry in any frame — the snapshot a call
-    /// form takes BEFORE it runs its transfer decisions, so `check_transfer` can tell a class
-    /// consumed by an earlier statement (its read was reported when the argument was
-    /// inferred) from one consumed by an earlier position of the SAME call (never reported
-    /// anywhere else — v0.3-M8 Phase 4 fix round 2, the `eat2(rows, other)` alias pair).
-    pub fn consumed_classes(&self) -> HashSet<u64> {
-        let mut out = HashSet::new();
-        for frame in &self.frames {
-            for entry in frame.values() {
-                if entry.consumed.is_some() {
-                    out.insert(entry.alias_class);
-                }
-            }
-        }
-        out
     }
 
     /// All names currently in scope (all frames), for Levenshtein suggestions.
