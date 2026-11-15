@@ -3157,7 +3157,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_call(
                 self.rt.ynz_array_set,
-                &[arr.into(), idx.into(), src.into(), self.ptr().const_null().into(), self.i32().const_zero().into()],
+                &[
+                    arr.into(),
+                    idx.into(),
+                    src.into(),
+                    self.ptr().const_null().into(),
+                    self.i32().const_zero().into(),
+                ],
                 &format!("{site}_soa_abort"),
             )
             .map_err(|e| format!("soa scatter oob set: {e}"))?;
@@ -4967,7 +4973,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     fn shape_needs_deepen(&self, shape_name: &str) -> bool {
         self.shape_table
             .layout_shape(shape_name)
-            .is_some_and(|shape| shape.fields.iter().any(|field| self.field_needs_deepen(&field.ty)))
+            .is_some_and(|shape| {
+                shape
+                    .fields
+                    .iter()
+                    .any(|field| self.field_needs_deepen(&field.ty))
+            })
     }
 
     /// After the bytes of a shape value were copied to `shape_ptr`, make every field that owns
@@ -5031,7 +5042,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // its release gives back (`ynz_channel_free`).
                 Type::BuiltinChannel { .. } => self
                     .builder
-                    .build_call(self.rt.ynz_channel_share, &[original.into()], &format!("{site}_share"))
+                    .build_call(
+                        self.rt.ynz_channel_share,
+                        &[original.into()],
+                        &format!("{site}_share"),
+                    )
                     .map_err(|err| format!("deepen_shape_fields share: {err}"))?
                     .try_as_basic_value()
                     .basic()
@@ -23415,7 +23430,6 @@ fn lower_stmt_field_assign<'ctx>(
     store_field(cg, val, &field_ty, field_ptr)
 }
 
-
 /// PostfixOp lowering: `.copy()` and `.freeze()`.
 fn lower_postfix_op<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -23469,8 +23483,8 @@ enum CopyMode {
 /// heap-upgrade path both call it. Neither classifies a type itself.
 ///
 /// The returned [`BgArgFreeKind`] tells the spawn path what the task must release at retire;
-/// `CopyMode::Body` callers ignore it (nothing releases a body-local heap value yet — the
-/// scope-exit release pass is separate, later work).
+/// `CopyMode::Body` callers ignore it (a body-local value is released by `release_fn`, which
+/// the scope-exit pass, C7/C8, calls).
 ///
 /// The `match` below is exhaustive over `OwnedCopy` with NO `_` arm on purpose: a plan added to
 /// the shared table fails to compile here until someone says how to emit it, which is the same
@@ -23491,9 +23505,7 @@ fn emit_owned_copy<'ctx>(
         OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
 
         // A `string`: a fresh heap copy, the same one in a body and across a spawn. The copy is
-        // not released when the task retires or the frame ends: the scope-exit release pass
-        // (C6/C7) owns every string release, so until it lands the copy leaks, which is
-        // strictly better than the alias it replaces.
+        // released by its owner: `release_fn` (a store's container, the scope-exit pass).
         OwnedCopy::StringClone => {
             let cloned = cg.string_clone_call(val, &format!("{site}_str"))?;
             Ok((cloned.into(), BgArgFreeKind::None))
@@ -23949,13 +23961,25 @@ fn emit_map_values_deep_copy<'ctx>(
         .into_int_value();
     let more = cg
         .builder
-        .build_int_compare(IntPredicate::SLT, position, count, &format!("{site}_values_more"))
+        .build_int_compare(
+            IntPredicate::SLT,
+            position,
+            count,
+            &format!("{site}_values_more"),
+        )
         .map_err(|err| format!("{site} map values cmp: {err}"))?;
     cg.builder
         .build_conditional_branch(more, body, done)
         .map_err(|err| format!("{site} map values cond: {err}"))?;
     cg.builder.position_at_end(body);
-    cg.map_iter_get_into(map, position, is_str_key, key_slot, value_buffer, &format!("{site}_values_get"))?;
+    cg.map_iter_get_into(
+        map,
+        position,
+        is_str_key,
+        key_slot,
+        value_buffer,
+        &format!("{site}_values_get"),
+    )?;
     if let Some(variants) = cg.envelope_union_variants(&value_ty) {
         let deepen = cg.union_deepen_fn(&variants)?;
         cg.builder
@@ -24008,7 +24032,14 @@ fn emit_map_values_deep_copy<'ctx>(
         cg.builder
             .build_call(
                 cg.rt.ynz_map_set_str,
-                &[map.into(), key.into(), value_buffer.into(), null.into(), null.into(), zero.into()],
+                &[
+                    map.into(),
+                    key.into(),
+                    value_buffer.into(),
+                    null.into(),
+                    null.into(),
+                    zero.into(),
+                ],
                 "",
             )
             .map_err(|err| format!("{site} map values set: {err}"))?;
@@ -24016,14 +24047,24 @@ fn emit_map_values_deep_copy<'ctx>(
         cg.builder
             .build_call(
                 cg.rt.ynz_map_set,
-                &[map.into(), key_bits.into(), value_buffer.into(), null.into(), zero.into()],
+                &[
+                    map.into(),
+                    key_bits.into(),
+                    value_buffer.into(),
+                    null.into(),
+                    zero.into(),
+                ],
                 "",
             )
             .map_err(|err| format!("{site} map values set: {err}"))?;
     }
     let next = cg
         .builder
-        .build_int_add(position, i64_ty.const_int(1, false), &format!("{site}_values_next"))
+        .build_int_add(
+            position,
+            i64_ty.const_int(1, false),
+            &format!("{site}_values_next"),
+        )
         .map_err(|err| format!("{site} map values add: {err}"))?;
     cg.builder
         .build_store(position_slot, next)
@@ -24043,21 +24084,8 @@ fn emit_map_values_deep_copy<'ctx>(
 /// produces a fresh allocation (`array`, `map`, `maybe`); an element that cannot be copied
 /// makes the whole container a refusal in the shared table, so it never reaches here.
 ///
-/// DEFERRED, four fields:
-/// - WHAT: the items this loop allocates are not released when the copy is dropped —
-///   `ynz_array_drop` is element-blind by design (recorded decision D6), so it frees the
-///   buffer and the header and nothing else.
-/// - WHY: an element-aware drop needs the element TYPE at the drop site. The runtime does not
-///   have it, and a task's retire ladder carries only a wire kind — so giving it one is the
-///   same `BG_ARG_KIND_*` wire-format change the `MapClone` arm's deferral names, and this
-///   change must land BEFORE the scope-exit release pass, not carry a piece of it. The
-///   alternative in the meantime is leaving the items SHARED, which is the alias this loop
-///   exists to remove and the thing that produced a use-after-free; a leak is the strictly
-///   less harmful of the two.
-/// - COST to fix later: per-element-kind drop glue, which codegen already mints for channel
-///   payloads (`channel_elem_drop` is the pattern), plus a way for the drop site to reach it.
-/// - TRIGGER: the scope-exit release pass, which is where a body-local array's own release
-///   lands and where this element walk has to exist anyway.
+/// The items this loop allocates are released with the array by `release_fn` (`ynz_array_release`
+/// walks the items with the element type's glue), so the copy frees exactly what this makes.
 fn emit_array_elem_deep_copy<'ctx>(
     cg: &Cg<'ctx, '_>,
     arr: PointerValue<'ctx>,
@@ -24148,7 +24176,13 @@ fn emit_array_elem_deep_copy<'ctx>(
     cg.builder
         .build_call(
             cg.rt.ynz_array_set,
-            &[arr.into(), i.into(), cell_slot.into(), cg.ptr().const_null().into(), cg.i32().const_zero().into()],
+            &[
+                arr.into(),
+                i.into(),
+                cell_slot.into(),
+                cg.ptr().const_null().into(),
+                cg.i32().const_zero().into(),
+            ],
             &format!("{site}_deep_set"),
         )
         .map_err(|e| format!("{site} deep set: {e}"))?;
@@ -24230,7 +24264,13 @@ fn emit_array_shape_deepen<'ctx>(
     cg.builder
         .build_call(
             cg.rt.ynz_array_set,
-            &[arr.into(), i.into(), element_slot.into(), cg.ptr().const_null().into(), cg.i32().const_zero().into()],
+            &[
+                arr.into(),
+                i.into(),
+                element_slot.into(),
+                cg.ptr().const_null().into(),
+                cg.i32().const_zero().into(),
+            ],
             &format!("{site}_shape_set"),
         )
         .map_err(|err| format!("{site} shape copy set: {err}"))?;
@@ -24398,7 +24438,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         match release_step(&ty) {
             ReleaseStep::Nothing => Ok(None),
             ReleaseStep::String => Ok(Some((
-                self.rt.ynz_string_release.as_global_value().as_pointer_value(),
+                self.rt
+                    .ynz_string_release
+                    .as_global_value()
+                    .as_pointer_value(),
                 false,
             ))),
             ReleaseStep::Array { .. }
@@ -24469,7 +24512,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// The byte size of the heap cell a value of `step` lives in when it owns its cell.
-    fn release_cell_size(&self, step: &ReleaseStep) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    fn release_cell_size(
+        &self,
+        step: &ReleaseStep,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         match step {
             ReleaseStep::Shape { name } => self.shape_abi_size_const(name, "release cell"),
             ReleaseStep::Maybe { .. } => {
@@ -24497,7 +24543,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///
     /// Time: O(size of the type) to emit once; at run time O(n) in the heap the value owns
     /// Space: O(1) here
-    fn release_fn(&self, ty: &Type, owns_cell: bool) -> Result<Option<FunctionValue<'ctx>>, String> {
+    fn release_fn(
+        &self,
+        ty: &Type,
+        owns_cell: bool,
+    ) -> Result<Option<FunctionValue<'ctx>>, String> {
         let resolved = self.resolve_type(ty);
         let step = release_step(&resolved);
         let owns_cell = owns_cell
@@ -24615,7 +24665,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     )
                     .map_err(|err| format!("release array {site}: {err}"))?;
             }
-            ReleaseStep::Map { key, value: value_ty } => {
+            ReleaseStep::Map {
+                key,
+                value: value_ty,
+            } => {
                 let key_glue = match release_step(&self.resolve_type(key)) {
                     ReleaseStep::String => self
                         .rt
@@ -24654,7 +24707,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     self.call_stored_release((glue, inline), field_ptr, site)?;
                 }
             }
-            ReleaseStep::Maybe { inner } => self.emit_maybe_payload_release(function, value, inner, site)?,
+            ReleaseStep::Maybe { inner } => {
+                self.emit_maybe_payload_release(function, value, inner, site)?
+            }
             ReleaseStep::Union { variants } => {
                 if self.envelope_union_variants(ty).is_some() {
                     self.emit_union_slot_release(function, value, variants, site)?;
@@ -24768,15 +24823,22 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let payload_release: Option<(PointerValue<'ctx>, Option<u64>)> = match release_step(&inner)
         {
             ReleaseStep::String => Some((
-                self.rt.ynz_string_release.as_global_value().as_pointer_value(),
+                self.rt
+                    .ynz_string_release
+                    .as_global_value()
+                    .as_pointer_value(),
                 None,
             )),
             ReleaseStep::Shape { .. } => self
                 .release_fn(&inner, true)?
                 .map(|glue| (glue.as_global_value().as_pointer_value(), None)),
-            _ if matches!(inner, Type::Number { precision } if precision <= 34) => {
-                Some((self.rt.ynz_number_cell_free.as_global_value().as_pointer_value(), None))
-            }
+            _ if matches!(inner, Type::Number { precision } if precision <= 34) => Some((
+                self.rt
+                    .ynz_number_cell_free
+                    .as_global_value()
+                    .as_pointer_value(),
+                None,
+            )),
             _ => None,
         };
         let Some((glue, _)) = payload_release else {
@@ -24820,7 +24882,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         match release_step(&variant) {
             ReleaseStep::Nothing => Ok(None),
             ReleaseStep::String => Ok(Some(
-                self.rt.ynz_string_release.as_global_value().as_pointer_value(),
+                self.rt
+                    .ynz_string_release
+                    .as_global_value()
+                    .as_pointer_value(),
             )),
             ReleaseStep::Array { .. } | ReleaseStep::Map { .. } => Ok(self
                 .release_fn(&variant, false)?
@@ -24865,7 +24930,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map(|glue| (glue, false)),
             };
             if release.is_some() {
-                let block = self.ctx.append_basic_block(function, &format!("union_variant{index}"));
+                let block = self
+                    .ctx
+                    .append_basic_block(function, &format!("union_variant{index}"));
                 cases.push((self.i64().const_int(index as u64, false), block));
                 bodies.push((block, release));
             }
@@ -24911,7 +24978,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let mut bodies: Vec<(BasicBlock<'ctx>, PointerValue<'ctx>)> = Vec::new();
         for (index, variant) in variants.iter().enumerate() {
             if let Some(glue) = self.union_variant_release(variant)? {
-                let block = self.ctx.append_basic_block(function, &format!("view_variant{index}"));
+                let block = self
+                    .ctx
+                    .append_basic_block(function, &format!("view_variant{index}"));
                 cases.push((self.i64().const_int(index as u64, false), block));
                 bodies.push((block, glue));
             }
@@ -24959,7 +25028,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let done = self.ctx.append_basic_block(function, "ec_done");
         let failed = self
             .builder
-            .build_int_compare(IntPredicate::NE, err_bits, self.i64().const_zero(), "ec_failed")
+            .build_int_compare(
+                IntPredicate::NE,
+                err_bits,
+                self.i64().const_zero(),
+                "ec_failed",
+            )
             .map_err(|err| format!("{site} ec cmp: {err}"))?;
         self.builder
             .build_conditional_branch(failed, failed_bb, ok_bb)
@@ -25016,9 +25090,9 @@ fn release_glue_free_kind<'ctx>(
     }
     let resolved = cg.resolve_type(ty);
     let upgrade = match (&kind, &resolved) {
-        (BgArgFreeKind::HeapArrayPrimitive, Type::BuiltinArray { elem }) => cg
-            .stored_release(elem, ReleaseHome::Element)?
-            .is_some(),
+        (BgArgFreeKind::HeapArrayPrimitive, Type::BuiltinArray { elem }) => {
+            cg.stored_release(elem, ReleaseHome::Element)?.is_some()
+        }
         (BgArgFreeKind::None, Type::BuiltinMap { .. }) => true,
         (BgArgFreeKind::HeapShape { .. }, Type::Shape { name }) => {
             !cg.shape_field_releases(name)?.is_empty()
@@ -25119,7 +25193,10 @@ mod copy_parity_tests {
                 // the samples hold `int` items).
                 _ => true,
             };
-            assert!(expected, "{ty:?}: refused to copy, but its release is {step:?}");
+            assert!(
+                expected,
+                "{ty:?}: refused to copy, but its release is {step:?}"
+            );
         }
     }
 

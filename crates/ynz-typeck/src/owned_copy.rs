@@ -24,20 +24,14 @@
 //! copy rather than an alias. That is [`OwnedCopy::ReceiverIsCopy`] /
 //! [`OwnedCopy::FrameLocalImmutable`], not a stub.
 //!
-//! ## Residuals this table does NOT close, named rather than hidden
+//! ## What a copy owns
 //!
-//! - [`OwnedCopy::ShapeMemcpy`] copies a shape's own bytes. A field that is itself a pointer
-//!   (a nested shape, an `array`, a `map`, a `maybe`) is copied as a pointer, so the copy and
-//!   the original still share it. Making that deep needs a per-shape recursive clone with a
-//!   matching release story; it is a separate, ratified piece of work, not something this
-//!   module can pretend away.
-//! - [`OwnedCopy::MapClone`] copies a map's four buffers. A value cell holding a pointer is
-//!   copied as a pointer, the same one level down. Iterating a map's occupied slots from
-//!   generated code is the missing machinery.
-//!
-//! Both residuals are pre-existing behaviour of already-shipped arms, unchanged here.
-//! `array<T>` is the one container this module DOES take all the way down
-//! ([`ElemCopy::Nested`]), because it is the type the use-after-free was found on.
+//! A copy owns a copy of everything the value owns, all the way down: a shape's string, array,
+//! map, nested-shape, `maybe` and union fields and its channel reference ([`OwnedCopy::ShapeMemcpy`]),
+//! a map's values ([`OwnedCopy::MapClone`]), an array's items ([`ElemCopy::Nested`]). A value a
+//! store takes by move (`heap_moves`) keeps its heap and copies nothing, and a `let` view
+//! (`view_bindings`) owns nothing. `ynz-codegen`'s release table frees exactly what the copy
+//! allocates, and a parity test holds the two tables together.
 
 use crate::types::{type_name, Type};
 
@@ -64,15 +58,15 @@ pub enum OwnedCopy {
     /// mechanism the spawn path has for this type, or [`HeapCell::None`] when it has none and
     /// must refuse.
     FrameLocalImmutable { heap_cell: HeapCell },
-    /// A `shape`: copy the struct's own bytes into fresh storage. See the pointer-field
-    /// residual in this module's header.
+    /// A `shape`: copy the struct's own bytes into fresh storage, then a copy of every heap
+    /// field (see "What a copy owns" in this module's header).
     ShapeMemcpy,
     /// `fixed<T>`: copy the N inline cells into a fresh slot.
     FixedMemcpy,
     /// `array<T>`: a fresh header and buffer. `elem` says whether the element cells are
     /// finished once byte-copied or must themselves be copied.
     ArrayClone { elem: ElemCopy },
-    /// `map<K, V>`: a fresh header and its four buffers. See the value-cell residual above.
+    /// `map<K, V>`: a fresh header and its four buffers, and a copy of every heap value.
     MapClone,
     /// `maybe<T>`: a fresh envelope cell, plus the payload for the inner types whose payload
     /// is itself copied by the shared maybe-ownership core.

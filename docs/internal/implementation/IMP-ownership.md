@@ -347,6 +347,25 @@ The crossing set reads only the kinds with a frame slot across a suspension toda
 
 **Parity.** `ReleasePlan::parity_violations` checks, per edge and founder, the fate against `Scope::consumed_classes` at the edge and the transfer record's escapes (`typeck/tests/release_plan.rs`, over every fixture and example).
 
+### The one release helper
+
+`Cg::release_fn` (`ynz-codegen/src/emit.rs`) is the one place a heap value is freed: it emits one module function `ynz_release_<type>` per type, from `release_step`, an exhaustive match over `Type`. It frees exactly what a copy of the value allocates (`emit_owned_copy`, whose shape copy is the one seam `deepen_shape_fields`), so a value freed once per holder balances.
+
+| value | what its release frees |
+|---|---|
+| `string` | its bytes (`ynz_string_release`; a static string is left alone) |
+| `array<T>` | each item by `T`'s release, then the header and buffer (`ynz_array_release`) |
+| `map<K, V>` | each occupied entry's key (a string key is a raw pointer the map owns) and value, then the buffers (`ynz_map_release`) |
+| shape | each field by its type: strings, arrays, maps, a nested shape (its heap cell: contents, then the cell), a `maybe` (its heap envelope cell), a union slot, a channel (one counted reference) |
+| `maybe<T>` | the payload a copy allocates (a string, a shape's heap cell, a `number`'s cell); in the cell flavor, the envelope cell. An array or map payload is not the envelope's (copy refuses it) |
+| union | an envelope union is a slot: a shape variant's fields (inline) or its box cell (recursive union), a string, array or map variant; any other union is a `{tag, data}` view |
+| `fixed<string>` | each string cell; any other heap item of a `fixed` is an internal error (its copy shares the cells) |
+| channel, task handle | one counted reference (`ynz_channel_free`); the handle aborts its task (`ynz_handle_free`) |
+| errors-capable | the error object, or the ok payload |
+| `dynamic`, type parameter | internal error: no such value exists in generated code |
+
+Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a map `set` over a present key, whose handed-in key copy is freed too). The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for every argument until C7's move sites null their slots. Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
+
 ### The parameter rule and how far it travels (FRAGO 007, re-derived)
 
 A whole binding that is a parameter transfers only if declared `give`. With `give` declared, the EXISTING call-site path consumes the caller's binding (sink 2) at every call and every spawn — one mechanism. The obligation therefore transits the whole chain: A relays to B relays to C, C sends; C's parameter needs `give`; B passes its parameter to a give position, so B's needs `give`; up to the frame that owns the value as a local. `share` and `lend` parameters are refused by the same test — they are explicit statements that the caller keeps the value.

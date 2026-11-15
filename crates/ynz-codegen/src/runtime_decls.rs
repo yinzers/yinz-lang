@@ -488,7 +488,10 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_array_set: declare_fn(
                 module,
                 "ynz_array_set",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into(), i32.into()], false),
+                void.fn_type(
+                    &[ptr.into(), i64.into(), ptr.into(), ptr.into(), i32.into()],
+                    false,
+                ),
             ),
             ynz_array_count: declare_fn(
                 module,

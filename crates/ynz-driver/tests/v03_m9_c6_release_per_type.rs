@@ -50,11 +50,7 @@ fn counted_run(case: &Case, suspending_callee: bool, spawns: usize) -> (u64, u64
     let source = program(case, suspending_callee, spawns);
     let built = build_source(&source, "c6 per-type program", false);
     let (output, counters) = run_counted(&built);
-    assert_eq!(
-        output.exit_code, 0,
-        "{source}\nstderr:\n{}",
-        output.stderr
-    );
+    assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
     assert_eq!(
         output.stdout.matches("777\n").count(),
         spawns,
