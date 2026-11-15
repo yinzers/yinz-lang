@@ -48,6 +48,7 @@
 //!   now. Releasing such a kind inside a state machine is C6's change, made together with the
 //!   frame backing, by widening that one predicate.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ynz_ast::nodes::{Block, Expr, Stmt};
@@ -264,7 +265,11 @@ fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> H
                 return HeapClass::Heap(ReleaseKind::NestedShape);
             };
             visiting.push(name.clone());
-            let fields: Vec<Type> = definition.fields.iter().map(|f| f.ty.clone()).collect();
+            let fields: Vec<Type> = definition
+                .fields
+                .iter()
+                .map(|field| field.ty.clone())
+                .collect();
             let class = shape_class(&fields, tables, visiting);
             visiting.pop();
             class
@@ -712,6 +717,7 @@ impl ReleaseRecorder {
             internal_errors: self.internal_errors,
             ..ReleasePlan::default()
         };
+        let holes: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let mut moves_by_binding: HashMap<DeclKey, Vec<Span>> = HashMap::new();
         for (span, decl) in strings.last_uses() {
             moves_by_binding.entry(decl.clone()).or_default().push(span);
@@ -724,11 +730,8 @@ impl ReleaseRecorder {
                     .class_of(codegen_name)
                     .map(|class| class.anchor.clone())
             };
-            let codegen_name_of = |decl: &DeclKey| {
-                names
-                    .codegen_name(decl)
-                    .map_or_else(|| decl.2.clone(), str::to_string)
-            };
+            let codegen_name_of =
+                |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
             let resolved =
                 resolve_function(function, &lookup, Some(&moves_by_binding), &codegen_name_of);
             let user_reads = resolve_function(
@@ -760,6 +763,7 @@ impl ReleaseRecorder {
                 (Err(message), _) | (_, Err(message)) => plan.internal_errors.push(message),
             }
         }
+        plan.note_holes(holes.into_inner());
         plan
     }
 }
@@ -965,8 +969,9 @@ impl ReleasePlan {
             .flat_map(|(span, sites)| sites.iter().map(move |site| (*span, site)))
     }
 
-    /// The release reads of `function` in `names`. Empty for a function with no recorded edge
-    /// (an imported or hidden-default context).
+    /// The release reads of `function` in `names`. Empty for a function the plan has no entry
+    /// for; every function of a module is planned (`unplanned_functions`, checked before codegen
+    /// reads the module).
     pub fn reads(&self, function: &str, names: Names) -> ReleaseReads {
         let table = match names {
             Names::User => &self.reads_user,
@@ -983,6 +988,26 @@ impl ReleasePlan {
     /// What the walk saw at each edge, in walk order.
     pub fn facts(&self) -> &[EdgeFacts] {
         &self.facts
+    }
+
+    /// Keep each distinct hole once in `internal_errors`.
+    fn note_holes(&mut self, holes: Vec<String>) {
+        for hole in holes {
+            if !self.internal_errors.contains(&hole) {
+                self.internal_errors.push(hole);
+            }
+        }
+    }
+
+    /// The names in `function_names` the plan has no entry for. `TypedModule::with_codegen_names`
+    /// fails on any, so `reads` never meets an unplanned function. O(names).
+    pub fn unplanned_functions<'a>(
+        &self,
+        function_names: impl Iterator<Item = &'a str>,
+    ) -> Vec<&'a str> {
+        function_names
+            .filter(|name| !self.reads_user.contains_key(*name))
+            .collect()
     }
 
     /// Add `site` at `span` unless that founder is already moved there.
@@ -1002,11 +1027,9 @@ impl ReleasePlan {
         names: &BindingNames,
         strings: &StringMoves,
     ) {
-        let codegen_name_of = |decl: &DeclKey| {
-            names
-                .codegen_name(decl)
-                .map_or_else(|| decl.2.clone(), str::to_string)
-        };
+        let holes: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let codegen_name_of =
+            |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
         let mut releasing_if_live: HashSet<DeclKey> = HashSet::new();
         for ((kind, span, fates), raw_edge) in resolved.edges.iter().zip(&function.edges) {
             let list: Vec<ReleaseEntry> = fates
@@ -1090,6 +1113,7 @@ impl ReleasePlan {
                 ));
             }
         }
+        self.note_holes(holes.into_inner());
     }
 
     /// Where the plan disagrees with the live scope's consumed classes or the transfer record.
@@ -1207,6 +1231,27 @@ impl ReleasePlan {
             }
         }
         violations
+    }
+}
+
+/// The codegen name of `decl`. A declaration `names` lacks is a hole in the record: it is noted in
+/// `holes` (the plan then fails `TypedModule::with_codegen_names`), and the user's name stands in
+/// only so the walk can finish and report every hole.
+fn codegen_name_or_note(
+    names: &BindingNames,
+    decl: &DeclKey,
+    function: &str,
+    holes: &RefCell<Vec<String>>,
+) -> String {
+    match names.codegen_name(decl) {
+        Some(codegen_name) => codegen_name.to_string(),
+        None => {
+            holes.borrow_mut().push(format!(
+                "internal: `{}` in `{function}` has no codegen name in the binding record",
+                decl.2
+            ));
+            decl.2.clone()
+        }
     }
 }
 

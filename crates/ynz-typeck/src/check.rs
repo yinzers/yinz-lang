@@ -921,6 +921,18 @@ impl TypedModule {
         if !self.release_plan.internal_errors().is_empty() {
             return Err(self.release_plan.internal_errors().join("; "));
         }
+        let unplanned = self
+            .release_plan
+            .unplanned_functions(self.module.items.iter().filter_map(|item| match item {
+                Item::Function(function) => Some(function.name.as_str()),
+                _ => None,
+            }));
+        if !unplanned.is_empty() {
+            return Err(format!(
+                "internal: the release plan has no entry for function(s) {}",
+                unplanned.join(", ")
+            ));
+        }
         let module = self.binding_names.apply(&self.module)?;
         Ok(TypedModule {
             module,
@@ -2491,7 +2503,6 @@ impl<'b> Checker<'b> {
         self.release.end_function(&self.transfers.current_anchors());
 
         // Clear type params when done with this function.
-
         for gp in &f.generics {
             self.type_param_scope.remove(&gp.name);
         }
