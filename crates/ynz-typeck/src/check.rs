@@ -7158,6 +7158,8 @@ impl<'b> Checker<'b> {
     /// parameter (accepted when it follows the contract), anything else not assignable.
     ///
     /// `name` is the callee as the call names it. An `Error` argument was already reported.
+    /// Returns false when it refused the argument, so a caller that would hand the argument over
+    /// (a store) can skip it: a mistyped value is never stored.
     /// O(size of the two types) time and space.
     fn check_argument_type(
         &mut self,
@@ -7165,13 +7167,15 @@ impl<'b> Checker<'b> {
         arg: &Expr,
         expected_ty: &Type,
         actual_ty: &Type,
-    ) {
+    ) -> bool {
+        let mut accepted = true;
         let actual_ty = actual_ty.clone();
         // M7 P3c: range values are first-class — can be passed as function arguments.
         if let Type::ErrorsCapable { .. } = &actual_ty {
             // M7 P3a: give a more helpful diagnostic for ErrorsCapable values passed
             // to a function expecting the success type.
             if !matches!(expected_ty, Type::ErrorsCapable { .. }) {
+                accepted = false;
                 self.diags.push(Diagnostic::error(
                         arg.span().clone(),
                         "This function can fail, but the failure is not handled here.",
@@ -7196,6 +7200,7 @@ impl<'b> Checker<'b> {
                 _ => false,
             };
 
+            accepted = is_valid_dyn_coerce;
             if !is_valid_dyn_coerce && is_union_into_its_variant(expected_ty, &actual_ty) {
                 self.diags.push(union_where_variant_expected_diag(
                     arg,
@@ -7234,6 +7239,7 @@ impl<'b> Checker<'b> {
         } else if actual_ty != Type::Error {
             self.record_union_coercion(arg, expected_ty, &actual_ty);
         }
+        accepted
     }
 
     fn check_user_fn_call(
@@ -7641,7 +7647,9 @@ impl<'b> Checker<'b> {
                             binding,
                         ));
                     }
-                    None => self.check_argument_type(name, arg, &resolved, &actual_ty),
+                    None => {
+                        self.check_argument_type(name, arg, &resolved, &actual_ty);
+                    }
                 }
             } else {
                 // A plain variant into a parameter whose resolved type is an envelope union
@@ -7795,6 +7803,7 @@ impl<'b> Checker<'b> {
         // `secret.contains(5)` panicked (C1g rework r3, #424). ONE position table
         // (`builtin_method_argument_slots`, through `Checker::builtin_method_argument_slots`
         // for the registry's one-argument methods) — no per-arm twins (authoritative-derivation).
+        let mut refused_positions: Vec<usize> = Vec::new();
         for (pos, slot_ty) in self.builtin_method_argument_slots(receiver_ty, method) {
             let Some(arg) = args.get(pos) else {
                 continue;
@@ -7815,7 +7824,9 @@ impl<'b> Checker<'b> {
             // `errors` result, so it must be wrapped). It is the one record: a second call here
             // would push the envelope refusal twice. A union envelope STORED by `add`/`set` into
             // a container is the lifetime class of #423.
-            self.check_argument_type(method, arg, &slot_ty, &actual_ty);
+            if !self.check_argument_type(method, arg, &slot_ty, &actual_ty) {
+                refused_positions.push(pos);
+            }
         }
 
         // M8 P4: sensitive type method dispatch (after the argument check: a `sensitive T` has
@@ -7826,13 +7837,19 @@ impl<'b> Checker<'b> {
         }
 
         // A heap value stored by an in-place collection method (`add`, `set`) is handed over to the
-        // receiver, like a field or index store.
+        // receiver, like a field or index store. A refused
+        // (mistyped) argument is not stored: it is reported once, and a later read of it must still
+        // get its own type error instead of a "handed over" one.
         if let Some(receiver) = receiver_expr {
             self.store_into_collection(
                 receiver,
                 method,
                 args,
-                collection_store_positions(receiver_ty, method),
+                &collection_store_positions(receiver_ty, method)
+                    .iter()
+                    .copied()
+                    .filter(|position| !refused_positions.contains(position))
+                    .collect::<Vec<_>>(),
             );
         }
 
