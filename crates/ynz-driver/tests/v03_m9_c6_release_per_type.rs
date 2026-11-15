@@ -47,9 +47,14 @@ fn program(case: &Case, suspending_callee: bool, spawns: usize) -> String {
 }
 
 /// `(cell alloc, cell free, string alloc, string free)` of one run of the program.
-fn counted_run(case: &Case, suspending_callee: bool, spawns: usize) -> (u64, u64, u64, u64) {
+fn counted_run(
+    case: &Case,
+    suspending_callee: bool,
+    no_optimize: bool,
+    spawns: usize,
+) -> (u64, u64, u64, u64) {
     let source = program(case, suspending_callee, spawns);
-    let built = build_source(&source, "c6 per-type program", false);
+    let built = build_source(&source, "c6 per-type program", no_optimize);
     let (output, counters) = run_counted(&built);
     assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
     assert_eq!(
@@ -67,11 +72,11 @@ fn counted_run(case: &Case, suspending_callee: bool, spawns: usize) -> (u64, u64
 
 /// Three more spawns allocate and free exactly the same number of cells and of heap strings:
 /// whatever the task's copy allocated, its release freed.
-fn assert_spawns_balance(case: &Case, suspending_callee: bool) {
+fn assert_spawns_balance(case: &Case, suspending_callee: bool, no_optimize: bool) {
     let (alloc_one, free_one, string_alloc_one, string_free_one) =
-        counted_run(case, suspending_callee, 1);
+        counted_run(case, suspending_callee, no_optimize, 1);
     let (alloc_four, free_four, string_alloc_four, string_free_four) =
-        counted_run(case, suspending_callee, 4);
+        counted_run(case, suspending_callee, no_optimize, 4);
     let extra_allocs = alloc_four - alloc_one;
     let extra_frees = free_four - free_one;
     let extra_string_allocs = string_alloc_four - string_alloc_one;
@@ -92,9 +97,9 @@ fn assert_spawns_balance(case: &Case, suspending_callee: bool) {
     );
 }
 
-fn assert_asan_clean(case: &Case, suspending_callee: bool) {
+fn assert_asan_clean(case: &Case, suspending_callee: bool, no_optimize: bool) {
     let source = program(case, suspending_callee, 4);
-    let built = build_source(&source, "c6 per-type asan program", false);
+    let built = build_source(&source, "c6 per-type asan program", no_optimize);
     let run = run_asan_binary(&build_asan(&built));
     assert!(
         !run.stderr.contains("AddressSanitizer"),
@@ -112,22 +117,42 @@ macro_rules! release_cases {
 
             #[test]
             fn cpu_callee_releases_the_copy() {
-                assert_spawns_balance(&$case, false);
+                assert_spawns_balance(&$case, false, false);
             }
 
             #[test]
             fn state_machine_callee_releases_the_copy() {
-                assert_spawns_balance(&$case, true);
+                assert_spawns_balance(&$case, true, false);
             }
 
             #[test]
             fn cpu_callee_asan() {
-                assert_asan_clean(&$case, false);
+                assert_asan_clean(&$case, false, false);
             }
 
             #[test]
             fn state_machine_callee_asan() {
-                assert_asan_clean(&$case, true);
+                assert_asan_clean(&$case, true, false);
+            }
+
+            #[test]
+            fn cpu_callee_releases_the_copy_no_optimize() {
+                assert_spawns_balance(&$case, false, true);
+            }
+
+            #[test]
+            fn state_machine_callee_releases_the_copy_no_optimize() {
+                assert_spawns_balance(&$case, true, true);
+            }
+
+            #[test]
+            fn cpu_callee_asan_no_optimize() {
+                assert_asan_clean(&$case, false, true);
+            }
+
+            #[test]
+            fn state_machine_callee_asan_no_optimize() {
+                assert_asan_clean(&$case, true, true);
             }
         }
     };
@@ -289,87 +314,140 @@ release_cases!(
 
 /// A `string` the spawner no longer holds (its last use is the spawn, a fresh value, a
 /// literal) is handed over as it is, not copied: the task owns it, and its release must free it
-/// once, never twice and never a static.
+/// once, never twice and never a static. A callee that declares `give value` may store the
+/// string in a container, so its argument keeps the flat behaviour (the string is not released,
+/// a recorded deferral to C7): that form must still run clean, freeing nothing twice.
 mod string_handed_over_whole {
     use super::*;
 
-    const ARGUMENTS: [(&str, &str, &str); 5] = [
-        (
-            "owned_fresh_value",
-            "  let count: int = 5\n",
-            "`n=${count}`",
-        ),
-        (
-            "owned_last_use_of_a_binding",
-            "  let count: int = 5\n  let value: string = `n=${count}`\n",
-            "value",
-        ),
-        (
-            "last_use_of_a_binding",
-            "  let labels: array<string> = [`heap string`]\n  let value: string = labels.get(0).or(`none`)\n",
-            "value",
-        ),
-        (
-            "fresh_value",
-            "  let labels: array<string> = [`heap string`]\n",
-            "labels.get(0).or(`none`)",
-        ),
-        ("literal", "", "`literal`"),
-    ];
-
-    fn source(setup: &str, argument: &str, suspending_callee: bool) -> String {
-        let callee_body = if suspending_callee {
-            "  wait sleep(1)\n  print(777)\n"
+    fn source(setup: &str, argument: &str, suspending_callee: bool, give_callee: bool) -> String {
+        let wait_line = if suspending_callee {
+            "  wait sleep(1)\n"
         } else {
-            "  print(777)\n"
+            ""
+        };
+        let store_line = if give_callee {
+            "  let held: array<string> = []\n  held.add(value)\n"
+        } else {
+            ""
+        };
+        let parameter = if give_callee {
+            "give value: string"
+        } else {
+            "value: string"
         };
         format!(
-            "function show(value: string) -> nothing {{\n{callee_body}}}\n\n\
+            "function show({parameter}) -> nothing {{\n{wait_line}{store_line}  print(777)\n}}\n\n\
              function launch() -> nothing {{\n{setup}  background show({argument})\n}}\n\n\
              function entrypoint() -> nothing {{\n  launch()\n  wait sleep(200)\n}}\n"
         )
     }
 
-    fn assert_runs_clean(suspending_callee: bool) {
-        for (name, setup, argument) in ARGUMENTS {
-            let program = source(setup, argument, suspending_callee);
-            let built = build_source(&program, "c6 handed-over string", false);
-            let (output, counters) = run_counted(&built);
-            assert_eq!(output.exit_code, 0, "{name}\n{program}\n{}", output.stderr);
+    fn assert_runs_clean(
+        setup: &str,
+        argument: &str,
+        task_owns_the_only_string: bool,
+        suspending_callee: bool,
+        give_callee: bool,
+        no_optimize: bool,
+    ) {
+        let program = source(setup, argument, suspending_callee, give_callee);
+        let built = build_source(&program, "c6 handed-over string", no_optimize);
+        let (output, counters) = run_counted(&built);
+        assert_eq!(output.exit_code, 0, "{program}\n{}", output.stderr);
+        assert_eq!(output.stdout.matches("777\n").count(), 1, "{program}");
+        assert!(
+            counters.string_free <= counters.string_alloc,
+            "{} strings freed for {} allocated\n{program}",
+            counters.string_free,
+            counters.string_alloc
+        );
+        if task_owns_the_only_string && !give_callee {
             assert_eq!(
-                output.stdout.matches("777\n").count(),
-                1,
-                "{name}\n{program}"
+                counters.string_alloc, counters.string_free,
+                "the task owns the only string and must free it\n{program}"
             );
-            assert!(
-                counters.string_free <= counters.string_alloc,
-                "{name}: {} strings freed for {} allocated\n{program}",
-                counters.string_free,
-                counters.string_alloc
-            );
-            if name.starts_with("owned_") {
-                assert_eq!(
-                    counters.string_alloc, counters.string_free,
-                    "{name}: the task owns the only string and must free it\n{program}"
-                );
-            }
-            let run = run_asan_binary(&build_asan(&built));
-            assert!(
-                !run.stderr.contains("AddressSanitizer"),
-                "{name}: AddressSanitizer reported an error:\n{}\n{program}",
-                run.stderr
-            );
-            assert_eq!(run.exit_code, 0, "{name}\n{}\n{program}", run.stderr);
         }
+        let run = run_asan_binary(&build_asan(&built));
+        assert!(
+            !run.stderr.contains("AddressSanitizer"),
+            "AddressSanitizer reported an error:\n{}\n{program}",
+            run.stderr
+        );
+        assert_eq!(run.exit_code, 0, "{}\n{program}", run.stderr);
     }
 
-    #[test]
-    fn cpu_callee_frees_the_string_once() {
-        assert_runs_clean(false);
+    macro_rules! handed_over_case {
+        ($name:ident, $owns_only_string:literal, $setup:literal, $argument:literal) => {
+            mod $name {
+                use super::*;
+
+                #[test]
+                fn cpu_callee() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, false, false, false);
+                }
+
+                #[test]
+                fn state_machine_callee() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, true, false, false);
+                }
+
+                #[test]
+                fn cpu_callee_no_optimize() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, false, false, true);
+                }
+
+                #[test]
+                fn state_machine_callee_no_optimize() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, true, false, true);
+                }
+
+                #[test]
+                fn give_cpu_callee() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, false, true, false);
+                }
+
+                #[test]
+                fn give_state_machine_callee() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, true, true, false);
+                }
+
+                #[test]
+                fn give_cpu_callee_no_optimize() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, false, true, true);
+                }
+
+                #[test]
+                fn give_state_machine_callee_no_optimize() {
+                    assert_runs_clean($setup, $argument, $owns_only_string, true, true, true);
+                }
+            }
+        };
     }
 
-    #[test]
-    fn state_machine_callee_frees_the_string_once() {
-        assert_runs_clean(true);
-    }
+    handed_over_case!(
+        owned_fresh_value,
+        true,
+        "  let count: int = 5\n",
+        "`n=${count}`"
+    );
+    handed_over_case!(
+        owned_last_use_of_a_binding,
+        true,
+        "  let count: int = 5\n  let value: string = `n=${count}`\n",
+        "value"
+    );
+    handed_over_case!(
+        last_use_of_a_binding,
+        false,
+        "  let labels: array<string> = [`heap string`]\n  let value: string = labels.get(0).or(`none`)\n",
+        "value"
+    );
+    handed_over_case!(
+        fresh_value,
+        false,
+        "  let labels: array<string> = [`heap string`]\n",
+        "labels.get(0).or(`none`)"
+    );
+    handed_over_case!(literal, false, "", "`literal`");
 }

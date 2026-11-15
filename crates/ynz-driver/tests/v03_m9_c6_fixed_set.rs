@@ -9,26 +9,52 @@ mod support;
 
 use support::{assert_asan_clean_and_prints, build, run_counted};
 
+/// Run the fixture with the counters on and compare `(cell alloc, cell free, string alloc,
+/// string free)`: the cells and strings the write replaced must have been freed.
+fn assert_replaced_item_released(
+    fixture: &str,
+    no_optimize: bool,
+    expected_stdout: &str,
+    expected_counts: (u64, u64, u64, u64),
+) {
+    let built = build(fixture, no_optimize);
+    let (output, counters) = run_counted(&built);
+    assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
+    assert_eq!(output.stdout, expected_stdout);
+    assert_eq!(
+        (
+            counters.alloc,
+            counters.free,
+            counters.string_alloc,
+            counters.string_free
+        ),
+        expected_counts,
+        "{fixture} (no_optimize={no_optimize}): {counters:?}"
+    );
+}
+
 macro_rules! fixed_set_case {
     ($case:ident, $fixture:literal, $expected:literal, $alloc:literal, $free:literal, $string_alloc:literal, $string_free:literal) => {
         mod $case {
-            use crate::{assert_asan_clean_and_prints, build, run_counted};
+            use crate::{assert_asan_clean_and_prints, assert_replaced_item_released};
 
             #[test]
             fn replaced_item_is_released() {
-                let built = build($fixture, false);
-                let (output, counters) = run_counted(&built);
-                assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
-                assert_eq!(output.stdout, $expected);
-                assert_eq!(
-                    (
-                        counters.alloc,
-                        counters.free,
-                        counters.string_alloc,
-                        counters.string_free
-                    ),
+                assert_replaced_item_released(
+                    $fixture,
+                    false,
+                    $expected,
                     ($alloc, $free, $string_alloc, $string_free),
-                    "{counters:?}"
+                );
+            }
+
+            #[test]
+            fn replaced_item_is_released_no_optimize() {
+                assert_replaced_item_released(
+                    $fixture,
+                    true,
+                    $expected,
+                    ($alloc, $free, $string_alloc, $string_free),
                 );
             }
 
