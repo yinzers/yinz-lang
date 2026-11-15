@@ -10823,7 +10823,7 @@ fn m5_p3_sweep_mapentry_bg_escape() {
 fn m5_p3_sweep_shape_eq_string_field() {
     // WHY: sweep cell 5 — shape_value_eq compares a `string` field by its bytes. Every store
     // copies a borrowed string (C3b), so equal text is never one pointer; cell 3 (runtime-
-    // interpolated same text) printed false under pointer identity and is the discriminator.
+    // interpolated same text) is the discriminator against a pointer-identity compare.
     m5_p3_sweep_assert_dual_mode(
         "m5_p3_sweep_shape_eq_string_field.ynz",
         "true\ntrue\ntrue\n",

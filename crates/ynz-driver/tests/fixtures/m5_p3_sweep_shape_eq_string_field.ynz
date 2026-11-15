@@ -5,7 +5,7 @@
 //   cell 1: target's name is read FROM the source binding (a copy of the same bytes).
 //   cell 2: a SECOND occurrence of the same literal text.
 //   cell 3: runtime-built same text via backtick interpolation (`${prefix}pha`; string `+`
-//           concat is a type error in Yinz) — the cell that printed false under pointer identity.
+//           concat is a type error in Yinz) — the cell a pointer-identity compare gets wrong.
 //
 // Expected output (byte-identical default vs --no-auto-parallel):
 //   true

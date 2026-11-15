@@ -3568,7 +3568,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(self
             .builder
             .build_call(self.rt.ynz_string_clone, &[string.into()], name)
-            .map_err(|e| format!("{name} string clone: {e}"))?
+            .map_err(|err| format!("{name} string clone: {err}"))?
             .try_as_basic_value()
             .basic()
             .ok_or_else(|| format!("{name} string clone: returned void"))?
@@ -3621,16 +3621,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     index as u32,
                     &format!("{site}_sf_{}", field.name),
                 )
-                .map_err(|e| format!("{site} string field gep: {e}"))?;
+                .map_err(|err| format!("{site} string field gep: {err}"))?;
             let original = self
                 .builder
                 .build_load(self.ptr(), field_ptr, &format!("{site}_sfv_{}", field.name))
-                .map_err(|e| format!("{site} string field load: {e}"))?;
+                .map_err(|err| format!("{site} string field load: {err}"))?;
             let copied =
                 self.string_clone_call(original, &format!("{site}_field_{}", field.name))?;
             self.builder
                 .build_store(field_ptr, copied)
-                .map_err(|e| format!("{site} string field store: {e}"))?;
+                .map_err(|err| format!("{site} string field store: {err}"))?;
         }
         Ok(())
     }
@@ -5015,8 +5015,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// (float compares as its i64 bit pattern). A `string` field compares by its bytes
     /// (`ynz_string_eq`): every store copies a borrowed string (v0.3-M9 C3b), so two equal
     /// strings are never one pointer. Other pointer-typed fields (nested shape) compare by
-    /// pointer identity — **D12 RATIFIED (P3 step 5(a), final for M5)**: the by-value cut FORCED field-wise equality at the
-    /// element grain (pointer identity has no by-value analogue), but
+    /// pointer identity — **D12 RATIFIED (P3 step 5(a), final for M5)**: the by-value cut
+    /// FORCED field-wise equality at the element grain (pointer identity has no by-value
+    /// analogue), but
     /// pointer-typed FIELDS underwent no repr change, so bit-identity is the
     /// minimal behavior-preserving semantics, consistent with the non-shape
     /// cells' bit-equality locked by the step-1 matrix goldens. Deep equality
@@ -5139,22 +5140,22 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // copies a borrowed string, so two shapes built from one string hold two
                 // pointers, and equal text must still be equal.
                 Type::String => {
-                    let a = self
+                    let left_string = self
                         .builder
                         .build_load(self.ptr(), a_gep, &format!("{site}_av_{fname}"))
-                        .map_err(|e| format!("{e}"))?;
-                    let b = self
+                        .map_err(|err| format!("{err}"))?;
+                    let right_string = self
                         .builder
                         .build_load(self.ptr(), b_gep, &format!("{site}_bv_{fname}"))
-                        .map_err(|e| format!("{e}"))?;
+                        .map_err(|err| format!("{err}"))?;
                     let call = self
                         .builder
                         .build_call(
                             self.rt.string_eq,
-                            &[a.into(), b.into()],
+                            &[left_string.into(), right_string.into()],
                             &format!("{site}_seq_{fname}"),
                         )
-                        .map_err(|e| format!("{e}"))?;
+                        .map_err(|err| format!("{err}"))?;
                     let result = call
                         .try_as_basic_value()
                         .basic()
@@ -5167,7 +5168,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                             self.i32().const_int(0, false),
                             &format!("{site}_eq_{fname}"),
                         )
-                        .map_err(|e| format!("{e}"))?
+                        .map_err(|err| format!("{err}"))?
                 }
                 // Pointer payload (nested shape, bignum, everything else):
                 // pointer identity — the Risk-3 heap-field deferral.
@@ -17975,14 +17976,16 @@ fn lower_expr_node<'ctx>(
 /// What the background task closure must do with a heap-copied arg after the call returns.
 ///
 /// Each `background` arg that was heap-copied (to survive the spawner's frame return) needs
-/// exactly one matching free call inside the closure. Primitives and strings need no free:
-/// primitives are i64 by-value, strings are immutable heap pointers that outlive the frame.
+/// exactly one matching free call inside the closure. Primitives need no free (i64 by-value). A
+/// string the task owns (moved, or an owned copy) gets no free call either: the scope-exit
+/// release pass (C6/C7) owns every string release (`IMP-strings.md` "Storing a string").
 ///
 /// This enum is produced by `prepare_bg_arg_for_ctx` at the spawn site and consumed by the
 /// closure body emitter to generate the matching `ynz_free` / `ynz_array_drop` calls.
 #[derive(Clone, Debug)]
 enum BgArgFreeKind {
-    /// No heap allocation to free — primitives (int/float/bool) and strings.
+    /// No free call in the closure — primitives (int/float/bool), and strings (owned by the task,
+    /// released by the scope-exit pass).
     None,
     /// Shape heap copy: call `ynz_free(ptr, byte_size)` after the fn call.
     HeapShape { byte_size: u64 },
@@ -18055,7 +18058,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // returns, matching the ynz_alloc emitted here.
     //
     // Primitives (Int/Bool/Float) are i64 by-value and need no heap-upgrade.
-    // Strings are immutable heap bytes; the pointer itself survives any frame.
+    // Strings are handled before this point: the task owns its string, moved or copied.
     // v0.3-M4: a channel argument is SHARED with the task — refcounted alias via
     // ynz_channel_share (both sides must operate on the SAME bounded buffer; neither give
     // nor copy is correct for a conduit). The task's drop ladder releases the reference
@@ -18199,9 +18202,11 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // Decided here, before the generic `is_heap_arg` gate, because a borrowed string reaches
     // that gate as "provably safe" and would otherwise be passed through uncopied.
     if is_string_like(&cg.resolve_type(ty)) {
-        let s = arg.span();
+        let arg_span = arg.span();
         let consumed_by_spawn = matches!(
-            cg.typed.background_arg_sole_holder.get(&(s.start, s.end)),
+            cg.typed
+                .background_arg_sole_holder
+                .get(&(arg_span.start, arg_span.end)),
             Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
         );
         if consumed_by_spawn
@@ -21305,7 +21310,7 @@ fn emit_owned_copy<'ctx>(
                             ],
                             "",
                         )
-                        .map_err(|e| format!("{site} map string clone: {e}"))?;
+                        .map_err(|err| format!("{site} map string clone: {err}"))?;
                 }
             }
             // DEFERRED, four fields, for the SpawnArg case only.
@@ -21433,22 +21438,22 @@ fn emit_fixed_string_cells_copy<'ctx>(
     let idx_slot = cg
         .builder
         .build_alloca(i64_ty, &format!("{site}_fixed_i"))
-        .map_err(|e| format!("{site} fixed copy idx alloca: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy idx alloca: {err}"))?;
     cg.builder
         .build_store(idx_slot, i64_ty.const_zero())
-        .map_err(|e| format!("{site} fixed copy idx init: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy idx init: {err}"))?;
     let head = cg.append_block(&format!("{site}_fixed_head"));
     let body = cg.append_block(&format!("{site}_fixed_body"));
     let done = cg.append_block(&format!("{site}_fixed_done"));
     cg.builder
         .build_unconditional_branch(head)
-        .map_err(|e| format!("{site} fixed copy br: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy br: {err}"))?;
 
     cg.builder.position_at_end(head);
     let i = cg
         .builder
         .build_load(i64_ty, idx_slot, &format!("{site}_fixed_iv"))
-        .map_err(|e| format!("{site} fixed copy idx load: {e}"))?
+        .map_err(|err| format!("{site} fixed copy idx load: {err}"))?
         .into_int_value();
     let more = cg
         .builder
@@ -21458,26 +21463,26 @@ fn emit_fixed_string_cells_copy<'ctx>(
             i64_ty.const_int(cell_count, false),
             &format!("{site}_fixed_more"),
         )
-        .map_err(|e| format!("{site} fixed copy cmp: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy cmp: {err}"))?;
     cg.builder
         .build_conditional_branch(more, body, done)
-        .map_err(|e| format!("{site} fixed copy cond: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy cond: {err}"))?;
 
     cg.builder.position_at_end(body);
     let cell = unsafe {
         cg.builder
             .build_gep(i64_ty, cells, &[i], &format!("{site}_fixed_cell"))
-            .map_err(|e| format!("{site} fixed copy gep: {e}"))?
+            .map_err(|err| format!("{site} fixed copy gep: {err}"))?
     };
     let bits = cg
         .builder
         .build_load(i64_ty, cell, &format!("{site}_fixed_bits"))
-        .map_err(|e| format!("{site} fixed copy load: {e}"))?
+        .map_err(|err| format!("{site} fixed copy load: {err}"))?
         .into_int_value();
     let item = cg
         .builder
         .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_fixed_item"))
-        .map_err(|e| format!("{site} fixed copy inttoptr: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy inttoptr: {err}"))?;
     let (copied, _free) = emit_owned_copy(
         cg,
         None,
@@ -21493,20 +21498,20 @@ fn emit_fixed_string_cells_copy<'ctx>(
             i64_ty,
             &format!("{site}_fixed_new_bits"),
         )
-        .map_err(|e| format!("{site} fixed copy ptrtoint: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy ptrtoint: {err}"))?;
     cg.builder
         .build_store(cell, copied_bits)
-        .map_err(|e| format!("{site} fixed copy store: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy store: {err}"))?;
     let next = cg
         .builder
         .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_fixed_next"))
-        .map_err(|e| format!("{site} fixed copy add: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy add: {err}"))?;
     cg.builder
         .build_store(idx_slot, next)
-        .map_err(|e| format!("{site} fixed copy idx store: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy idx store: {err}"))?;
     cg.builder
         .build_unconditional_branch(head)
-        .map_err(|e| format!("{site} fixed copy loop br: {e}"))?;
+        .map_err(|err| format!("{site} fixed copy loop br: {err}"))?;
 
     cg.builder.position_at_end(done);
     Ok(())
@@ -21663,7 +21668,7 @@ fn emit_array_shape_string_fields_copy<'ctx>(
     let len = cg
         .builder
         .build_call(cg.rt.ynz_array_count, &[arr.into()], &format!("{site}_len"))
-        .map_err(|e| format!("{site} shape copy count: {e}"))?
+        .map_err(|err| format!("{site} shape copy count: {err}"))?
         .try_as_basic_value()
         .basic()
         .ok_or_else(|| format!("{site} shape copy count: returned void"))?
@@ -21672,28 +21677,28 @@ fn emit_array_shape_string_fields_copy<'ctx>(
     let element_slot = cg.alloca_in_entry_llvm(struct_ty, &format!("{site}_shape_elem"))?;
     cg.builder
         .build_store(idx_slot, i64_ty.const_zero())
-        .map_err(|e| format!("{site} shape copy idx init: {e}"))?;
+        .map_err(|err| format!("{site} shape copy idx init: {err}"))?;
 
     let head = cg.append_block(&format!("{site}_shape_head"));
     let body = cg.append_block(&format!("{site}_shape_body"));
     let done = cg.append_block(&format!("{site}_shape_done"));
     cg.builder
         .build_unconditional_branch(head)
-        .map_err(|e| format!("{site} shape copy br: {e}"))?;
+        .map_err(|err| format!("{site} shape copy br: {err}"))?;
 
     cg.builder.position_at_end(head);
     let i = cg
         .builder
         .build_load(i64_ty, idx_slot, &format!("{site}_shape_iv"))
-        .map_err(|e| format!("{site} shape copy idx load: {e}"))?
+        .map_err(|err| format!("{site} shape copy idx load: {err}"))?
         .into_int_value();
     let more = cg
         .builder
         .build_int_compare(IntPredicate::SLT, i, len, &format!("{site}_shape_more"))
-        .map_err(|e| format!("{site} shape copy cmp: {e}"))?;
+        .map_err(|err| format!("{site} shape copy cmp: {err}"))?;
     cg.builder
         .build_conditional_branch(more, body, done)
-        .map_err(|e| format!("{site} shape copy cond: {e}"))?;
+        .map_err(|err| format!("{site} shape copy cond: {err}"))?;
 
     cg.builder.position_at_end(body);
     cg.builder
@@ -21702,7 +21707,7 @@ fn emit_array_shape_string_fields_copy<'ctx>(
             &[arr.into(), i.into(), element_slot.into()],
             &format!("{site}_shape_get"),
         )
-        .map_err(|e| format!("{site} shape copy get: {e}"))?;
+        .map_err(|err| format!("{site} shape copy get: {err}"))?;
     cg.copy_shape_string_fields(element_slot, shape_name, &format!("{site}_elem"))?;
     cg.builder
         .build_call(
@@ -21710,17 +21715,17 @@ fn emit_array_shape_string_fields_copy<'ctx>(
             &[arr.into(), i.into(), element_slot.into()],
             &format!("{site}_shape_set"),
         )
-        .map_err(|e| format!("{site} shape copy set: {e}"))?;
+        .map_err(|err| format!("{site} shape copy set: {err}"))?;
     let next = cg
         .builder
         .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_shape_next"))
-        .map_err(|e| format!("{site} shape copy add: {e}"))?;
+        .map_err(|err| format!("{site} shape copy add: {err}"))?;
     cg.builder
         .build_store(idx_slot, next)
-        .map_err(|e| format!("{site} shape copy idx store: {e}"))?;
+        .map_err(|err| format!("{site} shape copy idx store: {err}"))?;
     cg.builder
         .build_unconditional_branch(head)
-        .map_err(|e| format!("{site} shape copy loop br: {e}"))?;
+        .map_err(|err| format!("{site} shape copy loop br: {err}"))?;
 
     cg.builder.position_at_end(done);
     Ok(())
@@ -22465,7 +22470,7 @@ fn lower_array_method<'ctx>(
                 let elem_ptr = cg
                     .builder
                     .build_int_to_ptr(elem_bits, cg.ptr(), "c_elem_str")
-                    .map_err(|e| format!("contains string inttoptr: {e}"))?;
+                    .map_err(|err| format!("contains string inttoptr: {err}"))?;
                 let call = cg
                     .builder
                     .build_call(
@@ -22473,7 +22478,7 @@ fn lower_array_method<'ctx>(
                         &[elem_ptr.into(), target_val.into()],
                         "c_str_eq",
                     )
-                    .map_err(|e| format!("contains string_eq: {e}"))?;
+                    .map_err(|err| format!("contains string_eq: {err}"))?;
                 let result = call
                     .try_as_basic_value()
                     .basic()
@@ -22486,7 +22491,7 @@ fn lower_array_method<'ctx>(
                         cg.i32().const_int(0, false),
                         "c_str_eq_b",
                     )
-                    .map_err(|e| format!("{e}"))?
+                    .map_err(|err| format!("{err}"))?
             } else {
                 let elem_bits = cg.array_elem_bits_from_out(out, elem, "c_get")?;
                 cg.builder
@@ -24192,7 +24197,7 @@ fn store_field<'ctx>(
             let owned = own_string_for_store(cg, val, ty, "field_str")?;
             cg.builder
                 .build_store(field_ptr, owned)
-                .map_err(|e| format!("{e}"))?;
+                .map_err(|err| format!("{err}"))?;
         }
         _ => {
             cg.builder
