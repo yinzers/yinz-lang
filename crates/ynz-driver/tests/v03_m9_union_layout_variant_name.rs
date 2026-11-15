@@ -89,11 +89,19 @@ fn v03_m9_union_imported_signature_asan_no_optimize() {
     // Bug: an exported function's union (returned and taken) over shapes the importer never
     // imports was sized only for an exported SHAPE's union field, so the importer could not lay
     // out the slot. Tier: High (a valid program failed to build).
-    assert_asan_clean("v0_3_m9_union_imported_signature", true, "big 4\ntiny\nend\n");
+    assert_asan_clean(
+        "v0_3_m9_union_imported_signature",
+        true,
+        "big 4\ntiny\nend\n",
+    );
 }
 
 #[test]
 fn v03_m9_union_imported_signature_asan_optimized() {
     // WHY: same at -O2.
-    assert_asan_clean("v0_3_m9_union_imported_signature", false, "big 4\ntiny\nend\n");
+    assert_asan_clean(
+        "v0_3_m9_union_imported_signature",
+        false,
+        "big 4\ntiny\nend\n",
+    );
 }
