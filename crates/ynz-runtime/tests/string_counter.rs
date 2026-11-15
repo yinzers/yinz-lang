@@ -19,8 +19,8 @@ use ynz_runtime::{
     ynz_bignum_add, ynz_float_to_string, ynz_int_to_string, ynz_string_alloc_bytes,
     ynz_string_alloc_count, ynz_string_builder_append, ynz_string_builder_finalize,
     ynz_string_builder_new, ynz_string_clone, ynz_string_codepoint_at, ynz_string_concat,
-    ynz_string_free_bytes,
-    ynz_string_free_count, ynz_string_from_static, ynz_string_release, ynz_string_to_upper,
+    ynz_string_free_bytes, ynz_string_free_count, ynz_string_from_static, ynz_string_release,
+    ynz_string_to_upper,
 };
 
 /// Run one allocator, check it moved the alloc counters by exactly (1, expected_bytes) and

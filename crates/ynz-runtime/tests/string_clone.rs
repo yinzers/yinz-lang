@@ -38,7 +38,10 @@ fn heap_string(left: &str, right: &str) -> *const u8 {
 fn a_clone_of_a_static_or_heap_string_has_bytes_of_its_own() {
     let literal = LITERAL.string_pointer();
     let from_literal = unsafe { ynz_string_clone(literal) };
-    assert_ne!(from_literal, literal, "a clone of a literal is a new string");
+    assert_ne!(
+        from_literal, literal,
+        "a clone of a literal is a new string"
+    );
     assert_eq!(text(from_literal), "hello");
 
     let heap = heap_string("wor", "ld");
@@ -105,9 +108,20 @@ fn a_cloned_string_map_owns_every_key_and_value() {
             source_entries.iter().zip(&clone_entries).enumerate()
         {
             assert_ne!(clone_key, source_key, "entry {position}: key is shared");
-            assert_ne!(clone_value, source_value, "entry {position}: value is shared");
-            assert_eq!(text(*clone_key), text(*source_key), "entry {position}: key text");
-            assert_eq!(text(*clone_value), text(*source_value), "entry {position}: value text");
+            assert_ne!(
+                clone_value, source_value,
+                "entry {position}: value is shared"
+            );
+            assert_eq!(
+                text(*clone_key),
+                text(*source_key),
+                "entry {position}: key text"
+            );
+            assert_eq!(
+                text(*clone_value),
+                text(*source_value),
+                "entry {position}: value text"
+            );
         }
 
         // Release the source's strings and map, as the source's scope exit will; the clone must
@@ -124,7 +138,11 @@ fn a_cloned_string_map_owns_every_key_and_value() {
             assert_eq!(found, *value, "the lookup returns the clone's own value");
         }
         let texts: Vec<&str> = clone_entries.iter().map(|(key, _)| text(*key)).collect();
-        assert_eq!(texts, ["k1", "k2", "k3"], "insertion order survives the rewrite");
+        assert_eq!(
+            texts,
+            ["k1", "k2", "k3"],
+            "insertion order survives the rewrite"
+        );
 
         for (key, value) in clone_entries {
             ynz_string_release(key);
