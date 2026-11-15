@@ -59,10 +59,9 @@ The payload is a single pointer (8 bytes on 64-bit); no additional payload space
 
 LLVM emits explicit padding bytes to maintain alignment. The largest variant's value is stored inline in the payload bytes; smaller variants leave trailing bytes unused (the tag discriminates access).
 
-
 ---
 
-## Stored union slot (v0.3-M9 C1f)
+## Stored union slot
 
 The lowering table above names the logical representation. What a union value is when it is
 *stored* (an array element, a map value, a shape field, a binding that crosses a `wait`, a
@@ -103,8 +102,8 @@ its cell), a `string`, array or map variant owns that value, scalar variants and
 **Equality.** Two union fields are equal when their tags match and the stored variants are equal
 as values of that variant (field by field for a shape variant, the payload word otherwise).
 
-**Not stored.** A `maybe<Thing>` binding (or an `errors` result of one) held across a `wait`, and a union indexed-set into an
-array, are refused by typeck.
+**Not stored.** A `maybe<Thing>` binding (or an `errors` result of one) held across a `wait`,
+and a union indexed-set into an array, are refused by typeck.
 
 ---
 
