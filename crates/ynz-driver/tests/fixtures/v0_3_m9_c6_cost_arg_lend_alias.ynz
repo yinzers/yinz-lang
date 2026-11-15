@@ -1,0 +1,15 @@
+// v0.3-M9 C6 cost fixture: a `share` argument read from a collection another argument of the same
+// call lends is copied once for the call, and released after it.
+// Allocations: the outer literal and inner literal (4), the fallback literal (2), the overwriting
+// literal inside `replace` (2), and the one copy of the argument (2).
+
+function replace(share first: array<int>, lend rows: array<array<int>>) -> nothing {
+  rows[0] = [9]
+  print(first.count())
+}
+
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[1, 2, 3]]
+  let fallback: array<int> = []
+  replace(rows[0].or(fallback), rows)
+}

@@ -196,3 +196,25 @@ element_cases! {
         [("items[0]", 1, false)],
         "an element view read after `set` replaced the element reads the new value (High)";
 }
+
+view_cases! {
+    a_loop_variable_is_a_view_while_the_body_never_writes_the_iterated_array:
+        "function entrypoint() -> nothing {\n  let rows: array<array<int>> = [[1]]\n  for (row in rows) {\n    print(row.count())\n  }\n}\n",
+        [("rows", 2, true)],
+        "a loop variable copied per iteration although nothing writes the array (cost, Rule 8)";
+
+    a_loop_variable_is_not_a_view_when_the_body_overwrites_an_item:
+        "function entrypoint() -> nothing {\n  let rows: array<array<int>> = [[1]]\n  for (row in rows) {\n    rows[0] = [9]\n    print(row.count())\n  }\n}\n",
+        [("rows", 2, false)],
+        "a loop variable read after the body freed its item (High)";
+
+    a_loop_variable_is_not_a_view_when_a_lend_callee_overwrites_an_item:
+        "function clobber(lend rows: array<array<int>>) -> nothing {\n  rows[0] = [9]\n}\nfunction entrypoint() -> nothing {\n  let rows: array<array<int>> = [[1]]\n  for (row in rows) {\n    clobber(rows)\n    print(row.count())\n  }\n}\n",
+        [("rows", 3, false)],
+        "a loop variable read after a `lend` callee freed its item (High)";
+
+    a_reassigned_binding_does_not_point_through_a_loop_variable:
+        "shape Part {\n  qty: int\n}\nfunction entrypoint() -> nothing {\n  let first: Part = { qty: 1 }\n  let stock: map<string, Part> = { `a`: first }\n  let keep: Part = { qty: 0 }\n  for (entry in stock) {\n    keep = entry.value\n  }\n  print(keep.qty)\n}\n",
+        [("entry.value", 1, false)],
+        "a binding assigned from the loop variable kept the last iteration's staging (High: `m5_p3_mapshape_iter_escape`)";
+}
