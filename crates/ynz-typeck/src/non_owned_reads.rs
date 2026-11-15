@@ -143,14 +143,14 @@ fn binding_holds_place(ty: &Type) -> bool {
     }
 }
 
-/// True when a value of `ty` owns heap a reader may share: a string, or what
-/// [`binding_holds_place`] names. The types a loop variable or a call argument is judged for.
+/// True when a value of `ty` owns heap a reader may share and the store seam copies: a string,
+/// array, map or shape. The types a loop variable or a call argument is judged for (a union or a
+/// `maybe` has its own copy forms, used by `let` and reassignment only).
 fn reader_holds_heap(ty: &Type) -> bool {
-    match ty {
-        Type::String => true,
-        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
-        other => binding_holds_place(other),
-    }
+    matches!(
+        ty,
+        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::Shape { .. }
+    ) || matches!(ty, Type::Sensitive { inner } if matches!(inner.as_ref(), Type::String))
 }
 
 /// One identifier a place is read through, and whether the function can write it.
@@ -193,6 +193,15 @@ impl Candidate {
             Reader::Binding(key) | Reader::Reassigned(key) | Reader::LoopVariable(key) => Some(key),
             Reader::Argument => None,
         }
+    }
+
+    /// True when a `wait` or `background` in the reader's live range ends the view. A binding's
+    /// view may point at per-site staging (a shape element read) that the resume function no
+    /// longer has after a suspension; a loop variable or an argument of a string, array, map or
+    /// shape reads a heap value the frame keeps (a shape loop variable crossing a `wait` is
+    /// embedded in the frame by codegen), so only a write to the place ends it.
+    fn suspension_breaks(&self) -> bool {
+        matches!(self.reader, Reader::Binding(_) | Reader::Reassigned(_))
     }
 
     /// True when others may read through this candidate.
@@ -398,7 +407,9 @@ impl<'a> ReadTracker<'a> {
                                 | Type::BuiltinMap { .. }
                         )
                     ))
-                    || (method == "or" && self.is_place_read(receiver))
+                    || (method == "or"
+                        && (self.is_place_read(receiver)
+                            || matches!(receiver.as_ref(), Expr::Ident(..))))
             }
             Expr::Wait(inner, _) => self.is_place_read(inner),
             _ => false,
@@ -552,6 +563,14 @@ impl<'a> ReadTracker<'a> {
             self.must_copy(value_span);
             return;
         };
+        // A reassigned binding outlives the statement and the iteration it is assigned in, while
+        // a view read through another reader (a loop variable of per-site staging) lives only as
+        // long as that reader: `keep = entry.value` in a loop would keep the last iteration's
+        // staging (`m5_p3_mapshape_iter_escape`).
+        if matches!(reader, Reader::Reassigned(_)) && !through.is_empty() {
+            self.must_copy(value_span);
+            return;
+        }
         self.candidates.push(Candidate {
             reader,
             roots,
@@ -761,6 +780,7 @@ impl<'a> ReadTracker<'a> {
             let Some(holder) = candidate.holder().cloned() else {
                 continue;
             };
+            let suspension_breaks = candidate.suspension_breaks();
             let roots: Vec<DeclKey> = candidate
                 .roots
                 .iter()
@@ -768,7 +788,7 @@ impl<'a> ReadTracker<'a> {
                 .map(|root| root.key.clone())
                 .collect();
             let disqualified = exprs.iter().any(|expr| {
-                suspends(expr)
+                (suspension_breaks && suspends(expr))
                     || self.changes(expr, &holder)
                     || roots.iter().any(|root| self.changes(expr, root))
             });

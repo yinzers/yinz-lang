@@ -70,10 +70,16 @@ function m8Eat(give rows: array<int>) -> nothing {
   print(rows.count().toString())
 }
 
-// pick — returns a PIECE of its argument (`MayAlias` under the `returns_fresh` fixpoint fact),
-// so a `let` bound to its result is `Reaches(b)`, never transferable.
-function m8Pick(share b: Bucket) -> array<int> {
-  return b.rows
+// pick — returns its argument through a type parameter (`MayAlias` under the `returns_fresh`
+// fixpoint fact: a function returning a string, array, map or shape hands back an owned copy, so
+// only a type parameter still returns a piece), so a `let` bound to its result is `Reaches(b)`,
+// never transferable.
+function m8Pick<T>(share b: T) -> T {
+  return b
+}
+
+function m8EatBucket(give owner: Bucket) -> nothing {
+  print(owner.rows.count().toString())
 }
 
 // stash — a `give` position that is NOT the receiver of a UFCS dot-call (probe 1: UFCS
@@ -199,11 +205,11 @@ function m8TransferNeedsCopyLoopCell(lend wire: channel<array<int>>) -> nothing 
 }
 
 // WHY: TransferNeedsCopy — a CALL RESULT THAT RETURNS A PIECE of its argument (`m8Pick`
-// returns `b.rows`, so `rows` is `Reaches(bucket)` under the `returns_fresh` fact — probe 7).
+// returns `b`, so `again` is `Reaches(bucket)` under the `returns_fresh` fact — probe 7).
 function m8TransferNeedsCopyReturnsPiece() -> nothing {
   let bucket: Bucket = { rows: [1, 2, 3] }
-  let rows = m8Pick(bucket)
-  m8Eat(rows)
+  let again = m8Pick(bucket)
+  m8EatBucket(again)
 }
 
 // WHY: TransferNeedsCopy — a NESTED LITERAL built from a named heap value (`[a]` is

@@ -11311,7 +11311,10 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
     );
     assert_eq!(
         alloc,
-        free + 12,
+        // 12 + 2: `let mine = bucket[0].or(spare)` is written (`mine.set`), so it owns a copy of the
+        // row (C6 non-owned reads: a written reader never points at its place); the copy is held to
+        // exit until C7's scope-exit release.
+        free + 14,
         "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
          being freed — check it is not the parent's container or its items, which is the \
          use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \

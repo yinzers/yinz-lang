@@ -794,7 +794,7 @@ fn a_binding_shadowed_in_its_own_block_is_still_released() {
 #[test]
 fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
     let output = clean(
-        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction shadowed() -> array<int> {\n  let rows = [1]\n  let passed = pass(rows)\n  let rows = [9]\n  return passed\n}\n",
+        "function pass<T>(share rows: T) -> T {\n  return rows\n}\nfunction shadowed() -> array<int> {\n  let rows = [1]\n  let passed = pass(rows)\n  let rows = [9]\n  return passed\n}\n",
     );
     let returns = return_edges(&output, "shadowed");
     let list = &returns[0];
@@ -947,7 +947,7 @@ fn a_give_string_parameter_is_released_by_the_callee_and_omitted_by_the_caller()
 #[test]
 fn a_class_mate_of_the_founder_is_not_an_owner() {
     let output = clean(
-        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction mate() -> nothing {\n  let first = [1]\n  let second = pass(first)\n  print(`${second.count()}`)\n}\n",
+        "function pass<T>(share rows: T) -> T {\n  return rows\n}\nfunction mate() -> nothing {\n  let first = [1]\n  let second = pass(first)\n  print(`${second.count()}`)\n}\n",
     );
     let list = body_end(&output, "mate");
     assert_eq!(fate_of(&list, "first"), Fate::Release(ARRAY));

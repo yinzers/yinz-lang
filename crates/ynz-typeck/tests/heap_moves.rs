@@ -89,10 +89,10 @@ move_cases! {
         [("inner", 3, true), ("held", 2, false)],
         "a returned parameter whose boxes the caller also holds treated as moved (double free, High), or a returned local cloned (cost)";
 
-    a_call_result_is_a_move_only_when_the_callee_returns_a_fresh_value:
+    a_call_result_of_a_function_returning_a_shape_is_a_move_because_return_copies:
         "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
-        [("make()", 2, true), ("pass(first)", 1, false)],
-        "a call that returns its argument taken by move, so the caller and the result own one set of boxes (double free, High)";
+        [("make()", 2, true), ("pass(first)", 1, true)],
+        "a call result cloned a second time where the callee already returned an owned copy (a `return` of a parameter copies, so the result is fresh: cost, Rule 8), or the returned parameter not copied (double free, High: `v03_m9_c6_borrow_return_param_echo`)";
 
     a_returned_fresh_literal_is_a_move:
         "function make() -> Inner {\n  return { id: 1 }\n}\nfunction entrypoint() -> nothing {\n  print(make().id)\n}\n",

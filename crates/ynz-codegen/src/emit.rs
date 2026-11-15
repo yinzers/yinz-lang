@@ -15256,6 +15256,19 @@ fn stage_suspending_call_arg_bits<'ctx>(
     }
     let arg_val = lower_expr(cg, arg)?;
     let arg_ty = cg.expr_type(arg);
+    // An argument typeck judged a copy (`non_owned_reads`) is copied here. The callee suspends,
+    // so no instruction after the call in this resume function can release the copy: it is
+    // released at C8's frame release (deferred, `IMP-ownership.md` "Non-owned reads").
+    let arg_span = arg.span();
+    let arg_val = if cg
+        .typed
+        .non_owned_reads
+        .must_copy(arg_span.start, arg_span.end)
+    {
+        own_read_for_store(cg, arg, arg_val, &arg_ty, false, "sm_arg_copy")?.value
+    } else {
+        arg_val
+    };
     // 3. An envelope-union parameter: `lower_expr` wrapped a plain value in a tagged envelope in
     //    this resume function's frame, which dies with this invocation. The argument is written,
     //    payload inline, into the callee frame's own `Param` region, which lives as long as the
@@ -16886,7 +16899,11 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 })
                 .cloned();
             let val = if let Some(decision) = soa_decision {
-                lower_soa_construction(cg, name, value, &decision)?
+                // The constructed array is fresh: the binding takes it (no store-seam copy).
+                let constructed = lower_soa_construction(cg, name, value, &decision)?;
+                cg.moved_cell_values
+                    .insert(constructed.as_value_ref() as usize);
+                constructed
             } else {
                 lower_expr(cg, value)?
             };
@@ -19449,6 +19466,40 @@ fn release_map_entry<'ctx>(
     Ok(())
 }
 
+/// The copies a call made of its arguments, released once the call returns.
+type CallCopies<'ctx> = Vec<(BasicValueEnum<'ctx>, Type)>;
+
+/// Lower one argument of a call to a Yinz function. An argument typeck judged `MustCopy`
+/// (`non_owned_reads`: a read of a place that another argument of the same call may write) is
+/// copied by the store seam; the copy is recorded in `copies` for `release_call_copies`. Any
+/// other argument is passed as it is: a position the callee writes is the place itself, and a
+/// view reads the place the callee only reads.
+fn lower_call_argument<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &Expr,
+    copies: &mut CallCopies<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let val = lower_expr(cg, arg)?;
+    let span = arg.span();
+    if !cg.typed.non_owned_reads.must_copy(span.start, span.end) {
+        return Ok(val);
+    }
+    let ty = cg.expr_type(arg);
+    let owned = own_read_for_store(cg, arg, val, &ty, false, "call_arg")?;
+    if owned.copied {
+        copies.push((owned.value, ty));
+    }
+    Ok(owned.value)
+}
+
+/// Release the argument copies a call made, right after the call instruction.
+fn release_call_copies<'ctx>(cg: &Cg<'ctx, '_>, copies: &CallCopies<'ctx>) -> Result<(), String> {
+    for (value, ty) in copies {
+        release_owned_read(cg, *value, ty, "call_arg")?;
+    }
+    Ok(())
+}
+
 fn lower_expr_node<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     expr: &Expr,
@@ -19970,8 +20021,9 @@ fn lower_expr_node<'ctx>(
                         format!("codegen: function `{effective_name}` not found in module")
                     })?;
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+                    let mut arg_copies: CallCopies<'ctx> = Vec::new();
                     for arg in call.args.iter() {
-                        let val = lower_expr(cg, arg)?;
+                        let val = lower_call_argument(cg, arg, &mut arg_copies)?;
                         call_args.push(val.into());
                     }
                     // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
@@ -19984,6 +20036,7 @@ fn lower_expr_node<'ctx>(
                         .builder
                         .build_call(fn_val, &call_args, "call")
                         .map_err(|e| format!("call {effective_name}: {e}"))?;
+                    release_call_copies(cg, &arg_copies)?;
 
                     // M7 P4a: if callee is errors-capable, handle the {i64, i64} result.
                     let callee_is_ec =
@@ -20041,7 +20094,7 @@ fn lower_expr_node<'ctx>(
             match &recv_ty {
                 Type::Shape { name } => {
                     let name = name.clone();
-                    let raw = lower_ufcs_call(cg, recv_val, &name, method, args)?;
+                    let raw = lower_ufcs_call(cg, receiver, recv_val, &name, method, args)?;
                     // v0.3-M7 R9: a UFCS call is the same C-ABI invocation as the
                     // direct-call arm — by-value number/maybe/shape results wrap into
                     // a caller-owned slot here too (one reception discipline).
@@ -23346,6 +23399,7 @@ fn write_optional_text<'ctx>(
 /// UFCS dispatch: `receiver.method(args)` → call standalone function `method(receiver, args)`.
 fn lower_ufcs_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,
+    receiver: &Expr,
     recv_val: BasicValueEnum<'ctx>,
     _shape_name: &str,
     method: &str,
@@ -23356,9 +23410,26 @@ fn lower_ufcs_call<'ctx>(
         .get_function(method)
         .ok_or_else(|| format!("codegen UFCS: function `{}` not found in module", method))?;
 
+    // The receiver is the call's first argument: a copy typeck judged necessary is made here.
+    let mut copies: CallCopies<'ctx> = Vec::new();
+    let receiver_span = receiver.span();
+    let recv_val = if cg
+        .typed
+        .non_owned_reads
+        .must_copy(receiver_span.start, receiver_span.end)
+    {
+        let receiver_ty = cg.expr_type(receiver);
+        let owned = own_read_for_store(cg, receiver, recv_val, &receiver_ty, false, "ufcs_recv")?;
+        if owned.copied {
+            copies.push((owned.value, receiver_ty));
+        }
+        owned.value
+    } else {
+        recv_val
+    };
     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
     for arg in extra_args.iter() {
-        let arg_val = lower_expr(cg, arg)?;
+        let arg_val = lower_call_argument(cg, arg, &mut copies)?;
         args.push(arg_val.into());
     }
 
@@ -23366,6 +23437,7 @@ fn lower_ufcs_call<'ctx>(
         .builder
         .build_call(fn_val, &args, "ufcs")
         .map_err(|e| format!("UFCS call `{method}`: {e}"))?;
+    release_call_copies(cg, &copies)?;
     match call.try_as_basic_value().basic() {
         Some(v) => Ok(v),
         None => Ok(cg.i32().const_int(0, false).into()),

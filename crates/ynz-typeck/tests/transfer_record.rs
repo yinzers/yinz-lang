@@ -1161,21 +1161,22 @@ fn a_builtin_methods_result_reaches_its_heap_arguments() {
 const FIRST_BAG: &str = "shape Bag {
   items: array<int>
 }
-function firstBag(share bags: array<Bag>) -> Bag {
-  let fallback: Bag = { items: [] }
+function firstBag<T>(share bags: array<T>, share fallback: T) -> T {
   return bags[0].or(fallback)
 }
 ";
 
-/// (High) Bug caught: `firstBag(bags).items` is a piece of `bags` (the callee returns one of its
+/// (High) Bug caught: `firstBag(bags, empty).items` is a piece of `bags` (the callee returns one of its
 /// elements), but the field access rooted only in NAME chains and recorded no root, so `piece` was
-/// free to be released while `bags` still held it.
+/// free to be released while `bags` still held it. (A generic callee: a function returning a shape, an
+/// array, a map or a string hands back an owned copy, so only a type parameter still returns a piece.)
 #[test]
 fn a_field_of_a_call_result_is_a_piece_of_the_calls_arguments() {
     let source = format!(
         "{FIRST_BAG}function underTest() -> int {{
   let bags: array<Bag> = [{{ items: [1] }}]
-  let piece: array<int> = firstBag(bags).items
+  let empty: Bag = {{ items: [] }}
+  let piece: array<int> = firstBag(bags, empty).items
   return piece.count()
 }}"
     );
@@ -1190,8 +1191,9 @@ fn storing_a_piece_of_a_call_result_is_rejected() {
     let source = format!(
         "{FIRST_BAG}function underTest() -> array<array<int>> {{
   let bags: array<Bag> = [{{ items: [1] }}]
+  let empty: Bag = {{ items: [] }}
   let container: array<array<int>> = []
-  let piece: array<int> = firstBag(bags).items
+  let piece: array<int> = firstBag(bags, empty).items
   container.add(piece)
   return container
 }}"
@@ -1199,7 +1201,7 @@ fn storing_a_piece_of_a_call_result_is_rejected() {
     assert_rejected_with(&source, "so someone here still holds it");
 }
 
-/// (High) Bug caught: a store whose PLACE is a call result (`firstBag(bags).items = numbers`) was
+/// (High) Bug caught: a store whose PLACE is a call result (`firstBag(bags, empty).items = numbers`) was
 /// recorded as a store into a temporary. It hands `numbers` over to the place: `numbers` escapes,
 /// whatever the place is.
 #[test]
@@ -1207,14 +1209,15 @@ fn a_store_into_a_piece_of_a_call_result_hands_the_value_over() {
     let source = format!(
         "{FIRST_BAG}function underTest() -> nothing {{
   let bags: array<Bag> = [{{ items: [1] }}]
+  let empty: Bag = {{ items: [] }}
   let numbers: array<int> = [5]
-  firstBag(bags).items = numbers
+  firstBag(bags, empty).items = numbers
 }}"
     );
     let transfers = transfers_of(&source, "underTest");
     assert_eq!(
         escapes_of(&transfers, "numbers"),
-        vec![stored("`firstBag(bags).items`")]
+        vec![stored("`firstBag(bags, empty).items`")]
     );
 }
 
