@@ -641,9 +641,12 @@ impl ReleaseRecorder {
     }
 }
 
+/// One edge as resolved: its kind, its span key and the fate of each listed binding.
+type ResolvedEdge = (EdgeKind, Span, Vec<(DeclKey, Fate)>);
+
 struct ResolvedFunction {
     /// Per edge, in walk order.
-    edges: Vec<(EdgeKind, Span, Vec<(DeclKey, Fate)>)>,
+    edges: Vec<ResolvedEdge>,
     /// The reads in the user's names (early) or the codegen names (final), per `codegen_name_of`.
     reads: ReleaseReads,
 }

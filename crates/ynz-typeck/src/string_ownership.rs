@@ -69,7 +69,9 @@ impl StringMoves {
 
     /// Every last-use expression in the record: its `(start, end)` span and the binding it reads.
     pub fn last_uses(&self) -> impl Iterator<Item = ((usize, usize), &DeclKey)> + '_ {
-        self.last_uses.iter().map(|(span, declaration)| (*span, declaration))
+        self.last_uses
+            .iter()
+            .map(|(span, declaration)| (*span, declaration))
     }
 
     /// The number of expressions in the record.
