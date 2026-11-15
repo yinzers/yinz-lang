@@ -1,0 +1,59 @@
+// v0.3-M9 C1f (#423): a union binding that crosses a `wait` lives in its function's frame, not in
+// a heap cell. Covers a `let thing: Thing` read as a `wait`ed call's argument after an earlier
+// `wait`, and an `errors` result (`Thing errors`) held across a `wait` and read after it.
+// Correct behavior: each value reads back as the variant that was stored, clean under
+// AddressSanitizer at both optimization levels. Before: the union binding was two counted heap
+// cells, the `errors` binding a view pointer into the resume function's dead stack.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label} ${t.count}`
+    }
+  }
+  return `none`
+}
+
+function slowDescribe(share t: Thing) -> string {
+  wait sleep(1)
+  return describe(t)
+}
+
+function slowBig(count: int) -> Thing errors {
+  wait sleep(1)
+  let big: Big = { label: `slow`, count: count }
+  return big
+}
+
+function clobber(depth: int) -> int {
+  let filler: Big = { label: `filler`, count: depth }
+  return filler.count
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `crossing`, count: 3 }
+  let thing: Thing = big
+  wait sleep(1)
+  let scratch = clobber(5)
+  let first = wait slowDescribe(thing)
+  print(first)
+  let held = slowBig(8)
+  wait sleep(1)
+  let scratchAgain = clobber(6)
+  let fallback: Tiny = { flag: false }
+  let fallbackThing: Thing = fallback
+  print(describe(held.or(fallbackThing)))
+  print(`end`)
+}

@@ -231,3 +231,16 @@ by_value_tests!(
     v03_m9_union_errors_return_suspending_asan_optimized,
     v03_m9_union_errors_return_suspending_asan_no_optimize
 );
+
+// RED until step 2 of #423 lands (crossing union bindings in frame regions): a `Thing errors`
+// result held across a `wait` was a view pointer into the resume function's dead stack
+// (SIGSEGV since the errors result went by value); the `let thing: Thing` binding that crosses
+// was a heap envelope. Bug caught: a union binding read after a suspension. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_crossing_binding.ynz",
+    "big crossing 3\nbig slow 8\nend\n",
+    v03_m9_union_crossing_binding_optimized,
+    v03_m9_union_crossing_binding_no_optimize,
+    v03_m9_union_crossing_binding_asan_optimized,
+    v03_m9_union_crossing_binding_asan_no_optimize
+);
