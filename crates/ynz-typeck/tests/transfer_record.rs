@@ -284,14 +284,14 @@ fn gives_that_do_not_carry_into_the_next_pass_are_accepted() {
 
 // ── the record's boundaries (no over-joining, anchors, escapes) ─────────────
 
-/// (High) Values that are not heap values never join: `o.add(a[0])` stores an int, and
+/// (High) Values that are not heap values never join: `o.add(a[0].or(0))` stores an int, and
 /// `let n = a.count()` is a number. Joining them would only delay releases.
 #[test]
 fn storing_a_scalar_joins_nothing() {
     let source = "function f() -> int {
   let a: array<int> = [1, 2, 3]
   let o: array<int> = []
-  o.add(a[0])
+  o.add(a[0].or(0))
   o.add(a.count())
   return o.count()
 }";
