@@ -374,6 +374,56 @@ cases! { assert_accepted;
 }}"), "(High) over-rejection: a narrowed read before the store, and a read in the other arm, stay legal";
 }
 
+// ── one value handed to two owners inside ONE statement ─────────────────────
+//
+// Each operand is read before a LATER operand of the same statement consumes it, so the read site
+// saw a live binding; the sink then has to report it. All but the index store compiled: the sink
+// skipped any binding already consumed when the sink started, on the belief that its read had been
+// reported. The index store was refused already; it guards the statement form with no call.
+
+const EATERS: &str = "function eat_both(give x: array<int>, give rows: array<array<int>>) -> nothing {
+  print(x.count().toString())
+}
+function read_and_eat(share x: array<int>, give rows: array<array<int>>) -> nothing {
+  print(x.count().toString())
+}
+function eat_back(give v: array<int>) -> array<int> {
+  return v
+}
+function count_of(give v: array<int>) -> int {
+  return v.count()
+}
+";
+
+cases! { assert_read_after_store_rejected;
+    give_then_literal_store_in_one_call_is_rejected: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  eat_both(a, [a])
+}}"), "(High) `eat_both(a, [a])`: the literal takes `a` over and the call is given `a` too; two owners, a double free under a release pass";
+    share_then_literal_store_in_one_call_is_rejected: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  read_and_eat(a, [a])
+}}"), "(High) `read_and_eat(a, [a])`: the callee reads `x` while it owns `rows`, which holds the same array; a read after free inside the callee";
+}
+
+cases! { assert_use_after_give;
+    literal_store_then_give_in_one_literal_is_rejected: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  let o: array<array<int>> = [a, eat_back(a)]
+  print(o.count().toString())
+}}"), "(High) `[a, eat_back(a)]`: `eat_back` takes `a` and hands it back, and the literal stores `a` as well; the literal holds one array twice";
+    collection_store_then_give_in_one_call_is_rejected: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  let t: map<array<int>, array<int>> = {{}}
+  t.set(a, eat_back(a))
+}}"), "(High) `t.set(a, eat_back(a))`: the key and the value are the same array, two owners in one map";
+    index_store_after_a_give_in_the_index_is_rejected: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  let o: array<array<int>> = [[0], [0]]
+  o[count_of(a) - 1] = a
+}}"), "(High) `o[count_of(a) - 1] = a`: the index gives `a` away and the store hands it to `o` too";
+}
+
 // ── t3: a move inside a loop, rejected ──────────────────────────────────────
 
 /// The program must be rejected with the canonical use-after-give text and the loop wording.
