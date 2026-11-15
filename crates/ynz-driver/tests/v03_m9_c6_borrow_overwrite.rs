@@ -1,4 +1,4 @@
-//! v0.3-M9 C6 security round 1: the borrow-overwrite class (a reader of a replaced or released
+//! v0.3-M9 C6: the borrow-overwrite class (a reader of a replaced or released
 //! place) stays closed.
 //!
 //! The release helper frees what an overwrite replaces and what a task's argument owns. A binding,
@@ -99,7 +99,7 @@ borrow_case!(
     "v-1\n"
 );
 
-// Round 2 probes of the same class, each one a High-tier memory-safety case.
+// More probes of the same class, each one a High-tier memory-safety case.
 borrow_case!(
     loop_union_overwrite,
     "v0_3_m9_c6_borrow_loop_union_overwrite.ynz",

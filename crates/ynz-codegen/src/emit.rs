@@ -3437,9 +3437,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
         let src = self.array_elem_src_ptr(val, elem_ty, site)?;
         // The item being replaced is released with the element type's glue.
-        let (glue, inline) = self
-            .stored_release(elem_ty, ReleaseHome::Element)?
-            .unwrap_or((self.ptr().const_null(), false));
+        let (glue, inline) = self.element_release_arguments(elem_ty)?;
         self.builder
             .build_call(
                 self.rt.ynz_array_set,
@@ -5012,6 +5010,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// - a nested `shape` field (a heap cell) and a `maybe` field (a heap envelope cell): a fresh
     ///   cell holding a deep copy of the contents;
     /// - an envelope union field: `union_deepen_fn`.
+    ///
     /// Nothing for a field that owns no heap, so a shape of plain values copies by bytes alone.
     ///
     /// Time: O(f) to emit for f fields; O(n) at run time for the n values the shape owns
@@ -6193,10 +6192,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         };
         // What a set over a present key replaces is released: the old value by the value type's
         // glue, and the key copy this set was handed (the map keeps the key it owns).
-        let null = self.ptr().const_null();
-        let (value_glue, value_inline) = self
-            .stored_release(val_ty, ReleaseHome::Element)?
-            .unwrap_or((null, false));
+        let (value_glue, value_inline) = self.element_release_arguments(val_ty)?;
         let value_inline = self.i32().const_int(value_inline as u64, false);
         let args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = if is_str {
             let key_glue = self
@@ -7160,9 +7156,9 @@ fn lower_shape_defaults_initializer<'ctx, 'g>(
     Ok(())
 }
 
-/// A test hook: a function the entrypoint's lowering context is handed to, so a unit test can ask
-/// the context for something no source program reaches yet (a release of an `errors` value, which
-/// C7 first emits).
+// A test hook: a function the entrypoint's lowering context is handed to, so a unit test can ask
+// the context for something no source program reaches yet (a release of an `errors` value, which
+// C7 first emits).
 #[cfg(test)]
 thread_local! {
     static CG_PROBE: std::cell::Cell<Option<fn(&Cg<'_, '_>)>> = const { std::cell::Cell::new(None) };
@@ -21323,10 +21319,12 @@ fn emit_bg_arg_frees<'ctx>(
     rt: &RuntimeDecls<'ctx>,
     arc: Option<&ArcDecls<'ctx>>,
     i64_ty: inkwell::types::IntType<'ctx>,
-    ptr_ty: inkwell::types::PointerType<'ctx>,
     ctx_arg: inkwell::values::PointerValue<'ctx>,
     free_kinds: &[BgArgFreeKind],
 ) -> Result<(), String> {
+    let ptr_ty = module
+        .get_context()
+        .ptr_type(inkwell::AddressSpace::default());
     for (i, kind) in free_kinds.iter().enumerate() {
         match kind {
             BgArgFreeKind::None => {}
@@ -21790,7 +21788,6 @@ fn lower_expr_background<'ctx>(
     // Free any heap-copied args now that the original fn has returned.
     // Each BgArgFreeKind::HeapShape/HeapArrayPrimitive slot holds a heap pointer that was
     // ynz_alloc'd at spawn time and must be freed exactly once here.
-    let ptr_ty = cg.ctx.ptr_type(inkwell::AddressSpace::default());
     let arc = free_kinds
         .iter()
         .any(|k| matches!(k, BgArgFreeKind::ArcShape { .. }))
@@ -21801,7 +21798,6 @@ fn lower_expr_background<'ctx>(
         cg.rt,
         arc.as_ref(),
         cg.i64(),
-        ptr_ty,
         ctx_arg,
         &free_kinds,
     )
@@ -24368,8 +24364,8 @@ fn emit_owned_copy<'ctx>(
             if let Type::BuiltinMap { key, val: value } = &resolved {
                 emit_map_values_deep_copy(cg, cloned.into_pointer_value(), key, value, site)?;
             }
-            // The task's copy is released by the type's release glue (`release_glue_free_kind`,
-            // parked 68), so the arm itself reports no flat free.
+            // The task's copy is released by the type's release glue (`release_glue_free_kind`), so
+            // the arm itself reports no flat free.
             Ok((cloned, BgArgFreeKind::None))
         }
 
@@ -25138,6 +25134,19 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// The `(glue, inline)` arguments a runtime container call (`ynz_array_set`, `ynz_map_set`,
+    /// `ynz_array_release`, `ynz_map_release`) takes for the items of type `ty`: the item's release
+    /// from [`Cg::stored_release`], or the null glue the runtime reads as "the items own nothing".
+    /// The null glue is the runtime's defined answer for an item that owns nothing, never a stand-in
+    /// for an unsupported type (`stored_release` errors for one).
+    ///
+    /// Time: O(1) plus emitting the item's release once  Space: O(1)
+    fn element_release_arguments(&self, ty: &Type) -> Result<(PointerValue<'ctx>, bool), String> {
+        Ok(self
+            .stored_release(ty, ReleaseHome::Element)?
+            .unwrap_or((self.ptr().const_null(), false)))
+    }
+
     /// The fields of shape `shape_name` that own heap, each with its release: `(field index,
     /// glue, inline)`. Empty when the shape owns nothing a release frees.
     ///
@@ -25300,9 +25309,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|err| format!("release string {site}: {err}"))?;
             }
             ReleaseStep::Array { elem } => {
-                let (glue, inline) = self
-                    .stored_release(elem, ReleaseHome::Element)?
-                    .unwrap_or((null, false));
+                let (glue, inline) = self.element_release_arguments(elem)?;
                 self.builder
                     .build_call(
                         self.rt.ynz_array_release,
@@ -25327,9 +25334,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .as_pointer_value(),
                     _ => null,
                 };
-                let (value_glue, value_inline) = self
-                    .stored_release(value_ty, ReleaseHome::Element)?
-                    .unwrap_or((null, false));
+                let (value_glue, value_inline) = self.element_release_arguments(value_ty)?;
                 self.builder
                     .build_call(
                         self.rt.ynz_map_release,
@@ -25471,28 +25476,25 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         site: &str,
     ) -> Result<(), String> {
         let inner = self.resolve_type(inner);
-        let payload_release: Option<(PointerValue<'ctx>, Option<u64>)> = match release_step(&inner)
-        {
-            ReleaseStep::String => Some((
+        let payload_release: Option<PointerValue<'ctx>> = match release_step(&inner) {
+            ReleaseStep::String => Some(
                 self.rt
                     .ynz_string_release
                     .as_global_value()
                     .as_pointer_value(),
-                None,
-            )),
+            ),
             ReleaseStep::Shape { .. } => self
                 .release_fn(&inner, true)?
-                .map(|glue| (glue.as_global_value().as_pointer_value(), None)),
-            _ if matches!(inner, Type::Number { precision } if precision <= 34) => Some((
+                .map(|glue| glue.as_global_value().as_pointer_value()),
+            _ if matches!(inner, Type::Number { precision } if precision <= 34) => Some(
                 self.rt
                     .ynz_number_cell_free
                     .as_global_value()
                     .as_pointer_value(),
-                None,
-            )),
+            ),
             _ => None,
         };
-        let Some((glue, _)) = payload_release else {
+        let Some(glue) = payload_release else {
             return Ok(());
         };
         let present_bb = self.ctx.append_basic_block(function, "maybe_present");
@@ -25707,6 +25709,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 ///   site nulls the slot, which is C7's change.
 /// - COST: the item bytes of such arguments leak per spawn (the container itself is freed).
 /// - TRIGGER: C7 (#384) lands move-site slot nulling.
+///
 /// Pinned by `bg_arg_container_add_gives_row` (integration: a `give` row stored into a container
 /// the ladder also owns must not double free).
 fn release_glue_free_kind<'ctx>(
@@ -29611,7 +29614,7 @@ pub fn union_frame_sizes(
 
 #[cfg(test)]
 mod errors_capable_release_tests {
-    use super::{run_cg_probe, Cg, CG_PROBE};
+    use super::{Cg, CG_PROBE};
     use std::cell::RefCell;
     use ynz_parser::{CompilerDb, SourceFile};
     use ynz_typeck::types::Type;
@@ -29703,6 +29706,5 @@ mod errors_capable_release_tests {
                 "an `errors` value with a {label} ok payload must have a release"
             );
         }
-        let _ = run_cg_probe;
     }
 }

@@ -1879,7 +1879,7 @@ mod tests {
                     // the descriptor's `size`.
                     (
                         crate::ynz_alloc(16) as i64,
-                        free_sixteen_byte_cell as usize as u64,
+                        free_sixteen_byte_cell as *const () as usize as u64,
                         1,
                         std::ptr::null_mut(),
                         std::ptr::null_mut(),

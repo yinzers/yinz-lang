@@ -1,5 +1,5 @@
 //! Which reads of a place that someone else owns may point at the place, and which must copy it
-//! (v0.3-M9 C6 round 2, plan #17; `IMP-ownership.md` "Non-owned reads"; `IMP-unions.md` "Views").
+//! (v0.3-M9 C6; `IMP-ownership.md` "Non-owned reads"; `IMP-unions.md` "Views").
 //!
 //! `let rest = head.next` names a place that stays where it is. Copying it into the binding is
 //! what `Clone` does: one new box for every box the value owns, so a recursive walk that peels
@@ -12,7 +12,7 @@
 //! record copies, so a hole costs cells, never a dangling read.
 //!
 //! The record is keyed by the `(span.start, span.end)` of the expression that reads the place.
-//! Five sites are judged, each over a place read of a heap-holding type (a string, array, map,
+//! These sites are judged, each over a place read of a heap-holding type (a string, array, map,
 //! shape, union, or a `maybe` of those):
 //!
 //! * a `let` or reassignment value (`let r = b.rows`, `r = b.rows`): the binding is the reader;
@@ -184,6 +184,9 @@ enum Reader {
     /// A call argument: judged once, when its call is evaluated.
     Argument,
 }
+
+/// The roots a place is read through and the views it goes through (`ReadTracker::resolve_roots`).
+type ResolvedPlace = (Vec<Root>, Vec<DeclKey>);
 
 struct Candidate {
     reader: Reader,
@@ -429,11 +432,7 @@ impl<'a> ReadTracker<'a> {
     /// Resolve the identifiers of a place to the roots they stand for and the views they are
     /// read through. `None` when one is not a parameter, a `let` or a live view: nothing the
     /// analysis can follow, so the read copies.
-    fn resolve_roots(
-        &self,
-        idents: &[&Expr],
-        lets: &HashSet<DeclKey>,
-    ) -> Option<(Vec<Root>, Vec<DeclKey>)> {
+    fn resolve_roots(&self, idents: &[&Expr], lets: &HashSet<DeclKey>) -> Option<ResolvedPlace> {
         let mut roots: Vec<Root> = Vec::new();
         let mut through: Vec<DeclKey> = Vec::new();
         let add_root = |roots: &mut Vec<Root>, root: Root| {
@@ -704,7 +703,7 @@ impl<'a> ReadTracker<'a> {
                 is_method,
             )
         };
-        let mut judged: Vec<((usize, usize), Option<(Vec<Root>, Vec<DeclKey>)>)> = Vec::new();
+        let mut judged: Vec<((usize, usize), Option<ResolvedPlace>)> = Vec::new();
         for (position, argument) in arguments.iter().enumerate() {
             if !reads(position)
                 || !self.is_place_read(argument)

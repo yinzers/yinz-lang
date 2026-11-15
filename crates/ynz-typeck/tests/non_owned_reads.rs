@@ -1,4 +1,4 @@
-// v0.3-M9 C1f round 2 (plan #17): which `let` bindings of a place read are a read-only view.
+// v0.3-M9 C6: which reads of a place are a view of it or a copy (`non_owned_reads`).
 //
 // WHY (High tier: memory safety / data integrity): a view points at the place instead of copying
 // it, so a view that outlives a write to the place reads a changed or freed value, and a view that

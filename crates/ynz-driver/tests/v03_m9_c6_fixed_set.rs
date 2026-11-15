@@ -1,4 +1,4 @@
-//! v0.3-M9 C6 round 2: `fixed.set` and `fixed` index assignment release the item they replace.
+//! v0.3-M9 C6: `fixed.set` and `fixed` index assignment release the item they replace.
 //!
 //! Bug: the write stored the new item over the old cell and never released the old one, so a
 //! `fixed<string>` or `fixed<Tag>` leaked every overwritten item (an array `set` released it:

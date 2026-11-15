@@ -1,4 +1,4 @@
-//! v0.3-M9 C6 round 2: what a non-owned read costs (`IMP-ownership.md` "Non-owned reads").
+//! v0.3-M9 C6: what a non-owned read costs (`IMP-ownership.md` "Non-owned reads").
 //!
 //! A read of a place someone else owns points at the place when nothing writes the place while
 //! the reader is live, and owns a copy otherwise. Copying where Rust borrows costs more than Rust

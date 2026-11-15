@@ -9,7 +9,7 @@
 //! type and per spawn arm. Each case also runs once under AddressSanitizer, where a release of
 //! something the copy did not allocate (a shared array, a doubled free) is reported.
 //!
-//! Covers parked 67 (a deep array copy's items) and parked 68 (a spawn-cloned map in a loop).
+//! Covers a deep array copy's items and a spawn-cloned map in a loop.
 //! High tier: data integrity (a leak per spawn, or a free of memory another holder owns).
 
 mod support;
@@ -145,7 +145,7 @@ release_cases!(
 
 release_cases!(
     array_of_arrays,
-    "parked 67: a deep array copy's items (the inner arrays) are not released with it (High)",
+    "a deep array copy's items (the inner arrays) are not released with it (High)",
     Case {
         declarations: "",
         value_type: "array<array<int>>",
@@ -167,7 +167,7 @@ release_cases!(
 
 release_cases!(
     map_of_ints,
-    "parked 68: a spawn-cloned `map` is released by nobody, so a spawn in a loop grows the heap (High)",
+    "a spawn-cloned `map` is released by nobody, so a spawn in a loop grows the heap (High)",
     Case {
         declarations: "",
         value_type: "map<int, int>",
@@ -274,4 +274,3 @@ release_cases!(
         read: "  print(value.id)\n",
     }
 );
-

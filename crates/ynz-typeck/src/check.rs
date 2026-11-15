@@ -915,7 +915,7 @@ pub struct TypedModule {
     /// store's admitted transfer of a fresh value, of an owned binding it consumed, or a `return`
     /// of either (`crate::heap_moves`). Codegen deep-copies every other heap value it stores.
     pub heap_moves: crate::heap_moves::HeapMoves,
-    /// C6 round 2: every non-owned read (a `let`/reassignment value, a loop variable, a call argument)
+    /// Every non-owned read (a `let`/reassignment value, a loop variable, a call argument)
     /// judged a VIEW of its place or a MUST-COPY, by the span of the expression (`crate::non_owned_reads`).
     /// Codegen copies every read the record does not call a view, unless the store moves it.
     pub non_owned_reads: crate::non_owned_reads::NonOwnedReads,
