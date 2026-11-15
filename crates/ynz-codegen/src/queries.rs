@@ -247,7 +247,14 @@ pub fn frame_layouts_query(
             })
             .collect();
         sizes.extend(crate::emit::union_frame_sizes(&codegen_typed, &shape_types));
-        let roles = union_region_roles(&codegen_typed, &sig_output.shape_table, &shape_types);
+        // The same layout call fails in `emit_artifact`'s declaration of the function that
+        // returns or takes the union, which reports the error first (as for the shape types
+        // above), so the empty map is never observed as a live wrong frame size.
+        let roles = match union_region_roles(&codegen_typed, &sig_output.shape_table, &shape_types)
+        {
+            Ok(roles) => roles,
+            Err(_) => return Arc::new(HashMap::new()),
+        };
         (sizes, roles)
         // ctx and module drop here — no inkwell types escape past this block.
     };

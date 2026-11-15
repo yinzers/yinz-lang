@@ -4576,7 +4576,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `UnionLayout`; the payload lives INLINE in it, so nothing is allocated:
     /// - `src` null (`none`): the slot gets tag `UNION_NONE_TAG`.
     /// - a shape variant: the shape's bytes are copied into the slot's payload area (a
-    ///   recursive, boxed union clones them into a heap cell and keeps the cell pointer).
+    ///   recursive, boxed union clones them into a heap cell and keeps the cell pointer). The copy
+    ///   is DEEP, like `Box::clone`: every cell the shape's union fields own is cloned too
+    ///   (`clone_shape_variant_into_slot`), so a stored value shares no cell with its source and
+    ///   releasing one never frees the other's.
     /// - any other variant: its 8 bytes of bits (the value, or the pointer the store hands
     ///   over) are copied into the payload area.
     ///
@@ -4588,8 +4591,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// cell), a `string`, array or map variant releases that value, the scalar variants and
     /// `none` own nothing.
     ///
-    /// Time: O(1) + one memmove of the variant's size  Space: O(1); a heap cell only for a
-    /// boxed (recursive) union's shape variant
+    /// Time: O(1) + one memmove of the variant's size, plus O(n) for the n cells a recursive value
+    /// owns  Space: O(1); a heap cell for each cell a boxed (recursive) union's shape variant owns
     fn union_persist_into(
         &self,
         src: PointerValue<'ctx>,
@@ -4668,24 +4671,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         for ((index, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
             self.builder.position_at_end(*case_bb);
             let payload = self.union_payload_ptr(src, &format!("{site}_src_pay{index}"))?;
-            let size = self.shape_abi_size_const(shape_name, "union_persist_into")?;
-            if layout.boxed {
-                let cell = self.heap_cell(size, &format!("{site}_pay{index}"))?;
-                self.builder
-                    .build_memmove(cell, 1, payload, 1, size)
-                    .map_err(|err| format!("union persist box memmove {site}: {err}"))?;
-                let cell_bits = self
-                    .builder
-                    .build_ptr_to_int(cell, self.i64(), &format!("{site}_cell_bits{index}"))
-                    .map_err(|err| format!("union persist cell bits {site}: {err}"))?;
-                self.builder
-                    .build_store(payload_addr, cell_bits)
-                    .map_err(|err| format!("union persist cell store {site}: {err}"))?;
-            } else {
-                self.builder
-                    .build_memmove(payload_addr, 1, payload, 1, size)
-                    .map_err(|err| format!("union persist payload memmove {site}: {err}"))?;
-            }
+            self.clone_shape_variant_into_slot(
+                payload,
+                payload_addr,
+                &layout,
+                shape_name,
+                &format!("{site}_pay{index}"),
+            )?;
             self.builder
                 .build_unconditional_branch(done_bb)
                 .map_err(|err| format!("union persist case branch {site}: {err}"))?;
@@ -4699,6 +4691,216 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|err| format!("union persist raw branch {site}: {err}"))?;
         self.builder.position_at_end(done_bb);
         Ok(())
+    }
+
+    /// Store a SHAPE variant's bytes (`payload_src`) into the slot whose payload area is at
+    /// `payload_addr`, as a value of its own: the copy shares no cell with the source. An inline
+    /// slot receives the bytes; a boxed (recursive) slot gets a fresh heap cell holding them, and
+    /// its address in the payload word. Either way, every box the shape's union fields own is
+    /// cloned too (`deepen_shape_fields`), like `Box::clone` in a Rust enum.
+    ///
+    /// Time: O(n) for the n cells the value owns  Space: O(n) heap cells
+    fn clone_shape_variant_into_slot(
+        &self,
+        payload_src: PointerValue<'ctx>,
+        payload_addr: PointerValue<'ctx>,
+        layout: &UnionLayout,
+        shape_name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let size = self.shape_abi_size_const(shape_name, "clone_shape_variant_into_slot")?;
+        if layout.boxed {
+            let cell = self.heap_cell(size, site)?;
+            self.builder
+                .build_memcpy(cell, 1, payload_src, 1, size)
+                .map_err(|err| format!("union clone box memcpy {site}: {err}"))?;
+            self.deepen_shape_fields(cell, shape_name)?;
+            let cell_bits = self
+                .builder
+                .build_ptr_to_int(cell, self.i64(), &format!("{site}_cell_bits"))
+                .map_err(|err| format!("union clone cell bits {site}: {err}"))?;
+            self.builder
+                .build_store(payload_addr, cell_bits)
+                .map_err(|err| format!("union clone cell store {site}: {err}"))?;
+        } else {
+            self.builder
+                .build_memmove(payload_addr, 1, payload_src, 1, size)
+                .map_err(|err| format!("union clone payload memmove {site}: {err}"))?;
+            self.deepen_shape_fields(payload_addr, shape_name)?;
+        }
+        Ok(())
+    }
+
+    /// True when a slot of the union `variants` can own a heap cell: it is boxed (recursive), or
+    /// one of its shape variants has a union field that can. Such a slot cannot be copied by its
+    /// bytes alone, because the copy would share the cell with the source.
+    ///
+    /// Time: O(t) for the t shape and union types reachable inline  Space: O(t) recursion depth
+    fn union_owns_cells(&self, variants: &[Type]) -> Result<bool, String> {
+        let layout = self.union_layout(variants)?;
+        if layout.boxed {
+            return Ok(true);
+        }
+        for (_, shape_name) in &layout.shape_variants {
+            if self.shape_owns_cells(shape_name)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// True when a value of the shape `shape_name` has a union field that can own a heap cell
+    /// (`union_owns_cells`). The inline unions form no cycle (every recursive union is boxed), so
+    /// the walk ends.
+    ///
+    /// Time: O(t) for the t shape and union types reachable inline  Space: O(t) recursion depth
+    fn shape_owns_cells(&self, shape_name: &str) -> Result<bool, String> {
+        let shape_def = self
+            .shape_table
+            .layout_shape(shape_name)
+            .ok_or_else(|| format!("shape_owns_cells: shape `{shape_name}` not in table"))?;
+        for field in &shape_def.fields {
+            if let Some(variants) = self.envelope_union_variants(&field.ty) {
+                if self.union_owns_cells(&variants)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// After the bytes of a shape value were copied to `shape_ptr`, make each union field that
+    /// can own a cell own a cell of its own (`union_deepen_fn`): the byte copy left it pointing
+    /// at the source's cell. Nothing for a shape with no such field, so a non-recursive shape
+    /// copies by bytes alone.
+    ///
+    /// Time: O(f) to emit for f fields; O(n) at run time for the n cells the value owns
+    /// Space: O(1) here
+    fn deepen_shape_fields(
+        &self,
+        shape_ptr: PointerValue<'ctx>,
+        shape_name: &str,
+    ) -> Result<(), String> {
+        let struct_ty = self
+            .shape_types
+            .get(shape_name)
+            .ok_or_else(|| format!("deepen_shape_fields: LLVM type for `{shape_name}` missing"))?;
+        let shape_def = self
+            .shape_table
+            .layout_shape(shape_name)
+            .ok_or_else(|| format!("deepen_shape_fields: shape `{shape_name}` not in table"))?
+            .clone();
+        for (field_index, field) in shape_def.fields.iter().enumerate() {
+            let Some(variants) = self.envelope_union_variants(&field.ty) else {
+                continue;
+            };
+            if !self.union_owns_cells(&variants)? {
+                continue;
+            }
+            let field_slot = self
+                .builder
+                .build_struct_gep(
+                    struct_ty,
+                    shape_ptr,
+                    field_index as u32,
+                    &format!("deepen_{shape_name}_{}", field.name),
+                )
+                .map_err(|err| format!("deepen_shape_fields gep: {err}"))?;
+            let deepen_fn = self.union_deepen_fn(&variants)?;
+            self.builder
+                .build_call(deepen_fn, &[field_slot.into()], "deepen_field")
+                .map_err(|err| format!("deepen_shape_fields call: {err}"))?;
+        }
+        Ok(())
+    }
+
+    /// The module-private function `(slot)` that makes a slot of the union `variants`, whose bytes
+    /// were just copied from another slot, own its cells: a boxed slot clones the cell it points
+    /// to (and, through `deepen_shape_fields`, the cells inside it), an inline slot deepens the
+    /// shape variant it holds. A tag with no shape variant (`none`, `int`, `string`, …) owns no
+    /// cell and is left alone.
+    ///
+    /// One function per union rather than inline code, because a shape variant that reaches the
+    /// union again would otherwise unfold forever; it is declared before its body is emitted, so
+    /// the inner reference is a call (as `boxed_union_eq_fn`).
+    ///
+    /// Time: O(v) to emit once per union; O(n) at run time for the n cells the slot owns
+    /// Space: O(v)
+    fn union_deepen_fn(&self, variants: &[Type]) -> Result<FunctionValue<'ctx>, String> {
+        let name = format!(
+            "ynz_union_deepen_{}",
+            crate::shape_types::union_key(variants)
+        );
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let layout = self.union_layout(variants)?;
+        let deepen_fn = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(deepen_fn, "entry");
+        let done = self.ctx.append_basic_block(deepen_fn, "done");
+        self.builder.position_at_end(entry);
+        let slot = deepen_fn
+            .get_nth_param(0)
+            .ok_or("union deepen: missing slot")?
+            .into_pointer_value();
+        let tag = self
+            .builder
+            .build_load(self.i64(), slot, "tag")
+            .map_err(|err| format!("union deepen tag load: {err}"))?
+            .into_int_value();
+        let case_blocks: Vec<BasicBlock<'ctx>> = layout
+            .shape_variants
+            .iter()
+            .map(|(index, _)| {
+                self.ctx
+                    .append_basic_block(deepen_fn, &format!("shape_variant{index}"))
+            })
+            .collect();
+        let switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = layout
+            .shape_variants
+            .iter()
+            .zip(case_blocks.iter())
+            .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
+            .collect();
+        self.builder
+            .build_switch(tag, done, &switch_cases)
+            .map_err(|err| format!("union deepen switch: {err}"))?;
+        for ((index, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
+            self.builder.position_at_end(*case_bb);
+            let payload_addr = self.union_payload_addr(slot, &layout, "deepen")?;
+            if layout.boxed {
+                let source_cell = self
+                    .builder
+                    .build_load(self.ptr(), payload_addr, "source_cell")
+                    .map_err(|err| format!("union deepen cell load: {err}"))?
+                    .into_pointer_value();
+                self.clone_shape_variant_into_slot(
+                    source_cell,
+                    payload_addr,
+                    &layout,
+                    shape_name,
+                    &format!("deepen{index}"),
+                )?;
+            } else {
+                self.deepen_shape_fields(payload_addr, shape_name)?;
+            }
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("union deepen case branch: {err}"))?;
+        }
+        self.builder.position_at_end(done);
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("union deepen return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(deepen_fn)
     }
 
     /// READ a persisted union slot as a union value: a pointer to a per-site frame envelope
@@ -26636,26 +26838,26 @@ mod tests {
 /// Generic functions are skipped: they are never suspending state machines
 /// (`build_frame_layouts_with_unions` only lays out non-generic ones).
 ///
+/// Errors when a union's layout cannot be computed: leaving its region out would size the frame
+/// without the slot the function writes.
+///
 /// Time: O(f * p) for f functions of p parameters  Space: O(f * p)
 pub fn union_region_roles(
     typed: &TypedModule,
     shape_table: &ShapeTable,
     shape_types: &ShapeLlvmTypes<'_>,
-) -> HashMap<String, Vec<(UnionRegionRole, u64)>> {
-    let slot_size = |ty: &Type| -> Option<u64> {
+) -> Result<HashMap<String, Vec<(UnionRegionRole, u64)>>, String> {
+    let slot_size = |ty: &Type| -> Result<Option<u64>, String> {
         let Type::Union { variants } = ty else {
-            return None;
+            return Ok(None);
         };
         if !ynz_typeck::check::is_envelope_union(ty) {
-            return None;
+            return Ok(None);
         }
-        shape_types
-            .union_layout(variants)
-            .ok()
-            .map(|layout| layout.slot_size)
+        Ok(Some(shape_types.union_layout(variants)?.slot_size))
     };
     // A returned `maybe` of an envelope union rides the `Return` region like the union itself.
-    let return_slot_size = |ty: &Type| -> Option<u64> {
+    let return_slot_size = |ty: &Type| -> Result<Option<u64>, String> {
         match ty {
             Type::Maybe { inner } => slot_size(inner),
             other => slot_size(other),
@@ -26674,11 +26876,11 @@ pub fn union_region_roles(
             ynz_ast::nodes::Type::ErrorCapable { inner, .. } => inner.as_ref(),
             other => other,
         };
-        if let Some(size) = return_slot_size(&ast_type_to_typeck_type(returned, shape_table)) {
+        if let Some(size) = return_slot_size(&ast_type_to_typeck_type(returned, shape_table))? {
             function_roles.push((UnionRegionRole::Return, size));
         }
         for (index, param) in function.params.iter().enumerate() {
-            if let Some(size) = slot_size(&ast_type_to_typeck_type(&param.ty, shape_table)) {
+            if let Some(size) = slot_size(&ast_type_to_typeck_type(&param.ty, shape_table))? {
                 function_roles.push((UnionRegionRole::Param(index), size));
             }
         }
@@ -26686,7 +26888,7 @@ pub fn union_region_roles(
             roles.insert(function.name.clone(), function_roles);
         }
     }
-    roles
+    Ok(roles)
 }
 
 /// The frame bytes of every envelope union a crossing local of `typed` can hold, keyed by

@@ -92,8 +92,11 @@ it, so no pointer into a resume function's stack survives a suspension. None of 
 
 **Recursive unions** (a variant reaches the union through shape fields, so no finite inline size)
 are the one exception: the slot is `{ tag, word }` and a shape variant's bytes live in a heap cell
-the slot owns, one per store, as `Box<T>` in a Rust enum. Copying such a union into a binding
-clones its cell too.
+the slot owns, one per box, as `Box<T>` in a Rust enum. Every copy of such a union (a store into a
+container, a field or a binding) is DEEP, like `Box::clone`: the copy clones the cell and every cell
+the cell's own union fields own, so two slots never share a cell. Cost: O(n) for the n cells a value
+owns, so a chain built link by link by stores copies each link's tail once more. The same holds for
+a non-recursive union whose shape variant has such a field.
 
 **Ownership.** A `share` union parameter cannot be stored (`ParamNeedsGive`); a `give` union is
 copied into the slot. A slot owns its payload: a shape variant owns the shape's fields (and, boxed,
