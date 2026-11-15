@@ -1,0 +1,14 @@
+// v0.3-M9 C1f (#423) code round 1: shape equality over an imported shape's union field, whose
+// variant shapes the importer does not import by name (they are layout-only here).
+// Correct behavior: prints `big same true`, `big payload false`, `variant false`, `end`; clean
+// under AddressSanitizer at -O0 and -O2.
+import { Holder, makeBig, makeTiny } from `lib`
+
+function entrypoint() -> nothing {
+  let known: array<Holder> = []
+  known.add(makeBig(1).copy())
+  print(`big same ${known.contains(makeBig(1))}`)
+  print(`big payload ${known.contains(makeBig(2))}`)
+  print(`variant ${known.contains(makeTiny())}`)
+  print(`end`)
+}

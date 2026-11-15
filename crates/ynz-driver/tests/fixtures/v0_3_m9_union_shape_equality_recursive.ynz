@@ -1,0 +1,34 @@
+// v0.3-M9 C1f (#423): shape equality over a RECURSIVE union field (boxed slot: the shape
+// variant lives in a heap cell the slot owns, any other variant is the payload word). The
+// comparison must read a cell only when the tag says the slot holds that shape, and must
+// terminate at compile time and at run time.
+// Correct behavior: prints `same int true`, `other int false`, `variant false`,
+// `same node true`, `deep differs false`, `end`; clean under AddressSanitizer at both optimization levels.
+
+shape Node {
+  value: int
+  next: Node | int
+}
+
+function leaf(count: int) -> Node {
+  let node: Node = { value: 1, next: count }
+  return node
+}
+
+function chain(count: int) -> Node {
+  let tail: Node = { value: 1, next: count }
+  let head: Node = { value: 2, next: tail }
+  return head
+}
+
+function entrypoint() -> nothing {
+  let known: array<Node> = []
+  known.add(leaf(5))
+  print(`same int ${known.contains(leaf(5))}`)
+  print(`other int ${known.contains(leaf(6))}`)
+  print(`variant ${known.contains(chain(5))}`)
+  known.add(chain(5))
+  print(`same node ${known.contains(chain(5))}`)
+  print(`deep differs ${known.contains(chain(6))}`)
+  print(`end`)
+}
