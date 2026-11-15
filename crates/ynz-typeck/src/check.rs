@@ -5549,8 +5549,13 @@ impl<'b> Checker<'b> {
                 entries.push(RawEntry {
                     decl: decl_key(&entry.defined_at, name),
                     heap,
-                    // A `let`/`const` string owns its bytes; a parameter, a loop cell does not.
-                    string_owner: !entry.is_param
+                    // A `let`/`const` string, or a `give` parameter, owns its bytes; a `share`/
+                    // `lend`/bare parameter and a loop cell do not.
+                    string_owner: (!entry.is_param
+                        || matches!(
+                            entry.origin,
+                            Origin::Param(Some(OwnershipModifier::Give))
+                        ))
                         && !entry.is_loop_var
                         && !matches!(entry.origin, Origin::Cell(_)),
                     class: entry.alias_class,

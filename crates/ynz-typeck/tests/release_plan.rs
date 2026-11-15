@@ -891,6 +891,39 @@ fn a_string_parameter_is_not_released_by_the_callee() {
     );
 }
 
+/// Bug: a string given to a `give` parameter is released by both sides (a double free) or by
+/// neither (a leak). The checker refuses a read of it after the call, like any given value, so the
+/// caller omits it as moved and the callee, which owns what it was given, releases it: exactly
+/// one side. A `share` string parameter stays the caller's (`NotOwner` in the callee). Decided
+/// from `IMP-strings.md` (a string is moved or copied by a STORE; a call hands nothing over by
+/// itself) and the checker's own give: the sink consumes the caller's binding.
+#[test]
+fn a_give_string_parameter_is_released_by_the_callee_and_omitted_by_the_caller() {
+    let output = clean(
+        "function consume(give text: string) -> nothing {\n  print(text)\n}\nfunction borrow(share text: string) -> nothing {\n  print(text)\n}\nfunction caller() -> nothing {\n  let given = `n=${3}`\n  let lent = `m=${4}`\n  consume(given)\n  borrow(lent)\n}\n",
+    );
+    assert_eq!(
+        fate_of(&body_end(&output, "consume"), "text"),
+        Fate::Release(ReleaseKind::String),
+        "the callee owns what it was given"
+    );
+    assert_eq!(
+        fate_of(&body_end(&output, "borrow"), "text"),
+        Fate::Omitted(OmitReason::NotOwner),
+        "a `share` string stays the caller's"
+    );
+    let caller = body_end(&output, "caller");
+    assert_eq!(
+        fate_of(&caller, "given"),
+        Fate::Omitted(OmitReason::Moved),
+        "the caller gave it away on every path"
+    );
+    assert!(
+        fate_of(&caller, "lent").releases(),
+        "the caller still owns a string it only lent"
+    );
+}
+
 /// Bug: every member of an alias class releases (a double free): only the founder does, and the
 /// class mate is `NotOwner`.
 #[test]

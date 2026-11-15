@@ -831,6 +831,21 @@ fn fate_of(
         if !entry.string_owner {
             return Ok(Fate::Omitted(OmitReason::NotOwner));
         }
+        // A string given to a `give` parameter (or sent, stored) is handed over like any heap
+        // value: the callee releases it, so a caller whose class was given on every path omits it.
+        // Only the founder of its OWN class is judged by the scope: a string joined to a piece's
+        // class owns a copy that the class's give does not take.
+        let owns_its_class = matches!(
+            anchor_of(&entry.decl),
+            Some(ReleaseAnchor::Founder { decl, .. }) if decl == entry.decl
+        );
+        if owns_its_class {
+            match entry.moved {
+                Moved::EveryPath => return Ok(Fate::Omitted(OmitReason::Moved)),
+                Moved::SomePaths => return Ok(Fate::ReleaseIfLive(kind)),
+                Moved::No => {}
+            }
+        }
         let edge_end = edge.span.1;
         let may_have_moved = moves_by_binding
             .and_then(|moves| moves.get(&entry.decl))
@@ -1161,7 +1176,8 @@ impl ReleasePlan {
                         Fate::Release(_)
                             | Fate::ReleaseIfLive(_)
                             | Fate::Omitted(OmitReason::NotOwner)
-                    );
+                    ) || (entry.fate == Fate::Omitted(OmitReason::Moved)
+                        && edge.consumed_classes.contains(&entry.class));
                     if !allowed {
                         violations.push(format!("{place} is a string with fate {:?}", entry.fate));
                     }
