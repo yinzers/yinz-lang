@@ -1462,3 +1462,221 @@ fn a_name_declared_twice_in_a_function_feeds_no_release_read_to_the_guards() {
         "codegen's reads keep the owners"
     );
 }
+
+// ── Fixer round 2 (test): the boundaries of the ownership rules ───────────────────────────────
+
+/// Which edge of a function a table row reads.
+#[derive(Clone, Copy, Debug)]
+enum At {
+    BodyEnd,
+    /// The nth `return`, in source order.
+    Return(usize),
+}
+
+fn list_at(output: &CheckOutput, function: &str, at: At) -> Vec<(String, Fate)> {
+    match at {
+        At::BodyEnd => body_end(output, function),
+        At::Return(index) => return_edges(output, function)
+            .into_iter()
+            .nth(index)
+            .unwrap_or_else(|| panic!("`{function}` has no return #{index}")),
+    }
+}
+
+/// Bug: the fate of a give depends on WHERE it sits, and a construct that hides the give from the
+/// join (a nested `if`, a match arm, a branch that returns) turns an early or a double free into a
+/// leak or the reverse. `rows` is given at most once; each row names the edge read and the fate
+/// that edge must show. A `return` inside the construct that gave sees the give; an edge after a
+/// join sees it only when every path that reaches the join gave.
+#[test]
+fn a_give_in_a_nested_if_or_a_match_arm_reaches_each_edge_by_the_paths_that_reach_it() {
+    // (case, body after `let rows = [1]`, edge, expected fate of `rows`)
+    let cases: [(&str, &str, At, Fate); 7] = [
+        (
+            "nested if, edge after the inner join, still inside the outer if",
+            "  if (outer) {\n    if (inner) {\n      eat(rows)\n    }\n    return\n  }\n",
+            At::Return(0),
+            Fate::ReleaseIfLive(ARRAY),
+        ),
+        (
+            "nested if whose outer branch always returns: the give never reaches the body end",
+            "  if (outer) {\n    if (inner) {\n      eat(rows)\n    }\n    return\n  }\n",
+            At::BodyEnd,
+            Fate::Release(ARRAY),
+        ),
+        (
+            "the same give in a match arm: some arms give, the others keep it",
+            "  if (choice) {\n    1 => { eat(rows) }\n    2 => { print(`two`) }\n    else => { print(`other`) }\n  }\n",
+            At::BodyEnd,
+            Fate::ReleaseIfLive(ARRAY),
+        ),
+        (
+            "a match arm that returns sees the array still owned at its `return`",
+            "  if (choice) {\n    1 => { eat(rows) }\n    else => { return }\n  }\n",
+            At::Return(0),
+            Fate::Release(ARRAY),
+        ),
+        (
+            "the arm that returns never reaches the join, so the join sees only the give",
+            "  if (choice) {\n    1 => { eat(rows) }\n    else => { return }\n  }\n",
+            At::BodyEnd,
+            Fate::Omitted(OmitReason::Moved),
+        ),
+        (
+            "every arm of an inner match gives, but the outer `if` has no else",
+            "  if (outer) {\n    if (choice) {\n      1 => { eat(rows) }\n      else => { eat(rows) }\n    }\n  }\n",
+            At::BodyEnd,
+            Fate::ReleaseIfLive(ARRAY),
+        ),
+        (
+            "a give before a nested block that returns: the nested `return` sees the give",
+            "  eat(rows)\n  if (outer) {\n    return\n  }\n",
+            At::Return(0),
+            Fate::Omitted(OmitReason::Moved),
+        ),
+    ];
+    for (case, body, at, expected) in cases {
+        let source = format!(
+            "{}function probe(outer: boolean, inner: boolean, choice: int) -> nothing {{\n  let rows = [1]\n{body}}}\n",
+            support::EAT
+        );
+        let output = clean(&source);
+        assert_eq!(
+            fate_of(&list_at(&output, "probe", at), "rows"),
+            expected,
+            "{case}"
+        );
+    }
+}
+
+/// `(user name)` of every `let` of every function whose value the checker records as a view.
+fn view_names(output: &CheckOutput) -> Vec<String> {
+    let mut lets = Vec::new();
+    for item in &output.typed_module.module.items {
+        if let Item::Function(function) = item {
+            lets_of(&function.body, &mut lets);
+        }
+    }
+    let mut names: Vec<String> = lets
+        .into_iter()
+        .filter(|(span, _)| output.typed_module.view_bindings.contains(span.0, span.1))
+        .map(|(_, decl)| decl.2)
+        .collect();
+    names.sort();
+    names
+}
+
+/// Bug: a view that C1f records only for a one-step field read is listed as an owner when it
+/// reads through a chain of fields, an element or a map lookup (a double free of what the root
+/// still owns), or the view, not the root, founds the class. Every row names the views the
+/// program holds, and the roots that must stay the owners.
+#[test]
+fn a_view_through_a_chain_an_element_or_a_lookup_is_not_an_owner() {
+    let shapes = "shape Leaf {\n  label: string\n}\nshape Mid {\n  leaf: Leaf\n  tag: int\n}\nshape Top {\n  mid: Mid\n  count: int\n}\n";
+    // (case, body of `probe`, views, roots)
+    let cases: [(&str, &str, &[&str], &[&str]); 4] = [
+        (
+            "two field reads in a row",
+            "  let leaf: Leaf = { label: `a` }\n  let mid: Mid = { leaf: leaf, tag: 1 }\n  let top: Top = { mid: mid, count: 2 }\n  let viewed = top.mid\n  let deeper = top.mid.leaf\n  print(deeper.label)\n  print(`${viewed.tag}`)\n",
+            &["deeper", "viewed"],
+            &["top"],
+        ),
+        (
+            "an element read of an array",
+            "  let first: Leaf = { label: `a` }\n  let leaves: array<Leaf> = [first]\n  let picked = leaves[0]\n  print(`${picked.exists()}`)\n",
+            &["picked"],
+            &["leaves"],
+        ),
+        (
+            "a lookup in a map",
+            "  let leaf: Leaf = { label: `a` }\n  let table: map<string, Leaf> = { `k`: leaf }\n  let found = table[`k`]\n  print(`${found.exists()}`)\n",
+            &["found"],
+            &["table"],
+        ),
+        (
+            "a view whose root is then given away",
+            "  let leaf: Leaf = { label: `a` }\n  let mid: Mid = { leaf: leaf, tag: 1 }\n  let seen = mid.leaf\n  print(seen.label)\n  keep(mid)\n",
+            &["seen"],
+            &[],
+        ),
+    ];
+    for (case, body, views, roots) in cases {
+        let source = format!(
+            "{shapes}function keep(give mid: Mid) -> nothing {{\n  print(`${{mid.tag}}`)\n}}\nfunction probe() -> nothing {{\n{body}}}\n"
+        );
+        let output = clean(&source);
+        assert_eq!(
+            view_names(&output),
+            views
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>(),
+            "{case}: the checker records exactly these views"
+        );
+        let list = body_end(&output, "probe");
+        for view in views {
+            assert_eq!(
+                fate_of(&list, view),
+                Fate::Omitted(OmitReason::NotOwner),
+                "{case}: `{view}` is a view"
+            );
+        }
+        for root in roots {
+            assert!(
+                fate_of(&list, root).releases(),
+                "{case}: `{root}` stays the owner: {list:?}"
+            );
+        }
+        assert_eq!(c1f_agreement(&output), Vec::<String>::new(), "{case}");
+    }
+}
+
+/// Bug: a string that joins another class is omitted as moved when that class is given (a leak of
+/// its bytes: a `let` string owns a copy that the class's give does not take), or a string that
+/// is its OWN class's founder is released after its class was given (a double free with the
+/// callee). Only the founder of its own class follows the give; a joined string is released by
+/// its own scope.
+#[test]
+fn a_string_joined_to_a_given_class_is_released_but_a_given_string_is_omitted() {
+    let prelude = "shape Bucket {\n  text: string\n  rows: array<int>\n}\nfunction consume(give bucket: Bucket) -> nothing {\n  print(bucket.text)\n}\nfunction takes(give text: string) -> nothing {\n  print(text)\n}\n";
+    // (case, body of `probe`, edge, string binding, expected fate)
+    let cases: [(&str, &str, At, &str, Fate); 4] = [
+        (
+            "a string read out of a shape that is then given",
+            "  let bucket: Bucket = { text: `a`, rows: [1] }\n  let alias = bucket.text\n  if (flag) {\n    consume(bucket)\n    return\n  }\n  print(alias)\n",
+            At::Return(0),
+            "alias",
+            Fate::Release(ReleaseKind::String),
+        ),
+        (
+            "the same string at the end of the body: only the path that kept the shape reaches it",
+            "  let bucket: Bucket = { text: `a`, rows: [1] }\n  let alias = bucket.text\n  if (flag) {\n    consume(bucket)\n    return\n  }\n  print(alias)\n",
+            At::BodyEnd,
+            "alias",
+            Fate::ReleaseIfLive(ReleaseKind::String),
+        ),
+        (
+            "a string given on every path is its class's founder: the callee releases it",
+            "  let label = `n=${3}`\n  if (flag) {\n    takes(label)\n    return\n  }\n  takes(label)\n",
+            At::Return(0),
+            "label",
+            Fate::Omitted(OmitReason::Moved),
+        ),
+        (
+            "a string given on one path only is released if live",
+            "  let label = `n=${3}`\n  if (flag) {\n    takes(label)\n  }\n",
+            At::BodyEnd,
+            "label",
+            Fate::ReleaseIfLive(ReleaseKind::String),
+        ),
+    ];
+    for (case, body, at, name, expected) in cases {
+        let source = format!("{prelude}function probe(flag: boolean) -> nothing {{\n{body}}}\n");
+        let output = clean(&source);
+        assert_eq!(
+            fate_of(&list_at(&output, "probe", at), name),
+            expected,
+            "{case}"
+        );
+    }
+}
