@@ -424,6 +424,50 @@ cases! { assert_use_after_give;
 }}"), "(High) `o[count_of(a) - 1] = a`: the index gives `a` away and the store hands it to `o` too";
 }
 
+// ── `self` handed over, then read ───────────────────────────────────────────
+//
+// `self` is a binding like any other, but its read never reached the consumed-read check, so a
+// `give self` handed over or given away stayed readable (and a second store was skipped silently).
+
+const KEEPER: &str = "shape Box {
+  items: array<int>
+}
+function eat(give b: Box) -> nothing {
+  print(b.items.count().toString())
+}
+";
+
+cases! { assert_read_after_store_rejected;
+    read_of_self_after_a_store_is_rejected: format!("{KEEPER}function keep(give self: Box, lend o: array<Box>) -> nothing {{
+  o.add(self)
+  print(self.items.count().toString())
+}}"), "(High) `o.add(self)` then reading `self`: the container frees the box under the read";
+    second_store_of_self_is_rejected: format!("{KEEPER}function keep(give self: Box, lend o: array<Box>) -> nothing {{
+  o.add(self)
+  o.add(self)
+}}"), "(High) `self` stored twice: one box, two slots, a double free";
+    read_of_self_after_a_let_is_rejected: format!("{KEEPER}function keep(give self: Box) -> nothing {{
+  let mine = self
+  print(self.items.count().toString())
+  print(mine.items.count().toString())
+}}"), "(High) `let mine = self` then reading `self`: two names for one box";
+}
+
+cases! { assert_use_after_give;
+    read_of_self_after_a_give_is_rejected: format!("{KEEPER}function keep(give self: Box) -> nothing {{
+  eat(self)
+  print(self.items.count().toString())
+}}"), "(High) `eat(self)` then reading `self`: `eat` frees the box under the read";
+}
+
+cases! { assert_loop_store_rejected;
+    store_of_self_in_a_loop_is_rejected: format!("{KEEPER}function keep(give self: Box, lend o: array<Box>) -> nothing {{
+  for (i in [1, 2]) {{
+    o.add(self)
+  }}
+}}"), "(High) `o.add(self)` in a loop: the second pass stores the box again";
+}
+
 // ── t3: a move inside a loop, rejected ──────────────────────────────────────
 
 /// The program must be rejected with the canonical use-after-give text and the loop wording.
