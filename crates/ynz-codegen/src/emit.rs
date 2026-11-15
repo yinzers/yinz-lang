@@ -25030,7 +25030,7 @@ fn release_glue_free_kind<'ctx>(
 
 #[cfg(test)]
 mod copy_parity_tests {
-    use super::CopyMode;
+    use super::{release_step, CopyMode, ReleaseStep};
     use ynz_typeck::owned_copy::{owned_copy_plan, ElemCopy, HeapCell, OwnedCopy};
     use ynz_typeck::type_variant_sampler::{all_type_variants, TYPE_VARIANT_COUNT};
     use ynz_typeck::types::Type;
@@ -25047,6 +25047,176 @@ mod copy_parity_tests {
             "ynz_typeck::type_variant_sampler::all_type_variants must have one sample per \
              Type variant"
         );
+    }
+
+    /// Bug: a copy plan with no matching release leaks what the copy allocates, and a release
+    /// with no matching copy frees what nobody allocated (High: the helper frees exactly what a
+    /// copy allocates). `release_step` and `owned_copy_plan` are two exhaustive matches over
+    /// `Type`; this holds every sampled variant to the pairing, so an edit to one fails here.
+    #[test]
+    fn release_step_matches_the_owned_copy_plan_for_every_type_variant() {
+        for ty in all_type_variants() {
+            let step = release_step(&ty);
+            let plan = owned_copy_plan(&ty);
+            let consistent = match &plan {
+                OwnedCopy::StringClone => step == ReleaseStep::String,
+                OwnedCopy::ArrayClone { .. } => matches!(step, ReleaseStep::Array { .. }),
+                OwnedCopy::MapClone => matches!(step, ReleaseStep::Map { .. }),
+                OwnedCopy::MaybeCellClone => matches!(step, ReleaseStep::Maybe { .. }),
+                OwnedCopy::ShapeMemcpy => matches!(step, ReleaseStep::Shape { .. }),
+                OwnedCopy::FixedMemcpy => {
+                    matches!(step, ReleaseStep::Nothing | ReleaseStep::Fixed { .. })
+                }
+                OwnedCopy::ReceiverIsCopy | OwnedCopy::FrameLocalImmutable { .. } => {
+                    step == ReleaseStep::Nothing
+                }
+                // A refused copy still has a release: the type is held, and dropped, without
+                // ever being copied.
+                OwnedCopy::Refused(_) => true,
+            };
+            assert!(
+                consistent,
+                "{ty:?}: the owned-copy table plans {plan:?} but the release table says {step:?}"
+            );
+        }
+    }
+
+    /// Bug: a type the copy table refuses (a channel, a handle, a union, an errors-capable value)
+    /// has no release, so its holder leaks it or, worse, a later change frees it as something
+    /// else (High). Each refused heap-holding variant names its release.
+    #[test]
+    fn every_refused_type_still_has_its_own_release() {
+        for ty in all_type_variants() {
+            if !matches!(owned_copy_plan(&ty), OwnedCopy::Refused(_)) {
+                continue;
+            }
+            let step = release_step(&ty);
+            let expected = match ty {
+                Type::BuiltinChannel { .. } => matches!(step, ReleaseStep::Channel),
+                Type::BackgroundHandle { .. } => matches!(step, ReleaseStep::Handle),
+                Type::Union { .. } => matches!(step, ReleaseStep::Union { .. }),
+                Type::ErrorsCapable { .. } => matches!(step, ReleaseStep::ErrorsCapable { .. }),
+                // No such value exists in generated code: loud, never a skip.
+                Type::Dynamic { .. } | Type::TypeParam { .. } | Type::Generic { .. } => {
+                    matches!(step, ReleaseStep::Unsupported(_))
+                }
+                // A loop's view of a slot, `nothing`, the error placeholder and a bignum owns no
+                // heap this table frees.
+                Type::MapEntry { .. } | Type::Nothing | Type::Error | Type::Number { .. } => {
+                    step == ReleaseStep::Nothing
+                }
+                // The remaining refusals are containers refused for their items (none sampled:
+                // the samples hold `int` items).
+                _ => true,
+            };
+            assert!(expected, "{ty:?}: refused to copy, but its release is {step:?}");
+        }
+    }
+
+    /// Bug: the release plan names a kind of binding to release and the helper has nothing for it
+    /// (a silent skip at C7), or a new kind is added to the plan with no answer here (High).
+    /// The match over `ReleaseKind` has no `_` arm, so a new kind fails to compile until this
+    /// test says what releases it.
+    #[test]
+    fn every_kind_the_release_plan_names_has_a_release() {
+        use ynz_typeck::release_plan::ReleaseKind;
+        let kinds = [
+            ReleaseKind::String,
+            ReleaseKind::Array,
+            ReleaseKind::Map,
+            ReleaseKind::Channel,
+            ReleaseKind::TaskHandle,
+            ReleaseKind::Shape,
+            ReleaseKind::NestedShape,
+            ReleaseKind::Maybe,
+            ReleaseKind::Union,
+            ReleaseKind::Dynamic,
+            ReleaseKind::Fixed,
+            ReleaseKind::MapEntry,
+            ReleaseKind::ErrorsCapable,
+        ];
+        for kind in kinds {
+            let (representative, expected): (Type, fn(&ReleaseStep) -> bool) = match kind {
+                ReleaseKind::String => (Type::String, |step| *step == ReleaseStep::String),
+                ReleaseKind::Array => (
+                    Type::BuiltinArray {
+                        elem: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::Array { .. }),
+                ),
+                ReleaseKind::Map => (
+                    Type::BuiltinMap {
+                        key: Box::new(Type::String),
+                        val: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::Map { .. }),
+                ),
+                ReleaseKind::Channel => (
+                    Type::BuiltinChannel {
+                        elem: Box::new(Type::Int),
+                    },
+                    |step| *step == ReleaseStep::Channel,
+                ),
+                ReleaseKind::TaskHandle => (
+                    Type::BackgroundHandle {
+                        result: Box::new(Type::Int),
+                        msg_elem: None,
+                    },
+                    |step| *step == ReleaseStep::Handle,
+                ),
+                ReleaseKind::Shape | ReleaseKind::NestedShape => (
+                    Type::Shape {
+                        name: "Player".to_string(),
+                    },
+                    |step| matches!(step, ReleaseStep::Shape { .. }),
+                ),
+                ReleaseKind::Maybe => (
+                    Type::Maybe {
+                        inner: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::Maybe { .. }),
+                ),
+                ReleaseKind::Union => (
+                    Type::Union {
+                        variants: vec![Type::Int, Type::String],
+                    },
+                    |step| matches!(step, ReleaseStep::Union { .. }),
+                ),
+                // Dynamic dispatch is not lowered, so no such value exists: loud, not a skip.
+                ReleaseKind::Dynamic => (
+                    Type::Dynamic {
+                        contract: "Damageable".to_string(),
+                    },
+                    |step| matches!(step, ReleaseStep::Unsupported(_)),
+                ),
+                ReleaseKind::Fixed => (
+                    Type::BuiltinFixed {
+                        elem: Box::new(Type::String),
+                        size: Some(2),
+                    },
+                    |step| matches!(step, ReleaseStep::Fixed { .. }),
+                ),
+                // A loop cell is never an owner.
+                ReleaseKind::MapEntry => (
+                    Type::MapEntry {
+                        key: Box::new(Type::String),
+                        val: Box::new(Type::String),
+                    },
+                    |step| *step == ReleaseStep::Nothing,
+                ),
+                ReleaseKind::ErrorsCapable => (
+                    Type::ErrorsCapable {
+                        inner: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::ErrorsCapable { .. }),
+                ),
+            };
+            let step = release_step(&representative);
+            assert!(
+                expected(&step),
+                "{kind:?}: a `{representative:?}` releases as {step:?}"
+            );
+        }
     }
 
     #[test]
