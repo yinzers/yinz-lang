@@ -1,0 +1,35 @@
+// v0.3-M9 C1f security round 1 (#423): `Holder` keeps its union field `Big | Tiny` inline, sized
+// by THIS module's `Big` (48 bytes). `Big` is not exported.
+shape Big {
+  first: int
+  second: int
+  third: int
+  fourth: int
+  fifth: int
+  label: string
+}
+export shape Tiny {
+  flag: boolean
+}
+shape Slot = Big | Tiny
+export shape Holder {
+  slot: Big | Tiny
+  id: int
+}
+export function fillHolder(lend holder: Holder) -> nothing {
+  let big: Big = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, label: `lib` }
+  let asSlot: Slot = big
+  holder.slot = asSlot
+}
+export function show(share holder: Holder) -> string {
+  let slot = holder.slot
+  if (slot) {
+    is Big => {
+      return `big ${slot.label} ${slot.fifth}`
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}

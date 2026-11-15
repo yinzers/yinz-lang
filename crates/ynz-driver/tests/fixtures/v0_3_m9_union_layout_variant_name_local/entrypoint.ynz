@@ -1,0 +1,23 @@
+// v0.3-M9 C1f security round 1 (#423): this module declares its OWN shape `Big` (1 byte) and
+// builds the imported `Holder` on its stack.
+// Correct behavior: does not compile — `Big` would name two different shapes, and `Holder`'s
+// union slot would be sized by the wrong one.
+// Failure before the fix (measured): compiles; this module sizes `Holder.slot` by its own `Big`
+// (16 bytes) while `lib` writes its 48-byte `Big` into it: AddressSanitizer stack-buffer-overflow
+// at -O0 and -O2. Building `Holder { slot: ownBig }` instead is a tag/payload confusion: `lib`
+// reads `label` from a 1-byte shape.
+import { Holder, Tiny, show, fillHolder } from `lib`
+
+shape Big {
+  flag: boolean
+}
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let holder: Holder = { slot: tiny, id: 7 }
+  fillHolder(holder)
+  print(show(holder))
+  print(holder.id)
+  let own: Big = { flag: true }
+  print(own.flag)
+}
