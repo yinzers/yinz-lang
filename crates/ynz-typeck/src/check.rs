@@ -5394,28 +5394,32 @@ impl<'b> Checker<'b> {
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
         self.note_binding_use(name, span);
+        // The consumed-read site for every read the type checker infers: a use-after-give
+        // / use-after-send / use-after-store is rendered by `consumed_read_diag` (the ONE
+        // rendering of the `Consumed*` templates). Its other caller is `check_transfer`, for the
+        // one read this site cannot see — an argument consumed by an earlier position of the SAME
+        // call, which was inferred before the call consumed anything. It runs BEFORE the `is`
+        // overlay below: a read of the narrowed binding is a read of the same value, and the arm
+        // that handed it over (`circles.add(figure)`) must not read it again.
+        if let Some(cause) = self
+            .scope
+            .lookup(name)
+            .and_then(|entry| entry.consumed.clone())
+        {
+            let diag = consumed_read_diag(span.clone(), name, &cause);
+            self.diags.push(diag);
+            return Type::Error;
+        }
         // M6: if inside a union `is` arm, the binding is narrowed to a specific variant.
         // The overlay branch reads through `binding_ty_narrowed` (the one narrowing-aware
         // source); only the narrowed case returns here — the un-narrowed path continues
-        // below to the side-effecting scope checks (use-after-give, ErrorsCapable
-        // narrowing) the overlay window bypasses.
+        // below to the ErrorsCapable narrowing the overlay window bypasses.
         if self.active_union_narrowing(name).is_some() {
             if let Some(narrowed_ty) = self.binding_ty_narrowed(name) {
                 return narrowed_ty;
             }
         }
         if let Some(entry) = self.scope.lookup(name) {
-            // The consumed-read site for every read the type checker infers: a use-after-give
-            // / use-after-send is rendered by `consumed_read_diag` (the ONE rendering of the
-            // `Consumed` / `ConsumedBySend` templates). Its other caller is `check_transfer`,
-            // for the one read this site cannot see — an argument consumed by an earlier
-            // position of the SAME call, which was inferred before the call consumed anything.
-            if let Some(cause) = entry.consumed.clone() {
-                let diag = consumed_read_diag(span.clone(), name, &cause);
-                self.diags.push(diag);
-                return Type::Error;
-            }
-
             // M7 P3a: ErrorsCapable binding use handling.
             // Return the ErrorsCapable type as-is so method dispatch (.failed, .or, etc.)
             // can handle it. Auto-propagation fires when the binding is passed to a function
