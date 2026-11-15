@@ -177,12 +177,19 @@ pub fn module_signatures_query(
 
     // Shapes first — function signatures need them for type resolution.
     // Pass imported shapes and options so field type annotations can reference them.
-    let shape_table = collect_shapes(
+    let mut shape_table = collect_shapes(
         &parse.module,
         &imported.shapes,
         &imported.options,
         &mut diag_bucket,
     );
+    // An imported shape's union-field variants the importer never named, kept only so codegen
+    // can size the imported shape (a layout-only entry is not resolvable by name).
+    for (name, def) in imported.layout_shapes {
+        if !shape_table.contains(&name) {
+            shape_table.layout_only.insert(name, def);
+        }
+    }
     let generic_shape_table = collect_generic_shapes(&parse.module, &mut diag_bucket);
     let sig_table = collect_signatures(&parse.module, &mut diag_bucket, &shape_table);
     let generic_fn_table =

@@ -84,6 +84,12 @@ pub struct ShapeTable {
     ///              global type registry.
     /// @trigger Adding a second file to a project + using an imported options type in a shape field.
     pub options_names: HashSet<String>,
+    /// Shapes an IMPORTED shape needs only to know its own size: the variants of its union
+    /// fields, which the importing module never named (`import { Holder }` does not bring the
+    /// `Big` of `extra: Big | int`). Codegen lays them out so `Holder`'s slot size is computed
+    /// the same way in every module; they are NOT resolvable by name (`contains`/`get` never see
+    /// them), so an import cannot leak a name into the importer's scope.
+    pub layout_only: HashMap<String, ShapeDef>,
 }
 
 impl ShapeTable {
@@ -92,6 +98,7 @@ impl ShapeTable {
             shapes: HashMap::new(),
             union_aliases: HashMap::new(),
             options_names: HashSet::new(),
+            layout_only: HashMap::new(),
         }
     }
 
@@ -365,6 +372,7 @@ pub fn collect_shapes(
             .collect(),
         union_aliases: HashMap::new(),
         options_names: table.options_names.clone(),
+        layout_only: HashMap::new(),
     };
 
     // Pass 2: resolve each shape's own fields, contract sigs, extends, and follows.
@@ -1031,5 +1039,50 @@ fn emit_unknown_field_type_diag(
             }
         }
         _ => {}
+    }
+}
+
+impl ShapeTable {
+    /// A shape's definition for LAYOUT purposes: a named shape, or one only a union field of
+    /// an imported shape needs (`layout_only`).
+    pub fn layout_shape(&self, name: &str) -> Option<&ShapeDef> {
+        self.shapes.get(name).or_else(|| self.layout_only.get(name))
+    }
+
+    /// Every shape `roots` need to be sized: the shape variants of their envelope-union fields,
+    /// and, through those shapes' own fields, theirs. A shape's inline size depends on exactly
+    /// these (a nested `shape` field is a pointer), so an importer that has `roots` and this
+    /// closure lays each root out as its declaring module does.
+    ///
+    /// Time: O(s + f) for s shapes, f fields  Space: O(s)
+    pub fn union_variant_closure<'a>(
+        &self,
+        roots: impl Iterator<Item = &'a ShapeDef>,
+    ) -> HashMap<String, ShapeDef> {
+        let mut closure: HashMap<String, ShapeDef> = HashMap::new();
+        let mut pending: Vec<&ShapeDef> = roots.collect();
+        while let Some(shape) = pending.pop() {
+            for field in &shape.fields {
+                if !crate::check::is_envelope_union(&field.ty) {
+                    continue;
+                }
+                let Type::Union { variants } = &field.ty else {
+                    continue;
+                };
+                for variant in variants {
+                    let Type::Shape { name } = variant else {
+                        continue;
+                    };
+                    if closure.contains_key(name) {
+                        continue;
+                    }
+                    if let Some(variant_def) = self.layout_shape(name) {
+                        closure.insert(name.clone(), variant_def.clone());
+                        pending.push(variant_def);
+                    }
+                }
+            }
+        }
+        closure
     }
 }

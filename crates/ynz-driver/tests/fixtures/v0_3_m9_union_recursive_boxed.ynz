@@ -1,0 +1,63 @@
+// v0.3-M9 C1f (#423): a RECURSIVE union (a variant that reaches the union itself through a
+// shape field) cannot hold its payload inline, so its slot boxes a shape variant in a heap
+// cell. The list is built in one function, returned, and summed in another after the building
+// frame is gone.
+// Correct behavior: prints `6`, `3 deep`, `end`; clean under AddressSanitizer at both
+// optimization levels.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+
+function sum(share head: Node) -> int {
+  let total = head.value
+  let rest = head.next
+  if (rest) {
+    is Node => {
+      return total + sum(rest)
+    }
+    is End => {
+      return total
+    }
+  }
+  return total
+}
+
+function depth(share head: Node) -> int {
+  let rest = head.next
+  if (rest) {
+    is Node => {
+      return 1 + depth(rest)
+    }
+    is End => {
+      return 1
+    }
+  }
+  return 1
+}
+
+function build() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let first: Node = { value: 1, next: middle }
+  return first
+}
+
+function clobber(n: int) -> int {
+  let a = n + 1
+  let b = a * 2
+  return b + a
+}
+
+function entrypoint() -> nothing {
+  let list = build()
+  let scratch = clobber(5)
+  print(sum(list))
+  print(`${depth(list)} deep`)
+  print(`end`)
+}

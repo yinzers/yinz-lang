@@ -228,11 +228,16 @@ pub fn frame_layouts_query(
         // shape's frame slot is sized from the padded struct type automatically (one
         // source, every consumer threaded — authoritative-derivation.md).
         let layout = layout_decisions_query(db, source);
-        let shape_types = crate::shape_types::emit_shape_types(
+        let shape_types = match crate::shape_types::emit_shape_types(
             &ctx,
             &sig_output.shape_table,
             &layout.padded_shapes,
-        );
+            &target_data,
+        ) {
+            Ok(types) => types,
+            // Codegen builds the same types with `?` and reports the error first.
+            Err(_) => return Arc::new(HashMap::new()),
+        };
         shape_types
             .named
             .iter()

@@ -142,3 +142,26 @@ fn v03_m9_union_container_map_set_asan_no_optimize() {
         "tiny\nbig hello\nend\n",
     );
 }
+
+// A recursive union cannot hold its payload inline (no finite size), so its slot boxes a shape
+// variant in a heap cell. Bug caught: sizing the slot inline loops the layout, and a boxed slot
+// that kept a frame pointer would dangle once `build` returns. Tier: High.
+#[test]
+fn v03_m9_union_recursive_boxed_asan_optimized() {
+    // WHY: the list is read after the building frame is gone; ASan names a dangling cell.
+    assert_asan_clean(
+        "v0_3_m9_union_recursive_boxed.ynz",
+        false,
+        "6\n3 deep\nend\n",
+    );
+}
+
+#[test]
+fn v03_m9_union_recursive_boxed_asan_no_optimize() {
+    // WHY: same read at -O0, where the dead frame is left untouched.
+    assert_asan_clean(
+        "v0_3_m9_union_recursive_boxed.ynz",
+        true,
+        "6\n3 deep\nend\n",
+    );
+}

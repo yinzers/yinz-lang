@@ -23,6 +23,8 @@ use crate::{
 pub struct ResolvedImport {
     /// Local name → ShapeDef for imported shapes.
     pub shapes: std::collections::HashMap<String, ShapeDef>,
+    /// Shapes the imported shapes need only to be sized (`ShapeTable::layout_only`).
+    pub layout_shapes: std::collections::HashMap<String, ShapeDef>,
     /// Local name → OptionsEntry for imported options types.
     pub options: std::collections::HashMap<String, OptionsEntry>,
     /// Local name → FunctionSig for imported functions.
@@ -33,6 +35,7 @@ impl ResolvedImport {
     pub fn empty() -> Self {
         Self {
             shapes: Default::default(),
+            layout_shapes: Default::default(),
             options: Default::default(),
             functions: Default::default(),
         }
@@ -199,6 +202,10 @@ pub fn resolve_imports(
         // Get or build the ExportTable for the imported file using the same db.
         let export_table =
             load_export_table(db, &resolved_path, module_str, &span, visiting, diags);
+
+        for (name, def) in &export_table.layout_shapes {
+            result.layout_shapes.insert(name.clone(), def.clone());
+        }
 
         // Resolve named vs namespace imports.
         match &import.kind {
