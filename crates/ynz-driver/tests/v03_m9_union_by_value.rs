@@ -13,11 +13,12 @@
 //!   - `add` / `map_set`: straight-line stores, the guard that the one coercion point of
 //!     `check_argument_type` wraps a built-in container slot.
 //!
-//! Count: 4 red fixtures x 4 runs + 2 guard fixtures x 2 ASan runs = 20 tests, past the ~8 a
-//! High-tier unit gets without a reason. The runs are not copies: plain vs AddressSanitizer
-//! keeps the VALUE apart from the MEMORY ACCESS (a dangling read often prints plausible text,
-//! and an out-of-bounds one can print the right text), and -O0 vs -O2 keeps a frame the
-//! optimizer reuses apart from one it does not (stack-use-after-return vs after-scope).
+//! Count: each escape-kind fixture runs four ways (plain and AddressSanitizer, -O0 and -O2); the
+//! add / map_set / recursive-boxed / `wait`-staged / `background` guards run under ASan only, at
+//! both levels (ASan asserts the stdout too); the refusals compile only. The plain runs are the
+//! program as shipped: ASan changes the stack layout (redzones, fake frames), so a read that is
+//! only wrong without the sanitizer shows there. -O0 vs -O2 keeps a frame the optimizer reuses
+//! apart from one it does not (stack-use-after-return vs after-scope).
 //!
 //! The heap homes #410 and #421 built (union return, `wait`-staged argument, hidden default)
 //! are guarded by `v03_m9_union_wrap.rs` and `v03_m9_union_hidden_default.rs`.
@@ -232,10 +233,10 @@ by_value_tests!(
     v03_m9_union_errors_return_suspending_asan_no_optimize
 );
 
-// RED until step 2 of #423 lands (crossing union bindings in frame regions): a `Thing errors`
-// result held across a `wait` was a view pointer into the resume function's dead stack
-// (SIGSEGV since the errors result went by value); the `let thing: Thing` binding that crosses
-// was a heap envelope. Bug caught: a union binding read after a suspension. Tier: High.
+// Bug caught: a `Thing errors` result held across a `wait` was a view pointer into the resume
+// function's dead stack (SIGSEGV since the errors result went by value); the `let thing: Thing`
+// binding that crosses was a heap envelope. A union binding must read back after a suspension.
+// Tier: High.
 by_value_tests!(
     "v0_3_m9_union_crossing_binding.ynz",
     "big crossing 3\nbig slow 8\nend\n",
@@ -326,4 +327,29 @@ fn v03_m9_union_maybe_errors_crossing_is_refused() {
         "the refusal must say what is not supported:\n{}",
         compiled.diagnostics
     );
+}
+
+// Bug caught: a callee that does not own a union stored its `share` parameter in a list, so the
+// caller and the list both held one payload (the slot now copies bytes, but the ownership rule
+// is what keeps a release pass from freeing the caller's payload). `give` is the one way to
+// store a union you were passed (`v0_3_m9_union_keep_give.ynz`). Tier: High.
+#[test]
+fn v03_m9_union_share_param_stored_in_list_is_refused() {
+    let compiled = support::compile("v0_3_m9_union_keep_share_refused.ynz");
+    assert!(
+        !compiled.success,
+        "storing a `share` union parameter in a list must not compile:\n{}",
+        compiled.diagnostics
+    );
+    for fragment in [
+        "`t` is a parameter of `keep` that is declared `share`",
+        "needs `give`",
+        "function keep(give t: Tiny | Big, …)",
+    ] {
+        assert!(
+            compiled.diagnostics.contains(fragment),
+            "the refusal must contain {fragment:?}:\n{}",
+            compiled.diagnostics
+        );
+    }
 }
