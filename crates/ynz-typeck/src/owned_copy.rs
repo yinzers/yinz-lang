@@ -84,12 +84,12 @@ pub enum OwnedCopy {
 /// Whether a container's element cells are finished once the buffer is byte-copied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ElemCopy {
-    /// The cell holds the whole element (an `int`, a `shape`'s inline bytes) or a pointer to
-    /// immortal immutable bytes (a `string`). Byte-copying the buffer finishes the job.
+    /// The cell holds the whole element (an `int`, a `shape`'s inline bytes). Byte-copying the
+    /// buffer finishes the job.
     Inline,
-    /// The cell holds a pointer to a separately-allocated value. The buffer copy must be
-    /// followed by copying each element through this same table, or the two containers would
-    /// share their items.
+    /// The cell holds a pointer to a separately-allocated value (a `string`'s bytes included).
+    /// The buffer copy must be followed by copying each element through this same table, or the
+    /// two containers would share their items.
     Nested,
 }
 

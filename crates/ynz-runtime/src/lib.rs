@@ -1339,7 +1339,9 @@ pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8)
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 /// - `key` must be a non-null pointer to a valid null-terminated byte string that
-///   remains valid for the lifetime of the map (the map stores the pointer, not a copy).
+///   remains valid for the lifetime of the map (the map stores the pointer, not a copy of the
+///   bytes: codegen hands it a string the map owns, an owned copy of a borrowed key or a moved
+///   fresh one, `IMP-strings.md` "Storing a string").
 /// - `src` must be valid for `elem_size` bytes.
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.

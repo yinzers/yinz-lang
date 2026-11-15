@@ -890,12 +890,12 @@ pub struct TypedModule {
     /// v0.3-M9 C5a: the persisted transfer record — the final alias-class partition of every
     /// function with its release anchor and escapes (see `crate::transfer_record`).
     pub transfers: crate::transfer_record::TransferRecord,
-    /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
-    /// span. Codegen picks the instance a call runs from this record and nothing else.
     /// v0.3-M9 C3b: every string-typed expression a store takes by move — a fresh string or the
     /// last use of a `let` binding (`crate::string_ownership`). Codegen copies every other
     /// string it stores and consults nothing else.
     pub string_moves: crate::string_ownership::StringMoves,
+    /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
+    /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
 }
 
