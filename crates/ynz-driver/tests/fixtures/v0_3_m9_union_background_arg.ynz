@@ -14,28 +14,28 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
-  if (t) {
+function describe(share thing: Thing) -> string {
+  if (thing) {
     is Tiny => {
       return `tiny`
     }
     is Big => {
-      return `big ${t.label} ${t.count}`
+      return `big ${thing.label} ${thing.count}`
     }
   }
   return `none`
 }
 
-function slowDescribe(give t: Thing) -> string {
+function slowDescribe(give thing: Thing) -> string {
   wait sleep(1)
-  return describe(t)
+  return describe(thing)
 }
 
 function entrypoint() -> nothing {
   let big: Big = { label: `spawned`, count: 7 }
-  let h = background slowDescribe(big)
+  let handle = background slowDescribe(big)
   wait sleep(50)
-  let got = h.receive()
+  let got = handle.receive()
   let fallback = `none`
   print(got.or(fallback))
   print(`end`)

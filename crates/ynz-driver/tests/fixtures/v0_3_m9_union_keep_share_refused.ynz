@@ -13,8 +13,8 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function keep(lend list: array<Thing>, share t: Thing) -> nothing {
-  list.add(t)
+function keep(lend list: array<Thing>, share thing: Thing) -> nothing {
+  list.add(thing)
 }
 
 function entrypoint() -> nothing {

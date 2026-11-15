@@ -17,20 +17,20 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
-  if (t) {
+function describe(share thing: Thing) -> string {
+  if (thing) {
     is Tiny => {
       return `tiny`
     }
     is Big => {
-      return `big ${t.label}`
+      return `big ${thing.label}`
     }
   }
   return `none`
 }
 
-function keep(lend list: array<Thing>, give t: Thing) -> nothing {
-  list.add(t)
+function keep(lend list: array<Thing>, give thing: Thing) -> nothing {
+  list.add(thing)
 }
 
 function fill() -> array<Thing> {
@@ -45,11 +45,11 @@ function fill() -> array<Thing> {
   return list
 }
 
-function clobber(n: int) -> int {
-  let a = n + 1
-  let b = a * 2
-  let c = b - 3
-  return c + a
+function clobber(seed: int) -> int {
+  let plusOne = seed + 1
+  let doubled = plusOne * 2
+  let reduced = doubled - 3
+  return reduced + plusOne
 }
 
 function entrypoint() -> nothing {

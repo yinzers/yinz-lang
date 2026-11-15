@@ -40,14 +40,14 @@ function weigh(share self: Holder) -> int {
   return total
 }
 
-function build(n: int) -> Holder {
-  if (n % 2 == 0) {
+function build(seed: int) -> Holder {
+  if (seed % 2 == 0) {
     let tiny: Tiny = { flag: true }
-    let holder: Holder = { index: n, slot: tiny }
+    let holder: Holder = { index: seed, slot: tiny }
     return holder
   }
-  let big: Big = { count: n, weight: 2 }
-  let holder: Holder = { index: n, slot: big }
+  let big: Big = { count: seed, weight: 2 }
+  let holder: Holder = { index: seed, slot: big }
   return holder
 }
 

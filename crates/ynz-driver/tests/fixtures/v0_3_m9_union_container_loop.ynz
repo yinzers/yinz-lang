@@ -16,13 +16,13 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
-  if (t) {
+function describe(share thing: Thing) -> string {
+  if (thing) {
     is Tiny => {
       return `tiny`
     }
     is Big => {
-      return `big ${t.label}`
+      return `big ${thing.label}`
     }
   }
   return `none`
@@ -30,17 +30,17 @@ function describe(share t: Thing) -> string {
 
 function entrypoint() -> nothing {
   let things: array<Thing> = []
-  let n = 0
-  while (n < 4) {
-    if (n % 2 == 0) {
+  let round = 0
+  while (round < 4) {
+    if (round % 2 == 0) {
       let tiny: Tiny = { flag: true }
       things.add(tiny)
     }
-    if (n % 2 == 1) {
-      let big: Big = { label: `b${n}`, count: n }
+    if (round % 2 == 1) {
+      let big: Big = { label: `b${round}`, count: round }
       things.add(big)
     }
-    n = n + 1
+    round = round + 1
   }
   let i = 0
   while (i < things.count()) {

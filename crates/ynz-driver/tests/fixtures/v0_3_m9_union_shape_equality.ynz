@@ -32,10 +32,10 @@ function build_tiny() -> Holder {
 }
 
 function clobber(depth: int) -> int {
-  let a = depth * 3
-  let b = a + 11
-  let c = b * 5
-  return c - a
+  let tripled = depth * 3
+  let shifted = tripled + 11
+  let scaled = shifted * 5
+  return scaled - tripled
 }
 
 function entrypoint() -> nothing {

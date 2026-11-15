@@ -14,32 +14,32 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
-  if (t) {
+function describe(share thing: Thing) -> string {
+  if (thing) {
     is Tiny => {
       return `tiny`
     }
     is Big => {
-      return `big ${t.label} ${t.count}`
+      return `big ${thing.label} ${thing.count}`
     }
   }
   return `none`
 }
 
-function slowPass(give t: Thing) -> Thing {
+function slowPass(give thing: Thing) -> Thing {
   wait sleep(1)
-  return t
+  return thing
 }
 
-function slowDescribe(share t: Thing) -> string {
+function slowDescribe(share thing: Thing) -> string {
   wait sleep(1)
-  return describe(t)
+  return describe(thing)
 }
 
-function clobber(n: int) -> int {
-  let a = n + 1
-  let b = a * 2
-  return b + a
+function clobber(seed: int) -> int {
+  let plusOne = seed + 1
+  let doubled = plusOne * 2
+  return doubled + plusOne
 }
 
 function entrypoint() -> nothing {

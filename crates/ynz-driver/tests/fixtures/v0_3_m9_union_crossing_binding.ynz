@@ -14,21 +14,21 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
-  if (t) {
+function describe(share thing: Thing) -> string {
+  if (thing) {
     is Tiny => {
       return `tiny`
     }
     is Big => {
-      return `big ${t.label} ${t.count}`
+      return `big ${thing.label} ${thing.count}`
     }
   }
   return `none`
 }
 
-function slowDescribe(share t: Thing) -> string {
+function slowDescribe(share thing: Thing) -> string {
   wait sleep(1)
-  return describe(t)
+  return describe(thing)
 }
 
 function slowBig(count: int) -> Thing errors {

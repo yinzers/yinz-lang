@@ -12,13 +12,13 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> int {
-  if (t) {
+function describe(share thing: Thing) -> int {
+  if (thing) {
     is Tiny => {
       return 0
     }
     is Big => {
-      return t.count
+      return thing.count
     }
   }
   return -1

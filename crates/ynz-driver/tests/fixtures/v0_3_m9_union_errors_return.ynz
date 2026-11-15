@@ -16,13 +16,13 @@ shape Big {
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
-  if (t) {
+function describe(share thing: Thing) -> string {
+  if (thing) {
     is Tiny => {
       return `tiny`
     }
     is Big => {
-      return `big ${t.label} ${t.count}`
+      return `big ${thing.label} ${thing.count}`
     }
   }
   return `none`
@@ -38,8 +38,8 @@ function makeTiny() -> Thing errors {
   return tiny
 }
 
-function passThrough(share t: Thing) -> Thing errors {
-  return t
+function passThrough(share thing: Thing) -> Thing errors {
+  return thing
 }
 
 function relay(count: int) -> Thing errors {
