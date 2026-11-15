@@ -403,20 +403,6 @@ impl ReleaseReads {
         self.block_end.is_empty() && self.return_edge.is_empty() && self.propagation_edge.is_empty()
     }
 
-    /// Every owner name, sorted and deduplicated.
-    pub fn owner_names(&self) -> Vec<String> {
-        let mut names: BTreeSet<String> = BTreeSet::new();
-        for list in self
-            .block_end
-            .values()
-            .chain(self.return_edge.values())
-            .chain(self.propagation_edge.values())
-        {
-            names.extend(list.iter().cloned());
-        }
-        names.into_iter().collect()
-    }
-
     /// `body` (a function body's statements) with a read of every owner appended at each edge:
     /// at the end of its block, after its `return`, after the statement holding the identifier
     /// that fires a propagation. The reads are `Stmt::Expr(Ident)` with a span no source
