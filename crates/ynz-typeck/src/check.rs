@@ -9,7 +9,7 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 use crate::{
     builtins::{
         array_method_is_mutating, array_method_return, builtin_method_argument_count,
-        collection_method_arg_slots, collection_store_positions, fixed_method_is_mutating,
+        builtin_method_argument_slots, collection_store_positions, fixed_method_is_mutating,
         fixed_method_return, map_method_is_mutating, map_method_return, maybe_method_return,
         sensitive_method_return, string_method_return,
     },
@@ -4367,9 +4367,7 @@ impl<'b> Checker<'b> {
                         }
                         ret_ty
                     } else {
-                        for arg in args.iter() {
-                            self.infer_expr(arg, None);
-                        }
+                        self.infer_builtin_method_arguments(&effective_receiver_ty, method, args);
                         self.check_method_call(
                             &effective_receiver_ty,
                             Some(receiver),
@@ -4379,9 +4377,7 @@ impl<'b> Checker<'b> {
                         )
                     }
                 } else {
-                    for arg in args.iter() {
-                        self.infer_expr(arg, None);
-                    }
+                    self.infer_builtin_method_arguments(&effective_receiver_ty, method, args);
                     self.check_method_call(
                         &effective_receiver_ty,
                         Some(receiver),
@@ -6636,7 +6632,7 @@ impl<'b> Checker<'b> {
     /// (plain `f(5)` in `check_user_fn_call`, UFCS `p.f(5)` in
     /// `check_method_call`'s shape/UFCS arm, generic `f<T>(5, ...)` post-loop in
     /// `check_generic_fn_call`, built-in collection method args via the
-    /// `collection_method_arg_slots` position table) AND the construction /
+    /// `builtin_method_argument_slots` position table) AND the construction /
     /// statement slots (shape fields, array/fixed/map literal elements, index
     /// and bracket assigns, map bracket keys, `return`, multi-case-if arm
     /// patterns) — so all render byte-identical core diagnostics per
@@ -7450,12 +7446,6 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
-        // M8 P4: sensitive type method dispatch.
-        if let Type::Sensitive { inner } = receiver_ty {
-            let inner = inner.as_ref().clone();
-            return sensitive_method_return(method, &inner, method_span, &mut self.diags);
-        }
-
         // M6: reject `.toInt()` on bool — no silent 0/1 coercion.
         if *receiver_ty == Type::Bool && method == "toInt" {
             self.diags.push(Diagnostic::error(
@@ -7473,33 +7463,46 @@ impl<'b> Checker<'b> {
             return ret_ty;
         }
 
-        // Int literal (or `-IntLit`) into a `number`-typed elem/key/value slot
-        // of a built-in collection method — these args are inferred hint-free
-        // upstream and the builtin arms check nothing, so without this gate the
-        // program passes typeck and miscompiles (raw i64 bits where a decimal128
-        // pointer belongs: `array<number>.add(5)` segfaults; `.contains(5)` is
-        // silently wrong). ONE authoritative position table
-        // (`collection_method_arg_slots`) + the ONE shared gate — no per-arm
-        // twins (authoritative-derivation, Future-Req #14).
-        for (pos, slot_ty) in collection_method_arg_slots(receiver_ty, method) {
-            if let Some(arg) = args.get(pos) {
-                self.reject_int_literal_number_arg(method, &slot_ty, arg);
-                // `.or(fallback)`: the fallback IS the result when the receiver is empty, so it
-                // flows into the element slot; wrapped like any other value entering a union
-                // slot. The other element-typed positions are not a plain flow into a slot:
-                // `add`/`set` STORE into the receiver (an envelope that must outlive the frame:
-                // the lifetime class of #423), `contains`/`remove`/`get` only look a value up.
-                if method == "or" {
-                    let argument_span = arg.span();
-                    if let Some(actual_ty) = self
-                        .expr_types
-                        .get(&(argument_span.start, argument_span.end))
-                        .cloned()
-                    {
-                        self.record_union_coercion(arg, &slot_ty, &actual_ty);
-                    }
-                }
+        // Every typed argument of a built-in method against its parameter, with the plain call
+        // form's two checks in its order: an int literal into a `number` slot (codegen has no
+        // int→`number` conversion yet — Future-Req #14), then the argument's type
+        // (`check_argument_type`). Codegen trusts these types: before this check
+        // `xs.add(tiny)` on an `array<Big>` read the 1-byte `Tiny` as a 16-byte `Big` and
+        // `secret.contains(5)` panicked (C1g rework r3, #424). ONE position table
+        // (`builtin_method_argument_slots`, through `Checker::builtin_method_argument_slots`
+        // for the registry's one-argument methods) — no per-arm twins (authoritative-derivation).
+        for (pos, slot_ty) in self.builtin_method_argument_slots(receiver_ty, method) {
+            let Some(arg) = args.get(pos) else {
+                continue;
+            };
+            if self.reject_int_literal_number_arg(method, &slot_ty, arg) {
+                continue;
             }
+            let argument_span = arg.span();
+            let Some(actual_ty) = self
+                .expr_types
+                .get(&(argument_span.start, argument_span.end))
+                .cloned()
+            else {
+                continue;
+            };
+            self.check_argument_type(method, arg, &slot_ty, &actual_ty);
+            // `.or(fallback)` (on `maybe` and on an `errors` result): the fallback IS the result
+            // when the receiver is empty or failed, so it flows into the element slot; wrapped
+            // like any other value entering a union slot. The other element-typed positions are
+            // not a plain flow into a slot: `add`/`set` STORE into the receiver (an envelope
+            // that must outlive the frame: the lifetime class of #423), `contains`/`remove`/`get`
+            // only look a value up.
+            if method == "or" {
+                self.record_union_coercion(arg, &slot_ty, &actual_ty);
+            }
+        }
+
+        // M8 P4: sensitive type method dispatch (after the argument check: a `sensitive T` has
+        // the typed positions of `T`).
+        if let Type::Sensitive { inner } = receiver_ty {
+            let inner = inner.as_ref().clone();
+            return sensitive_method_return(method, &inner, method_span, &mut self.diags);
         }
 
         // A heap value stored by an in-place collection method (`add`, `set`) joins the
@@ -7793,20 +7796,8 @@ impl<'b> Checker<'b> {
         // M7 P3a: errors-capable value method dispatch.
         if let Type::ErrorsCapable { inner } = receiver_ty {
             let inner = inner.as_ref().clone();
-            // `.or(fallback)` on a failed result: the fallback is the success value, so it flows
-            // into the success type's slot (a plain shape for a union success type is wrapped).
-            if method == "or" {
-                if let Some(arg) = args.first() {
-                    let argument_span = arg.span();
-                    if let Some(actual_ty) = self
-                        .expr_types
-                        .get(&(argument_span.start, argument_span.end))
-                        .cloned()
-                    {
-                        self.record_union_coercion(arg, &inner, &actual_ty);
-                    }
-                }
-            }
+            // `.or(fallback)`'s argument was checked and its union coercion recorded by the
+            // built-in argument loop above (`builtin_method_argument_slots`).
             return self.check_errors_capable_method(receiver_expr, method, method_span, &inner);
         }
 
@@ -9338,6 +9329,49 @@ impl<'b> Checker<'b> {
             return Some(1);
         }
         None
+    }
+
+    /// The typed argument positions of the built-in method `method` on `receiver_ty` and the type
+    /// each must have: `builtin_method_argument_slots` first, then the registry's one-argument
+    /// entry (`method_1arg`) for the receiver with `sensitive` peeled (`secret.contains(x)` has
+    /// the parameter of `string.contains`). The same two sources, in the same order, as
+    /// `builtin_method_argument_count`. O(registry entries).
+    fn builtin_method_argument_slots(
+        &self,
+        receiver_ty: &Type,
+        method: &str,
+    ) -> Vec<(usize, Type)> {
+        let slots = builtin_method_argument_slots(receiver_ty, method);
+        if !slots.is_empty() {
+            return slots;
+        }
+        let registry_receiver_ty = match receiver_ty {
+            Type::Sensitive { inner } => inner.as_ref(),
+            other => other,
+        };
+        match self
+            .intrinsics
+            .lookup_method_1arg(registry_receiver_ty, method)
+        {
+            Some((argument_ty, _)) => vec![(0, argument_ty.clone())],
+            None => Vec::new(),
+        }
+    }
+
+    /// Infer a built-in method call's arguments, each with its parameter's type as the hint
+    /// (`builtin_method_argument_slots`), as the plain call form infers each argument with its
+    /// parameter's type: `xs.add(1.5)` on an `array<float>` types the literal `float`, and
+    /// `m.set(`k`, none)` knows which `maybe` the `none` is. A position with no typed parameter
+    /// (a closure, an unknown method) is inferred with no hint. O(arguments + registry entries).
+    fn infer_builtin_method_arguments(&mut self, receiver_ty: &Type, method: &str, args: &[Expr]) {
+        let slots = self.builtin_method_argument_slots(receiver_ty, method);
+        for (position, arg) in args.iter().enumerate() {
+            let hint = slots
+                .iter()
+                .find(|(slot_position, _)| *slot_position == position)
+                .map(|(_, slot_ty)| slot_ty);
+            self.infer_expr(arg, hint);
+        }
     }
 
     /// Refuse a built-in method (`xs.add()`, `m.set(`a`)`, `n.toString(1, 2)`) called with a

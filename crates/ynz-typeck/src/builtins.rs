@@ -234,28 +234,38 @@ pub fn builtin_method_returns_fresh(method: &str) -> bool {
     matches!(method, "receive")
 }
 
-/// The receiver-typed argument positions of the built-in collection methods:
-/// which arg positions of `method` carry the collection's elem / inner / key /
-/// value type (rather than an `int` index or a closure).
+/// The typed argument positions of the built-in methods and the type each must have: the
+/// collection's element / key / value, `maybe`'s and an `errors` result's inner type, an `int`
+/// index, and the `string` methods with two arguments (`substring(start, end)`,
+/// `replace(from, to)`; the registry lists them with one). A `sensitive T` has the positions of
+/// `T`. Closure positions (`sort`, `filter`, `map`, `find` on arrays), whole-collection
+/// positions (`concat`, `append`, `prepend`) and `limit(n)` carry no entry; none of them is
+/// lowered yet, so a wrong argument there stops at codegen instead of running.
 ///
-/// The ONE authoritative position table (authoritative-derivation) consumed by
-/// `check_method_call`'s int-literal→`number` slot gate — when a collection
-/// method gains an element-typed argument, extend THIS table, never a per-arm
-/// twin. (`concat`/`append`/`prepend` take a whole collection, not an element,
-/// so they carry no entry here.)
-pub fn collection_method_arg_slots(receiver: &Type, method: &str) -> Vec<(usize, Type)> {
+/// The ONE authoritative position table (authoritative-derivation): the `Expr::MethodCall` arm
+/// infers each argument with its position's type as the hint, and `check_method_call` runs the
+/// int-literal→`number` gate and the plain call form's argument check (`check_argument_type`)
+/// on every position listed here. Codegen trusts these types (it reads a `Big` slot from the
+/// argument's pointer), so a typed position missing here compiles a wrong argument and misreads
+/// memory (C1g rework r3, #424): when a built-in method gains a typed argument, extend THIS
+/// table, never a per-arm twin.
+///
+/// O(1): a match on two short strings and one recursion through `sensitive`.
+pub fn builtin_method_argument_slots(receiver: &Type, method: &str) -> Vec<(usize, Type)> {
     match receiver {
         Type::BuiltinArray { elem } => match method {
             "add" | "contains" | "remove" => vec![(0, elem.as_ref().clone())],
-            "set" => vec![(1, elem.as_ref().clone())],
+            "get" => vec![(0, Type::Int)],
+            "set" => vec![(0, Type::Int), (1, elem.as_ref().clone())],
             _ => Vec::new(),
         },
         Type::BuiltinFixed { elem, .. } => match method {
             "contains" => vec![(0, elem.as_ref().clone())],
-            "set" => vec![(1, elem.as_ref().clone())],
+            "get" => vec![(0, Type::Int)],
+            "set" => vec![(0, Type::Int), (1, elem.as_ref().clone())],
             _ => Vec::new(),
         },
-        Type::Maybe { inner } => match method {
+        Type::Maybe { inner } | Type::ErrorsCapable { inner } => match method {
             "or" => vec![(0, inner.as_ref().clone())],
             _ => Vec::new(),
         },
@@ -264,6 +274,12 @@ pub fn collection_method_arg_slots(receiver: &Type, method: &str) -> Vec<(usize,
             "get" | "has" | "remove" | "find" => vec![(0, key.as_ref().clone())],
             _ => Vec::new(),
         },
+        Type::String => match method {
+            "substring" => vec![(0, Type::Int), (1, Type::Int)],
+            "replace" => vec![(0, Type::String), (1, Type::String)],
+            _ => Vec::new(),
+        },
+        Type::Sensitive { inner } => builtin_method_argument_slots(inner, method),
         _ => Vec::new(),
     }
 }
@@ -277,8 +293,8 @@ pub fn collection_method_arg_slots(receiver: &Type, method: &str) -> Vec<(usize,
 /// `sort`, `filter`, `map` and `find` are left out on purpose: their closure arguments are not
 /// settled (`sort` takes none, one or two) and the type-check tests call `filter()` with none.
 ///
-/// The ONE argument-count table for built-in methods, beside `collection_method_arg_slots` (which
-/// says WHICH positions carry the element type; this says HOW MANY positions there are).
+/// The ONE argument-count table for built-in methods, beside `builtin_method_argument_slots` (which
+/// says WHICH positions are typed and as what; this says HOW MANY positions there are).
 /// `check_method_call`'s caller compares it with the call before any lowering, because codegen
 /// indexes the argument list by position and a missing argument is a panic, not an error. A
 /// method that gains an argument gains its number HERE, never a per-arm check.
