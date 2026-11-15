@@ -6,13 +6,13 @@
 //! The container stores `add` / `map.set` are #423's (a frame envelope cannot live in a
 //! container): their fixtures and tests are at `feat/v0-3-m9-c1e-rework-containers@56b4986`.
 //!
-//! Count: 12 tests = 2 run fixtures x 4 runs + 4 compile-only guards, past the ~8 a High-tier
+//! Count: 14 tests = 2 run fixtures x 4 runs + 6 compile-only guards, past the ~8 a High-tier
 //! unit gets without a written reason. The two fixtures are not copies: `non_shape` is the
 //! minimal red case (a raw int where the envelope pointer belongs); `per_instance` is what the
 //! heap re-home of the default must keep true (two instances never share one envelope, and a
 //! parent's default reaches a child built in a loop). The 4 runs per fixture are plain vs ASan
 //! (a misread often prints plausible output; only the sanitizer sees the out-of-bounds read)
-//! and -O0 vs -O2 (the optimizer can mask a misread). The 4 guards compile only.
+//! and -O0 vs -O2 (the optimizer can mask a misread). The 6 guards compile only.
 //!
 //! One named test per case: each fixture runs at two optimization levels, plainly (the VALUE)
 //! and under AddressSanitizer (the MEMORY ACCESS), kept apart so a failure says which is wrong.
@@ -170,5 +170,26 @@ fn v03_m9_union_hidden_default_unknown_variant_reports_only_the_unknown_type() {
             && !compiled.diagnostics.contains("unknown`"),
         "the default must not be checked against a broken type; got:\n{}",
         compiled.diagnostics
+    );
+}
+
+#[test]
+fn v03_m9_union_hidden_default_unknown_generic_variant_is_refused() {
+    // Bug: `Nope<int>` resolved to an unreported error type, the default check skipped a union
+    // holding one, and the program compiled and SIGSEGVed reading the raw int 4096 as the
+    // envelope pointer. Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_hidden_default_unknown_generic_variant.ynz",
+        "`Nope` is not a known type",
+    );
+}
+
+#[test]
+fn v03_m9_union_hidden_default_missing_type_argument_is_refused() {
+    // Bug: `map<int>` resolved its missing value type to an unreported error type, with the same
+    // compile-then-SIGSEGV as an unknown generic name. Tier: High.
+    assert_build_refused(
+        "v0_3_m9_union_hidden_default_missing_type_argument.ynz",
+        "`map` takes 2 type arguments",
     );
 }
