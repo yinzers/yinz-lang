@@ -2196,6 +2196,12 @@ struct Cg<'ctx, 'g> {
     // by move (typeck's `TypedModule::string_moves`), keyed by the LLVM value. Written by
     // `lower_expr` and read by `own_string_for_store`; a string absent from it is copied.
     owned_string_values: std::collections::HashSet<usize>,
+    // C1f round 2: the heap values (a shape, union or `maybe` that may own boxes) the expression
+    // that produced them says a store takes by MOVE (typeck's `TypedModule::heap_moves`), keyed by
+    // the LLVM value: the pointer an identifier read loads (a fresh `load` per read), a literal's
+    // or a call result's slot, a union envelope view. Written by `lower_expr`, read by every copy
+    // of a value's bytes (`Cg::is_moved_cells`); a value absent from it is copied deep.
+    moved_cell_values: std::collections::HashSet<usize>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -3315,7 +3321,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         elem_ty: &Type,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
-        if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
+        if let Type::Shape { name } = self.resolve_type(elem_ty) {
+            // The runtime memcpys the element out of this pointer, so a shape that owns boxes and
+            // is not moved in is staged through a deep copy, or the element would share them.
+            if !self.is_moved_cells(val.into_pointer_value()) && self.shape_owns_cells(&name)? {
+                return self.shape_bytes_to_owned(val.into_pointer_value(), &name, site);
+            }
             return Ok(val.into_pointer_value());
         }
         // C1f: an envelope union persists as its own slot (payload inline); the runtime memcpys
@@ -3632,6 +3643,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_memcpy(owned, 1, src, 1, size)
             .map_err(|e| format!("shape_bytes_to_owned memcpy: {e}"))?;
+        self.deepen_unless_moved(src, owned, shape_name)?;
         Ok(owned)
     }
 
@@ -3714,7 +3726,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("{e}"))?
             .into_int_value();
 
-        let final_bits = self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap)?;
+        let moved = self.is_moved_cells(src_env);
+        let final_bits = self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap, moved)?;
 
         let dst_flag_gep = self
             .builder
@@ -3842,6 +3855,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         inner_ty: &Type,
         site: &str,
         heap: bool,
+        moved: bool,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         enum WidePayload {
             Shape(String),
@@ -3898,6 +3912,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // The bytes were copied, so the payload's string fields still point at the
                 // source's strings: copy them so the payload owns its strings.
                 self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
+                // The payload owns boxes of its own unless the envelope it came from moves in.
+                if !moved {
+                    self.deepen_shape_fields(owned_pay, name)?;
+                }
                 owned_pay
             }
             // Number reaches here only with `heap = true` (the match above passes
@@ -4728,6 +4746,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ) -> Result<(), String> {
         let layout = self.union_layout(variants)?;
         let slot_ty = self.union_slot_llvm(&layout);
+        // A source typeck says a store takes by move hands over the boxes its shape variant owns;
+        // any other source keeps them, so the slot clones them (`clone_shape_variant_into_slot`).
+        let deep = !self.is_moved_cells(src);
         let done_bb = self.append_block(&format!("{site}_persist_done"));
         if nullable {
             let none_bb = self.append_block(&format!("{site}_persist_none"));
@@ -4786,6 +4807,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 payload_addr,
                 &layout,
                 shape_name,
+                deep,
                 &format!("{site}_pay{index}"),
             )?;
             self.builder
@@ -4816,6 +4838,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         payload_addr: PointerValue<'ctx>,
         layout: &UnionLayout,
         shape_name: &str,
+        deep: bool,
         site: &str,
     ) -> Result<(), String> {
         let size = self.shape_abi_size_const(shape_name, "clone_shape_variant_into_slot")?;
@@ -4824,7 +4847,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder
                 .build_memcpy(cell, 1, payload_src, 1, size)
                 .map_err(|err| format!("union clone box memcpy {site}: {err}"))?;
-            self.deepen_shape_fields(cell, shape_name)?;
+            if deep {
+                self.deepen_shape_fields(cell, shape_name)?;
+            }
             let cell_bits = self
                 .builder
                 .build_ptr_to_int(cell, self.i64(), &format!("{site}_cell_bits"))
@@ -4836,7 +4861,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder
                 .build_memmove(payload_addr, 1, payload_src, 1, size)
                 .map_err(|err| format!("union clone payload memmove {site}: {err}"))?;
-            self.deepen_shape_fields(payload_addr, shape_name)?;
+            if deep {
+                self.deepen_shape_fields(payload_addr, shape_name)?;
+            }
         }
         Ok(())
     }
@@ -4877,6 +4904,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
         }
         Ok(false)
+    }
+
+    /// True when the expression that produced `value` is one a store takes by MOVE (typeck's
+    /// `TypedModule::heap_moves`, remembered by `lower_expr`): nobody else reads its boxes, so a
+    /// copy of its bytes may keep them. Any other value is copied deep.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn is_moved_cells(&self, value: PointerValue<'ctx>) -> bool {
+        self.moved_cell_values
+            .contains(&(value.as_value_ref() as usize))
+    }
+
+    /// After the bytes of the shape value `source` were copied to `copy`: give the copy boxes of
+    /// its own (`deepen_shape_fields`) unless `source` is moved, in which case the copy takes its
+    /// boxes as Rust moves a `Box`. THE one place a byte copy of a shape decides between the two.
+    ///
+    /// Time: O(f) to emit; O(n) at run time for the n boxes a deep copy clones  Space: O(1)
+    fn deepen_unless_moved(
+        &self,
+        source: PointerValue<'ctx>,
+        copy: PointerValue<'ctx>,
+        shape_name: &str,
+    ) -> Result<(), String> {
+        if self.is_moved_cells(source) {
+            return Ok(());
+        }
+        self.deepen_shape_fields(copy, shape_name)
     }
 
     /// After the bytes of a shape value were copied to `shape_ptr`, make each union field that
@@ -4994,6 +5048,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     payload_addr,
                     &layout,
                     shape_name,
+                    true,
                     &format!("deepen{index}"),
                 )?;
             } else {
@@ -5690,6 +5745,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_memcpy(dest, 1, src, 1, size)
             .map_err(|err| format!("embed slot memcpy {site}: {err}"))?;
+        self.deepen_unless_moved(src, dest, shape_name)?;
         Ok(())
     }
 
@@ -5742,6 +5798,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_memcpy(cell, 1, src, 1, size)
             .map_err(|e| format!("shape_bytes_to_heap_cell memcpy: {e}"))?;
+        self.deepen_unless_moved(src, cell, shape_name)?;
         Ok(cell)
     }
 
@@ -6977,6 +7034,7 @@ fn plain_cg<'ctx, 'g>(
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
         owned_string_values: std::collections::HashSet::new(),
+        moved_cell_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -7401,6 +7459,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
         owned_string_values: std::collections::HashSet::new(),
+        moved_cell_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -18329,12 +18388,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         Type::Maybe { ref inner } => {
                             let env_ptr = val.into_pointer_value();
                             let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "sm_ret_maybe")?;
+                            let moved = cg.is_moved_cells(env_ptr);
                             let stable_bits = cg.maybe_payload_stable_bits(
                                 flag,
                                 bits,
                                 inner,
                                 "sm_ret_maybe",
                                 true,
+                                moved,
                             )?;
                             state_machine::store_return_value_errors(
                                 cg.ctx,
@@ -18624,8 +18685,9 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     // heap cell (flag-guarded; the shared promotion discipline, never
                     // a return-side twin). Same never-drop-cells posture as
                     // store_field (FRAGO 009).
+                    let moved = cg.is_moved_cells(env_ptr);
                     let stable_bits =
-                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true)?;
+                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true, moved)?;
                     let mut env = cg.maybe_type().const_zero();
                     env = cg
                         .builder
@@ -18806,6 +18868,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     let Some(coercion) = cg.coercion_at(key).cloned() else {
         let val = lower_expr_node(cg, expr)?;
         remember_movable_string(cg, expr, val);
+        remember_moved_cells(cg, expr, val);
         return Ok(val);
     };
     let outer = cg.coercion_inner.replace(key);
@@ -18823,7 +18886,22 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         return Ok(val);
     }
     let val = own_string_for_store(cg, val, &plain_ty, "union_wrap")?;
-    cg.wrap_into_union_envelope(expr, val, &coercion)
+    // The envelope views the value it wraps: a value that moves in moves on through its view.
+    let wrapped_value_moves = cg.typed.heap_moves.contains(span.start, span.end);
+    let view = cg.wrap_into_union_envelope(expr, val, &coercion)?;
+    if wrapped_value_moves && view.is_pointer_value() {
+        cg.moved_cell_values.insert(view.as_value_ref() as usize);
+    }
+    Ok(view)
+}
+
+/// A heap value typeck says a store takes by move (`TypedModule::heap_moves`) is remembered, so
+/// the copy that follows takes its boxes instead of cloning them.
+fn remember_moved_cells<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValueEnum<'ctx>) {
+    let span = expr.span();
+    if val.is_pointer_value() && cg.typed.heap_moves.contains(span.start, span.end) {
+        cg.moved_cell_values.insert(val.as_value_ref() as usize);
+    }
 }
 
 /// A string typeck says nobody else holds (a fresh string, or the last use of its binding:
@@ -23241,6 +23319,8 @@ fn emit_owned_copy<'ctx>(
                 .build_store(dst, struct_val)
                 .map_err(|e| format!("{site} store: {e}"))?;
             cg.copy_shape_string_fields(dst, name, site)?;
+            // An explicit copy (and a task's copy of an argument) owns boxes of its own.
+            cg.deepen_shape_fields(dst, name)?;
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape {
