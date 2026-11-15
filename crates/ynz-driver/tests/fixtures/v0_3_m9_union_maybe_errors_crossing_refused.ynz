@@ -1,0 +1,49 @@
+// v0.3-M9 C1f (#423) code round 1: an `errors` result whose success value is a `maybe<Thing>`,
+// bound before a `wait` and read after it. Its `ok` word views a slot on the resume function's
+// stack, which dies at the suspension, so the read after the `wait` saw a dead slot and printed
+// `none` instead of `big kept`. Like a plain `maybe<Thing>` binding, it is refused by typeck:
+// "cannot yet cross a `wait`".
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function slowFetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+  wait sleep(1)
+  let found = things.get(index)
+  return found
+}
+
+function work(share things: array<Thing>) -> nothing {
+  let slow = wait slowFetch(things, 0)
+  wait sleep(1)
+  let slowValue = slow.or(none)
+  if (slowValue.exists()) {
+    print(describe(slowValue.value))
+  }
+  print(`end`)
+}
+
+function entrypoint() -> nothing {
+  let things: array<Thing> = []
+  let big: Big = { label: `kept`, count: 1 }
+  things.add(big)
+  wait work(things)
+}

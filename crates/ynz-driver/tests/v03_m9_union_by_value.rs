@@ -310,3 +310,20 @@ by_value_tests!(
     v03_m9_union_shape_equality_recursive_asan_optimized,
     v03_m9_union_shape_equality_recursive_asan_no_optimize
 );
+
+// Bug: an `errors maybe<Thing>` binding held across a `wait` read a dead resume-stack slot
+// (silently `none`); typeck refuses it like a plain `maybe<Thing>` binding. Tier: High.
+#[test]
+fn v03_m9_union_maybe_errors_crossing_is_refused() {
+    let compiled = support::compile("v0_3_m9_union_maybe_errors_crossing_refused.ynz");
+    assert!(
+        !compiled.success,
+        "an `errors maybe<Thing>` binding held across a `wait` must not compile:\n{}",
+        compiled.diagnostics
+    );
+    assert!(
+        compiled.diagnostics.contains("cannot yet cross a `wait`"),
+        "the refusal must say what is not supported:\n{}",
+        compiled.diagnostics
+    );
+}

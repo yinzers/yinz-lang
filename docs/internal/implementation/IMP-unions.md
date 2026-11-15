@@ -103,7 +103,7 @@ its cell), a `string`, array or map variant owns that value, scalar variants and
 **Equality.** Two union fields are equal when their tags match and the stored variants are equal
 as values of that variant (field by field for a shape variant, the payload word otherwise).
 
-**Not stored.** A `maybe<Thing>` binding held across a `wait`, and a union indexed-set into an
+**Not stored.** A `maybe<Thing>` binding (or an `errors` result of one) held across a `wait`, and a union indexed-set into an
 array, are refused by typeck.
 
 ---

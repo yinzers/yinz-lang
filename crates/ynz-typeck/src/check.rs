@@ -1965,7 +1965,7 @@ impl<'b> Checker<'b> {
                                     | Type::Dynamic { .. }
                                     | Type::BuiltinFixed { .. }
                                     | Type::Range { .. }
-                            )
+                            ) || is_errors_maybe_of_envelope_union(ty)
                         })
                     })
                     .cloned();
@@ -11003,6 +11003,20 @@ fn union_coercion_for(slot_ty: &Type, value_ty: &Type) -> Option<UnionCoercion> 
         slot: slot_ty.clone(),
         tag,
     })
+}
+
+/// An `errors` result whose success value is a `maybe` of an envelope union
+/// (`maybe<Thing> errors`). Its `ok` word views a slot on the stack of the function that bound it,
+/// and no frame region holds that slot across a `wait` (a `maybe<Thing>` binding is refused the
+/// same way), so such a binding cannot yet cross one.
+fn is_errors_maybe_of_envelope_union(candidate: &Type) -> bool {
+    match candidate {
+        Type::ErrorsCapable { inner } => match inner.as_ref() {
+            Type::Maybe { inner: maybe_inner } => is_envelope_union(maybe_inner),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
