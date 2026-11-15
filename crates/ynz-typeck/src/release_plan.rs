@@ -45,9 +45,9 @@
 //!   producer: a release is a read at its edge, see [`ReleaseReads`]. Only a kind with a frame
 //!   slot across a suspension ([`ReleaseKind::has_frame_backing`]) is read today: the others
 //!   cannot cross a `wait` yet (Check 2/2b), so reading them would reject programs that compile
-//!   now. A flat shape is left out too: reading it made `v0_3_m9_union_narrow_sm_host` crash (a shape
-//!   local that crosses a `wait` inside an `is` arm of a state-machine match, found when C1f folded
-//!   in). Releasing such a kind inside a state machine is C6's change, made together with the
+//!   now. A flat shape is left out too: a shape local that crosses a `wait` inside an `is` arm of a
+//!   state-machine match reads freed frame bytes (tested: `v0_3_m9_union_narrow_sm_host`, optimized).
+//!   Releasing such a kind inside a state machine is C6's change, made together with the
 //!   frame backing, by widening that one predicate.
 
 use std::cell::RefCell;
@@ -818,6 +818,9 @@ fn resolve_function(
         for entry in &edge.entries {
             let fate = fate_of(function, edge, entry, anchor_of, moves_by_binding)?;
             // A release is a read at its edge, for the kinds with a frame slot across a suspension.
+            // An owner whose user name is shared (`ambiguous`, empty in the codegen space) is
+            // skipped on purpose, not dropped by accident: it is a frame-backed kind, which no
+            // guard rejects on its own, and codegen's unique names still read it.
             if let Fate::Release(kind) | Fate::ReleaseIfLive(kind) = fate {
                 if kind.has_frame_backing() && !ambiguous.contains(entry.decl.2.as_str()) {
                     owners.push(name_of(&entry.decl));

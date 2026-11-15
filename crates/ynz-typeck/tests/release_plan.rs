@@ -1423,7 +1423,7 @@ fn a_view_is_not_an_owner_and_its_root_stays_the_owner() {
 #[test]
 fn a_binding_moved_by_a_store_is_omitted_and_the_new_owner_releases() {
     let output = clean(
-        "shape Bucket {\n  rows: array<int>\n}\nfunction move() -> nothing {\n  let holder: Bucket = { rows: [1, 2] }\n  let moved = holder\n  print(moved.rows.count().toString())\n}\n",
+        "shape Bucket {\n  rows: array<int>\n}\nfunction move() -> nothing {\n  let holder: Bucket = { rows: [1, 2] }\n  let moved = holder\n  let total = moved.rows.count()\n  print(`${total}`)\n}\n",
     );
     assert!(
         !output.typed_module.heap_moves.is_empty(),
@@ -1437,20 +1437,20 @@ fn a_binding_moved_by_a_store_is_omitted_and_the_new_owner_releases() {
 
 // ── Fixer round 2 (code): the crossing set is name-based, so a name must mean one binding ──────
 
-/// Bug (a regression of a program that compiled before C5): the release read of an array owner `v`
-/// in one block makes the NAME `v` cross a `wait`, and the guards judge the name by the first
+/// Bug (a regression of a program that compiled before C5): the release read of an array owner `reading`
+/// in one block makes the NAME `reading` cross a `wait`, and the guards judge the name by the first
 /// `let v` of the function, a `maybe<int>` that does not cross: the program is rejected with
 /// "a `maybe<int>` value cannot yet cross a `wait`". Producer: `resolve_function` fed an owner's
 /// user name to the name-based crossing producer when the function declares that name twice.
 #[test]
 fn a_name_declared_twice_in_a_function_feeds_no_release_read_to_the_guards() {
     let output = clean(
-        "function twice(flag: boolean) -> nothing {\n  let arr = [1]\n  if (flag) {\n    let v: maybe<int> = arr.get(0)\n    print(`${v.or(0)}`)\n  }\n  if (flag) {\n    let v = [1, 2]\n    wait sleep(1)\n  }\n}\n",
+        "function twice(flag: boolean) -> nothing {\n  let numbers = [1]\n  if (flag) {\n    let reading: maybe<int> = numbers.get(0)\n    print(`${reading.or(0)}`)\n  }\n  if (flag) {\n    let reading = [1, 2]\n    wait sleep(1)\n  }\n}\n",
     );
     assert_eq!(
         crossing_names(&output, "twice", Names::User),
-        vec!["arr".to_string()],
-        "`arr` (one binding) crosses; the ambiguous `v` is not fed, so no guard judges it by the wrong binding"
+        vec!["numbers".to_string()],
+        "`numbers` (one binding) crosses; the ambiguous `reading` is not fed, so no guard judges it by the wrong binding"
     );
     // Codegen's names are unique, so codegen still reads both owners at their edges.
     assert!(
