@@ -293,8 +293,11 @@ impl<'a> ViewTracker<'a> {
         }
     }
 
-    /// A statement writes the binding `target_use` names (`name = …`, `name.f = …`,
-    /// `name[i] = …`) while `after` / `mentioned` say which views are live.
+    /// A statement writes through `target` (`name.f = …`, `name[i] = …`) while `after` /
+    /// `mentioned` say which views are live. A target whose base is not an identifier
+    /// (`make().f = …`, `arr.get(i).f = …`) names no binding the analysis can compare with a
+    /// view or its root, so every live view is disqualified, as for an unresolved name in
+    /// `evaluate_write_to`: an unproven write must keep the copy.
     pub(crate) fn evaluate_write(
         &mut self,
         target: &Expr,
@@ -302,9 +305,19 @@ impl<'a> ViewTracker<'a> {
         after: &HashSet<DeclKey>,
     ) {
         let Some(Expr::Ident(name, span)) = place_root(target) else {
+            self.disqualify_live_views(mentioned, after);
             return;
         };
         self.evaluate_write_to(name, span, mentioned, after);
+    }
+
+    /// Disqualify every candidate that is live (`after`) or mentioned by the statement.
+    fn disqualify_live_views(&mut self, mentioned: &HashSet<DeclKey>, after: &HashSet<DeclKey>) {
+        for candidate in &mut self.candidates {
+            if after.contains(&candidate.view) || mentioned.contains(&candidate.view) {
+                candidate.viable = false;
+            }
+        }
     }
 
     pub(crate) fn evaluate_write_to(

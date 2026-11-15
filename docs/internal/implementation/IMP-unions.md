@@ -156,6 +156,13 @@ An annotated `let` (a possible union wrap) is never a view. Which call positions
 from `effective_ownership::call_position_reads`, derived from the effective-ownership fixpoint, so
 a view analysis and the checker cannot disagree about a callee.
 
+Override directions (`auto-promotion.md`). Force the OTHER pick (an independent copy where a view
+fits): `let own = head.next.copy()`, existing syntax, always a deep copy. Force the AUTO pick (a
+view where the compiler keeps the copy): deliberately no override, because every refusal above is
+a soundness refusal (a write, an escape, a suspension, an unknown callee), and a forced view there
+would read a changed or freed place. A view has no source form (no keyword takes a binding "by
+view"), so there is no muted hint to make explicit.
+
 **Ownership.** A `share` union parameter cannot be stored (`ParamNeedsGive`); a `give` union is
 copied into the slot. A slot owns its payload: a shape variant owns the shape's fields (and, boxed,
 its cell), a `string`, array or map variant owns that value, scalar variants and `none` own nothing.

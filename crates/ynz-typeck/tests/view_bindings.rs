@@ -113,6 +113,11 @@ view_cases! {
         "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let outer: Outer = { inner: first, tag: 2 }\n  let tag = outer.tag\n  print(tag + outer.inner.id)\n}\n",
         [("outer.tag", 2, false)],
         "a bits read recorded as a view, which codegen would lower as a pointer (boundary of the heap-valued rule)";
+
+    a_write_through_a_target_with_no_root_name_is_not_a_view:
+        "function makeOuter() -> Outer {\n  let first: Inner = { id: 1 }\n  let outer: Outer = { inner: first, tag: 2 }\n  return outer\n}\nfunction entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  makeOuter().tag = 7\n  print(inner.id)\n}\n",
+        [("outer.inner", 1, false)],
+        "a write whose target names no binding was skipped, so a view live across it kept its place unproven (Fail Fast: unproven must keep the copy)";
 }
 
 const CHAIN_PRELUDE: &str = "shape Inner {\n  id: int\n}\nshape Middle {\n  inner: Inner\n  tag: int\n}\nshape Wrapper {\n  middle: Middle\n  count: int\n}\n";
