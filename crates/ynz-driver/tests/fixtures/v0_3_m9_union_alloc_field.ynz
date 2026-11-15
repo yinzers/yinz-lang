@@ -1,0 +1,63 @@
+// v0.3-M9 C1f (#423): a shape with a union field built in one function and returned allocates
+// NOTHING: the field is the inline slot, and a hidden default into a union field (#421) is
+// written into it the same way.
+// Correct behavior: prints the sum; the heap allocation count is 0 (the counter test pins it).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  count: int
+  weight: int
+}
+
+shape Holder {
+  index: int
+  slot: Tiny | Big
+  hidden extra: Big | int = 4096
+}
+
+function weigh(share self: Holder) -> int {
+  let slot: Tiny | Big = self.slot
+  let extra: Big | int = self.extra
+  let total = 0
+  if (slot) {
+    is Tiny => {
+      total = 1
+    }
+    is Big => {
+      total = slot.count + slot.weight
+    }
+  }
+  if (extra) {
+    is Big => {
+      total = total + extra.count
+    }
+    else => {
+      total = total + 1
+    }
+  }
+  return total
+}
+
+function build(n: int) -> Holder {
+  if (n % 2 == 0) {
+    let tiny: Tiny = { flag: true }
+    let holder: Holder = { index: n, slot: tiny }
+    return holder
+  }
+  let big: Big = { count: n, weight: 2 }
+  let holder: Holder = { index: n, slot: big }
+  return holder
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 300) {
+    let holder = build(round)
+    total = total + holder.weigh()
+    round = round + 1
+  }
+  print(total)
+}

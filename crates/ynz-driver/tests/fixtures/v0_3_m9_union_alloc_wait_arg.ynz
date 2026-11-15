@@ -1,0 +1,54 @@
+// v0.3-M9 C1f (#423): a union passed to a suspending callee rides the callee's own frame
+// (`Param` region): the only allocation per call is the callee frame itself, the same as for an
+// `int` argument (`v0_3_m9_union_alloc_wait_arg_int.ynz`).
+// Correct behavior: prints the sum; the allocation count equals the int baseline's.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  count: int
+  weight: int
+}
+shape Thing = Tiny | Big
+
+function weigh(share t: Thing) -> int {
+  if (t) {
+    is Tiny => {
+      return 1
+    }
+    is Big => {
+      return t.count + t.weight
+    }
+  }
+  return 0
+}
+
+function make(n: int) -> Thing {
+  if (n % 2 == 0) {
+    let tiny: Tiny = { flag: true }
+    let thing: Thing = tiny
+    return thing
+  }
+  let big: Big = { count: n, weight: 2 }
+  let thing: Thing = big
+  return thing
+}
+
+function slowWeigh(share t: Thing) -> int {
+  wait sleep(0)
+  return weigh(t)
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let big: Big = { count: round, weight: 2 }
+    let thing: Thing = big
+    let weight = wait slowWeigh(thing)
+    total = total + weight
+    round = round + 1
+  }
+  print(total)
+}

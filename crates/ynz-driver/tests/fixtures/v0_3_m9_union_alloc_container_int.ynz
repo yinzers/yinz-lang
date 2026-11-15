@@ -1,0 +1,22 @@
+// v0.3-M9 C1f (#423): the int baseline of v0_3_m9_union_alloc_container.ynz.
+
+function entrypoint() -> nothing {
+  let things: array<int> = []
+  let held: map<int, int> = {}
+  let round = 0
+  while (round < 300) {
+    things.add(round)
+    held.set(round, round)
+    round = round + 1
+  }
+  let total = 0
+  let index = 0
+  while (index < things.count()) {
+    let got = things.get(index)
+    if (got.exists()) {
+      total = total + got.value
+    }
+    index = index + 1
+  }
+  print(total)
+}

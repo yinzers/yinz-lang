@@ -1,0 +1,46 @@
+// v0.3-M9 C1f (#423): a union returned from a function allocates NOTHING, however often it is
+// returned: the slot comes back by value, payload inline.
+// Correct behavior: prints the sum; the heap allocation count is 0 (the counter test pins it).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  count: int
+  weight: int
+}
+shape Thing = Tiny | Big
+
+function weigh(share t: Thing) -> int {
+  if (t) {
+    is Tiny => {
+      return 1
+    }
+    is Big => {
+      return t.count + t.weight
+    }
+  }
+  return 0
+}
+
+function make(n: int) -> Thing {
+  if (n % 2 == 0) {
+    let tiny: Tiny = { flag: true }
+    let thing: Thing = tiny
+    return thing
+  }
+  let big: Big = { count: n, weight: 2 }
+  let thing: Thing = big
+  return thing
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 300) {
+    let thing = make(round)
+    total = total + weigh(thing)
+    round = round + 1
+  }
+  print(total)
+}

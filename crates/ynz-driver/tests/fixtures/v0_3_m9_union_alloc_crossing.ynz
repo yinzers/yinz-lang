@@ -1,0 +1,76 @@
+// v0.3-M9 C1f (#423): a union binding that crosses a `wait` lives in the function's frame
+// region: it adds no allocation over the `int` binding of
+// `v0_3_m9_union_alloc_crossing_int.ynz`.
+// Correct behavior: prints the sum; the allocation count equals the int baseline's.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  count: int
+  weight: int
+}
+shape Thing = Tiny | Big
+
+function weigh(share t: Thing) -> int {
+  if (t) {
+    is Tiny => {
+      return 1
+    }
+    is Big => {
+      return t.count + t.weight
+    }
+  }
+  return 0
+}
+
+function make(n: int) -> Thing {
+  if (n % 2 == 0) {
+    let tiny: Tiny = { flag: true }
+    let thing: Thing = tiny
+    return thing
+  }
+  let big: Big = { count: n, weight: 2 }
+  let thing: Thing = big
+  return thing
+}
+
+function slowWeigh(share t: Thing) -> int {
+  wait sleep(0)
+  return weigh(t)
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let big1: Big = { count: 1, weight: 2 }
+  let thing1: Thing = big1
+  wait sleep(0)
+  let weight1 = wait slowWeigh(thing1)
+  total = total + weight1
+  let big2: Big = { count: 2, weight: 2 }
+  let thing2: Thing = big2
+  wait sleep(0)
+  let weight2 = wait slowWeigh(thing2)
+  total = total + weight2
+  let big3: Big = { count: 3, weight: 2 }
+  let thing3: Thing = big3
+  wait sleep(0)
+  let weight3 = wait slowWeigh(thing3)
+  total = total + weight3
+  let big4: Big = { count: 4, weight: 2 }
+  let thing4: Thing = big4
+  wait sleep(0)
+  let weight4 = wait slowWeigh(thing4)
+  total = total + weight4
+  let big5: Big = { count: 5, weight: 2 }
+  let thing5: Thing = big5
+  wait sleep(0)
+  let weight5 = wait slowWeigh(thing5)
+  total = total + weight5
+  let big6: Big = { count: 6, weight: 2 }
+  let thing6: Thing = big6
+  wait sleep(0)
+  let weight6 = wait slowWeigh(thing6)
+  total = total + weight6
+  print(total)
+}
