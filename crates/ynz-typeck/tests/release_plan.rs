@@ -293,10 +293,7 @@ fn a_string_is_released_if_live_exactly_when_the_record_lists_a_read() {
         "function words() -> nothing {\n  let unused = `plain`\n  let label = `n=${3}`\n  print(label)\n}\n",
     );
     let list = body_end(&output, "words");
-    assert_eq!(
-        fate_of(&list, "unused"),
-        Fate::Release(ReleaseKind::String)
-    );
+    assert_eq!(fate_of(&list, "unused"), Fate::Release(ReleaseKind::String));
     assert_eq!(
         fate_of(&list, "label"),
         Fate::ReleaseIfLive(ReleaseKind::String)
@@ -305,7 +302,10 @@ fn a_string_is_released_if_live_exactly_when_the_record_lists_a_read() {
     let plan = &output.typed_module.release_plan;
     let record = &output.typed_module.string_moves;
     for (span, site) in plan.move_sites() {
-        assert!(record.contains(span.0, span.1), "{span:?} is not in string_moves");
+        assert!(
+            record.contains(span.0, span.1),
+            "{span:?} is not in string_moves"
+        );
         assert_eq!(
             record.last_use_binding(span.0, span.1),
             Some(&site.founder),
@@ -393,9 +393,8 @@ fn crossing_names(output: &CheckOutput, function: &str, names: Names) -> Vec<Str
 /// frees a stack address. Not crossing here would be the S3 probe `e1`.
 #[test]
 fn an_owner_declared_before_a_wait_crosses_it() {
-    let output = clean(
-        "function sleeper() -> nothing {\n  let rows = [1, 2, 3]\n  wait sleep(1)\n}\n",
-    );
+    let output =
+        clean("function sleeper() -> nothing {\n  let rows = [1, 2, 3]\n  wait sleep(1)\n}\n");
     assert_eq!(
         crossing_names(&output, "sleeper", Names::User),
         vec!["rows".to_string()]
@@ -484,7 +483,9 @@ fn parity_findings(path: &Path, tally: &Tally) -> (bool, Vec<String>) {
                 Fate::Release(_) => tally.released.fetch_add(1, Ordering::Relaxed),
                 Fate::ReleaseIfLive(_) => tally.released_if_live.fetch_add(1, Ordering::Relaxed),
                 Fate::Omitted(OmitReason::Moved) => tally.moved.fetch_add(1, Ordering::Relaxed),
-                Fate::Omitted(OmitReason::Returned) => tally.returned.fetch_add(1, Ordering::Relaxed),
+                Fate::Omitted(OmitReason::Returned) => {
+                    tally.returned.fetch_add(1, Ordering::Relaxed)
+                }
                 Fate::Omitted(_) => 0,
             };
         }
@@ -558,7 +559,12 @@ fn the_plan_agrees_with_the_live_scope_and_the_record_over_the_whole_corpus() {
             tally.edges.load(Ordering::Relaxed)
         );
     }
-    assert!(findings.is_empty(), "{} findings:\n{}", findings.len(), findings.join("\n"));
+    assert!(
+        findings.is_empty(),
+        "{} findings:\n{}",
+        findings.len(),
+        findings.join("\n")
+    );
 }
 
 /// Bug: a move that nulls the founder's slot is not seen as a write to it, so the state machine

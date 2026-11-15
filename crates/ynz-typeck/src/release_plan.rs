@@ -562,7 +562,8 @@ impl ReleaseRecorder {
         match resolve_function(&function, &lookup, None, &|decl: &DeclKey| decl.2.clone()) {
             Ok(resolved) => {
                 let reads = resolved.reads;
-                self.early_reads.insert(function.name.clone(), reads.clone());
+                self.early_reads
+                    .insert(function.name.clone(), reads.clone());
                 reads
             }
             Err(message) => {
@@ -605,12 +606,8 @@ impl ReleaseRecorder {
                     .codegen_name(decl)
                     .map_or_else(|| decl.2.clone(), str::to_string)
             };
-            let resolved = resolve_function(
-                function,
-                &lookup,
-                Some(&moves_by_binding),
-                &codegen_name_of,
-            );
+            let resolved =
+                resolve_function(function, &lookup, Some(&moves_by_binding), &codegen_name_of);
             let user_reads = resolve_function(
                 function,
                 &lookup,
@@ -628,7 +625,14 @@ impl ReleaseRecorder {
                             function.name
                         ));
                     }
-                    plan.absorb(function, resolved, user_reads.reads, &lookup, names, strings);
+                    plan.absorb(
+                        function,
+                        resolved,
+                        user_reads.reads,
+                        &lookup,
+                        names,
+                        strings,
+                    );
                 }
                 (Err(message), _) | (_, Err(message)) => plan.internal_errors.push(message),
             }
@@ -728,9 +732,7 @@ fn fate_of(
     match anchor {
         ReleaseAnchor::CallerOwns { .. } => return Ok(Fate::Omitted(OmitReason::CallerOwns)),
         ReleaseAnchor::NoOwner => return Ok(Fate::Omitted(OmitReason::NotOwner)),
-        ReleaseAnchor::NoStaticFounder(_) => {
-            return Ok(Fate::Omitted(OmitReason::NoStaticFounder))
-        }
+        ReleaseAnchor::NoStaticFounder(_) => return Ok(Fate::Omitted(OmitReason::NoStaticFounder)),
         ReleaseAnchor::Founder { decl, .. } if decl != entry.decl => {
             return Ok(Fate::Omitted(OmitReason::NotOwner))
         }
@@ -802,9 +804,7 @@ impl ReleasePlan {
 
     /// The list for the auto-propagation fired by the identifier read at `span`.
     pub fn propagation_edge(&self, span: &SourceSpan) -> Option<&[ReleaseEntry]> {
-        self.propagation_edge
-            .get(&span_of(span))
-            .map(Vec::as_slice)
+        self.propagation_edge.get(&span_of(span)).map(Vec::as_slice)
     }
 
     /// The founder a read at `span` takes its value out of, when the read is a move site.
@@ -937,10 +937,7 @@ impl ReleasePlan {
             }
         }
         for decl in &releasing_if_live {
-            let has_site = self
-                .move_sites
-                .values()
-                .any(|site| &site.founder == decl);
+            let has_site = self.move_sites.values().any(|site| &site.founder == decl);
             if !has_site {
                 self.internal_errors.push(format!(
                     "internal: `{}` in `{}` is released only if live but no read moves it",
@@ -975,7 +972,10 @@ impl ReleasePlan {
                     continue;
                 }
                 let Some(class) = function_transfers.class_of(&entry.codegen_name) else {
-                    violations.push(format!("`{}` has no class in the record", entry.codegen_name));
+                    violations.push(format!(
+                        "`{}` has no class in the record",
+                        entry.codegen_name
+                    ));
                     continue;
                 };
                 let is_founder = matches!(&class.anchor,
@@ -1027,4 +1027,3 @@ fn function_declares(function: &FunctionExits, decl: &DeclKey) -> bool {
         .flat_map(|edge| edge.entries.iter())
         .any(|entry| &entry.decl == decl)
 }
-

@@ -5460,12 +5460,7 @@ impl<'b> Checker<'b> {
     /// innermost frame; a `return` and an auto-propagation list every open frame, innermost first.
     /// Each frame lists its last declared binding first. `returned_classes` are the alias
     /// classes the returned value is or reaches. O(open entries).
-    fn record_exit(
-        &mut self,
-        kind: EdgeKind,
-        span: &SourceSpan,
-        returned_classes: &HashSet<u64>,
-    ) {
+    fn record_exit(&mut self, kind: EdgeKind, span: &SourceSpan, returned_classes: &HashSet<u64>) {
         let innermost = self.scope.innermost_frame();
         let frames: Vec<usize> = match kind {
             EdgeKind::BlockEnd => vec![innermost],
@@ -5497,7 +5492,8 @@ impl<'b> Checker<'b> {
             }
         }
         let consumed_classes = self.scope.consumed_classes();
-        self.release.note_exit(kind, span, consumed_classes, entries);
+        self.release
+            .note_exit(kind, span, consumed_classes, entries);
     }
 
     /// A `return`: every binding holding (a piece of) the returned value escapes.
