@@ -1,0 +1,10 @@
+// v0.3-M9 C6 borrow probe: a state-machine loop over a map whose body overwrites the entry's value
+// before it reads the entry (an entry is not read after a `wait`)
+function entrypoint() -> nothing {
+  let table: map<string, string> = { `k`: `v-${1}` }
+  for (entry in table) {
+    table[`k`] = `w-${2}`
+    print(entry.value)
+    wait sleep(1)
+  }
+}

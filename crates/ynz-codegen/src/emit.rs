@@ -10696,6 +10696,9 @@ fn lower_sm_for<'ctx, 'g>(
             cg.locals.insert(var.to_string(), s);
             s
         };
+        let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
+        let mut owned_elem: Option<OwnedRead<'ctx>> = None;
+        let mut embed_copy = false;
         if cg.sm_crossing_shape_embed_set.contains(var) {
             // Shape-embed loop var: `var_slot` is the ptr alloca pre-wired to the frame
             // region (Step 1b in lower_function_with_waits). The by-value get writes the
@@ -10721,11 +10724,21 @@ fn lower_sm_for<'ctx, 'g>(
                 "sm_a_get_call",
                 soa_info.as_ref(),
             )?;
+            // The bytes in the frame region share the element's strings and boxes: unless the
+            // loop variable is a view, it owns a copy of them, released after the iteration.
+            if let Type::Shape { name: shape_name } = cg.resolve_type(&elem) {
+                if !read_may_point_at_place(cg, iter, None) && cg.shape_needs_deepen(&shape_name) {
+                    cg.deepen_shape_fields(dest_ptr, &shape_name)?;
+                    embed_copy = true;
+                }
+            }
         } else {
             let out = cg.array_elem_out_buffer(&elem, "sm_a_get")?;
             let _flag =
                 cg.array_elem_get_into(arr_cur, idx_cur, out, "sm_a_get_call", soa_info.as_ref())?;
             let elem_val = cg.array_elem_from_out(out, &elem, "sm_a_get")?;
+            owned_elem = Some(own_loop_element(cg, iter, elem_val, &elem, "sm_a_elem")?);
+            let elem_val = owned_elem.as_ref().map_or(elem_val, |owned| owned.value);
             store(cg, elem_val, &elem, var_slot)?;
             flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
         }
@@ -10750,6 +10763,15 @@ fn lower_sm_for<'ctx, 'g>(
             if let Some(sp) = loop_sp {
                 cg.loop_stack_restore(sp)?;
             }
+            release_sm_loop_copy(
+                cg,
+                var,
+                var_slot,
+                &elem,
+                owned_elem.as_ref(),
+                embed_copy,
+                body_suspends,
+            )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -10843,7 +10865,9 @@ fn lower_sm_for<'ctx, 'g>(
             cg.locals.insert(var.to_string(), s);
             s
         };
-        store(cg, elem_val, &elem, var_slot)?;
+        let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
+        let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "sm_ff_elem")?;
+        store(cg, owned_elem.value, &elem, var_slot)?;
         flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
 
         lower_sm_block(
@@ -10860,6 +10884,15 @@ fn lower_sm_for<'ctx, 'g>(
         )?;
 
         if !is_block_terminated(cg) {
+            release_sm_loop_copy(
+                cg,
+                var,
+                var_slot,
+                &elem,
+                Some(&owned_elem),
+                false,
+                body_suspends,
+            )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -10963,6 +10996,10 @@ fn lower_sm_for<'ctx, 'g>(
         // Entry val bits: shape values carry the out-buffer pointer as i64 bits
         // (MapEntry fields load i64 bits + i64_bits_to), others the loaded cell.
         let v_bits = cg.array_elem_bits_from_out(val_out, &val_ty, "sm_mf_vv")?;
+        let owned_entry =
+            own_map_entry(cg, iter, k_val.into_int_value(), v_bits, &key_ty, &val_ty)?;
+        let (k_val, v_bits) = (owned_entry.key_bits, owned_entry.value_bits);
+        let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
         let k_dst = cg
             .builder
             .build_struct_gep(entry_ty, entry_slot, 0, "sm_mf_kd")
@@ -11001,6 +11038,11 @@ fn lower_sm_for<'ctx, 'g>(
             // Release this iteration's allocas before the back edge (leaf bodies only).
             if let Some(sp) = loop_sp {
                 cg.loop_stack_restore(sp)?;
+            }
+            // The entry is not read after a `wait` (Check 2c) and its copies are not persisted in
+            // the frame: a body that suspends releases them at C8's frame release (deferred).
+            if !body_suspends {
+                release_map_entry(cg, &owned_entry, &key_ty, &val_ty)?;
             }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
@@ -19665,6 +19707,54 @@ fn release_replaced_fixed_cell<'ctx>(
         .map_err(|err| format!("fixed release join {site}: {err}"))?;
     cg.builder.position_at_end(done_bb);
     Ok(())
+}
+
+/// Release what a state-machine loop copied for its variable, at the end of an iteration.
+///
+/// * A shape embedded in the frame (`embed_copy`) lives in the frame region its pointer slot
+///   names: its owned fields are released there, whatever the body does.
+/// * A copy made in a body that does not suspend is an SSA value of the same resume function:
+///   released directly.
+/// * A copy made in a body that suspends is released from the loop variable's frame slot when
+///   the variable is a crossing local (the slot is reloaded after a resume); otherwise nothing
+///   persists the copy's pointer and it is released at C8's frame release (DEFERRED: WHAT: the
+///   copy of a loop variable that is read before a `wait` but not after it; WHY: no frame slot
+///   holds it, and a slot is a frame-layout change C8 owns; COST: one copy leaked per iteration,
+///   only when the body writes the iterated collection; TRIGGER: C8 (#385) frame release).
+///
+/// O(1) time at the call site plus the copy's release; O(1) space.
+fn release_sm_loop_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    var: &str,
+    var_slot: PointerValue<'ctx>,
+    element_type: &Type,
+    owned: Option<&OwnedRead<'ctx>>,
+    embed_copy: bool,
+    body_suspends: bool,
+) -> Result<(), String> {
+    if embed_copy {
+        let region = cg
+            .builder
+            .build_load(cg.ptr(), var_slot, &format!("{var}_embed_region"))
+            .map_err(|err| format!("sm loop embed release load {var}: {err}"))?;
+        return release_owned_read(cg, region, element_type, "sm_embed_elem");
+    }
+    let Some(owned) = owned.filter(|owned| owned.copied) else {
+        return Ok(());
+    };
+    if !body_suspends {
+        return release_owned_read(cg, owned.release_value(), element_type, "sm_elem");
+    }
+    let persisted = owned.release_target.is_none()
+        && cg
+            .sm_crossing_names
+            .as_deref()
+            .is_some_and(|names| names.iter().any(|name| name == var));
+    if !persisted {
+        return Ok(());
+    }
+    let current = load(cg, var_slot, element_type, var)?;
+    release_owned_read(cg, current, element_type, "sm_elem")
 }
 
 fn lower_expr_node<'ctx>(

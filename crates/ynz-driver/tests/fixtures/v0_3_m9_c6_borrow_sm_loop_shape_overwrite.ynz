@@ -1,0 +1,14 @@
+// v0.3-M9 C6 borrow probe: a state-machine loop whose variable is a shape item (frame-embedded
+// across the `wait`) the body overwrites: the item's string is released by the overwrite
+shape Tag {
+  name: string
+  id: int
+}
+function entrypoint() -> nothing {
+  let tags: array<Tag> = [{ name: `a-${1}`, id: 1 }]
+  for (tag in tags) {
+    tags[0] = { name: `b-${2}`, id: 2 }
+    wait sleep(1)
+    print(tag.name)
+  }
+}

@@ -91,3 +91,19 @@ cost_case!(
     0,
     "a call result copied again where the callee already returned an owned copy (cost, Rule 8)"
 );
+cost_case!(
+    a_state_machine_loop_whose_body_writes_nothing_copies_nothing,
+    "v0_3_m9_c6_cost_sm_loop_no_write.ynz",
+    "1\n1\n",
+    7,
+    1,
+    "a state-machine loop variable copied because a `wait` is in the body, although nothing writes the array (cost, Rule 8)"
+);
+cost_case!(
+    a_state_machine_loop_that_overwrites_an_item_copies_and_releases_one_item_per_iteration,
+    "v0_3_m9_c6_cost_sm_loop_write.ynz",
+    "1\n1\n",
+    15,
+    9,
+    "a state-machine loop variable left pointing at an item the body frees, or a copy never released (High)"
+);

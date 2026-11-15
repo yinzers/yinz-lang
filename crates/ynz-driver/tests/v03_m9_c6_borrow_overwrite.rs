@@ -132,3 +132,20 @@ borrow_case!(
     "v0_3_m9_c6_cross_module_glue",
     "lib-3\nmain-4\n"
 );
+
+// State-machine loops (a `wait` in the body) copy the same way.
+borrow_case!(
+    sm_loop_elem_overwrite,
+    "v0_3_m9_c6_borrow_sm_loop_elem_overwrite.ynz",
+    "a-1\nb-2\n"
+);
+borrow_case!(
+    sm_loop_shape_overwrite,
+    "v0_3_m9_c6_borrow_sm_loop_shape_overwrite.ynz",
+    "a-1\n"
+);
+borrow_case!(
+    sm_loop_map_overwrite,
+    "v0_3_m9_c6_borrow_sm_loop_map_overwrite.ynz",
+    "v-1\n"
+);
