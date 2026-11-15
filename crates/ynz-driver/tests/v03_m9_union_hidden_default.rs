@@ -30,7 +30,7 @@ macro_rules! hidden_default_tests {
     ($fixture:expr, $stdout:expr, $optimized:ident, $no_optimize:ident, $asan_optimized:ident, $asan_no_optimize:ident) => {
         #[test]
         fn $optimized() {
-            // WHY: the element read back must be the variant that was stored.
+            // WHY: the field read back must be the variant its default stored.
             assert_prints($fixture, false, $stdout, WHAT);
         }
 
