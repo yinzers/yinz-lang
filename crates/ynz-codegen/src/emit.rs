@@ -16779,7 +16779,26 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 // Binding funnel: shape/maybe values copy their bytes into
                 // variable-owned storage here (get-side ownership contract —
                 // see store_binding); everything else stores as before.
-                store_binding(cg, val, &val_ty, slot, name)?;
+                // A `let` of a place read that typeck proved a read-only view
+                // (`TypedModule::view_bindings`) points at the place instead of copying it; a
+                // function with state-machine frames never views (a view must not cross a
+                // suspension, and the crossing sets are per local, not per live range).
+                let value_span = value.span();
+                let is_view = cg
+                    .typed
+                    .view_bindings
+                    .contains(value_span.start, value_span.end)
+                    && cg.sm_crossing_names.is_none()
+                    && val.is_pointer_value()
+                    && matches!(
+                        cg.resolve_type(&val_ty),
+                        Type::Shape { .. } | Type::Union { .. } | Type::Maybe { .. }
+                    );
+                if is_view {
+                    store(cg, val, &val_ty, slot)?;
+                } else {
+                    store_binding(cg, val, &val_ty, slot, name)?;
+                }
             }
             // M7 P4a: track bindings that hold errors-capable results.
             if matches!(val_ty, Type::ErrorsCapable { .. }) {

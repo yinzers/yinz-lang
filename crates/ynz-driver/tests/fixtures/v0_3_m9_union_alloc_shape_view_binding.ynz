@@ -1,0 +1,47 @@
+// v0.3-M9 C1f (#423) round 2: a binding made from a place that stays where it is
+// (`let copied = outer.inner`) that only reads it is a VIEW of the place: it owns nothing and
+// clones nothing. Correct behavior: prints 300. The counter test pins the moved-field count, 500
+// cells.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Outer {
+  inner: Holder
+  tag: int
+}
+
+function buildChain() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function makeHolder() -> Holder {
+  let top = buildChain()
+  let holder: Holder = { chain: top, id: 1 }
+  return holder
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let holder = makeHolder()
+    let outer: Outer = { inner: holder, tag: 2 }
+    let copied = outer.inner
+    total = total + outer.tag + copied.id
+    round = round + 1
+  }
+  print(total)
+}

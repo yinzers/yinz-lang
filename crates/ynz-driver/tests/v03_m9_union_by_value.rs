@@ -391,3 +391,15 @@ by_value_tests!(
     v03_m9_union_view_root_written_asan_optimized,
     v03_m9_union_view_root_written_asan_no_optimize
 );
+
+// Bug: a view of a field read (`let rest = head.next` over a `share` parameter) points into the
+// place it names; a recursive walk that reads it through every frame must read live memory, not a
+// frame or cell that is gone. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_view_walk_10.ynz",
+    "45\n10\n",
+    v03_m9_union_view_walk_optimized,
+    v03_m9_union_view_walk_no_optimize,
+    v03_m9_union_view_walk_asan_optimized,
+    v03_m9_union_view_walk_asan_no_optimize
+);

@@ -202,14 +202,22 @@ fn shape_field_store_moves_a_binding_and_copies_a_copy_once() {
 }
 
 #[test]
-fn shape_alias_binding_owns_a_deep_copy() {
-    let extra = extra_cells(
+fn shape_binding_of_a_field_read_is_a_view_until_the_place_is_written() {
+    let view_extra = extra_cells(
         ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
-        ("v0_3_m9_union_alloc_shape_alias_binding.ynz", "300\n"),
+        ("v0_3_m9_union_alloc_shape_view_binding.ynz", "300\n"),
     );
     assert_eq!(
-        extra, 400,
-        "`let copied = outer.inner` leaves the field in place, so the binding clones four cells"
+        view_extra, 0,
+        "`let copied = outer.inner` only reads the field, so it is a view and clones nothing"
+    );
+    let copy_extra = extra_cells(
+        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+        ("v0_3_m9_union_alloc_shape_alias_binding.ynz", "400\n"),
+    );
+    assert_eq!(
+        copy_extra, 400,
+        "the field is written while the binding is read, so the binding clones four cells"
     );
 }
 

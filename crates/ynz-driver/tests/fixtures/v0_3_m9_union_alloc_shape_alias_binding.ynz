@@ -1,7 +1,9 @@
-// v0.3-M9 C1f (#423) round 2: a binding made from a place that stays where it is (`outer.inner`:
-// an alias of a field) cannot take the source's boxes, because both would free them. The binding
-// owns a deep copy, four cells. Correct behavior: prints 300. The counter test pins 400 cells more
-// than the moved-field fixture.
+// v0.3-M9 C1f (#423) round 2: a binding made from a place that stays where it is
+// (`let copied = outer.inner`) while the place is written (`outer.tag = 3`) before the binding's
+// last read is not a view: the binding must keep the value it had, so it owns a deep copy, four
+// cells. Correct behavior: prints 400. The counter test pins 400 cells more than the moved-field
+// fixture.
+
 shape End {
   flag: boolean
 }
@@ -39,6 +41,7 @@ function entrypoint() -> nothing {
     let holder = makeHolder()
     let outer: Outer = { inner: holder, tag: 2 }
     let copied = outer.inner
+    outer.tag = 3
     total = total + outer.tag + copied.id
     round = round + 1
   }
