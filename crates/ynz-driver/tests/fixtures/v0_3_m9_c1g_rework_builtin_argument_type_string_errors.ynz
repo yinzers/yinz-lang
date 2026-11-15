@@ -2,7 +2,7 @@
 // `errors`-capable methods receive an argument of the wrong type. Correct behavior: does not
 // compile — each argument is compared with the method's parameter.
 // Pre-fix failure (2eabaf7): `s.substring(`a`, `b`)` and the same call on a `sensitive string`
-// panicked the code generator; `result.or(tiny)` compiled with a `Tiny` where a `Big` fallback
+// panicked the code generator, and so did `secret.contains(4242)`; `result.or(tiny)` compiled with a `Tiny` where a `Big` fallback
 // belongs, read as a `Big` when the call fails.
 
 shape Tiny {
@@ -22,11 +22,13 @@ function entrypoint() -> nothing {
   let s = `hello world`
   let part = s.substring(`a`, `b`)
   let secret: sensitive string = sensitive(`hello world`)
-  let hidden = secret.substring(`a`, 2)
+  let secretPart = secret.substring(`a`, 2)
+  let secretHas = secret.contains(4242)
   let tiny: Tiny = { flag: true }
   let result = makeBig()
   let picked = result.or(tiny)
   print(part)
-  print(hidden.reveal())
+  print(secretPart.reveal())
+  print(secretHas.toString())
   print(picked.count.toString())
 }

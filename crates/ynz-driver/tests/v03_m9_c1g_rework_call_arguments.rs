@@ -26,7 +26,7 @@
 //! argument types (round 3) and the legal generic `background` call that must keep running.
 //! Justified above 13: every test is one compile of its own fixture and names one bug on one
 //! receiver family, so a regression in one arm of `builtin_method_argument_count` or
-//! `collection_method_arg_slots` fails one named test.
+//! `builtin_method_argument_slots` fails one named test.
 
 mod support;
 
@@ -299,6 +299,7 @@ fn v03_m9_c1g_rework_builtin_string_and_errors_method_with_wrong_argument_type_i
         "v0_3_m9_c1g_rework_builtin_argument_type_string_errors.ynz",
         &[
             "This argument is `string`, but `substring` expects `int` here.",
+            "This argument is `int`, but `contains` expects `string` here.",
             "This argument is `Tiny`, but `or` expects `Big` here.",
         ],
     );
