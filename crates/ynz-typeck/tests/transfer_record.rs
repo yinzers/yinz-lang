@@ -469,6 +469,35 @@ cases! { assert_loop_store_rejected;
 }}"), "(High) `o.add(self)` in a loop: the second pass stores the box again";
 }
 
+// ── the legal forms next to the same-statement and `self` rejections ────────
+//
+// Green on arrival: they pin that the one consumed-read reporter (a reported-span set) does not
+// reject a read that comes before the hand-over, a read of a copy, or a read of a `share self`.
+
+cases! { assert_accepted;
+    copy_then_store_in_one_literal_is_accepted: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  let o: array<array<int>> = [a.copy(), a]
+  print(o.count().toString())
+}}"), "(High) over-rejection: `[a.copy(), a]` stores a copy and then `a`; the copy is a fresh value, `a` is handed over once";
+    read_in_the_key_then_store_in_one_call_is_accepted: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  let t: map<int, array<int>> = {{}}
+  t.set(a.count(), a)
+}}"), "(High) over-rejection: `t.set(a.count(), a)` reads `a` for the key and then hands it over; a read that ends before the hand-over is legal";
+    copy_of_the_value_beside_a_give_in_one_call_is_accepted: format!("{EATERS}function f() -> nothing {{
+  let a: array<int> = [1]
+  eat_both(a, [a.copy()])
+}}"), "(High) over-rejection: `eat_both(a, [a.copy()])` gives `a` once; the literal holds a copy";
+    share_self_read_twice_is_accepted: format!("{KEEPER}function twice(share self: Box) -> int {{
+  return self.items.count() + self.items.count()
+}}"), "(High) over-rejection: a `share self` is never handed over, so reading it again is legal";
+    give_self_stored_once_is_accepted: format!("{KEEPER}function keep(give self: Box, lend o: array<Box>) -> nothing {{
+  print(self.items.count().toString())
+  o.add(self)
+}}"), "(High) over-rejection: a `give self` read and then stored once is legal";
+}
+
 // ── t3: a move inside a loop, rejected ──────────────────────────────────────
 
 /// The program must be rejected with the canonical use-after-give text and the loop wording.
