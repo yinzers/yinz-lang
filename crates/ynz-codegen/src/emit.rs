@@ -16780,15 +16780,19 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 // variable-owned storage here (get-side ownership contract —
                 // see store_binding); everything else stores as before.
                 // A `let` of a place read that typeck proved a read-only view
-                // (`TypedModule::view_bindings`) points at the place instead of copying it; a
-                // function with state-machine frames never views (a view must not cross a
-                // suspension, and the crossing sets are per local, not per live range).
+                // (`TypedModule::view_bindings`) points at the place instead of copying it.
+                // Condition (c): a view never crosses a suspension. A binding that does is in
+                // the crossing set (`sm_crossing_names`, the one authoritative set that sizes the
+                // frame, which counts a call that suspends without a written `wait`) or the
+                // crossing union map; it keeps its copy. A state-machine function whose binding
+                // does not cross views like any other.
                 let value_span = value.span();
                 let is_view = cg
                     .typed
                     .view_bindings
                     .contains(value_span.start, value_span.end)
-                    && cg.sm_crossing_names.is_none()
+                    && !is_sm_crossing
+                    && !cg.sm_crossing_unions.contains_key(name.as_str())
                     && val.is_pointer_value()
                     && matches!(
                         cg.resolve_type(&val_ty),
