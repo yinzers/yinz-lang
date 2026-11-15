@@ -1,0 +1,15 @@
+// A second, unrelated shape named `Thing`, with other hidden defaults than `a`'s.
+export shape Thing {
+  id: int
+  hidden count: int = 22
+  hidden label: string = `b`
+}
+
+function readOwn(share self: Thing) -> string {
+  return `${self.count.toString()}${self.label}`
+}
+
+export function runB() -> string {
+  let thing: Thing = { id: 2 }
+  return thing.readOwn()
+}

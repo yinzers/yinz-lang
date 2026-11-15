@@ -102,11 +102,31 @@ pub struct Built {
 /// `ynz build --emit-ir [--no-optimize] <copy of fixture>` into a fresh temp directory.
 /// Panics with the compiler's output when the fixture does not compile (a fixture that fails
 /// to compile is a test bug, never a skip).
+///
+/// A `fixture_name` that names a DIRECTORY is a multi-module project (a `yinz.toml` and its
+/// `.ynz` files): it is copied whole and built as a project, whose binary is `bin` and whose IR
+/// is `bin.ll`, one `; file: <path>` section per module.
 pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
     let directory = tempfile::tempdir().expect("create temp directory");
-    let source = directory.path().join("program.ynz");
-    std::fs::copy(fixture_path(fixture_name), &source)
-        .unwrap_or_else(|err| panic!("copy fixture {fixture_name}: {err}"));
+    let fixture = fixture_path(fixture_name);
+    let is_project = fixture.is_dir();
+    let source = if is_project {
+        let project = directory.path().join("project");
+        std::fs::create_dir(&project).expect("create project directory");
+        for entry in std::fs::read_dir(&fixture)
+            .unwrap_or_else(|err| panic!("read fixture project {fixture_name}: {err}"))
+        {
+            let entry = entry.expect("read fixture project entry");
+            std::fs::copy(entry.path(), project.join(entry.file_name()))
+                .unwrap_or_else(|err| panic!("copy fixture project {fixture_name}: {err}"));
+        }
+        project
+    } else {
+        let source = directory.path().join("program.ynz");
+        std::fs::copy(&fixture, &source)
+            .unwrap_or_else(|err| panic!("copy fixture {fixture_name}: {err}"));
+        source
+    };
     let mut command = Command::new(env!("CARGO_BIN_EXE_ynz"));
     command.arg("build").arg(&source).arg("--emit-ir");
     if no_optimize {
@@ -122,9 +142,17 @@ pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let (binary, ir) = if is_project {
+        (source.join("bin"), source.join("bin.ll"))
+    } else {
+        (
+            directory.path().join("program"),
+            directory.path().join("program.ll"),
+        )
+    };
     Built {
-        binary: directory.path().join("program"),
-        ir: directory.path().join("program.ll"),
+        binary,
+        ir,
         _directory: directory,
     }
 }
@@ -261,16 +289,42 @@ fn find_clang() -> &'static str {
         .expect("ASan fixtures need `clang-18` or `clang` on PATH (with libclang-rt-18-dev)")
 }
 
+/// Split the IR text of a multi-module build into one text per module. `ynz build` on a project
+/// joins the modules, each behind a `; file: <path>` line; single-file IR has no such line and
+/// comes back as the one module it is. O(n) time and space.
+fn split_module_sections(ir: &str) -> Vec<String> {
+    let mut sections: Vec<String> = Vec::new();
+    for line in ir.lines() {
+        if line.starts_with("; file: ") || sections.is_empty() {
+            sections.push(String::new());
+        }
+        let current = sections.last_mut().expect("a section was just pushed");
+        current.push_str(line);
+        current.push('\n');
+    }
+    sections
+}
+
 /// Instrument `ir` (LLVM IR text) for ASan, compile it with `clang -fsanitize=address` and link
-/// it against the bundled runtime archive. The files are written into `directory`; returns the path
-/// of the sanitized binary.
+/// it against the bundled runtime archive. A multi-module build's IR is split per module and
+/// every module is instrumented and linked, so a default lowered in one module and called from
+/// another is checked too. The files are written into `directory`; returns the path of the
+/// sanitized binary.
 pub fn build_asan_from_ir(directory: &Path, ir: &str) -> PathBuf {
-    let sanitized_ir = directory.join("program.asan.ll");
-    std::fs::write(&sanitized_ir, instrument_for_asan(ir)).expect("write instrumented IR");
+    let sanitized_irs: Vec<PathBuf> = split_module_sections(ir)
+        .iter()
+        .enumerate()
+        .map(|(position, section)| {
+            let sanitized_ir = directory.join(format!("program.asan.{position}.ll"));
+            std::fs::write(&sanitized_ir, instrument_for_asan(section))
+                .expect("write instrumented IR");
+            sanitized_ir
+        })
+        .collect();
     let sanitized_binary = directory.join("program.asan");
     let output = Command::new(find_clang())
         .args(["-O0", "-g", "-fsanitize=address", "-no-pie"])
-        .arg(&sanitized_ir)
+        .args(&sanitized_irs)
         .arg(env!("YNZ_RT_LIB_PATH"))
         // The same system libraries the driver's own link line adds for the Tokio runtime.
         .args(["-lpthread", "-ldl", "-lm", "-lrt"])

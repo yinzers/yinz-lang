@@ -579,3 +579,86 @@ fn v03_m9_c1g_substituting_a_union_that_collapses_to_one_variant_gives_that_vari
         tiny
     );
 }
+
+/// Check `source` and require exactly one error whose WHAT is `expected_what`: the annotation is
+/// reported once, where it is written, and nothing else is reported for it.
+fn assert_one_error_saying(source: &str, expected_what: &str) {
+    let out = check(source);
+    let whats: Vec<&str> = out.diagnostics.iter().map(|d| d.what.as_str()).collect();
+    assert_eq!(
+        whats,
+        vec![expected_what],
+        "expected exactly one diagnostic; got: {:#?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn v03_m9_unknown_generic_name_in_a_let_annotation_is_reported() {
+    // BUG (High: type validation): `Nope<int>` resolved to an unreported error type, so the
+    // annotation passed the checker with no diagnostic. The resolver serves every annotation, so
+    // this guards the ordinary `let` path, not only a hidden default.
+    assert_one_error_saying(
+        r#"
+function entrypoint() -> nothing {
+  let slot: Nope<int> = 4096
+}
+"#,
+        "`Nope` is not a known type.",
+    );
+}
+
+#[test]
+fn v03_m9_type_arguments_on_a_plain_shape_in_a_parameter_are_reported() {
+    // BUG (High: type validation): `Big<int>` on a shape declared without type parameters
+    // resolved to an unreported error type. Guards the parameter-annotation path and the
+    // "declared but not generic" wording.
+    assert_one_error_saying(
+        r#"
+shape Big {
+  label: string
+}
+
+function show(share value: Big<int>) -> nothing { }
+
+function entrypoint() -> nothing { }
+"#,
+        "`Big` does not take type arguments.",
+    );
+}
+
+#[test]
+fn v03_m9_map_missing_its_value_type_in_a_let_annotation_is_reported() {
+    // BUG (High: type validation): `map<int>` filled the missing value type with an unreported
+    // error type. Guards the `let` path for a built-in generic missing an argument.
+    assert_one_error_saying(
+        r#"
+function entrypoint() -> nothing {
+  let scores: map<int> = {}
+}
+"#,
+        "`map` takes 2 type arguments.",
+    );
+}
+
+#[test]
+fn v03_m9_type_arguments_on_a_built_in_or_type_parameter_name_say_it_takes_none() {
+    // BUG (teaching surface): `string<int>` and `T<int>` name a type that exists, but the
+    // resolver's fall-through said "`string` is not a known type", which misstates the mistake.
+    assert_one_error_saying(
+        r#"
+function entrypoint() -> nothing {
+  let label: string<int> = `a`
+}
+"#,
+        "`string` does not take type arguments.",
+    );
+    assert_one_error_saying(
+        r#"
+function hold<T>(give value: T<int>) -> nothing { }
+
+function entrypoint() -> nothing { }
+"#,
+        "`T` does not take type arguments.",
+    );
+}

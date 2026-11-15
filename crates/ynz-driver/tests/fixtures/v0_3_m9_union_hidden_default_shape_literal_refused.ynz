@@ -1,0 +1,21 @@
+// v0.3-M9 C1e rework (#421): a shape-literal default into a union-typed hidden field is refused
+// with the teaching diagnostic every `{ ... }` into a union slot gets. It used to stop the build
+// with the internal error "struct literal with non-shape type Error".
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+shape Holder {
+  name: string
+  hidden extra: Tiny | Big = { flag: true }
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { name: `a` }
+  print(holder.name)
+}

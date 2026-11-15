@@ -1,0 +1,22 @@
+// v0.3-M9 C1e rework (#421): `things[i] = plain` into an `array<Thing>` is refused by typeck's
+// strict element-type equality, so no bare variant can reach a union-element slot through an
+// index store (regression guard, no hole). The refusal must stay a typeck diagnostic, never a
+// compiled bare store.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let big: Big = { label: `hello`, count: 3 }
+  let things: array<Thing> = []
+  things.add(tiny)
+  things[0] = big
+  print(`end`)
+}

@@ -1,0 +1,14 @@
+// v0.3-M9 C1e rework (#421): a shape IMPORTED from another module keeps its hidden defaults
+// when this module constructs it.
+// Correct behavior: prints `5`, `other`, `end`; clean under AddressSanitizer at -O0 and -O2.
+// Pre-fix failure: codegen looked for the shape's declaration only in this module, found none,
+// and skipped every hidden default: `count` read 0 and `extra` held a null envelope pointer,
+// a SIGSEGV on read.
+import { Holder, peekCount, peekExtra } from `holders`
+
+function entrypoint() -> nothing {
+  let holder: Holder = { name: `a` }
+  print(holder.peekCount().toString())
+  print(holder.peekExtra())
+  print(`end`)
+}
