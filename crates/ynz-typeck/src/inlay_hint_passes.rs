@@ -59,7 +59,7 @@ use crate::{
 /// sig data), replace the explicit list with a registry-sourced lookup.
 ///
 /// Time: O(n) where n = number of registry free-fn names (small, <10).  Space: O(1).
-fn builtin_free_fn_is_readonly(name: &str) -> bool {
+pub(crate) fn builtin_free_fn_is_readonly(name: &str) -> bool {
     // Builtins special-cased in check.rs (not in PrimitiveIntrinsicTable.free_fns).
     if matches!(name, "print" | "sensitive") {
         return true;
@@ -83,7 +83,7 @@ fn builtin_free_fn_is_readonly(name: &str) -> bool {
 ///
 /// Time: O(1) amortised (HashSet lookup; set built once via OnceLock).
 /// Space: O(m) where m = number of scalar intrinsic method names (<40).
-fn primitive_intrinsic_method_is_readonly(method: &str) -> bool {
+pub(crate) fn primitive_intrinsic_method_is_readonly(method: &str) -> bool {
     static INTRINSIC_METHODS: OnceLock<HashSet<String>> = OnceLock::new();
     let set = INTRINSIC_METHODS.get_or_init(|| {
         PrimitiveIntrinsicTable::m6()

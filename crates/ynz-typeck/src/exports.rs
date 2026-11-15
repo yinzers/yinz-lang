@@ -15,6 +15,9 @@ use crate::{
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExportTable {
     pub shapes: HashMap<String, ShapeDef>,
+    /// Shapes the exported shapes need only to be sized (the variants of their union fields),
+    /// whether or not the module exports them: see `ShapeTable::layout_only`.
+    pub layout_shapes: HashMap<String, ShapeDef>,
     pub options: HashMap<String, OptionsEntry>,
     pub functions: HashMap<String, FunctionSig>,
 }
@@ -63,5 +66,14 @@ pub fn collect_exports(
         }
     }
 
+    table.layout_shapes = shape_table.union_variant_closure(
+        table.shapes.values(),
+        table.functions.values().flat_map(|sig| {
+            sig.params
+                .iter()
+                .map(|(_, ty)| ty)
+                .chain(std::iter::once(&sig.ret))
+        }),
+    );
     table
 }

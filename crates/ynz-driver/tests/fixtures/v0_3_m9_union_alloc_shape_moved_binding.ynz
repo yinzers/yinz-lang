@@ -1,0 +1,46 @@
+// v0.3-M9 C1f (#423) round 2: a binding that takes a shape owning a recursive union MOVES it, as
+// Rust moves a struct: the chain's boxes change owner and nothing is cloned (the language
+// refuses a read of `holder` after the store, so the store is its last use). Each round builds
+// a holder (a three-box chain and the holder's own box: 4 cells) and moves it into `moved`.
+// Correct behavior: prints 100. The counter test pins 400 cells.
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Outer {
+  inner: Holder
+  tag: int
+}
+
+function buildChain() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function makeHolder() -> Holder {
+  let top = buildChain()
+  let holder: Holder = { chain: top, id: 1 }
+  return holder
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let holder = makeHolder()
+    let moved = holder
+    total = total + moved.id
+    round = round + 1
+  }
+  print(total)
+}

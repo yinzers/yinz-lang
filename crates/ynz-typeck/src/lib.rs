@@ -48,6 +48,7 @@ pub mod errors_fields;
 pub mod exports;
 pub mod false_sharing;
 pub mod generics;
+pub mod heap_moves;
 pub mod independence;
 pub mod inlay_hint_passes;
 pub mod intrinsics;
@@ -70,6 +71,7 @@ pub mod transfer_record;
 pub mod type_at_offset;
 pub mod type_variant_sampler;
 pub mod types;
+pub mod view_bindings;
 
 pub use check::{
     block_contains_back_edge_yield, check, check_with_kernel_mode, crossing_local_names,

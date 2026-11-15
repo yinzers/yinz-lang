@@ -1,0 +1,67 @@
+// v0.3-M9 C1f (#423): union array elements and map values are stored by value: filling an
+// `array<Thing>` and a `map<int, Thing>` allocates only the containers' own buffers, exactly
+// what the `int` containers of `v0_3_m9_union_alloc_container_int.ynz` allocate.
+// Correct behavior: prints the sum; the allocation count equals the int baseline's.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  count: int
+  weight: int
+}
+shape Thing = Tiny | Big
+
+function weigh(share thing: Thing) -> int {
+  if (thing) {
+    is Tiny => {
+      return 1
+    }
+    is Big => {
+      return thing.count + thing.weight
+    }
+  }
+  return 0
+}
+
+function make(seed: int) -> Thing {
+  if (seed % 2 == 0) {
+    let tiny: Tiny = { flag: true }
+    let thing: Thing = tiny
+    return thing
+  }
+  let big: Big = { count: seed, weight: 2 }
+  let thing: Thing = big
+  return thing
+}
+
+function entrypoint() -> nothing {
+  let things: array<Thing> = []
+  let held: map<int, Thing> = {}
+  let round = 0
+  while (round < 300) {
+    if (round % 2 == 0) {
+      let tiny: Tiny = { flag: true }
+      let otherTiny: Tiny = { flag: true }
+      things.add(tiny)
+      held.set(round, otherTiny)
+    }
+    if (round % 2 == 1) {
+      let big: Big = { count: round, weight: 2 }
+      let otherBig: Big = { count: round, weight: 2 }
+      things.add(big)
+      held.set(round, otherBig)
+    }
+    round = round + 1
+  }
+  let total = 0
+  let index = 0
+  while (index < things.count()) {
+    let got = things.get(index)
+    if (got.exists()) {
+      total = total + weigh(got.value)
+    }
+    index = index + 1
+  }
+  print(total)
+}

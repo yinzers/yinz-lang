@@ -1,0 +1,78 @@
+// v0.3-M9 C1f (#423): a union returned from an `errors` function, read after the callee's frame
+// is gone. The result carries the union's slot BY VALUE (payload inline), so nothing the caller
+// reads lives in the callee's frame and nothing is allocated.
+// Covers: a shape variant, a plain variant, a returned parameter, a relay that propagates the
+// result (`let` then `return`), `.or(...)` with a union fallback, and `.failed()` narrowing.
+// Correct behavior: each result names the variant that was returned, clean under
+// AddressSanitizer at both optimization levels.
+// Before: the success word was a heap envelope plus a heap payload (two counted cells).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${thing.label} ${thing.count}`
+    }
+  }
+  return `none`
+}
+
+function makeBig(count: int) -> Thing errors {
+  let big: Big = { label: `made`, count: count }
+  return big
+}
+
+function makeTiny() -> Thing errors {
+  let tiny: Tiny = { flag: true }
+  return tiny
+}
+
+function passThrough(share thing: Thing) -> Thing errors {
+  return thing
+}
+
+function relay(count: int) -> Thing errors {
+  let inner = makeBig(count)
+  return inner
+}
+
+function clobber(depth: int) -> int {
+  let filler: Big = { label: `filler`, count: depth }
+  return filler.count
+}
+
+function entrypoint() -> nothing {
+  let first = makeBig(1)
+  let second = makeTiny()
+  let ignored = clobber(7)
+  if (first.failed()) {
+    print(`failed`)
+  }
+  print(describe(first))
+  let fallback: Tiny = { flag: false }
+  let fallbackThing: Thing = fallback
+  let secondThing = second.or(fallbackThing)
+  print(describe(secondThing))
+  let source: Big = { label: `source`, count: 2 }
+  let sourceThing: Thing = source
+  let third = passThrough(sourceThing)
+  let ignoredAgain = clobber(9)
+  let thirdThing = third.or(fallbackThing)
+  print(describe(thirdThing))
+  let fourth = relay(4)
+  let ignoredThird = clobber(11)
+  let fourthThing = fourth.or(fallbackThing)
+  print(describe(fourthThing))
+  print(`end`)
+}

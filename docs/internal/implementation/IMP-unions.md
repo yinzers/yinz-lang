@@ -61,6 +61,120 @@ LLVM emits explicit padding bytes to maintain alignment. The largest variant's v
 
 ---
 
+## Stored union slot
+
+The lowering table above names the logical representation. What a union value is when it is
+*stored* (an array element, a map value, a shape field, a binding that crosses a `wait`, a
+return, a staged argument) is one layout, computed once.
+
+**Slot.** An *envelope union* (one with a shape variant) is stored as `{ i64 tag, payload }`, laid
+out like a Rust `enum`: the payload area is as large as the largest variant (at least 8 bytes for
+the non-shape variants), at the shape alignment (8, or 16 with a `number` field), and the slot size
+is a multiple of that alignment. `Thing = Tiny | Big` is 24 bytes when `Big` is 16. `none` (a union
+that lists `nothing`, or a `maybe` of the union) is the tag `u64::MAX`. The layout is
+`UnionLayout` in `crates/ynz-codegen/src/shape_types.rs`; the frame layout, codegen and any
+release helper read that one answer.
+
+**Value form.** Inside an expression a union is a pointer to a per-site `{tag, data}` view envelope
+(`data` = the payload's address for a shape variant, the value's bits otherwise), null for `none`.
+`union_slot_to_value` builds the view over a slot; `union_persist_into` copies a value into a slot.
+A view is valid as long as the slot it views.
+
+**By value, no heap home.** Every store copies the payload into the slot: a container element, a
+map value and a shape field (a hidden default into a union field included), a binding (an entry
+slot owned by the binding, so rebinding the source never changes the copy), a `return` (the slot
+comes back by value), an `errors` result (`{ err, slot }`) and a `maybe<Thing>` return (the slot,
+`none` the none tag), and a `wait`-staged or `background` argument (a `Param` region of the
+callee's own frame). A suspending function returns the slot through a `Return` region of its frame;
+the waiting caller copies it out before the frame is freed. A binding that crosses a `wait` lives in
+a region of the function's frame (`crossing_local_slot_count`); every resume rebuilds the view from
+it, so no pointer into a resume function's stack survives a suspension. None of these allocates.
+
+**Recursive unions** (a variant reaches the union through shape fields, so no finite inline size)
+are the one exception: the slot is `{ tag, word }` and a shape variant's bytes live in a heap cell
+the slot owns, one per box, as `Box<T>` in a Rust enum. A store MOVES such a value when it is
+a move and COPIES it deep otherwise (next section), exactly where Rust moves or clones. The same
+holds for a non-recursive union whose shape variant has such a field.
+
+**Moving and copying a value that owns boxes.** A shape, union or `maybe` that owns
+a recursive union's boxes is never copied by bytes alone, because the copy would share its boxes
+with the source and a release would free each box twice. Typeck records which stores are MOVES
+(`TypedModule::heap_moves`, `crates/ynz-typeck/src/heap_moves.rs`): the checker's admitted transfer
+of a fresh value (a literal, a call whose every return is fresh, a `.copy()`) or of an owned
+binding the store consumed (a later read is a compile error), and a `return` of either. Codegen
+reads the record and decides nothing (`lower_expr` marks the value, `Cg::is_moved_cells` asks):
+
+- a MOVED store takes the boxes as they are: one new cell for the value's own box, none for the
+  boxes it owns (building a chain link by link makes one cell per link);
+- every other store deep-copies, like `Clone`: `.copy()` (always, even when its source is not
+  read again), a binding made from a place that stays where it is and is not a view (`let copied = outer.inner` with
+  the field written while the binding is read, a `maybe` read of an element, a returned parameter's
+  alias binding) and an element store of a value
+  that is not moved. The copy clones each box the value owns (`deepen_unless_moved`,
+  `union_deepen_fn`): O(n) cells for n boxes.
+
+One seam makes the choice for every copy of a shape's bytes: union slot persist
+(`union_persist_into_as`), `shape_bytes_to_owned`, `shape_bytes_to_heap_cell`,
+`maybe_payload_stable_bits`, the embed slot and the staged element of an array or map store. A
+value absent from the record is copied deep, so a hole costs cells and never a double free. A
+`return` of a parameter copies nothing: its caller treats the result as an alias and the binding
+that takes it copies.
+
+**Views.** A `let` of a place read (`let rest = head.next`) names a place that stays where it
+is. Copying it into the binding is a clone, one box for every box the value owns, so a recursive
+walk that peels one link per call would copy the whole tail at every step: O(n²) cells where a Rust
+borrow costs none. A binding that only READS what it names is a read-only VIEW instead: it points at
+the place (a union field's slot, a shape field's bytes), owns nothing and clones nothing, and the
+language's value semantics are unchanged. Typeck proves it (`TypedModule::view_bindings`,
+`crates/ynz-typeck/src/view_bindings.rs`), inside the same liveness walk as `string_moves`, and
+codegen only reads the record:
+
+- (a) the view is never written, stored, returned, given or sent;
+- (b) the root of the place is not assigned, written through a field or index, or passed to a
+  position that may write or consume it, anywhere in the view's live range; a parameter the function
+  only reads (`share`) satisfies (b) for the whole body;
+- (c) the view never crosses a suspension: typeck refuses a written `wait` or `background` in the
+  live range, and codegen refuses a binding in the crossing set (`sm_crossing_names`, the set that
+  sizes the frame, which counts a call that suspends without a written `wait`). A state-machine
+  function whose binding does not cross views like any other.
+
+Every other binding keeps the deep copy, as Rust needs `.clone()` where it refuses the borrow. The
+forms that are views:
+
+- a field-read chain from a parameter or a plain `let` (`head.next`, `outer.inner.chain`);
+- a read THROUGH a view (`let b = a.g` with `a` a view of `x`): `b` is a view of `x`, checked against
+  `x`, and only while `a` is a view;
+- an element read of a built-in array, fixed list or map: `arr[i]`, `arr[i].f`, `arr.get(i)`,
+  `.first()`, `.last()`. An element read is a copy of the element's bytes into per-site staging
+  (a union element is a pointer into the buffer), so it shares the element's boxes and stays valid
+  while the collection is not written. Any write to the collection breaks (b): the in-place mutators
+  (`add`, `set`, `remove`, `clear`, `removeFirst`, `removeLast`, from the same
+  `*_method_is_mutating` tables the checker uses to refuse them on a `share` parameter) and growth,
+  a `lend`/`give`/`send` of the collection, and an assignment to it.
+
+An annotated `let` (a possible union wrap) is never a view. Which call positions only read comes
+from `effective_ownership::call_position_reads`, derived from the effective-ownership fixpoint, so
+a view analysis and the checker cannot disagree about a callee.
+
+Override directions (`auto-promotion.md`). Force the OTHER pick (an independent copy where a view
+fits): `let own = head.next.copy()`, existing syntax, always a deep copy. Force the AUTO pick (a
+view where the compiler keeps the copy): deliberately no override, because every refusal above is
+a soundness refusal (a write, an escape, a suspension, an unknown callee), and a forced view there
+would read a changed or freed place. A view has no source form (no keyword takes a binding "by
+view"), so there is no muted hint to make explicit.
+
+**Ownership.** A `share` union parameter cannot be stored (`ParamNeedsGive`); a `give` union is
+copied into the slot. A slot owns its payload: a shape variant owns the shape's fields (and, boxed,
+its cell), a `string`, array or map variant owns that value, scalar variants and `none` own nothing.
+
+**Equality.** Two union fields are equal when their tags match and the stored variants are equal
+as values of that variant (field by field for a shape variant, the payload word otherwise).
+
+**Not stored.** A `maybe<Thing>` binding (or an `errors` result of one) held across a `wait`,
+and a union indexed-set into an array, are refused by typeck.
+
+---
+
 ## No User Override on Layout
 
 There is no syntax for `dense<S>` or `tagged<S>` to force a particular layout. Rationale: layout is an implementation detail that users do not need to observe. The only legitimate reasons to pin layout (FFI, wire format, memory-mapped hardware) are handled at the boundary — not in the union declaration. Adding a layout modifier would create work for users who would almost never need it. Deliberate omission, symmetric with SSO threshold and auto-SoA (both also have no override).

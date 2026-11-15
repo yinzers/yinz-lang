@@ -1,0 +1,25 @@
+// v0.3-M9 C1f (#423): REFUSED. A callee that does not own a union cannot store it: `keep` stores
+// its `share` union parameter `t` in `list`, but the caller keeps `t` (`ParamNeedsGive`, C5a
+// #393). The accepted spelling is `give t: Thing` (`v0_3_m9_union_keep_give.ynz`), which copies
+// the union into the element slot.
+// Correct behavior: does not compile; the diagnostic names `t`, `keep` and `give`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function keep(lend list: array<Thing>, share thing: Thing) -> nothing {
+  list.add(thing)
+}
+
+function entrypoint() -> nothing {
+  let list: array<Thing> = []
+  let big: Big = { label: `kept`, count: 3 }
+  keep(list, big)
+  print(`end`)
+}

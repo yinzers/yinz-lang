@@ -1,0 +1,61 @@
+// v0.3-M9 C1f (#423): a `maybe<Thing>` returned by a suspending function, read right after the
+// `wait` that produced it. It must read back the variant it was given: the pair may not point into
+// a resume function's stack, which dies when the function returns Pending. (A `maybe<Thing>`
+// binding held across a `wait` is refused by typeck: "cannot yet cross a `wait`".)
+// Correct behavior: prints `tiny`, `big slow`, `none`, `end`; clean under AddressSanitizer at
+// both optimization levels.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${thing.label}`
+    }
+  }
+  return `none`
+}
+
+function slowFetch(share things: array<Thing>, index: int) -> maybe<Thing> {
+  wait sleep(1)
+  let found = things.get(index)
+  return found
+}
+
+function clobber(depth: int) -> int {
+  let filler: Big = { label: `filler`, count: depth }
+  return filler.count
+}
+
+function entrypoint() -> nothing {
+  let things: array<Thing> = []
+  let tiny: Tiny = { flag: true }
+  things.add(tiny)
+  let big: Big = { label: `slow`, count: 2 }
+  things.add(big)
+  let first = wait slowFetch(things, 0)
+  if (first.exists()) {
+    print(describe(first.value))
+  }
+  let scratch = clobber(3)
+  let later = wait slowFetch(things, 1)
+  if (later.exists()) {
+    print(describe(later.value))
+  }
+  let scratchAgain = clobber(4)
+  let missing = wait slowFetch(things, 5)
+  if (missing.exists() == false) {
+    print(`none`)
+  }
+  print(`end`)
+}

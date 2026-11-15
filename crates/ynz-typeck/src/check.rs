@@ -698,9 +698,20 @@ fn record_string_moves_of(
     binding_names: &crate::binding_names::BindingNames,
     local_fns: &HashSet<String>,
     imported_fns: &HashSet<String>,
-) -> crate::string_ownership::StringMoves {
+    ownership: &crate::effective_ownership::EffectiveOwnershipReport,
+) -> (
+    crate::string_ownership::StringMoves,
+    crate::view_bindings::ViewBindings,
+) {
     let callable: HashSet<String> = local_fns.union(imported_fns).cloned().collect();
-    crate::string_ownership::record_string_moves(module, expr_types, binding_names, &callable)
+    crate::string_ownership::record_moves_and_views(
+        module,
+        expr_types,
+        binding_names,
+        &callable,
+        imported_fns,
+        ownership,
+    )
 }
 
 /// The names of the functions `module` defines — the local half of the call-graph boundary
@@ -900,6 +911,14 @@ pub struct TypedModule {
     /// last use of a `let` binding (`crate::string_ownership`). Codegen copies every other
     /// string it stores and consults nothing else.
     pub string_moves: crate::string_ownership::StringMoves,
+    /// C1f round 2: every heap-valued expression (shape, union, `maybe`) a store takes by move: the
+    /// store's admitted transfer of a fresh value, of an owned binding it consumed, or a `return`
+    /// of either (`crate::heap_moves`). Codegen deep-copies every other heap value it stores.
+    pub heap_moves: crate::heap_moves::HeapMoves,
+    /// C1f round 2: every `let` of a place read that is a read-only VIEW of the place instead of a
+    /// copy of it, by the span of its value expression (`crate::view_bindings`). Codegen copies
+    /// every other `let` of a place.
+    pub view_bindings: crate::view_bindings::ViewBindings,
     /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
     /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
@@ -948,6 +967,8 @@ impl TypedModule {
             release_plan: self.release_plan.clone(),
             generic_call_instances: self.generic_call_instances.clone(),
             string_moves: self.string_moves.clone(),
+            heap_moves: self.heap_moves.clone(),
+            view_bindings: self.view_bindings.clone(),
         })
     }
 }
@@ -1022,6 +1043,7 @@ pub fn check(
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
+        heap_moves: crate::heap_moves::HeapMoves::default(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1042,12 +1064,13 @@ pub fn check(
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
-    let string_moves = record_string_moves_of(
+    let (string_moves, view_bindings) = record_string_moves_of(
         module,
         &checker.expr_types,
         &binding_names,
         &checker.local_fn_names,
         checker.imported_fn_names,
+        checker.ownership,
     );
     let release_plan = checker
         .release
@@ -1066,6 +1089,8 @@ pub fn check(
         release_plan,
         generic_call_instances: checker.generic_call_instances,
         string_moves,
+        heap_moves: checker.heap_moves,
+        view_bindings,
     };
     (
         typed,
@@ -1136,6 +1161,7 @@ pub fn check_with_kernel_mode(
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
+        heap_moves: crate::heap_moves::HeapMoves::default(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1156,12 +1182,13 @@ pub fn check_with_kernel_mode(
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
-    let string_moves = record_string_moves_of(
+    let (string_moves, view_bindings) = record_string_moves_of(
         module,
         &checker.expr_types,
         &binding_names,
         &checker.local_fn_names,
         checker.imported_fn_names,
+        checker.ownership,
     );
     let release_plan = checker
         .release
@@ -1180,6 +1207,8 @@ pub fn check_with_kernel_mode(
         release_plan,
         generic_call_instances: checker.generic_call_instances,
         string_moves,
+        heap_moves: checker.heap_moves,
+        view_bindings,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -1368,6 +1397,8 @@ struct Checker<'b> {
     bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
     /// The record `TypedModule::stores_handed_over` is moved from (`store_value`).
     stores_handed_over: HashMap<(usize, usize), String>,
+    /// The record `TypedModule::heap_moves` is moved from (`record_heap_move`).
+    heap_moves: crate::heap_moves::HeapMoves,
     /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
     union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
@@ -1899,9 +1930,9 @@ impl<'b> Checker<'b> {
             );
             for crossing_name in &crossings {
                 // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
-                // whose ONLY crossing provenance is arg-escape is bind-time promoted to
-                // counted heap cells (envelope + tag-resolved payload deep-copy via
-                // `union_to_heap_cell`) — nothing is frame-embedded, so the nested-shape
+                // whose ONLY crossing provenance is arg-escape is held in a frame region of its
+                // own (the union slot, payload inline; `crossing_local_slot_count` in codegen) —
+                // no shape is frame-embedded, so the nested-shape
                 // limitation this check guards cannot apply. Its RHS resolves to the
                 // CONCRETE variant shape (`let fig: Figure = s` types as `Square`),
                 // which is exactly why this check would otherwise fire on it.
@@ -2044,14 +2075,14 @@ impl<'b> Checker<'b> {
                                     | Type::Dynamic { .. }
                                     | Type::BuiltinFixed { .. }
                                     | Type::Range { .. }
-                            )
+                            ) || is_errors_maybe_of_envelope_union(ty)
                         })
                     })
                     .cloned();
                 // v0.3-M6 Phase 1c (FRAGOs 013/014): a `maybe` or `union` local whose
                 // ONLY crossing provenance is the arg-escape collector is legal — codegen
-                // promotes the binding to a counted heap cell at bind time
-                // (`maybe_to_heap_cell` / `union_to_heap_cell`), so the pointer the
+                // promotes a `maybe` to a counted heap cell at bind time (`maybe_to_heap_cell`) and
+                // keeps a `union` in a frame region of its own (`flush_crossing_union`), so the pointer the
                 // callee holds across its own suspension targets surviving heap, not the
                 // dead resume-fn stack. Membership is the SPAN rule, not collector
                 // order (`crossing_local_names_with_provenance`): every crossing span the
@@ -2098,6 +2129,19 @@ impl<'b> Checker<'b> {
                              suspends the function the stack frame is freed, and the crossing-local \
                              frame slot holds a dangling pointer on the next resume. Iterating \
                              that dangling range produces zero iterations (silent wrong output). \
+                             See design/concurrency.md 'UnsupportedCrossingLocalType'.",
+                        ),
+                        Type::ErrorsCapable { .. } => (
+                            format!(
+                                "Handle the `errors` result and unwrap the `maybe` before the \
+                                 `wait` (for example `let value = {crossing_name}.or(none)`), and \
+                                 carry only the plain values you need after the suspension."
+                            ),
+                            "The `maybe` inside an `errors` result views a union slot on the \
+                             stack of the function that bound it, and no frame region holds that \
+                             slot across a `wait`. When the `wait` suspends the function its stack \
+                             frame is freed, so a read after the `wait` would see a dead slot and \
+                             quietly report `none` instead of the value. \
                              See design/concurrency.md 'UnsupportedCrossingLocalType'.",
                         ),
                         _ => (
@@ -3647,7 +3691,7 @@ impl<'b> Checker<'b> {
     /// binding still holds the 16-byte `{tag, data}` union storage, so codegen's Shape
     /// heap-upgrade would `load` `sizeof(shape)` bytes from it — a confirmed
     /// out-of-bounds read (CWE-125), 48+ bytes past the storage for every variant.
-    /// The durable fix (extracting the variant's payload via `union_to_heap_cell`) is
+    /// The durable fix (extracting the variant's payload from the union slot) is
     /// deferred as Future Requirements #21; until it lands, the spawn is a
     /// deterministic compile error, never a silent OOB (the Check 2b / FRAGO 005
     /// precedent: un-embeddable crossings teach, never ship silently wrong).
@@ -5393,6 +5437,11 @@ impl<'b> Checker<'b> {
             copy_template,
         };
         let admitted = self.check_transfer(value, &sink);
+        // An admitted store of a fresh value or of a consumed owned binding is a MOVE: codegen
+        // takes the value's boxes without cloning them (`crate::heap_moves`).
+        if admitted {
+            self.record_heap_move(value);
+        }
         // A named binding handed over is what the muted hint at the store says.
         if admitted && matches!(self.provenance_of(value), Provenance::Whole(_)) {
             let span = value.span();
@@ -5515,10 +5564,39 @@ impl<'b> Checker<'b> {
             .note_exit(kind, span, consumed_classes, entries);
     }
 
+    /// Record that a heap-valued `value` is taken by move: codegen takes its boxes without
+    /// cloning them (`crate::heap_moves`). Bits are copied, never moved, so they are not recorded.
+    fn record_heap_move(&mut self, value: &Expr) {
+        if self.expr_is_bits(value) {
+            return;
+        }
+        let span = value.span();
+        self.heap_moves.insert(span.start, span.end);
+    }
+
     /// A `return`: every binding holding (a piece of) the returned value escapes.
     fn record_return(&mut self, value: &Expr) {
         for (_, holder) in self.heap_holders_of(value) {
             self.transfers.escape(&holder, Escape::Returned);
+        }
+        // A fresh value, or an owned local at its last use (nothing runs after a `return`), is
+        // handed to the caller whole; a parameter, a `const`, a field or an element stays with
+        // its holder, so the returned copy must own boxes of its own.
+        let owned_whole = match self.provenance_of(value) {
+            Provenance::Fresh => true,
+            Provenance::Whole(name) => self.scope.lookup(&name).is_some_and(|entry| {
+                !entry.is_const
+                    && entry.consumed.is_none()
+                    && matches!(
+                        entry.origin,
+                        Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
+                    )
+                    && self.non_give_param_in_class(entry.alias_class).is_none()
+            }),
+            Provenance::Reaches(_) | Provenance::Unknown => false,
+        };
+        if owned_whole {
+            self.record_heap_move(value);
         }
     }
 
@@ -6766,11 +6844,14 @@ impl<'b> Checker<'b> {
         copy_template: &str,
     ) -> BindingEvent {
         match self.provenance_of(value) {
-            Provenance::Fresh => BindingEvent {
-                origin: Origin::Owned,
-                alias_class: self.scope.new_class(),
-                joined: Vec::new(),
-            },
+            Provenance::Fresh => {
+                self.record_heap_move(value);
+                BindingEvent {
+                    origin: Origin::Owned,
+                    alias_class: self.scope.new_class(),
+                    joined: Vec::new(),
+                }
+            }
             // `let b = a`, `b = a`: the binding takes the value over (`store_value`), so `b` owns it
             // and `a` is gone. Bits are copied, so `b` is a fresh value of its own.
             Provenance::Whole(_) => {
@@ -6874,6 +6955,27 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// The first parameter in the alias class `class` (the binding itself, or an alias of a
+    /// parameter) that is not declared `give`, as `(name, modifier, type)`: the caller keeps its
+    /// value, so nothing in the class may be handed over or returned as owned.
+    ///
+    /// O(class size) time.
+    fn non_give_param_in_class(
+        &self,
+        class: u64,
+    ) -> Option<(String, Option<OwnershipModifier>, String)> {
+        for member in self.scope.visible_members_of(class) {
+            if let Some(entry) = self.scope.lookup(&member) {
+                if let Origin::Param(modifier) = &entry.origin {
+                    if *modifier != Some(OwnershipModifier::Give) {
+                        return Some((member.clone(), modifier.clone(), type_name(&entry.ty)));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// The ONE transfer decision (`IMP-ownership.md` "The transfer decision — ONE emit
     /// site"). Returns true when the transfer is admitted (the caller may proceed as if the
     /// value moved). Emits `ParamNeedsGive` / `TransferNeedsCopy` / the const refusal;
@@ -6932,20 +7034,7 @@ impl<'b> Checker<'b> {
                 // A parameter anywhere in the class (the name itself, or an alias of a
                 // parameter) that is not declared `give` refuses the transfer: the caller
                 // keeps the value.
-                let non_give_param = {
-                    let mut found: Option<(String, Option<OwnershipModifier>, String)> = None;
-                    for member in self.scope.visible_members_of(class) {
-                        if let Some(e) = self.scope.lookup(&member) {
-                            if let Origin::Param(m) = &e.origin {
-                                if *m != Some(OwnershipModifier::Give) {
-                                    found = Some((member.clone(), m.clone(), type_name(&e.ty)));
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    found
-                };
+                let non_give_param = self.non_give_param_in_class(class);
                 if let Some((pname, modifier, ptype)) = non_give_param {
                     self.emit_param_needs_give(span, &pname, modifier.as_ref(), &ptype, sink);
                     return false;
@@ -11172,10 +11261,24 @@ fn union_coercion_for(slot_ty: &Type, value_ty: &Type) -> Option<UnionCoercion> 
     })
 }
 
+/// An `errors` result whose success value is a `maybe` of an envelope union
+/// (`maybe<Thing> errors`). Its `ok` word views a slot on the stack of the function that bound it,
+/// and no frame region holds that slot across a `wait` (a `maybe<Thing>` binding is refused the
+/// same way), so such a binding cannot yet cross one.
+fn is_errors_maybe_of_envelope_union(candidate: &Type) -> bool {
+    match candidate {
+        Type::ErrorsCapable { inner } => match inner.as_ref() {
+            Type::Maybe { inner: maybe_inner } => is_envelope_union(maybe_inner),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
 /// `{tag, data}` envelope. Any other union (`map<..> | nothing`) is the variant's raw pointer,
 /// null for `nothing`, and has no envelope to build.
-fn is_envelope_union(candidate: &Type) -> bool {
+pub fn is_envelope_union(candidate: &Type) -> bool {
     match candidate {
         Type::Union { variants } => variants
             .iter()
@@ -13340,7 +13443,7 @@ fn collect_aggregate_args_in_expr(
 /// envelope on the resume fn's stack; marking it crossing routes the binding into
 /// bind-time promotion to a counted heap cell, giving the default pointer flush a stable
 /// heap pointee), or a `union` (v0.3-M6 Phase 1c step 3c / FRAGO 014: bind-time
-/// promotion via `union_to_heap_cell`; the codegen classification loop overrides the
+/// it is kept in a frame region of its own via `flush_crossing_union`); the codegen classification loop overrides the
 /// RHS variant type with the resolved Union ANNOTATION so the binding never lands in
 /// the shape-embed path — this widen and that override are load-bearing coupled).
 /// Bignum (`number` with precision > 34) is deliberately excluded: its slot stores a
@@ -14960,7 +15063,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
         // UnsupportedCrossingLocalType guard's [ann, rhs, for_var] preference order.
         let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
             .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
-        // Arg-escape-only union: bind-time promotion (`union_to_heap_cell`) handles the
+        // Arg-escape-only union: its frame region (`flush_crossing_union`) handles the
         // crossing — mirrors Check 2's AND Check 2b's union skips exactly (step 3c).
         let arg_escape_union_ok = arg_escape_only.contains(crossing_name.as_str())
             && matches!(ann_ty, Some(Type::Union { .. }));

@@ -1,0 +1,42 @@
+// v0.3-M9 C1f (#423): a union passed to a `background` task. The task runs after the spawning
+// frame has moved on, so the argument must live in the task's own frame (its `Param` region).
+// Correct behavior: prints `big spawned 7`, `end`; clean under AddressSanitizer at both
+// optimization levels.
+// Failure when the argument is staged as a pointer to the spawner's envelope: garbage text at
+// -O0, SIGSEGV at -O2.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${thing.label} ${thing.count}`
+    }
+  }
+  return `none`
+}
+
+function slowDescribe(give thing: Thing) -> string {
+  wait sleep(1)
+  return describe(thing)
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `spawned`, count: 7 }
+  let handle = background slowDescribe(big)
+  wait sleep(50)
+  let got = handle.receive()
+  let fallback = `none`
+  print(got.or(fallback))
+  print(`end`)
+}

@@ -1,0 +1,64 @@
+// v0.3-M9 C1f (#423) round 2: `held` is a view of the `share` parameter's field and `chain` is a view
+// read THROUGH `held` (`let b = a.g` with `a` a view): a view of the original root, so reading the
+// chain allocates nothing (Golden Rule 8). The recursive `sum` adds its own views.
+// Correct behavior: prints the sum of 0..99, `4950`.
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Crate {
+  holder: Holder
+  tag: int
+}
+
+function sum(share head: Node | End) -> int {
+  if (head) {
+    is Node => {
+      let rest = head.next
+      return head.value + sum(rest)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function makeCrate(count: int) -> Crate {
+  let stop: End = { flag: true }
+  let list: Node | End = stop
+  let index = 0
+  while (index < count) {
+    let node: Node = { value: index, next: list }
+    let wrapped: Node | End = node
+    list = wrapped
+    index = index + 1
+  }
+  let holder: Holder = { chain: list, id: 1 }
+  let crate: Crate = { holder: holder, tag: 2 }
+  return crate
+}
+
+function makeShort() -> Node {
+  let stop: End = { flag: true }
+  let only: Node = { value: 9, next: stop }
+  return only
+}
+
+function total(share crate: Crate) -> int {
+  let held = crate.holder
+  let chain = held.chain
+  return sum(chain)
+}
+
+function entrypoint() -> nothing {
+  let crate = makeCrate(100)
+  print(total(crate))
+}

@@ -373,7 +373,7 @@ fn v03_m6_union_arg_pure_call_yields_deterministic_value() {
     // tagged struct lives in a parent stack alloca; staging stages ptr_to_int of it.
     // Pre-fix signature (Paper-Traced this phase): deterministically the WRONG variant —
     // `circle` 3/3 from the dangling tag read. The FRAGO-013 fix must bind-time-promote
-    // the envelope to a counted heap cell (`union_to_heap_cell`, resolving the
+    // the envelope as a by-value union slot in a frame region (`flush_crossing_union`, resolving the
     // value_to_stable_bits known-hole for the crossing path) via the one classifier.
     let (stdout, stderr, code, timed_out) =
         ynz_run_with_timeout("v0_3_m6_union_arg_pure_call.ynz", RUN_TIMEOUT);

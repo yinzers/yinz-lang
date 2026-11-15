@@ -110,6 +110,7 @@ fn completion_list_with_user_fns_includes_them() {
         shapes: HashMap::new(),
         union_aliases: HashMap::new(),
         options_names: std::collections::HashSet::new(),
+        layout_only: HashMap::new(),
     };
 
     let list = completion_list(
@@ -176,6 +177,7 @@ fn user_symbols_sort_before_keywords() {
         shapes: HashMap::new(),
         union_aliases: HashMap::new(),
         options_names: std::collections::HashSet::new(),
+        layout_only: HashMap::new(),
     };
 
     let list = completion_list(
@@ -521,6 +523,7 @@ fn user_defined_fn_has_snippet_with_param_tab_stops() {
         shapes: HashMap::new(),
         union_aliases: HashMap::new(),
         options_names: std::collections::HashSet::new(),
+        layout_only: HashMap::new(),
     };
 
     let list = completion_list(
@@ -605,6 +608,7 @@ fn user_defined_fn_self_only_snippet_has_cursor_stop() {
         shapes: HashMap::new(),
         union_aliases: HashMap::new(),
         options_names: std::collections::HashSet::new(),
+        layout_only: HashMap::new(),
     };
 
     let list = completion_list(
@@ -723,6 +727,7 @@ fn anon_shapes_excluded_from_completion() {
         shapes,
         union_aliases: HashMap::new(),
         options_names: std::collections::HashSet::new(),
+        layout_only: HashMap::new(),
     };
     let sig_table = SignatureTable {
         fns: HashMap::new(),

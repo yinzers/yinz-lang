@@ -1,0 +1,35 @@
+// v0.3-M9 C1f (#423): a RECURSIVE union boxes a shape variant in one heap cell per box, the
+// cost of `Box<T>` in a Rust enum, and storing one is a deep copy (`Box::clone`). Each build
+// stores three values into the `next` union field (an `End`, a `Node`, a `Node`): the stores make
+// 1, 2 and 3 cells (a stored `Node` clones the cells its own `next` owns), so 100 builds make 600
+// cells, and nothing else allocates.
+// Correct behavior: prints the sum of the list heads, 100. The lists are only built, never walked:
+// copying a boxed union into a binding clones its cells too, a cost the walk would add. The
+// allocation count is 600 (the counter test pins it).
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+
+function build(seed: int) -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: seed, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let first: Node = { value: 1, next: middle }
+  return first
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let list = build(round)
+    total = total + list.value
+    round = round + 1
+  }
+  print(total)
+}

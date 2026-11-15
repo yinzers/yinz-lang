@@ -1,0 +1,30 @@
+// v0.3-M9 C1f (#423) code round 1: `Big` and `Tiny` are not exported, but an exported function
+// returns and takes their union, so an importer must size that union's slot.
+shape Big {
+  first: int
+  second: int
+  label: string
+}
+shape Tiny {
+  flag: boolean
+}
+shape Thing = Tiny | Big
+export function make(wantBig: boolean) -> Thing {
+  let big: Big = { first: 4, second: 2, label: `lib` }
+  let tiny: Tiny = { flag: true }
+  if (wantBig) {
+    return big
+  }
+  return tiny
+}
+export function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Big => {
+      return `big ${thing.first}`
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}

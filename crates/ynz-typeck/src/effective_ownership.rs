@@ -2704,3 +2704,38 @@ mod value_like_parity {
         }));
     }
 }
+
+/// True when position `index` of a call to `name` only READS what is passed there: a method call's
+/// receiver is position 0, its arguments follow (`is_method`). The one answer the view analysis
+/// asks, derived from the same classification the effective-ownership fixpoint uses
+/// (`classify_call_position`): a local function by its analyzed body, an imported one by its declared
+/// positions, an intrinsic as read-only, and a built-in in-place collection mutator
+/// (`array.add`, `map.set`, `fixed.set`, `remove`, `clear`, …: `*_method_is_mutating`, the table the
+/// checker uses to refuse them on a `share` parameter) as a write at every position, because it
+/// writes its receiver and stores its arguments.
+///
+/// Time: O(1)  Space: O(1)
+pub(crate) fn call_position_reads(
+    report: &EffectiveOwnershipReport,
+    imported_fn_names: &HashSet<String>,
+    name: &str,
+    index: usize,
+    is_method: bool,
+) -> bool {
+    let is_user_fn = report.is_local_fn(name) || imported_fn_names.contains(name);
+    if is_method
+        && !is_user_fn
+        && (array_method_is_mutating(name)
+            || map_method_is_mutating(name)
+            || fixed_method_is_mutating(name))
+    {
+        return false;
+    }
+    classify_call_position(
+        Some(name),
+        index,
+        &report.per_fn,
+        &report.declared_writes,
+        imported_fn_names,
+    ) == EffectiveOwnership::Reads
+}

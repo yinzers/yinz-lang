@@ -12,8 +12,8 @@ use ynz_typeck::{
 use crate::{
     artifact::CompiledArtifact,
     emit::{
-        build_frame_layouts_with_resolver, emit_artifact, spike_host_subset, FrameLayout,
-        SuspendSet,
+        build_frame_layouts_with_unions, emit_artifact, spike_host_subset, union_region_roles,
+        FrameLayout, SuspendSet,
     },
     state_machine,
 };
@@ -192,7 +192,7 @@ pub fn frame_layouts_query(
     // Create an inkwell Context to compute LLVM-accurate shape ABI sizes.
     // Context is created here and dropped at the end of this scope — no LLVM
     // types escape into the returned Arc<HashMap> (only u64 sizes escape).
-    let shape_abi_sizes: HashMap<String, u64> = {
+    let (shape_abi_sizes, union_roles) = {
         // Guard G1: same target machine constructor as emit_artifact.
         //
         // Pinned at `PipelineConfig::o0()` deliberately (v0.3-M7 Phase 3, recorded
@@ -228,19 +228,34 @@ pub fn frame_layouts_query(
         // shape's frame slot is sized from the padded struct type automatically (one
         // source, every consumer threaded — authoritative-derivation.md).
         let layout = layout_decisions_query(db, source);
-        let shape_types = crate::shape_types::emit_shape_types(
+        let shape_types = match crate::shape_types::emit_shape_types(
             &ctx,
             &sig_output.shape_table,
             &layout.padded_shapes,
-        );
-        shape_types
+            &target_data,
+        ) {
+            Ok(types) => types,
+            // Codegen builds the same types with `?` and reports the error first.
+            Err(_) => return Arc::new(HashMap::new()),
+        };
+        let mut sizes: HashMap<String, u64> = shape_types
             .named
             .iter()
             .map(|(name, &struct_ty)| {
                 let bytes = target_data.get_abi_size(&struct_ty);
                 (name.clone(), bytes)
             })
-            .collect()
+            .collect();
+        sizes.extend(crate::emit::union_frame_sizes(&codegen_typed, &shape_types));
+        // The same layout call fails in `emit_artifact`'s declaration of the function that
+        // returns or takes the union, which reports the error first (as for the shape types
+        // above), so the empty map is never observed as a live wrong frame size.
+        let roles = match union_region_roles(&codegen_typed, &sig_output.shape_table, &shape_types)
+        {
+            Ok(roles) => roles,
+            Err(_) => return Arc::new(HashMap::new()),
+        };
+        (sizes, roles)
         // ctx and module drop here — no inkwell types escape past this block.
     };
 
@@ -271,13 +286,31 @@ pub fn frame_layouts_query(
             })
     };
 
-    let mut layouts = build_frame_layouts_with_resolver(
+    let mut layouts = build_frame_layouts_with_unions(
         &codegen_typed,
         &effective_suspend_set,
         &base_suspend_set,
         &shape_abi_sizes,
+        &sig_output.shape_table,
+        &union_roles,
         &callee_size_resolver,
     );
+
+    let callee_union_regions = |name: &str| -> Vec<crate::emit::UnionRegion> {
+        let Some(callee_sf) = callee_source_map.get(name) else {
+            return Vec::new();
+        };
+        let callee_layouts = frame_layouts_query(db, *callee_sf);
+        let original = sig_output
+            .imported_fns
+            .get(name)
+            .and_then(|sig| sig.original_name.as_deref());
+        callee_layouts
+            .get(name)
+            .or_else(|| original.and_then(|orig| callee_layouts.get(orig)))
+            .map(|layout| layout.union_regions.clone())
+            .unwrap_or_default()
+    };
 
     // Add FrameLayout stubs for imported suspending callees, keyed by their LOCAL alias
     // name. These stubs carry the callee's real composed total_size (via Guard G2 recursive
@@ -303,6 +336,9 @@ pub fn frame_layouts_query(
                 children: Vec::new(),
                 recursion_slot: None,
                 number_errors_staging_offset: None,
+                // The callee's union slots are part of its call interface: a `wait`ing caller
+                // writes an argument into the callee's own frame at these offsets.
+                union_regions: callee_union_regions(local_name.as_str()),
                 // Imported-callee stubs carry no CPU groups — those belong to the importer's
                 // own frame, not the callee's.
                 cpu_group_slots: Vec::new(),

@@ -136,7 +136,7 @@ store_case!(
 /// (`ynz_string_clone`), under AddressSanitizer, which makes entry allocas dynamic.
 #[test]
 fn entry_allocas_come_before_a_loops_stacksave() {
-    let built = build("v0_3_m9_union_coerce_let.ynz", true);
+    let built = build("v0_3_m9_c3b_or_default.ynz", true);
     let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
     let main_start = ir.find("define i32 @main()").expect("main is emitted");
     let entry: Vec<&str> = ir[main_start..]
@@ -180,8 +180,8 @@ store_case!(
     shape_in_a_maybe_owns_its_strings,
     "v0_3_m9_c3b_maybe_shape.ynz",
     "t-1\nt-1\n",
-    4,
-    "binding or returning a `maybe<Tag>` memcpys the payload shape, so its `name` is the array element's pointer and a release of both frees it twice (High)"
+    3,
+    "returning a `maybe<Tag>` memcpys the payload shape, so its `name` is the array element's pointer and a release of both frees it twice; a binding of the element read (`let found = tags.get(0)`) only reads it and is a view, which owns no string (High)"
 );
 
 store_case!(

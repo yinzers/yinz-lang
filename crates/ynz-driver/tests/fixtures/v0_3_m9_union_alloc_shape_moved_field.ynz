@@ -1,0 +1,44 @@
+// v0.3-M9 C1f (#423) round 2: a shape stored in a shape field moves: the field's heap cell is
+// the only new cell. Correct behavior: prints 200. The counter test pins 500 cells (400 build
+// plus one field cell per round).
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Outer {
+  inner: Holder
+  tag: int
+}
+
+function buildChain() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function makeHolder() -> Holder {
+  let top = buildChain()
+  let holder: Holder = { chain: top, id: 1 }
+  return holder
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let holder = makeHolder()
+    let outer: Outer = { inner: holder, tag: 2 }
+    total = total + outer.tag
+    round = round + 1
+  }
+  print(total)
+}

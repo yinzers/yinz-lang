@@ -177,12 +177,28 @@ pub fn module_signatures_query(
 
     // Shapes first — function signatures need them for type resolution.
     // Pass imported shapes and options so field type annotations can reference them.
-    let shape_table = collect_shapes(
+    let mut shape_table = collect_shapes(
         &parse.module,
         &imported.shapes,
         &imported.options,
         &mut diag_bucket,
     );
+    // An imported shape's union-field variants the importer never named, kept only so codegen
+    // can size the imported shape (a layout-only entry is not resolvable by name). A name that
+    // already means ANOTHER shape here (this module's own, or another import) is refused: the
+    // imported shape would be sized by the wrong variant (`union_variant_name_clash`).
+    for (name, def) in imported.layout_shapes {
+        match shape_table.get(&name) {
+            None => {
+                shape_table.layout_only.insert(name, def);
+            }
+            Some(named) if *named == def => {}
+            Some(named) => {
+                let span = named.defined_at.clone();
+                diag_bucket.push(crate::resolve_import::union_variant_name_clash(&name, span));
+            }
+        }
+    }
     let generic_shape_table = collect_generic_shapes(&parse.module, &mut diag_bucket);
     let sig_table = collect_signatures(&parse.module, &mut diag_bucket, &shape_table);
     let generic_fn_table =
@@ -249,6 +265,8 @@ fn check_query_cycle_initial(
             release_plan: Default::default(),
             generic_call_instances: Default::default(),
             string_moves: Default::default(),
+            heap_moves: Default::default(),
+            view_bindings: Default::default(),
         },
         mono_table: crate::generics::MonomorphizationTable {
             entries: std::collections::BTreeMap::new(),

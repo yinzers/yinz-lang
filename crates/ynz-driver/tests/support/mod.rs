@@ -46,11 +46,11 @@ pub struct Compiled {
 
 /// Build `fixture_name` with `ynz build` in its own temp directory and keep the compiler's
 /// verdict and text. For the suites that assert a program is REFUSED with a teaching diagnostic
-/// (no program is run). `CLICOLOR=0` keeps the text free of escape codes.
+/// (no program is run). `CLICOLOR=0` keeps the text free of escape codes. A project fixture (a
+/// directory) is built as a project, as in [`build`].
 pub fn compile(fixture_name: &str) -> Compiled {
     let directory = tempfile::tempdir().expect("create temp directory");
-    let source = directory.path().join("program.ynz");
-    std::fs::copy(fixture_path(fixture_name), &source).expect("copy fixture");
+    let source = stage_fixture(directory.path(), fixture_name);
     let output = Command::new(env!("CARGO_BIN_EXE_ynz"))
         .arg("build")
         .arg(&source)
@@ -99,6 +99,28 @@ pub struct Built {
     pub ir: PathBuf,
 }
 
+/// Copy `fixture_name` into `directory` and return what `ynz build` takes: `program.ynz` for a
+/// single file, or the `project` directory (copied whole) for a multi-module project.
+fn stage_fixture(directory: &Path, fixture_name: &str) -> PathBuf {
+    let fixture = fixture_path(fixture_name);
+    if !fixture.is_dir() {
+        let source = directory.join("program.ynz");
+        std::fs::copy(&fixture, &source)
+            .unwrap_or_else(|err| panic!("copy fixture {fixture_name}: {err}"));
+        return source;
+    }
+    let project = directory.join("project");
+    std::fs::create_dir(&project).expect("create project directory");
+    for entry in std::fs::read_dir(&fixture)
+        .unwrap_or_else(|err| panic!("read fixture project {fixture_name}: {err}"))
+    {
+        let entry = entry.expect("read fixture project entry");
+        std::fs::copy(entry.path(), project.join(entry.file_name()))
+            .unwrap_or_else(|err| panic!("copy fixture project {fixture_name}: {err}"));
+    }
+    project
+}
+
 /// `ynz build --emit-ir [--no-optimize] <copy of fixture>` into a fresh temp directory.
 /// Panics with the compiler's output when the fixture does not compile (a fixture that fails
 /// to compile is a test bug, never a skip).
@@ -108,25 +130,8 @@ pub struct Built {
 /// is `bin.ll`, one `; file: <path>` section per module.
 pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
     let directory = tempfile::tempdir().expect("create temp directory");
-    let fixture = fixture_path(fixture_name);
-    let is_project = fixture.is_dir();
-    let source = if is_project {
-        let project = directory.path().join("project");
-        std::fs::create_dir(&project).expect("create project directory");
-        for entry in std::fs::read_dir(&fixture)
-            .unwrap_or_else(|err| panic!("read fixture project {fixture_name}: {err}"))
-        {
-            let entry = entry.expect("read fixture project entry");
-            std::fs::copy(entry.path(), project.join(entry.file_name()))
-                .unwrap_or_else(|err| panic!("copy fixture project {fixture_name}: {err}"));
-        }
-        project
-    } else {
-        let source = directory.path().join("program.ynz");
-        std::fs::copy(&fixture, &source)
-            .unwrap_or_else(|err| panic!("copy fixture {fixture_name}: {err}"));
-        source
-    };
+    let is_project = fixture_path(fixture_name).is_dir();
+    let source = stage_fixture(directory.path(), fixture_name);
     let mut command = Command::new(env!("CARGO_BIN_EXE_ynz"));
     command.arg("build").arg(&source).arg("--emit-ir");
     if no_optimize {

@@ -1,0 +1,86 @@
+// v0.3-M9 C1f (#423) round 2: a copy of a value that owns a recursive union's boxes (an explicit
+// `.copy()`, a binding made from a field, an array element and a `maybe` read) shares none of them
+// with its source, and a value MOVED into a store keeps working there. One side is then reassigned
+// (its `next` or `chain` replaced) and the other is read through its whole chain; a copy that shared
+// a box would read a cell the reassigned side no longer owns.
+// Correct behavior: prints `3 2`, `3 1`, `3 1`, `end`; clean under AddressSanitizer at -O0
+// and -O2.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Outer {
+  inner: Holder
+  tag: int
+}
+
+function length(share chain: Node | End) -> int {
+  if (chain) {
+    is Node => {
+      return 1 + length(chain.next)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function buildChain() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function makeHolder() -> Holder {
+  let top = buildChain()
+  let holder: Holder = { chain: top, id: 1 }
+  return holder
+}
+
+function shortChain() -> Node {
+  let stop: End = { flag: true }
+  let only: Node = { value: 9, next: stop }
+  return only
+}
+
+function entrypoint() -> nothing {
+  let original = buildChain()
+  let copied = original.copy()
+  let replacement: Node | End = shortChain()
+  copied.next = replacement
+  print(`${length(original.next) + 1} ${length(copied.next) + 1}`)
+
+  let holder = makeHolder()
+  let outer: Outer = { inner: holder, tag: 2 }
+  let rebound = outer.inner
+  let shorter: Node | End = shortChain()
+  rebound.chain = shorter
+  print(`${length(outer.inner.chain)} ${length(rebound.chain)}`)
+
+  let holders: array<Holder> = []
+  let pushed = makeHolder()
+  holders.add(pushed.copy())
+  holders.add(pushed)
+  let fromArray = holders.get(0)
+  if (fromArray.exists()) {
+    let element = fromArray.value
+    let another: Node | End = shortChain()
+    element.chain = another
+    let again = holders.get(0)
+    if (again.exists()) {
+      print(`${length(again.value.chain)} ${length(element.chain)}`)
+    }
+  }
+  print(`end`)
+}
