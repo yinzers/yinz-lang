@@ -1920,6 +1920,11 @@ fn abi_return_type<'ctx>(
             })?;
             Some((*struct_ty).into())
         }
+        // C1f (#423): an envelope union comes back BY VALUE as its `{tag, data}` pair, like a
+        // `maybe`; the shape payload it points to is a heap cell, never the callee's frame.
+        union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union) => {
+            Some(crate::shape_types::union_slot_type(ctx).into())
+        }
         _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
     })
 }
@@ -3767,6 +3772,19 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .build_store(slot, sv)
                     .map_err(|e| format!("{e}"))?;
                 Ok(slot.into())
+            }
+            // C1f (#423): the returned `{tag, data}` pair lands in a CALLER-owned slot; `none`
+            // (tag UNION_NONE_TAG) is the null value again.
+            union @ Type::Union { .. } if self.envelope_union_variants(&union).is_some() => {
+                let variants = self
+                    .envelope_union_variants(&union)
+                    .ok_or("wrap_abi_call_result: union lost its variants")?;
+                let slot = self
+                    .alloca_in_entry_llvm(self.union_slot_type(), &format!("{site}_union_ret"))?;
+                self.builder
+                    .build_store(slot, val.into_struct_value())
+                    .map_err(|e| format!("{e}"))?;
+                Ok(self.union_slot_to_value(slot, &variants, site)?.into())
             }
             _ => Ok(val),
         }
@@ -6752,6 +6770,26 @@ fn lower_function_with_waits<'ctx, 'g>(
                     .build_return(Some(&i128_val))
                     .map_err(|e| format!("wrapper number ret: {e}"))?;
             }
+            // C1f (#423): the resume fn stored the union's `{tag, data}` pair in the return slot
+            // (same +0/+8 pair layout); return it BY VALUE per `abi_return_type`.
+            union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union) => {
+                let (tag, data) =
+                    state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                let pair_ty = crate::shape_types::union_slot_type(ctx);
+                let mut pair = pair_ty.const_zero();
+                pair = builder
+                    .build_insert_value(pair, tag, 0, "wrap_union_tag")
+                    .map_err(|e| format!("wrapper union tag insert: {e}"))?
+                    .into_struct_value();
+                pair = builder
+                    .build_insert_value(pair, data, 1, "wrap_union_data")
+                    .map_err(|e| format!("wrapper union data insert: {e}"))?
+                    .into_struct_value();
+                builder
+                    .build_return(Some(&pair))
+                    .map_err(|e| format!("wrapper union ret: {e}"))?;
+            }
             Type::Maybe { .. } => {
                 // v0.3-M7 R9: the resume fn stored the maybe envelope's (flag, bits)
                 // pair in the 16-byte return slot (same +0/+8 pair layout as the
@@ -9534,6 +9572,18 @@ fn load_sm_return_value_typed<'ctx>(
             // bind_sm_return_value's I128Value arm will create an i128 alloca for it.
             let i128_val = state_machine::load_return_value_i128(ctx, &cg.builder, frame_ptr, tag)?;
             Ok(i128_val.into())
+        }
+        // C1f (#423): a union-returning callee's resume fn stores the `{tag, data}` pair in the
+        // return slot; rebuild it in a CALLER-owned slot and hand back the value form.
+        Some(union @ Type::Union { .. }) if cg.envelope_union_variants(&union).is_some() => {
+            let variants = cg
+                .envelope_union_variants(&union)
+                .ok_or("sm union return load: lost the variants")?;
+            let (union_tag, union_data) =
+                state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+            let slot = cg.alloca_in_entry_llvm(cg.union_slot_type(), &format!("{tag}_union"))?;
+            cg.store_union_slot_words(slot, union_tag, union_data, tag)?;
+            Ok(cg.union_slot_to_value(slot, &variants, tag)?.into())
         }
         Some(Type::Maybe { .. }) => {
             // v0.3-M7 R9: a maybe-returning callee's resume fn stores the envelope's
@@ -16143,9 +16193,12 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let mut val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
-                // A union return carries a tagged envelope that outlives this resume
-                // invocation (`home_union_on_heap`, `Return` home).
-                if let Some(union_ty) = cg.union_return_slot_ty() {
+                // A union return value rides the 16-byte return slot BY VALUE (below). Only the
+                // `errors` result's 8-byte ok word cannot hold the pair, so that one case keeps
+                // the heap home (`home_union_on_heap`, `Return`).
+                if let (Some(union_ty), Type::ErrorsCapable { .. }) =
+                    (cg.union_return_slot_ty(), cg.resolve_type(&ret_ty))
+                {
                     val = cg.home_union_on_heap(
                         expr,
                         val,
@@ -16477,6 +16530,32 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 stable_bits,
                             )?;
                         }
+                        // C1f (#423): an envelope union's `{tag, data}` pair rides the 16-byte return
+                        // slot by value, like a `maybe`'s pair; a shape payload is cloned to a heap
+                        // cell first (the resume stack dies when this function returns).
+                        union @ Type::Union { .. }
+                            if cg.envelope_union_variants(union).is_some() =>
+                        {
+                            let variants = cg
+                                .envelope_union_variants(union)
+                                .ok_or("sm union return: lost the variants")?;
+                            let scratch =
+                                cg.alloca_in_entry_llvm(cg.union_slot_type(), "sm_union_ret_slot")?;
+                            cg.union_persist_into(
+                                val.into_pointer_value(),
+                                scratch,
+                                &variants,
+                                "sm_union_ret",
+                            )?;
+                            let (tag, data) = cg.load_maybe_env_pair(scratch, "sm_union_ret")?;
+                            state_machine::store_return_value_errors(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                tag,
+                                data,
+                            )?;
+                        }
                         Type::String
                         | Type::BuiltinArray { .. }
                         | Type::BuiltinFixed { .. }
@@ -16618,14 +16697,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 .map_err(|e| format!("void ret: {e}"))?;
         }
         Some(expr) => {
-            let mut val = lower_expr(cg, expr)?;
-            // A union return is a pointer to a tagged envelope that must outlive this frame
-            // (`home_union_on_heap`, `Return` home): never a bare shape, never a slot in
-            // the frame that is about to die.
-            if let Some(union_ty) = cg.union_return_slot_ty() {
-                val =
-                    cg.home_union_on_heap(expr, val, &union_ty, EnvelopeHome::Return, "union_ret")?;
-            }
+            let val = lower_expr(cg, expr)?;
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -16676,6 +16748,30 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     cg.builder
                         .build_return(Some(&env))
                         .map_err(|e| format!("ret maybe: {e}"))?;
+                }
+                // C1f (#423): an envelope union returns its `{tag, data}` pair BY VALUE. The
+                // persist routine copies the pair into a scratch slot and clones a shape
+                // payload into a heap cell, so neither this frame's envelope nor its payload
+                // is read after `ret`.
+                union @ Type::Union { .. } if cg.envelope_union_variants(&union).is_some() => {
+                    let variants = cg
+                        .envelope_union_variants(&union)
+                        .ok_or("union return: lost the variants")?;
+                    let scratch =
+                        cg.alloca_in_entry_llvm(cg.union_slot_type(), "union_ret_slot")?;
+                    cg.union_persist_into(
+                        val.into_pointer_value(),
+                        scratch,
+                        &variants,
+                        "union_ret",
+                    )?;
+                    let pair = cg
+                        .builder
+                        .build_load(cg.union_slot_type(), scratch, "union_ret_pair")
+                        .map_err(|e| format!("ret union load: {e}"))?;
+                    cg.builder
+                        .build_return(Some(&pair))
+                        .map_err(|e| format!("ret union: {e}"))?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {
                     let ptr_v = val.into_pointer_value();
