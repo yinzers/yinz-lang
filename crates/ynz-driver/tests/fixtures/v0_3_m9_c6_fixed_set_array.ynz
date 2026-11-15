@@ -11,6 +11,8 @@ function entrypoint() -> nothing {
   value.set(0, third)
   value[1] = fourth
   let fallback: array<int> = []
-  print(value[0].or(fallback).count())
-  print(value[1].or(fallback).count())
+  let firstItem: array<int> = value[0].or(fallback)
+  let secondItem: array<int> = value[1].or(fallback)
+  print(firstItem.count())
+  print(secondItem.count())
 }

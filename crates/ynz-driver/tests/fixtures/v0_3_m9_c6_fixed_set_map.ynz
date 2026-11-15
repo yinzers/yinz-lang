@@ -13,6 +13,8 @@ function entrypoint() -> nothing {
   let value: fixed<map<string, int> > = [first, second]
   value.set(0, third)
   let fallback: map<string, int> = {}
-  print(value[0].or(fallback).count())
-  print(value[1].or(fallback).count())
+  let firstItem: map<string, int> = value[0].or(fallback)
+  let secondItem: map<string, int> = value[1].or(fallback)
+  print(firstItem.count())
+  print(secondItem.count())
 }

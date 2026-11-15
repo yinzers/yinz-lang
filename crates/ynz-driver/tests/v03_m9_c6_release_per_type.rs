@@ -307,7 +307,7 @@ release_cases!(
     Case {
         declarations: "",
         value_type: "string",
-        setup: "  let labels: array<string> = [`heap string`]\n  let value: string = labels.get(0).or(`none`)\n",
+        setup: "  let labels: array<string> = [`heap string`]\n  let maybeLabel: maybe<string> = labels.get(0)\n  let value: string = maybeLabel.or(`none`)\n",
         read: "  print(value)\n",
     }
 );
@@ -440,14 +440,14 @@ mod string_handed_over_whole {
     handed_over_case!(
         last_use_of_a_binding,
         false,
-        "  let labels: array<string> = [`heap string`]\n  let value: string = labels.get(0).or(`none`)\n",
+        "  let labels: array<string> = [`heap string`]\n  let maybeLabel: maybe<string> = labels.get(0)\n  let value: string = maybeLabel.or(`none`)\n",
         "value"
     );
     handed_over_case!(
         fresh_value,
         false,
-        "  let labels: array<string> = [`heap string`]\n",
-        "labels.get(0).or(`none`)"
+        "  let labels: array<string> = [`heap string`]\n  let maybeLabel: maybe<string> = labels.get(0)\n",
+        "maybeLabel.or(`none`)"
     );
     handed_over_case!(literal, false, "", "`literal`");
 }

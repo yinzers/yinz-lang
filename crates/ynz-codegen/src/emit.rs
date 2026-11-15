@@ -20906,8 +20906,8 @@ fn lower_expr_node<'ctx>(
 /// closure body emitter to generate the matching `ynz_free` / `ynz_array_drop` calls.
 #[derive(Clone, Debug)]
 enum BgArgFreeKind {
-    /// No free call in the closure — primitives (int/float/bool), and a value `release_glue_free_kind`
-    /// then upgrades to `ReleaseGlue` (a string or map the task owns).
+    /// No free call in the closure — primitives (int/float/bool), and a value
+    /// `release_glue_free_kind` then upgrades to `ReleaseGlue` (a string or map the task owns).
     None,
     /// Shape heap copy: call `ynz_free(ptr, byte_size)` after the fn call.
     HeapShape { byte_size: u64 },
@@ -24145,7 +24145,8 @@ fn emit_owned_copy<'ctx>(
         OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
 
         // A `string`: a fresh heap copy, the same one in a body and across a spawn. The copy is
-        // released by its owner: the spawn ladder's release glue, a store's container, or the scope-exit pass.
+        // released by its owner: the spawn ladder's release glue, a store's container, or the
+        // scope-exit pass.
         OwnedCopy::StringClone => {
             let cloned = cg.string_clone_call(val, &format!("{site}_str"))?;
             Ok((cloned.into(), BgArgFreeKind::None))
