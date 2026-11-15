@@ -10,6 +10,7 @@
 //! something the copy did not allocate (a shared array, a doubled free) is reported.
 //!
 //! Covers a deep array copy's items and a spawn-cloned map in a loop.
+//! A plain `string` is the one type whose copy is a bare allocation (no container around it).
 //! High tier: data integrity (a leak per spawn, or a free of memory another holder owns).
 
 mod support;
@@ -272,5 +273,16 @@ release_cases!(
         value_type: "Wire",
         setup: "  let line: channel<int> = channel<int>(2)\n  let value: Wire = { line: line, id: 1 }\n",
         read: "  print(value.id)\n",
+    }
+);
+
+release_cases!(
+    plain_string,
+    "a plain `string` argument's spawn-time clone is freed by nobody, so every spawn leaks one string (High)",
+    Case {
+        declarations: "",
+        value_type: "string",
+        setup: "  let labels: array<string> = [`heap string`]\n  let value: string = labels.get(0).or(`none`)\n",
+        read: "  print(value)\n",
     }
 );
