@@ -1,0 +1,70 @@
+// v0.3-M9 C1f (#423): a `maybe<Thing>` returned by an `errors` function, plain and suspending, and
+// read after the callee's frame is gone. The success value rides the result as the union's slot,
+// `none` its none tag, so the result's ok word points into no frame.
+// Correct behavior: prints `big kept`, `tiny`, `none`, `big kept`, `end`; clean under
+// AddressSanitizer at both optimization levels.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function fetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+  let found = things.get(index)
+  return found
+}
+
+function slowFetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+  wait sleep(1)
+  let found = things.get(index)
+  return found
+}
+
+function clobber(depth: int) -> int {
+  let filler: Big = { label: `filler`, count: depth }
+  return filler.count
+}
+
+function entrypoint() -> nothing {
+  let things: array<Thing> = []
+  let big: Big = { label: `kept`, count: 1 }
+  things.add(big)
+  let tiny: Tiny = { flag: true }
+  things.add(tiny)
+  let index = 0
+  while (index < 3) {
+    let picked = fetch(things, index)
+    let scratch = clobber(index)
+    let value = picked.or(none)
+    if (value.exists()) {
+      print(describe(value.value))
+    }
+    if (value.exists() == false) {
+      print(`none`)
+    }
+    index = index + 1
+  }
+  let slow = wait slowFetch(things, 0)
+  let again = clobber(5)
+  let slowValue = slow.or(none)
+  if (slowValue.exists()) {
+    print(describe(slowValue.value))
+  }
+  print(`end`)
+}
