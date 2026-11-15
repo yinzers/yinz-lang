@@ -286,3 +286,90 @@ release_cases!(
         read: "  print(value)\n",
     }
 );
+
+/// A `string` the spawner no longer holds (its last use is the spawn, a fresh value, a
+/// literal) is handed over as it is, not copied: the task owns it, and its release must free it
+/// once, never twice and never a static.
+mod string_handed_over_whole {
+    use super::*;
+
+    const ARGUMENTS: [(&str, &str, &str); 5] = [
+        (
+            "owned_fresh_value",
+            "  let count: int = 5\n",
+            "`n=${count}`",
+        ),
+        (
+            "owned_last_use_of_a_binding",
+            "  let count: int = 5\n  let value: string = `n=${count}`\n",
+            "value",
+        ),
+        (
+            "last_use_of_a_binding",
+            "  let labels: array<string> = [`heap string`]\n  let value: string = labels.get(0).or(`none`)\n",
+            "value",
+        ),
+        (
+            "fresh_value",
+            "  let labels: array<string> = [`heap string`]\n",
+            "labels.get(0).or(`none`)",
+        ),
+        ("literal", "", "`literal`"),
+    ];
+
+    fn source(setup: &str, argument: &str, suspending_callee: bool) -> String {
+        let callee_body = if suspending_callee {
+            "  wait sleep(1)\n  print(777)\n"
+        } else {
+            "  print(777)\n"
+        };
+        format!(
+            "function show(value: string) -> nothing {{\n{callee_body}}}\n\n\
+             function launch() -> nothing {{\n{setup}  background show({argument})\n}}\n\n\
+             function entrypoint() -> nothing {{\n  launch()\n  wait sleep(200)\n}}\n"
+        )
+    }
+
+    fn assert_runs_clean(suspending_callee: bool) {
+        for (name, setup, argument) in ARGUMENTS {
+            let program = source(setup, argument, suspending_callee);
+            let built = build_source(&program, "c6 handed-over string", false);
+            let (output, counters) = run_counted(&built);
+            assert_eq!(output.exit_code, 0, "{name}\n{program}\n{}", output.stderr);
+            assert_eq!(
+                output.stdout.matches("777\n").count(),
+                1,
+                "{name}\n{program}"
+            );
+            assert!(
+                counters.string_free <= counters.string_alloc,
+                "{name}: {} strings freed for {} allocated\n{program}",
+                counters.string_free,
+                counters.string_alloc
+            );
+            if name.starts_with("owned_") {
+                assert_eq!(
+                    counters.string_alloc, counters.string_free,
+                    "{name}: the task owns the only string and must free it\n{program}"
+                );
+            }
+            let run = run_asan_binary(&build_asan(&built));
+            assert!(
+                !run.stderr.contains("AddressSanitizer"),
+                "{name}: AddressSanitizer reported an error:\n{}\n{program}",
+                run.stderr
+            );
+            assert_eq!(run.exit_code, 0, "{name}\n{}\n{program}", run.stderr);
+        }
+    }
+
+    #[test]
+    fn cpu_callee_frees_the_string_once() {
+        assert_runs_clean(false);
+    }
+
+    #[test]
+    fn state_machine_callee_frees_the_string_once() {
+        assert_runs_clean(true);
+    }
+}

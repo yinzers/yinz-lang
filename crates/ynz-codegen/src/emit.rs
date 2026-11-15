@@ -20890,15 +20890,15 @@ fn lower_expr_node<'ctx>(
 ///
 /// Each `background` arg that was heap-copied (to survive the spawner's frame return) needs
 /// exactly one matching free call inside the closure. Primitives need no free (i64 by-value). A
-/// string the task owns (moved, or an owned copy) gets no free call either: the scope-exit
-/// release pass (C6/C7) owns every string release (`IMP-strings.md` "Storing a string").
+/// string the task owns (moved, or an owned copy) starts as `None` here and is upgraded to
+/// `ReleaseGlue` by `release_glue_free_kind`, like any other value the task owns.
 ///
 /// This enum is produced by `prepare_bg_arg_for_ctx` at the spawn site and consumed by the
 /// closure body emitter to generate the matching `ynz_free` / `ynz_array_drop` calls.
 #[derive(Clone, Debug)]
 enum BgArgFreeKind {
-    /// No free call in the closure — primitives (int/float/bool), and strings (owned by the task,
-    /// released by the scope-exit pass).
+    /// No free call in the closure — primitives (int/float/bool), and a value `release_glue_free_kind`
+    /// then upgrades to `ReleaseGlue` (a string or map the task owns).
     None,
     /// Shape heap copy: call `ynz_free(ptr, byte_size)` after the fn call.
     HeapShape { byte_size: u64 },
@@ -24136,7 +24136,7 @@ fn emit_owned_copy<'ctx>(
         OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
 
         // A `string`: a fresh heap copy, the same one in a body and across a spawn. The copy is
-        // released by its owner: `release_fn` (a store's container, the scope-exit pass).
+        // released by its owner: the spawn ladder's release glue, a store's container, or the scope-exit pass.
         OwnedCopy::StringClone => {
             let cloned = cg.string_clone_call(val, &format!("{site}_str"))?;
             Ok((cloned.into(), BgArgFreeKind::None))
@@ -25703,11 +25703,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 ///
 /// DEFERRED, four fields — the items of a `give` parameter's argument:
 /// - WHAT: every argument of a call whose callee declares any `give` parameter keeps the flat
-///   free, so its items, entries and string fields are not released by the ladder.
+///   free, so its items, entries and string fields are not released by the ladder, and a plain
+///   `string` argument is not released at all.
 /// - WHY: the callee owns what it was given and may move it (store it in a container that is
 ///   itself a ladder slot); a deep release would then free the same pointer twice until a move
 ///   site nulls the slot, which is C7's change.
-/// - COST: the item bytes of such arguments leak per spawn (the container itself is freed).
+/// - COST: the item bytes of such arguments leak per spawn (a container itself is freed; a plain
+///   string leaks whole).
 /// - TRIGGER: C7 (#384) lands move-site slot nulling.
 ///
 /// Pinned by `bg_arg_container_add_gives_row` (integration: a `give` row stored into a container
@@ -25726,6 +25728,8 @@ fn release_glue_free_kind<'ctx>(
         (BgArgFreeKind::HeapArrayPrimitive, Type::BuiltinArray { elem }) => {
             cg.stored_release(elem, ReleaseHome::Element)?.is_some()
         }
+        // A `string` the task owns: the spawn-time clone, or the moved original.
+        (BgArgFreeKind::None, string_like) if is_string_like(string_like) => true,
         (BgArgFreeKind::None, Type::BuiltinMap { .. }) => true,
         (BgArgFreeKind::HeapShape { .. }, Type::Shape { name }) => {
             !cg.shape_field_releases(name)?.is_empty()
