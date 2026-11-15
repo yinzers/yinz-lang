@@ -19,11 +19,12 @@
 //! parameters, so `xs.add(tiny)` on an `array<Big>` read a `Tiny` as a `Big`; three fixtures, one
 //! per receiver group.
 //!
-//! Test count: 17 — one per refused case (two `background` generic calls, three dot-call argument
+//! Test count: 18 — one per refused case (two `background` generic calls, three dot-call argument
 //! counts: too few, too many, through a `dynamic` receiver), the teaching text of the dot-call
 //! form, one per built-in method family (array, `fixed`, map, `maybe`, string, number), one for
 //! the `sensitive`, `errors`-capable and `options` receivers (round 2), three for built-in
-//! argument types (round 3) and the legal generic `background` call that must keep running.
+//! argument types (round 3), one for the remaining typed positions (round 3, Test) and the
+//! legal generic `background` call that must keep running.
 //! Justified above 13: every test is one compile of its own fixture and names one bug on one
 //! receiver family, so a regression in one arm of `builtin_method_argument_count` or
 //! `builtin_method_argument_slots` fails one named test.
@@ -301,6 +302,27 @@ fn v03_m9_c1g_rework_builtin_string_and_errors_method_with_wrong_argument_type_i
             "This argument is `string`, but `substring` expects `int` here.",
             "This argument is `int`, but `contains` expects `string` here.",
             "This argument is `Tiny`, but `or` expects `Big` here.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_fixed_array_remove_map_lookup_and_replace_with_wrong_argument_type_is_rejected(
+) {
+    // BUG (round 3, Test): the position table has its own `fixed<T>` arm, `array.remove`, the
+    // `map` lookups `has`/`remove` and the string `replace`, and no other fixture reaches them:
+    // deleting one arm leaves the three fixtures above green while `fs.contains(tiny)` reads a
+    // `Tiny` as a `Big`. Each fragment below appears for one receiver only. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_argument_type_remaining_arms.ynz",
+        &[
+            "This argument is `string`, but `set` expects `int` here.",
+            "This argument is `string`, but `get` expects `int` here.",
+            "This argument is `Tiny`, but `contains` expects `Big` here.",
+            "This argument is `Tiny`, but `remove` expects `Big` here.",
+            "This argument is `int`, but `has` expects `string` here.",
+            "This argument is `int`, but `remove` expects `string` here.",
+            "This argument is `int`, but `replace` expects `string` here.",
         ],
     );
 }
