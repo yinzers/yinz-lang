@@ -223,3 +223,19 @@ store_case!(
     4,
     "`.copy()` of a `map<string, int>` or `map<int, string>` clones the wrong side: an `int` read as a string pointer (crash), or the string side shared with the source (High)"
 );
+
+store_case!(
+    fixed_index_assign,
+    "v0_3_m9_c3b_fixed_index_assign.ynz",
+    "fresh-3\nnamed\nfresh-3\n",
+    6,
+    "`list[i] = value` on a `fixed<string>` stores a still-read local or an element read by pointer (two owners), or copies a fresh or last-use string (High)"
+);
+
+store_case!(
+    assign_after_move,
+    "v0_3_m9_c3b_assign_after_move.ynz",
+    "first-5\n",
+    2,
+    "a binding reassigned after its string moved out frees or aliases the moved string (High)"
+);
