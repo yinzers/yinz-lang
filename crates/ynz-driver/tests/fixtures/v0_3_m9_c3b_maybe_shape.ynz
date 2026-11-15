@@ -1,0 +1,28 @@
+// v0.3-M9 C3b fixture: a `maybe<Tag>` whose payload shape holds a string field owns that string
+// once it is bound or stored: the payload copy copies the string with it.
+// Allocations: `t-1` is fresh and stored by move 1; `let found = tags.get(0)` copies the payload
+// shape's `name` 1; `pick` returns a payload copy 1 and `let picked = pick(tags)` copies it
+// again 1. Total 1+1+1+1 = 4.
+// Expected output: one value per line below.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function pick(tags: array<Tag>) -> maybe<Tag> {
+  return tags.get(0)
+}
+
+function entrypoint() -> nothing {
+  let n: int = 1
+  let tags: array<Tag> = [{ name: `t-${n}`, id: 1 }]
+  let found = tags.get(0)
+  if (found.exists()) {
+    print(found.value.name)
+  }
+  let picked = pick(tags)
+  if (picked.exists()) {
+    print(picked.value.name)
+  }
+}

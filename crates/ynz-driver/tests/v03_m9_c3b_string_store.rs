@@ -167,3 +167,19 @@ store_case!(
     11,
     "`.copy()` of a shape or a map, and a `maybe<string>` stored in a field or returned, hold the source's string pointer, so releasing both frees it twice (High)"
 );
+
+store_case!(
+    array_of_shapes_copy_has_strings_of_its_own,
+    "v0_3_m9_c3b_array_shape_copy.ynz",
+    "t-1\nu-1\nt-1\nu-1\n",
+    4,
+    "`array<Tag>.copy()` memcpys each element, so the copy's `name` fields hold the original's string pointers and releasing both frees them twice (High)"
+);
+
+store_case!(
+    shape_in_a_maybe_owns_its_strings,
+    "v0_3_m9_c3b_maybe_shape.ynz",
+    "t-1\nt-1\n",
+    4,
+    "binding or returning a `maybe<Tag>` memcpys the payload shape, so its `name` is the array element's pointer and a release of both frees it twice (High)"
+);

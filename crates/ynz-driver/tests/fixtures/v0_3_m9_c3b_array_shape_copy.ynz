@@ -1,0 +1,22 @@
+// v0.3-M9 C3b fixture: `.copy()` of an `array<Tag>` whose elements hold a string field gives the
+// copy strings of its own, so releasing both arrays frees each string once.
+// Allocations: the two element names are fresh and stored by move 2; `tags.copy()` copies each
+// element's `name` 2. Total 2+2 = 4.
+// Expected output: one value per line below.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let n: int = 1
+  let tags: array<Tag> = [{ name: `t-${n}`, id: 1 }, { name: `u-${n}`, id: 2 }]
+  let copied = tags.copy()
+  for (tag in tags) {
+    print(tag.name)
+  }
+  for (tag in copied) {
+    print(tag.name)
+  }
+}
