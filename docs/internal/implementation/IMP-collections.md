@@ -522,7 +522,9 @@ to alias, so the snapshot is forced — and it is consistent with D12's value-se
 
 **Teaching note (the single most surprising divergence for the target audience):** TypeScript/JS
 developers expect aliasing here — in TS, objects are references, so push-then-mutate changes what
-the array sees. In Yinz, the collection stores a snapshot taken at the assignment:
+the array sees. In Yinz a store hands the source over (`IMP-ownership.md`, "Stores are sinks";
+`git log --grep="hands it over"`), so the source name cannot be read or mutated after the store.
+To keep working with the source, store a copy; the collection holds a snapshot taken at the store:
 
 ```ynz
 shape Position {
@@ -531,12 +533,12 @@ shape Position {
 }
 
 let path: array<Position> = []
-let p: Position = { x: 1, y: 2 }
-path.add(p)
-p.x = 99
-// The stored element still has x == 1 — .add() snapshotted p's bytes at the call.
-// In TypeScript, path[0] would alias p and show x == 99.
-// To change the stored element, write through the collection: path[0] = { x: 99, y: 2 }
+let p: Position = { x: 1.0, y: 2.0 }
+path.add(p.copy())
+p.x = 99.0
+// The stored element still has x == 1.0 — the copy was taken at the call.
+// Without `.copy()`, the read of `p` on the next line is refused.
+// To change the stored element, write through the collection: path[0] = { x: 99.0, y: 2.0 }
 ```
 
 The user spec ([`REF-collections.md`](../../reference/REF-collections.md)) must keep carrying this
