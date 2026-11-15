@@ -127,3 +127,35 @@ store_case!(
     5,
     "`fixed<string>.copy()` is refused once a string is not plain bits, or builds but shares its strings with the original (High: a program that built stops building; two owners of one string)"
 );
+
+/// Every `alloca` of a function's entry block comes before the loop's `llvm.stacksave`.
+///
+/// Bug caught (High: memory safety): an entry-block slot created after a loop was lowered sat
+/// after that loop's `stacksave`, so the back-edge `stackrestore` released a live local's slot
+/// and a callee's frame overwrote it. It showed as a crash only once a callee's frame grew
+/// (`ynz_string_clone`), under AddressSanitizer, which makes entry allocas dynamic.
+#[test]
+fn entry_allocas_come_before_a_loops_stacksave() {
+    let built = build("v0_3_m9_union_coerce_let.ynz", true);
+    let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
+    let main_start = ir.find("define i32 @main()").expect("main is emitted");
+    let entry: Vec<&str> = ir[main_start..]
+        .lines()
+        .skip(1)
+        .take_while(|line| {
+            !(line.ends_with(':') || line.contains(": ")) || line.starts_with("entry")
+        })
+        .collect();
+    let stacksave = entry
+        .iter()
+        .position(|line| line.contains("@llvm.stacksave"))
+        .expect("the fixture's `while` takes a stacksave in the entry block");
+    let late_allocas: Vec<&&str> = entry[stacksave..]
+        .iter()
+        .filter(|line| line.contains("= alloca"))
+        .collect();
+    assert!(
+        late_allocas.is_empty(),
+        "entry-block allocas after the loop's stacksave would be released by its stackrestore: {late_allocas:?}"
+    );
+}

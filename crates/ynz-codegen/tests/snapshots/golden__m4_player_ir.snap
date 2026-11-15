@@ -23,6 +23,8 @@ declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) #1
 
 declare void @ynz_siphash_init() local_unnamed_addr
 
+declare ptr @ynz_string_clone(ptr) local_unnamed_addr
+
 declare void @ynz_rt_init() local_unnamed_addr
 
 declare void @ynz_rt_shutdown() local_unnamed_addr
@@ -65,10 +67,11 @@ define noundef i32 @main() local_unnamed_addr {
 heal.exit:
   tail call void @ynz_siphash_init()
   tail call void @ynz_rt_init()
-  %puts.i = tail call i32 @puts(ptr nonnull dereferenceable(1) getelementptr inbounds ({ i64, [8 x i8] }, ptr @bts, i64 0, i32 1)), !noalias !0
+  %field_str_str = tail call ptr @ynz_string_clone(ptr nonnull getelementptr inbounds ({ i64, [8 x i8] }, ptr @bts, i64 0, i32 1))
+  %puts.i = tail call i32 @puts(ptr nonnull dereferenceable(1) %field_str_str), !noalias !0
   %int_str = tail call ptr @ynz_int_to_string(i64 120)
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
-  %puts.i8 = tail call i32 @puts(ptr nonnull dereferenceable(1) getelementptr inbounds ({ i64, [8 x i8] }, ptr @bts, i64 0, i32 1))
+  %puts.i8 = tail call i32 @puts(ptr nonnull dereferenceable(1) %field_str_str)
   tail call void @ynz_rt_shutdown()
   ret i32 0
 }

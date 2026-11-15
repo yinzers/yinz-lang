@@ -2366,6 +2366,31 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// Move the builder to where a new entry-block alloca belongs: after the entry block's
+    /// existing leading allocas and before its first other instruction, so every entry alloca
+    /// executes before anything else in the function.
+    ///
+    /// Why not "at the end of the entry block": a loop's `llvm.stacksave` is an entry-block
+    /// instruction, and `llvm.stackrestore` releases every alloca executed after it. An alloca
+    /// added at the end of the entry block after a loop was lowered sits after that stacksave,
+    /// so the back-edge restore would hand its slot back to the stack and a callee's frame
+    /// would overwrite a live local (AddressSanitizer turns entry allocas into dynamic ones,
+    /// which exposed it: `v03_m9_union_coerce_let` once a callee's frame grew). Allocas at the
+    /// top of the entry block are never after a stacksave.
+    ///
+    /// O(k) time for k instructions before the first non-alloca one.
+    fn position_for_entry_alloca(&self, entry_bb: BasicBlock<'ctx>) {
+        let mut instruction = entry_bb.get_first_instruction();
+        while let Some(current) = instruction {
+            if current.get_opcode() != inkwell::values::InstructionOpcode::Alloca {
+                self.builder.position_before(&current);
+                return;
+            }
+            instruction = current.get_next_instruction();
+        }
+        self.builder.position_at_end(entry_bb);
+    }
+
     /// Build an alloca in the function's ENTRY block, regardless of where the builder
     /// currently points. LLVM SSA requires allocas to dominate every use; placing them
     /// in the entry block is the canonical way to satisfy this for values that may be
@@ -2386,11 +2411,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // We save and restore the builder's current insertion point so the caller's
         // ongoing block emission is unaffected.
         let saved_bb = self.builder.get_insert_block();
-        if let Some(term) = entry_bb.get_terminator() {
-            self.builder.position_before(&term);
-        } else {
-            self.builder.position_at_end(entry_bb);
-        }
+        self.position_for_entry_alloca(entry_bb);
         let slot = self.alloca(ty, name)?;
         // Restore the builder to wherever it was before we moved it.
         if let Some(bb) = saved_bb {
@@ -2416,11 +2437,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get_first_basic_block()
             .ok_or_else(|| format!("alloca_in_entry_llvm: no entry block for `{name}`"))?;
         let saved_bb = self.builder.get_insert_block();
-        if let Some(term) = entry_bb.get_terminator() {
-            self.builder.position_before(&term);
-        } else {
-            self.builder.position_at_end(entry_bb);
-        }
+        self.position_for_entry_alloca(entry_bb);
         let slot = self
             .builder
             .build_alloca(llvm_ty, name)
@@ -14738,7 +14755,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                         // STABLE: shape/maybe values heap-clone via the ONE marshalling
                         // choke point (fix round 4 — the round-3 closer's probe showed
                         // slots aliasing the loop binding's reused storage).
-                        let elem_val = own_string_for_store(cg, elem_val, &elem_ty, "fixed_ia_str")?;
+                        let elem_val =
+                            own_string_for_store(cg, elem_val, &elem_ty, "fixed_ia_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty, "fixed_ia_val")?;
                         let arr_ptr = recv_val.into_pointer_value();
                         let gep = unsafe {
@@ -17230,7 +17248,8 @@ fn lower_expr_node<'ctx>(
                         // bits must be stable (heap-cloned via the ONE choke point, fix
                         // round 4), or a later mutation of the source binding silently
                         // rewrites the stored element.
-                        let elem_val = own_string_for_store(cg, elem_val, &elem_ty2, "fixed_lit_str")?;
+                        let elem_val =
+                            own_string_for_store(cg, elem_val, &elem_ty2, "fixed_lit_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty2, "fixed_lit_val")?;
                         let idx = cg.i64().const_int(i as u64, false);
                         let gep = unsafe {
@@ -20767,7 +20786,11 @@ fn emit_owned_copy<'ctx>(
         OwnedCopy::StringClone => {
             let cloned = cg
                 .builder
-                .build_call(cg.rt.ynz_string_clone, &[val.into()], &format!("{site}_str"))
+                .build_call(
+                    cg.rt.ynz_string_clone,
+                    &[val.into()],
+                    &format!("{site}_str"),
+                )
                 .map_err(|e| format!("{site} string clone: {e}"))?
                 .try_as_basic_value()
                 .basic()
