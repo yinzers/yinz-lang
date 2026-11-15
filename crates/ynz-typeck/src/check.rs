@@ -2093,7 +2093,10 @@ impl<'b> Checker<'b> {
                 continue;
             }
             let default_ty = self.infer_expr(default_expr, Some(&field_ty));
-            if default_ty == Type::Error || field_ty == Type::Error {
+            // An unknown name inside a union (`Big | Missing`) leaves a nested `Error`: it was
+            // already reported at the annotation, so a second error naming `unknown` would only
+            // repeat it.
+            if default_ty == Type::Error || type_contains_error(&field_ty) {
                 continue;
             }
             if can_assign(&field_ty, &default_ty) {
@@ -10420,6 +10423,28 @@ fn is_envelope_union(candidate: &Type) -> bool {
         Type::Union { variants } => variants
             .iter()
             .any(|variant| matches!(variant, Type::Shape { .. })),
+        _ => false,
+    }
+}
+
+/// Whether `ty` is, or holds anywhere inside it, the `Error` placeholder an unresolvable type
+/// name leaves behind. Callers use it to skip a check whose slot type is already reported.
+///
+/// Time: O(size of the type)  Space: O(depth of the type)
+fn type_contains_error(ty: &Type) -> bool {
+    match ty {
+        Type::Error => true,
+        Type::Union { variants } => variants.iter().any(type_contains_error),
+        Type::Generic { args, .. } => args.iter().any(type_contains_error),
+        Type::BuiltinArray { elem }
+        | Type::BuiltinFixed { elem, .. }
+        | Type::BuiltinChannel { elem }
+        | Type::Maybe { inner: elem }
+        | Type::ErrorsCapable { inner: elem }
+        | Type::Sensitive { inner: elem } => type_contains_error(elem),
+        Type::BuiltinMap { key, val } | Type::MapEntry { key, val } => {
+            type_contains_error(key) || type_contains_error(val)
+        }
         _ => false,
     }
 }
