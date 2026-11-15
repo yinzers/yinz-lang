@@ -2021,6 +2021,19 @@ impl<'b> Checker<'b> {
                              that dangling range produces zero iterations (silent wrong output). \
                              See design/concurrency.md 'UnsupportedCrossingLocalType'.",
                         ),
+                        Type::ErrorsCapable { .. } => (
+                            format!(
+                                "Handle the `errors` result and unwrap the `maybe` before the \
+                                 `wait` (for example `let value = {crossing_name}.or(none)`), and \
+                                 carry only the plain values you need after the suspension."
+                            ),
+                            "The `maybe` inside an `errors` result views a union slot on the \
+                             stack of the function that bound it, and no frame region holds that \
+                             slot across a `wait`. When the `wait` suspends the function its stack \
+                             frame is freed, so a read after the `wait` would see a dead slot and \
+                             quietly report `none` instead of the value. \
+                             See design/concurrency.md 'UnsupportedCrossingLocalType'.",
+                        ),
                         _ => (
                             format!(
                                 "Extract the inner value before the `wait`, or restructure so \
