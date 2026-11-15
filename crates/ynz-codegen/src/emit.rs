@@ -4144,13 +4144,18 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// #423 replaces them. Two homes, each costing two counted allocations (envelope + payload
     /// cell) per present value, freed by no pass yet:
     /// - `Heap`: an argument staged into a suspending (`wait`ed) callee's frame, when
-    ///   `lower_expr` just wrapped it (a frame slot would die with the resume invocation). A
-    ///   union VALUE passes through: its binding already homed it.
+    ///   `lower_expr` just wrapped it (a frame slot would die with the resume invocation), and a
+    ///   hidden shape-field default wrapped by the shape's defaults initializer (its frame ends
+    ///   at the initializer's `ret`). A union VALUE passes through: its binding already homed it.
     /// - `Return`: a `return`ed union value, unless it is a call result (every union return
     ///   already promoted, so the caller got a heap cell). A union a callee built itself, a
     ///   returned PARAMETER and a freshly wrapped value all promote.
     ///
     /// A non-envelope union (no shape variant) is the raw pointer and passes through.
+    ///
+    /// Frame-homed envelopes that can still outlive their frame (#423's by-value envelope ends
+    /// them): the element of `array.add` / `map.set`, and a plain variant stored by a shape
+    /// literal into a union field of a shape that leaves the frame.
     ///
     /// Time: O(1) + the heap-cell copy  Space: O(1), two counted heap cells per present value
     fn home_union_on_heap(
