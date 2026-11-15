@@ -17210,6 +17210,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                                 .build_gep(cg.i64(), arr_ptr, &[idx_val], "fixed_set_elem")
                                 .map_err(|e| format!("fixed_set gep: {e}"))?
                         };
+                        release_replaced_fixed_cell(cg, gep, &elem_ty, "fixed_ia_old")?;
                         cg.builder
                             .build_store(gep, bits)
                             .map_err(|e| format!("{e}"))?;
@@ -19497,6 +19498,49 @@ fn release_call_copies<'ctx>(cg: &Cg<'ctx, '_>, copies: &CallCopies<'ctx>) -> Re
     for (value, ty) in copies {
         release_owned_read(cg, *value, ty, "call_arg")?;
     }
+    Ok(())
+}
+
+/// Release the item a `fixed` list cell holds before a write replaces it: a `fixed<string>` cell
+/// holds a string, a `fixed<Shape>` cell a heap cell owning the shape (`release_step`'s `Fixed`).
+/// The same glue an array `set` and a shape field assignment replace with (`stored_release`), so
+/// one dispatch frees every overwritten item. A cell no write has filled holds null: nothing to
+/// release. Other item types own no heap a copy made.
+///
+/// O(1) time at the call site plus the item's release; O(1) space.
+fn release_replaced_fixed_cell<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    cell: PointerValue<'ctx>,
+    element_type: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let element_type = cg.resolve_type(element_type);
+    if !(is_string_like(&element_type) || matches!(element_type, Type::Shape { .. })) {
+        return Ok(());
+    }
+    let Some(glue) = cg.stored_release(&element_type, ReleaseHome::Field)? else {
+        return Ok(());
+    };
+    let old = cg
+        .builder
+        .build_load(cg.ptr(), cell, &format!("{site}_old"))
+        .map_err(|err| format!("fixed release load {site}: {err}"))?
+        .into_pointer_value();
+    let is_set = cg
+        .builder
+        .build_is_not_null(old, &format!("{site}_old_set"))
+        .map_err(|err| format!("fixed release null check {site}: {err}"))?;
+    let release_bb = cg.append_block(&format!("{site}_old_release"));
+    let done_bb = cg.append_block(&format!("{site}_old_done"));
+    cg.builder
+        .build_conditional_branch(is_set, release_bb, done_bb)
+        .map_err(|err| format!("fixed release branch {site}: {err}"))?;
+    cg.builder.position_at_end(release_bb);
+    cg.call_stored_release(glue, cell, site)?;
+    cg.builder
+        .build_unconditional_branch(done_bb)
+        .map_err(|err| format!("fixed release join {site}: {err}"))?;
+    cg.builder.position_at_end(done_bb);
     Ok(())
 }
 
@@ -26603,6 +26647,7 @@ fn lower_fixed_method<'ctx>(
                     .build_gep(cg.i64(), arr, &[idx], "fs_elem")
                     .map_err(|e| format!("{e}"))?
             };
+            release_replaced_fixed_cell(cg, gep, &vty, "fs_old")?;
             cg.builder
                 .build_store(gep, bits)
                 .map_err(|e| format!("{e}"))?;
