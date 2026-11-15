@@ -15,13 +15,18 @@
 //! too. The type checker never counted their arguments, so `xs.add()` panicked the code generator
 //! and `n.toString(1, 2)` dropped its arguments; each method family has its own fixture.
 //!
-//! Test count: 14 — one per refused case (two `background` generic calls, three dot-call argument
+//! Round 3 (security fixer): a built-in method's argument TYPES were never compared with its
+//! parameters, so `xs.add(tiny)` on an `array<Big>` read a `Tiny` as a `Big`; three fixtures, one
+//! per receiver group.
+//!
+//! Test count: 17 — one per refused case (two `background` generic calls, three dot-call argument
 //! counts: too few, too many, through a `dynamic` receiver), the teaching text of the dot-call
 //! form, one per built-in method family (array, `fixed`, map, `maybe`, string, number), one for
-//! the `sensitive`, `errors`-capable and `options` receivers (round 2) and the legal generic
-//! `background` call that must keep running. Justified above 13: every test is one compile of
-//! its own fixture and names one bug on one receiver family, so a regression in one counting arm
-//! of `builtin_method_argument_count` fails one named test.
+//! the `sensitive`, `errors`-capable and `options` receivers (round 2), three for built-in
+//! argument types (round 3) and the legal generic `background` call that must keep running.
+//! Justified above 13: every test is one compile of its own fixture and names one bug on one
+//! receiver family, so a regression in one arm of `builtin_method_argument_count` or
+//! `collection_method_arg_slots` fails one named test.
 
 mod support;
 
@@ -248,6 +253,53 @@ fn v03_m9_c1g_rework_builtin_method_on_a_wrapped_receiver_with_wrong_argument_co
             "`or` takes 2 argument(s), but 1 were given.",
             "`failed` takes 1 argument(s), but 2 were given.",
             "`toString` takes 1 argument(s), but 2 were given.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_array_method_with_wrong_argument_type_is_rejected() {
+    // BUG (round 3, Security): only the count of a built-in method's arguments was checked, not
+    // their types. `xs.add(tiny)`, `xs.set(0, tiny)` and `xs.contains(tiny)` on an `array<Big>`
+    // compiled and read the 1-byte `Tiny` as a 16-byte `Big` (ASan stack-buffer-overflow READ);
+    // `xs.get(`zero`)` panicked the code generator. TIER: High (type checker, memory safety).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_argument_type_array.ynz",
+        &[
+            "This argument is `Tiny`, but `add` expects `Big` here.",
+            "This argument is `Tiny`, but `set` expects `Big` here.",
+            "This argument is `Tiny`, but `contains` expects `Big` here.",
+            "This argument is `string`, but `get` expects `int` here.",
+            "Pass a `Big` value.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_map_and_maybe_method_with_wrong_argument_type_is_rejected() {
+    // BUG (round 3, Security): `m.set(`a`, tiny)` on a `map<string, Big>` and `nobody.or(tiny)`
+    // on a `maybe<Big>` compiled and read the `Tiny` as a `Big` (ASan stack-buffer-overflow
+    // READ); `m.get(12345)` failed LLVM verification. TIER: High (type checker, memory safety).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_argument_type_map_maybe.ynz",
+        &[
+            "This argument is `Tiny`, but `set` expects `Big` here.",
+            "This argument is `int`, but `get` expects `string` here.",
+            "This argument is `Tiny`, but `or` expects `Big` here.",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_c1g_rework_builtin_string_and_errors_method_with_wrong_argument_type_is_rejected() {
+    // BUG (round 3, Security): `s.substring(`a`, `b`)` on a `string` and on a `sensitive string`
+    // panicked the code generator; `result.or(tiny)` on a `Big errors` result compiled with a
+    // `Tiny` fallback that is read as a `Big` when the call fails. TIER: High (type checker).
+    assert_rejected_with(
+        "v0_3_m9_c1g_rework_builtin_argument_type_string_errors.ynz",
+        &[
+            "This argument is `string`, but `substring` expects `int` here.",
+            "This argument is `Tiny`, but `or` expects `Big` here.",
         ],
     );
 }

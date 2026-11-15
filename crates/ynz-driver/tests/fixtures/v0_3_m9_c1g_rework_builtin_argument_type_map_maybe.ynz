@@ -1,0 +1,25 @@
+// v0.3-M9 C1g rework round 3 (security): built-in `map` and `maybe` methods receive an argument
+// of the wrong type. Correct behavior: does not compile — each argument is compared with the
+// method's parameter, with the plain call form's text.
+// Pre-fix failure (ASan, 2eabaf7): `m.set(`a`, tiny)` and `nobody.or(tiny)` compiled and read
+// the 1-byte `Tiny` as a 16-byte `Big` (stack-buffer-overflow READ); `m.get(12345)` failed LLVM
+// verification (a compiler-bug report).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let m: map<string, Big> = {}
+  m.set(`a`, tiny)
+  let got = m.get(12345)
+  let nobody: maybe<Big> = none
+  let picked = nobody.or(tiny)
+  print(got.exists().toString())
+  print(picked.count.toString())
+}
