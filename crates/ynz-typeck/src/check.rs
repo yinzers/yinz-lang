@@ -8025,19 +8025,22 @@ impl<'b> Checker<'b> {
     }
 
     /// Report a type annotation that gives type arguments to a name that is not a generic shape
-    /// declared in this file (`Nope<int>`, or a plain shape such as `Big<int>`).
+    /// declared in this file: an unknown name (`Nope<int>`) or a known type that takes none (a
+    /// plain shape such as `Big<int>`, `string<int>`, or a type parameter `T<int>`).
     ///
     /// Time: O(1)  Space: O(1)
     fn report_non_generic_type_name(&mut self, name: &str, name_span: &SourceSpan) {
         let is_plain_type = self.shape_table.contains(name)
             || self.options_table.contains(name)
-            || self.union_aliases.contains_key(name);
+            || self.union_aliases.contains_key(name)
+            || self.type_param_scope.contains_key(name)
+            || matches!(name, "string" | "range" | "Frame" | "SourceLoc");
         if is_plain_type {
             self.diags.push(Diagnostic::error(
                 name_span.clone(),
                 format!("`{name}` does not take type arguments."),
                 format!("Write `{name}` without the `<...>`."),
-                format!("`{name}` is declared without type parameters, so it is one fixed type; only a shape declared as `shape {name}<T> {{ ... }}` takes type arguments."),
+                format!("`{name}` is one fixed type with no type parameters; only a shape declared with type parameters, like `shape Pair<T> {{ ... }}`, takes type arguments."),
             ));
         } else {
             self.diags.push(Diagnostic::error(

@@ -640,3 +640,25 @@ function entrypoint() -> nothing {
         "`map` takes 2 type arguments.",
     );
 }
+
+#[test]
+fn v03_m9_type_arguments_on_a_built_in_or_type_parameter_name_say_it_takes_none() {
+    // BUG (teaching surface): `string<int>` and `T<int>` name a type that exists, but the
+    // resolver's fall-through said "`string` is not a known type", which misstates the mistake.
+    assert_one_error_saying(
+        r#"
+function entrypoint() -> nothing {
+  let label: string<int> = `a`
+}
+"#,
+        "`string` does not take type arguments.",
+    );
+    assert_one_error_saying(
+        r#"
+function hold<T>(give value: T<int>) -> nothing { }
+
+function entrypoint() -> nothing { }
+"#,
+        "`T` does not take type arguments.",
+    );
+}
