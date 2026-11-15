@@ -5477,6 +5477,77 @@ mod release_walk_tests {
         }
     }
 
+    static DUPLICATE_KEY_RELEASES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static REPLACED_VALUE_RELEASES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn record_duplicate_key(key: *mut u8) {
+        DUPLICATE_KEY_RELEASES.lock().unwrap().push(key as usize);
+    }
+    unsafe extern "C" fn record_replaced_value(value: *mut u8) {
+        REPLACED_VALUE_RELEASES.lock().unwrap().push(value as usize);
+    }
+
+    /// Bug: a `set` over a present string key releases the stored key (the map keeps the key it
+    /// owns, so the next lookup reads freed bytes), or fails to release the duplicate key it was
+    /// handed (a leak per overwrite), or fails to release the value it replaces. The stored key
+    /// itself is handed back in (a read of the map's own key) and must be left alone. High: data
+    /// integrity.
+    #[test]
+    fn a_set_over_a_present_key_releases_the_duplicate_key_and_the_replaced_value_only() {
+        unsafe {
+            let map = ynz_map_new(8);
+            let stored_key = ynz_string_clone(c"key".as_ptr().cast());
+            let duplicate_key = ynz_string_clone(c"key".as_ptr().cast());
+            let first_value: usize = 0xAAA0;
+            let second_value: usize = 0xBBB0;
+            let third_value: usize = 0xCCC0;
+            let set = |key: *const u8, value: &usize| {
+                ynz_map_set_str(
+                    map,
+                    key,
+                    value as *const usize as *const u8,
+                    Some(record_duplicate_key),
+                    Some(record_replaced_value),
+                    0,
+                )
+            };
+            set(stored_key, &first_value);
+            assert!(
+                DUPLICATE_KEY_RELEASES.lock().unwrap().is_empty(),
+                "an insert replaces nothing"
+            );
+
+            set(duplicate_key, &second_value);
+            assert_eq!(
+                *DUPLICATE_KEY_RELEASES.lock().unwrap(),
+                vec![duplicate_key as usize],
+                "the key copy the set was handed is released"
+            );
+            assert_eq!(
+                *REPLACED_VALUE_RELEASES.lock().unwrap(),
+                vec![first_value],
+                "the value the set replaced is released"
+            );
+
+            set(stored_key, &third_value);
+            assert_eq!(
+                DUPLICATE_KEY_RELEASES.lock().unwrap().len(),
+                1,
+                "the stored key handed back in is the map's own and is not released"
+            );
+            assert_eq!(
+                *REPLACED_VALUE_RELEASES.lock().unwrap(),
+                vec![first_value, second_value]
+            );
+            ynz_string_release(duplicate_key);
+            ynz_map_release(map, Some(release_string_glue), None, 0);
+        }
+    }
+
+    unsafe extern "C" fn release_string_glue(key: *mut u8) {
+        ynz_string_release(key as *const u8);
+    }
+
     /// Bug: a null container (a moved-out slot) makes the release dereference null.
     #[test]
     fn releasing_a_null_container_is_a_no_op() {

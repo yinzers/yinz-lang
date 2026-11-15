@@ -45,8 +45,8 @@ fn program(case: &Case, suspending_callee: bool, spawns: usize) -> String {
     )
 }
 
-/// `(alloc, free)` of one run of the program.
-fn counted_run(case: &Case, suspending_callee: bool, spawns: usize) -> (u64, u64) {
+/// `(cell alloc, cell free, string alloc, string free)` of one run of the program.
+fn counted_run(case: &Case, suspending_callee: bool, spawns: usize) -> (u64, u64, u64, u64) {
     let source = program(case, suspending_callee, spawns);
     let built = build_source(&source, "c6 per-type program", false);
     let (output, counters) = run_counted(&built);
@@ -56,26 +56,36 @@ fn counted_run(case: &Case, suspending_callee: bool, spawns: usize) -> (u64, u64
         spawns,
         "every spawned task must have run to completion before the counters are read:\n{source}"
     );
-    (counters.alloc, counters.free)
+    (
+        counters.alloc,
+        counters.free,
+        counters.string_alloc,
+        counters.string_free,
+    )
 }
 
-/// Three more spawns allocate and free exactly the same number of cells: whatever the task's
-/// copy allocated, its release freed.
+/// Three more spawns allocate and free exactly the same number of cells and of heap strings:
+/// whatever the task's copy allocated, its release freed.
 fn assert_spawns_balance(case: &Case, suspending_callee: bool) {
-    let (alloc_one, free_one) = counted_run(case, suspending_callee, 1);
-    let (alloc_four, free_four) = counted_run(case, suspending_callee, 4);
+    let (alloc_one, free_one, string_alloc_one, string_free_one) =
+        counted_run(case, suspending_callee, 1);
+    let (alloc_four, free_four, string_alloc_four, string_free_four) =
+        counted_run(case, suspending_callee, 4);
     let extra_allocs = alloc_four - alloc_one;
     let extra_frees = free_four - free_one;
+    let extra_string_allocs = string_alloc_four - string_alloc_one;
+    let extra_string_frees = string_free_four - string_free_one;
     assert!(
-        extra_allocs > 0,
+        extra_allocs + extra_string_allocs > 0,
         "three more spawns allocated nothing: the program does not copy its argument\n{}",
         program(case, suspending_callee, 4)
     );
     assert_eq!(
-        extra_allocs,
-        extra_frees,
-        "three more spawns allocated {extra_allocs} cells and freed {extra_frees}: the task's \
-         copy of `{}` is not released\n{}",
+        (extra_allocs, extra_string_allocs),
+        (extra_frees, extra_string_frees),
+        "three more spawns allocated {extra_allocs} cells and {extra_string_allocs} strings and \
+         freed {extra_frees} cells and {extra_string_frees} strings: the task's copy of `{}` is \
+         not released\n{}",
         case.value_type,
         program(case, suspending_callee, 4)
     );
@@ -264,3 +274,4 @@ release_cases!(
         read: "  print(value.id)\n",
     }
 );
+
