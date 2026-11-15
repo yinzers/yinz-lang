@@ -1362,7 +1362,10 @@ fn build_module<'ctx, 'g>(
         })
         .collect();
     for declaration in &defaults_initializer_shapes {
-        shape_defaults_initializer(ctx, module, &declaration.name);
+        let shape = shape_table
+            .get(&declaration.name)
+            .ok_or_else(|| format!("defaults of `{}`: shape not in table", declaration.name))?;
+        shape_defaults_initializer(ctx, module, shape);
     }
 
     // Pass 2 — emit non-generic function bodies.
@@ -1491,18 +1494,24 @@ fn mangle_mono_name(fn_name: &str, type_args: &[Type]) -> String {
 }
 
 /// The symbol of the function that writes one shape's hidden-field defaults into an instance:
-/// `ynz_defaults<shape:Name>`, in the injective `fn<arg>` form of `mangle_mono_name`, so it can
-/// never equal a user function's name.
+/// `ynz_defaults<shape:Name>@<declaring file>`. The first part is the injective `fn<arg>` form of
+/// `mangle_mono_name`, so it can never equal a user function's name; the file part keeps two
+/// modules' shapes of the same name apart, because shape names are not unique across a project
+/// (each module has its own LLVM context) and the symbol is external, so the linker sees all of
+/// them. A shape name never contains `@`, so the pair stays injective.
 ///
-/// The module that DECLARES the shape defines it; every module that constructs the shape, that
-/// one included, calls it. O(length of the shape name) time and space.
-fn shape_defaults_symbol(shape_name: &str) -> String {
-    mangle_mono_name(
+/// The declaring file is `ShapeDef::defined_at`: an imported shape keeps the `ShapeDef` of the
+/// module that declares it, so the declaring and every constructing module derive the same
+/// symbol. The module that DECLARES the shape defines it; every module that constructs the
+/// shape, that one included, calls it. O(length of the shape name + file path) time and space.
+fn shape_defaults_symbol(shape: &ynz_typeck::shapes::ShapeDef) -> String {
+    let shape_part = mangle_mono_name(
         "ynz_defaults",
         &[Type::Shape {
-            name: shape_name.to_string(),
+            name: shape.name.clone(),
         }],
-    )
+    );
+    format!("{shape_part}@{}", shape.defined_at.file)
 }
 
 /// True when constructing `shape` must call its defaults initializer. Hidden fields always carry
@@ -1519,13 +1528,13 @@ fn shape_has_hidden_fields(shape: &ynz_typeck::shapes::ShapeDef) -> bool {
 /// a module that only imports the shape gets this bodiless declaration, which the linker
 /// resolves against the declaring module's object.
 ///
-/// O(length of the shape name) time and space.
+/// O(length of the shape name + file path) time and space.
 fn shape_defaults_initializer<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
-    shape_name: &str,
+    shape: &ynz_typeck::shapes::ShapeDef,
 ) -> FunctionValue<'ctx> {
-    let symbol = shape_defaults_symbol(shape_name);
+    let symbol = shape_defaults_symbol(shape);
     if let Some(declared) = module.get_function(&symbol) {
         return declared;
     }
@@ -5260,14 +5269,14 @@ fn lower_shape_defaults_initializer<'ctx, 'g>(
     layout: &'g ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
     let shape_name = declaration.name.as_str();
-    let fn_val = shape_defaults_initializer(ctx, module, shape_name);
+    let shape_def = shape_table
+        .get(shape_name)
+        .ok_or_else(|| format!("defaults of `{shape_name}`: shape not in table"))?;
+    let fn_val = shape_defaults_initializer(ctx, module, shape_def);
     let struct_ty = *shape_types
         .named
         .get(shape_name)
         .ok_or_else(|| format!("defaults of `{shape_name}`: LLVM type not found"))?;
-    let shape_def = shape_table
-        .get(shape_name)
-        .ok_or_else(|| format!("defaults of `{shape_name}`: shape not in table"))?;
 
     let mut cg = plain_cg(
         ctx,
@@ -20703,7 +20712,7 @@ fn lower_struct_lit<'ctx>(
     // that module's own typed data, and called here whether the shape is local or imported.
     // Defaults land after the provided fields, as the inline lowering always did.
     if shape_has_hidden_fields(&shape_def) {
-        let initializer = shape_defaults_initializer(cg.ctx, cg.module, &shape_name);
+        let initializer = shape_defaults_initializer(cg.ctx, cg.module, &shape_def);
         cg.builder
             .build_call(initializer, &[slot.into()], "hidden_defaults")
             .map_err(|err| format!("hidden defaults call `{shape_name}`: {err}"))?;

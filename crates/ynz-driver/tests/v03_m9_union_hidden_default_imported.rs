@@ -5,8 +5,10 @@
 //! module and called by every construction site, writes them now. Tier: High (data integrity /
 //! memory safety).
 //!
-//! Count: 9 tests = 2 fixtures x 4 runs + 1 structural check, past the ~8 a High-tier unit gets
-//! without a written reason. `imported` is the plain cross-module construction;
+//! Count: 11 tests = 2 fixtures x 4 runs + 1 structural check + 2 runs of the same-name fixture,
+//! past the ~8 a High-tier unit gets without a written reason. The same-name fixture (two modules
+//! each declaring a different shape `Thing`) is a bug of its own, the initializer symbol colliding
+//! at link time, so it gets one plain and one ASan run rather than all four. `imported` is the plain cross-module construction;
 //! `inherited_imported` adds a parent's defaults applied through the child's initializer, a path of
 //! its own (`extends` cannot cross files, so it cannot be folded into the first). The 4 runs per
 //! fixture are plain vs ASan (a null envelope read can print plausible output) and -O0 vs -O2 (the
@@ -79,22 +81,41 @@ imported_default_tests!(
 #[test]
 fn v03_m9_union_hidden_default_imported_is_written_by_the_one_initializer() {
     // Bug: defaults lowered inline in each constructing module (and skipped when imported).
-    // The declaring module must DEFINE `ynz_defaults<shape:Holder>`, the importer must only
+    // The declaring module must DEFINE `ynz_defaults<shape:Holder>@<declaring file>`, the importer must only
     // DECLARE and call it, and no module may store a default inline. Tier: High.
     let built = support::build("v0_3_m9_union_hidden_default_imported", true);
     let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
-    let mut sections = ir.split("; file: ").filter(|section| !section.is_empty());
-    let entry_module = sections
-        .clone()
-        .find(|section| section.contains("entrypoint.ynz"))
-        .expect("entry module section");
-    let holders_module = sections
-        .find(|section| section.contains("holders.ynz"))
-        .expect("holders module section");
-    let initializer = "@\"ynz_defaults<shape:Holder>\"";
+    // A section's first line is its file path. Match on that line alone: the importer's section
+    // names `holders.ynz` too, inside the initializer's symbol.
+    let sections = ir.split("; file: ").filter(|section| !section.is_empty());
+    let section_of = |file: &str| {
+        sections
+            .clone()
+            .find(|section| {
+                section
+                    .lines()
+                    .next()
+                    .is_some_and(|path| path.ends_with(file))
+            })
+            .unwrap_or_else(|| panic!("no module section for {file}"))
+    };
+    let entry_module = section_of("entrypoint.ynz");
+    let holders_module = section_of("holders.ynz");
+    // The symbol is `ynz_defaults<shape:Holder>@<declaring file>`: read it off the definition, then
+    // require the importer to name that exact symbol.
+    let definition_prefix = "define void @\"ynz_defaults<shape:Holder>@";
+    let definition_start = holders_module.find(definition_prefix).unwrap_or_else(|| {
+        panic!("the declaring module must define the initializer:\n{holders_module}")
+    });
+    let symbol_start = definition_start + "define void ".len();
+    let symbol_length = holders_module[symbol_start + 2..]
+        .find('"')
+        .expect("the initializer symbol is quoted")
+        + 3;
+    let initializer = &holders_module[symbol_start..symbol_start + symbol_length];
     assert!(
-        holders_module.contains(&format!("define void {initializer}")),
-        "the declaring module must define the initializer:\n{holders_module}"
+        initializer.ends_with("holders.ynz\""),
+        "the symbol must carry the declaring file: {initializer}"
     );
     assert!(
         entry_module.contains(&format!("declare void {initializer}"))
