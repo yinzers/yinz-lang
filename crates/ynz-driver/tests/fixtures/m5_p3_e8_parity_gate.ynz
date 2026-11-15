@@ -4,7 +4,8 @@
 // and the loops are sized so any per-element / per-iteration allocation
 // regression shifts the pinned totals loudly.
 //
-// Accounting (the integration test pins alloc=11 / free=0 exactly):
+// Accounting (the integration test pins alloc=11 / free=3 exactly; the 3 frees are the cells the
+// loop's 3 field re-assigns replace, released since v0.3-M9 C3c):
 //   +2  ONE array<Part>          — header + buffer (never-drop-local design,
 //                                  pre-existing, made visible by FRAGO 005)
 //   +0  40 read iterations       — reads stage through per-site entry-block

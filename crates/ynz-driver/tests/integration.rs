@@ -10707,9 +10707,9 @@ fn m5_p3_e8_parity_gate() {
     );
     assert_eq!(
         (alloc, free),
-        (11, 0),
+        (11, 3),
         "E8 parity accounting drifted: expected alloc=11 (2 array + 5 map + 4 \
-         persist cells) / free=0. A higher alloc = a per-element/per-iteration \
+         persist cells) / free=3 (each of the 3 field re-assigns frees the cell it replaces, v0.3-M9 C3c). A higher alloc = a per-element/per-iteration \
          allocation regression or a NEW persist site; free>0 with equal delta = \
          a drop story landed (update the accounting + the step-4 verdict); any \
          other drift = investigate before touching this pin. alloc={alloc} \

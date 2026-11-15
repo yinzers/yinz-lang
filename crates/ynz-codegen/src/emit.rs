@@ -3781,17 +3781,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_pointer_value())
     }
 
-    /// Does shape `shape_name` hold a direct `string` field? Decides whether a shape's byte copy
-    /// owes its strings a copy of their own.
-    fn shape_has_string_field(&self, shape_name: &str) -> bool {
-        self.shape_table.get(shape_name).is_some_and(|shape| {
-            shape
-                .fields
-                .iter()
-                .any(|field| is_string_like(&self.resolve_type(&field.ty)))
-        })
-    }
-
     /// Copy every direct `string` field of the shape at `shape_ptr`, in place, through the one
     /// string copy ([`Cg::string_clone_call`], the call `emit_owned_copy`'s `StringClone` arm
     /// makes): the shape's bytes were just copied, so each string field still points at the
@@ -3926,11 +3915,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.builder
                     .build_memcpy(owned_pay, 1, src_pay, 1, size)
                     .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
-                // The bytes were copied, so the payload's string fields still point at the
-                // source's strings: copy them so the payload owns its strings.
-                self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
-                // The payload owns boxes of its own unless the envelope it came from moves in.
-                if !moved {
+                // The payload owns a copy of everything the shape owns unless the envelope it
+                // came from moves in; a moved payload still owns strings of its own (a string is
+                // moved by `string_moves`, not by this record).
+                if moved {
+                    self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
+                } else {
                     self.deepen_shape_fields(owned_pay, name)?;
                 }
                 owned_pay
@@ -4954,12 +4944,43 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.deepen_shape_fields(copy, shape_name)
     }
 
-    /// After the bytes of a shape value were copied to `shape_ptr`, make each union field that
-    /// can own a cell own a cell of its own (`union_deepen_fn`): the byte copy left it pointing
-    /// at the source's cell. Nothing for a shape with no such field, so a non-recursive shape
-    /// copies by bytes alone.
+    /// Does a field of type `ty` own heap a shape copy must copy (`deepen_shape_fields`)?
     ///
-    /// Time: O(f) to emit for f fields; O(n) at run time for the n cells the value owns
+    /// Time: O(v) for a union's v variants  Space: O(v)
+    fn field_needs_deepen(&self, ty: &Type) -> bool {
+        let ty = self.resolve_type(ty);
+        self.envelope_union_variants(&ty).is_some()
+            || is_string_like(&ty)
+            || matches!(
+                ty,
+                Type::BuiltinArray { .. }
+                    | Type::BuiltinMap { .. }
+                    | Type::Shape { .. }
+                    | Type::Maybe { .. }
+            )
+    }
+
+    /// Does shape `shape_name` own heap a copy of its bytes must copy?
+    ///
+    /// Time: O(f)  Space: O(1)
+    fn shape_needs_deepen(&self, shape_name: &str) -> bool {
+        self.shape_table
+            .layout_shape(shape_name)
+            .is_some_and(|shape| shape.fields.iter().any(|field| self.field_needs_deepen(&field.ty)))
+    }
+
+    /// After the bytes of a shape value were copied to `shape_ptr`, make every field that owns
+    /// heap own a copy of its own: the byte copy left each pointing at the source's. THE one place
+    /// a shape copy deepens (`.copy()`, a task's argument, a `maybe` payload, a union variant):
+    /// the release helper frees exactly what this allocates (`stored_release`).
+    /// - a `string` field: a fresh string (`ynz_string_clone`);
+    /// - an `array` or `map` field: the owned copy `emit_owned_copy` makes;
+    /// - a nested `shape` field (a heap cell) and a `maybe` field (a heap envelope cell): a fresh
+    ///   cell holding a deep copy of the contents;
+    /// - an envelope union field: `union_deepen_fn`.
+    /// Nothing for a field that owns no heap, so a shape of plain values copies by bytes alone.
+    ///
+    /// Time: O(f) to emit for f fields; O(n) at run time for the n values the shape owns
     /// Space: O(1) here
     fn deepen_shape_fields(
         &self,
@@ -4976,25 +4997,43 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or_else(|| format!("deepen_shape_fields: shape `{shape_name}` not in table"))?
             .clone();
         for (field_index, field) in shape_def.fields.iter().enumerate() {
-            let Some(variants) = self.envelope_union_variants(&field.ty) else {
-                continue;
-            };
-            if !self.union_owns_cells(&variants)? {
+            let field_ty = self.resolve_type(&field.ty);
+            let site = format!("deepen_{shape_name}_{}", field.name);
+            let envelope_variants = self.envelope_union_variants(&field_ty);
+            if !self.field_needs_deepen(&field_ty) {
                 continue;
             }
             let field_slot = self
                 .builder
-                .build_struct_gep(
-                    struct_ty,
-                    shape_ptr,
-                    field_index as u32,
-                    &format!("deepen_{shape_name}_{}", field.name),
-                )
+                .build_struct_gep(struct_ty, shape_ptr, field_index as u32, &site)
                 .map_err(|err| format!("deepen_shape_fields gep: {err}"))?;
-            let deepen_fn = self.union_deepen_fn(&variants)?;
+            if let Some(variants) = envelope_variants {
+                let deepen_fn = self.union_deepen_fn(&variants)?;
+                self.builder
+                    .build_call(deepen_fn, &[field_slot.into()], "deepen_field")
+                    .map_err(|err| format!("deepen_shape_fields call: {err}"))?;
+                continue;
+            }
+            let original = self
+                .builder
+                .build_load(self.ptr(), field_slot, &format!("{site}_original"))
+                .map_err(|err| format!("deepen_shape_fields load: {err}"))?
+                .into_pointer_value();
+            let copied: BasicValueEnum<'ctx> = match &field_ty {
+                Type::Shape { name } => self
+                    .shape_bytes_to_heap_cell(original, name, &format!("{site}_cell"))?
+                    .into(),
+                Type::Maybe { inner } => self
+                    .maybe_to_heap_cell(original, inner, &format!("{site}_cell"))?
+                    .into(),
+                // A string, an array or a map: the one owned copy.
+                other => {
+                    emit_owned_copy(self, None, original.into(), other, CopyMode::Body, &site)?.0
+                }
+            };
             self.builder
-                .build_call(deepen_fn, &[field_slot.into()], "deepen_field")
-                .map_err(|err| format!("deepen_shape_fields call: {err}"))?;
+                .build_store(field_slot, copied)
+                .map_err(|err| format!("deepen_shape_fields store: {err}"))?;
         }
         Ok(())
     }
@@ -5052,6 +5091,25 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .zip(case_blocks.iter())
             .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
             .collect();
+        // A string, array or map variant owns the value its payload word points at: the byte copy
+        // left it pointing at the source's, so it gets a copy of its own (`emit_owned_copy`).
+        let mut switch_cases = switch_cases;
+        let mut copy_cases: Vec<(BasicBlock<'ctx>, Type)> = Vec::new();
+        for (index, variant) in variants.iter().enumerate() {
+            let variant = self.resolve_type(variant);
+            if matches!(variant, Type::Shape { .. }) {
+                continue;
+            }
+            if is_string_like(&variant)
+                || matches!(variant, Type::BuiltinArray { .. } | Type::BuiltinMap { .. })
+            {
+                let block = self
+                    .ctx
+                    .append_basic_block(deepen_fn, &format!("copy_variant{index}"));
+                switch_cases.push((self.i64().const_int(index as u64, false), block));
+                copy_cases.push((block, variant));
+            }
+        }
         self.builder
             .build_switch(tag, done, &switch_cases)
             .map_err(|err| format!("union deepen switch: {err}"))?;
@@ -5078,6 +5136,28 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder
                 .build_unconditional_branch(done)
                 .map_err(|err| format!("union deepen case branch: {err}"))?;
+        }
+        for (block, variant) in copy_cases {
+            self.builder.position_at_end(block);
+            let payload_addr = self.union_payload_addr(slot, &layout, "deepen_variant")?;
+            let original = self
+                .builder
+                .build_load(self.ptr(), payload_addr, "variant_original")
+                .map_err(|err| format!("union deepen variant load: {err}"))?;
+            let (copied, _) = emit_owned_copy(
+                self,
+                None,
+                original,
+                &variant,
+                CopyMode::Body,
+                "deepen_variant",
+            )?;
+            self.builder
+                .build_store(payload_addr, copied)
+                .map_err(|err| format!("union deepen variant store: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("union deepen variant branch: {err}"))?;
         }
         self.builder.position_at_end(done);
         self.builder
@@ -23466,8 +23546,8 @@ fn emit_owned_copy<'ctx>(
             cg.builder
                 .build_store(dst, struct_val)
                 .map_err(|e| format!("{site} store: {e}"))?;
-            cg.copy_shape_string_fields(dst, name, site)?;
-            // An explicit copy (and a task's copy of an argument) owns boxes of its own.
+            // An explicit copy (and a task's copy of an argument) owns a copy of everything the
+            // shape owns: its strings, containers, cells and boxes.
             cg.deepen_shape_fields(dst, name)?;
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
@@ -23573,8 +23653,8 @@ fn emit_owned_copy<'ctx>(
             // Shape elements live inline in the buffer, so the clone's strings are the
             // source's: copy each element's string fields.
             if let Type::Shape { name } = cg.resolve_type(&elem_ty) {
-                if cg.shape_has_string_field(&name) {
-                    emit_array_shape_string_fields_copy(cg, cloned, &name, site)?;
+                if cg.shape_needs_deepen(&name) {
+                    emit_array_shape_deepen(cg, cloned, &name, site)?;
                 }
             }
             let free = match mode {
@@ -23953,12 +24033,12 @@ fn emit_array_elem_deep_copy<'ctx>(
     Ok(())
 }
 
-/// Give every element of an already-cloned `array<Shape>` strings of its own, when the shape has
-/// a direct `string` field: the clone's buffer was byte-copied, so each element's string fields
-/// still point at the source's strings. A counted loop that reads an element into a scratch slot,
-/// copies its string fields ([`Cg::copy_shape_string_fields`], the same copy a shape `.copy()`
-/// makes) and writes it back. O(n) time in the elements plus one string copy per string field.
-fn emit_array_shape_string_fields_copy<'ctx>(
+/// Give every element of an already-cloned `array<Shape>` a copy of what it owns, when the shape
+/// owns any heap: the clone's buffer was byte-copied, so each element's strings, arrays, maps and
+/// cells still point at the source's. A counted loop that reads an element into a scratch slot,
+/// deepens it ([`Cg::deepen_shape_fields`], the same copy a shape `.copy()` makes) and writes it
+/// back. O(n) time in the elements plus the copies each one costs.
+fn emit_array_shape_deepen<'ctx>(
     cg: &Cg<'ctx, '_>,
     arr: PointerValue<'ctx>,
     shape_name: &str,
@@ -24012,7 +24092,7 @@ fn emit_array_shape_string_fields_copy<'ctx>(
             &format!("{site}_shape_get"),
         )
         .map_err(|err| format!("{site} shape copy get: {err}"))?;
-    cg.copy_shape_string_fields(element_slot, shape_name, &format!("{site}_elem"))?;
+    cg.deepen_shape_fields(element_slot, shape_name)?;
     cg.builder
         .build_call(
             cg.rt.ynz_array_set,
