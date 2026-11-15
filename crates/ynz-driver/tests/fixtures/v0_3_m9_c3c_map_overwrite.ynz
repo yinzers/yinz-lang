@@ -1,0 +1,24 @@
+// v0.3-M9 C3c fixture: setting a key that is already in a string-keyed, string-valued map frees
+// what the set replaces: the old value, and the key copy the set was handed (the map keeps the
+// key it already owns).
+// Heap strings: `firstValue` 1 (fresh, moved into the literal); the literal key `k` copied for the
+// map 1; `table.set(`k`, `second`)` copies the literal key 1 and the literal value 1. The overwrite
+// releases the old value (`firstValue`) and the duplicate key copy: 2 released there, and the
+// task's ladder releases the 2 the map still owns. Total 4 allocated, 4 released.
+// Expected output: the entry count (the key was overwritten, not added).
+
+function build(count: int) -> map<string, string> {
+  let firstValue: string = `first-${count}`
+  let table: map<string, string> = { `k`: firstValue }
+  table.set(`k`, `second`)
+  return table
+}
+
+function show(table: map<string, string>) -> nothing {
+  print(table.count())
+}
+
+function entrypoint() -> nothing {
+  background show(build(1))
+  wait sleep(80)
+}
