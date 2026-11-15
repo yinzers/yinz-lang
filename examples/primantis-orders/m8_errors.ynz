@@ -298,8 +298,8 @@ function m8CloseWithArgs() -> nothing {
 // consumed BEFORE the call (fix round 2, Producer C1: `eat2(rows, other)` used to compile and
 // print `3 3`). `{via}` names `bucket` as what was given away. (C5a: the class-mate is a piece of
 // `bucket`; a whole-value alias is refused where it is made.)
-function m8Eat2(give a: Bucket, give b: array<int>) -> nothing {
-  print(`${a.rows.count()} ${b.count()}`)
+function m8Eat2(give owner: Bucket, give piece: array<int>) -> nothing {
+  print(`${owner.rows.count()} ${piece.count()}`)
 }
 
 function m8SameCallAliasGiveGive() -> nothing {
@@ -311,8 +311,8 @@ function m8SameCallAliasGiveGive() -> nothing {
 // WHY: the mixed form — `bucket` given at position 0, its class-mate `other` (a piece of `bucket`) READ (`share`) at
 // position 1 of the same call: a read after free inside the callee, refused with the same
 // use-after-give error.
-function m8Mix(give a: Bucket, share b: array<int>) -> nothing {
-  print(`${a.rows.count()} ${b.count()}`)
+function m8Mix(give owner: Bucket, share piece: array<int>) -> nothing {
+  print(`${owner.rows.count()} ${piece.count()}`)
 }
 
 function m8SameCallAliasGiveShare() -> nothing {

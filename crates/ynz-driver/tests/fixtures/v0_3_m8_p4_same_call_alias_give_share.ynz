@@ -10,8 +10,8 @@ shape Rows {
   items: array<int>
 }
 
-function mix(give a: Rows, share b: array<int>) -> nothing {
-  print(`${a.items.count()} ${b.count()}`)
+function mix(give owner: Rows, share piece: array<int>) -> nothing {
+  print(`${owner.items.count()} ${piece.count()}`)
 }
 
 function entrypoint() -> nothing {

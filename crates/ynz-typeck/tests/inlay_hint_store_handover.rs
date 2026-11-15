@@ -1,8 +1,8 @@
 // WHY: v0.3-M9 C5a (Tier: Medium, presentation of a High-tier decision): storing a named heap
 // value hands it over, and the muted hint at the store says where the value went
-// (`a` + ` handed to `list``), so the later "was stored in" error is no surprise. The hint reads
-// the one store record (`TypedModule::stores_handed_over`), so one test per store form pins
-// that every form records, and one pins that a store of bits (a copy) records nothing.
+// (`numbers` + ` handed to `list``), so the later "was stored in" error is no surprise. The hint
+// reads the one store record (`TypedModule::stores_handed_over`), so one test per store form
+// pins that every form records, and one pins that a store of bits (a copy) records nothing.
 
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::ownership_call_site_hints;
@@ -37,11 +37,11 @@ fn container_add_hints_where_the_value_went() {
     assert_one_hint(
         "add",
         "function entrypoint() -> nothing {
-  let a: array<int> = [1]
+  let numbers: array<int> = [1]
   let list: array<array<int>> = []
-  list.add(a)
+  list.add(numbers)
 }",
-        "list.add(a",
+        "list.add(numbers",
         "handed to `list`",
     );
 }
@@ -52,11 +52,11 @@ fn field_store_hints_where_the_value_went() {
         "field",
         "shape Bag { items: array<int> }
 function entrypoint() -> nothing {
-  let a: array<int> = [1]
+  let numbers: array<int> = [1]
   let bag: Bag = { items: [0] }
-  bag.items = a
+  bag.items = numbers
 }",
-        "bag.items = a",
+        "bag.items = numbers",
         "handed to `bag.items`",
     );
 }
@@ -66,12 +66,12 @@ fn let_hints_where_the_value_went() {
     assert_one_hint(
         "let",
         "function entrypoint() -> nothing {
-  let a: array<int> = [1]
-  let b: array<int> = a
-  print(b.count().toString())
+  let numbers: array<int> = [1]
+  let owner: array<int> = numbers
+  print(owner.count().toString())
 }",
-        "let b: array<int> = a",
-        "handed to `b`",
+        "let owner: array<int> = numbers",
+        "handed to `owner`",
     );
 }
 
@@ -80,12 +80,12 @@ fn literal_part_hints_where_the_value_went() {
     assert_one_hint(
         "literal",
         "function entrypoint() -> nothing {
-  let a: array<int> = [1]
-  let rows: array<array<int>> = [a]
+  let numbers: array<int> = [1]
+  let rows: array<array<int>> = [numbers]
   print(rows.count().toString())
 }",
-        "let rows: array<array<int>> = [a",
-        "handed to the literal `[a]`",
+        "let rows: array<array<int>> = [numbers",
+        "handed to the literal `[numbers]`",
     );
 }
 
@@ -94,11 +94,11 @@ fn storing_bits_hints_nothing() {
     let found = store_hints(
         "bits",
         "function entrypoint() -> nothing {
-  let n: int = 1
+  let original: int = 1
   let list: array<int> = []
-  list.add(n)
-  let m: int = n
-  print(m.toString())
+  list.add(original)
+  let copied: int = original
+  print(copied.toString())
 }",
     );
     assert_eq!(found, Vec::<(String, String)>::new());

@@ -2,8 +2,8 @@
 //
 // WHY (High tier: ownership / data integrity): `Scope` used to clear the consumed state on ANY
 // reassignment, even one inside an `if`, a match arm, or a loop that may run zero times. A later
-// give or read of `x` then touched a value already given away on some path: a double free or a
-// use-after-free under any scope-exit release pass. Rust rejects the same programs. The join
+// give or read of `numbers` then touched a value already given away on some path: a double free or
+// a use-after-free under any scope-exit release pass. Rust rejects the same programs. The join
 // after a branch is "maybe given" unless EVERY path that reaches it revived the binding; reading
 // a maybe-given binding is the ordinary use-after-give error (the canonical `Consumed` text).
 //
@@ -45,169 +45,169 @@ fn assert_revive_accepted(source: &str) {
 }
 
 cases! { assert_revive_rejected;
-    loop_revive_under_an_if_is_carried: "function l(c: boolean) -> nothing {
-  let x: array<int> = [1, 2, 3]
+    loop_revive_under_an_if_is_carried: "function underTest(condition: boolean) -> nothing {
+  let numbers: array<int> = [1, 2, 3]
   for (j in range(0, 2)) {
-    eat(x)
-    if (c) { x = [0] }
+    eat(numbers)
+    if (condition) { numbers = [0] }
   }
-}", "give, then revive only under `if`, inside a loop: the next pass gives `x` again (High)";
+}", "give, then revive only under `if`, inside a loop: the next pass gives `numbers` again (High)";
 }
 
 cases! { assert_revive_rejected;
-    loop_revive_in_a_zero_trip_inner_loop_is_carried: "function l() -> nothing {
-  let x: array<int> = [1, 2, 3]
+    loop_revive_in_a_zero_trip_inner_loop_is_carried: "function underTest() -> nothing {
+  let numbers: array<int> = [1, 2, 3]
   for (j in range(0, 2)) {
-    eat(x)
-    for (k in range(0, 0)) { x = [0] }
+    eat(numbers)
+    for (k in range(0, 0)) { numbers = [0] }
   }
-}", "give, then revive inside an inner loop that may run zero times: the next pass gives `x` again (High)";
+}", "give, then revive inside an inner loop that may run zero times: the next pass gives `numbers` again (High)";
 }
 
 cases! { assert_revive_rejected;
-    read_after_an_if_that_revives_on_one_path: "function l(c: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (c) { x = [0] }
-  return x.count()
-}", "give, revive only under `if`, then read: on the path where the condition was false `x` is gone (High)";
+    read_after_an_if_that_revives_on_one_path: "function underTest(condition: boolean) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (condition) { numbers = [0] }
+  return numbers.count()
+}", "give, revive only under `if`, then read: on the path where the condition was false `numbers` is gone (High)";
 }
 
 cases! { assert_revive_rejected;
-    read_after_a_match_whose_else_arm_does_not_revive: "function l(n: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (n) {
-    1 => { x = [0] }
+    read_after_a_match_whose_else_arm_does_not_revive: "function underTest(choice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (choice) {
+    1 => { numbers = [0] }
     else => { print(`other`) }
   }
-  return x.count()
-}", "give, revive in one match arm only, then read: the other arm leaves `x` given away (High)";
+  return numbers.count()
+}", "give, revive in one match arm only, then read: the other arm leaves `numbers` given away (High)";
 }
 
 cases! { assert_revive_rejected;
-    read_after_a_match_with_no_else_arm: "function l(n: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (n) {
-    1 => { x = [0] }
-    2 => { x = [1] }
+    read_after_a_match_with_no_else_arm: "function underTest(choice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (choice) {
+    1 => { numbers = [0] }
+    2 => { numbers = [1] }
   }
-  return x.count()
+  return numbers.count()
 }", "give, revive in every listed arm of a non-exhaustive match, then read: no arm matching is a path that never revived (High)";
 }
 
 cases! { assert_revive_rejected;
-    read_after_a_while_that_revives_in_its_body: "function l(c: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  while (c) { x = [0] }
-  return x.count()
+    read_after_a_while_that_revives_in_its_body: "function underTest(condition: boolean) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  while (condition) { numbers = [0] }
+  return numbers.count()
 }", "give, revive inside a `while` body, then read: the body may run zero times (High)";
 }
 
 cases! { assert_revive_accepted;
-    revive_in_every_arm_of_a_match_with_else: "function l(n: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (n) {
-    1 => { x = [0] }
-    else => { x = [1] }
+    revive_in_every_arm_of_a_match_with_else: "function underTest(choice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (choice) {
+    1 => { numbers = [0] }
+    else => { numbers = [1] }
   }
-  return x.count()
+  return numbers.count()
 }", "give, revive in every arm including `else`, then read: every path revived (High)";
 }
 
 cases! { assert_revive_accepted;
-    revive_beside_an_arm_that_always_returns: "function l(n: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (n) {
+    revive_beside_an_arm_that_always_returns: "function underTest(choice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (choice) {
     1 => { return 0 }
-    else => { x = [0] }
+    else => { numbers = [0] }
   }
-  return x.count()
+  return numbers.count()
 }", "give, one arm returns, the other revives, then read: the returning arm never reaches the join (High)";
 }
 
 cases! { assert_revive_accepted;
-    unconditional_revive_after_a_loop: "function l() -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
+    unconditional_revive_after_a_loop: "function underTest() -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
   for (j in range(0, 2)) { print(`tick`) }
-  x = [0]
-  return x.count()
-}", "give, run a loop that does not mention `x`, revive after it, then read (High)";
+  numbers = [0]
+  return numbers.count()
+}", "give, run a loop that does not mention `numbers`, revive after it, then read (High)";
 }
 
 cases! { assert_revive_accepted;
-    revive_in_a_loop_body_then_revive_again_after_it: "function l() -> int {
-  let x: array<int> = [1, 2, 3]
+    revive_in_a_loop_body_then_revive_again_after_it: "function underTest() -> int {
+  let numbers: array<int> = [1, 2, 3]
   for (j in range(0, 2)) {
-    eat(x)
-    x = [0]
+    eat(numbers)
+    numbers = [0]
   }
-  x = [1]
-  return x.count()
+  numbers = [1]
+  return numbers.count()
 }", "give and revive on every pass, then revive after the loop and read (High)";
 }
 
 cases! { assert_revive_accepted;
-    give_and_revive_both_inside_the_branch: "function l(c: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  if (c) {
-    eat(x)
-    x = [0]
+    give_and_revive_both_inside_the_branch: "function underTest(condition: boolean) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  if (condition) {
+    eat(numbers)
+    numbers = [0]
   }
-  return x.count()
-}", "give then revive inside one `if` body: both paths leave `x` live (High)";
+  return numbers.count()
+}", "give then revive inside one `if` body: both paths leave `numbers` live (High)";
 }
 
 cases! { assert_revive_accepted;
-    unconditional_revive_straight_line: "function l() -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  x = [4, 5]
-  return x.count()
+    unconditional_revive_straight_line: "function underTest() -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  numbers = [4, 5]
+  return numbers.count()
 }", "give then revive on the same path, then read: the existing revive-on-reassign rule (High)";
 }
 
 cases! { assert_revive_rejected;
-    read_after_a_match_where_one_arm_gives_and_the_other_revives: "function l(n: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  if (n) {
-    1 => { eat(x) }
-    else => { x = [0] }
+    read_after_a_match_where_one_arm_gives_and_the_other_revives: "function underTest(choice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  if (choice) {
+    1 => { eat(numbers) }
+    else => { numbers = [0] }
   }
-  return x.count()
-}", "arm 1 gives `x`, the else arm revives it, then read: the join must keep arm 1's give, so one arm's revive cannot launder another arm's give (High)";
+  return numbers.count()
+}", "arm 1 gives `numbers`, the else arm revives it, then read: the join must keep arm 1's give, so one arm's revive cannot launder another arm's give (High)";
 }
 
 cases! { assert_revive_rejected;
-    revive_under_a_nested_if_only: "function l(c: boolean, d: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (c) {
-    if (d) { x = [0] }
+    revive_under_a_nested_if_only: "function underTest(condition: boolean, otherCondition: boolean) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (condition) {
+    if (otherCondition) { numbers = [0] }
   }
-  return x.count()
+  return numbers.count()
 }", "give, revive only under two nested `if`s, then read: neither join covers the outer skip path (High)";
 }
 
 cases! { assert_revive_accepted;
-    revive_in_every_leaf_of_nested_matches: "function l(n: int, m: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (n) {
+    revive_in_every_leaf_of_nested_matches: "function underTest(choice: int, otherChoice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (choice) {
     1 => {
-      if (m) {
-        1 => { x = [0] }
-        else => { x = [1] }
+      if (otherChoice) {
+        1 => { numbers = [0] }
+        else => { numbers = [1] }
       }
     }
-    else => { x = [2] }
+    else => { numbers = [2] }
   }
-  return x.count()
+  return numbers.count()
 }", "give, revive in every leaf of a match nested in a match, then read: every path revived (High)";
 }
 
@@ -226,32 +226,32 @@ fn assert_maybe_given_names_the_path(case: &(&str, &str)) {
 }
 
 cases! { assert_maybe_given_names_the_path;
-    maybe_given_after_an_if_names_the_if_path: ("the path where the `if` above did not run", "function l(c: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (c) { x = [0] }
-  return x.count()
+    maybe_given_after_an_if_names_the_if_path: ("the path where the `if` above did not run", "function underTest(condition: boolean) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (condition) { numbers = [0] }
+  return numbers.count()
 }"), "a read after an `if` that reassigned on one path said only `already given away`, which over-claims on the reassigned path (High: the wrong text sends the user to the wrong fix)";
 }
 
 cases! { assert_maybe_given_names_the_path;
-    maybe_given_after_a_match_names_the_match_path: ("a path through the `match` above", "function l(n: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (n) {
-    1 => { x = [0] }
+    maybe_given_after_a_match_names_the_match_path: ("a path through the `match` above", "function underTest(choice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (choice) {
+    1 => { numbers = [0] }
     else => { print(`other`) }
   }
-  return x.count()
+  return numbers.count()
 }"), "the same over-claim after a `match` where one arm does not reassign (High)";
 }
 
 cases! { assert_maybe_given_names_the_path;
-    maybe_given_after_a_loop_names_the_loop_path: ("the path where the loop above ran zero times", "function l(c: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  while (c) { x = [0] }
-  return x.count()
+    maybe_given_after_a_loop_names_the_loop_path: ("the path where the loop above ran zero times", "function underTest(condition: boolean) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  while (condition) { numbers = [0] }
+  return numbers.count()
 }"), "the same over-claim after a loop whose body reassigns but may run zero times (High)";
 }
 
@@ -259,15 +259,15 @@ cases! { assert_maybe_given_names_the_path;
 // already given away on some path, or a give of a piece another value still holds).
 
 cases! { assert_revive_rejected;
-    an_arm_that_reassigns_then_gives_again_stays_given: "function l(c: boolean) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (c) {
-    x = [0]
-    eat(x)
-    x = [1]
+    an_arm_that_reassigns_then_gives_again_stays_given: "function underTest(condition: boolean) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (condition) {
+    numbers = [0]
+    eat(numbers)
+    numbers = [1]
   }
-  return x.count()
+  return numbers.count()
 }", "an arm that reassigned a given binding and then gave it again was put back as live, not as given, for the paths after it (High: double give)";
 }
 
@@ -275,38 +275,38 @@ cases! { assert_revive_rejected;
     a_while_condition_give_holds_after_the_loop: "function ok(give rows: array<int>) -> boolean {
   return true
 }
-function l() -> nothing {
-  let x: array<int> = [1, 2, 3]
-  while (ok(x)) { x = [0] }
-  eat(x)
-}", "the last, false check of a `while` condition gives `x` on every path out of the loop; a reassignment in the body hid it (High: double give)";
+function underTest() -> nothing {
+  let numbers: array<int> = [1, 2, 3]
+  while (ok(numbers)) { numbers = [0] }
+  eat(numbers)
+}", "the last, false check of a `while` condition gives `numbers` on every path out of the loop; a reassignment in the body hid it (High: double give)";
 }
 
 cases! { assert_revive_rejected;
     a_union_with_a_non_shape_variant_is_not_exhaustive: "shape Circle { radius: number }
 shape Pair = Circle | int
-function l(s: Pair) -> int {
-  let x: array<int> = [1, 2, 3]
-  eat(x)
-  if (s) {
-    is Circle => { x = [0] }
+function underTest(pairValue: Pair) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  eat(numbers)
+  if (pairValue) {
+    is Circle => { numbers = [0] }
   }
-  return x.count()
+  return numbers.count()
 }", "a union match counted as covering every value though its `int` variant enters no arm (High: read after give)";
 }
 
 cases! { assert_revive_rejected;
     a_class_mate_reassigned_on_one_path_still_reaches_the_value_on_the_other: "shape Bag { items: array<int> }
-function eat_bag(give bag: Bag) -> nothing {
+function eatBag(give bag: Bag) -> nothing {
   print(bag.items.count().toString())
 }
-function l(c: boolean) -> int {
+function underTest(condition: boolean) -> int {
   let bag: Bag = { items: [1, 2, 3] }
   let view: array<int> = bag.items
-  if (c) { view = [0] }
-  eat_bag(bag)
+  if (condition) { view = [0] }
+  eatBag(bag)
   return view.count()
-}", "a reassignment under `if` moved `view` out of `bag`'s class on every path, so giving `bag` left `view` readable where it still reaches `bag`'s value (High: read after give). Was `an_alias_reassigned_on_one_path_still_aliases_on_the_other` with `let y = x`; a whole-value alias cannot exist any more (storing hands the value over), so the class-mate is a piece";
+}", "a reassignment under `if` moved `view` out of `bag`'s class on every path, so giving `bag` left `view` readable where it still reaches `bag`'s value (High: read after give). Was `an_alias_reassigned_on_one_path_still_aliases_on_the_other` with a whole-value `let` alias; a whole-value alias cannot exist any more (storing hands the value over), so the class-mate is a piece";
 }
 
 /// The give itself must be refused: the value may be a piece another value still holds.
@@ -323,30 +323,30 @@ fn assert_give_refused(source: &str) {
 
 cases! { assert_give_refused;
     a_piece_reassigned_on_one_path_is_still_a_piece_on_the_other: "shape Box { items: array<int> }
-function l(c: boolean, b: Box) -> nothing {
-  let y: array<int> = b.items
-  if (c) { y = [0] }
-  eat(y)
-}", "a reassignment under `if` made `y` owned on every path, so a field of a borrowed parameter could be given away (High: double free)";
+function underTest(condition: boolean, box: Box) -> nothing {
+  let piece: array<int> = box.items
+  if (condition) { piece = [0] }
+  eat(piece)
+}", "a reassignment under `if` made `piece` owned on every path, so a field of a borrowed parameter could be given away (High: double free)";
 }
 
 cases! { assert_revive_accepted;
-    sibling_arms_may_each_give_the_same_binding: "function l(n: int) -> nothing {
-  let x: array<int> = [1, 2, 3]
-  if (n) {
-    1 => { eat(x) }
-    else => { eat(x) }
+    sibling_arms_may_each_give_the_same_binding: "function underTest(choice: int) -> nothing {
+  let numbers: array<int> = [1, 2, 3]
+  if (choice) {
+    1 => { eat(numbers) }
+    else => { eat(numbers) }
   }
 }", "arm 1's give leaked into arm 2, so a binding given once on each of two sibling paths was rejected as already given away (High: false rejection of a valid give)";
 }
 
 cases! { assert_revive_rejected;
-    read_after_sibling_arms_that_each_give: "function l(n: int) -> int {
-  let x: array<int> = [1, 2, 3]
-  if (n) {
-    1 => { eat(x) }
-    else => { eat(x) }
+    read_after_sibling_arms_that_each_give: "function underTest(choice: int) -> int {
+  let numbers: array<int> = [1, 2, 3]
+  if (choice) {
+    1 => { eat(numbers) }
+    else => { eat(numbers) }
   }
-  return x.count()
-}", "every arm gives `x`, then a read: given on every path, so the join must still reject it (High: read after give)";
+  return numbers.count()
+}", "every arm gives `numbers`, then a read: given on every path, so the join must still reject it (High: read after give)";
 }

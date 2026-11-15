@@ -10,9 +10,9 @@ shape Rows {
   items: array<int>
 }
 
-function eat2(give a: Rows, give b: array<int>) -> nothing {
+function eat2(give owner: Rows, give piece: array<int>) -> nothing {
   wait sleep(1)
-  print(`${a.items.count()} ${b.count()}`)
+  print(`${owner.items.count()} ${piece.count()}`)
 }
 
 function entrypoint() -> nothing {

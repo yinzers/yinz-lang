@@ -329,7 +329,7 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     assert_rendered(
         DiagnosticKind::Consumed,
         "shape Bag { items: array<int> }\n\
-         function eat2(give a: Bag, give b: array<int>) -> nothing { print(a.items.count()) }\n\
+         function eat2(give bag: Bag, give extra: array<int>) -> nothing { print(bag.items.count()) }\n\
          function entrypoint() -> nothing {\n\
            let bag: Bag = { items: [1, 2, 3] }\n\
            let view: array<int> = bag.items\n\
@@ -349,7 +349,7 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     assert_rendered(
         DiagnosticKind::Consumed,
         "shape Bag { items: array<int> }\n\
-         function mix(give a: Bag, share b: array<int>) -> nothing { print(a.items.count()) }\n\
+         function mix(give bag: Bag, share extra: array<int>) -> nothing { print(bag.items.count()) }\n\
          function entrypoint() -> nothing {\n\
            let bag: Bag = { items: [1, 2, 3] }\n\
            let view: array<int> = bag.items\n\
@@ -1142,17 +1142,23 @@ fn consumed_by_store_into_a_struct_literal_names_a_literal_that_compiles() {
         DiagnosticKind::ConsumedByStore,
         "shape Pair { first: array<int>, second: array<int> }\n\
          function entrypoint() -> nothing {\n\
-           let a: array<int> = [1]\n\
-           let c: array<int> = [2]\n\
-           let pair: Pair = { first: a, second: c }\n\
-           print(a.count())\n\
+           let numbers: array<int> = [1]\n\
+           let moreNumbers: array<int> = [2]\n\
+           let pair: Pair = { first: numbers, second: moreNumbers }\n\
+           print(numbers.count())\n\
            print(pair.first.count())\n\
          }",
         &[
-            ("name", "a"),
-            ("place", "the literal `{ first: a, second: c }`"),
-            ("stored", "a"),
-            ("copy_form", "{ first: a.copy(), second: c }"),
+            ("name", "numbers"),
+            (
+                "place",
+                "the literal `{ first: numbers, second: moreNumbers }`",
+            ),
+            ("stored", "numbers"),
+            (
+                "copy_form",
+                "{ first: numbers.copy(), second: moreNumbers }",
+            ),
             ("via", ""),
         ],
     );
@@ -1180,25 +1186,31 @@ fn consumed_by_store_into_a_map_literal_names_a_literal_that_compiles() {
 }
 
 /// (High) A literal part that is an operator expression is written out, not replaced by a
-/// placeholder: the WHAT-INSTEAD names `{ first: a.copy(), count: (n + 1) * 2 }`, which a reader can
-/// type, not `{ first: a.copy(), count: this value }`.
+/// placeholder: the WHAT-INSTEAD names `{ first: numbers.copy(), count: (factor + 1) * 2 }`, which
+/// a reader can type, not `{ first: numbers.copy(), count: this value }`.
 #[test]
 fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles() {
     assert_rendered(
         DiagnosticKind::ConsumedByStore,
         "shape Tally { first: array<int>, count: int }\n\
          function entrypoint() -> nothing {\n\
-           let a: array<int> = [1]\n\
-           let n: int = 3\n\
-           let tally: Tally = { first: a, count: (n + 1) * 2 }\n\
-           print(a.count())\n\
+           let numbers: array<int> = [1]\n\
+           let factor: int = 3\n\
+           let tally: Tally = { first: numbers, count: (factor + 1) * 2 }\n\
+           print(numbers.count())\n\
            print(tally.count)\n\
          }",
         &[
-            ("name", "a"),
-            ("place", "the literal `{ first: a, count: (n + 1) * 2 }`"),
-            ("stored", "a"),
-            ("copy_form", "{ first: a.copy(), count: (n + 1) * 2 }"),
+            ("name", "numbers"),
+            (
+                "place",
+                "the literal `{ first: numbers, count: (factor + 1) * 2 }`",
+            ),
+            ("stored", "numbers"),
+            (
+                "copy_form",
+                "{ first: numbers.copy(), count: (factor + 1) * 2 }",
+            ),
             ("via", ""),
         ],
     );
