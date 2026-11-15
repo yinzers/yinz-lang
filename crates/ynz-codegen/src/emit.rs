@@ -5822,6 +5822,136 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(v)
     }
 
+    /// The module-private function `(slot_a, slot_b) -> i1` comparing two slots of the RECURSIVE
+    /// (boxed) union `variants`: equal when the tags match and the stored variants are equal as
+    /// values of that variant, a shape variant field by field through the cell the slot owns
+    /// (`shape_value_eq`), `none` always, any other variant by its payload word.
+    ///
+    /// One function per union rather than inline code, because a shape variant that reaches the
+    /// union again would otherwise unfold forever; the function is declared before its body is
+    /// emitted, so the inner reference is a call. A cell is read only on the branch whose tag
+    /// says the slot owns one: the word of `int` or `none` is no pointer.
+    ///
+    /// Time: O(v) to emit once per union  Space: O(v)
+    fn boxed_union_eq_fn(&self, variants: &[Type]) -> Result<FunctionValue<'ctx>, String> {
+        let name = format!("ynz_union_eq_{}", crate::shape_types::union_key(variants));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let layout = self.union_layout(variants)?;
+        let fn_ty = self
+            .bool()
+            .fn_type(&[self.ptr().into(), self.ptr().into()], false);
+        let eq_fn = self
+            .module
+            .add_function(&name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(eq_fn, "entry");
+        let tags_match = self.ctx.append_basic_block(eq_fn, "tags_match");
+        let differ = self.ctx.append_basic_block(eq_fn, "differ");
+        let by_word = self.ctx.append_basic_block(eq_fn, "by_word");
+        self.builder.position_at_end(entry);
+        let slot_a = eq_fn
+            .get_nth_param(0)
+            .ok_or("boxed union equality: missing first slot")?
+            .into_pointer_value();
+        let slot_b = eq_fn
+            .get_nth_param(1)
+            .ok_or("boxed union equality: missing second slot")?
+            .into_pointer_value();
+        let tag_a = self
+            .builder
+            .build_load(self.i64(), slot_a, "tag_a")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let tag_b = self
+            .builder
+            .build_load(self.i64(), slot_b, "tag_b")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let same_tag = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, tag_a, tag_b, "same_tag")
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_conditional_branch(same_tag, tags_match, differ)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(differ);
+        self.builder
+            .build_return(Some(&self.bool().const_zero()))
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(tags_match);
+        let case_blocks: Vec<BasicBlock<'ctx>> = layout
+            .shape_variants
+            .iter()
+            .map(|(index, _)| {
+                self.ctx
+                    .append_basic_block(eq_fn, &format!("shape_variant{index}"))
+            })
+            .collect();
+        let switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = layout
+            .shape_variants
+            .iter()
+            .zip(case_blocks.iter())
+            .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
+            .collect();
+        self.builder
+            .build_switch(tag_a, by_word, &switch_cases)
+            .map_err(|e| format!("{e}"))?;
+        for ((_, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
+            self.builder.position_at_end(*case_bb);
+            let mut cells = Vec::new();
+            for slot in [slot_a, slot_b] {
+                let word_addr = self.union_payload_addr(slot, &layout, "boxed_eq")?;
+                cells.push(
+                    self.builder
+                        .build_load(self.ptr(), word_addr, "cell")
+                        .map_err(|e| format!("{e}"))?
+                        .into_pointer_value(),
+                );
+            }
+            let equal = self.shape_value_eq(cells[0], cells[1], shape_name, "boxed_eq")?;
+            self.builder
+                .build_return(Some(&equal))
+                .map_err(|e| format!("{e}"))?;
+        }
+        self.builder.position_at_end(by_word);
+        let mut words = Vec::new();
+        for slot in [slot_a, slot_b] {
+            let word_addr = self.union_payload_addr(slot, &layout, "boxed_eq")?;
+            words.push(
+                self.builder
+                    .build_load(self.i64(), word_addr, "word")
+                    .map_err(|e| format!("{e}"))?
+                    .into_int_value(),
+            );
+        }
+        let same_word = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, words[0], words[1], "same_word")
+            .map_err(|e| format!("{e}"))?;
+        let is_none = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag_a,
+                self.i64().const_int(UNION_NONE_TAG, false),
+                "is_none",
+            )
+            .map_err(|e| format!("{e}"))?;
+        let equal = self
+            .builder
+            .build_or(same_word, is_none, "plain_equal")
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_return(Some(&equal))
+            .map_err(|e| format!("{e}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(eq_fn)
+    }
+
     /// Field-wise VALUE equality between two shape element pointers.
     ///
     /// v0.3-M5 P2 recorded decision: `contains` on `array<Shape>` compares element
@@ -5857,7 +5987,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or_else(|| format!("shape_value_eq: LLVM type for `{shape_name}` missing"))?;
         let shape_def = self
             .shape_table
-            .get(shape_name)
+            .layout_shape(shape_name)
             .ok_or_else(|| format!("shape_value_eq: shape `{shape_name}` not in table"))?
             .clone();
         let mut acc = self.bool().const_int(1, false);
@@ -5967,6 +6097,29 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .envelope_union_variants(union)
                         .ok_or("shape_value_eq: union lost its variants")?;
                     let layout = self.union_layout(&variants)?;
+                    // A recursive union's shape variant can reach this very slot again, so
+                    // comparing it inline would never end: it compares through one function per
+                    // union, which reads a cell only when the tag says the slot owns one.
+                    if layout.boxed {
+                        let eq_fn = self.boxed_union_eq_fn(&variants)?;
+                        let equal = self
+                            .builder
+                            .build_call(
+                                eq_fn,
+                                &[a_gep.into(), b_gep.into()],
+                                &format!("{site}_ueq_{fname}"),
+                            )
+                            .map_err(|e| format!("{e}"))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or("boxed union equality returned void")?
+                            .into_int_value();
+                        acc = self
+                            .builder
+                            .build_and(acc, equal, &format!("{site}_acc_{fname}"))
+                            .map_err(|e| format!("{e}"))?;
+                        continue;
+                    }
                     let tag_a = self
                         .builder
                         .build_load(self.i64(), a_gep, "ueq_ta")
@@ -6012,18 +6165,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .build_or(same_word, is_none, "ueq_plain")
                         .map_err(|e| format!("{e}"))?;
                     for (index, variant_shape) in &layout.shape_variants {
-                        let (variant_a, variant_b) = if layout.boxed {
-                            (
-                                self.builder
-                                    .build_int_to_ptr(word_a, self.ptr(), "ueq_ca")
-                                    .map_err(|e| format!("{e}"))?,
-                                self.builder
-                                    .build_int_to_ptr(word_b, self.ptr(), "ueq_cb")
-                                    .map_err(|e| format!("{e}"))?,
-                            )
-                        } else {
-                            (payload_a, payload_b)
-                        };
+                        let (variant_a, variant_b) = (payload_a, payload_b);
                         let shape_equal = self.shape_value_eq(
                             variant_a,
                             variant_b,

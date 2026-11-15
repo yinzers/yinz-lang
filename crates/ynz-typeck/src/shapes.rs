@@ -1049,8 +1049,10 @@ impl ShapeTable {
         self.shapes.get(name).or_else(|| self.layout_only.get(name))
     }
 
-    /// Every shape `roots` need to be sized: the shape variants of their envelope-union fields,
-    /// and, through those shapes' own fields, theirs. A shape's inline size depends on exactly
+    /// Every shape `roots` and the `signature_types` need to be sized: the shape variants of the
+    /// roots' envelope-union fields and of the envelope unions an exported function's signature
+    /// names (a parameter, or the result, possibly inside `maybe` or `errors`), and, through those
+    /// shapes' own fields, theirs. A shape's inline size depends on exactly
     /// these (a nested `shape` field is a pointer), so an importer that has `roots` and this
     /// closure lays each root out as its declaring module does.
     ///
@@ -1058,31 +1060,56 @@ impl ShapeTable {
     pub fn union_variant_closure<'a>(
         &self,
         roots: impl Iterator<Item = &'a ShapeDef>,
+        signature_types: impl Iterator<Item = &'a Type>,
     ) -> HashMap<String, ShapeDef> {
         let mut closure: HashMap<String, ShapeDef> = HashMap::new();
         let mut pending: Vec<&ShapeDef> = roots.collect();
+        for signature_type in signature_types {
+            if let Some(variants) = signature_union_variants(signature_type) {
+                for variant in variants {
+                    self.add_variant_to_closure(variant, &mut closure, &mut pending);
+                }
+            }
+        }
         while let Some(shape) = pending.pop() {
             for field in &shape.fields {
-                if !crate::check::is_envelope_union(&field.ty) {
-                    continue;
-                }
-                let Type::Union { variants } = &field.ty else {
-                    continue;
-                };
-                for variant in variants {
-                    let Type::Shape { name } = variant else {
-                        continue;
-                    };
-                    if closure.contains_key(name) {
-                        continue;
-                    }
-                    if let Some(variant_def) = self.layout_shape(name) {
-                        closure.insert(name.clone(), variant_def.clone());
-                        pending.push(variant_def);
+                if let Some(variants) = signature_union_variants(&field.ty) {
+                    for variant in variants {
+                        self.add_variant_to_closure(variant, &mut closure, &mut pending);
                     }
                 }
             }
         }
         closure
+    }
+
+    /// Add the shape `variant` names (if it is a shape this table can lay out) to `closure`, and
+    /// queue it so its own union fields are followed.
+    fn add_variant_to_closure<'s>(
+        &'s self,
+        variant: &Type,
+        closure: &mut HashMap<String, ShapeDef>,
+        pending: &mut Vec<&'s ShapeDef>,
+    ) {
+        let Type::Shape { name } = variant else {
+            return;
+        };
+        if closure.contains_key(name) {
+            return;
+        }
+        if let Some(variant_def) = self.layout_shape(name) {
+            closure.insert(name.clone(), variant_def.clone());
+            pending.push(variant_def);
+        }
+    }
+}
+
+/// The variants of the envelope union `ty` is, or wraps in `maybe` or `errors` (what a signature
+/// can name); `None` for every other type.
+fn signature_union_variants(ty: &Type) -> Option<&Vec<Type>> {
+    match ty {
+        Type::Maybe { inner } | Type::ErrorsCapable { inner } => signature_union_variants(inner),
+        Type::Union { variants } if crate::check::is_envelope_union(ty) => Some(variants),
+        _ => None,
     }
 }

@@ -299,3 +299,14 @@ by_value_tests!(
     v03_m9_union_maybe_errors_asan_optimized,
     v03_m9_union_maybe_errors_asan_no_optimize
 );
+
+// Bug: shape equality over a recursive (boxed) union field read the payload word of a
+// non-shape variant as a heap cell pointer and recursed forever in the compiler. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_shape_equality_recursive.ynz",
+    "same int true\nother int false\nvariant false\nsame node true\ndeep differs false\nend\n",
+    v03_m9_union_shape_equality_recursive_optimized,
+    v03_m9_union_shape_equality_recursive_no_optimize,
+    v03_m9_union_shape_equality_recursive_asan_optimized,
+    v03_m9_union_shape_equality_recursive_asan_no_optimize
+);

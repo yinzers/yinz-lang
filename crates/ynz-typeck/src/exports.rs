@@ -66,6 +66,12 @@ pub fn collect_exports(
         }
     }
 
-    table.layout_shapes = shape_table.union_variant_closure(table.shapes.values());
+    table.layout_shapes = shape_table.union_variant_closure(
+        table.shapes.values(),
+        table
+            .functions
+            .values()
+            .flat_map(|sig| sig.params.iter().map(|(_, ty)| ty).chain(std::iter::once(&sig.ret))),
+    );
     table
 }
