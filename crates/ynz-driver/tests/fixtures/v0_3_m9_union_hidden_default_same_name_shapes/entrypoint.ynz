@@ -1,0 +1,14 @@
+// v0.3-M9 C1e rework (#421): two modules each declare a shape named `Thing` with hidden
+// defaults; this module constructs `a`'s and runs `b`'s.
+// Correct behavior: prints `11a`, `11a`, `22b`; clean under AddressSanitizer at -O0 and -O2.
+// Pre-fix failure: both modules defined the symbol `ynz_defaults<shape:Thing>` and the link
+// failed with a duplicate symbol (before the initializer, the same program built and ran).
+import { Thing, readThing, runA } from `a`
+import { runB } from `b`
+
+function entrypoint() -> nothing {
+  let own: Thing = { id: 3 }
+  print(own.readThing())
+  print(runA())
+  print(runB())
+}

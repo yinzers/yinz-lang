@@ -106,3 +106,28 @@ fn v03_m9_union_hidden_default_imported_is_written_by_the_one_initializer() {
         "the importing module must store no default inline:\n{entry_module}"
     );
 }
+
+// Two modules each declare a DIFFERENT shape named `Thing` with hidden defaults: the initializer
+// symbol must tell them apart, both to link and so each construction runs its own shape's.
+#[test]
+fn v03_m9_union_hidden_default_same_name_shapes_optimized() {
+    // Bug: both modules defined `ynz_defaults<shape:Thing>`, a duplicate-symbol link failure on a
+    // program that built before the initializer existed. Tier: High.
+    assert_prints(
+        "v0_3_m9_union_hidden_default_same_name_shapes",
+        false,
+        "11a\n11a\n22b\n",
+        "same-named shapes of two modules must each keep their own hidden defaults",
+    );
+}
+
+#[test]
+fn v03_m9_union_hidden_default_same_name_shapes_asan_no_optimize() {
+    // Bug: the importer calling the other module's same-named initializer would write that
+    // shape's layout into this one; ASan at -O0 is the memory verdict. Tier: High.
+    assert_asan_clean(
+        "v0_3_m9_union_hidden_default_same_name_shapes",
+        true,
+        "11a\n11a\n22b\n",
+    );
+}
