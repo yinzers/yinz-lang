@@ -165,3 +165,46 @@ fn v03_m9_union_recursive_boxed_asan_no_optimize() {
         "6\n3 deep\nend\n",
     );
 }
+
+// Bug caught: a `wait`-staged or `background` union argument that names the spawner's envelope
+// dangles once the spawner suspends or returns; the callee's own `Param` region does not.
+// Tier: High.
+#[test]
+fn v03_m9_union_wait_arg_asan_optimized() {
+    // WHY: the argument is read after the callee resumes; the return rides the `Return` region.
+    assert_asan_clean(
+        "v0_3_m9_union_wait_arg_by_value.ynz",
+        false,
+        "big waited 7\ntiny\nbig again 8\nend\n",
+    );
+}
+
+#[test]
+fn v03_m9_union_wait_arg_asan_no_optimize() {
+    // WHY: same read at -O0.
+    assert_asan_clean(
+        "v0_3_m9_union_wait_arg_by_value.ynz",
+        true,
+        "big waited 7\ntiny\nbig again 8\nend\n",
+    );
+}
+
+#[test]
+fn v03_m9_union_background_arg_asan_optimized() {
+    // WHY: the task reads the argument long after the spawning frame moved on.
+    assert_asan_clean(
+        "v0_3_m9_union_background_arg.ynz",
+        false,
+        "big spawned 7\nend\n",
+    );
+}
+
+#[test]
+fn v03_m9_union_background_arg_asan_no_optimize() {
+    // WHY: same read at -O0.
+    assert_asan_clean(
+        "v0_3_m9_union_background_arg.ynz",
+        true,
+        "big spawned 7\nend\n",
+    );
+}

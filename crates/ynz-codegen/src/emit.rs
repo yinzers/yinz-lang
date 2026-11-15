@@ -2049,9 +2049,6 @@ struct SoaArrayInfo<'ctx> {
 /// `lower_expr` built in this frame and is never re-homed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EnvelopeHome {
-    /// Counted heap cells for a freshly wrapped value staged into a suspending callee's frame
-    /// (a frame slot would die with the resume invocation).
-    Heap,
     /// A `return`: a union value the callee built itself, a returned parameter and a freshly
     /// wrapped value move to heap cells (their envelope is a slot in the frame about to die); a
     /// call result already is a heap cell.
@@ -4271,22 +4268,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Move a union value that must outlive this frame onto counted heap cells
-    /// (`union_to_heap_cell`: envelope AND payload) — #410's heap homes, kept as they are until
-    /// #423 replaces them. Two homes, each costing two counted allocations (envelope + payload
-    /// cell) per present value, freed by no pass yet:
-    /// - `Heap`: an argument staged into a suspending (`wait`ed) callee's frame, when
-    ///   `lower_expr` just wrapped it (a frame slot would die with the resume invocation), and a
-    ///   hidden shape-field default wrapped by the shape's defaults initializer (its frame ends
-    ///   at the initializer's `ret`). A union VALUE passes through: its binding already homed it.
-    /// - `Return`: a `return`ed union value, unless it is a call result (every union return
-    ///   already promoted, so the caller got a heap cell). A union a callee built itself, a
-    ///   returned PARAMETER and a freshly wrapped value all promote.
+    /// (`union_to_heap_cell`: envelope AND payload). The ONE use left after C1f (#423) is the
+    /// union success value of a `-> Thing errors` function (`Return` home): the errors result is
+    /// `{err, ok}` with an 8-byte ok word, which cannot hold a slot, so the value still rides a
+    /// heap envelope and payload (two counted cells per present value, freed by no pass yet).
+    /// Every other union store, return and staged argument is by value in a slot
+    /// (`union_persist_into`). Replacing this last home needs a wider errors result.
     ///
-    /// A non-envelope union (no shape variant) is the raw pointer and passes through.
-    ///
-    /// Frame-homed envelopes that can still outlive their frame (#423's by-value envelope ends
-    /// them): the element of `array.add` / `map.set`, and a plain variant stored by a shape
-    /// literal into a union field of a shape that leaves the frame.
+    /// A union a callee built itself, a returned PARAMETER and a freshly wrapped value all
+    /// promote; a call result already is a heap cell. A non-envelope union (no shape variant)
+    /// is the raw pointer and passes through.
     ///
     /// Time: O(1) + the heap-cell copy  Space: O(1), two counted heap cells per present value
     fn home_union_on_heap(
@@ -4320,7 +4311,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..)
             );
         let promote = match home {
-            EnvelopeHome::Heap => wrapped_here,
             EnvelopeHome::Return => is_union_value && !already_homed,
         };
         if promote {
@@ -4555,6 +4545,74 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
         Ok(())
     }
+    /// The bits a suspending function's parameter alloca holds, from the bits in its frame slot.
+    /// Most parameters are their own bits; an envelope-union parameter's frame bits are the
+    /// address of its slot (a `UnionRegionRole::Param` region of this frame, written by the
+    /// caller), and the alloca holds a view of that slot, the value form every reader expects.
+    ///
+    /// Time: O(v) for v shape variants  Space: O(1)
+    fn sm_param_bits(
+        &self,
+        frame_bits: inkwell::values::IntValue<'ctx>,
+        param_ty: &Type,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        if let Some(variants) = self.envelope_union_variants(param_ty) {
+            let slot = self
+                .builder
+                .build_int_to_ptr(frame_bits, self.ptr(), "sm_param_union_slot")
+                .map_err(|e| format!("sm union param slot cast: {e}"))?;
+            let view = self.union_slot_to_value(slot, &variants, "sm_param_union")?;
+            return self
+                .builder
+                .build_ptr_to_int(view, self.i64(), "sm_param_union_bits")
+                .map_err(|e| format!("sm union param view bits: {e}"));
+        }
+        self.to_i64_bits(self.i64_bits_to(frame_bits, param_ty)?, param_ty)
+    }
+
+    /// Stage the envelope-union argument `value` for parameter `index` of the suspending
+    /// callee `callee_name`, whose frame starts at `callee_frame`: persist it into the callee
+    /// frame's `Param` region (so it lives as long as the callee, not as long as this resume
+    /// invocation or the caller's frame) and return the address as the frame slot bits.
+    ///
+    /// Time: O(1) + one memmove  Space: O(1)
+    fn stage_union_arg(
+        &self,
+        value: PointerValue<'ctx>,
+        variants: &[Type],
+        callee_name: &str,
+        index: usize,
+        callee_frame: PointerValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let offset = self
+            .frame_layouts
+            .get(callee_name)
+            .and_then(|layout| {
+                layout
+                    .union_regions
+                    .iter()
+                    .find(|region| region.role == UnionRegionRole::Param(index))
+            })
+            .map(|region| region.offset)
+            .ok_or_else(|| {
+                format!(
+                    "codegen: the frame layout of `{callee_name}` reserves no union region for \
+                     parameter {index}; the layout and the call disagree, a compiler bug"
+                )
+            })?;
+        let region = state_machine::frame_region_ptr(
+            self.ctx,
+            &self.builder,
+            callee_frame,
+            offset,
+            "staged_union_arg",
+        )?;
+        self.union_persist_into(value, region, variants, "staged_union_arg")?;
+        self.builder
+            .build_ptr_to_int(region, self.i64(), "staged_union_arg_bits")
+            .map_err(|e| format!("staged union arg bits: {e}"))
+    }
+
     /// The byte offset, in this state machine's frame, of the union slot reserved for `role`
     /// (`FrameLayout::union_regions`). Missing means the layout and the lowering disagree about
     /// which union slots this function has: a compiler bug.
@@ -6833,18 +6891,15 @@ fn lower_function_with_waits<'ctx, 'g>(
             state_machine::load_local_slot(ctx, &cg_resume.builder, frame_param, slot_idx, pname)?;
         let param_decl = &f.params[slot_idx];
         let param_ty = ast_type_to_typeck_type(&param_decl.ty, shape_table);
-        // Reconstruct the LLVM value from i64 bits, then store into the alloca.
-        let val = cg_resume
-            .i64_bits_to(bits, &param_ty)
-            .map_err(|e| format!("sm param reconstruct: {e}"))?;
         let alloca = *cg_resume
             .locals
             .get(pname)
             .ok_or_else(|| format!("sm: alloca for {pname} not found"))?;
-        // Store directly regardless of type (the alloca is i64; store the raw bits).
+        // Store directly regardless of type (the alloca is i64; store the raw bits; a union
+        // parameter's frame bits name its slot, which the alloca holds as a view).
         let bits_for_store = cg_resume
-            .to_i64_bits(val, &param_ty)
-            .map_err(|e| format!("sm param to_bits: {e}"))?;
+            .sm_param_bits(bits, &param_ty)
+            .map_err(|e| format!("sm param bits: {e}"))?;
         cg_resume
             .builder
             .build_store(alloca, bits_for_store)
@@ -6897,8 +6952,36 @@ fn lower_function_with_waits<'ctx, 'g>(
             .get_nth_param(slot_idx as u32)
             .ok_or_else(|| format!("wrapper: missing param {slot_idx}"))?;
         let param_ty = ast_type_to_typeck_type(&param.ty, shape_table);
-        let bits = value_to_i64_bits(&builder, ctx.i64_type(), llvm_param, &param_ty)
-            .map_err(|e| format!("param to bits: {e}"))?;
+        let bits = if let Some(variants) = cg_resume.envelope_union_variants(&param_ty) {
+            // An envelope-union parameter is written into this frame's own `Param` region
+            // (the resume function reads its slot there). The persist emission is the resume
+            // function's `Cg`, pointed at the wrapper for this one call.
+            let wrapper_block = builder
+                .get_insert_block()
+                .ok_or("wrapper: builder has no insert block")?;
+            cg_resume.builder.position_at_end(wrapper_block);
+            let resume_function = cg_resume.current_fn;
+            cg_resume.current_fn = wrapper_fn;
+            let staged = cg_resume.stage_union_arg(
+                llvm_param.into_pointer_value(),
+                &variants,
+                &f.name,
+                slot_idx,
+                frame_ptr,
+            );
+            cg_resume.current_fn = resume_function;
+            let staged = staged?;
+            builder.position_at_end(
+                cg_resume
+                    .builder
+                    .get_insert_block()
+                    .ok_or("wrapper: union staging left no insert block")?,
+            );
+            staged
+        } else {
+            value_to_i64_bits(&builder, ctx.i64_type(), llvm_param, &param_ty)
+                .map_err(|e| format!("param to bits: {e}"))?
+        };
         state_machine::store_local_slot(ctx, &builder, frame_ptr, slot_idx, bits)?;
     }
 
@@ -7424,7 +7507,7 @@ fn reload_params_from_frame<'ctx>(
         let alloca = cg
             .reload_slot(pname)
             .ok_or_else(|| format!("sm reload: alloca for {pname} missing"))?;
-        let bits_to_store = cg.to_i64_bits(cg.i64_bits_to(bits, &param_ty)?, &param_ty)?;
+        let bits_to_store = cg.sm_param_bits(bits, &param_ty)?;
         cg.builder
             .build_store(alloca, bits_to_store)
             .map_err(|e| format!("sm reload store {pname}: {e}"))?;
@@ -12128,6 +12211,9 @@ fn emit_io_member_init<'ctx, 'g>(
             cg,
             arg,
             frame_ptr,
+            child_frame,
+            callee_name,
+            idx,
             cg.callee_param_type(callee_name, idx),
         )
         .map_err(|e| format!("{arg_bits_label}: {e}"))?;
@@ -13499,6 +13585,9 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
             cg,
             arg,
             parent_frame,
+            child_frame,
+            &callee_name,
+            idx,
             cg.callee_param_type(&callee_name, idx),
         )
         .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
@@ -13669,6 +13758,9 @@ fn stage_suspending_call_arg_bits<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     arg: &Expr,
     parent_frame: PointerValue<'ctx>,
+    callee_frame: PointerValue<'ctx>,
+    callee_name: &str,
+    index: usize,
     param_ty: Option<Type>,
 ) -> Result<inkwell::values::IntValue<'ctx>, String> {
     let ctx = cg.ctx;
@@ -13716,19 +13808,23 @@ fn stage_suspending_call_arg_bits<'ctx>(
         let arg_ty = cg.expr_type(arg);
         return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
     }
-    let mut arg_val = lower_expr(cg, arg)?;
-    let mut arg_ty = cg.expr_type(arg);
-    // 3. A plain value for a UNION parameter: `lower_expr` wrapped it in a tagged envelope in
-    //    this resume function's frame. The staged bits must name an envelope that survives the
-    //    parent's suspension, so the envelope and payload move to counted heap cells
-    //    (`home_union_on_heap`, `Heap` home) — a frame slot would die with the resume
-    //    invocation.
-    if let Some(param_ty) = param_ty {
-        if matches!(param_ty, Type::Union { .. }) {
-            arg_val =
-                cg.home_union_on_heap(arg, arg_val, &param_ty, EnvelopeHome::Heap, "sm_union_arg")?;
-            arg_ty = param_ty;
-        }
+    let arg_val = lower_expr(cg, arg)?;
+    let arg_ty = cg.expr_type(arg);
+    // 3. An envelope-union parameter: `lower_expr` wrapped a plain value in a tagged envelope in
+    //    this resume function's frame, which dies with this invocation. The argument is written,
+    //    payload inline, into the callee frame's own `Param` region, which lives as long as the
+    //    callee does (`stage_union_arg`).
+    if let Some(variants) = param_ty
+        .as_ref()
+        .and_then(|param_ty| cg.envelope_union_variants(param_ty))
+    {
+        return cg.stage_union_arg(
+            arg_val.into_pointer_value(),
+            &variants,
+            callee_name,
+            index,
+            callee_frame,
+        );
     }
     cg.to_i64_bits(arg_val, &arg_ty)
 }
@@ -13834,6 +13930,9 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
             cg,
             arg,
             parent_frame,
+            child_frame,
+            callee_name,
+            idx,
             cg.callee_param_type(callee_name, idx),
         )
         .map_err(|e| format!("rec arg bits: {e}"))?;
@@ -19365,9 +19464,21 @@ fn lower_sm_background_spawn<'ctx>(
     // v0.3-M4: the FIRST channel-typed argument is the handle's `.send()` conduit
     // (`ynz_rt_spawn_handle` takes its own refcounted reference to it).
     let mut first_channel_arg: Option<inkwell::values::PointerValue<'ctx>> = None;
-    for arg in &call.args {
+    // An envelope-union argument cannot be staged before the callee frame exists: it is
+    // persisted into the frame's `Param` region (`stage_union_arg`) once the frame is allocated.
+    let mut pending_union_args: Vec<(usize, PointerValue<'ctx>, Vec<Type>)> = Vec::new();
+    for (arg_index, arg) in call.args.iter().enumerate() {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        if let Some(variants) = cg
+            .callee_param_type(callee_name, arg_index)
+            .and_then(|param_ty| cg.envelope_union_variants(&param_ty))
+        {
+            pending_union_args.push((arg_index, val.into_pointer_value(), variants));
+            arg_vals_i64.push(cg.i64().const_zero());
+            free_kinds.push(BgArgFreeKind::None);
+            continue;
+        }
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         if first_channel_arg.is_none()
             && matches!(cg.resolve_type(&ty), Type::BuiltinChannel { .. })
@@ -19390,6 +19501,11 @@ fn lower_sm_background_spawn<'ctx>(
         .map(|l| l.total_size)
         .unwrap_or_else(|| ynz_abi::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals));
     let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, total_frame_size)?;
+
+    for (arg_index, value, variants) in &pending_union_args {
+        arg_vals_i64[*arg_index] =
+            cg.stage_union_arg(*value, variants, callee_name, *arg_index, frame_ptr)?;
+    }
 
     // Step 3: write parameter values to frame local slots (at offset 32+).
     for (idx, bits) in arg_vals_i64.iter().enumerate() {
