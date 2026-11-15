@@ -244,3 +244,36 @@ by_value_tests!(
     v03_m9_union_crossing_binding_asan_optimized,
     v03_m9_union_crossing_binding_asan_no_optimize
 );
+
+// Probe: a union binding copied from another binding inside a loop keeps its value when the source
+// is rebound (a binding is a value, not a reference to a per-site envelope). Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_binding_copy.ynz",
+    "tiny\nbig b0\nbig b0\nbig b1\nbig b1\nbig b2\nend\n",
+    v03_m9_union_binding_copy_optimized,
+    v03_m9_union_binding_copy_no_optimize,
+    v03_m9_union_binding_copy_asan_optimized,
+    v03_m9_union_binding_copy_asan_no_optimize
+);
+
+// Probe: `maybe<Thing>` returned holding each variant and `none`, read after the callee's frame
+// is gone. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_maybe.ynz",
+    "tiny\nbig kept\nnone\nend\n",
+    v03_m9_union_maybe_optimized,
+    v03_m9_union_maybe_no_optimize,
+    v03_m9_union_maybe_asan_optimized,
+    v03_m9_union_maybe_asan_no_optimize
+);
+
+// Probe: shape equality over a union field compares the variant and its payload, not an address.
+// Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_shape_equality.ynz",
+    "big same true\nbig payload false\nvariant false\ntiny same true\nend\n",
+    v03_m9_union_shape_equality_optimized,
+    v03_m9_union_shape_equality_no_optimize,
+    v03_m9_union_shape_equality_asan_optimized,
+    v03_m9_union_shape_equality_asan_no_optimize
+);

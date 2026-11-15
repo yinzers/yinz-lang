@@ -4962,6 +4962,27 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.ec_standard_over_slot(err, slot, variants, site)
     }
 
+    /// COPY a union value into storage the binding owns: a slot of its own in this frame's entry
+    /// block (one per binding site) holding the value by value, and a view of it. A binding that
+    /// kept the pointer it was given would alias the envelope and payload of whatever built the
+    /// value (a per-site wrap slot a later loop iteration rewrites, or another binding that is
+    /// rebound), so `let previous: Thing = current` followed by rebinding `current` would change
+    /// `previous` too.
+    ///
+    /// Time: O(v) for v shape variants + one memmove of the variant's size  Space: O(1) entry slot
+    fn union_to_owned(
+        &self,
+        value: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_owned"))?;
+        self.union_persist_into(value, slot, variants, &format!("{site}_owned"))?;
+        self.union_slot_to_value(slot, variants, &format!("{site}_owned"))
+    }
+
     /// The frame region and variants of the crossing union local `name`.
     fn crossing_union(&self, name: &str) -> Result<&CrossingUnion<'ctx>, String> {
         self.sm_crossing_unions.get(name).ok_or_else(|| {
@@ -5748,60 +5769,105 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .build_int_compare(IntPredicate::EQ, a, b, &format!("{site}_eq_{fname}"))
                         .map_err(|e| format!("{e}"))?
                 }
-                // An envelope union field is the inline slot: every 8-byte word of it compares
-                // by bit equality (tag, then the payload area), the way the pointer fields below
-                // compare. Padding inside a shape variant's bytes can make two equal values
-                // differ; a `none` slot is {UNION_NONE_TAG, ..}, so two none slots compare equal
-                // only when their payload words match.
+                // An envelope union field is the inline slot: two slots are equal when their tags
+                // match and the stored variants are equal as values of that variant: a shape
+                // variant field by field (`shape_value_eq`, which skips the padding inside the
+                // shape and the unused bytes of a slot sized for a bigger variant), any other
+                // variant by its payload word (bit equality, like the pointer fields below), and
+                // `none` always. Every shape variant's comparison is straight-line loads from
+                // memory the slot owns, so the matching one is selected by tag.
                 union @ Type::Union { .. } if self.envelope_union_variants(union).is_some() => {
                     let variants = self
                         .envelope_union_variants(union)
                         .ok_or("shape_value_eq: union lost its variants")?;
                     let layout = self.union_layout(&variants)?;
-                    let mut slots_equal = self.bool().const_int(1, false);
-                    for word in 0..layout.slot_size / 8 {
-                        // SAFETY: `word * 8` is inside the slot (`slot_size` is a multiple of 8).
-                        let (a_word_gep, b_word_gep) = unsafe {
-                            let offset = self.i64().const_int(word * 8, false);
+                    let tag_a = self
+                        .builder
+                        .build_load(self.i64(), a_gep, "ueq_ta")
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let tag_b = self
+                        .builder
+                        .build_load(self.i64(), b_gep, "ueq_tb")
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let same_tag = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, tag_a, tag_b, "ueq_tag")
+                        .map_err(|e| format!("{e}"))?;
+                    let payload_a = self.union_payload_addr(a_gep, &layout, "ueq_a")?;
+                    let payload_b = self.union_payload_addr(b_gep, &layout, "ueq_b")?;
+                    let word_a = self
+                        .builder
+                        .build_load(self.i64(), payload_a, "ueq_wa")
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let word_b = self
+                        .builder
+                        .build_load(self.i64(), payload_b, "ueq_wb")
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let same_word = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, word_a, word_b, "ueq_word")
+                        .map_err(|e| format!("{e}"))?;
+                    let is_none = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            tag_a,
+                            self.i64().const_int(UNION_NONE_TAG, false),
+                            "ueq_none",
+                        )
+                        .map_err(|e| format!("{e}"))?;
+                    // Not a shape variant: the payload word, or nothing for `none`.
+                    let mut variant_equal = self
+                        .builder
+                        .build_or(same_word, is_none, "ueq_plain")
+                        .map_err(|e| format!("{e}"))?;
+                    for (index, variant_shape) in &layout.shape_variants {
+                        let (variant_a, variant_b) = if layout.boxed {
                             (
                                 self.builder
-                                    .build_in_bounds_gep(
-                                        self.ctx.i8_type(),
-                                        a_gep,
-                                        &[offset],
-                                        "ueq_a",
-                                    )
+                                    .build_int_to_ptr(word_a, self.ptr(), "ueq_ca")
                                     .map_err(|e| format!("{e}"))?,
                                 self.builder
-                                    .build_in_bounds_gep(
-                                        self.ctx.i8_type(),
-                                        b_gep,
-                                        &[offset],
-                                        "ueq_b",
-                                    )
+                                    .build_int_to_ptr(word_b, self.ptr(), "ueq_cb")
                                     .map_err(|e| format!("{e}"))?,
                             )
+                        } else {
+                            (payload_a, payload_b)
                         };
-                        let a_word = self
+                        let shape_equal = self.shape_value_eq(
+                            variant_a,
+                            variant_b,
+                            variant_shape,
+                            &format!("{site}_u{index}"),
+                        )?;
+                        let is_variant = self
                             .builder
-                            .build_load(self.i64(), a_word_gep, "ueq_av")
+                            .build_int_compare(
+                                IntPredicate::EQ,
+                                tag_a,
+                                self.i64().const_int(*index, false),
+                                "ueq_is_variant",
+                            )
+                            .map_err(|e| format!("{e}"))?;
+                        let this_or_other = self
+                            .builder
+                            .build_select(
+                                is_variant,
+                                shape_equal,
+                                variant_equal,
+                                "ueq_pick",
+                            )
                             .map_err(|e| format!("{e}"))?
                             .into_int_value();
-                        let b_word = self
-                            .builder
-                            .build_load(self.i64(), b_word_gep, "ueq_bv")
-                            .map_err(|e| format!("{e}"))?
-                            .into_int_value();
-                        let word_equal = self
-                            .builder
-                            .build_int_compare(IntPredicate::EQ, a_word, b_word, "ueq_word")
-                            .map_err(|e| format!("{e}"))?;
-                        slots_equal = self
-                            .builder
-                            .build_and(slots_equal, word_equal, "ueq_acc")
-                            .map_err(|e| format!("{e}"))?;
+                        variant_equal = this_or_other;
                     }
-                    slots_equal
+                    self.builder
+                        .build_and(same_tag, variant_equal, "ueq_slot")
+                        .map_err(|e| format!("{e}"))?
                 }
                 // Pointer payload (string, nested shape, bignum, everything else):
                 // pointer identity — the Risk-3 heap-field deferral.
@@ -24875,9 +24941,22 @@ fn store_binding<'ctx>(
                 .map_err(|e| format!("store_binding maybe {name}: {e}"))?;
             Ok(())
         }
-        // A union binding stores its view pointer like any other. A CROSSING one is persisted into
-        // its frame region by the flush after the statement (`Cg::flush_crossing_union`), which
-        // allocates nothing.
+        // An envelope union binding owns a by-value copy of the value it was given, so it never
+        // aliases the per-site wrap slot or the binding it was copied from. A CROSSING one keeps
+        // the given view until the flush after the statement persists it into its frame region
+        // (`Cg::flush_crossing_union`), which is the same copy.
+        union @ Type::Union { .. } if cg.envelope_union_variants(&union).is_some() => {
+            let variants = cg
+                .envelope_union_variants(&union)
+                .ok_or("store_binding: union lost its variants")?;
+            let is_crossing = cg.sm_crossing_unions.contains_key(name);
+            let view = if is_crossing {
+                val.into_pointer_value()
+            } else {
+                cg.union_to_owned(val.into_pointer_value(), &variants, name)?
+            };
+            store(cg, view.into(), ty, slot)
+        }
         _ => store(cg, val, ty, slot),
     }
 }
