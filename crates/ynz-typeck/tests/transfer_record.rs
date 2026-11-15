@@ -543,16 +543,18 @@ fn storing_a_sensitive_string_hands_nothing_over() {
 }
 
 /// (High) A `range` is its start and end and nothing can change them: `owned_copy_plan` calls its
-/// copy the receiver's bits, so storing one hands nothing over. `let s = r` then `for (i in r)`
-/// is a valid program, and a range stored in a container stays readable.
+/// copy the receiver's bits, so storing one hands nothing over. `let s = r` and a struct literal
+/// holding `r` leave `r` readable, so `for (i in r)` is a valid program. Every form here builds
+/// end to end; an `array<range>` does not (codegen cannot lower a range element yet), so it is
+/// not pinned as accepted.
 #[test]
 fn storing_a_range_hands_nothing_over() {
     assert_accepted(
-        "function f() -> int {
+        "shape Window { span: range }
+function f() -> int {
   let r = range(0, 3)
   let s = r
-  let ranges: array<range> = []
-  ranges.add(r)
+  let window: Window = { span: r }
   let total = 0
   for (i in r) {
     total = total + i
@@ -560,7 +562,10 @@ fn storing_a_range_hands_nothing_over() {
   for (j in s) {
     total = total + j
   }
-  return total + ranges.count()
+  for (k in window.span) {
+    total = total + k
+  }
+  return total
 }",
     );
 }
