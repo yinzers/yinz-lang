@@ -169,10 +169,11 @@ fn union_recovery(value: &Expr, source_union: &Type, expected_variant: &Type) ->
 ///
 /// `expected` and `given` always count the receiver of a dot call. `dot_receiver` is the source
 /// text of the value before the dot, `None` for a plain call (a dot call whose receiver text is
-/// unknown gets the plain call's text, which is still true, never an invented name). The first sentence of the WHAT is
-/// the same for every form; a dot call adds to WHAT-INSTEAD and WHY what the plain call has no
-/// need of: that the value before the dot is one of the arguments (without it, "takes 2, but 1
-/// were given" for `big.useBig()` has nothing to point at, since the parentheses are empty).
+/// unknown gets the plain call's text, which is still true, never an invented name). The first
+/// sentence of the WHAT is the same for every form; a dot call adds to WHAT-INSTEAD and WHY what
+/// the plain call has no need of: that the value before the dot is one of the arguments (without
+/// it, "takes 2, but 1 were given" for `big.useBig()` has nothing to point at, since the
+/// parentheses are empty).
 fn wrong_argument_count_diag(
     span: SourceSpan,
     callee: &str,
@@ -7486,16 +7487,12 @@ impl<'b> Checker<'b> {
             else {
                 continue;
             };
+            // `check_argument_type` also records the union coercion of a value entering a union
+            // slot (the `.or(fallback)` fallback IS the result of an empty `maybe` or a failed
+            // `errors` result, so it must be wrapped). It is the one record: a second call here
+            // would push the envelope refusal twice. A union envelope STORED by `add`/`set` into
+            // a container is the lifetime class of #423.
             self.check_argument_type(method, arg, &slot_ty, &actual_ty);
-            // `.or(fallback)` (on `maybe` and on an `errors` result): the fallback IS the result
-            // when the receiver is empty or failed, so it flows into the element slot; wrapped
-            // like any other value entering a union slot. The other element-typed positions are
-            // not a plain flow into a slot: `add`/`set` STORE into the receiver (an envelope
-            // that must outlive the frame: the lifetime class of #423), `contains`/`remove`/`get`
-            // only look a value up.
-            if method == "or" {
-                self.record_union_coercion(arg, &slot_ty, &actual_ty);
-            }
         }
 
         // M8 P4: sensitive type method dispatch (after the argument check: a `sensitive T` has
@@ -9299,6 +9296,7 @@ impl<'b> Checker<'b> {
         ));
         true
     }
+
     /// How many arguments (the receiver not counted) the built-in method `method` takes on
     /// `receiver_ty`, or `None` when no table knows it. Asks the collection/`maybe`/string table
     /// first (`builtin_method_argument_count`), then the registry-backed primitive intrinsics

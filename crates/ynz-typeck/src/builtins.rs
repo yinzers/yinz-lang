@@ -285,11 +285,11 @@ pub fn builtin_method_argument_slots(receiver: &Type, method: &str) -> Vec<(usiz
 }
 
 /// How many arguments (the receiver not counted) the built-in methods of the collection, `maybe`,
-/// string, `sensitive`, `errors`-capable and `options` types take, or `None` when this table does not know the method: an unknown name
-/// (refused elsewhere, with its own text), `sort` (its arguments are optional) and the methods the
-/// registry's `primitive_intrinsic` entries already count (`int`/`float`/`number`/`bool` methods
-/// and the string methods with zero or one argument — see `Checker::builtin_method_argument_count`,
-/// which asks this table first, then those entries).
+/// string, `sensitive`, `errors`-capable and `options` types take, or `None` when this table does
+/// not know the method: an unknown name (refused elsewhere, with its own text), `sort` (its
+/// arguments are optional) and the methods the registry's `primitive_intrinsic` entries already
+/// count (`int`/`float`/`number`/`bool` methods and the string methods with zero or one argument,
+/// see `Checker::builtin_method_argument_count`, which asks this table first, then those entries).
 /// `sort`, `filter`, `map` and `find` are left out on purpose: their closure arguments are not
 /// settled (`sort` takes none, one or two) and the type-check tests call `filter()` with none.
 ///
