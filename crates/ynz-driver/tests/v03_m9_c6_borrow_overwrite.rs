@@ -1,9 +1,10 @@
-//! v0.3-M9 C6 security round 1: RED until the borrow-overwrite class is fixed.
+//! v0.3-M9 C6 security round 1: the borrow-overwrite class (a reader of a replaced or released
+//! place) stays closed.
 //!
 //! The release helper frees what an overwrite replaces and what a task's argument owns. A binding,
 //! loop variable, `share` argument or `return` that still points at the replaced or released
-//! value then reads freed memory. Base `cf5a42dd` prints each expected output under ASan;
-//! head reads freed memory. All High tier: memory safety.
+//! value then reads freed memory. Each fixture prints its expected output under ASan only while
+//! typeck judges the reader a copy (`non_owned_reads`). All High tier: memory safety.
 
 mod support;
 

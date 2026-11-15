@@ -9,8 +9,9 @@
 //! All High tier (memory safety and data integrity: a string released twice, or not at all,
 //! is silent at exit 0). One fixture per container kind, three tests each: the count balance
 //! (also asserts stdout), and AddressSanitizer at both optimization levels. A static string is
-//! never freed (C3a's static mark): `string_free_bytes` of a fixture whose strings are literals
-//! is covered by the byte balance.
+//! never freed (C3a's static mark): no Yinz program can store one in a container (every store
+//! copies), so that half runs in `ynz-runtime/tests/container_string_release.rs`, which releases
+//! containers of static and heap strings with the same glue.
 
 mod support;
 

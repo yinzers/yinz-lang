@@ -1,0 +1,11 @@
+// v0.3-M9 C6 cost fixture: a `let` of a `maybe<map>` element read, and of its `.or`, copies no
+// payload while nothing writes the list.
+// Allocations: the list (2), its one map (counted with its buffers: 5) and the fallback map (5).
+
+function entrypoint() -> nothing {
+  let tables: array<map<string, int>> = [{ `a`: 1 }]
+  let picked = tables.get(0)
+  let fallback: map<string, int> = {}
+  let found = picked.or(fallback)
+  print(found.count())
+}

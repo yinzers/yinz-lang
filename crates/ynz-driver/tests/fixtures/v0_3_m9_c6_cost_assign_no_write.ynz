@@ -1,0 +1,15 @@
+// v0.3-M9 C6 cost fixture: reassigning a binding from a field nobody writes copies nothing.
+// Allocations: the field's literal (2) and the first value of `rows` (2); the assignment copies no
+// array.
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let rows: array<int> = [1]
+  rows = bucket.rows
+  print(rows.count())
+}

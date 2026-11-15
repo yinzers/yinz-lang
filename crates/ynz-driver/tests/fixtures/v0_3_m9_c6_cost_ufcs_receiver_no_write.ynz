@@ -1,0 +1,20 @@
+// v0.3-M9 C6 cost fixture: the receiver of a UFCS call to a user function reads a place the call
+// writes nothing through, so it is passed as it is.
+// Allocations: `first`'s array (2), the list of one `Bucket` (2) and the fallback's empty array
+// (2); the call copies no receiver.
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function total(share bucket: Bucket) -> int {
+  return bucket.rows.count()
+}
+
+function entrypoint() -> nothing {
+  let first: Bucket = { rows: [1, 2], id: 1 }
+  let buckets: array<Bucket> = [first]
+  let fallback: Bucket = { rows: [], id: 0 }
+  print(buckets[0].or(fallback).total())
+}

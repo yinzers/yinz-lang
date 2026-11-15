@@ -1,0 +1,16 @@
+// v0.3-M9 C6 cost fixture: an argument of a call that suspends (its callee `wait`s, so the caller
+// stages the argument into the callee's frame) reads a place nothing writes, so it is staged
+// without a copy.
+// Allocations: the outer literal and its inner literal (4), the fallback literal (2) and one
+// state-machine frame (1, freed: the same frame a bare `wait` costs). A copy of the argument would add 2.
+
+function slow(share row: array<int>) -> nothing {
+  wait sleep(1)
+  print(row.count())
+}
+
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[1, 2]]
+  let fallback: array<int> = []
+  slow(rows[0].or(fallback))
+}
