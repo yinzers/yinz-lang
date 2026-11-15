@@ -688,6 +688,25 @@ pub unsafe extern "C" fn ynz_string_release(string: *const u8) {
     free(allocation as *mut core::ffi::c_void);
 }
 
+/// Copy a string: a fresh heap string with the same bytes, which the caller owns
+/// (`ynz_string_release` frees it). THE copy a store makes of a borrowed string (a literal, a
+/// field or element read, a parameter, an `.or()` result) so the place holds bytes of its own;
+/// accepts static and heap strings alike, and a null string stays null (the `none` of a
+/// `T | nothing` union).
+///
+/// Cost: one `strlen`, one allocation, one `memcpy`; O(n) time, n + 9 bytes of memory.
+///
+/// # Safety
+/// `string` must be null or a valid pointer to a null-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_clone(string: *const u8) -> *const u8 {
+    if string.is_null() {
+        return string;
+    }
+    let bytes = unsafe { std::ffi::CStr::from_ptr(string as *const i8) }.to_bytes();
+    heap_string_from_bytes(bytes)
+}
+
 /// Read the current heap-string alloc count. Zero when counter not enabled.
 #[no_mangle]
 pub extern "C" fn ynz_string_alloc_count() -> u64 {

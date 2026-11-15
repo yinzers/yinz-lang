@@ -18,7 +18,8 @@ use ynz_runtime::runtime::{ynz_rt_init, ynz_rt_shutdown};
 use ynz_runtime::{
     ynz_bignum_add, ynz_float_to_string, ynz_int_to_string, ynz_string_alloc_bytes,
     ynz_string_alloc_count, ynz_string_builder_append, ynz_string_builder_finalize,
-    ynz_string_builder_new, ynz_string_codepoint_at, ynz_string_concat, ynz_string_free_bytes,
+    ynz_string_builder_new, ynz_string_clone, ynz_string_codepoint_at, ynz_string_concat,
+    ynz_string_free_bytes,
     ynz_string_free_count, ynz_string_from_static, ynz_string_release, ynz_string_to_upper,
 };
 
@@ -81,6 +82,10 @@ fn every_string_allocator_is_counted_and_balanced_by_ynz_string_release() {
     check_allocator("ynz_float_to_string", "1.5", || ynz_float_to_string(1.5));
     check_allocator("ynz_string_concat", "foobar", || unsafe {
         ynz_string_concat(c"foo".as_ptr().cast(), c"bar".as_ptr().cast())
+    });
+    // The copy of a static string is a counted heap string, released like any other.
+    check_allocator("ynz_string_clone (static source)", "copy", || unsafe {
+        ynz_string_clone(c"copy".as_ptr().cast())
     });
     check_allocator("ynz_string_codepoint_at", "é", || unsafe {
         ynz_string_codepoint_at(c"aé".as_ptr().cast(), 1)

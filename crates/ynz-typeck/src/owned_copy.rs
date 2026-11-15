@@ -19,7 +19,7 @@
 //! are exactly two buckets — a real copy, or a [`CopyRefusal`] the user can read.
 //!
 //! "Independence is meaningful" means *the value has state something could change*. For a
-//! type whose contents can never change — `int`, `string`, an `options` tag, a `range` — the
+//! type whose contents can never change — `int`, an `options` tag, a `range` — the
 //! receiver already IS an independent value in every observable sense, so returning it is a
 //! copy rather than an alias. That is [`OwnedCopy::ReceiverIsCopy`] /
 //! [`OwnedCopy::FrameLocalImmutable`], not a stub.
@@ -47,10 +47,16 @@ use crate::types::{type_name, Type};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnedCopy {
     /// The receiver's bits ARE the copy, for every consumer: an immediate (`int`, `float`,
-    /// `bool`, an `options` i8 tag) or a pointer to immortal, immutable bytes (`string`,
-    /// `sensitive string`). Nothing can change what is behind it, so a second name for the
-    /// same bits is indistinguishable from a second value.
+    /// `bool`, an `options` i8 tag). Nothing can change what is behind it, so a second name
+    /// for the same bits is indistinguishable from a second value.
     ReceiverIsCopy,
+    /// A `string` (and a `sensitive string`, the same pointer): a fresh heap copy of the bytes
+    /// (`ynz_string_clone`), so the copy and the receiver own two strings. Nothing changes a
+    /// string in place, but the scope-exit release frees a heap string once, so two holders of
+    /// one pointer would free it twice. The one copy a store makes of a borrowed string
+    /// (`IMP-strings.md` "String Ownership and Release"); `.copy()` and a `background`
+    /// argument ask for the same one.
+    StringClone,
     /// Immutable contents behind a pointer into the PRODUCING FRAME's storage — a
     /// `decimal128` number today. `.copy()` may hand back the receiver (same frame, nothing
     /// can mutate it); a `background` argument may NOT, because the frame dies while the task
@@ -148,9 +154,10 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
     match ty {
         // ── Values whose contents can never change: the receiver is already the copy ──
         Type::Int | Type::Float | Type::Bool => OwnedCopy::ReceiverIsCopy,
-        // String bytes are allocated once and never written again, and there is no operation
-        // that changes a string in place, so two names for the same bytes can never disagree.
-        Type::String => OwnedCopy::ReceiverIsCopy,
+        // Nothing changes a string in place, so two names for the same bytes never disagree.
+        // What two names cannot do is both own them: the scope-exit release frees a heap
+        // string once, so a copy is a fresh string with an owner of its own.
+        Type::String => OwnedCopy::StringClone,
         // An `options` value is a small tag with nothing behind it.
         Type::Options { .. } => OwnedCopy::ReceiverIsCopy,
 
@@ -190,6 +197,7 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
             // inner kinds it knows how to follow. An inner whose own copy needs a fresh
             // allocation is not one of those yet.
             OwnedCopy::ReceiverIsCopy
+            | OwnedCopy::StringClone
             | OwnedCopy::FrameLocalImmutable { .. }
             | OwnedCopy::ShapeMemcpy => OwnedCopy::MaybeCellClone,
             _ => OwnedCopy::Refused(items_refuse(ty, "contents", inner.as_ref())),
@@ -203,6 +211,7 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
         // `string` today, so there is no such case to design for yet.
         Type::Sensitive { inner } => match owned_copy_plan(inner) {
             OwnedCopy::ReceiverIsCopy => OwnedCopy::ReceiverIsCopy,
+            OwnedCopy::StringClone => OwnedCopy::StringClone,
             _ => OwnedCopy::Refused(items_refuse(ty, "contents", inner)),
         },
 
@@ -335,8 +344,10 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
 fn elem_copy(ty: &Type) -> Option<ElemCopy> {
     match owned_copy_plan(ty) {
         // The cell holds the element outright (an int, a shape's inline bytes, an options
-        // tag) or a pointer to bytes nothing can change (a string).
+        // tag).
         OwnedCopy::ReceiverIsCopy | OwnedCopy::ShapeMemcpy => Some(ElemCopy::Inline),
+        // A string cell is a pointer to bytes the cell owns: copy each one.
+        OwnedCopy::StringClone => Some(ElemCopy::Nested),
         // A `number` cell is 8 bytes of POINTER bits, not the 16-byte decimal itself
         // (`Cg::array_elem_size` sizes it at 8, and `Cg::to_i64_bits` is what puts it there) —
         // and the storage it points at belongs to whichever frame produced the number, which
@@ -438,6 +449,7 @@ pub fn spawn_arg_refusal(ty: &Type) -> Option<(SpawnRefusalCause, CopyRefusal)> 
             ),
         )),
         OwnedCopy::ReceiverIsCopy
+        | OwnedCopy::StringClone
         | OwnedCopy::FrameLocalImmutable { .. }
         | OwnedCopy::ShapeMemcpy
         | OwnedCopy::FixedMemcpy
@@ -465,7 +477,7 @@ pub fn spawn_arg_can_be_independent(ty: &Type) -> bool {
 ///   (`emit_owned_copy`'s `(CopyMode::Body, _)` arm). The receiver still reaches it, so
 ///   `r.copy()` on a `range` is not a second value however immutable it is — calling it
 ///   `Fresh` would let a transfer sink hand away something the source still names. Ordinary
-///   `int`/`string` copies are unaffected: those are [`OwnedCopy::ReceiverIsCopy`], where the
+///   `int` copies are unaffected: those are [`OwnedCopy::ReceiverIsCopy`], where the
 ///   bits are the value and there is no storage for anyone to still reach.
 pub fn copy_is_independent(ty: &Type) -> bool {
     !matches!(
@@ -492,7 +504,6 @@ mod tests {
                 Type::Int
                     | Type::Float
                     | Type::Bool
-                    | Type::String
                     | Type::Options { .. }
                     | Type::Number { .. }
                     | Type::Range { .. }

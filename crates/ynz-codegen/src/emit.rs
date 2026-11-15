@@ -20606,6 +20606,21 @@ fn emit_owned_copy<'ctx>(
         // the first, so the receiver IS the copy — in a body and across a spawn alike.
         OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
 
+        // A `string`: a fresh heap copy, the same one in a body and across a spawn. The copy is
+        // not released when the task retires or the frame ends: the scope-exit release pass
+        // (C6/C7) owns every string release, so until it lands the copy leaks, which is
+        // strictly better than the alias it replaces.
+        OwnedCopy::StringClone => {
+            let cloned = cg
+                .builder
+                .build_call(cg.rt.ynz_string_clone, &[val.into()], &format!("{site}_str"))
+                .map_err(|e| format!("{site} string clone: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| format!("{site} string clone: returned void"))?;
+            Ok((cloned, BgArgFreeKind::None))
+        }
+
         // Immutable, but living in storage the producing frame owns.
         OwnedCopy::FrameLocalImmutable { heap_cell } => match (mode, heap_cell) {
             (CopyMode::Body, _) => Ok((val, BgArgFreeKind::None)),
@@ -20886,6 +20901,9 @@ fn sole_holder_transfer_free_kind<'ctx>(
         // into frame storage the SpawnArg path must re-home (or refuse) for itself.
         ynz_typeck::owned_copy::OwnedCopy::ReceiverIsCopy
         | ynz_typeck::owned_copy::OwnedCopy::FrameLocalImmutable { .. } => None,
+        // A string a task solely holds (a fresh one, or a binding the spawn consumes) is the
+        // task's already: copying it would leave the original held by nobody.
+        ynz_typeck::owned_copy::OwnedCopy::StringClone => Some(BgArgFreeKind::None),
         // No copy exists; the caller's own refusal arm handles it.
         ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
     }
@@ -21107,6 +21125,10 @@ mod copy_parity_tests {
                     matches!(ty, Type::Maybe { .. }),
                     "{ty:?}: planned MaybeCellClone, which the emitter destructures as \
                      Type::Maybe"
+                ),
+                OwnedCopy::StringClone => assert!(
+                    matches!(ty, Type::String | Type::Sensitive { .. }),
+                    "{ty:?}: planned StringClone, which the emitter copies with ynz_string_clone"
                 ),
                 OwnedCopy::ReceiverIsCopy
                 | OwnedCopy::FrameLocalImmutable { .. }
