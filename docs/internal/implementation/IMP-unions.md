@@ -133,14 +133,28 @@ codegen only reads the record:
 - (b) the root of the place is not assigned, written through a field or index, or passed to a
   position that may write or consume it, anywhere in the view's live range; a parameter the function
   only reads (`share`) satisfies (b) for the whole body;
-- (c) no `wait` or `background` lies in the live range, and the function has no state-machine
-  frames (a view never crosses a suspension).
+- (c) the view never crosses a suspension: typeck refuses a written `wait` or `background` in the
+  live range, and codegen refuses a binding in the crossing set (`sm_crossing_names`, the set that
+  sizes the frame, which counts a call that suspends without a written `wait`). A state-machine
+  function whose binding does not cross views like any other.
 
 Every other binding keeps the deep copy, as Rust needs `.clone()` where it refuses the borrow. The
-decided form is a field-read chain from a parameter or a plain `let`; an element read (`arr[i]`,
-`.get(i)`) is a copy into per-site staging and keeps its copy, because whether a built-in collection
-method writes its receiver has no table to read, and an annotated `let` (a possible union wrap) is
-never a view.
+forms that are views:
+
+- a field-read chain from a parameter or a plain `let` (`head.next`, `outer.inner.chain`);
+- a read THROUGH a view (`let b = a.g` with `a` a view of `x`): `b` is a view of `x`, checked against
+  `x`, and only while `a` is a view;
+- an element read of a built-in array, fixed list or map: `arr[i]`, `arr[i].f`, `arr.get(i)`,
+  `.first()`, `.last()`. An element read is a copy of the element's bytes into per-site staging
+  (a union element is a pointer into the buffer), so it shares the element's boxes and stays valid
+  while the collection is not written. Any write to the collection breaks (b): the in-place mutators
+  (`add`, `set`, `remove`, `clear`, `removeFirst`, `removeLast`, from the same
+  `*_method_is_mutating` tables the checker uses to refuse them on a `share` parameter) and growth,
+  a `lend`/`give`/`send` of the collection, and an assignment to it.
+
+An annotated `let` (a possible union wrap) is never a view. Which call positions only read comes
+from `effective_ownership::call_position_reads`, derived from the effective-ownership fixpoint, so
+a view analysis and the checker cannot disagree about a callee.
 
 **Ownership.** A `share` union parameter cannot be stored (`ParamNeedsGive`); a `give` union is
 copied into the slot. A slot owns its payload: a shape variant owns the shape's fields (and, boxed,
