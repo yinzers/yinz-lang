@@ -912,7 +912,7 @@ pub fn check(
         imported_fn_names,
         local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
-        diags: diags.clone(),
+        diags,
         scope: Scope::new(),
         current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
@@ -1012,7 +1012,7 @@ pub fn check_with_kernel_mode(
         imported_fn_names: &no_imports,
         local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
-        diags: diags.clone(),
+        diags,
         scope: Scope::new(),
         current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
@@ -6499,7 +6499,7 @@ impl<'b> Checker<'b> {
                 }
             }
             Provenance::Reaches(roots) => {
-                let reason = self.reaches_reason(value, &roots);
+                let reason = self.reaches_reason(value);
                 // Join EVERY root's class: the roots of one initializer are all held by the
                 // value it builds (`{ first: a, second: c }` holds both), so giving or
                 // returning any one of them must reach this name, and this name must reach
@@ -6549,7 +6549,7 @@ impl<'b> Checker<'b> {
 
     /// The `{reason}` slot of `TransferNeedsCopy` for a `Reaches` expression: who still
     /// holds the value, said from the expression's own shape.
-    fn reaches_reason(&self, expr: &Expr, roots: &[String]) -> String {
+    fn reaches_reason(&self, expr: &Expr) -> String {
         match expr {
             Expr::FieldAccess { receiver, .. } => match root_binding_name(receiver) {
                 Some(r) => format!("a field of `{r}`"),
@@ -6573,7 +6573,7 @@ impl<'b> Checker<'b> {
                 Some(r) => format!("an item inside `{r}`"),
                 None => "a value the compiler cannot trace to one owner".to_string(),
             },
-            Expr::Wait(inner, _) => self.reaches_reason(inner, roots),
+            Expr::Wait(inner, _) => self.reaches_reason(inner),
             _ => "a value the compiler cannot trace to one owner".to_string(),
         }
     }
@@ -6705,10 +6705,10 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            Provenance::Reaches(roots) => {
+            Provenance::Reaches(_) => {
                 let text = expr_source_text(expr);
                 let ty = self.expr_type_name(expr);
-                let reason = self.reaches_reason(expr, &roots);
+                let reason = self.reaches_reason(expr);
                 let fix = format!("{text}.copy()");
                 self.emit_transfer_needs_copy(span, &text, &ty, &reason, &fix, sink);
                 false
