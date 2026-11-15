@@ -1,0 +1,52 @@
+// v0.3-M9 C1f (#423): shape equality over a union field (`array<Holder>.contains`, the one
+// element-equality surface) compares the variant AND its payload, not the address a field holds
+// and not the unused bytes of a slot whose largest variant is bigger than the one stored.
+// Holders built in separate frames holding equal values are equal; the same variant with a
+// different payload, and a different variant, are not.
+// Correct behavior: prints `big same true`, `big payload false`, `variant false`,
+// `tiny same true`, `end`; clean under AddressSanitizer at both optimization levels.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  count: int
+  weight: int
+}
+shape Thing = Tiny | Big
+
+shape Holder {
+  slot: Tiny | Big
+}
+
+function build_big(count: int) -> Holder {
+  let big: Big = { count: count, weight: 7 }
+  let holder: Holder = { slot: big }
+  return holder
+}
+
+function build_tiny() -> Holder {
+  let tiny: Tiny = { flag: true }
+  let holder: Holder = { slot: tiny }
+  return holder
+}
+
+function clobber(depth: int) -> int {
+  let a = depth * 3
+  let b = a + 11
+  let c = b * 5
+  return c - a
+}
+
+function entrypoint() -> nothing {
+  let known: array<Holder> = []
+  known.add(build_big(1))
+  let noise = clobber(4)
+  print(`big same ${known.contains(build_big(1))}`)
+  print(`big payload ${known.contains(build_big(2))}`)
+  print(`variant ${known.contains(build_tiny())}`)
+  known.add(build_tiny())
+  let more = clobber(noise)
+  print(`tiny same ${known.contains(build_tiny())}`)
+  print(`end`)
+}

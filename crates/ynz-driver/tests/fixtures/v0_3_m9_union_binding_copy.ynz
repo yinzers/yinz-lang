@@ -1,0 +1,42 @@
+// v0.3-M9 C1f (#423): a union binding copied from another union binding, inside a loop, then
+// the source rebound. The copy must keep the value it was given: a binding is a value, not a
+// reference to the per-site envelope the source was wrapped into.
+// Correct behavior: prints `tiny`, `big b0`, `big b0`, `big b1`, `big b1`, `big b2`, `end`
+// (previous, then current, each iteration); clean under AddressSanitizer at both levels.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let first: Tiny = { flag: true }
+  let current: Thing = first
+  let step = 0
+  while (step < 3) {
+    let previous: Thing = current
+    let next: Big = { label: `b${step}`, count: step }
+    let nextThing: Thing = next
+    current = nextThing
+    print(describe(previous))
+    print(describe(current))
+    step = step + 1
+  }
+  print(`end`)
+}

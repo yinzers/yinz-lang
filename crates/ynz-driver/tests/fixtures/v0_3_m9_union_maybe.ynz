@@ -1,0 +1,51 @@
+// v0.3-M9 C1f (#423): a `maybe<Thing>` read from a union array in a callee, handed back to the
+// caller, and read after the callee's frame is gone: each variant and an index past the end
+// (`none`).
+// Correct behavior: prints `tiny`, `big kept`, `none`, `end`; clean under AddressSanitizer at
+// both optimization levels.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function fetch(share things: array<Thing>, index: int) -> maybe<Thing> {
+  let found = things.get(index)
+  return found
+}
+
+function entrypoint() -> nothing {
+  let things: array<Thing> = []
+  let tiny: Tiny = { flag: true }
+  things.add(tiny)
+  let big: Big = { label: `kept`, count: 1 }
+  things.add(big)
+  let index = 0
+  while (index < 3) {
+    let picked = fetch(things, index)
+    if (picked.exists()) {
+      print(describe(picked.value))
+    }
+    if (picked.exists() == false) {
+      print(`none`)
+    }
+    index = index + 1
+  }
+  print(`end`)
+}
