@@ -1,0 +1,12 @@
+// v0.3-M9 C6 fixture: a channel of arrays of strings. The channel registers drop glue for its
+// element type at construction; the glue must be the one release function of the element type
+// (the array and the strings it owns), not a flat array drop.
+// Expected output: the received count.
+
+function entrypoint() -> nothing {
+  let wire: channel<array<string>> = channel<array<string>>(2)
+  let items: array<string> = [`a`, `b`]
+  wire.send(items)
+  let got = wire.receive()
+  print(got.or([]).count())
+}
