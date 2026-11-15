@@ -246,6 +246,7 @@ fn check_query_cycle_initial(
             cross_thread_padded_shapes: std::collections::HashSet::new(),
             binding_names: crate::binding_names::BindingNames::default(),
             transfers: Default::default(),
+            release_plan: Default::default(),
             generic_call_instances: Default::default(),
             string_moves: Default::default(),
         },

@@ -890,6 +890,9 @@ pub struct TypedModule {
     /// v0.3-M9 C5a: the persisted transfer record — the final alias-class partition of every
     /// function with its release anchor and escapes (see `crate::transfer_record`).
     pub transfers: crate::transfer_record::TransferRecord,
+    /// v0.3-M9 C5: the persisted scope-exit release plan - one total list per exit edge, with
+    /// each binding's fate (`crate::release_plan`). Codegen releases from it and decides nothing.
+    pub release_plan: crate::release_plan::ReleasePlan,
     /// v0.3-M9 C3b: every string-typed expression a store takes by move — a fresh string or the
     /// last use of a `let` binding (`crate::string_ownership`). Codegen copies every other
     /// string it stores and consults nothing else.
@@ -912,6 +915,9 @@ impl TypedModule {
         if !self.transfers.internal_errors().is_empty() {
             return Err(self.transfers.internal_errors().join("; "));
         }
+        if !self.release_plan.internal_errors().is_empty() {
+            return Err(self.release_plan.internal_errors().join("; "));
+        }
         let module = self.binding_names.apply(&self.module)?;
         Ok(TypedModule {
             module,
@@ -924,6 +930,7 @@ impl TypedModule {
             back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
             binding_names: self.binding_names.clone(),
             transfers: self.transfers.clone(),
+            release_plan: self.release_plan.clone(),
             generic_call_instances: self.generic_call_instances.clone(),
             string_moves: self.string_moves.clone(),
         })
@@ -1011,6 +1018,7 @@ pub fn check(
         bg_union_narrowed_diag_spans: HashSet::new(),
         binding_names: crate::binding_names::BindingNameRecorder::default(),
         transfers: crate::transfer_record::TransferRecorder::default(),
+        release: crate::release_plan::ReleaseRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
         stored_literals: HashSet::new(),
@@ -1026,6 +1034,9 @@ pub fn check(
         &checker.local_fn_names,
         checker.imported_fn_names,
     );
+    let release_plan = checker
+        .release
+        .finish(&binding_names, &transfers, &string_moves);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1037,6 +1048,7 @@ pub fn check(
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
         transfers,
+        release_plan,
         generic_call_instances: checker.generic_call_instances,
         string_moves,
     };
@@ -1120,6 +1132,7 @@ pub fn check_with_kernel_mode(
         bg_union_narrowed_diag_spans: HashSet::new(),
         binding_names: crate::binding_names::BindingNameRecorder::default(),
         transfers: crate::transfer_record::TransferRecorder::default(),
+        release: crate::release_plan::ReleaseRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
         stored_literals: HashSet::new(),
@@ -1135,6 +1148,9 @@ pub fn check_with_kernel_mode(
         &checker.local_fn_names,
         checker.imported_fn_names,
     );
+    let release_plan = checker
+        .release
+        .finish(&binding_names, &transfers, &string_moves);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1146,6 +1162,7 @@ pub fn check_with_kernel_mode(
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
         transfers,
+        release_plan,
         generic_call_instances: checker.generic_call_instances,
         string_moves,
     };
@@ -1404,6 +1421,9 @@ struct Checker<'b> {
     /// live scope (`declare_binding`, `binding_event_origin`, the store and return sites,
     /// `consume_binding`). Carried on `TypedModule::transfers`.
     transfers: crate::transfer_record::TransferRecorder,
+    /// v0.3-M9 C5: the release plan under construction: exit edges and move sites, recorded at
+    /// the points that hold the facts (`record_exit`, `consume_binding`, `check_assign`).
+    release: crate::release_plan::ReleaseRecorder,
     /// Gives made while inside a loop body, in order, so the loop can check at its end that no
     /// give reached a binding the NEXT pass reads again (`check_loop_carried_gives`).
     loop_gives: Vec<LoopGive>,
