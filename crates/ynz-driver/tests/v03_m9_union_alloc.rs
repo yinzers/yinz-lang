@@ -102,22 +102,26 @@ fn union_container_store_allocates_like_int() {
     );
 }
 
-// A recursive union cannot hold its payload inline: one heap cell per box the stored value owns.
-// Each store is a deep copy (`Box::clone`), so storing a chain of k boxes makes k cells: a build
-// stores 1 box, then 2, then 3, which is 6 cells.
+// A recursive union cannot hold its payload inline: one heap cell per box. Each build stores an
+// `End`, a `Node` and a `Node` into `next` fields, and each store MOVES its value (the language
+// refuses a read of the source afterwards), as `Box::new(prev)` does in Rust: one cell per box
+// created, no clone. 100 builds x 3 cells.
+// Bug caught: every store deep-cloned the chain it was given (1 + 2 + 3 cells per build, 600),
+// above Rust's cost for a move (Golden Rule 8).
 #[test]
 fn recursive_union_store_allocates_one_cell_per_box() {
     assert_eq!(
         heap_allocations("v0_3_m9_union_alloc_recursive.ynz", "100\n"),
-        600,
-        "100 builds x (1 + 2 + 3) cells must make 600 cells and nothing else"
+        300,
+        "100 builds x 3 moved boxes must make 300 cells and nothing else"
     );
 }
 
-// Bug caught: storing a recursive union moved the variant's bytes into ONE new cell, so the nested
+// Bug caught: storing a recursive union copied the variant's bytes into ONE new cell, so the nested
 // cells of the original and the copy were the same cells and a recursive release (C6) would free
-// them twice. A deep copy of the four-cell chain makes four cells per copy: 100 stores, 400 more
-// than the chain built alone.
+// them twice. An explicit `.copy()` of the four-cell chain makes four cells per copy (the three
+// boxes the chain owns, then the binding's box takes the copy by move): 100 copies, 400 more than
+// the chain built alone.
 #[test]
 fn recursive_union_copy_clones_every_cell() {
     let chain_alone = heap_allocations("v0_3_m9_union_alloc_recursive_chain.ynz", "100\n");
@@ -125,6 +129,123 @@ fn recursive_union_copy_clones_every_cell() {
     assert_eq!(
         with_copies - chain_alone,
         400,
-        "100 stores of a four-cell chain must make 400 cells; chain alone {chain_alone}, with stores {with_copies}"
+        "100 copies of a four-cell chain must make 400 cells; chain alone {chain_alone}, with copies {with_copies}"
+    );
+}
+
+// Bug caught: a store of a chain nobody reads again deep-cloned it (four cells) where Rust moves
+// the `Box`: the move needs only the binding's own cell, one per store.
+#[test]
+fn recursive_union_move_clones_nothing() {
+    let chain_alone = heap_allocations("v0_3_m9_union_alloc_recursive_chain.ynz", "100\n");
+    let with_moves = heap_allocations("v0_3_m9_union_alloc_recursive_move.ynz", "300\n");
+    assert_eq!(
+        with_moves - chain_alone,
+        100,
+        "100 moves of a chain must make one cell each; chain alone {chain_alone}, with moves {with_moves}"
+    );
+}
+
+/// How many more cells `fixture` allocates than `baseline`, both run clean and printing what they
+/// print.
+fn extra_cells(baseline: (&str, &str), fixture: (&str, &str)) -> u64 {
+    let baseline_cells = heap_allocations(baseline.0, baseline.1);
+    let fixture_cells = heap_allocations(fixture.0, fixture.1);
+    fixture_cells - baseline_cells
+}
+
+// Shape byte copies of a shape that owns a recursive union (`shape_bytes_to_owned`,
+// `shape_bytes_to_heap_cell`, `maybe_payload_stable_bits`, `.copy()`, an array store). A holder
+// built with makeHolder owns four cells. Bug caught by each: a copy that shared its source's
+// boxes (a release of both frees them twice), and, after the deep-copy fix, a MOVE that still
+// cloned them (above Rust's cost).
+
+#[test]
+fn shape_move_into_a_binding_clones_nothing() {
+    assert_eq!(
+        heap_allocations("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+        400,
+        "100 holders x 4 cells, moved into a binding with no clone"
+    );
+}
+
+#[test]
+fn shape_explicit_copy_is_deep_even_when_the_source_is_not_read_again() {
+    let extra = extra_cells(
+        ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+        ("v0_3_m9_union_alloc_shape_explicit_copy.ynz", "200\n"),
+    );
+    assert_eq!(
+        extra, 400,
+        "`.copy()` of a holder clones its four cells, once"
+    );
+}
+
+#[test]
+fn shape_field_store_moves_a_binding_and_copies_a_copy_once() {
+    let moved = extra_cells(
+        ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+    );
+    assert_eq!(
+        moved, 100,
+        "a moved holder costs the field's own cell, nothing else"
+    );
+    let copied = extra_cells(
+        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+        ("v0_3_m9_union_alloc_shape_copied_field.ynz", "300\n"),
+    );
+    assert_eq!(
+        copied, 400,
+        "a copy stored in a field is cloned once (four cells), not again by the store"
+    );
+}
+
+#[test]
+fn shape_alias_binding_owns_a_deep_copy() {
+    let extra = extra_cells(
+        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+        ("v0_3_m9_union_alloc_shape_alias_binding.ynz", "300\n"),
+    );
+    assert_eq!(
+        extra, 400,
+        "`let copied = outer.inner` leaves the field in place, so the binding clones four cells"
+    );
+}
+
+#[test]
+fn shape_array_store_moves_a_binding_and_copies_a_copy_once() {
+    let extra = extra_cells(
+        ("v0_3_m9_union_alloc_shape_moved_array.ynz", "100\n"),
+        ("v0_3_m9_union_alloc_shape_copied_array.ynz", "200\n"),
+    );
+    assert_eq!(
+        extra, 400,
+        "an array store of a copy clones four cells, once"
+    );
+}
+
+#[test]
+fn shape_returned_parameter_is_copied_once_by_the_binding() {
+    let extra = extra_cells(
+        ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+        ("v0_3_m9_union_alloc_shape_returned_parameter.ynz", "200\n"),
+    );
+    assert_eq!(
+        extra, 400,
+        "the alias binding of a returned parameter clones four cells; the return clones none"
+    );
+}
+
+#[test]
+fn maybe_payload_binding_clones_the_boxes_it_reads() {
+    let extra = extra_cells(
+        ("v0_3_m9_union_alloc_shape_maybe_read_once.ynz", "1\n"),
+        ("v0_3_m9_union_alloc_shape_maybe_read.ynz", "100\n"),
+    );
+    assert_eq!(
+        extra,
+        99 * 4,
+        "99 more reads of a `maybe<Holder>` element, four cells each"
     );
 }

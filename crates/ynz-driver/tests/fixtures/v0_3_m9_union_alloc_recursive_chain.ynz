@@ -1,6 +1,6 @@
-// v0.3-M9 C1f (#423): baseline of `v0_3_m9_union_alloc_recursive_copy.ynz`. Each of 100 rounds
+// v0.3-M9 C1f (#423): baseline of `v0_3_m9_union_alloc_recursive_copy.ynz` and `..._recursive_move.ynz`. Each of 100 rounds
 // builds a three-link chain (`top` -> `middle` -> `last` -> an `End`) and reads the head's value;
-// the copy fixture builds the same chain and then stores the whole chain into a union binding.
+// the other two build the same chain and then store the whole chain into a union binding.
 // Correct behavior: prints the summed head values, 100.
 
 shape End {
