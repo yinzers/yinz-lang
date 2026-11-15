@@ -1,7 +1,7 @@
 // v0.3-M9 C1f (#423) round 2: binding `holders.get(0)` (a `maybe<Holder>` whose payload is the
-// element, still in the array) copies the payload deep: four cells for each read. Correct
-// behavior: prints 100. The counter test compares it with the single-read fixture: 99 more reads,
-// 396 more cells.
+// element, still in the array) is a VIEW while the array is not written: reading it allocates
+// nothing. Correct behavior: prints 100. The counter test compares it with the single-read fixture:
+// 99 more reads, no more cells.
 shape End {
   flag: boolean
 }

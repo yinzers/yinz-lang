@@ -403,3 +403,37 @@ by_value_tests!(
     v03_m9_union_view_walk_asan_optimized,
     v03_m9_union_view_walk_asan_no_optimize
 );
+
+// Bug: a view read through another view (`held`, then `chain`) kept pointing at the original root's
+// slot after `crate.holder.chain` was replaced, so it read the replacement instead of the 3-link
+// chain it named. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_view_chain_written.ynz",
+    "3\n1\n",
+    v03_m9_union_view_chain_written_optimized,
+    v03_m9_union_view_chain_written_no_optimize,
+    v03_m9_union_view_chain_written_asan_optimized,
+    v03_m9_union_view_chain_written_asan_no_optimize
+);
+
+// Bug: an element view into an array buffer that `add` grew and moved read freed memory. The array is
+// written while the binding is read, so the binding owns a copy. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_view_element_grown.ynz",
+    "big first\n41\n",
+    v03_m9_union_view_element_grown_optimized,
+    v03_m9_union_view_element_grown_no_optimize,
+    v03_m9_union_view_element_grown_asan_optimized,
+    v03_m9_union_view_element_grown_asan_no_optimize
+);
+
+// Bug: a binding that crosses a call that suspends (no written `wait`) was a pointer in the resume
+// function's stack, garbage after the resume. It crosses, so it owns a copy. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_view_suspension_crossing.ynz",
+    "46\n",
+    v03_m9_union_view_suspension_crossing_optimized,
+    v03_m9_union_view_suspension_crossing_no_optimize,
+    v03_m9_union_view_suspension_crossing_asan_optimized,
+    v03_m9_union_view_suspension_crossing_asan_no_optimize
+);

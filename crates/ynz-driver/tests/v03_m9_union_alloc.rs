@@ -246,15 +246,14 @@ fn shape_returned_parameter_is_copied_once_by_the_binding() {
 }
 
 #[test]
-fn maybe_payload_binding_clones_the_boxes_it_reads() {
+fn maybe_payload_binding_of_an_element_read_is_a_view() {
     let extra = extra_cells(
         ("v0_3_m9_union_alloc_shape_maybe_read_once.ynz", "1\n"),
         ("v0_3_m9_union_alloc_shape_maybe_read.ynz", "100\n"),
     );
     assert_eq!(
-        extra,
-        99 * 4,
-        "99 more reads of a `maybe<Holder>` element, four cells each"
+        extra, 0,
+        "99 more reads of a `maybe<Holder>` element that is not written are views: no cells"
     );
 }
 
@@ -278,4 +277,50 @@ fn recursive_walk_over_a_field_read_allocates_nothing() {
             "a walk of {chain_length} links must add no cells to the {built} the build made"
         );
     }
+}
+
+// Bug caught: `let b = a.g` with `a` itself a view copied the tail again, O(n) cells per read of a
+// chain of aliases where a Rust borrow of a borrow costs none (Golden Rule 8). `held` and `chain`
+// are both views of the `share` parameter, so reading the 100-link chain adds no cells.
+#[test]
+fn a_read_through_a_view_allocates_nothing() {
+    let extra = extra_cells(
+        ("v0_3_m9_union_view_chain_build.ynz", "built\n"),
+        ("v0_3_m9_union_view_chain_walk.ynz", "4950\n"),
+    );
+    assert_eq!(
+        extra, 0,
+        "reading the chain through two views adds no cells"
+    );
+}
+
+// Bug caught: a function with a suspension point never viewed, so a view read AFTER a `wait`
+// copied the whole chain although it does not cross the suspension. The binding's crossing set
+// decides, not "the function is a state machine".
+#[test]
+fn a_view_that_does_not_cross_a_suspension_allocates_nothing() {
+    let extra = extra_cells(
+        ("v0_3_m9_union_view_suspension_build.ynz", "done\n"),
+        ("v0_3_m9_union_view_suspension_nap.ynz", "4950\n"),
+    );
+    assert_eq!(extra, 0, "reading the chain after the nap adds no cells");
+}
+
+// Bug caught: an element view kept pointing at an element the array replaced while the binding was
+// still read (a release, C6, would free the boxes under it). The write breaks (b), so the binding
+// copies: per round a new holder (4 cells) plus the copy (4 cells).
+#[test]
+fn maybe_payload_binding_copies_when_the_element_is_replaced() {
+    let extra = extra_cells(
+        (
+            "v0_3_m9_union_alloc_shape_maybe_read_written_once.ynz",
+            "1\n",
+        ),
+        ("v0_3_m9_union_alloc_shape_maybe_read_written.ynz", "100\n"),
+    );
+    assert_eq!(
+        extra,
+        99 * 8,
+        "99 more rounds: a new holder and a four-cell copy each"
+    );
 }

@@ -1,0 +1,63 @@
+// v0.3-M9 C1f (#423) round 2: `held` is read AFTER a call that suspends (`nap()` has no written
+// `wait`; it suspends all the same), so the binding crosses the suspension: it cannot be a view (a
+// view is a pointer in the resume function's stack, gone when the function resumes) and owns a
+// copy. Correct behavior: prints `46`; clean under AddressSanitizer at -O0 and -O2.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Crate {
+  holder: Holder
+  tag: int
+}
+
+function sum(share head: Node | End) -> int {
+  if (head) {
+    is Node => {
+      let rest = head.next
+      return head.value + sum(rest)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function makeCrate(count: int) -> Crate {
+  let stop: End = { flag: true }
+  let list: Node | End = stop
+  let index = 0
+  while (index < count) {
+    let node: Node = { value: index, next: list }
+    let wrapped: Node | End = node
+    list = wrapped
+    index = index + 1
+  }
+  let holder: Holder = { chain: list, id: 1 }
+  let crate: Crate = { holder: holder, tag: 2 }
+  return crate
+}
+
+function nap() -> nothing {
+  wait sleep(1)
+}
+
+function sumAcrossNap(share crate: Crate) -> int {
+  let held = crate.holder
+  nap()
+  return sum(held.chain) + held.id
+}
+
+function entrypoint() -> nothing {
+  let total = wait sumAcrossNap(makeCrate(10))
+  print(total)
+}

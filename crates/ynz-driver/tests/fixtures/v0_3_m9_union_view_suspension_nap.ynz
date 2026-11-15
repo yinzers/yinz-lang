@@ -1,0 +1,54 @@
+// v0.3-M9 C1f (#423) round 2: a function with a suspension point (`wait sleep(1)`) still views a place
+// it reads AFTER the suspension: `held` does not cross it, so it is a view of the `share`
+// parameter's field and reading the 100-link chain allocates nothing (the crossing set of the
+// binding decides, not "is a state machine"). Correct behavior: prints `4950`.
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+
+function sum(share head: Node | End) -> int {
+  if (head) {
+    is Node => {
+      let rest = head.next
+      return head.value + sum(rest)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function makeHolder(count: int) -> Holder {
+  let stop: End = { flag: true }
+  let list: Node | End = stop
+  let index = 0
+  while (index < count) {
+    let node: Node = { value: index, next: list }
+    let wrapped: Node | End = node
+    list = wrapped
+    index = index + 1
+  }
+  let holder: Holder = { chain: list, id: 1 }
+  return holder
+}
+
+function napThenTotal(share holder: Holder) -> int {
+  wait sleep(1)
+  let held = holder.chain
+  return sum(held)
+}
+
+function entrypoint() -> nothing {
+  let holder = makeHolder(100)
+  let total = wait napThenTotal(holder)
+  print(total)
+}

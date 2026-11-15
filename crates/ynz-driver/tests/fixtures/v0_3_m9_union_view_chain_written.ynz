@@ -1,0 +1,76 @@
+// v0.3-M9 C1f (#423) round 2: a view read through another view is a view only while the original
+// root is not written. `crate.holder.chain` is replaced while `chain` is still read, so `chain` must
+// keep the 3-link chain it named (`3`) and the crate holds the 1-link chain (`1`); a view would read
+// the replacement.
+// Correct behavior: prints `3` then `1`; clean under AddressSanitizer at -O0 and -O2.
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Crate {
+  holder: Holder
+  tag: int
+}
+
+function sum(share head: Node | End) -> int {
+  if (head) {
+    is Node => {
+      let rest = head.next
+      return head.value + sum(rest)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function makeCrate(count: int) -> Crate {
+  let stop: End = { flag: true }
+  let list: Node | End = stop
+  let index = 0
+  while (index < count) {
+    let node: Node = { value: index, next: list }
+    let wrapped: Node | End = node
+    list = wrapped
+    index = index + 1
+  }
+  let holder: Holder = { chain: list, id: 1 }
+  let crate: Crate = { holder: holder, tag: 2 }
+  return crate
+}
+
+function makeShort() -> Node {
+  let stop: End = { flag: true }
+  let only: Node = { value: 9, next: stop }
+  return only
+}
+
+function length(share chain: Node | End) -> int {
+  if (chain) {
+    is Node => {
+      return 1 + length(chain.next)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let crate = makeCrate(3)
+  let held = crate.holder
+  let chain = held.chain
+  let shorter: Node | End = makeShort()
+  crate.holder.chain = shorter
+  print(length(chain))
+  print(length(crate.holder.chain))
+}
