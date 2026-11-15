@@ -8024,6 +8024,49 @@ impl<'b> Checker<'b> {
         result
     }
 
+    /// Report a type annotation that gives type arguments to a name that is not a generic shape
+    /// declared in this file (`Nope<int>`, or a plain shape such as `Big<int>`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn report_non_generic_type_name(&mut self, name: &str, name_span: &SourceSpan) {
+        let is_plain_type = self.shape_table.contains(name)
+            || self.options_table.contains(name)
+            || self.union_aliases.contains_key(name);
+        if is_plain_type {
+            self.diags.push(Diagnostic::error(
+                name_span.clone(),
+                format!("`{name}` does not take type arguments."),
+                format!("Write `{name}` without the `<...>`."),
+                format!("`{name}` is declared without type parameters, so it is one fixed type; only a shape declared as `shape {name}<T> {{ ... }}` takes type arguments."),
+            ));
+        } else {
+            self.diags.push(Diagnostic::error(
+                name_span.clone(),
+                format!("`{name}` is not a known type."),
+                format!("Declare `shape {name}<T> {{ ... }}` in this file, or use a built-in generic (`array<T>`, `fixed<T>`, `map<K, V>`, `channel<T>`)."),
+                format!("`{name}` is not declared in this file as a generic shape, so `{name}<...>` names no type."),
+            ).with_kind(ynz_diagnostics::DiagnosticKind::NotDefined));
+        }
+    }
+
+    /// Report a built-in generic written with fewer type arguments than it takes (`map<int>`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn report_missing_type_arguments(&mut self, name: &str, required: usize, span: &SourceSpan) {
+        let example = if required == 2 {
+            format!("{name}<string, int>")
+        } else {
+            format!("{name}<int>")
+        };
+        let plural = if required == 1 { "" } else { "s" };
+        self.diags.push(Diagnostic::error(
+            span.clone(),
+            format!("`{name}` takes {required} type argument{plural}."),
+            format!("Write every type argument, for example `{example}`."),
+            format!("Without all {required} type argument{plural}, `{name}` does not say what it holds, so its values cannot be checked or laid out in memory."),
+        ));
+    }
+
     fn ast_type_to_type(&mut self, ast_ty: &AstType) -> Type {
         match ast_ty {
             AstType::Nothing => Type::Nothing,
@@ -8149,6 +8192,17 @@ impl<'b> Checker<'b> {
                 }
                 let resolved_args: Vec<Type> =
                     args.iter().map(|a| self.ast_type_to_type(a)).collect();
+                // The arms below fill a missing argument with `Error`. Report it here: callers
+                // skip their checks on a type holding an `Error` as already reported (`channel`
+                // reports its own count).
+                let required_args = match name.as_str() {
+                    "array" | "fixed" => 1,
+                    "map" | "MapEntry" => 2,
+                    _ => 0,
+                };
+                if resolved_args.len() < required_args {
+                    self.report_missing_type_arguments(name, required_args, span);
+                }
                 match name.as_str() {
                     "array" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
@@ -8217,6 +8271,7 @@ impl<'b> Checker<'b> {
                                 args: resolved_args,
                             }
                         } else {
+                            self.report_non_generic_type_name(name, name_span);
                             Type::Error
                         }
                     }
