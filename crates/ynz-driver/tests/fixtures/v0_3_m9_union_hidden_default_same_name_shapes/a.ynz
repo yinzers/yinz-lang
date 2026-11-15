@@ -1,0 +1,20 @@
+// v0.3-M9 C1e rework (#421): module `a` declares a shape `Thing` with hidden defaults. Module
+// `b` declares a DIFFERENT shape that is also called `Thing`. Both modules build and run.
+export shape Thing {
+  id: int
+  hidden count: int = seed()
+  hidden label: string = `a`
+}
+
+function seed() -> int {
+  return 11
+}
+
+export function readThing(share self: Thing) -> string {
+  return `${self.count.toString()}${self.label}`
+}
+
+export function runA() -> string {
+  let thing: Thing = { id: 1 }
+  return thing.readThing()
+}

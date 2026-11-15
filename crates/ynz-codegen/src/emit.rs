@@ -1340,6 +1340,34 @@ fn build_module<'ctx, 'g>(
     // Pass 1.6 — emit vtable globals for `dynamic Foo` dispatch.
     let _vtables = emit_vtable_globals(module, shape_table);
 
+    // Pass 1.7 — forward-declare the hidden-defaults initializer of every shape THIS module
+    // declares and that has hidden fields (own or inherited). The body (Pass 2.6) lowers each
+    // default with this module's typed data; a module that only imports the shape declares the
+    // same symbol bodiless at its first construction site (`lower_struct_lit`).
+    let defaults_initializer_shapes: Vec<&ynz_ast::nodes::ShapeDecl> = typed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ShapeDecl(declaration)
+                if declaration.generics.is_empty()
+                    && declaration.alias_ty.is_none()
+                    && shape_table
+                        .get(&declaration.name)
+                        .is_some_and(shape_has_hidden_fields) =>
+            {
+                Some(declaration)
+            }
+            _ => None,
+        })
+        .collect();
+    for declaration in &defaults_initializer_shapes {
+        let shape = shape_table
+            .get(&declaration.name)
+            .ok_or_else(|| format!("defaults of `{}`: shape not in table", declaration.name))?;
+        shape_defaults_initializer(ctx, module, shape);
+    }
+
     // Pass 2 — emit non-generic function bodies.
     for item in &typed.module.items {
         match item {
@@ -1372,6 +1400,32 @@ fn build_module<'ctx, 'g>(
             | Item::ConstDecl(_)
             | Item::ReExport(_) => {}
         }
+    }
+
+    // Pass 2.6 — emit the hidden-defaults initializer bodies declared in Pass 1.7. After every
+    // function is declared, because a default may call one.
+    for declaration in &defaults_initializer_shapes {
+        lower_shape_defaults_initializer(
+            ctx,
+            module,
+            &rt,
+            &globals,
+            typed,
+            declaration,
+            shape_table,
+            &shape_types,
+            &shape_abi_sizes,
+            &shape_field_abi,
+            &options_table,
+            &wait_cache,
+            suspend_set,
+            base_suspends,
+            frame_layouts,
+            imported_fns,
+            sig_table,
+            m3d_spike,
+            layout,
+        )?;
     }
 
     // Pass 2.5 — emit monomorphized generic function bodies.
@@ -1437,6 +1491,59 @@ fn build_module<'ctx, 'g>(
 fn mangle_mono_name(fn_name: &str, type_args: &[Type]) -> String {
     let args: Vec<String> = type_args.iter().map(mangle_type).collect();
     format!("{fn_name}<{}>", args.join(","))
+}
+
+/// The symbol of the function that writes one shape's hidden-field defaults into an instance:
+/// `ynz_defaults<shape:Name>@<declaring file>`. The first part is the injective `fn<arg>` form of
+/// `mangle_mono_name`, so it can never equal a user function's name; the file part keeps two
+/// modules' shapes of the same name apart, because shape names are not unique across a project
+/// (each module has its own LLVM context) and the symbol is external, so the linker sees all of
+/// them. A shape name never contains `@`, so the pair stays injective.
+///
+/// The declaring file is `ShapeDef::defined_at`: an imported shape keeps the `ShapeDef` of the
+/// module that declares it, so the declaring and every constructing module derive the same
+/// symbol. The module that DECLARES the shape defines it; every module that constructs the
+/// shape, that one included, calls it. O(length of the shape name + file path) time and space.
+fn shape_defaults_symbol(shape: &ynz_typeck::shapes::ShapeDef) -> String {
+    let shape_part = mangle_mono_name(
+        "ynz_defaults",
+        &[Type::Shape {
+            name: shape.name.clone(),
+        }],
+    );
+    format!("{shape_part}@{}", shape.defined_at.file)
+}
+
+/// True when constructing `shape` must call its defaults initializer. Hidden fields always carry
+/// a default (typeck refuses a hidden field without one), and the flattened field list holds the
+/// inherited ones too, so this one test answers it for a local and an imported shape alike.
+///
+/// O(fields) time, O(1) space.
+fn shape_has_hidden_fields(shape: &ynz_typeck::shapes::ShapeDef) -> bool {
+    shape.fields.iter().any(|field| field.is_hidden)
+}
+
+/// The defaults initializer's function value, declared on first use: `void (ptr instance)`.
+/// A module that declares the shape defines the body (`lower_shape_defaults_initializer`);
+/// a module that only imports the shape gets this bodiless declaration, which the linker
+/// resolves against the declaring module's object.
+///
+/// O(length of the shape name + file path) time and space.
+fn shape_defaults_initializer<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    shape: &ynz_typeck::shapes::ShapeDef,
+) -> FunctionValue<'ctx> {
+    let symbol = shape_defaults_symbol(shape);
+    if let Some(declared) = module.get_function(&symbol) {
+        return declared;
+    }
+    let pointer = ctx.ptr_type(AddressSpace::default());
+    module.add_function(
+        &symbol,
+        ctx.void_type().fn_type(&[pointer.into()], false),
+        None,
+    )
 }
 
 /// A type's symbol-name form. Injective: a user name is always followed by a delimiter or the
@@ -1548,82 +1655,38 @@ fn lower_generic_function<'ctx>(
     let ret_ty = mono_sig.ret_type.clone();
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
 
-    let mut cg = Cg {
+    // The shared plain-function context, plus this instantiation's type substitution. A generic
+    // body cannot `wait` (M2) and is not errors-capable (M7), so it carries no suspension data:
+    // the empty caches, the empty genuine-suspend set (which turns the block_on-fallback guard
+    // `sync_call_fallback_is_codegen_bug` vacuously off; safe while no generic body can reach a
+    // suspension point through a type parameter, see `ynz-typeck/src/check.rs:4214`, and a
+    // v0.4-revisit site with the kernel guard deferral documented there) and the empty
+    // signature table (`lower_sm_block` is never reached). It never enters the M3d spike path.
+    let mut cg = plain_cg(
         ctx,
         module,
-        builder: ctx.create_builder(),
         rt,
         globals,
         typed,
-        current_fn: fn_val,
-        is_main: false,
-        current_fn_ret_ty: ret_ty,
-        locals: HashMap::new(),
+        fn_val,
+        ret_ty,
+        false,
+        false,
         shape_table,
         shape_types,
         shape_abi_sizes,
         shape_field_abi,
-        soa_bindings: HashMap::new(),
-        // The REAL authority, not an empty stand-in: the struct-lit padded-alloca
-        // alignment path runs for generic bodies too.
         layout,
-        type_subst,
         options_table,
-        // Generic functions are not errors-capable in M7 (no `-> T errors` on generics yet).
-        is_errors_capable: false,
-        errors_capable_locals: std::collections::HashSet::new(),
-        bg_uid: 0,
-        arc_transients: HashMap::new(),
-        arc_pending_release: Vec::new(),
-        // Generic functions cannot contain `wait` in M2. Use empty caches.
-        wait_cache: empty_wait_cache(),
-        suspend_set: empty_suspend_set(),
-        // Generic mono functions cannot suspend yet (v0.4 generic+suspension work), so the
-        // genuine-suspend set is empty here too — the block_on-fallback guard
-        // (`sync_call_fallback_is_codegen_bug`) is vacuously off for generic bodies. Safe today:
-        // no generic function in the current language surface can reach a suspension point through
-        // a type parameter (see `ynz-typeck/src/check.rs:4214`). This empty-set assumption is a
-        // v0.4-revisit site alongside the kernel guard deferral documented there.
-        base_suspends: empty_suspend_set(),
-        frame_layouts: empty_frame_layouts(),
-        imported_fns: empty_imported_fns(),
-        sm_frame_ptr: None,
-        sm_yinz_ret_ty: None,
-        sm_crossing_names: None,
-        sm_crossing_scalar_set: HashSet::new(),
-        sm_crossing_bool_set: HashSet::new(),
-        sm_crossing_slot_indices: Vec::new(),
-        sm_crossing_decimal128_set: HashSet::new(),
-        sm_number_param_set: HashSet::new(),
-        sm_crossing_float_set: HashSet::new(),
-        sm_crossing_errors_capable_set: HashSet::new(),
-        sm_crossing_ec_number_set: HashSet::new(),
-        sm_crossing_ec_number_i128_allocas: HashMap::new(),
-        sm_crossing_shape_embed_set: HashSet::new(),
-        sm_crossing_ec_struct_allocas: HashMap::new(),
-        sm_crossing_shape_names: HashMap::new(),
-        sm_crossing_shape_allocas: HashMap::new(),
-        sm_scope_depth: 0,
-        narrowed_unions: Vec::new(),
-        coercion_inner: None,
-        sm_for_loop_counter: 0,
-        sm_number_errors_staging_offset: None,
-        // Generic functions cannot contain `wait` — auto-parallel is never applicable.
-        no_auto_parallel: false,
-        // Generic functions never SM-lower; no back-edge yield.
-        back_edge_yield: false,
-        // Generic functions never reach lower_sm_block; the empty table satisfies
-        // the struct field without the caller needing a real SignatureTable.
-        sig_table: empty_sig_table(),
-        // Generic functions never enter the M3d spike path.
-        m3d_spike: false,
-        m3d_spike_cpu_result_names: Vec::new(),
-        m3d_spike_cpu_result_allocas: HashMap::new(),
-        m3d_spike_fired: false,
-        // Generic functions never enter the M3g fused-group path.
-        fused_group: None,
-        fused_group_fired: false,
-    };
+        empty_wait_cache(),
+        empty_suspend_set(),
+        empty_suspend_set(),
+        empty_frame_layouts(),
+        empty_imported_fns(),
+        empty_sig_table(),
+        false,
+    );
+    cg.type_subst = type_subst;
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
@@ -4081,13 +4144,18 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// #423 replaces them. Two homes, each costing two counted allocations (envelope + payload
     /// cell) per present value, freed by no pass yet:
     /// - `Heap`: an argument staged into a suspending (`wait`ed) callee's frame, when
-    ///   `lower_expr` just wrapped it (a frame slot would die with the resume invocation). A
-    ///   union VALUE passes through: its binding already homed it.
+    ///   `lower_expr` just wrapped it (a frame slot would die with the resume invocation), and a
+    ///   hidden shape-field default wrapped by the shape's defaults initializer (its frame ends
+    ///   at the initializer's `ret`). A union VALUE passes through: its binding already homed it.
     /// - `Return`: a `return`ed union value, unless it is a call result (every union return
     ///   already promoted, so the caller got a heap cell). A union a callee built itself, a
     ///   returned PARAMETER and a freshly wrapped value all promote.
     ///
     /// A non-envelope union (no shape variant) is the raw pointer and passes through.
+    ///
+    /// Frame-homed envelopes that can still outlive their frame (#423's by-value envelope ends
+    /// them): the element of `array.add` / `map.set`, and a plain variant stored by a shape
+    /// literal into a union field of a shape that leaves the frame.
     ///
     /// Time: O(1) + the heap-cell copy  Space: O(1), two counted heap cells per present value
     fn home_union_on_heap(
@@ -5054,73 +5122,30 @@ fn lower_function<'ctx, 'g>(
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
     let is_errors_capable = f.errors_capable;
 
-    let mut cg = Cg {
+    let mut cg = plain_cg(
         ctx,
         module,
-        builder: ctx.create_builder(),
         rt,
         globals,
         typed,
-        current_fn: fn_val,
+        fn_val,
+        ret_ty,
         is_main,
-        current_fn_ret_ty: ret_ty,
-        locals: HashMap::new(),
+        is_errors_capable,
         shape_table,
         shape_types,
         shape_abi_sizes,
         shape_field_abi,
-        soa_bindings: HashMap::new(),
         layout,
-        type_subst: HashMap::new(),
         options_table,
-        is_errors_capable,
-        errors_capable_locals: std::collections::HashSet::new(),
-        bg_uid: 0,
-        arc_transients: HashMap::new(),
-        arc_pending_release: Vec::new(),
         wait_cache,
         suspend_set,
         base_suspends,
         frame_layouts,
         imported_fns,
-        sm_frame_ptr: None,
-        sm_yinz_ret_ty: None,
-        sm_crossing_names: None,
-        sm_crossing_scalar_set: HashSet::new(),
-        sm_crossing_bool_set: HashSet::new(),
-        sm_crossing_slot_indices: Vec::new(),
-        sm_crossing_decimal128_set: HashSet::new(),
-        sm_number_param_set: HashSet::new(),
-        sm_crossing_float_set: HashSet::new(),
-        sm_crossing_errors_capable_set: HashSet::new(),
-        sm_crossing_ec_number_set: HashSet::new(),
-        sm_crossing_ec_number_i128_allocas: HashMap::new(),
-        sm_crossing_shape_embed_set: HashSet::new(),
-        sm_crossing_ec_struct_allocas: HashMap::new(),
-        sm_crossing_shape_names: HashMap::new(),
-        sm_crossing_shape_allocas: HashMap::new(),
-        sm_scope_depth: 0,
-        narrowed_unions: Vec::new(),
-        coercion_inner: None,
-        sm_for_loop_counter: 0,
-        sm_number_errors_staging_offset: None,
-        // Non-SM functions cannot contain independent suspending groups.
-        no_auto_parallel: false,
-        // Non-SM functions have no frame and cannot yield — the documented residual.
-        back_edge_yield: false,
-        // sig_table unused for non-SM functions — independence analysis runs only in
-        // lower_sm_block which is never reached from the non-SM path.
         sig_table,
-        // Non-SM functions are never in the spike suspend_set extension, so m3d_spike
-        // only matters for SM functions. Forward the flag so future callers are consistent.
         m3d_spike,
-        m3d_spike_cpu_result_names: Vec::new(),
-        m3d_spike_cpu_result_allocas: HashMap::new(),
-        m3d_spike_fired: false,
-        // Non-SM functions never reach lower_sm_block — the M3g fused path is never consulted.
-        fused_group: None,
-        fused_group_fired: false,
-    };
+    );
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
@@ -5206,6 +5231,259 @@ fn lower_function<'ctx, 'g>(
         }
     }
     Ok(())
+}
+
+/// Define one shape's hidden-defaults initializer (`ynz_defaults<shape:Name>(ptr instance)`):
+/// write every hidden field's default into the instance, its inherited fields' defaults too.
+///
+/// This is the ONLY place a hidden default is lowered. It runs in the module that declares the
+/// shape, so each default is lowered with that module's own typed data (expression types and the
+/// union coercion recorded at the default's span), and may call that module's private helpers.
+/// Every construction site, local or imported, calls it (`lower_struct_lit`).
+///
+/// The chain is walked child first; an ancestor's field that a nearer declaration re-declares is
+/// skipped, so the nearest declaration's default is the one stored. An ancestor not declared in
+/// this module is an error, never a silent skip: typeck requires `extends` to stay in one file,
+/// so reaching it means that rule was bypassed.
+///
+/// O(hidden fields + chain depth) time and space at compile time; the emitted function is one
+/// store per hidden field plus whatever its default expression costs. Per construction that is
+/// one direct call (~1 ns), plus, for a plain variant defaulted
+/// into a union that has a shape variant, two counted heap cells (~29 ns) until #423's inline
+/// envelope replaces the heap home.
+#[allow(clippy::too_many_arguments)]
+fn lower_shape_defaults_initializer<'ctx, 'g>(
+    ctx: &'ctx Context,
+    module: &'g Module<'ctx>,
+    rt: &'g RuntimeDecls<'ctx>,
+    globals: &'g ModuleGlobals<'ctx>,
+    typed: &'g TypedModule,
+    declaration: &ynz_ast::nodes::ShapeDecl,
+    shape_table: &'g ShapeTable,
+    shape_types: &'g ShapeLlvmTypes<'ctx>,
+    shape_abi_sizes: &'g HashMap<String, u64>,
+    shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
+    options_table: &'g ynz_typeck::options_table::OptionsTable,
+    wait_cache: &'g WaitCache,
+    suspend_set: &'g SuspendSet,
+    base_suspends: &'g SuspendSet,
+    frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    m3d_spike: bool,
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
+) -> Result<(), String> {
+    let shape_name = declaration.name.as_str();
+    let shape_def = shape_table
+        .get(shape_name)
+        .ok_or_else(|| format!("defaults of `{shape_name}`: shape not in table"))?;
+    let fn_val = shape_defaults_initializer(ctx, module, shape_def);
+    let struct_ty = *shape_types
+        .named
+        .get(shape_name)
+        .ok_or_else(|| format!("defaults of `{shape_name}`: LLVM type not found"))?;
+
+    let mut cg = plain_cg(
+        ctx,
+        module,
+        rt,
+        globals,
+        typed,
+        fn_val,
+        Type::Nothing,
+        false,
+        false,
+        shape_table,
+        shape_types,
+        shape_abi_sizes,
+        shape_field_abi,
+        layout,
+        options_table,
+        wait_cache,
+        suspend_set,
+        base_suspends,
+        frame_layouts,
+        imported_fns,
+        sig_table,
+        m3d_spike,
+    );
+    let entry = ctx.append_basic_block(fn_val, "entry");
+    cg.builder.position_at_end(entry);
+    let instance = fn_val
+        .get_nth_param(0)
+        .ok_or_else(|| format!("defaults of `{shape_name}`: missing instance parameter"))?
+        .into_pointer_value();
+
+    let mut visited_field_names: HashSet<&str> = HashSet::new();
+    let mut current: &ynz_ast::nodes::ShapeDecl = declaration;
+    loop {
+        for ast_field in &current.fields {
+            // A nearer declaration already owns this name.
+            if !visited_field_names.insert(ast_field.name.as_str()) || !ast_field.is_hidden {
+                continue;
+            }
+            let default_expr = ast_field.default.as_ref().ok_or_else(|| {
+                format!(
+                    "Hidden field `{}` of `{}` has no default value",
+                    ast_field.name, current.name
+                )
+            })?;
+            let field_idx = shape_def
+                .fields
+                .iter()
+                .position(|resolved_field| resolved_field.name == ast_field.name)
+                .ok_or_else(|| {
+                    format!(
+                        "defaults of `{shape_name}`: hidden field `{}` is not in the resolved shape",
+                        ast_field.name
+                    )
+                })?;
+            let field_ty = shape_def.fields[field_idx].ty.clone();
+            let field_slot = cg
+                .builder
+                .build_struct_gep(
+                    struct_ty,
+                    instance,
+                    field_idx as u32,
+                    &format!("{shape_name}.{}_default", ast_field.name),
+                )
+                .map_err(|err| format!("hidden default GEP `{}`: {err}", ast_field.name))?;
+            let lowered_default = lower_expr(&mut cg, default_expr)?;
+            // `lower_expr` wraps a plain variant in an envelope that is a slot in THIS frame,
+            // and this frame ends at the `ret`: the instance's field would point at a dead
+            // slot. Re-home a freshly wrapped union value on counted heap cells, the same home
+            // a wrapped value staged into a suspending callee's frame gets.
+            let stored_default = cg.home_union_on_heap(
+                default_expr,
+                lowered_default,
+                &field_ty,
+                EnvelopeHome::Heap,
+                "hidden_default_union",
+            )?;
+            store_field(&mut cg, stored_default, &field_ty, field_slot)?;
+        }
+        let Some((parent_name, _)) = &current.extends else {
+            break;
+        };
+        current = typed
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::ShapeDecl(candidate) if candidate.name == *parent_name => Some(candidate),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "defaults of `{shape_name}`: parent `{parent_name}` is not declared in the \
+                     module that declares `{shape_name}` — its hidden defaults cannot be lowered here"
+                )
+            })?;
+    }
+    cg.builder
+        .build_return(None)
+        .map_err(|err| format!("defaults of `{shape_name}`: ret: {err}"))?;
+    Ok(())
+}
+
+/// The lowering context for one plain (non-state-machine) function body: no frame, no
+/// state-machine slots, no fused groups. The ONE constructor `lower_function`,
+/// `lower_generic_function` and `lower_shape_defaults_initializer` share, so a field added to
+/// `Cg` is initialised once.
+///
+/// O(1) time and space.
+#[allow(clippy::too_many_arguments)]
+fn plain_cg<'ctx, 'g>(
+    ctx: &'ctx Context,
+    module: &'g Module<'ctx>,
+    rt: &'g RuntimeDecls<'ctx>,
+    globals: &'g ModuleGlobals<'ctx>,
+    typed: &'g TypedModule,
+    fn_val: FunctionValue<'ctx>,
+    ret_ty: Type,
+    is_main: bool,
+    is_errors_capable: bool,
+    shape_table: &'g ShapeTable,
+    shape_types: &'g ShapeLlvmTypes<'ctx>,
+    shape_abi_sizes: &'g HashMap<String, u64>,
+    shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
+    options_table: &'g ynz_typeck::options_table::OptionsTable,
+    wait_cache: &'g WaitCache,
+    suspend_set: &'g SuspendSet,
+    base_suspends: &'g SuspendSet,
+    frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    m3d_spike: bool,
+) -> Cg<'ctx, 'g> {
+    Cg {
+        ctx,
+        module,
+        builder: ctx.create_builder(),
+        rt,
+        globals,
+        typed,
+        current_fn: fn_val,
+        is_main,
+        current_fn_ret_ty: ret_ty,
+        locals: HashMap::new(),
+        shape_table,
+        shape_types,
+        shape_abi_sizes,
+        shape_field_abi,
+        soa_bindings: HashMap::new(),
+        layout,
+        type_subst: HashMap::new(),
+        options_table,
+        is_errors_capable,
+        errors_capable_locals: std::collections::HashSet::new(),
+        bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
+        wait_cache,
+        suspend_set,
+        base_suspends,
+        frame_layouts,
+        imported_fns,
+        sm_frame_ptr: None,
+        sm_yinz_ret_ty: None,
+        sm_crossing_names: None,
+        sm_crossing_scalar_set: HashSet::new(),
+        sm_crossing_bool_set: HashSet::new(),
+        sm_crossing_slot_indices: Vec::new(),
+        sm_crossing_decimal128_set: HashSet::new(),
+        sm_number_param_set: HashSet::new(),
+        sm_crossing_float_set: HashSet::new(),
+        sm_crossing_errors_capable_set: HashSet::new(),
+        sm_crossing_ec_number_set: HashSet::new(),
+        sm_crossing_ec_number_i128_allocas: HashMap::new(),
+        sm_crossing_shape_embed_set: HashSet::new(),
+        sm_crossing_ec_struct_allocas: HashMap::new(),
+        sm_crossing_shape_names: HashMap::new(),
+        sm_crossing_shape_allocas: HashMap::new(),
+        sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
+        coercion_inner: None,
+        sm_for_loop_counter: 0,
+        sm_number_errors_staging_offset: None,
+        // Non-SM functions cannot contain independent suspending groups.
+        no_auto_parallel: false,
+        // Non-SM functions have no frame and cannot yield — the documented residual.
+        back_edge_yield: false,
+        // sig_table unused for non-SM functions — independence analysis runs only in
+        // lower_sm_block which is never reached from the non-SM path.
+        sig_table,
+        // Non-SM functions are never in the spike suspend_set extension, so m3d_spike
+        // only matters for SM functions. Forward the flag so future callers are consistent.
+        m3d_spike,
+        m3d_spike_cpu_result_names: Vec::new(),
+        m3d_spike_cpu_result_allocas: HashMap::new(),
+        m3d_spike_fired: false,
+        // Non-SM functions never reach lower_sm_block — the M3g fused path is never consulted.
+        fused_group: None,
+        fused_group_fired: false,
+    }
 }
 
 // ── v0.3-M2: state-machine function codegen ───────────────────────────────────
@@ -20434,77 +20712,15 @@ fn lower_struct_lit<'ctx>(
         store_field(cg, val, &field_ty, gep)?;
     }
 
-    // Evaluate and store non-zero hidden-field defaults.
-    //
-    // Walk all AST ShapeDecls in the inheritance chain (current shape + every ancestor
-    // via `extends`) to find hidden fields with explicit default expressions.
-    // Zero-init above already covers zero-default fields; only emit a GEP+store when
-    // the default expression evaluates to something non-zero.
-    //
-    // Inherited hidden fields live in the parent's AST ShapeDecl, not the child's —
-    // so we must walk the chain.  The GEP index is always looked up from the resolved
-    // ShapeDef.fields (which includes inherited fields in layout order) to produce
-    // the correct LLVM struct offset.
-    let ast_shape_decl_for = |name: &str| -> Option<&ynz_ast::nodes::ShapeDecl> {
-        cg.typed.module.items.iter().find_map(|item| {
-            if let ynz_ast::nodes::Item::ShapeDecl(s) = item {
-                if s.name == name {
-                    Some(s)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-    };
-
-    // Collect the shape names to visit: walk up the extends chain.
-    let mut chain: Vec<String> = vec![shape_name.clone()];
-    {
-        let mut cur = shape_name.clone();
-        while let Some(parent) = cg.shape_table.get(&cur).and_then(|s| s.extends.clone()) {
-            chain.push(parent.clone());
-            cur = parent;
-        }
-    }
-
-    for decl_name in &chain {
-        let Some(ast_shape) = ast_shape_decl_for(decl_name) else {
-            continue;
-        };
-        for ast_field in &ast_shape.fields {
-            if !ast_field.is_hidden {
-                continue;
-            }
-            let Some(default_expr) = &ast_field.default else {
-                continue;
-            };
-            // Find this field's index in the resolved ShapeDef (which includes
-            // inherited fields; the LLVM struct layout follows ShapeDef.fields order).
-            let field_idx = match shape_def
-                .fields
-                .iter()
-                .position(|f| f.name == ast_field.name)
-            {
-                Some(idx) => idx,
-                None => continue, // field not in resolved def — skip safely
-            };
-            let field_ty = shape_def.fields[field_idx].ty.clone();
-
-            let gep = cg
-                .builder
-                .build_struct_gep(
-                    struct_ty,
-                    slot,
-                    field_idx as u32,
-                    &format!("{}.{}_default", shape_name, ast_field.name),
-                )
-                .map_err(|e| format!("hidden default GEP `{}`: {e}", ast_field.name))?;
-
-            let val = lower_expr(cg, default_expr)?;
-            store_field(cg, val, &field_ty, gep)?;
-        }
+    // Write the hidden-field defaults: ONE initializer per shape, defined by the module that
+    // declares the shape (`lower_shape_defaults_initializer`) so each default is lowered with
+    // that module's own typed data, and called here whether the shape is local or imported.
+    // Defaults land after the provided fields, as the inline lowering always did.
+    if shape_has_hidden_fields(&shape_def) {
+        let initializer = shape_defaults_initializer(cg.ctx, cg.module, &shape_def);
+        cg.builder
+            .build_call(initializer, &[slot.into()], "hidden_defaults")
+            .map_err(|err| format!("hidden defaults call `{shape_name}`: {err}"))?;
     }
 
     Ok(slot.into())

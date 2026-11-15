@@ -1,0 +1,38 @@
+// v0.3-M9 C1e rework (#421), question 4: a HIDDEN shape-field default into a union-typed field
+// (`hidden extra: Big | int = 4096`) is a value entering a union slot, so it must be wrapped in a
+// tagged envelope like the declared-field and shape-literal slots.
+// Correct behavior: prints `other` (the `int` variant, matched by `else =>`) then `end`; clean
+// under AddressSanitizer at both optimization levels.
+// Pre-fix failure: the default lands as the raw int 4096 where the envelope pointer belongs:
+// SIGSEGV reading address 0x1000.
+// (A shape-literal default into a union-typed hidden field is a different failure: the build
+// stops with "struct literal with non-shape type Error".)
+
+shape Big {
+  label: string
+  count: int
+}
+
+shape Holder {
+  name: string
+  hidden extra: Big | int = 4096
+}
+
+function peek(share self: Holder) -> string {
+  let slot: Big | int = self.extra
+  if (slot) {
+    is Big => {
+      return `big ${slot.label}`
+    }
+    else => {
+      return `other`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { name: `a` }
+  print(holder.peek())
+  print(`end`)
+}

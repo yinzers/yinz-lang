@@ -1418,46 +1418,7 @@ impl<'b> Checker<'b> {
                     for field in &s.fields {
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
                     }
-                    // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): a hidden
-                    // field with an int-literal default against a `number` type
-                    // (`hidden cache: number = 5`) is never typechecked here otherwise,
-                    // and codegen ICEs lowering the raw i64 into the decimal128 pointer
-                    // slot (emit.rs hidden-default store). Only hidden-field defaults are
-                    // lowered as defaults (non-hidden fields must be provided at
-                    // construction, so their default expr is dead), so the gate matches
-                    // that scope. Route through the SAME shared teaching gate as every
-                    // other int-literal→`number` slot (authoritative-derivation: one gate,
-                    // no per-slot twin). Coercion stays deferred to the stub plan.
-                    for field in &s.fields {
-                        if !field.is_hidden {
-                            continue;
-                        }
-                        let Some(default_expr) = &field.default else {
-                            continue;
-                        };
-                        // Guard on the RAW AST type before resolving through
-                        // ast_type_to_type. This arm runs with an empty
-                        // type_param_scope (it is only populated in
-                        // check_generic_function_body), so resolving a
-                        // type-param-typed field (`hidden buffer: array<T>`) would
-                        // emit a spurious "T is not a known type" diagnostic — the
-                        // exact trap the diagnostic-free walker above deliberately
-                        // avoids. `number` is banned from aliasing, so a `number`
-                        // slot is ALWAYS the literal AstType::Number here; matching
-                        // it directly resolves and fires the gate only for a bare
-                        // `number` annotation, never walking a generic param. The
-                        // gate already fires only on bare Type::Number (so `maybe
-                        // number` etc. fall through), so this loses nothing.
-                        if !matches!(&field.ty, AstType::Number { .. }) {
-                            continue;
-                        }
-                        let field_ty = self.ast_type_to_type(&field.ty);
-                        self.reject_int_literal_number_slot(
-                            NumberSlotRole::Field { name: &field.name },
-                            &field_ty,
-                            default_expr,
-                        );
-                    }
+                    self.check_hidden_field_defaults(s, &type_params);
                     // Union type alias RHS: `shape PghEvent = SouthSideEvent | StripeDistrictEvent`.
                     // alias_ty is the raw AstType (Union) written in source. Because the check
                     // pass never enters ShapeDecl bodies, these member names are otherwise
@@ -2317,6 +2278,97 @@ impl<'b> Checker<'b> {
                     "A `return` statement ends the function immediately. Any code after it in the same block is never reached.",
                 ));
             }
+        }
+    }
+
+    /// Check every hidden-field default of `shape` against the field's declared type.
+    ///
+    /// Only hidden-field defaults are lowered as defaults (non-hidden fields must be provided at
+    /// construction, so their default expression is dead), so the check matches that scope. A
+    /// default is a value meeting a slot of declared type, so it gets the same three outcomes as
+    /// a shape-literal field: the int-literal-into-`number` teaching gate (`hidden cache: number
+    /// = 5`, which otherwise ICEs lowering the raw i64 into the decimal128 slot), the ordinary
+    /// mismatch diagnostic (`hidden extra: string = 4096`), and, for a union-typed field, the
+    /// coercion record (`record_union_coercion`) that makes codegen wrap the default in the
+    /// tagged envelope. Without the record a plain variant default was stored as the bare value
+    /// where the envelope pointer belongs.
+    ///
+    /// The default is inferred under the shape's own type parameters (`hidden buffer: array<T>
+    /// = []`), outside any function body, in a scope frame of its own.
+    ///
+    /// Time: O(fields x default size)  Space: O(1) beyond the recorded types
+    fn check_hidden_field_defaults(
+        &mut self,
+        shape: &ynz_ast::nodes::ShapeDecl,
+        type_params: &HashSet<String>,
+    ) {
+        for param in type_params {
+            self.type_param_scope.insert(param.clone(), ());
+        }
+        self.scope.push();
+        for field in &shape.fields {
+            if !field.is_hidden {
+                continue;
+            }
+            let Some(default_expr) = &field.default else {
+                continue;
+            };
+            let field_ty = self.ast_type_to_type(&field.ty);
+            if self.reject_int_literal_number_slot(
+                NumberSlotRole::Field { name: &field.name },
+                &field_ty,
+                default_expr,
+            ) {
+                continue;
+            }
+            let default_ty = self.infer_expr(default_expr, Some(&field_ty));
+            // An unknown name inside a union (`Big | Missing`) leaves a nested `Error`: it was
+            // already reported at the annotation, so a second error naming `unknown` would only
+            // repeat it.
+            if default_ty == Type::Error || type_contains_error(&field_ty) {
+                continue;
+            }
+            if can_assign(&field_ty, &default_ty) {
+                self.record_union_coercion(default_expr, &field_ty, &default_ty);
+            } else if is_union_into_its_variant(&field_ty, &default_ty) {
+                self.diags.push(union_where_variant_expected_diag(
+                    default_expr,
+                    &default_ty,
+                    &field_ty,
+                    &format!(
+                        "`{}.{}` is declared as a `{}`",
+                        shape.name,
+                        field.name,
+                        type_name(&field_ty)
+                    ),
+                ));
+            } else {
+                self.diags.push(Diagnostic::error(
+                    default_expr.span().clone(),
+                    format!(
+                        "Hidden field `{}` expects `{}`, but its default is `{}`.",
+                        field.name,
+                        type_name(&field_ty),
+                        type_name(&default_ty)
+                    ),
+                    format!(
+                        "Give `{}` a default of type `{}`, or change the field's type.",
+                        field.name,
+                        type_name(&field_ty)
+                    ),
+                    format!(
+                        "`{}.{}` was declared as `{}`, and every new `{}` starts with its default.",
+                        shape.name,
+                        field.name,
+                        type_name(&field_ty),
+                        shape.name
+                    ),
+                ));
+            }
+        }
+        self.scope.pop();
+        for param in type_params {
+            self.type_param_scope.remove(param);
         }
     }
 
@@ -8384,6 +8436,52 @@ impl<'b> Checker<'b> {
         result
     }
 
+    /// Report a type annotation that gives type arguments to a name that is not a generic shape
+    /// declared in this file: an unknown name (`Nope<int>`) or a known type that takes none (a
+    /// plain shape such as `Big<int>`, `string<int>`, or a type parameter `T<int>`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn report_non_generic_type_name(&mut self, name: &str, name_span: &SourceSpan) {
+        let is_plain_type = self.shape_table.contains(name)
+            || self.options_table.contains(name)
+            || self.union_aliases.contains_key(name)
+            || self.type_param_scope.contains_key(name)
+            || matches!(name, "string" | "range" | "Frame" | "SourceLoc");
+        if is_plain_type {
+            self.diags.push(Diagnostic::error(
+                name_span.clone(),
+                format!("`{name}` does not take type arguments."),
+                format!("Write `{name}` without the `<...>`."),
+                format!("`{name}` is one fixed type with no type parameters; only a shape declared with type parameters, like `shape Pair<T> {{ ... }}`, takes type arguments."),
+            ));
+        } else {
+            self.diags.push(Diagnostic::error(
+                name_span.clone(),
+                format!("`{name}` is not a known type."),
+                format!("Declare `shape {name}<T> {{ ... }}` in this file, or use a built-in generic (`array<T>`, `fixed<T>`, `map<K, V>`, `channel<T>`)."),
+                format!("`{name}` is not declared in this file as a generic shape, so `{name}<...>` names no type."),
+            ).with_kind(ynz_diagnostics::DiagnosticKind::NotDefined));
+        }
+    }
+
+    /// Report a built-in generic written with fewer type arguments than it takes (`map<int>`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn report_missing_type_arguments(&mut self, name: &str, required: usize, span: &SourceSpan) {
+        let example = if required == 2 {
+            format!("{name}<string, int>")
+        } else {
+            format!("{name}<int>")
+        };
+        let plural = if required == 1 { "" } else { "s" };
+        self.diags.push(Diagnostic::error(
+            span.clone(),
+            format!("`{name}` takes {required} type argument{plural}."),
+            format!("Write every type argument, for example `{example}`."),
+            format!("Without all {required} type argument{plural}, `{name}` does not say what it holds, so its values cannot be checked or laid out in memory."),
+        ));
+    }
+
     fn ast_type_to_type(&mut self, ast_ty: &AstType) -> Type {
         match ast_ty {
             AstType::Nothing => Type::Nothing,
@@ -8509,6 +8607,17 @@ impl<'b> Checker<'b> {
                 }
                 let resolved_args: Vec<Type> =
                     args.iter().map(|a| self.ast_type_to_type(a)).collect();
+                // The arms below fill a missing argument with `Error`. Report it here: callers
+                // skip their checks on a type holding an `Error` as already reported (`channel`
+                // reports its own count).
+                let required_args = match name.as_str() {
+                    "array" | "fixed" => 1,
+                    "map" | "MapEntry" => 2,
+                    _ => 0,
+                };
+                if resolved_args.len() < required_args {
+                    self.report_missing_type_arguments(name, required_args, span);
+                }
                 match name.as_str() {
                     "array" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
@@ -8577,6 +8686,7 @@ impl<'b> Checker<'b> {
                                 args: resolved_args,
                             }
                         } else {
+                            self.report_non_generic_type_name(name, name_span);
                             Type::Error
                         }
                     }
@@ -10903,6 +11013,28 @@ fn is_envelope_union(candidate: &Type) -> bool {
         Type::Union { variants } => variants
             .iter()
             .any(|variant| matches!(variant, Type::Shape { .. })),
+        _ => false,
+    }
+}
+
+/// Whether `ty` is, or holds anywhere inside it, the `Error` placeholder an unresolvable type
+/// name leaves behind. Callers use it to skip a check whose slot type is already reported.
+///
+/// Time: O(size of the type)  Space: O(depth of the type)
+fn type_contains_error(ty: &Type) -> bool {
+    match ty {
+        Type::Error => true,
+        Type::Union { variants } => variants.iter().any(type_contains_error),
+        Type::Generic { args, .. } => args.iter().any(type_contains_error),
+        Type::BuiltinArray { elem }
+        | Type::BuiltinFixed { elem, .. }
+        | Type::BuiltinChannel { elem }
+        | Type::Maybe { inner: elem }
+        | Type::ErrorsCapable { inner: elem }
+        | Type::Sensitive { inner: elem } => type_contains_error(elem),
+        Type::BuiltinMap { key, val } | Type::MapEntry { key, val } => {
+            type_contains_error(key) || type_contains_error(val)
+        }
         _ => false,
     }
 }

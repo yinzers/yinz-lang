@@ -1,4 +1,4 @@
-// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C5a store hands over)
+// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C1e hidden defaults, C5a store hands over)
 //
 // Every block below intentionally triggers a diagnostic added or extended in v0.3-M9.
 // Run `ynz build v0_3_m9_errors.ynz` to see all diagnostics.
@@ -21,6 +21,13 @@ shape Ticket {
 }
 
 shape Round = Plain | int
+
+shape Tip {
+  amount: int
+  // WHY: hidden-field default mismatch — every new `Tip` starts with this default, but a
+  // `string` field cannot start as the `int` 4096.
+  hidden note: string = 4096
+}
 
 function plateSpecial(share special: Special) -> string {
   return special.label

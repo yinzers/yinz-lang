@@ -1,0 +1,18 @@
+// v0.3-M9 C1e rework (#421): a hidden field whose union type names an unknown type gets the one
+// "not a known type" error from its annotation. The default is not also checked against the
+// broken type, which used to add a second error naming a type called `unknown`.
+
+shape Big {
+  first: int
+  second: int
+}
+
+shape Holder {
+  name: string
+  hidden extra: Big | Missing = 4096
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { name: `a` }
+  print(holder.name)
+}

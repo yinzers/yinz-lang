@@ -247,7 +247,7 @@ The compiler checks that the fields exist with the right types. No need to write
 
 ## Hidden fields — invisible outside the same file
 
-Mark a field `hidden` to make it inaccessible to code in OTHER FILES. Hidden fields require a default value because external code can't provide them at construction.
+Mark a field `hidden` to make it inaccessible to code in OTHER FILES. Hidden fields require a default value because external code can't provide them at construction. The default must match the field's type (`hidden note: string = 4096` is refused), and every new value starts with it, wherever the shape is created.
 
 ```ynz
 // File: player.ynz

@@ -703,16 +703,18 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
     // WHY: v0_3_m9_errors.ynz is where a human reads the v0.3-M9 union refusals together: a
     // union reaching a slot that expects one of its variants (return, argument, annotated
     // `let`, shape field), a union match that leaves a non-shape variant unhandled, and (C1g) an
-    // argument of another type than its type parameter was made to stand for, and (C5a) a store
-    // that hands a value over and a later read of it. One trigger each; the count plus a key phrase per class keeps one from regressing into a
+    // argument of another type than its type parameter was made to stand for, (C1e) a hidden
+    // field whose default is not its declared type, and (C5a) a store that hands a value over
+    // and a later read of it. One trigger each; the count plus a key phrase per class keeps one
+    // from regressing into a
     // generic message.
     let (stderr, code) = compile_gallery(&gallery("v0_3_m9_errors.ynz"));
     assert_ne!(code, 0, "v0_3_m9 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert_eq!(
-        error_count, 7,
-        "v0_3_m9 gallery must produce exactly 7 errors, one per trigger; got \
+        error_count, 8,
+        "v0_3_m9 gallery must produce exactly 8 errors, one per trigger; got \
          {error_count}.\nstderr:\n{stderr}"
     );
 
@@ -723,6 +725,10 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
         ("shape field", "`Ticket.held` is declared as a `Special`"),
         ("what-instead", "Check which variant it holds first"),
         ("why", "is a box with a tag saying which variant is inside"),
+        (
+            "hidden field default of another type",
+            "Hidden field `note` expects `string`, but its default is `int`",
+        ),
         (
             "non-shape variant left unhandled",
             "1 variant is not handled: int",
