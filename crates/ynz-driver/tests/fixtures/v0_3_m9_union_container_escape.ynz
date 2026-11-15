@@ -1,0 +1,57 @@
+// v0.3-M9 C1e rework (#421): a union container RETURNED from the function that filled it. The
+// element cell holds a pointer to the envelope (not the 16 bytes by value), and the payload is
+// a pointer into the callee's frame, so a frame envelope dangles once `build` returns.
+// Correct behavior: prints `big hello`, `tiny`, then `end`; clean under AddressSanitizer.
+// Failure of a frame envelope (measured, also for an explicit `let held: Thing = big` store on
+// the base): ASan stack-use-after-return at -O0 (stack-use-after-scope at -O2), `none` printed.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function build() -> array<Thing> {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let things: array<Thing> = []
+  things.add(big)
+  things.add(tiny)
+  return things
+}
+
+function clobber(n: int) -> int {
+  let a = n + 1
+  let b = a * 2
+  let c = b - 3
+  return c + a
+}
+
+function entrypoint() -> nothing {
+  let things = build()
+  let scratch = clobber(7)
+  let i = 0
+  while (i < things.count()) {
+    let got = things.get(i)
+    if (got.exists()) {
+      print(describe(got.value))
+    }
+    i = i + 1
+  }
+  print(`end`)
+}

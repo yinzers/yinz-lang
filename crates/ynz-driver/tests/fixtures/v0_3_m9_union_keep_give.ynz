@@ -1,0 +1,67 @@
+// v0.3-M9 C1f (#423): a union stored into a list by a function that does not own the list, then
+// the list returned from the function that filled it. The stored envelope must be the slot's
+// own bytes and its payload must not live in a dead frame.
+// Ownership: a `share` union parameter cannot be stored (`ParamNeedsGive`, C5a #393); `give`
+// hands the union over, and the store copies it into the element slot.
+// Correct behavior: prints `big kept`, `big old`, `tiny`, `end`; clean under AddressSanitizer at
+// both optimization levels.
+// Failure on the base (measured): ASan stack-use-after-return (stack-use-after-scope at -O2);
+// without the sanitizer the payload prints as garbage.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function keep(lend list: array<Thing>, give t: Thing) -> nothing {
+  list.add(t)
+}
+
+function fill() -> array<Thing> {
+  let list: array<Thing> = []
+  let big: Big = { label: `kept`, count: 3 }
+  keep(list, big)
+  let old: Big = { label: `old`, count: 4 }
+  let as_thing: Thing = old
+  keep(list, as_thing)
+  let tiny: Tiny = { flag: true }
+  keep(list, tiny)
+  return list
+}
+
+function clobber(n: int) -> int {
+  let a = n + 1
+  let b = a * 2
+  let c = b - 3
+  return c + a
+}
+
+function entrypoint() -> nothing {
+  let things = fill()
+  let scratch = clobber(7)
+  let i = 0
+  while (i < things.count()) {
+    let got = things.get(i)
+    if (got.exists()) {
+      print(describe(got.value))
+    }
+    i = i + 1
+  }
+  print(`end`)
+}

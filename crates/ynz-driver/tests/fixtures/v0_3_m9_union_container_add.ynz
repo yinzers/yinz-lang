@@ -1,0 +1,49 @@
+// v0.3-M9 C1e rework (#421): `array<Thing>.add(plain)` stores a plain variant into a UNION-element
+// array. The element must be the tagged envelope of the variant stored, so reading it back and
+// matching with `is` picks the arm of the variant that went in.
+// Correct behavior: prints `tiny`, `big hello`, `tiny`, `big world`, `end`; clean under
+// AddressSanitizer at both optimization levels.
+// (Each plain variant is stored once: a store hands its value over, C5a #393.)
+// Pre-fix failure: the bare shape pointer was stored as the element (no `{tag, data}` envelope).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let tiny_again: Tiny = { flag: false }
+  let big: Big = { label: `hello`, count: 3 }
+  let other: Big = { label: `world`, count: 4 }
+  let things: array<Thing> = []
+  things.add(tiny)
+  things.add(big)
+  things.add(tiny_again)
+  things.add(other)
+  let i = 0
+  while (i < things.count()) {
+    let got = things.get(i)
+    if (got.exists()) {
+      print(describe(got.value))
+    }
+    i = i + 1
+  }
+  print(`end`)
+}
