@@ -199,3 +199,11 @@ store_case!(
     5,
     "`array<string>.copy()` clones the buffer and shares each string pointer with the original (High)"
 );
+
+store_case!(
+    hidden_string_default_is_copied_per_instance,
+    "v0_3_m9_c3b_hidden_default.ynz",
+    "default\ndefault\ndefault\nnote\nn-1\n",
+    9,
+    "the defaults initializer stores a hidden string default without the store rule (copy a borrowed string, move a fresh one), so an instance holds a string no one owns (High)"
+);
