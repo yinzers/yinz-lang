@@ -16976,22 +16976,22 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 // frame, which counts a call that suspends without a written `wait`) or the
                 // crossing union map; it keeps its copy. A state-machine function whose binding
                 // does not cross views like any other.
-                let value_span = value.span();
-                let is_view = cg
-                    .typed
-                    .view_bindings
-                    .contains(value_span.start, value_span.end)
-                    && !is_sm_crossing
-                    && !cg.sm_crossing_unions.contains_key(name.as_str())
+                // Array and map values go through the store seam (`own_read_for_store`): a
+                // moved value is taken, a view points at its place, any other read is copied.
+                let is_view = read_may_point_at_place(cg, value, Some(name))
                     && val.is_pointer_value()
                     && matches!(
                         cg.resolve_type(&val_ty),
-                        Type::Shape { .. } | Type::Union { .. } | Type::Maybe { .. }
+                        Type::Shape { .. }
+                            | Type::Union { .. }
+                            | Type::Maybe { .. }
+                            | Type::BuiltinArray { .. }
+                            | Type::BuiltinMap { .. }
                     );
                 if is_view {
                     store(cg, val, &val_ty, slot)?;
                 } else {
-                    store_binding(cg, val, &val_ty, slot, name)?;
+                    store_binding_of_read(cg, value, val, &val_ty, slot, name)?;
                 }
             }
             // M7 P4a: track bindings that hold errors-capable results.
@@ -17032,7 +17032,21 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 // Binding funnel: shape/maybe values copy their bytes into
                 // variable-owned storage (get-side ownership contract — see
                 // store_binding); everything else stores as before.
-                store_binding(cg, val, &ty, slot, target)?;
+                if read_may_point_at_place(cg, value, Some(target))
+                    && val.is_pointer_value()
+                    && matches!(
+                        cg.resolve_type(&ty),
+                        Type::Shape { .. }
+                            | Type::Union { .. }
+                            | Type::Maybe { .. }
+                            | Type::BuiltinArray { .. }
+                            | Type::BuiltinMap { .. }
+                    )
+                {
+                    store(cg, val, &ty, slot)?;
+                } else {
+                    store_binding_of_read(cg, value, val, &ty, slot, target)?;
+                }
             }
         }
 
@@ -17746,6 +17760,11 @@ fn lower_stmt_for<'ctx>(
         let out = cg.array_elem_out_buffer(&elem, "for_get")?;
         let _flag = cg.array_elem_get_into(arr_ptr, i, out, "for_get_call", soa_info.as_ref())?;
         let elem_val = cg.array_elem_from_out(out, &elem, "for_get")?;
+        // The loop variable points at the element when nothing in the body writes the iterated
+        // place (typeck's `non_owned_reads`); otherwise it owns a copy, released after its
+        // iteration.
+        let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "for_elem")?;
+        let elem_val = owned_elem.value;
 
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
@@ -17759,6 +17778,9 @@ fn lower_stmt_for<'ctx>(
         }
 
         if !is_block_terminated(cg) {
+            if owned_elem.copied {
+                release_owned_read(cg, elem_val, &elem, "for_elem")?;
+            }
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "next_i")
@@ -17834,6 +17856,8 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?
             .into_int_value();
         let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "ff_elem")?;
+        let elem_val = owned_elem.value;
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
@@ -17846,6 +17870,9 @@ fn lower_stmt_for<'ctx>(
         }
 
         if !is_block_terminated(cg) {
+            if owned_elem.copied {
+                release_owned_read(cg, elem_val, &elem, "ff_elem")?;
+            }
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "ff_ni")
@@ -17950,6 +17977,11 @@ fn lower_stmt_for<'ctx>(
         // Entry val bits: shape values carry the out-buffer pointer as i64 bits
         // (MapEntry fields load i64 bits + i64_bits_to), others the loaded cell.
         let v_bits = cg.array_elem_bits_from_out(val_out, &val_ty, "mf_vv")?;
+        // The entry points at the slot when nothing in the body writes the iterated map;
+        // otherwise it owns a copy of its key and value, released after its iteration.
+        let owned_entry =
+            own_map_entry(cg, iter, k_val.into_int_value(), v_bits, &key_ty, &val_ty)?;
+        let (k_val, v_bits) = (owned_entry.key_bits, owned_entry.value_bits);
         let k_dst = cg
             .builder
             .build_struct_gep(entry_ty, entry_slot, 0, "mf_kd")
@@ -17977,6 +18009,7 @@ fn lower_stmt_for<'ctx>(
         cg.locals.remove(var);
 
         if !is_block_terminated(cg) {
+            release_map_entry(cg, &owned_entry, &key_ty, &val_ty)?;
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "mf_ni")
@@ -18142,7 +18175,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
-                let val = own_returned_string(cg, expr, val, "sm_return_str")?;
+                let val = own_returned_value(cg, expr, val, "sm_return_str")?;
                 // C1f (#423): an `errors` function whose success value is an envelope union
                 // writes the slot, payload inline, into its frame's `Return` region and puts the
                 // region's address in the result's ok word (`ec_region_to_standard` reads it).
@@ -18724,7 +18757,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
-                let val = own_returned_string(cg, expr, val, "ec_return_str")?;
+                let val = own_returned_value(cg, expr, val, "ec_return_str")?;
                 // C1f (#423): an envelope union success value returns BY VALUE as the result's
                 // slot (`ec_result_type`), payload inline, so neither this frame's envelope nor a
                 // payload in this frame is read after `ret`. An `errors` value (a call result or
@@ -18829,7 +18862,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         }
         Some(expr) => {
             let mut val = lower_expr(cg, expr)?;
-            val = own_returned_string(cg, expr, val, "return_str")?;
+            val = own_returned_value(cg, expr, val, "return_str")?;
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -19176,11 +19209,12 @@ fn own_string_for_store<'ctx>(
     Ok(copied)
 }
 
-/// The string a `return` hands its caller: a function returns an owned string (the caller
-/// binds a call result by move), so a borrowed one (a parameter, a field or element read, a
-/// literal) is copied here and a returned local at its last use is moved. A value coerced into
+/// The value a `return` hands its caller: a function returns an owned string, array, map or shape
+/// (the caller binds a call result by move: typeck classifies it `Fresh`), so a borrowed one (a
+/// parameter, a field or element read, a literal) is copied here by the store seam and a value that
+/// moves (a fresh one, a returned local at its last use) is taken. No read is a view across a frame. A value coerced into
 /// a union slot was owned when it entered the envelope (`lower_expr`), so it is left alone.
-fn own_returned_string<'ctx>(
+fn own_returned_value<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     expr: &Expr,
     val: BasicValueEnum<'ctx>,
@@ -19191,7 +19225,228 @@ fn own_returned_string<'ctx>(
         return Ok(val);
     }
     let ty = cg.expr_type(expr);
-    own_string_for_store(cg, val, &ty, site)
+    if !ynz_typeck::owned_copy::copied_at_return(&cg.resolve_type(&ty)) {
+        return Ok(val);
+    }
+    let owned = own_read_for_store(cg, expr, val, &ty, false, site)?;
+    // A shape copy returned whole is not copied again where the return form persists it.
+    if owned.copied
+        && owned.value.is_pointer_value()
+        && matches!(cg.resolve_type(&ty), Type::Shape { .. })
+    {
+        cg.moved_cell_values
+            .insert(owned.value.as_value_ref() as usize);
+    }
+    Ok(owned.value)
+}
+
+/// True when the read of a place at `expr` may point at the place instead of copying it:
+/// typeck judged it a view (`TypedModule::non_owned_reads`, rule (b)) and nothing in codegen's
+/// own crossing sets (rule (c)) keeps it from being one. `binding` is the codegen name of the
+/// binding the value is stored in, `None` for a loop variable or an argument.
+fn read_may_point_at_place(cg: &Cg<'_, '_>, expr: &Expr, binding: Option<&str>) -> bool {
+    let span = expr.span();
+    if !cg.typed.non_owned_reads.is_view(span.start, span.end) {
+        return false;
+    }
+    match binding {
+        Some(name) => {
+            !cg.sm_crossing_names
+                .as_deref()
+                .is_some_and(|names| names.iter().any(|crossing| crossing == name))
+                && !cg.sm_crossing_unions.contains_key(name)
+        }
+        None => true,
+    }
+}
+
+/// A value the store seam copied, and what releases it.
+struct OwnedRead<'ctx> {
+    value: BasicValueEnum<'ctx>,
+    /// True when the seam allocated `value`: its holder releases it (`release_owned_read`).
+    copied: bool,
+}
+
+/// THE store seam of a read of a place that someone else owns (`IMP-ownership.md`
+/// "Non-owned reads"): a `let` or reassignment value, a loop variable, a call argument and a
+/// `return` all store what they read through here. `expr` is the expression that reads the
+/// place and `may_point` says the site may keep a typeck view (`read_may_point_at_place`).
+///
+/// * a value typeck says a store takes by move (`string_moves`, `heap_moves`) is taken as it is;
+/// * a read typeck judged a view stays a pointer at its place;
+/// * anything else is copied by `emit_owned_copy`, the one routine that copies a string, array
+///   or map, and `shape_bytes_to_owned`, the one that copies a shape's bytes and deepens them.
+///
+/// Types the seam does not own (bits, `maybe`, unions, channels) pass through.
+///
+/// O(1) time at the call site; the copy it emits is O(n) in the value's size.
+fn own_read_for_store<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    may_point: bool,
+    site: &str,
+) -> Result<OwnedRead<'ctx>, String> {
+    let resolved = cg.resolve_type(ty);
+    let kept = OwnedRead {
+        value: val,
+        copied: false,
+    };
+    if !val.is_pointer_value() {
+        return Ok(kept);
+    }
+    let pointer = val.into_pointer_value();
+    match &resolved {
+        string if is_string_like(string) => {
+            if may_point
+                || cg
+                    .owned_string_values
+                    .contains(&(val.as_value_ref() as usize))
+            {
+                return Ok(kept);
+            }
+            let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
+            Ok(OwnedRead {
+                value: copied,
+                copied: true,
+            })
+        }
+        Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => {
+            if may_point || cg.is_moved_cells(pointer) {
+                return Ok(kept);
+            }
+            let (copied, _free) = emit_owned_copy(cg, Some(expr), val, ty, CopyMode::Body, site)?;
+            Ok(OwnedRead {
+                value: copied,
+                copied: true,
+            })
+        }
+        Type::Shape { name } => {
+            if may_point {
+                return Ok(kept);
+            }
+            let moved = cg.is_moved_cells(pointer);
+            let owned = cg.shape_bytes_to_owned(pointer, name, site)?;
+            Ok(OwnedRead {
+                value: owned.into(),
+                copied: !moved,
+            })
+        }
+        _ => Ok(kept),
+    }
+}
+
+/// Release a value `own_read_for_store` copied, once its holder is done with it: a loop
+/// variable after its iteration, an argument after the call. One call of the type's release
+/// helper (`release_fn`), the function a scope exit and an overwrite use.
+///
+/// O(n) time in the heap the value owns; O(1) space.
+fn release_owned_read<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    value: BasicValueEnum<'ctx>,
+    ty: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let resolved = cg.resolve_type(ty);
+    let Some(glue) = cg.release_fn(&resolved, false)? else {
+        return Ok(());
+    };
+    cg.builder
+        .build_call(glue, &[value.into_pointer_value().into()], "")
+        .map_err(|err| format!("release_owned_read {site}: {err}"))?;
+    Ok(())
+}
+
+/// Store the value of `expr` into the binding slot `slot` of `name`: an array or map goes through
+/// the store seam (`own_read_for_store`, which takes a moved value and copies a read of a place
+/// that is not a view); every other type through `store_binding`.
+fn store_binding_of_read<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    slot: PointerValue<'ctx>,
+    name: &str,
+) -> Result<(), String> {
+    if matches!(
+        cg.resolve_type(ty),
+        Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+    ) {
+        let owned = own_read_for_store(cg, expr, val, ty, false, name)?;
+        return store(cg, owned.value, ty, slot);
+    }
+    store_binding(cg, val, ty, slot, name)
+}
+
+/// The element a `for` loop variable reads from `iter`'s collection: the element itself when
+/// typeck judged the loop variable a view (nothing in the body writes the iterated place), else a
+/// copy the loop variable owns for its iteration (`own_read_for_store`; the loop releases it after
+/// the iteration). A loop cell is never a value typeck moves.
+fn own_loop_element<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    iter: &Expr,
+    element: BasicValueEnum<'ctx>,
+    element_type: &Type,
+    site: &str,
+) -> Result<OwnedRead<'ctx>, String> {
+    let may_point = read_may_point_at_place(cg, iter, None);
+    own_read_for_store(cg, iter, element, element_type, may_point, site)
+}
+
+/// The key and value bits a map-iteration entry holds, and which of them the entry owns.
+struct OwnedMapEntry<'ctx> {
+    key_bits: inkwell::values::IntValue<'ctx>,
+    value_bits: inkwell::values::IntValue<'ctx>,
+    key: Option<BasicValueEnum<'ctx>>,
+    value: Option<BasicValueEnum<'ctx>>,
+}
+
+/// `own_loop_element` for a map entry: a string key and a heap value are each copied unless the
+/// loop variable is a view.
+fn own_map_entry<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    iter: &Expr,
+    key_bits: inkwell::values::IntValue<'ctx>,
+    value_bits: inkwell::values::IntValue<'ctx>,
+    key_type: &Type,
+    value_type: &Type,
+) -> Result<OwnedMapEntry<'ctx>, String> {
+    let mut entry = OwnedMapEntry {
+        key_bits,
+        value_bits,
+        key: None,
+        value: None,
+    };
+    let key_value = cg.i64_bits_to(key_bits, key_type)?;
+    let owned_key = own_loop_element(cg, iter, key_value, key_type, "mf_key_own")?;
+    if owned_key.copied {
+        entry.key_bits = cg.to_i64_bits(owned_key.value, key_type)?;
+        entry.key = Some(owned_key.value);
+    }
+    let value_value = cg.i64_bits_to(value_bits, value_type)?;
+    let owned_value = own_loop_element(cg, iter, value_value, value_type, "mf_val_own")?;
+    if owned_value.copied {
+        entry.value_bits = cg.to_i64_bits(owned_value.value, value_type)?;
+        entry.value = Some(owned_value.value);
+    }
+    Ok(entry)
+}
+
+/// Release what `own_map_entry` copied.
+fn release_map_entry<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    entry: &OwnedMapEntry<'ctx>,
+    key_type: &Type,
+    value_type: &Type,
+) -> Result<(), String> {
+    if let Some(key) = entry.key {
+        release_owned_read(cg, key, key_type, "mf_key_own")?;
+    }
+    if let Some(value) = entry.value {
+        release_owned_read(cg, value, value_type, "mf_val_own")?;
+    }
+    Ok(())
 }
 
 fn lower_expr_node<'ctx>(

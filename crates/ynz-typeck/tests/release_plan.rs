@@ -580,9 +580,10 @@ fn parity_findings(path: &Path, tally: &Tally) -> (bool, Vec<String>) {
             .into_iter()
             .map(|message| format!("{}: {message}", path.display())),
     );
-    tally
-        .views
-        .fetch_add(output.typed_module.view_bindings.len(), Ordering::Relaxed);
+    tally.views.fetch_add(
+        output.typed_module.non_owned_reads.view_count(),
+        Ordering::Relaxed,
+    );
     tally
         .heap_moves
         .fetch_add(output.typed_module.heap_moves.len(), Ordering::Relaxed);
@@ -1279,7 +1280,7 @@ fn lets_of(block: &Block, found: &mut Vec<((usize, usize), ynz_typeck::binding_n
     }
 }
 
-/// Where the release plan disagrees with C1f's records (`view_bindings`, `heap_moves`):
+/// Where the release plan disagrees with C1f's records (`non_owned_reads`, `heap_moves`):
 ///
 /// * a view owns nothing: at every edge it is listed, its fate omits it, and the founder of its
 ///   class is another binding;
@@ -1299,7 +1300,7 @@ fn c1f_agreement(output: &CheckOutput) -> Vec<String> {
         }
     }
     for (span, decl) in &lets {
-        if !module.view_bindings.contains(span.0, span.1) {
+        if !module.non_owned_reads.is_view(span.0, span.1) {
             continue;
         }
         for edge in plan.facts() {
@@ -1409,7 +1410,7 @@ fn a_view_is_not_an_owner_and_its_root_stays_the_owner() {
         "shape Inner {\n  label: string\n}\nshape Outer {\n  inner: Inner\n  tag: int\n}\nfunction peek() -> nothing {\n  let first: Inner = { label: `a` }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  print(inner.label)\n}\n",
     );
     assert!(
-        !output.typed_module.view_bindings.is_empty(),
+        output.typed_module.non_owned_reads.view_count() > 0,
         "the program is meant to hold a view"
     );
     let list = body_end(&output, "peek");
@@ -1559,7 +1560,7 @@ fn view_names(output: &CheckOutput) -> Vec<String> {
     }
     let mut names: Vec<String> = lets
         .into_iter()
-        .filter(|(span, _)| output.typed_module.view_bindings.contains(span.0, span.1))
+        .filter(|(span, _)| output.typed_module.non_owned_reads.is_view(span.0, span.1))
         .map(|(_, decl)| decl.2)
         .collect();
     names.sort();

@@ -701,10 +701,10 @@ fn record_string_moves_of(
     ownership: &crate::effective_ownership::EffectiveOwnershipReport,
 ) -> (
     crate::string_ownership::StringMoves,
-    crate::view_bindings::ViewBindings,
+    crate::non_owned_reads::NonOwnedReads,
 ) {
     let callable: HashSet<String> = local_fns.union(imported_fns).cloned().collect();
-    crate::string_ownership::record_moves_and_views(
+    crate::string_ownership::record_moves_and_reads(
         module,
         expr_types,
         binding_names,
@@ -915,10 +915,10 @@ pub struct TypedModule {
     /// store's admitted transfer of a fresh value, of an owned binding it consumed, or a `return`
     /// of either (`crate::heap_moves`). Codegen deep-copies every other heap value it stores.
     pub heap_moves: crate::heap_moves::HeapMoves,
-    /// C1f round 2: every `let` of a place read that is a read-only VIEW of the place instead of a
-    /// copy of it, by the span of its value expression (`crate::view_bindings`). Codegen copies
-    /// every other `let` of a place.
-    pub view_bindings: crate::view_bindings::ViewBindings,
+    /// C6 round 2: every non-owned read (a `let`/reassignment value, a loop variable, a call argument)
+    /// judged a VIEW of its place or a MUST-COPY, by the span of the expression (`crate::non_owned_reads`).
+    /// Codegen copies every read the record does not call a view, unless the store moves it.
+    pub non_owned_reads: crate::non_owned_reads::NonOwnedReads,
     /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
     /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
@@ -968,7 +968,7 @@ impl TypedModule {
             generic_call_instances: self.generic_call_instances.clone(),
             string_moves: self.string_moves.clone(),
             heap_moves: self.heap_moves.clone(),
-            view_bindings: self.view_bindings.clone(),
+            non_owned_reads: self.non_owned_reads.clone(),
         })
     }
 }
@@ -1064,7 +1064,7 @@ pub fn check(
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
-    let (string_moves, view_bindings) = record_string_moves_of(
+    let (string_moves, non_owned_reads) = record_string_moves_of(
         module,
         &checker.expr_types,
         &binding_names,
@@ -1090,7 +1090,7 @@ pub fn check(
         generic_call_instances: checker.generic_call_instances,
         string_moves,
         heap_moves: checker.heap_moves,
-        view_bindings,
+        non_owned_reads,
     };
     (
         typed,
@@ -1182,7 +1182,7 @@ pub fn check_with_kernel_mode(
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
-    let (string_moves, view_bindings) = record_string_moves_of(
+    let (string_moves, non_owned_reads) = record_string_moves_of(
         module,
         &checker.expr_types,
         &binding_names,
@@ -1208,7 +1208,7 @@ pub fn check_with_kernel_mode(
         generic_call_instances: checker.generic_call_instances,
         string_moves,
         heap_moves: checker.heap_moves,
-        view_bindings,
+        non_owned_reads,
     };
     (typed, checker.mono_table, checker.diags)
 }

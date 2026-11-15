@@ -37,8 +37,8 @@ use ynz_ast::nodes::{Expr, FunctionDecl, Item, MatchPatternKind, Module, Postfix
 
 use crate::binding_names::{decl_key, BindingNames, DeclKey};
 use crate::effective_ownership::EffectiveOwnershipReport;
+use crate::non_owned_reads::{NonOwnedReads, ReadTracker};
 use crate::types::Type;
-use crate::view_bindings::{ViewBindings, ViewTracker};
 
 /// The record: the `(span.start, span.end)` of every string-typed expression a store takes by
 /// move.
@@ -87,34 +87,34 @@ impl StringMoves {
     }
 }
 
-/// Build the string-move record and the view record for every function of `module`, in the ONE
-/// liveness walk below (`view_bindings` judges the expressions this walk visits).
+/// Build the string-move record and the read record for every function of `module`, in the ONE
+/// liveness walk below (`non_owned_reads` judges the expressions this walk visits).
 ///
 /// `expr_types` is typeck's per-expression type map, `names` resolves each identifier use to its
 /// declaration, `callable_fns` holds the names of every Yinz function a call can reach (local and
 /// imported), `imported_fns` the imported ones alone, and `ownership` is the effective-ownership fixpoint (which call positions only read).
-pub fn record_moves_and_views(
+pub fn record_moves_and_reads(
     module: &Module,
     expr_types: &HashMap<(usize, usize), Type>,
     names: &BindingNames,
     callable_fns: &HashSet<String>,
     imported_fns: &HashSet<String>,
     ownership: &EffectiveOwnershipReport,
-) -> (StringMoves, ViewBindings) {
+) -> (StringMoves, NonOwnedReads) {
     let mut recorder = Recorder {
         expr_types,
         names,
         callable_fns,
         lets: HashSet::new(),
         moves: StringMoves::default(),
-        views: ViewTracker::new(names, ownership, imported_fns, expr_types),
+        reads: ReadTracker::new(names, ownership, imported_fns, expr_types),
     };
     for item in &module.items {
         if let Item::Function(function) = item {
             recorder.function(function);
         }
     }
-    (recorder.moves, recorder.views.finish())
+    (recorder.moves, recorder.reads.finish())
 }
 
 struct Recorder<'a> {
@@ -124,8 +124,8 @@ struct Recorder<'a> {
     /// The `let`/`const` declarations of the function being walked.
     lets: HashSet<DeclKey>,
     moves: StringMoves,
-    /// Judges which `let` bindings of a place read are views, over the same evaluations.
-    views: ViewTracker<'a>,
+    /// Judges which non-owned reads are views, over the same evaluations.
+    reads: ReadTracker<'a>,
 }
 
 /// Names of the string methods that always build a new string (never return the receiver).
@@ -136,9 +136,9 @@ impl Recorder<'_> {
     fn function(&mut self, function: &FunctionDecl) {
         self.lets.clear();
         collect_lets(&function.body.stmts, &mut self.lets);
-        self.views.start_function(function);
+        self.reads.start_function(function);
         self.block(&function.body.stmts, &HashSet::new());
-        self.views.finish_function();
+        self.reads.finish_function();
     }
 
     fn type_of(&self, expr: &Expr) -> Option<&Type> {
@@ -171,21 +171,30 @@ impl Recorder<'_> {
     fn stmt(&mut self, stmt: &Stmt, after: &HashSet<DeclKey>) {
         self.view_writes(stmt, after);
         self.stmt_evaluations(stmt, after);
-        // A `let` of a place read is judged once its own value was evaluated.
-        if let Stmt::Let {
-            name,
-            name_span,
-            ty,
-            value,
-            ..
-        } = stmt
-        {
-            self.views
-                .declare(name, name_span, ty.is_some(), value, &self.lets);
+        // A `let` or reassignment of a place read is judged once its own value was evaluated.
+        match stmt {
+            Stmt::Let {
+                name,
+                name_span,
+                ty,
+                value,
+                ..
+            } => self
+                .reads
+                .declare_let(name, name_span, ty.as_ref(), value, &self.lets),
+            Stmt::Assign {
+                target,
+                target_span,
+                value,
+                ..
+            } => self
+                .reads
+                .declare_assign(target, target_span, value, &self.lets),
+            _ => {}
         }
     }
 
-    /// The writes and returns a statement makes, as far as views are concerned: `name = …`,
+    /// The writes and returns a statement makes, as far as non-owned reads are concerned: `name = …`,
     /// `name.f = …`, `name[i] = …` and `return …`.
     fn view_writes(&mut self, stmt: &Stmt, after: &HashSet<DeclKey>) {
         let mut mentioned = HashSet::new();
@@ -197,13 +206,13 @@ impl Recorder<'_> {
                 ..
             } => {
                 self.mentions_expr(value, &mut mentioned);
-                self.views
+                self.reads
                     .evaluate_write_to(target, target_span, &mentioned, after);
             }
             Stmt::FieldAssign { target, value, .. } => {
                 self.mentions_expr(target, &mut mentioned);
                 self.mentions_expr(value, &mut mentioned);
-                self.views.evaluate_write(target, &mentioned, after);
+                self.reads.evaluate_write(target, &mentioned, after);
             }
             Stmt::IndexAssign {
                 receiver,
@@ -214,11 +223,11 @@ impl Recorder<'_> {
                 self.mentions_expr(receiver, &mut mentioned);
                 self.mentions_expr(index, &mut mentioned);
                 self.mentions_expr(value, &mut mentioned);
-                self.views.evaluate_write(receiver, &mentioned, after);
+                self.reads.evaluate_write(receiver, &mentioned, after);
             }
             Stmt::Return {
                 value: Some(value), ..
-            } => self.views.evaluate_return(value),
+            } => self.reads.evaluate_return(value),
             _ => {}
         }
     }
@@ -276,12 +285,21 @@ impl Recorder<'_> {
                 self.simple(&[cond], &around);
                 self.block(&body.stmts, &around);
             }
-            Stmt::For { iter, body, .. } => {
+            Stmt::For {
+                var,
+                var_span,
+                iter,
+                body,
+                ..
+            } => {
                 let mut with_body = after.clone();
                 self.mentions_block(&body.stmts, &mut with_body);
                 self.simple(&[iter], &with_body);
                 let around = self.loop_live(None, &body.stmts, after);
+                // The loop variable reads an element of the iterated place for the whole body.
+                self.reads.begin_loop(var, var_span, iter, &self.lets);
                 self.block(&body.stmts, &around);
+                self.reads.end_loop(var_span, var);
             }
         }
     }
@@ -317,7 +335,10 @@ impl Recorder<'_> {
         for expr in exprs {
             self.mentions_expr(expr, &mut mentioned);
         }
-        self.views.evaluate(exprs, &mentioned, after);
+        self.reads.evaluate(exprs, &mentioned, after);
+        for expr in exprs {
+            self.reads.judge_calls(expr, &self.lets);
+        }
         let mut counts: HashMap<DeclKey, usize> = HashMap::new();
         for expr in exprs {
             self.count_expr(expr, &mut counts);

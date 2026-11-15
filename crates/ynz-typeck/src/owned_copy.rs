@@ -30,7 +30,7 @@
 //! map, nested-shape, `maybe` and union fields and its channel reference ([`OwnedCopy::ShapeMemcpy`]),
 //! a map's values ([`OwnedCopy::MapClone`]), an array's items ([`ElemCopy::Nested`]). A value a
 //! store takes by move (`heap_moves`) keeps its heap and copies nothing, and a `let` view
-//! (`view_bindings`) owns nothing. `ynz-codegen`'s release table frees exactly what the copy
+//! (`non_owned_reads`) owns nothing. `ynz-codegen`'s release table frees exactly what the copy
 //! allocates, and a parity test holds the two tables together.
 
 use crate::types::{type_name, Type};
@@ -582,5 +582,25 @@ mod tests {
             }),
             OwnedCopy::FixedMemcpy
         );
+    }
+}
+
+/// True when a `return` of a value of type `ty` hands its caller an OWNED value: the types a
+/// function copies at its `return` unless the value moves (a fresh one, an owned local at its last
+/// use). A call to a function whose declared return type is one of these is `Fresh`
+/// (`effective_ownership`'s `returns_fresh`), so the caller's binding takes it without a second
+/// copy. THE one answer for typeck's call-result classification and codegen's return seam
+/// (`authoritative-derivation.md`): a `string`, an `array`, a `map` or a shape; any other type
+/// returns what it names (a `maybe`, a union, a channel and a task handle have their own return
+/// forms, and a type parameter is only known per instance).
+///
+/// Time: O(1)  Space: O(1)
+pub fn copied_at_return(ty: &Type) -> bool {
+    match ty {
+        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+        Type::Shape { name } => !name.is_empty(),
+        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
+        Type::ErrorsCapable { inner } => copied_at_return(inner),
+        _ => false,
     }
 }

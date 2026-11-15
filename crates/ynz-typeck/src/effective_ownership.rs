@@ -680,7 +680,12 @@ pub fn analyze(
             }
             // returns_fresh[f]: every `return` fresh, else MayAlias (naming the parameter it
             // reaches through when there is one).
-            if returns_fresh[&f.name] == Freshness::Fresh {
+            // A function whose declared return type is copied at its `return` hands its caller an
+            // owned value whatever it returns (`owned_copy::copied_at_return`): `Fresh`, for the
+            // caller's binding to take without a second copy.
+            let returns_an_owned_copy =
+                crate::owned_copy::copied_at_return(&resolve_ty(&f.return_type));
+            if !returns_an_owned_copy && returns_fresh[&f.name] == Freshness::Fresh {
                 let type_of =
                     fixpoint_type_oracle(f, resolve_ty, &local_fn_names, imported_fn_names);
                 let ctx = ProvenanceCtx {
