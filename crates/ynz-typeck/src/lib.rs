@@ -48,6 +48,7 @@ pub mod errors_fields;
 pub mod exports;
 pub mod false_sharing;
 pub mod generics;
+pub mod heap_moves;
 pub mod independence;
 pub mod inlay_hint_passes;
 pub mod intrinsics;

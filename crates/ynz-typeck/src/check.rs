@@ -894,6 +894,10 @@ pub struct TypedModule {
     /// last use of a `let` binding (`crate::string_ownership`). Codegen copies every other
     /// string it stores and consults nothing else.
     pub string_moves: crate::string_ownership::StringMoves,
+    /// C1f round 2: every heap-valued expression (shape, union, `maybe`) a store takes by move: the
+    /// store's admitted transfer of a fresh value, of an owned binding it consumed, or a `return`
+    /// of either (`crate::heap_moves`). Codegen deep-copies every other heap value it stores.
+    pub heap_moves: crate::heap_moves::HeapMoves,
     /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
     /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
@@ -926,6 +930,7 @@ impl TypedModule {
             transfers: self.transfers.clone(),
             generic_call_instances: self.generic_call_instances.clone(),
             string_moves: self.string_moves.clone(),
+            heap_moves: self.heap_moves.clone(),
         })
     }
 }
@@ -1000,6 +1005,7 @@ pub fn check(
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
+        heap_moves: crate::heap_moves::HeapMoves::default(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1039,6 +1045,7 @@ pub fn check(
         transfers,
         generic_call_instances: checker.generic_call_instances,
         string_moves,
+        heap_moves: checker.heap_moves,
     };
     (
         typed,
@@ -1109,6 +1116,7 @@ pub fn check_with_kernel_mode(
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
+        heap_moves: crate::heap_moves::HeapMoves::default(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1148,6 +1156,7 @@ pub fn check_with_kernel_mode(
         transfers,
         generic_call_instances: checker.generic_call_instances,
         string_moves,
+        heap_moves: checker.heap_moves,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -1336,6 +1345,8 @@ struct Checker<'b> {
     bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
     /// The record `TypedModule::stores_handed_over` is moved from (`store_value`).
     stores_handed_over: HashMap<(usize, usize), String>,
+    /// The record `TypedModule::heap_moves` is moved from (`record_heap_move`).
+    heap_moves: crate::heap_moves::HeapMoves,
     /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
     union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
@@ -5335,6 +5346,11 @@ impl<'b> Checker<'b> {
             copy_template,
         };
         let admitted = self.check_transfer(value, &sink);
+        // An admitted store of a fresh value or of a consumed owned binding is a MOVE: codegen
+        // takes the value's boxes without cloning them (`crate::heap_moves`).
+        if admitted {
+            self.record_heap_move(value);
+        }
         // A named binding handed over is what the muted hint at the store says.
         if admitted && matches!(self.provenance_of(value), Provenance::Whole(_)) {
             let span = value.span();
@@ -5410,10 +5426,39 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// Record that a heap-valued `value` is taken by move: codegen takes its boxes without
+    /// cloning them (`crate::heap_moves`). Bits are copied, never moved, so they are not recorded.
+    fn record_heap_move(&mut self, value: &Expr) {
+        if self.expr_is_bits(value) {
+            return;
+        }
+        let span = value.span();
+        self.heap_moves.insert(span.start, span.end);
+    }
+
     /// A `return`: every binding holding (a piece of) the returned value escapes.
     fn record_return(&mut self, value: &Expr) {
         for (_, holder) in self.heap_holders_of(value) {
             self.transfers.escape(&holder, Escape::Returned);
+        }
+        // A fresh value, or an owned local at its last use (nothing runs after a `return`), is
+        // handed to the caller whole; a parameter, a `const`, a field or an element stays with
+        // its holder, so the returned copy must own boxes of its own.
+        let owned_whole = match self.provenance_of(value) {
+            Provenance::Fresh => true,
+            Provenance::Whole(name) => self.scope.lookup(&name).is_some_and(|entry| {
+                !entry.is_const
+                    && entry.consumed.is_none()
+                    && matches!(
+                        entry.origin,
+                        Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
+                    )
+                    && self.non_give_param_in_class(entry.alias_class).is_none()
+            }),
+            Provenance::Reaches(_) | Provenance::Unknown => false,
+        };
+        if owned_whole {
+            self.record_heap_move(value);
         }
     }
 
@@ -6646,11 +6691,14 @@ impl<'b> Checker<'b> {
         copy_template: &str,
     ) -> BindingEvent {
         match self.provenance_of(value) {
-            Provenance::Fresh => BindingEvent {
-                origin: Origin::Owned,
-                alias_class: self.scope.new_class(),
-                joined: Vec::new(),
-            },
+            Provenance::Fresh => {
+                self.record_heap_move(value);
+                BindingEvent {
+                    origin: Origin::Owned,
+                    alias_class: self.scope.new_class(),
+                    joined: Vec::new(),
+                }
+            }
             // `let b = a`, `b = a`: the binding takes the value over (`store_value`), so `b` owns it
             // and `a` is gone. Bits are copied, so `b` is a fresh value of its own.
             Provenance::Whole(_) => {
@@ -6754,6 +6802,27 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// The first parameter in the alias class `class` (the binding itself, or an alias of a
+    /// parameter) that is not declared `give`, as `(name, modifier, type)`: the caller keeps its
+    /// value, so nothing in the class may be handed over or returned as owned.
+    ///
+    /// O(class size) time.
+    fn non_give_param_in_class(
+        &self,
+        class: u64,
+    ) -> Option<(String, Option<OwnershipModifier>, String)> {
+        for member in self.scope.visible_members_of(class) {
+            if let Some(entry) = self.scope.lookup(&member) {
+                if let Origin::Param(modifier) = &entry.origin {
+                    if *modifier != Some(OwnershipModifier::Give) {
+                        return Some((member.clone(), modifier.clone(), type_name(&entry.ty)));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// The ONE transfer decision (`IMP-ownership.md` "The transfer decision — ONE emit
     /// site"). Returns true when the transfer is admitted (the caller may proceed as if the
     /// value moved). Emits `ParamNeedsGive` / `TransferNeedsCopy` / the const refusal;
@@ -6812,20 +6881,7 @@ impl<'b> Checker<'b> {
                 // A parameter anywhere in the class (the name itself, or an alias of a
                 // parameter) that is not declared `give` refuses the transfer: the caller
                 // keeps the value.
-                let non_give_param = {
-                    let mut found: Option<(String, Option<OwnershipModifier>, String)> = None;
-                    for member in self.scope.visible_members_of(class) {
-                        if let Some(e) = self.scope.lookup(&member) {
-                            if let Origin::Param(m) = &e.origin {
-                                if *m != Some(OwnershipModifier::Give) {
-                                    found = Some((member.clone(), m.clone(), type_name(&e.ty)));
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    found
-                };
+                let non_give_param = self.non_give_param_in_class(class);
                 if let Some((pname, modifier, ptype)) = non_give_param {
                     self.emit_param_needs_give(span, &pname, modifier.as_ref(), &ptype, sink);
                     return false;
