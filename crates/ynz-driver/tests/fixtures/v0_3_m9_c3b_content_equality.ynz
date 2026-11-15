@@ -27,6 +27,8 @@ function entrypoint() -> nothing {
   print(tags.contains(second))
   let table: map<string, int> = { `x`: 1 }
   table.set(key, 5)
-  print(table.get(same).or(-1))
-  print(table.get(`k-1`).or(-1))
+  let bySame = table.get(same)
+  print(bySame.or(-1))
+  let byLiteral = table.get(`k-1`)
+  print(byLiteral.or(-1))
 }

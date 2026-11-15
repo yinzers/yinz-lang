@@ -5,7 +5,8 @@
 // 0 and copies the literal value 1. `table.set(`b`, valueText)` copies the literal key 1 and
 // `valueText` (last use) moves 0. `sharedKey` 1 (fresh); `table.set(sharedKey, `s`)` copies the key
 // (`sharedKey` is read again below) 1 and the literal value 1.
-// Total 1+1+1+1+0+1+1+0+1+1+1 = 9.
+// The four `table.get(...)` results are each bound to a name, and each `let` copies the payload 4.
+// Total 1+1+1+1+0+1+1+0+1+1+1+4 = 13.
 // Expected output: one value per line below.
 
 function entrypoint() -> nothing {
@@ -19,8 +20,12 @@ function entrypoint() -> nothing {
   let sharedKey: string = `shared-${count}`
   table.set(sharedKey, `s`)
   print(sharedKey)
-  print(table.get(`a`).or(`none`))
-  print(table.get(`key-2`).or(`none`))
-  print(table.get(`b`).or(`none`))
-  print(table.get(`shared-2`).or(`none`))
+  let literalKeyValue = table.get(`a`)
+  print(literalKeyValue.or(`none`))
+  let builtKeyValue = table.get(`key-2`)
+  print(builtKeyValue.or(`none`))
+  let secondLiteralKeyValue = table.get(`b`)
+  print(secondLiteralKeyValue.or(`none`))
+  let sharedKeyValue = table.get(`shared-2`)
+  print(sharedKeyValue.or(`none`))
 }

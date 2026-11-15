@@ -10,8 +10,8 @@ shape Tag {
 }
 
 function entrypoint() -> nothing {
-  let n: int = 1
-  let tags: array<Tag> = [{ name: `t-${n}`, id: 1 }, { name: `u-${n}`, id: 2 }]
+  let count: int = 1
+  let tags: array<Tag> = [{ name: `t-${count}`, id: 1 }, { name: `u-${count}`, id: 2 }]
   let copied = tags.copy()
   for (tag in tags) {
     print(tag.name)

@@ -84,7 +84,7 @@ store_case!(
     map_key_and_value,
     "v0_3_m9_c3b_map.ynz",
     "value-2\nshared-2\nvalue-2\nv\nvalue-2\ns\n",
-    9,
+    13,
     "a map stores a string key by its raw pointer and a value by its pointer, aliasing a still-read local (key or value) or a literal (High)"
 );
 
@@ -164,7 +164,7 @@ store_case!(
     copied_containers_own_their_strings,
     "v0_3_m9_c3b_container_copy.ynz",
     "t-1\nv-1\nx-1\nx-1\n",
-    11,
+    12,
     "`.copy()` of a shape or a map, and a `maybe<string>` stored in a field or returned, hold the source's string pointer, so releasing both frees it twice (High)"
 );
 
@@ -220,7 +220,7 @@ store_case!(
     map_copy_copies_only_the_string_side,
     "v0_3_m9_c3b_map_copy_kinds.ynz",
     "7\nv-1\n7\nv-1\n",
-    4,
+    6,
     "`.copy()` of a `map<string, int>` or `map<int, string>` clones the wrong side: an `int` read as a string pointer (crash), or the string side shared with the source (High)"
 );
 

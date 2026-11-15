@@ -27,11 +27,11 @@ function kind(share value: Mixed) -> int {
 }
 
 function entrypoint() -> nothing {
-  let n: int = 1
-  let fresh: string = `a-${n}`
+  let count: int = 1
+  let fresh: string = `a-${count}`
   let held: Mixed = fresh
   let lit: Mixed = `lit`
-  let origin: string = `b-${n}`
+  let origin: string = `b-${count}`
   let kept: Mixed = origin
   print(kind(held))
   print(kind(lit))
