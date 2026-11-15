@@ -88,4 +88,29 @@ move_cases! {
         "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
         [("inner", 3, true), ("held", 2, false)],
         "a returned parameter whose boxes the caller also holds treated as moved (double free, High), or a returned local cloned (cost)";
+
+    a_call_result_is_a_move_only_when_the_callee_returns_a_fresh_value:
+        "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
+        [("make()", 2, true), ("pass(first)", 1, false)],
+        "a call that returns its argument taken by move, so the caller and the result own one set of boxes (double free, High)";
+
+    a_returned_fresh_literal_is_a_move:
+        "function make() -> Inner {\n  return { id: 1 }\n}\nfunction entrypoint() -> nothing {\n  print(make().id)\n}\n",
+        [("{ id: 1 }", 1, true)],
+        "a returned literal cloned on return where Rust moves (cost, Rule 8)";
+
+    a_returned_field_read_is_not_a_move:
+        "function pick(share outer: Outer) -> Inner {\n  return outer.inner\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
+        [("outer.inner", 1, false)],
+        "a returned field whose boxes the shape still owns taken by the caller (double free, High)";
+
+    a_returned_const_is_not_a_move:
+        "function make() -> Inner {\n  const inner: Inner = { id: 1 }\n  return inner\n}\nfunction entrypoint() -> nothing {\n  print(make().id)\n}\n",
+        [("inner", 3, false)],
+        "a returned `const` taken by move although a `const` stays readable to whatever holds it (double free, High)";
+
+    a_returned_give_parameter_is_a_move:
+        "function own(give held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let second = own(first)\n  print(second.id)\n}\n",
+        [("held", 2, true)],
+        "a returned `give` parameter cloned where the callee owns it and Rust moves (cost, Rule 8)";
 }

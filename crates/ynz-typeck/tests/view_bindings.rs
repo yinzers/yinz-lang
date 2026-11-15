@@ -98,6 +98,21 @@ view_cases! {
         "function read(share outer: Outer) -> int {\n  let inner: Inner = outer.inner\n  return inner.id\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
         [("outer.inner", 1, false)],
         "an annotated binding can wrap the value into a union slot, which a view cannot be";
+
+    a_view_live_across_a_written_wait_is_not_a_view:
+        "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  wait sleep(1)\n  print(inner.id)\n}\n",
+        [("outer.inner", 1, false)],
+        "a view held across a suspension is a pointer into a frame the resume function no longer has (High)";
+
+    a_view_live_across_a_background_is_not_a_view:
+        "function tick() -> nothing {\n  print(`tick`)\n}\nfunction entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  background tick()\n  print(inner.id)\n}\n",
+        [("outer.inner", 1, false)],
+        "a view live across a `background` spawn read after the task may have run (High)";
+
+    a_bits_field_read_is_not_a_view:
+        "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let outer: Outer = { inner: first, tag: 2 }\n  let tag = outer.tag\n  print(tag + outer.inner.id)\n}\n",
+        [("outer.tag", 2, false)],
+        "a bits read recorded as a view, which codegen would lower as a pointer (boundary of the heap-valued rule)";
 }
 
 const CHAIN_PRELUDE: &str = "shape Inner {\n  id: int\n}\nshape Middle {\n  inner: Inner\n  tag: int\n}\nshape Wrapper {\n  middle: Middle\n  count: int\n}\n";
@@ -147,8 +162,13 @@ macro_rules! element_cases {
 
 element_cases! {
     an_element_read_of_a_share_parameter_is_a_view:
-        "function read(share items: array<Inner>) -> int {\n  let item = items[0]\n  let found = items.get(1)\n  if (item.exists()) {\n    return item.value.id\n  }\n  if (found.exists()) {\n    return found.value.id\n  }\n  return 0\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
-        [("items[0]", 1, true), ("items.get(1)", 1, true)],
+        "function read(share items: array<Inner>) -> int {\n  let item = items[0]\n  let found = items.get(1)\n  let head = items.first()\n  let tail = items.last()\n  if (head.exists()) {\n    return head.value.id\n  }\n  if (tail.exists()) {\n    return tail.value.id\n  }\n  if (item.exists()) {\n    return item.value.id\n  }\n  if (found.exists()) {\n    return found.value.id\n  }\n  return 0\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
+        [
+            ("items[0]", 1, true),
+            ("items.get(1)", 1, true),
+            ("items.first()", 1, true),
+            ("items.last()", 1, true),
+        ],
         "an element read copied where Rust borrows (cost, Rule 8)";
 
     an_element_read_of_a_local_collection_is_a_view_until_the_collection_is_written:
