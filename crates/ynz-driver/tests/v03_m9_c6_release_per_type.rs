@@ -246,3 +246,14 @@ release_cases!(
         read: "  print(value.id)\n",
     }
 );
+
+release_cases!(
+    shape_with_a_channel_field,
+    "a shape copy shares its channel field without taking a counted reference, so the task's release gives back a reference it never held and frees the channel under the spawner (High)",
+    Case {
+        declarations: "shape Wire {\n  line: channel<int>\n  id: int\n}\n",
+        value_type: "Wire",
+        setup: "  let line: channel<int> = channel<int>(2)\n  let value: Wire = { line: line, id: 1 }\n",
+        read: "  print(value.id)\n",
+    }
+);

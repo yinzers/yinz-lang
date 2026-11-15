@@ -4957,6 +4957,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     | Type::BuiltinMap { .. }
                     | Type::Shape { .. }
                     | Type::Maybe { .. }
+                    | Type::BuiltinChannel { .. }
             )
     }
 
@@ -5026,6 +5027,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 Type::Maybe { inner } => self
                     .maybe_to_heap_cell(original, inner, &format!("{site}_cell"))?
                     .into(),
+                // A channel is shared, not copied: the copy holds a counted reference of its own, which
+                // its release gives back (`ynz_channel_free`).
+                Type::BuiltinChannel { .. } => self
+                    .builder
+                    .build_call(self.rt.ynz_channel_share, &[original.into()], &format!("{site}_share"))
+                    .map_err(|err| format!("deepen_shape_fields share: {err}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_channel_share returned void")?,
                 // A string, an array or a map: the one owned copy.
                 other => {
                     emit_owned_copy(self, None, original.into(), other, CopyMode::Body, &site)?.0
