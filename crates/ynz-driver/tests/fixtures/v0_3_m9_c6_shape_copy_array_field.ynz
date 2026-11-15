@@ -1,0 +1,22 @@
+// v0.3-M9 C6 fixture: `.copy()` of a shape owns a copy of every heap field, so releasing the copy
+// frees nothing the original still holds.
+// Allocations (counted): `rows` array 2 (header and buffer), moved into `bucket` at its last use
+// 0; `bucket.copy()` copies the array 2. Total 4. Before the deep copy the two shapes shared one
+// array, 2 allocated, and releasing both would free it twice.
+// Expected output: the two counts, then the changed first row of the copy and the original's.
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  let bucket: Bucket = { rows: rows, id: 1 }
+  let twin = bucket.copy()
+  twin.rows.set(0, 99)
+  print(bucket.rows.count())
+  print(twin.rows.count())
+  print(twin.rows[0].or(-1))
+  print(bucket.rows[0].or(-1))
+}

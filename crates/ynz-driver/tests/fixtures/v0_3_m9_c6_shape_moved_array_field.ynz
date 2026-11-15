@@ -1,0 +1,22 @@
+// v0.3-M9 C6 fixture: a shape handed over (stored at its last use, `heap_moves`) keeps its heap
+// fields and copies nothing, like a Rust move.
+// Allocations (counted): `rows` array 2, moved into `bucket` 0; `bucket` is given to `wrap`,
+// which stores it in a list at its last use: the list 2 and no copy of the array. Total 4.
+// Expected output: the list count.
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function wrap(give bucket: Bucket) -> array<Bucket> {
+  let list: array<Bucket> = [bucket]
+  return list
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  let bucket: Bucket = { rows: rows, id: 1 }
+  let list = wrap(bucket)
+  print(list.count())
+}
