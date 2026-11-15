@@ -354,3 +354,15 @@ fn v03_m9_union_share_param_stored_in_list_is_refused() {
         );
     }
 }
+
+// Bug caught: copying a recursive union moved the variant's bytes into one new cell, so the
+// copy's nested cells were the original's cells. A deep copy reads back the whole chain and stays
+// clean under AddressSanitizer; the allocation count test pins that every box is cloned. Tier: High.
+by_value_tests!(
+    "v0_3_m9_union_alloc_recursive_copy.ynz",
+    "300\n",
+    v03_m9_union_recursive_copy_optimized,
+    v03_m9_union_recursive_copy_no_optimize,
+    v03_m9_union_recursive_copy_asan_optimized,
+    v03_m9_union_recursive_copy_asan_no_optimize
+);

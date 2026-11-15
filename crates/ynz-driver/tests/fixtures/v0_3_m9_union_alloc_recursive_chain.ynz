@@ -1,0 +1,31 @@
+// v0.3-M9 C1f (#423): baseline of `v0_3_m9_union_alloc_recursive_copy.ynz`. Each of 100 rounds
+// builds a three-link chain (`top` -> `middle` -> `last` -> an `End`) and reads the head's value;
+// the copy fixture builds the same chain and then stores the whole chain into a union binding.
+// Correct behavior: prints the summed head values, 100.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+
+function build() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let top = build()
+    total = total + top.value
+    round = round + 1
+  }
+  print(total)
+}

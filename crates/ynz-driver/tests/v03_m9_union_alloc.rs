@@ -1,6 +1,6 @@
 //! v0.3-M9 C1f (#423): a union that is not recursive is stored by value, so moving one through a
 //! store, a return, an `errors` result, a `wait`-staged argument or a hidden default allocates
-//! NOTHING. Only a recursive union boxes its shape variant, one heap cell per store (the cost of
+//! NOTHING. Only a recursive union boxes its shape variant, one heap cell per box a stored value owns (the cost of
 //! `Box<T>` in a Rust enum).
 //!
 //! Tier: High (data integrity: the layout is the contract C6's release helper reads; an
@@ -102,12 +102,29 @@ fn union_container_store_allocates_like_int() {
     );
 }
 
-// A recursive union cannot hold its payload inline: one heap cell per stored shape variant.
+// A recursive union cannot hold its payload inline: one heap cell per box the stored value owns.
+// Each store is a deep copy (`Box::clone`), so storing a chain of k boxes makes k cells: a build
+// stores 1 box, then 2, then 3, which is 6 cells.
 #[test]
-fn recursive_union_store_allocates_one_cell_per_store() {
+fn recursive_union_store_allocates_one_cell_per_box() {
     assert_eq!(
         heap_allocations("v0_3_m9_union_alloc_recursive.ynz", "100\n"),
-        300,
-        "100 builds x 3 stores must make 300 cells and nothing else"
+        600,
+        "100 builds x (1 + 2 + 3) cells must make 600 cells and nothing else"
+    );
+}
+
+// Bug caught: storing a recursive union moved the variant's bytes into ONE new cell, so the nested
+// cells of the original and the copy were the same cells and a recursive release (C6) would free
+// them twice. A deep copy of the four-cell chain makes four cells per copy: 100 stores, 400 more
+// than the chain built alone.
+#[test]
+fn recursive_union_copy_clones_every_cell() {
+    let chain_alone = heap_allocations("v0_3_m9_union_alloc_recursive_chain.ynz", "100\n");
+    let with_copies = heap_allocations("v0_3_m9_union_alloc_recursive_copy.ynz", "300\n");
+    assert_eq!(
+        with_copies - chain_alone,
+        400,
+        "100 stores of a four-cell chain must make 400 cells; chain alone {chain_alone}, with stores {with_copies}"
     );
 }
