@@ -1,0 +1,26 @@
+// v0.3-M9 C3c fixture: assigning a string field frees the string it replaces.
+// Heap strings: `tag.name` 1 (fresh, moved into the literal); `tag.name = `renamed`` copies the
+// literal 1 and releases the first name. The spawn copies the shape (the returned temporary still
+// holds its own `renamed`), cloning the name 1; the task's ladder releases the clone. The returned
+// temporary's `renamed` belongs to the scope-exit pass (C7). Total 3 allocated, 2 released.
+// Expected output: the name.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function build(count: int) -> Tag {
+  let tag: Tag = { name: `tag-${count}`, id: 1 }
+  tag.name = `renamed`
+  return tag
+}
+
+function show(tag: Tag) -> nothing {
+  print(tag.name)
+}
+
+function entrypoint() -> nothing {
+  background show(build(1))
+  wait sleep(80)
+}
