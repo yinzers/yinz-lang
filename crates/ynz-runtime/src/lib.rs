@@ -1300,6 +1300,20 @@ pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out
     }
 }
 
+/// Release the value a `set` is about to overwrite at slot `idx`, with the glue for the value type
+/// (none when the value owns nothing). The map owns its values, so the replaced one has no other
+/// holder.
+unsafe fn release_replaced_value(
+    map: *const YnzMap,
+    idx: usize,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
+    if let Some(glue) = value_glue {
+        glue(item_argument(val_slot(map, idx), values_inline));
+    }
+}
+
 /// Set a key-value pair with an i64 key: copies `elem_size` bytes from `src` into
 /// the value cell (overwrite on hit, insert on miss).
 ///
@@ -1313,13 +1327,20 @@ pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8) {
+pub unsafe extern "C" fn ynz_map_set(
+    map: *mut YnzMap,
+    key: i64,
+    src: *const u8,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
     if (*map).count * 4 >= (*map).capacity * 3 {
         map_grow_int(map);
     }
     let elem_size = (*map).elem_size;
     let hash = ynz_siphash_i64(key);
     if let Some(idx) = find_slot(map, hash, key) {
+        release_replaced_value(map, idx, value_glue, values_inline);
         std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
         return;
     }
@@ -1346,13 +1367,28 @@ pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8)
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, src: *const u8) {
+pub unsafe extern "C" fn ynz_map_set_str(
+    map: *mut YnzMap,
+    key: *const u8,
+    src: *const u8,
+    key_glue: Option<ReleaseGlue>,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
     if (*map).count * 4 >= (*map).capacity * 3 {
         map_grow_str(map);
     }
     let elem_size = (*map).elem_size;
     let hash = ynz_siphash_str(key);
     if let Some(idx) = find_slot_str(map, hash, key) {
+        // The map keeps the key it already owns; the one handed in is the caller's to free, and
+        // is released here unless it IS the stored one (a read of the map's own key).
+        if let Some(glue) = key_glue {
+            if *(*map).keys.add(idx) as *const u8 != key {
+                glue(key as *mut u8);
+            }
+        }
+        release_replaced_value(map, idx, value_glue, values_inline);
         std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
         return;
     }
@@ -1802,7 +1838,6 @@ pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
     }
     ynz_free(arr as *mut u8, std::mem::size_of::<YnzArray>());
 }
-
 
 /// The release glue codegen emits for a type (`ynz_release_<type>`): frees everything the value at
 /// the pointer owns. THE one callback shape every container walk and the task drop ladder share.
@@ -5414,7 +5449,13 @@ mod release_walk_tests {
             let keys: [usize; 3] = [0x11, 0x22, 0x33];
             for key in keys {
                 let value = key * 2;
-                ynz_map_set(map, key as i64, &value as *const usize as *const u8);
+                ynz_map_set(
+                    map,
+                    key as i64,
+                    &value as *const usize as *const u8,
+                    None,
+                    0,
+                );
             }
             ynz_map_release(map, Some(record_map_key), Some(record_map_value), 0);
             let mut seen_keys = MAP_KEYS.lock().unwrap().clone();

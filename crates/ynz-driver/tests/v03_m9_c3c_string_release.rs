@@ -88,3 +88,12 @@ release_case!(
     1,
     "releasing a task's shape copy frees the struct but not the `string` field the copy cloned (High)"
 );
+
+release_case!(
+    map_overwrite_frees_the_replaced_value_and_the_duplicate_key,
+    "v0_3_m9_c3c_map_overwrite.ynz",
+    "1\n",
+    4,
+    4,
+    "`set` on a present key stores the new value over the old one without freeing it, and drops the key copy the set was handed, so a string-keyed map leaks both on every overwrite (High)"
+);

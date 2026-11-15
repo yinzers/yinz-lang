@@ -96,7 +96,14 @@ fn a_cloned_string_map_owns_every_key_and_value() {
             (heap_string("k", "3"), heap_string("v", "3")),
         ];
         for (key, value) in &source_strings {
-            ynz_map_set_str(source, *key, value as *const *const u8 as *const u8);
+            ynz_map_set_str(
+                source,
+                *key,
+                value as *const *const u8 as *const u8,
+                None,
+                None,
+                0,
+            );
         }
         let clone = ynz_map_clone(source);
         ynz_map_clone_strings(clone, 1, 1);
@@ -162,7 +169,14 @@ fn only_the_string_side_of_a_map_is_copied() {
         let counts = ynz_map_new(8);
         let key = heap_string("tal", "ly");
         let count: i64 = 7;
-        ynz_map_set_str(counts, key, &count as *const i64 as *const u8);
+        ynz_map_set_str(
+            counts,
+            key,
+            &count as *const i64 as *const u8,
+            None,
+            None,
+            0,
+        );
         let counts_clone = ynz_map_clone(counts);
         ynz_map_clone_strings(counts_clone, 1, 0);
         let counts_entries = {
@@ -188,7 +202,7 @@ fn only_the_string_side_of_a_map_is_copied() {
         // map<int, string>: values only.
         let names = ynz_map_new(8);
         let value = heap_string("nam", "e");
-        ynz_map_set(names, 42, &value as *const *const u8 as *const u8);
+        ynz_map_set(names, 42, &value as *const *const u8 as *const u8, None, 0);
         let names_clone = ynz_map_clone(names);
         ynz_map_clone_strings(names_clone, 0, 1);
         let mut value_out: *const u8 = std::ptr::null();

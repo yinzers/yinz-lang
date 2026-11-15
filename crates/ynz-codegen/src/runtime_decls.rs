@@ -173,6 +173,12 @@ pub struct RuntimeDecls<'ctx> {
     // C3b: give a just-cloned map strings of its own (keys and/or values).
     // ABI: (map: ptr, clone_keys: i32, clone_values: i32) → void
     pub ynz_map_clone_strings: FunctionValue<'ctx>,
+    // ynz_array_release(ptr arr, ptr item_glue, i32 items_inline) -> void: call the glue on each
+    // item, then drop the array (v0.3-M9 C3c/C6).
+    pub ynz_array_release: FunctionValue<'ctx>,
+    // ynz_map_release(ptr map, ptr key_glue, ptr value_glue, i32 values_inline) -> void: call the
+    // glues on each occupied entry, then drop the map (v0.3-M9 C3c/C6).
+    pub ynz_map_release: FunctionValue<'ctx>,
 
     // M7 P4a: errors runtime — frame stack + error allocation.
     // ynz_frame_push(file: ptr, line: i64, function: ptr) → void
@@ -515,12 +521,25 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_map_set: declare_fn(
                 module,
                 "ynz_map_set",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                void.fn_type(
+                    &[ptr.into(), i64.into(), ptr.into(), ptr.into(), i32.into()],
+                    false,
+                ),
             ),
             ynz_map_set_str: declare_fn(
                 module,
                 "ynz_map_set_str",
-                void.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+                void.fn_type(
+                    &[
+                        ptr.into(),
+                        ptr.into(),
+                        ptr.into(),
+                        ptr.into(),
+                        ptr.into(),
+                        i32.into(),
+                    ],
+                    false,
+                ),
             ),
             ynz_map_count: declare_fn(module, "ynz_map_count", i64.fn_type(&[ptr.into()], false)),
             ynz_map_has: declare_fn(
@@ -641,6 +660,16 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_string_clone",
                 ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_array_release: declare_fn(
+                module,
+                "ynz_array_release",
+                void.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            ynz_map_release: declare_fn(
+                module,
+                "ynz_map_release",
+                void.fn_type(&[ptr.into(), ptr.into(), ptr.into(), i32.into()], false),
             ),
             ynz_map_clone_strings: declare_fn(
                 module,

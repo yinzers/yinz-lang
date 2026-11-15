@@ -6054,8 +6054,41 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         } else {
             self.rt.ynz_map_set
         };
+        // What a set over a present key replaces is released: the old value by the value type's
+        // glue, and the key copy this set was handed (the map keeps the key it owns).
+        // C3c: a value type whose release is not lowered yet passes no glue, so its replaced
+        // value leaks as before; C6 lowers the rest and removes this fallback.
+        let null = self.ptr().const_null();
+        let (value_glue, value_inline) = self
+            .release_item_glue(val_ty)
+            .unwrap_or(None)
+            .unwrap_or((null, false));
+        let value_inline = self.i32().const_int(value_inline as u64, false);
+        let args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = if is_str {
+            let key_glue = self
+                .rt
+                .ynz_string_release
+                .as_global_value()
+                .as_pointer_value();
+            vec![
+                map.into(),
+                key,
+                src.into(),
+                key_glue.into(),
+                value_glue.into(),
+                value_inline.into(),
+            ]
+        } else {
+            vec![
+                map.into(),
+                key,
+                src.into(),
+                value_glue.into(),
+                value_inline.into(),
+            ]
+        };
         self.builder
-            .build_call(callee, &[map.into(), key, src.into()], site)
+            .build_call(callee, &args, site)
             .map_err(|e| format!("map_val_set: {e}"))?;
         Ok(())
     }
@@ -20184,6 +20217,10 @@ enum BgArgFreeKind {
     /// (`ynz_arc_clone` at the spawn site): release with `ynz_arc_free(ptr, byte_size)`
     /// after the call (CPU arm) or at retire via `BG_ARG_KIND_ARC_SHAPE` (SM ladder).
     ArcShape { byte_size: u64 },
+    /// v0.3-M9 C3c/C6: the task's own value, released by the type's release glue (the module
+    /// function named here, `Cg::release_fn`): it frees the value's items, entries and fields and
+    /// the value itself. CPU arm: called after the call; SM ladder: `BG_ARG_KIND_RELEASE_GLUE`.
+    ReleaseGlue { glue_name: String },
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -20575,6 +20612,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
 /// program with no admitted group carries no `ynz_arc_*` declaration).
 fn emit_bg_arg_frees<'ctx>(
     cg_builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
     rt: &RuntimeDecls<'ctx>,
     arc: Option<&ArcDecls<'ctx>>,
     i64_ty: inkwell::types::IntType<'ctx>,
@@ -20686,6 +20724,32 @@ fn emit_bg_arg_frees<'ctx>(
                 cg_builder
                     .build_call(rt.ynz_channel_free, &[chan_ptr.into()], "bg_chan_free")
                     .map_err(|e| format!("bg chan free call: {e}"))?;
+            }
+            // v0.3-M9: the value's release glue frees it whole.
+            BgArgFreeKind::ReleaseGlue { glue_name } => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "release_slot",
+                        )
+                        .map_err(|e| format!("bg release gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "release_bits")
+                    .map_err(|e| format!("bg release load: {e}"))?
+                    .into_int_value();
+                let release_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "release_ptr")
+                    .map_err(|e| format!("bg release inttoptr: {e}"))?;
+                let glue = module.get_function(glue_name).ok_or_else(|| {
+                    format!("bg release: glue `{glue_name}` is not in the module")
+                })?;
+                cg_builder
+                    .build_call(glue, &[release_ptr.into()], "")
+                    .map_err(|e| format!("bg release call: {e}"))?;
             }
             // v0.3-M8 Phase 5 Auto-Arc: release the task's counted reference to the shared
             // block (the CPU-arm twin of the SM ladder's `BG_ARG_KIND_ARC_SHAPE` arm).
@@ -20890,6 +20954,7 @@ fn lower_expr_background<'ctx>(
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
+        let kind = release_glue_free_kind(cg, kind, &ty, &callee_name)?;
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("background arg to_i64_bits: {e}"))?;
@@ -21025,6 +21090,7 @@ fn lower_expr_background<'ctx>(
         .then(|| arc_decls(cg.ctx, cg.module));
     emit_bg_arg_frees(
         &cg.builder,
+        cg.module,
         cg.rt,
         arc.as_ref(),
         cg.i64(),
@@ -21140,6 +21206,7 @@ fn lower_sm_background_spawn<'ctx>(
             continue;
         }
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
+        let kind = release_glue_free_kind(cg, kind, &ty, callee_name)?;
         if first_channel_arg.is_none()
             && matches!(cg.resolve_type(&ty), Type::BuiltinChannel { .. })
         {
@@ -21251,6 +21318,10 @@ fn lower_sm_background_spawn<'ctx>(
                 let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, *byte_size))
             }
+            BgArgFreeKind::ReleaseGlue { .. } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, 0_u64))
+            }
             BgArgFreeKind::None => None,
         })
         .collect();
@@ -21309,6 +21380,7 @@ fn lower_sm_background_spawn<'ctx>(
                 BgArgFreeKind::HeapArrayPrimitive => ynz_abi::BG_ARG_KIND_HEAP_ARRAY,
                 BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
                 BgArgFreeKind::ArcShape { .. } => ynz_abi::BG_ARG_KIND_ARC_SHAPE,
+                BgArgFreeKind::ReleaseGlue { .. } => ynz_abi::BG_ARG_KIND_RELEASE_GLUE,
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -21336,8 +21408,19 @@ fn lower_sm_background_spawn<'ctx>(
                     )
                     .map_err(|e| format!("desc gep 2: {e}"))?
             };
+            // A glue descriptor carries the glue's address where the others carry a byte count.
+            let size_value = match &free_kinds[*slot_idx] {
+                BgArgFreeKind::ReleaseGlue { glue_name } => cg
+                    .module
+                    .get_function(glue_name)
+                    .ok_or_else(|| format!("bg release: glue `{glue_name}` is not in the module"))?
+                    .as_global_value()
+                    .as_pointer_value()
+                    .const_to_int(i64_ty),
+                _ => i64_ty.const_int(*size, false),
+            };
             cg.builder
-                .build_store(off2, i64_ty.const_int(*size, false))
+                .build_store(off2, size_value)
                 .map_err(|e| format!("desc store 2: {e}"))?;
         }
 
@@ -23935,6 +24018,377 @@ fn emit_array_shape_string_fields_copy<'ctx>(
 
     cg.builder.position_at_end(done);
     Ok(())
+}
+
+// ── The one release helper (v0.3-M9 C3c / C6) ───────────────────────────────────────────────
+//
+// Releasing a value frees EXACTLY what a copy of it allocates: `emit_owned_copy` is the one place
+// a copy is made, and the release functions below are the one place a copy is undone. Nothing
+// else decides how a heap value is freed (`.claude/rules/authoritative-derivation.md`): the
+// task drop ladder, the channel's element glue and C7/C8's scope exits all call
+// [`Cg::release_fn`].
+
+/// What releasing a value of one type does. THE per-type release table: [`release_step`] is
+/// exhaustive over `Type` with no `_` arm, and `copy_parity_tests` holds it to
+/// `owned_copy_plan` for every type variant, so a copy plan with no release (or the reverse)
+/// fails a test instead of leaking or double-freeing.
+#[derive(Clone, Debug, PartialEq)]
+enum ReleaseStep {
+    /// The value owns no heap memory.
+    Nothing,
+    /// A `string`: `ynz_string_release` (a static string is left alone).
+    String,
+    /// An `array<T>`: each item by `T`'s step, then the header and buffer.
+    Array { elem: Type },
+    /// A `map<K, V>`: each occupied entry's key and value, then the buffers.
+    Map { key: Type, value: Type },
+    /// A shape: each field that owns heap, by the field type's step.
+    Shape { name: String },
+    /// A type with a heap value but no release lowered yet, or none to lower. Reaching one is an
+    /// internal error naming the type, never a silent skip.
+    Unsupported(&'static str),
+}
+
+/// THE exhaustive per-`Type` release table (see [`ReleaseStep`]).
+fn release_step(ty: &Type) -> ReleaseStep {
+    match ty {
+        Type::Nothing
+        | Type::Error
+        | Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Number { .. }
+        | Type::Range { .. }
+        | Type::Options { .. }
+        // A map-iteration entry is the loop's view of one slot: never an owner.
+        | Type::MapEntry { .. } => ReleaseStep::Nothing,
+        Type::String => ReleaseStep::String,
+        Type::Sensitive { inner } => release_step(inner),
+        Type::BuiltinArray { elem } => ReleaseStep::Array {
+            elem: elem.as_ref().clone(),
+        },
+        Type::BuiltinMap { key, val } => ReleaseStep::Map {
+            key: key.as_ref().clone(),
+            value: val.as_ref().clone(),
+        },
+        Type::Shape { name } => ReleaseStep::Shape { name: name.clone() },
+        Type::BuiltinFixed { .. }
+        | Type::Maybe { .. }
+        | Type::Union { .. }
+        | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. }
+        | Type::ErrorsCapable { .. } => {
+            ReleaseStep::Unsupported("this type's release is not lowered in this build")
+        }
+        Type::Dynamic { .. } => ReleaseStep::Unsupported(
+            "a `dynamic` value cannot be released: dynamic dispatch is not lowered yet, so no \
+             such value exists in generated code",
+        ),
+        Type::TypeParam { .. } | Type::Generic { .. } => ReleaseStep::Unsupported(
+            "a type parameter or an unresolved generic shape has no size to release; release is \
+             emitted per instance, after the type is substituted",
+        ),
+    }
+}
+
+/// What a container walk calls on each item: the release function and whether the item lives
+/// inline in its cell (a shape's bytes) rather than behind a pointer.
+type ItemGlue<'ctx> = Option<(PointerValue<'ctx>, bool)>;
+
+impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// Does shape `shape_name` hold a field whose release frees something (a string today)?
+    ///
+    /// Time: O(f)  Space: O(1)
+    fn shape_owns_released_fields(&self, shape_name: &str) -> bool {
+        self.shape_table.get(shape_name).is_some_and(|shape| {
+            shape
+                .fields
+                .iter()
+                .any(|field| is_string_like(&self.resolve_type(&field.ty)))
+        })
+    }
+
+    /// The glue a container walk calls on each item of type `elem`; `None` when the items own
+    /// nothing, so the walk is skipped. Errors for an item whose release is unsupported.
+    ///
+    /// Time: O(1) plus emitting the item's release function once  Space: O(1)
+    fn release_item_glue(&self, elem: &Type) -> Result<ItemGlue<'ctx>, String> {
+        let elem = self.resolve_type(elem);
+        match release_step(&elem) {
+            ReleaseStep::Nothing => Ok(None),
+            ReleaseStep::String => Ok(Some((
+                self.rt
+                    .ynz_string_release
+                    .as_global_value()
+                    .as_pointer_value(),
+                false,
+            ))),
+            ReleaseStep::Shape { .. } => Ok(self
+                .release_fn(&elem, false)?
+                .map(|glue| (glue.as_global_value().as_pointer_value(), true))),
+            ReleaseStep::Array { .. } | ReleaseStep::Map { .. } => {
+                let glue = self.release_fn(&elem, false)?.ok_or_else(|| {
+                    format!(
+                        "internal: a container of type `{}` has no release function",
+                        ynz_typeck::types::type_name(&elem)
+                    )
+                })?;
+                Ok(Some((glue.as_global_value().as_pointer_value(), false)))
+            }
+            ReleaseStep::Unsupported(reason) => Err(format!(
+                "internal: cannot release an item of type `{}`: {reason}",
+                ynz_typeck::types::type_name(&elem)
+            )),
+        }
+    }
+
+    /// The module function `void(ptr value)` that releases a value of `ty`, or `None` when the
+    /// value owns nothing. `owns_cell` says the value sits in a heap cell of its own (a spawn
+    /// argument's shape copy), which the function frees after its contents; a value that is its
+    /// own heap object (a string, an array, a map) ignores it.
+    ///
+    /// One function per type, declared before its body is emitted so a type that reaches itself
+    /// is a call, as in `union_deepen_fn`.
+    ///
+    /// Time: O(size of the type) to emit once; at run time O(n) in the heap the value owns
+    /// Space: O(1) here
+    fn release_fn(
+        &self,
+        ty: &Type,
+        owns_cell: bool,
+    ) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let resolved = self.resolve_type(ty);
+        let step = release_step(&resolved);
+        let owns_cell = owns_cell && matches!(step, ReleaseStep::Shape { .. });
+        let name = format!(
+            "ynz_release_{}{}",
+            mangle_type(&resolved),
+            if owns_cell { "_cell" } else { "" }
+        );
+        match &step {
+            ReleaseStep::Nothing => return Ok(None),
+            ReleaseStep::Unsupported(reason) => {
+                return Err(format!(
+                    "internal: cannot release a value of type `{}`: {reason}",
+                    ynz_typeck::types::type_name(&resolved)
+                ))
+            }
+            ReleaseStep::Shape { name: shape_name }
+                if !self.shape_owns_released_fields(shape_name) =>
+            {
+                return Ok(None)
+            }
+            _ => {}
+        }
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let value = release
+            .get_nth_param(0)
+            .ok_or("release: missing value parameter")?
+            .into_pointer_value();
+        self.emit_release_body(&step, value, owns_cell, &name)?;
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("release return {name}: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
+
+    /// The body of one release function: `step` applied to the value at `value`.
+    ///
+    /// Time: O(f) for a shape's f fields, O(1) otherwise  Space: O(1)
+    fn emit_release_body(
+        &self,
+        step: &ReleaseStep,
+        value: PointerValue<'ctx>,
+        owns_cell: bool,
+        site: &str,
+    ) -> Result<(), String> {
+        let null = self.ptr().const_null();
+        match step {
+            ReleaseStep::String => {
+                self.builder
+                    .build_call(self.rt.ynz_string_release, &[value.into()], "")
+                    .map_err(|err| format!("release string {site}: {err}"))?;
+            }
+            ReleaseStep::Array { elem } => {
+                let glue = self.release_item_glue(elem)?;
+                let (glue_ptr, inline) = glue.unwrap_or((null, false));
+                self.builder
+                    .build_call(
+                        self.rt.ynz_array_release,
+                        &[
+                            value.into(),
+                            glue_ptr.into(),
+                            self.i32().const_int(inline as u64, false).into(),
+                        ],
+                        "",
+                    )
+                    .map_err(|err| format!("release array {site}: {err}"))?;
+            }
+            ReleaseStep::Map {
+                key,
+                value: value_ty,
+            } => {
+                let key_glue = match release_step(&self.resolve_type(key)) {
+                    ReleaseStep::String => Some((
+                        self.rt
+                            .ynz_string_release
+                            .as_global_value()
+                            .as_pointer_value(),
+                        false,
+                    )),
+                    _ => None,
+                };
+                let value_glue = self.release_item_glue(value_ty)?;
+                let (value_ptr, value_inline) = value_glue.unwrap_or((null, false));
+                self.builder
+                    .build_call(
+                        self.rt.ynz_map_release,
+                        &[
+                            value.into(),
+                            key_glue.map_or(null, |(glue, _)| glue).into(),
+                            value_ptr.into(),
+                            self.i32().const_int(value_inline as u64, false).into(),
+                        ],
+                        "",
+                    )
+                    .map_err(|err| format!("release map {site}: {err}"))?;
+            }
+            ReleaseStep::Shape { name } => {
+                self.emit_shape_field_releases(value, name, site)?;
+                if owns_cell {
+                    let size = self.shape_abi_size_const(name, site)?;
+                    self.builder
+                        .build_call(self.rt.ynz_free, &[value.into(), size.into()], "")
+                        .map_err(|err| format!("release shape cell {site}: {err}"))?;
+                }
+            }
+            ReleaseStep::Nothing | ReleaseStep::Unsupported(_) => {
+                return Err(format!("internal: {site} has no release body"))
+            }
+        }
+        Ok(())
+    }
+
+    /// Release every field of the shape at `shape_ptr` whose type owns heap: the string fields
+    /// (what `copy_shape_string_fields` copies).
+    ///
+    /// Time: O(f) to emit  Space: O(1)
+    fn emit_shape_field_releases(
+        &self,
+        shape_ptr: PointerValue<'ctx>,
+        shape_name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let struct_ty = self
+            .shape_types
+            .get(shape_name)
+            .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
+        let fields = self
+            .shape_table
+            .get(shape_name)
+            .ok_or_else(|| format!("{site}: shape `{shape_name}` not in the shape table"))?
+            .fields
+            .clone();
+        for (index, field) in fields.iter().enumerate() {
+            if !is_string_like(&self.resolve_type(&field.ty)) {
+                continue;
+            }
+            let field_ptr = self
+                .builder
+                .build_struct_gep(struct_ty, shape_ptr, index as u32, "release_field")
+                .map_err(|err| format!("{site} release field gep: {err}"))?;
+            let string = self
+                .builder
+                .build_load(self.ptr(), field_ptr, "release_field_string")
+                .map_err(|err| format!("{site} release field load: {err}"))?;
+            self.builder
+                .build_call(self.rt.ynz_string_release, &[string.into()], "")
+                .map_err(|err| format!("{site} release field string: {err}"))?;
+        }
+        Ok(())
+    }
+
+    /// Does the callee take any parameter written `give`? Unknown callees (imported, generic
+    /// instances) answer yes: the safe side. A given parameter can be stored into another
+    /// parameter's container, so one `give` anywhere makes every deep release of the call
+    /// unsound until move sites null their slots.
+    ///
+    /// Time: O(f) for f items  Space: O(1)
+    fn callee_takes_a_given_parameter(&self, callee: &str) -> bool {
+        self.typed
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == callee => {
+                    Some(function.params.iter().any(|param| {
+                        matches!(
+                            param.ownership,
+                            Some(ynz_ast::nodes::OwnershipModifier::Give)
+                        )
+                    }))
+                }
+                _ => None,
+            })
+            .unwrap_or(true)
+    }
+}
+
+/// Upgrade the flat free kind of a `background` argument to the type's release glue, when the
+/// glue frees more than the flat free does and the task may free it deeply.
+///
+/// DEFERRED, four fields — the items of a `give` parameter's argument:
+/// - WHAT: every argument of a call whose callee declares any `give` parameter keeps the flat
+///   free, so its items, entries and string fields are not released by the ladder.
+/// - WHY: the callee owns what it was given and may move it (store it in a container that is
+///   itself a ladder slot); a deep release would then free the same pointer twice until a move
+///   site nulls the slot, which is C7's change.
+/// - COST: the item bytes of such arguments leak per spawn (the container itself is freed).
+/// - TRIGGER: C7 (#384) lands move-site slot nulling.
+/// Pinned by `bg_arg_container_add_gives_row` (integration: a `give` row stored into a container
+/// the ladder also owns must not double free).
+fn release_glue_free_kind<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    kind: BgArgFreeKind,
+    ty: &Type,
+    callee: &str,
+) -> Result<BgArgFreeKind, String> {
+    if cg.callee_takes_a_given_parameter(callee) {
+        return Ok(kind);
+    }
+    let resolved = cg.resolve_type(ty);
+    let upgrade = match (&kind, &resolved) {
+        (BgArgFreeKind::HeapArrayPrimitive, Type::BuiltinArray { elem }) => {
+            matches!(cg.release_item_glue(elem), Ok(Some(_)))
+        }
+        (BgArgFreeKind::None, Type::BuiltinMap { .. }) => true,
+        (BgArgFreeKind::HeapShape { .. }, Type::Shape { name }) => {
+            cg.shape_owns_released_fields(name)
+        }
+        _ => false,
+    };
+    if !upgrade {
+        return Ok(kind);
+    }
+    match cg.release_fn(&resolved, true) {
+        Ok(Some(glue)) => Ok(BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        }),
+        Ok(None) | Err(_) => Ok(kind),
+    }
 }
 
 #[cfg(test)]
