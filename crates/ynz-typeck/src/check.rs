@@ -5552,10 +5552,7 @@ impl<'b> Checker<'b> {
                     // A `let`/`const` string, or a `give` parameter, owns its bytes; a `share`/
                     // `lend`/bare parameter and a loop cell do not.
                     string_owner: (!entry.is_param
-                        || matches!(
-                            entry.origin,
-                            Origin::Param(Some(OwnershipModifier::Give))
-                        ))
+                        || matches!(entry.origin, Origin::Param(Some(OwnershipModifier::Give))))
                         && !entry.is_loop_var
                         && !matches!(entry.origin, Origin::Cell(_)),
                     class: entry.alias_class,

@@ -550,6 +550,8 @@ struct Tally {
     released_if_live: AtomicUsize,
     moved: AtomicUsize,
     returned: AtomicUsize,
+    views: AtomicUsize,
+    heap_moves: AtomicUsize,
     kinds: Mutex<HashSet<ReleaseKind>>,
 }
 
@@ -573,6 +575,17 @@ fn parity_findings(path: &Path, tally: &Tally) -> (bool, Vec<String>) {
         .collect();
     findings.extend(
         plan.parity_violations(&output.typed_module.transfers)
+            .into_iter()
+            .map(|message| format!("{}: {message}", path.display())),
+    );
+    tally
+        .views
+        .fetch_add(output.typed_module.view_bindings.len(), Ordering::Relaxed);
+    tally
+        .heap_moves
+        .fetch_add(output.typed_module.heap_moves.len(), Ordering::Relaxed);
+    findings.extend(
+        c1f_agreement(&output)
             .into_iter()
             .map(|message| format!("{}: {message}", path.display())),
     );
@@ -656,6 +669,8 @@ fn the_plan_agrees_with_the_live_scope_and_the_record_over_the_whole_corpus() {
         ("released if live", &tally.released_if_live),
         ("moved", &tally.moved),
         ("returned", &tally.returned),
+        ("view", &tally.views),
+        ("heap move", &tally.heap_moves),
     ] {
         assert!(
             count.load(Ordering::Relaxed) > 0,
@@ -1226,4 +1241,194 @@ fn with_reads_puts_a_propagation_read_after_its_statement_in_its_own_block() {
         vec!["rows".to_string(), "rows".to_string()],
         "the outer block has only its `return` edge and its own end: no copy of the nested propagation edge, no read right after the `if`"
     );
+}
+
+// ── C1f's records: heap moves and views ─────────────────────────────────────────────────────
+
+/// Every `let` of `block` (nested blocks included): `(value expression span, declaration)`.
+fn lets_of(block: &Block, found: &mut Vec<((usize, usize), ynz_typeck::binding_names::DeclKey)>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let {
+                name,
+                name_span,
+                value,
+                ..
+            } => {
+                let span = value.span();
+                found.push((
+                    (span.start, span.end),
+                    ynz_typeck::binding_names::decl_key(name_span, name),
+                ));
+            }
+            Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                lets_of(body, found)
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    lets_of(&arm.body, found);
+                }
+                if let Some(block) = else_arm {
+                    lets_of(block, found);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Where the release plan disagrees with C1f's records (`view_bindings`, `heap_moves`):
+///
+/// * a view owns nothing: at every edge it is listed, its fate omits it, and the founder of its
+///   class is another binding;
+/// * a store the checker records as a heap move consumed a binding: when the store is a plain
+///   statement of the block that declares the founder, the founder's fate at that block's end is
+///   `Omitted(Moved)`, and at every edge it is not `Release` for a store that precedes the edge
+///   in the same straight line (checked at the declaring block's end).
+fn c1f_agreement(output: &CheckOutput) -> Vec<String> {
+    let module = &output.typed_module;
+    let plan = &module.release_plan;
+    let mut findings = Vec::new();
+
+    let mut lets = Vec::new();
+    for item in &module.module.items {
+        if let Item::Function(function) = item {
+            lets_of(&function.body, &mut lets);
+        }
+    }
+    for (span, decl) in &lets {
+        if !module.view_bindings.contains(span.0, span.1) {
+            continue;
+        }
+        for edge in plan.facts() {
+            for entry in edge.entries.iter().filter(|entry| &entry.decl == decl) {
+                if !matches!(
+                    entry.fate,
+                    Fate::Omitted(
+                        OmitReason::NotOwner
+                            | OmitReason::CallerOwns
+                            | OmitReason::NoStaticFounder
+                            | OmitReason::TypeParameter
+                    )
+                ) {
+                    findings.push(format!(
+                        "view `{}` has fate {:?} at {:?} {:?}",
+                        entry.codegen_name, entry.fate, edge.kind, edge.span
+                    ));
+                }
+            }
+        }
+        let anchor = module
+            .binding_names
+            .codegen_name(decl)
+            .and_then(|name| {
+                module
+                    .transfers
+                    .function(
+                        &plan
+                            .facts()
+                            .iter()
+                            .find(|edge| edge.entries.iter().any(|entry| &entry.decl == decl))?
+                            .function,
+                    )?
+                    .class_of(name)
+            })
+            .map(|class| class.anchor.clone());
+        if let Some(ynz_typeck::transfer_record::ReleaseAnchor::Founder { decl: founder, .. }) =
+            anchor
+        {
+            if &founder == decl {
+                findings.push(format!("view `{}` founds its own class", decl.2));
+            }
+        }
+    }
+
+    for ((start, end, _), decl) in module.binding_names.uses() {
+        if !module.heap_moves.contains(*start, *end) {
+            continue;
+        }
+        // The edges of the function that lists the moved binding, and the block that ends it.
+        let Some(listing) = plan
+            .facts()
+            .iter()
+            .find(|edge| edge.entries.iter().any(|entry| &entry.decl == decl))
+        else {
+            continue;
+        };
+        let function_edges: Vec<_> = plan
+            .facts()
+            .iter()
+            .filter(|edge| edge.function == listing.function)
+            .collect();
+        let Some(own_end) = function_edges.iter().find(|edge| {
+            edge.kind == ynz_typeck::release_plan::EdgeKind::BlockEnd
+                && edge.entries.iter().any(|entry| &entry.decl == decl)
+        }) else {
+            continue;
+        };
+        let inside = |edge: &&ynz_typeck::release_plan::EdgeFacts| {
+            edge.span.0 <= *start && *end <= edge.span.1
+        };
+        let nested_block = function_edges.iter().any(|edge| {
+            edge.kind == ynz_typeck::release_plan::EdgeKind::BlockEnd
+                && edge.span != own_end.span
+                && inside(edge)
+                && own_end.span.0 <= edge.span.0
+                && edge.span.1 <= own_end.span.1
+        });
+        let in_return = function_edges
+            .iter()
+            .any(|edge| edge.kind == ynz_typeck::release_plan::EdgeKind::Return && inside(edge));
+        if !inside(own_end) || nested_block || in_return {
+            continue;
+        }
+        let entry = own_end
+            .entries
+            .iter()
+            .find(|entry| &entry.decl == decl)
+            .expect("listed at its own block end");
+        // The moved binding is the founder or an alias of it: an alias is `NotOwner` and the
+        // founder carries the move; a founder must be omitted.
+        if matches!(entry.fate, Fate::Release(_) | Fate::ReleaseIfLive(_)) {
+            findings.push(format!(
+                "`{}` is moved by a store at {start}..{end} but released at the end of its block ({:?})",
+                entry.codegen_name, entry.fate
+            ));
+        }
+    }
+    findings
+}
+
+/// Bug: a read-only view is listed as an owner (it frees what its root still owns: a double free)
+/// or the view, not its root, founds the class.
+#[test]
+fn a_view_is_not_an_owner_and_its_root_stays_the_owner() {
+    let output = clean(
+        "shape Inner {\n  label: string\n}\nshape Outer {\n  inner: Inner\n  tag: int\n}\nfunction peek() -> nothing {\n  let first: Inner = { label: `a` }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  print(inner.label)\n}\n",
+    );
+    assert!(
+        !output.typed_module.view_bindings.is_empty(),
+        "the program is meant to hold a view"
+    );
+    let list = body_end(&output, "peek");
+    assert_eq!(fate_of(&list, "inner"), Fate::Omitted(OmitReason::NotOwner));
+    assert!(fate_of(&list, "outer").releases());
+    assert_eq!(c1f_agreement(&output), Vec::<String>::new());
+}
+
+/// Bug: a binding a store moves (`heap_moves`) is also released at its scope exit (a double free
+/// of its boxes): the store owns it, so the moved binding is omitted and the new binding releases.
+#[test]
+fn a_binding_moved_by_a_store_is_omitted_and_the_new_owner_releases() {
+    let output = clean(
+        "shape Bucket {\n  rows: array<int>\n}\nfunction move() -> nothing {\n  let holder: Bucket = { rows: [1, 2] }\n  let moved = holder\n  print(moved.rows.count().toString())\n}\n",
+    );
+    assert!(
+        !output.typed_module.heap_moves.is_empty(),
+        "the program is meant to hold a heap move"
+    );
+    let list = body_end(&output, "move");
+    assert_eq!(fate_of(&list, "holder"), Fate::Omitted(OmitReason::Moved));
+    assert!(fate_of(&list, "moved").releases());
+    assert_eq!(c1f_agreement(&output), Vec::<String>::new());
 }

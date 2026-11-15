@@ -77,6 +77,11 @@ impl BindingNames {
         self.uses.get(&use_key(span, name))
     }
 
+    /// Every identifier use and the declaration it resolves to: `((start, end, name), declaration)`.
+    pub fn uses(&self) -> impl Iterator<Item = (&UseKey, &DeclKey)> + '_ {
+        self.uses.iter()
+    }
+
     /// Clone `module` with every binding declaration and use renamed to its codegen name.
     ///
     /// Hard error (never a fallback to the raw name) when a declaration has no codegen name,
