@@ -21,7 +21,7 @@ use inkwell::{
     targets::FileType,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
     values::{
-        BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+        AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
         PointerValue,
     },
     AddressSpace, IntPredicate,
@@ -1575,6 +1575,7 @@ fn lower_generic_function<'ctx>(
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
+        owned_string_values: std::collections::HashSet::new(),
         // Generic functions cannot contain `wait` in M2. Use empty caches.
         wait_cache: empty_wait_cache(),
         suspend_set: empty_suspend_set(),
@@ -1992,6 +1993,10 @@ struct Cg<'ctx, 'g> {
     // spawn-site lowering immediately after the spawn call — never by the drop ladder,
     // which frees only the TASKS' references.
     arc_pending_release: Vec<(PointerValue<'ctx>, u64)>,
+    // v0.3-M9 C3b: the string values the expression that produced them says a store may take
+    // by move (typeck's `TypedModule::string_moves`), keyed by the LLVM value. Written by
+    // `lower_expr` and read by `own_string_for_store`; a string absent from it is copied.
+    owned_string_values: std::collections::HashSet<usize>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -2939,7 +2944,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// re-derivation); the raw `ynz_array_new_sized` call is legal here
     /// because this helper lives inside the choke section (E7).
     fn soa_copy_to_aos(
-        &self,
+        &mut self,
         info: &SoaArrayInfo<'ctx>,
         arr: PointerValue<'ctx>,
         site: &str,
@@ -3076,7 +3081,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Non-shape: i64-bit marshal into a per-site ENTRY-BLOCK staging slot (a
     /// body-block alloca would grow the stack every loop iteration — S1 discovery).
     fn array_elem_src_ptr(
-        &self,
+        &mut self,
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
         site: &str,
@@ -3090,6 +3095,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // (`value_to_stable_bits`), never marshal bare envelope-pointer bits
         // (the escape-the-iteration miscompile; fix round 3, tripwire
         // `m5_p2_byval_array_maybe_elem_write_escape`).
+        // A string cell owns its bytes: copy a borrowed string, take a movable one.
+        let val = own_string_for_store(self, val, elem_ty, site)?;
         let stable = self.value_to_stable_bits(val, elem_ty, site)?;
         let bits = self.zext_bits64(stable)?;
         let staging = self.alloca_in_entry_llvm(self.i64(), &format!("{site}_stage"))?;
@@ -3103,7 +3110,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `soa` must be None: growth is a Phase 4 admission decline (D3 — `add`
     /// escapes), so a Some here is an entry-gate breach, not a lowering case.
     fn array_elem_push(
-        &self,
+        &mut self,
         arr: PointerValue<'ctx>,
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
@@ -3127,7 +3134,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// staging semantics: for shape values `array_elem_src_ptr` IS the value
     /// pointer, and admission guarantees SoA elements are shapes).
     fn array_elem_set(
-        &self,
+        &mut self,
         arr: PointerValue<'ctx>,
         idx: inkwell::values::IntValue<'ctx>,
         val: BasicValueEnum<'ctx>,
@@ -4662,7 +4669,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// maybe/non-shape values marshal through `value_to_stable_bits` into an
     /// 8-byte staging cell, keeping the stable-bits persist discipline unchanged.
     fn map_val_set(
-        &self,
+        &mut self,
         map: PointerValue<'ctx>,
         key: inkwell::values::BasicMetadataValueEnum<'ctx>,
         is_str: bool,
@@ -4670,6 +4677,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         val_ty: &Type,
         site: &str,
     ) -> Result<(), String> {
+        // A string key is stored by its pointer: the map owns its own copy of it.
+        let key: inkwell::values::BasicMetadataValueEnum<'ctx> = if is_str {
+            let key_value = BasicValueEnum::try_from(key)
+                .map_err(|_| format!("map_val_set {site}: a string key is not a value"))?;
+            own_string_for_store(self, key_value, &Type::String, "map_key_str")?.into()
+        } else {
+            key
+        };
         let src = self.array_elem_src_ptr(val, val_ty, site)?;
         let callee = if is_str {
             self.rt.ynz_map_set_str
@@ -5078,6 +5093,7 @@ fn lower_function<'ctx, 'g>(
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
+        owned_string_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -5589,6 +5605,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
+        owned_string_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -13360,6 +13377,8 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         let arg = &args[0];
         let arg_ty = cg.expr_type(arg);
         let v = lower_expr(cg, arg)?;
+        // The channel owns what it carries: a borrowed string is copied, a movable one is sent.
+        let v = own_string_for_store(cg, v, &arg_ty, "conduit_send_str")?;
         // fr12 (v0.3-M8 Phase 4 step 3d): a decimal128 payload lives on the sender's frame
         // (a pointer to per-site i128 storage) and would dangle in the buffer. Mint a fresh
         // counted 16-byte cell through the ONE `number_to_heap_cell` helper the `background`
@@ -14684,6 +14703,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                         // STABLE: shape/maybe values heap-clone via the ONE marshalling
                         // choke point (fix round 4 — the round-3 closer's probe showed
                         // slots aliasing the loop binding's reused storage).
+                        let elem_val = own_string_for_store(cg, elem_val, &elem_ty, "fixed_ia_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty, "fixed_ia_val")?;
                         let arr_ptr = recv_val.into_pointer_value();
                         let gep = unsafe {
@@ -15654,6 +15674,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let mut val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                val = own_returned_string(cg, expr, val, "sm_return_str")?;
                 // A union return carries a tagged envelope that outlives this resume
                 // invocation (`home_union_on_heap`, `Return` home).
                 if let Some(union_ty) = cg.union_return_slot_ty() {
@@ -16055,6 +16076,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let mut val = lower_expr(cg, expr)?;
                 let mut val_ty = cg.expr_type(expr);
+                val = own_returned_string(cg, expr, val, "ec_return_str")?;
                 // A union success value's envelope must not live in this frame
                 // (`home_union_on_heap`, `Return` home); the coerced value IS a union.
                 if let Some(union_ty) = cg.union_return_slot_ty() {
@@ -16130,6 +16152,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         }
         Some(expr) => {
             let mut val = lower_expr(cg, expr)?;
+            val = own_returned_string(cg, expr, val, "return_str")?;
             // A union return is a pointer to a tagged envelope that must outlive this frame
             // (`home_union_on_heap`, `Return` home): never a bare shape, never a slot in
             // the frame that is about to die.
@@ -16326,7 +16349,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     let span = expr.span();
     let key = (span.start, span.end);
     let Some(coercion) = cg.coercion_at(key).cloned() else {
-        return lower_expr_node(cg, expr);
+        let val = lower_expr_node(cg, expr)?;
+        remember_movable_string(cg, expr, val);
+        return Ok(val);
     };
     let outer = cg.coercion_inner.replace(key);
     let lowered = lower_expr_node(cg, expr);
@@ -16335,7 +16360,76 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     if cg.is_narrowed_envelope_ident(expr) {
         return Ok(val);
     }
+    // A string entering a union slot is stored in the envelope: the slot owns its own bytes.
+    remember_movable_string(cg, expr, val);
+    let plain_ty = cg.expr_type(expr);
+    let val = own_string_for_store(cg, val, &plain_ty, "union_wrap")?;
     cg.wrap_into_union_envelope(expr, val, &coercion)
+}
+
+/// A string typeck says nobody else holds (a fresh string, or the last use of its binding:
+/// `TypedModule::string_moves`) is remembered, so the store that takes it can move it instead
+/// of copying it.
+fn remember_movable_string<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValueEnum<'ctx>) {
+    let span = expr.span();
+    if val.is_pointer_value()
+        && cg.typed.string_moves.contains(span.start, span.end)
+        && is_string_like(&cg.resolve_type(&cg.expr_type(expr)))
+    {
+        cg.owned_string_values.insert(val.as_value_ref() as usize);
+    }
+}
+
+/// True for the types whose value is a string pointer (`string`, `sensitive string`).
+fn is_string_like(ty: &Type) -> bool {
+    match ty {
+        Type::String => true,
+        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
+        _ => false,
+    }
+}
+
+/// THE seam every store of a string goes through: the string a place keeps. A string typeck
+/// recorded as movable (`TypedModule::string_moves`, remembered by `lower_expr`) is taken as it
+/// is; any other is copied by `emit_owned_copy`, the one routine that copies a string, so the
+/// place owns bytes no other holder can free. Types that are not strings pass through.
+///
+/// O(1) time at the call site; the copy it emits is O(n) in the string's length.
+fn own_string_for_store<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    site: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    if !is_string_like(&cg.resolve_type(ty)) || !val.is_pointer_value() {
+        return Ok(val);
+    }
+    if cg
+        .owned_string_values
+        .contains(&(val.as_value_ref() as usize))
+    {
+        return Ok(val);
+    }
+    let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
+    Ok(copied)
+}
+
+/// The string a `return` hands its caller: a function returns an owned string (the caller
+/// binds a call result by move), so a borrowed one (a parameter, a field or element read, a
+/// literal) is copied here and a returned local at its last use is moved. A value coerced into
+/// a union slot was owned when it entered the envelope (`lower_expr`), so it is left alone.
+fn own_returned_string<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    site: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let span = expr.span();
+    if cg.coercion_at((span.start, span.end)).is_some() {
+        return Ok(val);
+    }
+    let ty = cg.expr_type(expr);
+    own_string_for_store(cg, val, &ty, site)
 }
 
 fn lower_expr_node<'ctx>(
@@ -17101,6 +17195,7 @@ fn lower_expr_node<'ctx>(
                         // bits must be stable (heap-cloned via the ONE choke point, fix
                         // round 4), or a later mutation of the source binding silently
                         // rewrites the stored element.
+                        let elem_val = own_string_for_store(cg, elem_val, &elem_ty2, "fixed_lit_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty2, "fixed_lit_val")?;
                         let idx = cg.i64().const_int(i as u64, false);
                         let gep = unsafe {
@@ -17673,6 +17768,30 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             }
             return Ok((task_ref, BgArgFreeKind::ArcShape { byte_size: size }));
         }
+    }
+
+    // A `string` argument: the task owns its bytes. A string nobody else holds goes over as it
+    // is: one typeck recorded as movable (`string_moves`: fresh, or the last use of its
+    // binding) or a binding this spawn consumes. Every other (a field, element, parameter or
+    // `.or()` result the spawner or a container still holds) is copied by `emit_owned_copy`.
+    // Decided here, before the generic `is_heap_arg` gate, because a borrowed string reaches
+    // that gate as "provably safe" and would otherwise be passed through uncopied.
+    if is_string_like(&cg.resolve_type(ty)) {
+        let s = arg.span();
+        let consumed_by_spawn = matches!(
+            cg.typed.background_arg_sole_holder.get(&(s.start, s.end)),
+            Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
+        );
+        if consumed_by_spawn
+            || val.is_pointer_value()
+                && cg
+                    .owned_string_values
+                    .contains(&(val.as_value_ref() as usize))
+        {
+            return Ok((val, BgArgFreeKind::None));
+        }
+        let resolved = cg.resolve_type(ty);
+        return emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg");
     }
 
     let is_heap_arg = match arg {
@@ -21927,6 +22046,7 @@ fn lower_fixed_method<'ctx>(
             // Persist surface: the fixed slot outlives the value expr's site —
             // shape/maybe bits route through the ONE stable-bits choke point
             // (fix round 4).
+            let val = own_string_for_store(cg, val, &vty, "fs_str")?;
             let bits = cg.value_to_stable_bits(val, &vty, "fs_val")?;
             let gep = unsafe {
                 cg.builder
@@ -23404,6 +23524,11 @@ fn store_binding<'ctx>(
                 store(cg, val, ty, slot)
             }
         }
+        // A string binding owns its bytes: a borrowed string is copied, a movable one is taken.
+        Type::String | Type::Sensitive { .. } => {
+            let owned = own_string_for_store(cg, val, ty, name)?;
+            store(cg, owned, ty, slot)
+        }
         _ => store(cg, val, ty, slot),
     }
 }
@@ -23463,6 +23588,13 @@ fn store_field<'ctx>(
             // N > 34: field stores a pointer to the decimal string; val is already a ptr.
             cg.builder
                 .build_store(field_ptr, val)
+                .map_err(|e| format!("{e}"))?;
+        }
+        // A string field owns its bytes: a borrowed string is copied, a movable one is taken.
+        Type::String | Type::Sensitive { .. } => {
+            let owned = own_string_for_store(cg, val, ty, "field_str")?;
+            cg.builder
+                .build_store(field_ptr, owned)
                 .map_err(|e| format!("{e}"))?;
         }
         _ => {
