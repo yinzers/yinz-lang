@@ -784,3 +784,23 @@ fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
         "{list:?}"
     );
 }
+
+/// Bug: one `background` spawn that gives two bindings is one read; the plan kept the first
+/// founder only, so the second (released if live) had no move site and the module failed with an
+/// internal error (High: data integrity). Producer: `note_move_site` keyed sites by span alone.
+#[test]
+fn a_spawn_that_gives_two_bindings_moves_both_founders() {
+    let output = clean(
+        "function work(a: array<int>, b: array<int>) -> nothing {\n  print(a.count().toString())\n}\nfunction spawns(flag: boolean) -> nothing {\n  let a: array<int> = [1]\n  let b: array<int> = [2]\n  if (flag) {\n    background work(a, b)\n  }\n}\n",
+    );
+    let list = body_end(&output, "spawns");
+    assert_eq!(fate_of(&list, "a"), Fate::ReleaseIfLive(ARRAY));
+    assert_eq!(fate_of(&list, "b"), Fate::ReleaseIfLive(ARRAY));
+    let function = function_of(&output, "spawns");
+    let mut founders = output
+        .typed_module
+        .release_plan
+        .founders_moved_in(&function.body.stmts[2]);
+    founders.sort();
+    assert_eq!(founders, vec!["a".to_string(), "b".to_string()]);
+}

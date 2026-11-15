@@ -654,7 +654,12 @@ impl ReleaseRecorder {
             return;
         };
         let key = span_of(span);
-        if !function.move_sites.iter().any(|site| site.span == key) {
+        // One read can move several founders (a spawn that gives two arguments): keyed by both.
+        if !function
+            .move_sites
+            .iter()
+            .any(|site| site.span == key && site.named == named)
+        {
             function.move_sites.push(RawMoveSite { span: key, named });
         }
     }
@@ -901,7 +906,7 @@ pub struct ReleasePlan {
     block_end: HashMap<Span, Vec<ReleaseEntry>>,
     return_edge: HashMap<Span, Vec<ReleaseEntry>>,
     propagation_edge: HashMap<Span, Vec<ReleaseEntry>>,
-    move_sites: HashMap<Span, MoveSite>,
+    move_sites: HashMap<Span, Vec<MoveSite>>,
     reads_user: HashMap<String, ReleaseReads>,
     reads_codegen: HashMap<String, ReleaseReads>,
     facts: Vec<EdgeFacts>,
@@ -930,9 +935,12 @@ impl ReleasePlan {
         self.propagation_edge.get(&span_of(span)).map(Vec::as_slice)
     }
 
-    /// The founder a read at `span` takes its value out of, when the read is a move site.
-    pub fn move_site(&self, span: &SourceSpan) -> Option<&MoveSite> {
-        self.move_sites.get(&span_of(span))
+    /// The founders a read at `span` takes its value out of (one read can move several: a
+    /// `background` spawn that gives two arguments); empty when the read is no move site.
+    pub fn move_site(&self, span: &SourceSpan) -> &[MoveSite] {
+        self.move_sites
+            .get(&span_of(span))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The codegen names of the founders whose slot a read inside `stmt` nulls (every move site
@@ -942,9 +950,9 @@ impl ReleasePlan {
     pub fn founders_moved_in(&self, stmt: &Stmt) -> Vec<String> {
         let span = stmt_span(stmt);
         let mut names: BTreeSet<String> = BTreeSet::new();
-        for (site_span, site) in &self.move_sites {
+        for (site_span, sites) in &self.move_sites {
             if encloses(span, *site_span) {
-                names.insert(site.founder_codegen_name.clone());
+                names.extend(sites.iter().map(|site| site.founder_codegen_name.clone()));
             }
         }
         names.into_iter().collect()
@@ -952,7 +960,9 @@ impl ReleasePlan {
 
     /// Every move site, as (read span, founder).
     pub fn move_sites(&self) -> impl Iterator<Item = (Span, &MoveSite)> + '_ {
-        self.move_sites.iter().map(|(span, site)| (*span, site))
+        self.move_sites
+            .iter()
+            .flat_map(|(span, sites)| sites.iter().map(move |site| (*span, site)))
     }
 
     /// The release reads of `function` in `names`. Empty for a function with no recorded edge
@@ -973,6 +983,14 @@ impl ReleasePlan {
     /// What the walk saw at each edge, in walk order.
     pub fn facts(&self) -> &[EdgeFacts] {
         &self.facts
+    }
+
+    /// Add `site` at `span` unless that founder is already moved there.
+    fn add_move_site(&mut self, span: Span, site: MoveSite) {
+        let sites = self.move_sites.entry(span).or_default();
+        if !sites.contains(&site) {
+            sites.push(site);
+        }
     }
 
     fn absorb(
@@ -1038,7 +1056,7 @@ impl ReleasePlan {
             if let Some(ReleaseAnchor::Founder { decl, .. }) = anchor_of(&site.named) {
                 if releasing_if_live.contains(&decl) {
                     let founder_codegen_name = codegen_name_of(&decl);
-                    self.move_sites.insert(
+                    self.add_move_site(
                         site.span,
                         MoveSite {
                             founder: decl,
@@ -1050,7 +1068,7 @@ impl ReleasePlan {
         }
         for (span, decl) in strings.last_uses() {
             if releasing_if_live.contains(decl) && function_declares(function, decl) {
-                self.move_sites.insert(
+                self.add_move_site(
                     span,
                     MoveSite {
                         founder: decl.clone(),
@@ -1060,7 +1078,11 @@ impl ReleasePlan {
             }
         }
         for decl in &releasing_if_live {
-            let has_site = self.move_sites.values().any(|site| &site.founder == decl);
+            let has_site = self
+                .move_sites
+                .values()
+                .flatten()
+                .any(|site| &site.founder == decl);
             if !has_site {
                 self.internal_errors.push(format!(
                     "internal: `{}` in `{}` is released only if live but no read moves it",
