@@ -8,11 +8,12 @@
 //! Count: 11 tests = 2 fixtures x 4 runs + 1 structural check + 2 runs of the same-name fixture,
 //! past the ~8 a High-tier unit gets without a written reason. The same-name fixture (two modules
 //! each declaring a different shape `Thing`) is a bug of its own, the initializer symbol colliding
-//! at link time, so it gets one plain and one ASan run rather than all four. `imported` is the plain cross-module construction;
-//! `inherited_imported` adds a parent's defaults applied through the child's initializer, a path of
-//! its own (`extends` cannot cross files, so it cannot be folded into the first). The 4 runs per
-//! fixture are plain vs ASan (a null envelope read can print plausible output) and -O0 vs -O2 (the
-//! optimizer can mask a misread); all 8 go red without the one-initializer fix.
+//! at link time, so it gets one plain and one ASan run rather than all four. `imported` is the
+//! plain cross-module construction; `inherited_imported` adds a parent's defaults applied through
+//! the child's initializer, a path of its own (`extends` cannot cross files, so it cannot be
+//! folded into the first). The 4 runs per fixture are plain vs ASan (a null envelope read can
+//! print plausible output) and -O0 vs -O2 (the optimizer can mask a misread); all 8 go red
+//! without the one-initializer fix.
 //!
 //! Each fixture is a multi-module project (a directory) run at two optimization levels,
 //! plainly (the VALUE) and under AddressSanitizer (the MEMORY ACCESS, every module
@@ -81,8 +82,8 @@ imported_default_tests!(
 #[test]
 fn v03_m9_union_hidden_default_imported_is_written_by_the_one_initializer() {
     // Bug: defaults lowered inline in each constructing module (and skipped when imported).
-    // The declaring module must DEFINE `ynz_defaults<shape:Holder>@<declaring file>`, the importer must only
-    // DECLARE and call it, and no module may store a default inline. Tier: High.
+    // The declaring module must DEFINE `ynz_defaults<shape:Holder>@<declaring file>`, the importer
+    // must only DECLARE and call it, and no module may store a default inline. Tier: High.
     let built = support::build("v0_3_m9_union_hidden_default_imported", true);
     let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
     // A section's first line is its file path. Match on that line alone: the importer's section
