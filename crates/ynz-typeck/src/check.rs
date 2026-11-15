@@ -6500,11 +6500,10 @@ impl<'b> Checker<'b> {
             }
             Provenance::Reaches(roots) => {
                 let reason = self.reaches_reason(value);
-                // Join EVERY root's class: the roots of one initializer are all held by the
-                // value it builds (`{ first: a, second: c }` holds both), so giving or
-                // returning any one of them must reach this name, and this name must reach
-                // them. Joining only the first root left `c` free to be released while the
-                // returned literal still held it (spike S3 probe t7).
+                // Join EVERY root's class: a piece of a call result (`pick(a, c)`) may be held
+                // by any of the roots, so giving or returning any one of them must reach this
+                // name, and this name must reach them. (A container literal is not here: it
+                // takes its named parts over, `hand_literal_parts_over`.)
                 let root_entries: Vec<(u64, DeclKey)> = roots
                     .iter()
                     .filter_map(|root| {
