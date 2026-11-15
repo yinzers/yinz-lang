@@ -204,7 +204,15 @@ pub fn resolve_imports(
             load_export_table(db, &resolved_path, module_str, &span, visiting, diags);
 
         for (name, def) in &export_table.layout_shapes {
-            result.layout_shapes.insert(name.clone(), def.clone());
+            match result.layout_shapes.get(name) {
+                Some(earlier) if earlier != def => {
+                    diags.push(union_variant_name_clash(name, span.clone()));
+                }
+                Some(_) => {}
+                None => {
+                    result.layout_shapes.insert(name.clone(), def.clone());
+                }
+            }
         }
 
         // Resolve named vs namespace imports.
@@ -474,4 +482,28 @@ fn load_export_table(
         sig.does_real_work = check_out.does_real_work_set.contains(name.as_str());
     }
     export_table
+}
+
+/// The refusal for a shape name that means two different shapes in one module while one of them
+/// sizes an imported shape's union field (`ShapeTable::layout_only`). The field keeps its variants
+/// inline, sized by the declaring module's shape of that name; sized here by another shape, the
+/// two modules would disagree on the slot and a store would write past it. `span` is where the
+/// second meaning comes in (the importer's own shape, or the second import).
+pub fn union_variant_name_clash(name: &str, span: SourceSpan) -> Diagnostic {
+    Diagnostic::error(
+        span,
+        format!(
+            "Two different shapes are named `{name}` here, and an imported shape keeps one of \
+             them inside a union field."
+        ),
+        format!(
+            "Rename one of the `{name}` shapes, or import `{name}` from the module that declares \
+             the union field so the name means that one shape."
+        ),
+        format!(
+            "A union field holds its variant inline, sized by the `{name}` of the module that \
+             declares the field. If `{name}` meant another shape here, this module would size \
+             the same field differently, and a store into it would write past its end."
+        ),
+    )
 }
