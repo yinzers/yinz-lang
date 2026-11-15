@@ -199,7 +199,7 @@ This design **extends that module** with three facts and one function, and forbi
 
 1. **`provenance(expr, bindings) -> Provenance`** — the syntactic answer to "what does this expression denote, ownership-wise". Exhaustive over `Expr` with **no wildcard arm**, so a new expression form is a compile error in exactly one function until someone classifies it; consumers never see syntax, only the four values below.
 2. **`consumed[fn][i]: bool`** — a per-position fact in the same fixpoint loop: position `i` of `fn` is *consumed* when it is declared `give`, OR its body passes it (as a whole binding) to a consumed position, OR sends it (as a whole binding) on a channel. Monotone false→true; converges for the same reason `Writes` does. **The send case is gated on the parameter's DECLARED type**: the fixpoint runs before body checking and has no type environment (`effective_ownership.rs:475–491` classifies a `.send` receiver by method NAME and the `is_user_fn` test, never by receiver type), so "sends it on a channel" means: a builtin `send` (not a user function of that name) whose argument is the whole parameter, AND `FunctionDecl.params[i].ty` resolves to an owned-heap element kind (`channel_elem_drop(ty).is_some_and(transfers_source)` — `array`/`map`). A `number`/`int`/`string` parameter sent on a channel is never `consumed`; the only builtin `send` that takes an `array`/`map` is the conduit send (channel or handle, one send core), so the element type is the parameter's own declared type and needs no receiver lookup. It is a lower bound (a body that first rebinds the parameter with `let` and then sends the rebinding is caught by the emit site's alias classes, below, not by this fact) — it exists so a relay chain is reported in ONE compile, never to accept a program.
-3. **`returns_fresh[fn]: Freshness`** — per function: `Fresh` iff every `return` yields a value nobody else reaches (a fresh expression, a `give` parameter, or a local whose initializer was fresh and that was not aliased); `MayAlias` otherwise (a `share`/`lend`/bare parameter or any piece of one; a call to a `MayAlias` or imported callee; anything unclassifiable). Bottom `Fresh`, raised in the same loop. Imported functions are `MayAlias`.
+3. **`returns_fresh[fn]: Freshness`** — per function: `Fresh` iff every `return` yields a value nobody else reaches (a fresh expression, a `give` parameter, or a local whose initializer was fresh and that was not aliased); `MayAlias` otherwise (a `share`/`lend`/bare parameter or any piece of one; a call to a `MayAlias` or imported callee; anything unclassifiable). Bottom `Fresh`, raised in the same loop. Imported functions are `MayAlias`. **One exception, by declared return type**: a function whose return type is a `string`, `array`, `map` or shape is `Fresh` whatever it returns, because its `return` copies what is not a fresh value or an owned local (`owned_copy::copied_at_return`, the one predicate typeck and codegen's return seam share; see "Non-owned reads"). Only a type parameter, a `maybe`, a union or a channel return still returns a piece.
 4. **`classify_binding_in_stmts(name, stmts) -> EffectiveOwnership`** — the existing per-name body classifier (`classify_param_in_block`) exposed over an arbitrary statement suffix. It never cared that the name was a parameter; the Auto-Arc caller-side proof below needs the identical question asked about a local over the statements after a spawn.
 
 ```rust
@@ -364,7 +364,31 @@ The crossing set reads only the kinds with a frame slot across a suspension toda
 | errors-capable | the error object, or the ok payload |
 | `dynamic`, type parameter | internal error: no such value exists in generated code |
 
-Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a map `set` over a present key, whose handed-in key copy is freed too). The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for every argument until C7's move sites null their slots. Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
+Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a `fixed` `set` or index assignment, a map `set` over a present key, whose handed-in key copy is freed too). `emit_errors_capable_release`'s ok payload and a plain union view release through the same `stored_release`: one dispatch decides what a stored value's release is. The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for every argument until C7's move sites null their slots. Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
+
+### Non-owned reads — view or copy (v0.3-M9 C6 round 2)
+
+A read of a place someone else owns (`b.rows`, `rows[i].or(d)`, a loop's element, a call's argument) has two honest forms. A **view** points at the place: no allocation, as a Rust borrow. A **copy** owns a value of its own. Overwriting a place releases the value it held (the helper above), so a view that is still read after its place is written reads freed memory. Typeck therefore decides, per read, and codegen copies unless typeck proved a view. **Cost: no write while the reader lives means no copy; a write means one copy per affected `let`, loop iteration or call** (what Rust's `.clone()` costs where its borrow checker refuses a borrow), so Golden Rule 8 holds and the language gains no rule. Pinned by `v03_m9_c6_borrow_cost`.
+
+**The record.** `TypedModule::non_owned_reads` (`crates/ynz-typeck/src/non_owned_reads.rs`) maps the span of the expression that reads the place to `View` or `MustCopy`. It is built in the ONE liveness walk of `string_ownership` (the same `after` sets as `string_moves`); nothing re-derives it. Five sites are judged:
+
+| site | reader | key | judged types |
+|---|---|---|---|
+| `let` value, reassignment value | the binding | the value expression | array, map, shape, union, `maybe` of those |
+| `for` loop variable (array, `fixed`, map key and value) | the variable, live for the whole body | the iterated expression | string, array, map, shape, union |
+| call argument at a position the callee only reads | the callee's parameter, live for the call | the argument | the same |
+| `return` | none: it outlives its frame | no entry | string, array, map, shape (`copied_at_return`) |
+
+A read is a `View` when (a) the reader is never written, stored, returned, given or sent, and (b) no root of the place is written, lent, given or released anywhere in the reader's live range: for a loop variable the whole body, a `lend` callee included; for an argument, any other argument of the same call (`both(items[0].or(d), items)` copies the first argument); a parameter the function only reads satisfies (b) for the whole body. (c) A `let` or reassignment view never crosses a suspension (it may point at per-site staging); a loop variable or argument does not end at a `wait`, only at a write. A reassigned binding never points through another reader (a loop variable's staging). `.or(default)` reads the place or the default: both are roots.
+
+**The seam.** `own_read_for_store` (`ynz-codegen/src/emit.rs`) is the one store seam for a string, array, map, shape and envelope union: a value typeck says moves (`string_moves`, `heap_moves`) is taken, a `View` stays a pointer, anything else is copied by `emit_owned_copy` / `shape_bytes_to_owned` / `union_persist_into`. `let`, reassignment, loop variables (plain and state-machine, `own_loop_element`, `own_map_entry`), call arguments (`lower_call_argument`) and returns (`own_returned_value`) read the record through it. A `maybe` of an array or map copies its payload too (`copy_maybe_container_payload`). A loop variable's copy is released after its iteration and an argument's copy after the call, both through `release_fn`.
+
+**Returns.** A function returns an owned value: a fresh value or an owned local at its last use moves, any other read (a parameter, a field, an element) is copied at the `return`. The caller binds a call result by move (`Provenance::Fresh`), so a returned copy is not copied again. The same copy closes a task's return of its own argument, which the release glue frees at retire.
+
+**Parked for C7/C8** (the record gives them the facts; none is a use-after-free, each is a leak the helper's scope-exit calls close):
+- *A `MustCopy` binding is an owner in fact* but keeps `Origin::Reaches`: the release plan lists it `NotOwner` until C7 reads the record.
+- *Early returns leak the loop copy*: a `return` inside a loop body skips the iteration's release (the release plan does not list loop cells).
+- *Suspending calls and loop bodies*: an argument copy of a call that suspends, and the copy of a loop variable (or map entry) a body that suspends reads before its `wait` and not after it, are released at C8's frame release. WHAT: those copies; WHY: no frame slot holds their pointer and a slot is a frame-layout change C8 owns; COST: one copy leaked per such call or iteration, only when a write follows the read; TRIGGER: C8 (#385) frame release.
 
 ### The parameter rule and how far it travels (FRAGO 007, re-derived)
 
@@ -436,7 +460,7 @@ Worked examples (the gallery renders these; `crates/ynz-driver/tests/error_galle
 ```ynz
 shape Bucket { rows: array<int> }
 function eat(give rows: array<int>) -> nothing { print(rows.count().toString()) }
-function pick(share b: Bucket) -> array<int> { return b.rows }
+function pick<T>(share b: T) -> T { return b }
 
 function entrypoint() -> nothing {
   let bucket: Bucket = { rows: [1, 2, 3] }
@@ -444,9 +468,9 @@ function entrypoint() -> nothing {
   // COMPILE ERROR: This line gives `bucket.rows` away — it is given to `eat` — but `bucket.rows`
   //   is a field of `bucket`, so someone here still holds it.
   //   Give away a copy instead: `bucket.rows.copy()`. …
-  let rows = pick(bucket)
-  eat(rows)
-  // COMPILE ERROR: … `rows` is what `pick` returns, and `pick` returns a piece of its `b` argument …
+  let again = pick(bucket)
+  eat(again)
+  // COMPILE ERROR: … `again` is what `pick` returns, and `pick` returns a piece of its `b` argument …
   let matrix: array<array<int>> = [[1, 2], [3]]
   for (row in matrix) {
     eat(row)

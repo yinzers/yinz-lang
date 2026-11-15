@@ -117,16 +117,16 @@ One seam makes the choice for every copy of a shape's bytes: union slot persist
 (`union_persist_into_as`), `shape_bytes_to_owned`, `shape_bytes_to_heap_cell`,
 `maybe_payload_stable_bits`, the embed slot and the staged element of an array or map store. A
 value absent from the record is copied deep, so a hole costs cells and never a double free. A
-`return` of a parameter copies nothing: its caller treats the result as an alias and the binding
-that takes it copies.
+`return` of a parameter, a field or an element copies it, so a function hands its caller an owned
+value (`IMP-ownership.md` "Non-owned reads").
 
 **Views.** A `let` of a place read (`let rest = head.next`) names a place that stays where it
 is. Copying it into the binding is a clone, one box for every box the value owns, so a recursive
 walk that peels one link per call would copy the whole tail at every step: O(n²) cells where a Rust
 borrow costs none. A binding that only READS what it names is a read-only VIEW instead: it points at
 the place (a union field's slot, a shape field's bytes), owns nothing and clones nothing, and the
-language's value semantics are unchanged. Typeck proves it (`TypedModule::view_bindings`,
-`crates/ynz-typeck/src/view_bindings.rs`), inside the same liveness walk as `string_moves`, and
+language's value semantics are unchanged. Typeck proves it (`TypedModule::non_owned_reads`,
+`crates/ynz-typeck/src/non_owned_reads.rs`, which also judges loop variables and call arguments), inside the same liveness walk as `string_moves`, and
 codegen only reads the record:
 
 - (a) the view is never written, stored, returned, given or sent;
