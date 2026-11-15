@@ -1,19 +1,19 @@
-// v0.3-M9 C6 security r1 red fixture: a task returns its argument's field; the release glue frees it under the parent
-// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+// v0.3-M9 C6: a task returns its argument's field; the release glue frees it under the parent
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Bucket {
   rows: array<int>
   id: int
 }
-function pick(b: Bucket) -> array<int> {
+function pick(bucket: Bucket) -> array<int> {
   wait sleep(1)
-  return b.rows
+  return bucket.rows
 }
 function entrypoint() -> nothing {
-  let b: Bucket = { rows: [10, 20, 30], id: 1 }
-  let h = background pick(b)
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let handle = background pick(bucket)
   wait sleep(50)
-  let got = h.receive()
+  let got = handle.receive()
   let fallback: array<int> = []
   let arr = got.or(fallback)
   print(arr.count())

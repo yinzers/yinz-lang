@@ -1,5 +1,5 @@
-// v0.3-M9 C6 security r1 red fixture: a share argument reads an item another argument's lend overwrites
-// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+// v0.3-M9 C6: a share argument reads an item another argument's lend overwrites
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 function both(share name: string, lend items: array<string>) -> nothing {
   items[0] = `z-${3}`

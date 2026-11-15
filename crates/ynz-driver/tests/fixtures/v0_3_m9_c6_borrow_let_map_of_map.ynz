@@ -1,5 +1,5 @@
-// v0.3-M9 C6 security r1 red fixture: let of a map value .or() aliases it; the map set frees it
-// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+// v0.3-M9 C6: let of a map value .or() aliases it; the map set frees it
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 function entrypoint() -> nothing {
   let outer: map<string, map<string, string>> = { `a`: { `k`: `v-${1}` } }

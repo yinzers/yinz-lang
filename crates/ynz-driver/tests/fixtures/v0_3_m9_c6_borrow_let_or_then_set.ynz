@@ -1,11 +1,11 @@
-// v0.3-M9 C6 security r1 red fixture: let of an element .or() aliases it; the index assign frees it
-// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+// v0.3-M9 C6: let of an element .or() aliases it; the index assign frees it
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 function entrypoint() -> nothing {
   let rows: array<array<int>> = [[10, 20, 30]]
   let fallback: array<int> = []
-  let r = rows[0].or(fallback)
+  let heldRow = rows[0].or(fallback)
   rows[0] = [9]
-  print(r.count())
-  print(r[0].or(-1))
+  print(heldRow.count())
+  print(heldRow[0].or(-1))
 }

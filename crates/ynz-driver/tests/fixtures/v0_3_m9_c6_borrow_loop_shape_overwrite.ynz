@@ -1,5 +1,5 @@
-// v0.3-M9 C6 security r1 red fixture: a for-loop variable reads a shape item whose string the body releases
-// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+// v0.3-M9 C6: a for-loop variable reads a shape item whose string the body releases
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Tag {
   name: string
@@ -7,8 +7,8 @@ shape Tag {
 }
 function entrypoint() -> nothing {
   let tags: array<Tag> = [{ name: `a-${1}`, id: 1 }]
-  for (t in tags) {
+  for (tag in tags) {
     tags[0] = { name: `b-${2}`, id: 2 }
-    print(t.name)
+    print(tag.name)
   }
 }

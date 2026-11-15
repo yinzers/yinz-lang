@@ -1,17 +1,17 @@
-// v0.3-M9 C6 security r1 red fixture: returning a parameter's field hands the caller an alias
-// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+// v0.3-M9 C6: returning a parameter's field hands the caller an alias
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Bucket {
   rows: array<int>
   id: int
 }
-function pick(b: Bucket) -> array<int> {
-  return b.rows
+function pick(bucket: Bucket) -> array<int> {
+  return bucket.rows
 }
 function entrypoint() -> nothing {
-  let b: Bucket = { rows: [10, 20, 30], id: 1 }
-  let r = pick(b)
-  b.rows = [9]
-  print(r.count())
-  print(r[0].or(-1))
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let heldRows = pick(bucket)
+  bucket.rows = [9]
+  print(heldRows.count())
+  print(heldRows[0].or(-1))
 }

@@ -1,14 +1,14 @@
-// v0.3-M9 C6 security r1 red fixture: let of an array field aliases it; the field assign frees it
-// Expected output is what base cf5a42dd prints; head frees the old value under the live reader.
+// v0.3-M9 C6: let of an array field aliases it; the field assign frees it
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Bucket {
   rows: array<int>
   id: int
 }
 function entrypoint() -> nothing {
-  let b: Bucket = { rows: [10, 20, 30], id: 1 }
-  let r = b.rows
-  b.rows = [9]
-  print(r.count())
-  print(r[0].or(-1))
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let heldRows = bucket.rows
+  bucket.rows = [9]
+  print(heldRows.count())
+  print(heldRows[0].or(-1))
 }
