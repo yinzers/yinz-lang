@@ -498,11 +498,23 @@ fn an_owner_declared_after_the_last_wait_does_not_cross() {
     );
 }
 
-/// Bug: a `return` after a wait releases the outer owner without a frame slot.
+/// Bug: a `return` after a wait releases the outer owner without a frame slot. The other arm gives
+/// the owner away and the returning arm never reaches the body end, so the `return` edge is the
+/// ONLY release that follows the wait: the body-end read alone would not make the owner cross.
 #[test]
 fn an_owner_crosses_a_wait_to_reach_a_return_release() {
-    let output = clean(
-        "function guarded(flag: boolean) -> nothing {\n  let rows = [1, 2, 3]\n  wait sleep(1)\n  if (flag) {\n    return\n  }\n}\n",
+    let output = clean(&format!(
+        "{}function guarded(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{\n      wait sleep(1)\n      return\n    }}\n  }}\n}}\n",
+        support::EAT
+    ));
+    assert_eq!(
+        fate_of(&body_end(&output, "guarded"), "rows"),
+        Fate::Omitted(OmitReason::Moved),
+        "the body end does not release it"
+    );
+    assert_eq!(
+        fate_of(&return_edges(&output, "guarded")[0], "rows"),
+        Fate::Release(ARRAY)
     );
     assert_eq!(
         crossing_names(&output, "guarded", Names::User),
@@ -803,4 +815,378 @@ fn a_spawn_that_gives_two_bindings_moves_both_founders() {
         .founders_moved_in(&function.body.stmts[2]);
     founders.sort();
     assert_eq!(founders, vec!["a".to_string(), "b".to_string()]);
+}
+
+// ── Fixer round 1 (test): the rules each fate comes from, at their boundaries ────────────────
+
+/// Bug: the join of two branches decides "given on every path" wrongly (`any` for `all`, or a
+/// returning arm counted as a path): a give on one arm only is omitted (a leak on the other arm),
+/// or a give on both arms is released if live (a needless run-time test), or an arm that returns
+/// makes the join look "some paths" when the only path that reaches it gave.
+#[test]
+fn a_join_is_moved_only_when_every_path_that_reaches_it_gave() {
+    let both = clean(&format!(
+        "{}function both(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ eat(rows) }}\n  }}\n}}\n",
+        support::EAT
+    ));
+    assert_eq!(
+        fate_of(&body_end(&both, "both"), "rows"),
+        Fate::Omitted(OmitReason::Moved)
+    );
+    let one = clean(&format!(
+        "{}function one(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ print(`kept`) }}\n  }}\n}}\n",
+        support::EAT
+    ));
+    assert_eq!(
+        fate_of(&body_end(&one, "one"), "rows"),
+        Fate::ReleaseIfLive(ARRAY)
+    );
+    let other_returns = clean(&format!(
+        "{}function other(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ return }}\n  }}\n}}\n",
+        support::EAT
+    ));
+    assert_eq!(
+        fate_of(&body_end(&other_returns, "other"), "rows"),
+        Fate::Omitted(OmitReason::Moved),
+        "the returning arm never reaches the join"
+    );
+    assert_eq!(
+        fate_of(&return_edges(&other_returns, "other")[0], "rows"),
+        Fate::Release(ARRAY),
+        "the returning arm still owns the array at its `return`"
+    );
+}
+
+/// Bug: a string's `ReleaseIfLive` is decided by whether the record lists any read of it, not by
+/// whether one can precede THIS edge: the early `return` then frees through a run-time test the
+/// path never needs, and (reversed) a read before the edge is missed and the store's owner and the
+/// scope both free the string.
+#[test]
+fn a_string_is_released_if_live_only_at_edges_a_listed_read_can_precede() {
+    let output = clean(
+        "function late(flag: boolean) -> nothing {\n  let label = `n=${3}`\n  if (flag) {\n    return\n  }\n  print(label)\n}\n",
+    );
+    assert_eq!(
+        fate_of(&return_edges(&output, "late")[0], "label"),
+        Fate::Release(ReleaseKind::String),
+        "no listed read comes before this `return`"
+    );
+    assert_eq!(
+        fate_of(&body_end(&output, "late"), "label"),
+        Fate::ReleaseIfLive(ReleaseKind::String)
+    );
+}
+
+/// Bug: a string parameter is released by the callee (the caller still owns it: a double free).
+#[test]
+fn a_string_parameter_is_not_released_by_the_callee() {
+    let output = clean("function show(text: string) -> nothing {\n  print(text)\n}\n");
+    assert_eq!(
+        fate_of(&body_end(&output, "show"), "text"),
+        Fate::Omitted(OmitReason::NotOwner)
+    );
+}
+
+/// Bug: every member of an alias class releases (a double free): only the founder does, and the
+/// class mate is `NotOwner`.
+#[test]
+fn a_class_mate_of_the_founder_is_not_an_owner() {
+    let output = clean(
+        "function pass(share rows: array<int>) -> array<int> {\n  return rows\n}\nfunction mate() -> nothing {\n  let first = [1]\n  let second = pass(first)\n  print(second.count().toString())\n}\n",
+    );
+    let list = body_end(&output, "mate");
+    assert_eq!(fate_of(&list, "first"), Fate::Release(ARRAY));
+    assert_eq!(
+        fate_of(&list, "second"),
+        Fate::Omitted(OmitReason::NotOwner)
+    );
+}
+
+/// Bug: a binding that outlives its class's only owner is released with that owner (a use after
+/// free) or guessed to be the owner: the record says it has no static founder, so the plan omits
+/// both and leaves the decision to C7's run-time flag.
+#[test]
+fn a_class_with_no_static_founder_releases_nothing_at_either_scope_end() {
+    let output = clean(
+        "shape Bucket {\n  rows: array<int>\n}\nfunction make() -> Bucket {\n  let bucket: Bucket = { rows: [9] }\n  return bucket\n}\nfunction under(condition: boolean) -> int {\n  let cell: array<int> = make().rows\n  if (condition) {\n    let owner: Bucket = make()\n    cell = owner.rows\n  }\n  return cell.count()\n}\n",
+    );
+    let function = function_of(&output, "under");
+    let Stmt::If { body, .. } = &function.body.stmts[1] else {
+        panic!("the `if` is the second statement")
+    };
+    let inner: Vec<(String, Fate)> = output
+        .typed_module
+        .release_plan
+        .block_end(&body.span)
+        .expect("the `if` body has a list")
+        .iter()
+        .map(|entry| (entry.decl.2.clone(), entry.fate))
+        .collect();
+    assert_eq!(
+        fate_of(&inner, "owner"),
+        Fate::Omitted(OmitReason::NoStaticFounder)
+    );
+    // `cell` is reassigned, so its omission is the reassignment's; the plan must not say owner.
+    assert!(!fate_of(&body_end(&output, "under"), "cell").releases());
+}
+
+/// Bug: a `return` lists the frames outermost first, or each frame first-declared first: codegen
+/// releases in list order, so a later local would be freed after what it borrows from.
+#[test]
+fn a_return_lists_the_innermost_frame_first_and_the_last_declared_first() {
+    let output = clean(
+        "function ordered(flag: boolean) -> nothing {\n  let outer_first = [1]\n  let outer_second = [2]\n  if (flag) {\n    let inner_first = [3]\n    let inner_second = [4]\n    return\n  }\n  print(outer_first.count().toString())\n  print(outer_second.count().toString())\n}\n",
+    );
+    let names: Vec<String> = return_edges(&output, "ordered")[0]
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["inner_second", "inner_first", "outer_second", "outer_first"]
+    );
+}
+
+/// Bug: a kind of heap value (or a type holding one) is classified as owning none, so C6 has
+/// nothing to release it from; or a value type is listed. The kinds `heap_class_of_each_type`
+/// does not build by hand.
+#[test]
+fn heap_class_of_the_remaining_kinds() {
+    let shapes = ShapeTable::default();
+    let generic_shapes = GenericShapeTable::default();
+    let tables = TypeTables {
+        shapes: &shapes,
+        generic_shapes: &generic_shapes,
+    };
+    let cases: Vec<(Type, HeapClass)> = vec![
+        (
+            Type::BuiltinChannel {
+                elem: Box::new(Type::Int),
+            },
+            HeapClass::Heap(ReleaseKind::Channel),
+        ),
+        (
+            Type::BackgroundHandle {
+                result: Box::new(Type::Int),
+                msg_elem: None,
+            },
+            HeapClass::Heap(ReleaseKind::TaskHandle),
+        ),
+        (
+            Type::Sensitive {
+                inner: Box::new(Type::String),
+            },
+            HeapClass::Heap(ReleaseKind::String),
+        ),
+        (
+            Type::Sensitive {
+                inner: Box::new(Type::Int),
+            },
+            HeapClass::NoHeap,
+        ),
+        (
+            Type::MapEntry {
+                key: Box::new(Type::Int),
+                val: Box::new(Type::String),
+            },
+            HeapClass::Heap(ReleaseKind::MapEntry),
+        ),
+        (
+            Type::MapEntry {
+                key: Box::new(Type::Int),
+                val: Box::new(Type::Int),
+            },
+            HeapClass::NoHeap,
+        ),
+        (
+            Type::MapEntry {
+                key: Box::new(Type::Int),
+                val: Box::new(Type::TypeParam { name: "V".into() }),
+            },
+            HeapClass::TypeParameter,
+        ),
+        (
+            Type::Union {
+                variants: vec![Type::Int, Type::TypeParam { name: "T".into() }],
+            },
+            HeapClass::TypeParameter,
+        ),
+        // One heap-owning variant decides, even beside a type parameter.
+        (
+            Type::Union {
+                variants: vec![
+                    Type::TypeParam { name: "T".into() },
+                    Type::BuiltinArray {
+                        elem: Box::new(Type::Int),
+                    },
+                ],
+            },
+            HeapClass::Heap(ReleaseKind::Union),
+        ),
+        (
+            Type::BuiltinFixed {
+                elem: Box::new(Type::TypeParam { name: "T".into() }),
+                size: None,
+            },
+            HeapClass::TypeParameter,
+        ),
+    ];
+    for (ty, expected) in cases {
+        assert_eq!(heap_class_of(&ty, &tables), expected, "{ty:?}");
+    }
+}
+
+/// Bug: a generic shape instance is judged by its declaration, not its arguments (`Pair<int, int>`
+/// listed, or `Pair<string, int>` not), and a shape that holds itself recurses forever or is
+/// classed as owning nothing.
+#[test]
+fn generic_and_recursive_shapes_are_classified_by_what_they_hold() {
+    let output = clean(
+        "shape Pair<A, B> {\n  first: A\n  second: B\n}\nshape Node {\n  label: string\n  next: maybe<Node>\n}\nfunction pairs(give numbers: Pair<int, int>, give named: Pair<string, int>, give chain: Node) -> nothing {\n  print(numbers.first.toString())\n  print(named.first)\n  print(chain.label)\n}\n",
+    );
+    let list = body_end(&output, "pairs");
+    assert!(
+        list.iter().all(|(name, _)| name != "numbers"),
+        "a pair of ints owns no heap: {list:?}"
+    );
+    assert_eq!(fate_of(&list, "named"), Fate::Release(ReleaseKind::Shape));
+    assert_eq!(
+        fate_of(&list, "chain"),
+        Fate::Release(ReleaseKind::Shape),
+        "a recursive shape owns heap (its label, its boxed link)"
+    );
+}
+
+/// Bug: an owner omitted from every edge is still read there, so it gets a frame slot and a flush
+/// for nothing (above hand-written cost); a binding released only if live is missed and its slot
+/// is not preserved across the wait.
+#[test]
+fn only_the_owners_that_release_cross_a_wait() {
+    let moved = clean(&format!(
+        "{}function moved() -> nothing {{\n  let rows = [1, 2, 3]\n  eat(rows)\n  wait sleep(1)\n}}\n",
+        support::EAT
+    ));
+    assert_eq!(
+        crossing_names(&moved, "moved", Names::User),
+        Vec::<String>::new(),
+        "given on every path: no release reads it after the wait"
+    );
+    let if_live = clean(&format!(
+        "{}function if_live(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n  wait sleep(1)\n}}\n",
+        support::EAT
+    ));
+    assert_eq!(
+        crossing_names(&if_live, "if_live", Names::User),
+        vec!["rows".to_string()],
+        "released if live after the wait"
+    );
+    let borrowed =
+        clean("function borrowed(share rows: array<int>) -> nothing {\n  wait sleep(1)\n}\n");
+    assert_eq!(
+        crossing_names(&borrowed, "borrowed", Names::User),
+        Vec::<String>::new(),
+        "the caller owns it: no release"
+    );
+}
+
+/// Bug: the reads a release adds are placed at the wrong statement (after the wrong `return`, in
+/// the wrong block, or twice), so the one crossing producer sees a use before a suspension it
+/// follows, or after one it precedes. `with_reads` is the only place the placement is decided.
+#[test]
+fn with_reads_adds_one_read_per_owner_at_each_edge_it_belongs_to() {
+    use ynz_ast::nodes::Expr;
+    let output = clean(&format!(
+        "{}function placed(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    let inner = [4]\n    return\n  }}\n  print(rows.count().toString())\n}}\n",
+        support::EAT
+    ));
+    let function = function_of(&output, "placed");
+    let reads = output
+        .typed_module
+        .release_plan
+        .reads("placed", Names::User);
+    let rewritten = reads.with_reads(&function.body.stmts);
+    let read_names = |stmts: &[Stmt]| -> Vec<String> {
+        stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Expr(Expr::Ident(name, _)) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // Top level: `let`, `if`, `print` (an expression statement, not an identifier), then the body
+    // end's read of `rows`.
+    assert_eq!(rewritten.len(), function.body.stmts.len() + 1);
+    assert_eq!(read_names(&rewritten), vec!["rows".to_string()]);
+    assert!(
+        matches!(rewritten.last(), Some(Stmt::Expr(Expr::Ident(name, _))) if name == "rows"),
+        "the body-end read comes last"
+    );
+    // The `if` body: `let`, `return`, then the `return` edge's reads, innermost frame first.
+    let Stmt::If { body, .. } = &rewritten[1] else {
+        panic!("the second statement is still the `if`")
+    };
+    assert_eq!(body.stmts.len(), 2 + 2 + 1);
+    assert!(matches!(body.stmts[1], Stmt::Return { .. }));
+    assert_eq!(
+        read_names(&body.stmts[2..]),
+        vec!["inner".to_string(), "rows".to_string(), "inner".to_string()],
+        "the `return` edge lists the inner and outer owner; the arm's own end lists the inner"
+    );
+    // A function with no release reads is returned unchanged.
+    let quiet = clean("function quiet() -> nothing {\n  print(`x`)\n}\n");
+    let plain = function_of(&quiet, "quiet");
+    assert_eq!(
+        quiet
+            .typed_module
+            .release_plan
+            .reads("quiet", Names::User)
+            .with_reads(&plain.body.stmts)
+            .len(),
+        plain.body.stmts.len()
+    );
+}
+
+/// Bug: the read a propagation edge adds is placed at the outer statement as well as inside the
+/// nested block that holds the identifier (twice), or in the outer block only (after the nested
+/// block's own end, where its locals are already gone). The edge belongs right after the
+/// statement that holds the identifier, in the innermost block.
+#[test]
+fn with_reads_puts_a_propagation_read_after_its_statement_in_its_own_block() {
+    use ynz_ast::nodes::Expr;
+    let output = clean(
+        "function risky() -> int errors {\n  return 1\n}\nfunction chained(flag: boolean) -> int errors {\n  let rows = [1, 2]\n  if (flag) {\n    let inner = [3]\n    let value = risky()\n    print(value.toString())\n  }\n  return 0\n}\n",
+    );
+    let function = function_of(&output, "chained");
+    let rewritten = output
+        .typed_module
+        .release_plan
+        .reads("chained", Names::User)
+        .with_reads(&function.body.stmts);
+    let read_names = |stmts: &[Stmt]| -> Vec<String> {
+        stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Expr(Expr::Ident(name, _)) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let Stmt::If { body, .. } = &rewritten[1] else {
+        panic!("the second statement is the `if`")
+    };
+    assert!(
+        matches!(body.stmts[2], Stmt::Expr(_)),
+        "the statement holding the failing read is the `print` call"
+    );
+    assert_eq!(
+        read_names(&body.stmts),
+        vec!["inner".to_string(), "rows".to_string(), "inner".to_string()],
+        "the propagation edge's owners right after the `print`, then the block's own end"
+    );
+    assert_eq!(
+        read_names(&rewritten),
+        vec!["rows".to_string(), "rows".to_string()],
+        "the outer block has only its `return` edge and its own end: no copy of the nested propagation edge, no read right after the `if`"
+    );
 }
