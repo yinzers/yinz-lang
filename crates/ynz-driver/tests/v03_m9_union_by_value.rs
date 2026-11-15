@@ -1,6 +1,7 @@
 //! v0.3-M9 C1f (#423): a union stored into anything that outlives the frame that made it must
-//! read back correctly: the slot holds the 16-byte `{tag, data}` envelope BY VALUE and the
-//! payload it points to lives outside every frame. Tier: High (memory safety / data integrity).
+//! read back correctly: the slot holds `{ tag, payload }` BY VALUE with the payload inline, sized to
+//! the largest variant (`IMP-unions.md` "Stored union slot"); only a recursive union boxes a shape
+//! variant in a heap cell. Tier: High (memory safety / data integrity).
 //!
 //! Each fixture is one escape kind, not a copy of another:
 //!   - `escape`: a union array returned from the function that filled it.
