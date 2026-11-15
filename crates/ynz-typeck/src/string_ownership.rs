@@ -75,12 +75,13 @@ impl StringMoves {
 ///
 /// `expr_types` is typeck's per-expression type map, `names` resolves each identifier use to its
 /// declaration, `callable_fns` holds the names of every Yinz function a call can reach (local and
-/// imported), and `ownership` is the effective-ownership fixpoint (which call positions only read).
+/// imported), `imported_fns` the imported ones alone, and `ownership` is the effective-ownership fixpoint (which call positions only read).
 pub fn record_moves_and_views(
     module: &Module,
     expr_types: &HashMap<(usize, usize), Type>,
     names: &BindingNames,
     callable_fns: &HashSet<String>,
+    imported_fns: &HashSet<String>,
     ownership: &EffectiveOwnershipReport,
 ) -> (StringMoves, ViewBindings) {
     let mut recorder = Recorder {
@@ -89,7 +90,7 @@ pub fn record_moves_and_views(
         callable_fns,
         lets: HashSet::new(),
         moves: StringMoves::default(),
-        views: ViewTracker::new(names, ownership, expr_types),
+        views: ViewTracker::new(names, ownership, imported_fns, expr_types),
     };
     for item in &module.items {
         if let Item::Function(function) = item {

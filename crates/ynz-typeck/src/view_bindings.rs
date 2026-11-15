@@ -40,9 +40,8 @@ use std::collections::{HashMap, HashSet};
 use ynz_ast::nodes::{Expr, FunctionDecl, PostfixOpKind};
 
 use crate::binding_names::{decl_key, BindingNames, DeclKey};
-use crate::effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
-use crate::inlay_hint_passes::{
-    builtin_free_fn_is_readonly, primitive_intrinsic_method_is_readonly,
+use crate::effective_ownership::{
+    call_position_reads, value_like, EffectiveOwnership, EffectiveOwnershipReport,
 };
 use crate::string_ownership::children;
 use crate::types::Type;
@@ -75,8 +74,8 @@ impl ViewBindings {
     }
 }
 
-/// Built-in methods that only read their receiver and their arguments.
-const READ_ONLY_BUILTIN_METHODS: &[&str] = &["count", "exists", "get", "contains", "has"];
+/// Built-in collection methods whose result is a read of one element of the receiver.
+const ELEMENT_READ_METHODS: &[&str] = &["get", "first", "last"];
 
 struct Candidate {
     view: DeclKey,
@@ -84,6 +83,9 @@ struct Candidate {
     /// True when the root is a parameter the function only reads: (b) holds for the whole body.
     root_is_read_only_parameter: bool,
     value_span: (usize, usize),
+    /// The view this one is read through (`let b = a.g` with `a` a view of `x`): `b` is a view of
+    /// `x`, and only while `a` is.
+    via: Option<DeclKey>,
     viable: bool,
 }
 
@@ -92,6 +94,7 @@ struct Candidate {
 pub(crate) struct ViewTracker<'a> {
     names: &'a BindingNames,
     ownership: &'a EffectiveOwnershipReport,
+    imported_fn_names: &'a HashSet<String>,
     expr_types: &'a HashMap<(usize, usize), Type>,
     function_name: String,
     parameters: HashSet<DeclKey>,
@@ -104,11 +107,13 @@ impl<'a> ViewTracker<'a> {
     pub(crate) fn new(
         names: &'a BindingNames,
         ownership: &'a EffectiveOwnershipReport,
+        imported_fn_names: &'a HashSet<String>,
         expr_types: &'a HashMap<(usize, usize), Type>,
     ) -> Self {
         Self {
             names,
             ownership,
+            imported_fn_names,
             expr_types,
             function_name: String::new(),
             parameters: HashSet::new(),
@@ -135,8 +140,16 @@ impl<'a> ViewTracker<'a> {
 
     /// End a function: every candidate no evaluation disqualified is a view.
     pub(crate) fn finish_function(&mut self) {
+        // A view read through another view is a view only while that one is: the candidates are
+        // in declaration order, so the view it goes through is decided first.
+        let mut decided: HashMap<DeclKey, bool> = HashMap::new();
         for candidate in self.candidates.drain(..) {
-            if candidate.viable {
+            let through_is_view = candidate.via.as_ref().map_or(true, |through| {
+                decided.get(through).copied().unwrap_or(false)
+            });
+            let is_view = candidate.viable && through_is_view;
+            decided.insert(candidate.view.clone(), is_view);
+            if is_view {
                 self.views.spans.insert(candidate.value_span);
             }
         }
@@ -156,9 +169,12 @@ impl<'a> ViewTracker<'a> {
         value: &Expr,
         lets: &HashSet<DeclKey>,
     ) {
-        if annotated || !matches!(value, Expr::FieldAccess { .. }) {
+        if annotated {
             return;
         }
+        let Some(place) = self.view_place(value) else {
+            return;
+        };
         let span = value.span();
         let heap_valued = match self.expr_types.get(&(span.start, span.end)) {
             Some(Type::Shape { .. } | Type::Union { .. }) => true,
@@ -170,28 +186,78 @@ impl<'a> ViewTracker<'a> {
         if !heap_valued {
             return;
         }
-        let Some(Expr::Ident(root_name, root_span)) = place_root(value) else {
+        let Expr::Ident(root_name, root_span) = place else {
             return;
         };
         let Some(root) = self.names.declaration_of_use(root_span, root_name).cloned() else {
             return;
         };
-        let is_parameter = self.parameters.contains(&root);
-        let is_plain_let = lets.contains(&root)
-            && !self
-                .candidates
-                .iter()
-                .any(|candidate| candidate.view == root);
-        if !is_parameter && !is_plain_let {
-            return;
-        }
+        let (root, root_is_read_only_parameter, via) = match self
+            .candidates
+            .iter()
+            .find(|candidate| candidate.view == root)
+        {
+            // `let b = a.g` with `a` a view of `x`: `b` is a view of `x`, checked against `x`.
+            Some(through) if through.viable => (
+                through.root.clone(),
+                through.root_is_read_only_parameter,
+                Some(through.view.clone()),
+            ),
+            // A view already disqualified owns a copy: it is a plain `let` root.
+            Some(_) if lets.contains(&root) => (root.clone(), false, None),
+            Some(_) => return,
+            None if self.parameters.contains(&root) => {
+                let read_only = self.read_only_parameters.contains(&root);
+                (root, read_only, None)
+            }
+            None if lets.contains(&root) => (root, false, None),
+            None => return,
+        };
         self.candidates.push(Candidate {
             view: decl_key(name_span, name),
-            root_is_read_only_parameter: self.read_only_parameters.contains(&root),
+            root_is_read_only_parameter,
             root,
             value_span: (span.start, span.end),
+            via,
             viable: true,
         });
+    }
+
+    /// The identifier a view of `value` points through, when `value` is a read of one place: a
+    /// field chain (`head.next`), an element (`arr[i]`, `arr[i].f`) or an element method of a
+    /// built-in collection (`arr.get(i)`, `.first()`, `.last()`). An element read is a copy of
+    /// the element's bytes into per-site staging, so it shares the element's boxes and stays
+    /// valid while the collection is not written: growth, `set`, `remove` and `clear` are
+    /// writes (`call_position_reads`), and any write breaks (b).
+    fn view_place<'e>(&self, value: &'e Expr) -> Option<&'e Expr> {
+        match value {
+            Expr::FieldAccess { .. } | Expr::IndexAccess { .. } => {
+                place_root(value).filter(|root| matches!(root, Expr::Ident(..)))
+            }
+            Expr::MethodCall {
+                receiver, method, ..
+            } if ELEMENT_READ_METHODS.contains(&method.as_str())
+                && !self.ownership.is_local_fn(method)
+                && !self.imported_fn_names.contains(method.as_str()) =>
+            {
+                let receiver_span = receiver.span();
+                let is_collection = matches!(
+                    self.expr_types
+                        .get(&(receiver_span.start, receiver_span.end)),
+                    Some(
+                        Type::BuiltinArray { .. }
+                            | Type::BuiltinFixed { .. }
+                            | Type::BuiltinMap { .. }
+                    )
+                );
+                if is_collection {
+                    place_root(receiver)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The expressions `exprs` are evaluated while `after` (the `let`s read later) and the
@@ -267,6 +333,9 @@ impl<'a> ViewTracker<'a> {
     /// A `return value` while views are live: a returned view (or a place read through one)
     /// escapes the function.
     pub(crate) fn evaluate_return(&mut self, value: &Expr) {
+        if !self.holds_boxes(value) {
+            return;
+        }
         let Some(Expr::Ident(name, span)) = place_root(value) else {
             return;
         };
@@ -280,15 +349,27 @@ impl<'a> ViewTracker<'a> {
         }
     }
 
+    /// False when `expr` is typed as bits (an `int`, a `string`, a `maybe` of those): copying it
+    /// is the value, so it shares nothing. An expression with no recorded type holds boxes.
+    fn holds_boxes(&self, expr: &Expr) -> bool {
+        let span = expr.span();
+        !self
+            .expr_types
+            .get(&(span.start, span.end))
+            .is_some_and(value_like)
+    }
+
     /// True when `expr` may write, store, give, send or return what `target` names, or pass it
     /// to a position that may.
     fn changes(&self, expr: &Expr, target: &DeclKey) -> bool {
+        // A place that is bits (an `int` field read through the view) is copied, never shared.
         let is_target = |place: &Expr| -> bool {
-            matches!(
-                place_root(place),
-                Some(Expr::Ident(name, span))
-                    if self.names.declaration_of_use(span, name) == Some(target)
-            )
+            self.holds_boxes(place)
+                && matches!(
+                    place_root(place),
+                    Some(Expr::Ident(name, span))
+                        if self.names.declaration_of_use(span, name) == Some(target)
+                )
         };
         match expr {
             Expr::Call(call) => {
@@ -300,9 +381,13 @@ impl<'a> ViewTracker<'a> {
                     if is_target(arg) {
                         // A position proven read-only reads the place; anything else may not.
                         return callee_name.map_or(true, |name| {
-                            !builtin_free_fn_is_readonly(name)
-                                && self.ownership.ownership_of(name, position)
-                                    != EffectiveOwnership::Reads
+                            !call_position_reads(
+                                self.ownership,
+                                self.imported_fn_names,
+                                name,
+                                position,
+                                false,
+                            )
                         });
                     }
                     self.changes(arg, target)
@@ -314,15 +399,16 @@ impl<'a> ViewTracker<'a> {
                 args,
                 ..
             } => {
-                let local = self.ownership.is_local_fn(method);
-                let builtin_reads = READ_ONLY_BUILTIN_METHODS.contains(&method.as_str())
-                    || primitive_intrinsic_method_is_readonly(method);
-                let reads_receiver = is_target(receiver)
-                    && (builtin_reads
-                        || (local
-                            && self.ownership.ownership_of(method, 0)
-                                == EffectiveOwnership::Reads));
-                if is_target(receiver) && !reads_receiver {
+                let reads = |position: usize| {
+                    call_position_reads(
+                        self.ownership,
+                        self.imported_fn_names,
+                        method,
+                        position,
+                        true,
+                    )
+                };
+                if is_target(receiver) && !reads(0) {
                     return true;
                 }
                 if !is_target(receiver) && self.changes(receiver, target) {
@@ -330,10 +416,7 @@ impl<'a> ViewTracker<'a> {
                 }
                 args.iter().enumerate().any(|(position, arg)| {
                     if is_target(arg) {
-                        return !(builtin_reads
-                            || (local
-                                && self.ownership.ownership_of(method, position + 1)
-                                    == EffectiveOwnership::Reads));
+                        return !reads(position + 1);
                     }
                     self.changes(arg, target)
                 })

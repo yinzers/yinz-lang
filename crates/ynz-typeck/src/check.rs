@@ -706,6 +706,7 @@ fn record_string_moves_of(
         expr_types,
         binding_names,
         &callable,
+        imported_fns,
         ownership,
     )
 }

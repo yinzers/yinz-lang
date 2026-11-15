@@ -99,3 +99,75 @@ view_cases! {
         [("outer.inner", 1, false)],
         "an annotated binding can wrap the value into a union slot, which a view cannot be";
 }
+
+const CHAIN_PRELUDE: &str = "shape Inner {\n  id: int\n}\nshape Middle {\n  inner: Inner\n  tag: int\n}\nshape Wrapper {\n  middle: Middle\n  count: int\n}\n";
+
+macro_rules! chain_cases {
+    ($($case:ident: $program:expr, [$($expectation:expr),+ $(,)?], $bug:literal;)+) => {
+        $(
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                assert_views(&format!("{CHAIN_PRELUDE}{}", $program), &[$($expectation),+]);
+            }
+        )+
+    };
+}
+
+chain_cases! {
+    a_read_through_a_view_is_a_view_of_the_original_root:
+        "function read(share wrapper: Wrapper) -> int {\n  let middle = wrapper.middle\n  let inner = middle.inner\n  return inner.id + middle.tag\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
+        [("wrapper.middle", 1, true), ("middle.inner", 1, true)],
+        "`let b = a.g` with `a` a view of `x` copied the tail again (O(n^2) over a chain of aliases, Rule 8)";
+
+    a_chained_view_is_not_a_view_when_the_original_root_is_written:
+        "function entrypoint() -> nothing {\n  let leaf: Inner = { id: 1 }\n  let middle: Middle = { inner: leaf, tag: 2 }\n  let wrapper: Wrapper = { middle: middle, count: 3 }\n  let held = wrapper.middle\n  let inner = held.inner\n  wrapper.count = 4\n  print(inner.id + held.tag)\n}\n",
+        [("wrapper.middle", 1, false), ("held.inner", 1, false)],
+        "a view read through another after the original root was written reads a changed place (High)";
+
+    a_chained_view_is_not_a_view_when_the_view_it_goes_through_is_written:
+        "function read(share wrapper: Wrapper) -> int {\n  let held = wrapper.middle\n  let inner = held.inner\n  held.tag = 7\n  return inner.id\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
+        [("wrapper.middle", 1, false), ("held.inner", 1, false)],
+        "a view whose parent view is written, which changes the place both name (High)";
+}
+
+const ELEMENT_PRELUDE: &str = "shape Inner {\n  id: int\n}\nfunction bump(lend items: array<Inner>) -> nothing {\n  let extra: Inner = { id: 5 }\n  items.add(extra)\n}\n";
+
+macro_rules! element_cases {
+    ($($case:ident: $program:expr, [$($expectation:expr),+ $(,)?], $bug:literal;)+) => {
+        $(
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                assert_views(&format!("{ELEMENT_PRELUDE}{}", $program), &[$($expectation),+]);
+            }
+        )+
+    };
+}
+
+element_cases! {
+    an_element_read_of_a_share_parameter_is_a_view:
+        "function read(share items: array<Inner>) -> int {\n  let item = items[0]\n  let found = items.get(1)\n  if (item.exists()) {\n    return item.value.id\n  }\n  if (found.exists()) {\n    return found.value.id\n  }\n  return 0\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
+        [("items[0]", 1, true), ("items.get(1)", 1, true)],
+        "an element read copied where Rust borrows (cost, Rule 8)";
+
+    an_element_read_of_a_local_collection_is_a_view_until_the_collection_is_written:
+        "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let items: array<Inner> = [first]\n  let item = items[0]\n  print(item.exists())\n  let second: Inner = { id: 2 }\n  items.add(second)\n}\n",
+        [("items[0]", 1, true)],
+        "a write after the view's last read ends nothing (cost)";
+
+    an_element_view_is_not_a_view_when_the_collection_grows_while_it_is_read:
+        "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let second: Inner = { id: 2 }\n  let items: array<Inner> = [first]\n  let item = items[0]\n  items.add(second)\n  print(item.exists())\n}\n",
+        [("items[0]", 1, false)],
+        "an element view read after `add` reallocated the buffer reads freed memory (High)";
+
+    an_element_view_is_not_a_view_when_the_collection_is_passed_to_a_lend_parameter:
+        "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let items: array<Inner> = [first]\n  let item = items[0]\n  bump(items)\n  print(item.exists())\n}\n",
+        [("items[0]", 1, false)],
+        "an element view read after a callee may write the collection (High)";
+
+    an_element_view_is_not_a_view_when_an_element_is_replaced_while_it_is_read:
+        "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let second: Inner = { id: 2 }\n  let items: array<Inner> = [first]\n  let item = items[0]\n  items.set(0, second)\n  print(item.exists())\n}\n",
+        [("items[0]", 1, false)],
+        "an element view read after `set` replaced the element reads the new value (High)";
+}
