@@ -38,7 +38,7 @@ fn bignum_map_key_is_refused_with_a_teaching_diagnostic() {
         &[
             "A `map` cannot be keyed by `number<50>`.",
             "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits",
-            "compared by address",
+            "compare where it sits in memory",
         ],
     );
 }
@@ -51,7 +51,7 @@ fn sensitive_string_map_key_is_refused_with_a_teaching_diagnostic() {
         &[
             "A `map` cannot be keyed by `sensitive string`.",
             "Key the map by a plain `string`",
-            "compared by address",
+            "compare where it sits in memory",
         ],
     );
 }
@@ -65,7 +65,7 @@ fn shape_map_key_is_refused_with_a_teaching_diagnostic() {
             "A `map` cannot be keyed by `Point`.",
             "Key the map by one of its fields",
             "`map<string, Point>`",
-            "compared by address",
+            "compare where it sits in memory",
         ],
     );
 }
@@ -77,8 +77,8 @@ fn union_argument_to_a_generic_background_callee_is_refused_with_a_teaching_diag
         "v0_3_m9_c6b_background_union_generic_refused.ynz",
         &[
             "Cannot give the union `Circle | Tag` to `eat`'s generic parameter `held`",
-            "Declare the parameter with the union type",
-            "no union slot to copy into",
+            "Declare `held` as `Circle | Tag` in `eat`'s signature",
+            "gives it no union slot to copy into",
         ],
     );
 }

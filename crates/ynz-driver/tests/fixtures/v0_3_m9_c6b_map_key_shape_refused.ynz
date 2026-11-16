@@ -1,4 +1,5 @@
-// v0.3-M9 C6: a shape is not a map key; a map would compare it by address.
+// v0.3-M9 C6: a shape is not a map key; a map would compare where it sits in memory, not its
+// fields.
 // Correct behavior: does not compile; the refusal names the type, a key to use, and why.
 shape Point {
   x: int

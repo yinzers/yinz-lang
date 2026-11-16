@@ -8771,25 +8771,43 @@ impl<'b> Checker<'b> {
                     "Cannot give the union `{union_name}` to `{callee}`'s generic parameter \
                      `{parameter_name}` in a `background` call."
                 ),
-                "Declare the parameter with the union type instead of a type parameter, or wrap the \
-                 union in a shape field and pass the shape.",
-                "A `background` task keeps its own copy of a union argument, and it can make that \
-                 copy only when the function declares the union type. A generic parameter `T` \
-                 gives the task no union slot to copy into, so it would read the spawner's memory \
-                 after the spawner returned.",
+                format!(
+                    "Declare `{parameter_name}` as `{union_name}` in `{callee}`'s signature \
+                     instead of a type parameter, or wrap the union in a shape field and pass \
+                     the shape."
+                ),
+                format!(
+                    "A `background` task keeps its own copy of every argument, because it can \
+                     still be running after the function that spawned it has returned. It can \
+                     only copy a union when `{callee}` declares the union type. A generic \
+                     parameter gives it no union slot to copy into, so the task would read the \
+                     spawner's memory after the spawner returned."
+                ),
             ));
         }
     }
 
     /// Report a `map` key type the runtime cannot look up by value. A map hashes and compares a
-    /// key by value for a `string`, an `int`, a `boolean`, a `float` and a `number` of up to 34
-    /// digits (`MAX_MAP_KEY_NUMBER_DIGITS`); every other key type would be compared by
-    /// its address, so an equal key would miss. Codegen's `map_key_kind` mirrors this list and
-    /// only asserts it. An `Error` key was reported where it was written, and a type parameter
+    /// key by what it holds for a `string`, an `int`, a `boolean`, a `float` and a `number` of up
+    /// to 34 digits (`MAX_MAP_KEY_NUMBER_DIGITS`); every other key type would be compared by where
+    /// it sits in memory, so an equal key would miss. Codegen's `map_key_kind` mirrors this list
+    /// and only asserts it. An `Error` key was reported where it was written, and a type parameter
     /// `K` is not known until an instance binds it, so neither is reported here.
     ///
     /// Time: O(1)  Space: O(1)
     fn check_map_key_type(&mut self, key: &Type, span: &SourceSpan) {
+        let shown = match key {
+            Type::Number { precision } => format!("number<{precision}>"),
+            Type::Sensitive { .. } => "sensitive string".to_string(),
+            other => type_name(other),
+        };
+        // The one explanation of which keys a map finds by value, shared by every refusal below
+        // and by REF-collections.md ("A map key is found by what it holds").
+        let by_value_keys = format!(
+            "A map finds a key by comparing what it holds, and it can do that for a `string`, an \
+             `int`, a `boolean`, a `float` and a `number` of up to {MAX_MAP_KEY_NUMBER_DIGITS} \
+             digits."
+        );
         let (instead, why) = match key {
             Type::String
             | Type::Int
@@ -8798,44 +8816,47 @@ impl<'b> Checker<'b> {
             | Type::Error
             | Type::TypeParam { .. } => return,
             Type::Number { precision } if *precision <= MAX_MAP_KEY_NUMBER_DIGITS => return,
-            Type::Number { precision } => (
+            Type::Number { .. } => (
                 format!(
                     "Key the map by an `int` or a `string` id, or by a `number` of at most \
                      {MAX_MAP_KEY_NUMBER_DIGITS} digits (`number<{MAX_MAP_KEY_NUMBER_DIGITS}>`)."
                 ),
                 format!(
-                    "A map finds a key by its value, and it can do that for a `number` held in \
-                     128 bits (up to {MAX_MAP_KEY_NUMBER_DIGITS} digits). A `number<{precision}>` is \
-                     a larger number held on the heap, so it would be compared by address and \
-                     `m[key]` would miss an equal number."
+                    "{by_value_keys} A `{shown}` is a larger number kept on the heap, so the map \
+                     would compare where it sits in memory instead of its digits, and looking up \
+                     a number equal to one you stored would miss."
                 ),
             ),
             Type::Sensitive { .. } => (
                 "Key the map by a plain `string`, such as a non-secret id or a name.".to_string(),
-                "A map finds a key by its value, and it can do that for a plain `string`. A \
-                 `sensitive` string is a wrapper that hides its text, so it would be compared by \
-                 address and `m[key]` would miss an equal secret."
-                    .to_string(),
+                format!(
+                    "{by_value_keys} A `{shown}` is a wrapper that hides its text, so the map \
+                     would compare where it sits in memory instead of its text, and looking up \
+                     a secret equal to one you stored would miss."
+                ),
             ),
-            other => (
+            Type::Shape { .. } => (
                 format!(
                     "Key the map by one of its fields (an `int` id or a `string` name) and keep \
-                     the `{shown}` as the map's value: `map<string, {shown}>`.",
-                    shown = type_name(other)
+                     the `{shown}` as the map's value: `map<string, {shown}>`."
                 ),
                 format!(
-                    "A map finds a key by its value, and it can do that for a `string`, an `int`, \
-                     a `boolean`, a `float` and a `number` of up to {MAX_MAP_KEY_NUMBER_DIGITS} \
-                     digits. A `{}` key would be compared by address, so `m[key]` would miss an \
-                     equal key.",
-                    type_name(other)
+                    "{by_value_keys} A `{shown}` is a shape, so the map would compare where it \
+                     sits in memory instead of its fields, and looking up a `{shown}` equal to \
+                     one you stored would miss."
                 ),
             ),
-        };
-        let shown = match key {
-            Type::Number { precision } => format!("number<{precision}>"),
-            Type::Sensitive { .. } => "sensitive string".to_string(),
-            other => type_name(other),
+            _ => (
+                format!(
+                    "Key the map by a `string` or an `int` that identifies the `{shown}`, and keep \
+                     the `{shown}` as the map's value: `map<string, {shown}>`."
+                ),
+                format!(
+                    "{by_value_keys} A `{shown}` is none of those, so the map would compare where \
+                     it sits in memory instead of what it holds, and looking up a `{shown}` equal \
+                     to one you stored would miss."
+                ),
+            ),
         };
         self.diags.push(Diagnostic::error(
             span.clone(),
