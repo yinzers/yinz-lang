@@ -59,6 +59,21 @@ fn sensitive_string_map_key_is_refused_with_a_teaching_diagnostic() {
             "not constant-time",
         ],
     );
+    // Bug caught: a shape field's or union alias's map type skipped the key check, so the key
+    // reached codegen as a "compiler bug" or compiled unused (C7 review r2). Tier: Medium.
+    let in_shape = "v0_3_m9_c7_map_key_sensitive_in_shape_refused.ynz";
+    assert_refused_with(
+        in_shape,
+        &["A `map` cannot be keyed by `sensitive string`."],
+    );
+    let refusals = compile(in_shape)
+        .diagnostics
+        .matches("A `map` cannot be keyed by `sensitive string`.")
+        .count();
+    assert_eq!(
+        refusals, 3,
+        "{in_shape}: the field, the nested field and the union variant are each refused once"
+    );
 }
 
 #[test]

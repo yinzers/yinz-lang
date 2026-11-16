@@ -1581,6 +1581,11 @@ impl<'b> Checker<'b> {
                         s.generics.iter().map(|g| g.name.clone()).collect();
                     for field in &s.fields {
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
+                        // A hidden field with a default had its type checked, map keys
+                        // included, by `check_hidden_field_defaults` below.
+                        if !(field.is_hidden && field.default.is_some()) {
+                            self.check_map_keys_in_ast_type(&field.ty);
+                        }
                     }
                     self.check_hidden_field_defaults(s, &type_params);
                     // Union type alias RHS: `shape PghEvent = SouthSideEvent | StripeDistrictEvent`.
@@ -1590,6 +1595,7 @@ impl<'b> Checker<'b> {
                     // closes for regular shape fields.
                     if let Some(alias) = &s.alias_ty {
                         self.collect_referenced_names_in_ast_type(alias, &type_params);
+                        self.check_map_keys_in_ast_type(alias);
                     }
                 }
                 // M6: options declarations are validated and registered by collect_options()
@@ -9291,6 +9297,56 @@ impl<'b> Checker<'b> {
     ///
     /// Time: O(n)  Space: O(n)  where n = nodes in the AST type tree (recursion
     /// depth bounds the stack; generic args recurse).
+    /// Refuse every map key in a shape declaration's written type (a field, or a union alias's
+    /// variants) that `check_map_key_type` refuses. The check pass never resolves a shape's types
+    /// through `ast_type_to_type`, so without this walk a `map<sensitive string, V>` field
+    /// compiled, and reached codegen as a "compiler bug" once used.
+    ///
+    /// Time: O(n)  Space: O(depth)  where n = nodes in the AST type tree
+    fn check_map_keys_in_ast_type(&mut self, ast_ty: &AstType) {
+        match ast_ty {
+            AstType::Generic {
+                name, args, span, ..
+            } => {
+                if name == "map" {
+                    if let Some(key_ast) = args.first() {
+                        // A shape's type parameter resolves to `Error` here and is skipped by
+                        // `check_map_key_type`, as a `K` is checked where an instance binds it.
+                        let key = self.shape_table.resolve_ast_type(key_ast);
+                        self.check_map_key_type(&key, span);
+                    }
+                }
+                for arg in args {
+                    self.check_map_keys_in_ast_type(arg);
+                }
+            }
+            AstType::Maybe { inner, .. }
+            | AstType::ErrorCapable { inner, .. }
+            | AstType::Sensitive(inner) => self.check_map_keys_in_ast_type(inner),
+            AstType::Union { variants, .. } => {
+                for variant in variants {
+                    self.check_map_keys_in_ast_type(variant);
+                }
+            }
+            AstType::AnonShape { fields, .. } => {
+                for field in fields {
+                    self.check_map_keys_in_ast_type(&field.ty);
+                }
+            }
+            AstType::Nothing
+            | AstType::Int
+            | AstType::Float
+            | AstType::Number { .. }
+            | AstType::Bool
+            | AstType::Error
+            | AstType::Range { .. }
+            | AstType::SelfType { .. }
+            | AstType::Named(..)
+            | AstType::TypeParam { .. }
+            | AstType::Dynamic { .. } => {}
+        }
+    }
+
     fn collect_referenced_names_in_ast_type(
         &mut self,
         ast_ty: &AstType,
