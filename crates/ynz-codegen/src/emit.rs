@@ -2878,6 +2878,107 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         matches!(self.resolve_type(ty), Type::Number { precision } if precision <= 34)
     }
 
+    /// The LLVM type of one cell of a `fixed<elem>` block: the 16-byte decimal itself for a
+    /// decimal128 `number`, the uniform 8-byte i64 cell for everything else.
+    fn fixed_cell_llvm(&self, elem_ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
+        if self.is_inline_decimal(elem_ty) {
+            self.i128().into()
+        } else {
+            self.i64().into()
+        }
+    }
+
+    /// The byte size of one cell of a `fixed<elem>` block (see [`Cg::fixed_cell_llvm`]).
+    fn fixed_cell_bytes(&self, elem_ty: &Type) -> u64 {
+        if self.is_inline_decimal(elem_ty) {
+            DECIMAL_CELL_SIZE
+        } else {
+            8
+        }
+    }
+
+    /// The address of cell `index` of the `fixed<elem>` block at `cells`.
+    fn fixed_cell_ptr(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        elem_ty: &Type,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        // SAFETY: every caller bounds-checks `index` against the block's compile-time size.
+        unsafe {
+            self.builder
+                .build_gep(self.fixed_cell_llvm(elem_ty), cells, &[index], site)
+                .map_err(|e| format!("{site} fixed cell gep: {e}"))
+        }
+    }
+
+    /// Read cell `index` of a `fixed<elem>` block as a value: the cell's address for a decimal
+    /// (a number value is a pointer to its 16 bytes), the loaded i64 bits converted otherwise.
+    fn fixed_cell_value(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        elem_ty: &Type,
+        site: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let cell = self.fixed_cell_ptr(cells, index, elem_ty, site)?;
+        if self.is_inline_decimal(elem_ty) {
+            return Ok(cell.into());
+        }
+        let bits = self
+            .builder
+            .build_load(self.i64(), cell, &format!("{site}_bits"))
+            .map_err(|e| format!("{site} fixed cell load: {e}"))?
+            .into_int_value();
+        self.i64_bits_to(bits, elem_ty)
+    }
+
+    /// The i64 a `{flag, bits}` maybe envelope carries for cell `index`: the cell's address for a
+    /// decimal, the cell's bits otherwise.
+    fn fixed_cell_envelope_bits(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        elem_ty: &Type,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let cell = self.fixed_cell_ptr(cells, index, elem_ty, site)?;
+        if self.is_inline_decimal(elem_ty) {
+            return self
+                .builder
+                .build_ptr_to_int(cell, self.i64(), &format!("{site}_addr"))
+                .map_err(|e| format!("{site} fixed cell address: {e}"));
+        }
+        Ok(self
+            .builder
+            .build_load(self.i64(), cell, &format!("{site}_bits"))
+            .map_err(|e| format!("{site} fixed cell load: {e}"))?
+            .into_int_value())
+    }
+
+    /// Write the decimal at `value` into cell `index` of a `fixed<number>` block: the 16 bytes
+    /// are copied, so the source slot may be reused by the next statement.
+    fn fixed_cell_store_decimal(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        value: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let cell = self.fixed_cell_ptr(cells, index, &Type::Number { precision: 34 }, site)?;
+        self.builder
+            .build_memcpy(
+                cell,
+                1,
+                value,
+                1,
+                self.i64().const_int(DECIMAL_CELL_SIZE, false),
+            )
+            .map_err(|e| format!("{site} fixed decimal store: {e}"))?;
+        Ok(())
+    }
+
     // ── v0.3-M5 P5: SoA gather/scatter (design c) ────────────────────────────
     //
     // Admitted arrays keep the SAME `YnzArray` header and the same element-blind
@@ -10894,17 +10995,7 @@ fn lower_sm_for<'ctx, 'g>(
 
         cg.builder.position_at_end(body_bb);
         let arr_cur = lower_expr(cg, iter)?.into_pointer_value();
-        let gep = unsafe {
-            cg.builder
-                .build_gep(cg.i64(), arr_cur, &[idx_cur], "sm_ff_gep")
-                .map_err(|e| format!("{e}"))?
-        };
-        let bits = cg
-            .builder
-            .build_load(cg.i64(), gep, "sm_ff_bits")
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
-        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let elem_val = cg.fixed_cell_value(arr_cur, idx_cur, &elem, "sm_ff_gep")?;
         let var_slot = if let Some(&existing) = cg.locals.get(var) {
             existing
         } else {
@@ -17302,6 +17393,17 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                             soa_info.as_ref(),
                         )?;
                     }
+                    Type::BuiltinFixed { size, .. } if cg.is_inline_decimal(&elem_ty) => {
+                        // A `fixed<number>` cell is the 16-byte decimal itself: copy it in, so
+                        // the slot the value came from can be reused by the next statement.
+                        let _ = size;
+                        cg.fixed_cell_store_decimal(
+                            recv_val.into_pointer_value(),
+                            idx_val,
+                            elem_val.into_pointer_value(),
+                            "fixed_ia_dec",
+                        )?;
+                    }
                     Type::BuiltinFixed { size, .. } => {
                         // fixed<T> keeps its stack [N x i64] uniform-slot layout — the
                         // by-value heap-array ABI does not apply here. The slot PERSISTS
@@ -17971,17 +18073,7 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let elem_gep = unsafe {
-            cg.builder
-                .build_gep(cg.i64(), arr_ptr, &[i], "ff_gep")
-                .map_err(|e| format!("{e}"))?
-        };
-        let bits = cg
-            .builder
-            .build_load(cg.i64(), elem_gep, "ff_bits")
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
-        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let elem_val = cg.fixed_cell_value(arr_ptr, i, &elem, "ff_gep")?;
         let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "ff_elem")?;
         let elem_val = owned_elem.value;
         let var_slot = cg.alloca(&elem, var)?;
@@ -20578,7 +20670,10 @@ fn lower_expr_node<'ctx>(
             match &arr_ty {
                 Type::BuiltinFixed { elem, size } => {
                     let n = size.unwrap_or(elements.len()) as u32;
-                    let arr_t = cg.i64().array_type(n.max(1));
+                    let arr_t = match cg.fixed_cell_llvm(elem) {
+                        inkwell::types::BasicTypeEnum::IntType(cell) => cell.array_type(n.max(1)),
+                        _ => cg.i64().array_type(n.max(1)),
+                    };
                     let slot = cg
                         .builder
                         .build_alloca(arr_t, "fixed_arr")
@@ -20586,6 +20681,16 @@ fn lower_expr_node<'ctx>(
                     for (i, elem_expr) in elements.iter().enumerate() {
                         let elem_val = lower_expr(cg, elem_expr)?;
                         let elem_ty2 = cg.expr_type(elem_expr);
+                        if cg.is_inline_decimal(elem) {
+                            let idx = cg.i64().const_int(i as u64, false);
+                            cg.fixed_cell_store_decimal(
+                                slot,
+                                idx,
+                                elem_val.into_pointer_value(),
+                                "fixed_lit_dec",
+                            )?;
+                            continue;
+                        }
                         // Fixed slots persist past the element expr's site — shape/maybe
                         // bits must be stable (heap-cloned via the ONE choke point, fix
                         // round 4), or a later mutation of the source binding silently
@@ -20678,7 +20783,8 @@ fn lower_expr_node<'ctx>(
                     )?;
                     Ok(maybe_slot.into())
                 }
-                Type::BuiltinFixed { size, .. } => {
+                Type::BuiltinFixed { elem, size } => {
+                    let fixed_elem_ty = elem.as_ref().clone();
                     let n = size.unwrap_or(0) as u64;
                     let maybe_slot = cg
                         .builder
@@ -20712,16 +20818,8 @@ fn lower_expr_node<'ctx>(
                     // ok: load element and write maybe_some
                     cg.builder.position_at_end(ok_bb);
                     let arr_ptr = recv_val.into_pointer_value();
-                    let gep = unsafe {
-                        cg.builder
-                            .build_gep(cg.i64(), arr_ptr, &[idx], "fixed_elem_ok")
-                            .map_err(|e| format!("fixed gep ok: {e}"))?
-                    };
-                    let elem_bits = cg
-                        .builder
-                        .build_load(cg.i64(), gep, "elem_bits")
-                        .map_err(|e| format!("{e}"))?
-                        .into_int_value();
+                    let elem_bits =
+                        cg.fixed_cell_envelope_bits(arr_ptr, idx, &fixed_elem_ty, "fixed_elem_ok")?;
                     let has_ok = cg
                         .builder
                         .build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_ok")
@@ -24291,7 +24389,11 @@ fn emit_owned_copy<'ctx>(
         // cells, so `b = a.copy(); b.set(0, 99)` changed `a` too — the silent wrong answer this
         // emitter's whole existence is about.
         OwnedCopy::FixedMemcpy => {
-            let Type::BuiltinFixed { size, .. } = &resolved else {
+            let Type::BuiltinFixed {
+                size,
+                elem: fixed_elem,
+            } = &resolved
+            else {
                 return Err(format!(
                     "{site}: owned_copy_plan classified a non-fixed as FixedMemcpy"
                 ));
@@ -24302,8 +24404,11 @@ fn emit_owned_copy<'ctx>(
                      cannot be sized — this is a compiler bug"
                 )
             })? as u64;
-            let bytes = n * 8;
-            let cells_ty = cg.i64().array_type(n as u32);
+            let bytes = n * cg.fixed_cell_bytes(fixed_elem);
+            let cells_ty = match cg.fixed_cell_llvm(fixed_elem) {
+                inkwell::types::BasicTypeEnum::IntType(cell) => cell.array_type(n as u32),
+                _ => cg.i64().array_type(n as u32),
+            };
             let dst = match mode {
                 CopyMode::Body => cg
                     .builder
@@ -26901,16 +27006,7 @@ fn lower_fixed_method<'ctx>(
                 .map_err(|e| format!("{e}"))?;
 
             cg.builder.position_at_end(ok_bb);
-            let gep = unsafe {
-                cg.builder
-                    .build_gep(cg.i64(), arr, &[idx], "fg_elem")
-                    .map_err(|e| format!("{e}"))?
-            };
-            let bits = cg
-                .builder
-                .build_load(cg.i64(), gep, "bits")
-                .map_err(|e| format!("{e}"))?
-                .into_int_value();
+            let bits = cg.fixed_cell_envelope_bits(arr, idx, elem, "fg_elem")?;
             let has0 = cg
                 .builder
                 .build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_ok")
@@ -26956,6 +27052,10 @@ fn lower_fixed_method<'ctx>(
             let idx = lower_expr(cg, &args[0])?.into_int_value();
             let val = lower_expr(cg, &args[1])?;
             let vty = cg.expr_type(&args[1]);
+            if cg.is_inline_decimal(&vty) {
+                cg.fixed_cell_store_decimal(arr, idx, val.into_pointer_value(), "fs_dec")?;
+                return Ok(cg.i64().const_zero().into());
+            }
             // Persist surface: the fixed slot outlives the value expr's site —
             // shape/maybe bits route through the ONE stable-bits choke point
             // (fix round 4).

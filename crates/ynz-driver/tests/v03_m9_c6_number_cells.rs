@@ -137,3 +137,20 @@ fn maybe_number_read_from_an_element_survives_its_array_and_the_next_read() {
     );
     assert_prints(&source, "2.5 5.00 54 5.00\n");
 }
+
+#[test]
+fn fixed_of_numbers_holds_its_own_decimals() {
+    // Bug caught: `fixed<number>` cells holding the address of the number they were built from,
+    // so a later write to that binding changed the list, and a `set` of a loop body's slot read
+    // garbage at -O0. Tier: High.
+    let source = program(
+        "",
+        "  let seed: number = 1.5\n  let cells: fixed<number> = [seed, seed * 2.0]\n  seed = 9.0\n  \
+         let fallback: number = 0.0\n  print(`${cells[0].or(fallback)}`)\n  \
+         for (round in range(0, 2)) {\n    let step: number = seed * 2.0\n    cells.set(round, step)\n    \
+         seed = seed + 1.0\n  }\n  let total: number = 0.0\n  for (cell in cells) {\n    \
+         total = total + cell\n  }\n  \
+         print(`${cells[0].or(fallback)} ${cells[1].or(fallback)} ${total}`)\n",
+    );
+    assert_prints(&source, "1.5\n18.00 20.00 38.00\n");
+}
