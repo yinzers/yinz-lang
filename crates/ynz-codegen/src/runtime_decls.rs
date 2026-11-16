@@ -97,12 +97,12 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_map_new_decimal_keys(i64 elem_size) -> ptr: a map whose keys are decimal128 numbers held
     // inline (16 bytes), hashed and compared by value
     pub ynz_map_new_decimal_keys: FunctionValue<'ctx>,
-    // ynz_map_get_dec(ptr map, ptr key16, ptr out) -> i64 has-flag; same contract as ynz_map_get
-    pub ynz_map_get_dec: FunctionValue<'ctx>,
-    // ynz_map_set_dec(ptr map, ptr key16, ptr src, ptr value_glue, i32 values_inline) -> void
-    pub ynz_map_set_dec: FunctionValue<'ctx>,
-    // ynz_map_iter_get_dec(ptr map, i64 pos, ptr key16_out, ptr val_out) -> i64 has-flag
-    pub ynz_map_iter_get_dec: FunctionValue<'ctx>,
+    // ynz_map_get_decimal(ptr map, ptr key16, ptr out) -> i64 has-flag; same contract as ynz_map_get
+    pub ynz_map_get_decimal: FunctionValue<'ctx>,
+    // ynz_map_set_decimal(ptr map, ptr key16, ptr src, ptr value_glue, i32 values_inline) -> void
+    pub ynz_map_set_decimal: FunctionValue<'ctx>,
+    // ynz_map_iter_get_decimal(ptr map, i64 pos, ptr key16_out, ptr val_out) -> i64 has-flag
+    pub ynz_map_iter_get_decimal: FunctionValue<'ctx>,
     // ynz_map_get(ptr map, i64 key, ptr out) -> i64 has-flag; copies elem_size
     // value bytes into out on hit, zeroes out on miss
     pub ynz_map_get: FunctionValue<'ctx>,
@@ -525,22 +525,22 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_map_new_decimal_keys",
                 ptr.fn_type(&[i64.into()], false),
             ),
-            ynz_map_get_dec: declare_fn(
+            ynz_map_get_decimal: declare_fn(
                 module,
-                "ynz_map_get_dec",
+                "ynz_map_get_decimal",
                 i64.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
             ),
-            ynz_map_set_dec: declare_fn(
+            ynz_map_set_decimal: declare_fn(
                 module,
-                "ynz_map_set_dec",
+                "ynz_map_set_decimal",
                 void.fn_type(
                     &[ptr.into(), ptr.into(), ptr.into(), ptr.into(), i32.into()],
                     false,
                 ),
             ),
-            ynz_map_iter_get_dec: declare_fn(
+            ynz_map_iter_get_decimal: declare_fn(
                 module,
-                "ynz_map_iter_get_dec",
+                "ynz_map_iter_get_decimal",
                 i64.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into()], false),
             ),
             ynz_map_get: declare_fn(

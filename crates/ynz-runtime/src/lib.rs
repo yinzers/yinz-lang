@@ -1003,15 +1003,15 @@ unsafe fn val_slot(map: *const YnzMap, idx: usize) -> *mut u8 {
     (*map).vals.add(idx * (*map).elem_size as usize)
 }
 
-/// The address of key slot `idx` of a map of decimal128 keys: `keys + idx * 16`. Only a map made
+/// The address of key slot `slot_index` of a map of decimal128 keys: `keys + slot_index * 16`. Only a map made
 /// by [`ynz_map_new_decimal_keys`] has such slots; int and string maps index `keys` as i64.
-unsafe fn decimal_key_slot(map: *const YnzMap, idx: usize) -> *mut u8 {
-    ((*map).keys as *mut u8).add(idx * DECIMAL_KEY_SIZE as usize)
+unsafe fn decimal_key_slot(map: *const YnzMap, slot_index: usize) -> *mut u8 {
+    ((*map).keys as *mut u8).add(slot_index * DECIMAL_KEY_SIZE as usize)
 }
 
-/// The address of position `pos` of a decimal-keyed map's insertion-order buffer.
-unsafe fn decimal_order_slot(map: *const YnzMap, pos: usize) -> *mut u8 {
-    ((*map).insert_order as *mut u8).add(pos * DECIMAL_KEY_SIZE as usize)
+/// The address of position `position` of a decimal-keyed map's insertion-order buffer.
+unsafe fn decimal_order_slot(map: *const YnzMap, position: usize) -> *mut u8 {
+    ((*map).insert_order as *mut u8).add(position * DECIMAL_KEY_SIZE as usize)
 }
 
 unsafe fn map_alloc(capacity: i64, elem_size: i64, key_size: i64) -> *mut YnzMap {
@@ -1054,8 +1054,8 @@ pub unsafe extern "C" fn ynz_map_new(elem_size: i64) -> *mut YnzMap {
 }
 
 /// Allocate a new empty map of `elem_size`-byte values keyed by decimal128 `number`s, each key
-/// held inline (16 bytes). Use it with [`ynz_map_set_dec`], [`ynz_map_get_dec`] and
-/// [`ynz_map_iter_get_dec`] only; the i64 and string entry points would read a 16-byte key as 8.
+/// held inline (16 bytes). Use it with [`ynz_map_set_decimal`], [`ynz_map_get_decimal`] and
+/// [`ynz_map_iter_get_decimal`] only; the i64 and string entry points would read a 16-byte key as 8.
 /// Same abort and ownership contract as [`ynz_map_new`]; [`ynz_map_drop`] and [`ynz_map_clone`]
 /// read the key size from the map, and a number key owns nothing to release.
 ///
@@ -1168,27 +1168,27 @@ fn decimal_key_hash(bits: u128) -> u64 {
 
 /// THE decimal-key slot probe: the same bucket walk as `find_slot` and `find_slot_str`, comparing
 /// the 16 stored bytes of a candidate slot with `key` by VALUE (`ynz_numerics::key_equal`) — a
-/// bit comparison would tell `1.0` from `1.00`. Every decimal-key lookup (`ynz_map_get_dec`,
-/// `ynz_map_set_dec`'s overwrite check, `ynz_map_iter_get_dec`) routes through this one helper.
+/// bit comparison would tell `1.0` from `1.00`. Every decimal-key lookup (`ynz_map_get_decimal`,
+/// `ynz_map_set_decimal`'s overwrite check, `ynz_map_iter_get_decimal`) routes through this one helper.
 ///
 /// Time: O(1) expected, O(cap) worst case. Space: O(1).
-unsafe fn find_slot_dec(map: *const YnzMap, hash: u64, key: *const u8) -> Option<usize> {
+unsafe fn find_slot_decimal(map: *const YnzMap, hash: u64, key: *const u8) -> Option<usize> {
     let cap = (*map).capacity as usize;
     let (h2, start) = h2_and_start(hash, cap);
     let wanted = decimal_key_bits(key);
-    let mut idx = start;
+    let mut slot_index = start;
     loop {
-        let ctrl = *(*map).ctrl.add(idx);
+        let ctrl = *(*map).ctrl.add(slot_index);
         if ctrl == CTRL_EMPTY {
             return None;
         }
         if ctrl == h2
-            && ynz_numerics::key_equal(decimal_key_bits(decimal_key_slot(map, idx)), wanted)
+            && ynz_numerics::key_equal(decimal_key_bits(decimal_key_slot(map, slot_index)), wanted)
         {
-            return Some(idx);
+            return Some(slot_index);
         }
-        idx = (idx + 1) & (cap - 1);
-        if idx == start {
+        slot_index = (slot_index + 1) & (cap - 1);
+        if slot_index == start {
             return None;
         }
     }
@@ -1270,15 +1270,15 @@ unsafe fn map_grow(map: *mut YnzMap, hash_key: KeyHash) {
         }
         let old_key = old_keys.add(i * key_size);
         let hash = hash_key(old_key);
-        let (h2, mut idx) = h2_and_start(hash, new_cap as usize);
-        while *new_ctrl.add(idx) != CTRL_EMPTY {
-            idx = (idx + 1) & (new_cap as usize - 1);
+        let (h2, mut slot_index) = h2_and_start(hash, new_cap as usize);
+        while *new_ctrl.add(slot_index) != CTRL_EMPTY {
+            slot_index = (slot_index + 1) & (new_cap as usize - 1);
         }
-        *new_ctrl.add(idx) = h2;
-        std::ptr::copy_nonoverlapping(old_key, new_keys.add(idx * key_size), key_size);
+        *new_ctrl.add(slot_index) = h2;
+        std::ptr::copy_nonoverlapping(old_key, new_keys.add(slot_index * key_size), key_size);
         std::ptr::copy_nonoverlapping(
             val_slot(map, i),
-            new_vals.add(idx * elem_size as usize),
+            new_vals.add(slot_index * elem_size as usize),
             elem_size as usize,
         );
     }
@@ -1500,12 +1500,16 @@ pub unsafe extern "C" fn ynz_map_set_str(
 /// - `key` must be valid for 16 bytes (the runtime reads them before returning).
 /// - `out` must be a writable pointer valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_get_dec(map: *const YnzMap, key: *const u8, out: *mut u8) -> i64 {
+pub unsafe extern "C" fn ynz_map_get_decimal(
+    map: *const YnzMap,
+    key: *const u8,
+    out: *mut u8,
+) -> i64 {
     let elem_size = (*map).elem_size;
     let hash = decimal_key_hash(decimal_key_bits(key));
-    match find_slot_dec(map, hash, key) {
-        Some(idx) => {
-            std::ptr::copy_nonoverlapping(val_slot(map, idx), out, elem_size as usize);
+    match find_slot_decimal(map, hash, key) {
+        Some(slot_index) => {
+            std::ptr::copy_nonoverlapping(val_slot(map, slot_index), out, elem_size as usize);
             1
         }
         None => {
@@ -1528,7 +1532,7 @@ pub unsafe extern "C" fn ynz_map_get_dec(map: *const YnzMap, key: *const u8, out
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_set_dec(
+pub unsafe extern "C" fn ynz_map_set_decimal(
     map: *mut YnzMap,
     key: *const u8,
     src: *const u8,
@@ -1540,46 +1544,50 @@ pub unsafe extern "C" fn ynz_map_set_dec(
     }
     let elem_size = (*map).elem_size;
     let hash = decimal_key_hash(decimal_key_bits(key));
-    if let Some(idx) = find_slot_dec(map, hash, key) {
-        release_replaced_value(map, idx, value_glue, values_inline);
-        std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
+    if let Some(slot_index) = find_slot_decimal(map, hash, key) {
+        release_replaced_value(map, slot_index, value_glue, values_inline);
+        std::ptr::copy_nonoverlapping(src, val_slot(map, slot_index), elem_size as usize);
         return;
     }
     let (h2, _) = h2_and_start(hash, (*map).capacity as usize);
-    let idx = find_insert_slot(map, hash);
-    *(*map).ctrl.add(idx) = h2;
-    std::ptr::copy_nonoverlapping(key, decimal_key_slot(map, idx), DECIMAL_KEY_SIZE as usize);
-    std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
+    let slot_index = find_insert_slot(map, hash);
+    *(*map).ctrl.add(slot_index) = h2;
+    std::ptr::copy_nonoverlapping(
+        key,
+        decimal_key_slot(map, slot_index),
+        DECIMAL_KEY_SIZE as usize,
+    );
+    std::ptr::copy_nonoverlapping(src, val_slot(map, slot_index), elem_size as usize);
     order_push(map, key);
     (*map).count += 1;
 }
 
-/// Get the entry at insertion-order position `pos` of a decimal-keyed map: copies the 16 key
+/// Get the entry at insertion-order position `position` of a decimal-keyed map: copies the 16 key
 /// bytes into `key_out`, `elem_size` value bytes into `val_out`, and returns the has-flag (1 on
 /// success; 0 on out of range, with `key_out` and `val_out` zeroed).
 ///
-/// The slot lookup DELEGATES to `find_slot_dec`, like `ynz_map_iter_get_str` to its probe: a key
+/// The slot lookup DELEGATES to `find_slot_decimal`, like `ynz_map_iter_get_str` to its probe: a key
 /// is stored once, so the recorded key finds its own slot.
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new_decimal_keys` and not yet freed.
 /// - `key_out` must be writable for 16 bytes; `val_out` must be writable for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_iter_get_dec(
+pub unsafe extern "C" fn ynz_map_iter_get_decimal(
     map: *const YnzMap,
-    pos: i64,
+    position: i64,
     key_out: *mut u8,
     val_out: *mut u8,
 ) -> i64 {
     let elem_size = (*map).elem_size as usize;
-    if pos < 0 || pos >= (*map).count {
+    if position < 0 || position >= (*map).count {
         std::ptr::write_bytes(key_out, 0, DECIMAL_KEY_SIZE as usize);
         std::ptr::write_bytes(val_out, 0, elem_size);
         return 0;
     }
-    let recorded_key = decimal_order_slot(map, pos as usize);
+    let recorded_key = decimal_order_slot(map, position as usize);
     std::ptr::copy_nonoverlapping(recorded_key, key_out, DECIMAL_KEY_SIZE as usize);
-    ynz_map_get_dec(map, key_out, val_out)
+    ynz_map_get_decimal(map, key_out, val_out)
 }
 
 /// Return the number of key-value pairs.
@@ -5790,14 +5798,14 @@ mod release_walk_tests {
         );
     }
 
-    unsafe fn dec_get(map: *const YnzMap, key: &str) -> Option<i64> {
+    unsafe fn decimal_get(map: *const YnzMap, key: &str) -> Option<i64> {
         let mut out = [0u8; 8];
-        let found = ynz_map_get_dec(map, decimal(key).as_ptr(), out.as_mut_ptr());
+        let found = ynz_map_get_decimal(map, decimal(key).as_ptr(), out.as_mut_ptr());
         (found == 1).then(|| i64::from_ne_bytes(out))
     }
 
-    unsafe fn dec_set(map: *mut YnzMap, key: &str, value: i64) {
-        ynz_map_set_dec(
+    unsafe fn decimal_set(map: *mut YnzMap, key: &str, value: i64) {
+        ynz_map_set_decimal(
             map,
             decimal(key).as_ptr(),
             value.to_ne_bytes().as_ptr(),
@@ -5813,51 +5821,51 @@ mod release_walk_tests {
     fn decimal_keys_match_by_value_overwrite_grow_iterate_and_clone() {
         unsafe {
             let map = ynz_map_new_decimal_keys(8);
-            dec_set(map, "2.5", 1);
-            assert_eq!(dec_get(map, "2.50"), Some(1));
-            assert_eq!(dec_get(map, "2.6"), None);
-            dec_set(map, "2.500", 2);
+            decimal_set(map, "2.5", 1);
+            assert_eq!(decimal_get(map, "2.50"), Some(1));
+            assert_eq!(decimal_get(map, "2.6"), None);
+            decimal_set(map, "2.500", 2);
             assert_eq!(ynz_map_count(map), 1, "an equal key overwrites");
-            assert_eq!(dec_get(map, "2.5"), Some(2));
+            assert_eq!(decimal_get(map, "2.5"), Some(2));
 
             // Past several growths of the slot buffers and the order buffer (64 entries).
             for entry in 0..300i64 {
-                dec_set(map, &format!("{entry}.25"), entry);
+                decimal_set(map, &format!("{entry}.25"), entry);
             }
             assert_eq!(ynz_map_count(map), 301);
             for entry in 0..300i64 {
-                assert_eq!(dec_get(map, &format!("{entry}.250")), Some(entry));
+                assert_eq!(decimal_get(map, &format!("{entry}.250")), Some(entry));
             }
-            assert_eq!(dec_get(map, "2.5"), Some(2));
+            assert_eq!(decimal_get(map, "2.5"), Some(2));
 
             let mut key = [0u8; 16];
             let mut value = [0u8; 8];
             assert_eq!(
-                ynz_map_iter_get_dec(map, 0, key.as_mut_ptr(), value.as_mut_ptr()),
+                ynz_map_iter_get_decimal(map, 0, key.as_mut_ptr(), value.as_mut_ptr()),
                 1
             );
             assert_eq!(key, decimal("2.5"), "the first spelling is the stored key");
             assert_eq!(i64::from_ne_bytes(value), 2);
             assert_eq!(
-                ynz_map_iter_get_dec(map, 1, key.as_mut_ptr(), value.as_mut_ptr()),
+                ynz_map_iter_get_decimal(map, 1, key.as_mut_ptr(), value.as_mut_ptr()),
                 1
             );
             assert_eq!(key, decimal("0.25"));
             assert_eq!(i64::from_ne_bytes(value), 0);
             assert_eq!(
-                ynz_map_iter_get_dec(map, 301, key.as_mut_ptr(), value.as_mut_ptr()),
+                ynz_map_iter_get_decimal(map, 301, key.as_mut_ptr(), value.as_mut_ptr()),
                 0
             );
             assert_eq!(key, [0u8; 16]);
 
             let copy = ynz_map_clone(map);
-            dec_set(map, "2.5", 99);
-            dec_set(map, "7", 7);
-            assert_eq!(dec_get(copy, "2.50"), Some(2), "a copy is independent");
-            assert_eq!(dec_get(copy, "7"), None);
+            decimal_set(map, "2.5", 99);
+            decimal_set(map, "7", 7);
+            assert_eq!(decimal_get(copy, "2.50"), Some(2), "a copy is independent");
+            assert_eq!(decimal_get(copy, "7"), None);
             assert_eq!(ynz_map_count(copy), 301);
             assert_eq!(
-                ynz_map_iter_get_dec(copy, 300, key.as_mut_ptr(), value.as_mut_ptr()),
+                ynz_map_iter_get_decimal(copy, 300, key.as_mut_ptr(), value.as_mut_ptr()),
                 1
             );
             assert_eq!(key, decimal("299.25"));
@@ -5883,15 +5891,15 @@ mod release_walk_tests {
                 ("1E+33", 7),
                 ("1000000000000000000000000000000000", 8),
             ] {
-                dec_set(map, key, value);
+                decimal_set(map, key, value);
             }
             assert_eq!(ynz_map_count(map), 5, "NaN, +inf, -inf, zero, 10^33");
-            assert_eq!(dec_get(map, "NaN"), Some(2));
-            assert_eq!(dec_get(map, "Inf"), Some(3));
-            assert_eq!(dec_get(map, "-Inf"), Some(4));
-            assert_eq!(dec_get(map, "0E+5"), Some(6));
-            assert_eq!(dec_get(map, "10E+32"), Some(8));
-            assert_eq!(dec_get(map, "1"), None);
+            assert_eq!(decimal_get(map, "NaN"), Some(2));
+            assert_eq!(decimal_get(map, "Inf"), Some(3));
+            assert_eq!(decimal_get(map, "-Inf"), Some(4));
+            assert_eq!(decimal_get(map, "0E+5"), Some(6));
+            assert_eq!(decimal_get(map, "10E+32"), Some(8));
+            assert_eq!(decimal_get(map, "1"), None);
             ynz_map_release(map, None, None, 0);
         }
     }

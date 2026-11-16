@@ -2848,8 +2848,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Other elements are 8-byte cells holding the i64-bit convention
     /// (int/float/bool by value; string/every other pointer type as pointer bits —
     /// scratch-doc Option A). A decimal128 `number` is stored inline, 16 bytes
-    /// ([`DECIMAL_CELL_SIZE`]), like a Rust `Vec<Decimal>` element. Shape elements are stored inline at the
-    /// shape's LLVM ABI byte size, read from `shape_abi_sizes`
+    /// ([`DECIMAL_CELL_SIZE`]), like a Rust `Vec<Decimal>` element. Shape elements are stored
+    /// inline at the shape's LLVM ABI byte size, read from `shape_abi_sizes`
     /// (TargetData-accurate, computed once per module) — never re-derived here.
     fn array_elem_size(&self, elem_ty: &Type) -> Result<u64, String> {
         match self.resolve_type(elem_ty) {
@@ -2880,12 +2880,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// The LLVM type of one cell of a `fixed<elem>` block: the 16-byte decimal itself for a
     /// decimal128 `number`, the uniform 8-byte i64 cell for everything else.
-    fn fixed_cell_llvm(&self, elem_ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
+    fn fixed_cell_llvm(&self, elem_ty: &Type) -> inkwell::types::IntType<'ctx> {
         if self.is_inline_decimal(elem_ty) {
-            self.i128().into()
+            self.i128()
         } else {
-            self.i64().into()
+            self.i64()
         }
+    }
+
+    /// The LLVM type of a whole `fixed<elem>` block of `count` cells.
+    fn fixed_block_type(&self, elem_ty: &Type, count: u32) -> inkwell::types::ArrayType<'ctx> {
+        self.fixed_cell_llvm(elem_ty).array_type(count)
     }
 
     /// The byte size of one cell of a `fixed<elem>` block (see [`Cg::fixed_cell_llvm`]).
@@ -2909,7 +2914,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         unsafe {
             self.builder
                 .build_gep(self.fixed_cell_llvm(elem_ty), cells, &[index], site)
-                .map_err(|e| format!("{site} fixed cell gep: {e}"))
+                .map_err(|err| format!("{site} fixed cell gep: {err}"))
         }
     }
 
@@ -2929,7 +2934,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let bits = self
             .builder
             .build_load(self.i64(), cell, &format!("{site}_bits"))
-            .map_err(|e| format!("{site} fixed cell load: {e}"))?
+            .map_err(|err| format!("{site} fixed cell load: {err}"))?
             .into_int_value();
         self.i64_bits_to(bits, elem_ty)
     }
@@ -2948,12 +2953,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return self
                 .builder
                 .build_ptr_to_int(cell, self.i64(), &format!("{site}_addr"))
-                .map_err(|e| format!("{site} fixed cell address: {e}"));
+                .map_err(|err| format!("{site} fixed cell address: {err}"));
         }
         Ok(self
             .builder
             .build_load(self.i64(), cell, &format!("{site}_bits"))
-            .map_err(|e| format!("{site} fixed cell load: {e}"))?
+            .map_err(|err| format!("{site} fixed cell load: {err}"))?
             .into_int_value())
     }
 
@@ -2975,7 +2980,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 1,
                 self.i64().const_int(DECIMAL_CELL_SIZE, false),
             )
-            .map_err(|e| format!("{site} fixed decimal store: {e}"))?;
+            .map_err(|err| format!("{site} fixed decimal store: {err}"))?;
         Ok(())
     }
 
@@ -3603,7 +3608,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   (`value_to_stable_bits` in `array_elem_src_ptr`), cloning envelope +
     ///   shape payload into counted heap cells. Fix round 3.
     /// - **Fixed-array element writes** (index-assign / `.set()` / literal
-    ///   fill): a PERSIST surface — the `[N x i64]` stack slots outlive the
+    ///   fill): a PERSIST surface — the `[N x i64]` stack slots (`[N x i128]` for a decimal128
+    ///   `number`, copied in whole) outlive the
     ///   producing site's next execution, and there is NO runtime memcpy
     ///   backstop (fixed never migrated to the by-value heap ABI). Shape and
     ///   maybe elements route through the ONE marshalling choke point
@@ -4096,7 +4102,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         1,
                         self.i64().const_int(DECIMAL_CELL_SIZE, false),
                     )
-                    .map_err(|e| format!("maybe_payload_stable_bits number memcpy: {e}"))?;
+                    .map_err(|err| format!("maybe_payload_stable_bits number memcpy: {err}"))?;
                 owned_pay
             }
             WidePayload::String => {
@@ -6155,8 +6161,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   the 8-byte cell persists inside the buffer. Fix round 3; tripwire
     ///   `m5_p2_byval_array_maybe_elem_write_escape`. (Shape elements never
     ///   reach this helper from arrays — they memcpy by value inline.)
-    /// - **Fixed-array element slots** (uniform `[N x i64]` stack layout — the
-    ///   by-value heap ABI does not apply): ALL THREE write sites —
+    /// - **Fixed-array element slots** (`[N x i64]` stack layout, `[N x i128]` for a
+    ///   decimal128 `number` — the by-value heap ABI does not apply): ALL THREE write sites —
     ///   index-assign, `.set()`, and the literal fill. Fix round 4 (the
     ///   round-3 closer's surfaced deviation); tripwires
     ///   `m5_p2_byval_fixed_*escape*`. Shape AND maybe elements clone here;
@@ -6235,8 +6241,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // maybe-valued entry's bits are a stable heap cell today —
                 // the write-side marshal above minted it — but cloning keeps
                 // this arm correct if that ever changes). The KEY half is
-                // always self-contained (i64 bits or a stable heap string
-                // pointer) — the memcpy above already owns it.
+                // self-contained for an int, bool, float or string key (i64 bits or a stable heap
+                // string pointer: the memcpy above owns it); a decimal key's bits are the address
+                // of the loop's per-site key buffer, which the next iteration overwrites.
                 let resolved_val_ty = self.resolve_type(entry_val_ty);
                 if matches!(resolved_val_ty, Type::Shape { .. } | Type::Maybe { .. })
                     || self.is_inline_decimal(&resolved_val_ty)
@@ -6293,14 +6300,21 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     // — one derivation for both collection ABIs, never a map-side twin.
 
     /// How a map of `key_ty` keys stores and compares them: a string by pointer, a decimal128
-    /// `number` inline in 16 bytes (hashed and compared by value), anything else as i64 bits.
-    fn map_key_kind(&self, key_ty: &Type) -> MapKeyKind {
-        if key_is_string(&self.resolve_type(key_ty)) {
-            MapKeyKind::Str
-        } else if self.is_inline_decimal(key_ty) {
-            MapKeyKind::Number
-        } else {
-            MapKeyKind::Int
+    /// `number` inline in 16 bytes (hashed and compared by value), an `int`, `bool` or `float` as
+    /// i64 bits. Any other key type (a `number<N>` past 34 digits, a `sensitive` string, a shape)
+    /// has no key family in the runtime, so it is an error here and not an i64 of pointer bits.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn map_key_kind(&self, key_ty: &Type) -> Result<MapKeyKind, String> {
+        let resolved = self.resolve_type(key_ty);
+        match resolved {
+            Type::String => Ok(MapKeyKind::String),
+            Type::Number { precision } if precision <= 34 => Ok(MapKeyKind::Number),
+            Type::Int | Type::Bool | Type::Float => Ok(MapKeyKind::Int),
+            other => Err(format!(
+                "codegen: a map keyed by {other:?} has no runtime key kind (keys are string, \
+                 number up to 34 digits, int, bool or float): this is a compiler bug"
+            )),
         }
     }
 
@@ -6314,7 +6328,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         kind: MapKeyKind,
     ) -> Result<inkwell::values::BasicMetadataValueEnum<'ctx>, String> {
         match kind {
-            MapKeyKind::Str | MapKeyKind::Number => Ok(value.into()),
+            MapKeyKind::String | MapKeyKind::Number => Ok(value.into()),
             MapKeyKind::Int => Ok(self.to_i64_bits(value, value_ty)?.into()),
         }
     }
@@ -6322,9 +6336,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Per-site ENTRY-BLOCK buffer an iteration reads a map key into: 16 bytes for a decimal key,
     /// one i64 cell otherwise (a string key arrives as its stored pointer).
     fn map_key_out_buffer(&self, key_ty: &Type, site: &str) -> Result<PointerValue<'ctx>, String> {
-        match self.map_key_kind(key_ty) {
+        match self.map_key_kind(key_ty)? {
             MapKeyKind::Number => self.alloca_in_entry_llvm(self.i128(), site),
-            MapKeyKind::Str | MapKeyKind::Int => self.alloca_in_entry_llvm(self.i64(), site),
+            MapKeyKind::String | MapKeyKind::Int => self.alloca_in_entry_llvm(self.i64(), site),
         }
     }
 
@@ -6337,16 +6351,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         key_ty: &Type,
         site: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        match self.map_key_kind(key_ty) {
+        match self.map_key_kind(key_ty)? {
             MapKeyKind::Number => self
                 .builder
                 .build_ptr_to_int(key_out, self.i64(), site)
-                .map_err(|e| format!("map key address: {e}")),
-            MapKeyKind::Str | MapKeyKind::Int => self
+                .map_err(|err| format!("map key address: {err}")),
+            MapKeyKind::String | MapKeyKind::Int => self
                 .builder
                 .build_load(self.i64(), key_out, site)
-                .map(|v| v.into_int_value())
-                .map_err(|e| format!("map key load: {e}")),
+                .map(|value| value.into_int_value())
+                .map_err(|err| format!("map key load: {err}")),
         }
     }
 
@@ -6362,9 +6376,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ) -> Result<PointerValue<'ctx>, String> {
         let elem_size = self.array_elem_size(val_ty)?;
         let size_const = self.i64().const_int(elem_size, false);
-        let constructor = match self.map_key_kind(key_ty) {
+        let constructor = match self.map_key_kind(key_ty)? {
             MapKeyKind::Number => self.rt.ynz_map_new_decimal_keys,
-            MapKeyKind::Str | MapKeyKind::Int => self.rt.ynz_map_new,
+            MapKeyKind::String | MapKeyKind::Int => self.rt.ynz_map_new,
         };
         let v = self
             .builder
@@ -6377,7 +6391,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Insert/overwrite one value (the ONLY ynz_map_set / ynz_map_set_str call
-    /// sites in codegen; the decimal one is `ynz_map_set_dec`). `key` is the
+    /// sites in codegen; the decimal one is `ynz_map_set_decimal`). `key` is the
     /// already-marshalled key operand (`map_key_operand`): i64 bits for int-keyed
     /// maps, a string pointer for str-keyed maps, a pointer to the 16 decimal
     /// bytes for number-keyed maps (copied into the map before the call returns).
@@ -6397,7 +6411,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         val_ty: &Type,
         site: &str,
     ) -> Result<(), String> {
-        let is_str = kind == MapKeyKind::Str;
+        let is_str = kind == MapKeyKind::String;
         // A string key is stored by its pointer: the map owns its own copy of it.
         let key: inkwell::values::BasicMetadataValueEnum<'ctx> = if is_str {
             let key_value = BasicValueEnum::try_from(key)
@@ -6408,8 +6422,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         };
         let src = self.array_elem_src_ptr(val, val_ty, site)?;
         let callee = match kind {
-            MapKeyKind::Str => self.rt.ynz_map_set_str,
-            MapKeyKind::Number => self.rt.ynz_map_set_dec,
+            MapKeyKind::String => self.rt.ynz_map_set_str,
+            MapKeyKind::Number => self.rt.ynz_map_set_decimal,
             MapKeyKind::Int => self.rt.ynz_map_set,
         };
         // What a set over a present key replaces is released: the old value by the value type's
@@ -6459,8 +6473,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         site: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let callee = match kind {
-            MapKeyKind::Str => self.rt.ynz_map_get_str,
-            MapKeyKind::Number => self.rt.ynz_map_get_dec,
+            MapKeyKind::String => self.rt.ynz_map_get_str,
+            MapKeyKind::Number => self.rt.ynz_map_get_decimal,
             MapKeyKind::Int => self.rt.ynz_map_get,
         };
         let flag = self
@@ -6508,7 +6522,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Read the entry at insertion-order `pos` (the ONLY ynz_map_iter_get /
-    /// ynz_map_iter_get_str / ynz_map_iter_get_dec call sites in codegen). Writes the key into
+    /// ynz_map_iter_get_str / ynz_map_iter_get_decimal call sites in codegen). Writes the key into
     /// `key_out` (a `map_key_out_buffer`: an i64 slot, where a str-keyed map receives the stored
     /// key POINTER as i64 bits, or 16 bytes for a number key) and the value bytes into `val_out`
     /// (an `array_elem_out_buffer`).
@@ -6523,8 +6537,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         site: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let callee = match kind {
-            MapKeyKind::Str => self.rt.ynz_map_iter_get_str,
-            MapKeyKind::Number => self.rt.ynz_map_iter_get_dec,
+            MapKeyKind::String => self.rt.ynz_map_iter_get_str,
+            MapKeyKind::Number => self.rt.ynz_map_iter_get_decimal,
             MapKeyKind::Int => self.rt.ynz_map_iter_get,
         };
         let flag = self
@@ -11190,7 +11204,7 @@ fn lower_sm_for<'ctx, 'g>(
         // shared array/map get-side ownership contract — reused per iteration).
         let key_slot = cg.map_key_out_buffer(&key_ty, "sm_mf_key")?;
         let val_out = cg.array_elem_out_buffer(&val_ty, "sm_mf_val")?;
-        let key_kind = cg.map_key_kind(&key_ty);
+        let key_kind = cg.map_key_kind(&key_ty)?;
         cg.map_iter_get_into(map_cur, idx_cur, key_kind, key_slot, val_out, "sm_mf_iter")?;
         let k_val = cg.map_key_bits_from_out(key_slot, &key_ty, "sm_mf_kv")?;
         // Entry val bits: shape values carry the out-buffer pointer as i64 bits
@@ -17417,7 +17431,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 let key_ty = key.as_ref().clone();
                 let val_ty = val.as_ref().clone();
                 let key_val = lower_expr(cg, index)?;
-                let key_kind = cg.map_key_kind(&key_ty);
+                let key_kind = cg.map_key_kind(&key_ty)?;
                 let index_ty = cg.expr_type(index);
                 let key_operand = cg.map_key_operand(key_val, &index_ty, key_kind)?;
                 cg.map_val_set(
@@ -17444,15 +17458,14 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                             soa_info.as_ref(),
                         )?;
                     }
-                    Type::BuiltinFixed { size, .. } if cg.is_inline_decimal(&elem_ty) => {
+                    Type::BuiltinFixed { .. } if cg.is_inline_decimal(&elem_ty) => {
                         // A `fixed<number>` cell is the 16-byte decimal itself: copy it in, so
                         // the slot the value came from can be reused by the next statement.
-                        let _ = size;
                         cg.fixed_cell_store_decimal(
                             recv_val.into_pointer_value(),
                             idx_val,
                             elem_val.into_pointer_value(),
-                            "fixed_ia_dec",
+                            "fixed_ia_decimal",
                         )?;
                     }
                     Type::BuiltinFixed { size, .. } => {
@@ -18231,7 +18244,7 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let key_kind = cg.map_key_kind(&key_ty);
+        let key_kind = cg.map_key_kind(&key_ty)?;
         cg.map_iter_get_into(map_ptr, i, key_kind, key_slot, val_out, "mf_iter")?;
         let k_val = cg.map_key_bits_from_out(key_slot, &key_ty, "mf_kv")?;
         // Entry val bits: shape values carry the out-buffer pointer as i64 bits
@@ -20675,7 +20688,7 @@ fn lower_expr_node<'ctx>(
             if let Type::BuiltinMap { key, val } = cg.expr_type(expr) {
                 let val_ty = val.as_ref().clone();
                 let key_ty = key.as_ref().clone();
-                if !fields.is_empty() && cg.map_key_kind(&key_ty) != MapKeyKind::Str {
+                if !fields.is_empty() && cg.map_key_kind(&key_ty)? != MapKeyKind::String {
                     return Err(format!(
                         "codegen: `{{ name: value }}` fields are string keys, but the map is keyed by {key_ty:?}"
                     ));
@@ -20688,7 +20701,7 @@ fn lower_expr_node<'ctx>(
                     cg.map_val_set(
                         map_ptr,
                         key_ptr.into(),
-                        MapKeyKind::Str,
+                        MapKeyKind::String,
                         val_val,
                         &val_ty,
                         "imap_set",
@@ -20724,10 +20737,7 @@ fn lower_expr_node<'ctx>(
             match &arr_ty {
                 Type::BuiltinFixed { elem, size } => {
                     let n = size.unwrap_or(elements.len()) as u32;
-                    let arr_t = match cg.fixed_cell_llvm(elem) {
-                        inkwell::types::BasicTypeEnum::IntType(cell) => cell.array_type(n.max(1)),
-                        _ => cg.i64().array_type(n.max(1)),
-                    };
+                    let arr_t = cg.fixed_block_type(elem, n.max(1));
                     let slot = cg
                         .builder
                         .build_alloca(arr_t, "fixed_arr")
@@ -20736,12 +20746,12 @@ fn lower_expr_node<'ctx>(
                         let elem_val = lower_expr(cg, elem_expr)?;
                         let elem_ty2 = cg.expr_type(elem_expr);
                         if cg.is_inline_decimal(elem) {
-                            let idx = cg.i64().const_int(i as u64, false);
+                            let cell_index = cg.i64().const_int(i as u64, false);
                             cg.fixed_cell_store_decimal(
                                 slot,
-                                idx,
+                                cell_index,
                                 elem_val.into_pointer_value(),
-                                "fixed_lit_dec",
+                                "fixed_lit_decimal",
                             )?;
                             continue;
                         }
@@ -20799,7 +20809,7 @@ fn lower_expr_node<'ctx>(
                 let key_ty = key.as_ref().clone();
                 let val_ty = val.as_ref().clone();
                 let idx_val = lower_expr(cg, index)?;
-                let key_kind = cg.map_key_kind(&key_ty);
+                let key_kind = cg.map_key_kind(&key_ty)?;
                 let index_ty = cg.expr_type(index);
                 let key_operand = cg.map_key_operand(idx_val, &index_ty, key_kind)?;
                 let maybe_slot = cg.map_val_get_maybe(
@@ -20922,7 +20932,7 @@ fn lower_expr_node<'ctx>(
             for (key_expr, val_expr) in entries {
                 let key_val = lower_expr(cg, key_expr)?;
                 let val_val = lower_expr(cg, val_expr)?;
-                let key_kind = cg.map_key_kind(&key_ty);
+                let key_kind = cg.map_key_kind(&key_ty)?;
                 let key_expr_ty = cg.expr_type(key_expr);
                 let key_operand = cg.map_key_operand(key_val, &key_expr_ty, key_kind)?;
                 cg.map_val_set(map_ptr, key_operand, key_kind, val_val, &val_ty, "map_set")?;
@@ -21938,7 +21948,7 @@ fn lower_expr_background<'ctx>(
                 let slot = cg
                     .builder
                     .build_int_to_ptr(bits, cg.ptr(), "cl_union_slot")
-                    .map_err(|e| format!("closure union slot: {e}"))?;
+                    .map_err(|err| format!("closure union slot: {err}"))?;
                 // The view's frame envelope belongs to the closure, not to the spawning
                 // function whose `current_fn` the emitter still holds.
                 let spawning_fn = std::mem::replace(&mut cg.current_fn, closure_fn);
@@ -21948,7 +21958,7 @@ fn lower_expr_background<'ctx>(
             }
             None => cg
                 .i64_bits_to(bits, ty)
-                .map_err(|e| format!("closure i64_bits_to: {e}"))?,
+                .map_err(|err| format!("closure i64_bits_to: {err}"))?,
         };
         call_args.push(val.into());
     }
@@ -23654,7 +23664,14 @@ fn to_c_string<'ctx>(
             // (shared array/map get-side ownership contract).
             let key_slot = cg.alloca_in_entry_llvm(cg.i64(), "mdbg_key")?;
             let val_out = cg.array_elem_out_buffer(&val_ty, "mdbg_val")?;
-            cg.map_iter_get_into(map_ptr, i, MapKeyKind::Str, key_slot, val_out, "mdbg_iter")?;
+            cg.map_iter_get_into(
+                map_ptr,
+                i,
+                MapKeyKind::String,
+                key_slot,
+                val_out,
+                "mdbg_iter",
+            )?;
 
             let key_ptr = cg
                 .builder
@@ -24440,10 +24457,7 @@ fn emit_owned_copy<'ctx>(
                 )
             })? as u64;
             let bytes = n * cg.fixed_cell_bytes(fixed_elem);
-            let cells_ty = match cg.fixed_cell_llvm(fixed_elem) {
-                inkwell::types::BasicTypeEnum::IntType(cell) => cell.array_type(n as u32),
-                _ => cg.i64().array_type(n as u32),
-            };
+            let cells_ty = cg.fixed_block_type(fixed_elem, n as u32);
             let dst = match mode {
                 CopyMode::Body => cg
                     .builder
@@ -24787,7 +24801,7 @@ fn emit_map_values_deep_copy<'ctx>(
     if is_string_like(&value_ty) || !cg.field_needs_deepen(&value_ty) {
         return Ok(());
     }
-    let key_kind = cg.map_key_kind(key_ty);
+    let key_kind = cg.map_key_kind(key_ty)?;
     let i64_ty = cg.i64();
     let count = cg.map_count_val(map, &format!("{site}_values_count"))?;
     let position_slot = cg.alloca_in_entry_llvm(i64_ty, &format!("{site}_values_i"))?;
@@ -24868,65 +24882,69 @@ fn emit_map_values_deep_copy<'ctx>(
     }
     let null = cg.ptr().const_null();
     let zero = cg.i32().const_zero();
-    if key_kind == MapKeyKind::Number {
-        // The key sits in its 16-byte buffer; the runtime copies it and finds the cloned entry
-        // (an equal key), so only the value is replaced.
-        cg.builder
-            .build_call(
-                cg.rt.ynz_map_set_dec,
-                &[
-                    map.into(),
-                    key_slot.into(),
-                    value_buffer.into(),
-                    null.into(),
-                    zero.into(),
-                ],
-                "",
-            )
-            .map_err(|err| format!("{site} map values set: {err}"))?;
-    } else if key_kind == MapKeyKind::Str {
-        let key_bits = cg
-            .builder
-            .build_load(i64_ty, key_slot, &format!("{site}_values_key_bits"))
-            .map_err(|err| format!("{site} map values key: {err}"))?
-            .into_int_value();
-        let key = cg
-            .builder
-            .build_int_to_ptr(key_bits, cg.ptr(), &format!("{site}_values_key_ptr"))
-            .map_err(|err| format!("{site} map values key ptr: {err}"))?;
-        cg.builder
-            .build_call(
-                cg.rt.ynz_map_set_str,
-                &[
-                    map.into(),
-                    key.into(),
-                    value_buffer.into(),
-                    null.into(),
-                    null.into(),
-                    zero.into(),
-                ],
-                "",
-            )
-            .map_err(|err| format!("{site} map values set: {err}"))?;
-    } else {
-        let key_bits = cg
-            .builder
-            .build_load(i64_ty, key_slot, &format!("{site}_values_key_bits"))
-            .map_err(|err| format!("{site} map values key: {err}"))?
-            .into_int_value();
-        cg.builder
-            .build_call(
-                cg.rt.ynz_map_set,
-                &[
-                    map.into(),
-                    key_bits.into(),
-                    value_buffer.into(),
-                    null.into(),
-                    zero.into(),
-                ],
-                "",
-            )
-            .map_err(|err| format!("{site} map values set: {err}"))?;
+    match key_kind {
+        MapKeyKind::Number => {
+            // The key sits in its 16-byte buffer; the runtime copies it and finds the cloned entry
+            // (an equal key), so only the value is replaced.
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_set_decimal,
+                    &[
+                        map.into(),
+                        key_slot.into(),
+                        value_buffer.into(),
+                        null.into(),
+                        zero.into(),
+                    ],
+                    "",
+                )
+                .map_err(|err| format!("{site} map values set: {err}"))?;
+        }
+        MapKeyKind::String => {
+            let key_bits = cg
+                .builder
+                .build_load(i64_ty, key_slot, &format!("{site}_values_key_bits"))
+                .map_err(|err| format!("{site} map values key: {err}"))?
+                .into_int_value();
+            let key = cg
+                .builder
+                .build_int_to_ptr(key_bits, cg.ptr(), &format!("{site}_values_key_ptr"))
+                .map_err(|err| format!("{site} map values key ptr: {err}"))?;
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_set_str,
+                    &[
+                        map.into(),
+                        key.into(),
+                        value_buffer.into(),
+                        null.into(),
+                        null.into(),
+                        zero.into(),
+                    ],
+                    "",
+                )
+                .map_err(|err| format!("{site} map values set: {err}"))?;
+        }
+        MapKeyKind::Int => {
+            let key_bits = cg
+                .builder
+                .build_load(i64_ty, key_slot, &format!("{site}_values_key_bits"))
+                .map_err(|err| format!("{site} map values key: {err}"))?
+                .into_int_value();
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_set,
+                    &[
+                        map.into(),
+                        key_bits.into(),
+                        value_buffer.into(),
+                        null.into(),
+                        zero.into(),
+                    ],
+                    "",
+                )
+                .map_err(|err| format!("{site} map values set: {err}"))?;
+        }
     }
     let next = cg
         .builder
@@ -25942,7 +25960,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 /// `release_glue_free_kind`); otherwise the slot's contents are released and the cell freed by
 /// the one release helper.
 ///
-/// Time: O(1) here, O(n) at run time in the cells the union owns  Space: O(1)
+/// Time: O(1) here, O(n) at run time in the cells the union owns; Space: O(1)
 fn bg_union_arg_cell<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     value: PointerValue<'ctx>,
@@ -25968,7 +25986,7 @@ fn bg_union_arg_cell<'ctx>(
     let bits = cg
         .builder
         .build_ptr_to_int(cell, cg.i64(), "bg_union_bits")
-        .map_err(|e| format!("bg union cell bits: {e}"))?;
+        .map_err(|err| format!("bg union cell bits: {err}"))?;
     Ok((bits, kind))
 }
 
@@ -27109,7 +27127,7 @@ fn lower_fixed_method<'ctx>(
             let val = lower_expr(cg, &args[1])?;
             let vty = cg.expr_type(&args[1]);
             if cg.is_inline_decimal(&vty) {
-                cg.fixed_cell_store_decimal(arr, idx, val.into_pointer_value(), "fs_dec")?;
+                cg.fixed_cell_store_decimal(arr, idx, val.into_pointer_value(), "fs_decimal")?;
                 return Ok(cg.i64().const_zero().into());
             }
             // Persist surface: the fixed slot outlives the value expr's site —
@@ -27573,7 +27591,7 @@ enum MapKeyKind {
     /// An int, bool or float key: its 8 bytes as i64 bits.
     Int,
     /// A string key: a pointer to its bytes, compared by content.
-    Str,
+    String,
     /// A decimal128 `number` key: held inline in 16 bytes, hashed and compared by value.
     Number,
 }
@@ -27588,7 +27606,7 @@ fn lower_map_method<'ctx>(
     method: &str,
     args: &[Expr],
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    let key_kind = cg.map_key_kind(key_ty);
+    let key_kind = cg.map_key_kind(key_ty)?;
     match method {
         "count" => {
             let n = cg.map_count_val(map, "mc")?;
