@@ -318,3 +318,104 @@ fn a_maybe_channel_an_imported_function_returns_outlives_its_arguments_owner() {
         assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n1\n");
     });
 }
+
+// ── Item 5: a `MapEntry` spawned to a task keeps its own decimal key ────────────────────────
+
+const A_MAP_ENTRY_WITH_A_DECIMAL_KEY_IS_SPAWNED: &str = "
+function work(e: MapEntry<number<10>, int>) -> nothing {
+  print(e.key)
+}
+function entrypoint() -> nothing {
+  let table: map<number<10>, int> = { 1.5: 1, 2.5: 2, 3.5: 3 }
+  for (entry in table) {
+    background work(entry)
+  }
+  wait sleep(200)
+}
+";
+
+#[test]
+fn a_map_entry_spawned_to_a_task_keeps_its_own_decimal_key() {
+    // Bug (High: a task reads a buffer the next iteration overwrote, or freed memory): the stable
+    // copy of a spawned `MapEntry` copied the value half and left a decimal KEY as the address of the
+    // loop's per-site key buffer. The three tasks printed `3.5` and then garbage. The tasks run
+    // concurrently, so the lines are compared as a set.
+    at_both_optimization_levels(|no_optimize| {
+        let built = support::build_source(
+            A_MAP_ENTRY_WITH_A_DECIMAL_KEY_IS_SPAWNED,
+            "map_entry_decimal_key",
+            no_optimize,
+        );
+        let output = std::process::Command::new(&built.binary)
+            .output()
+            .expect("run the program");
+        let mut lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        lines.sort();
+        assert_eq!(
+            lines,
+            vec!["1.5", "2.5", "3.5"],
+            "no_optimize={no_optimize}: stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    });
+}
+
+/// `ynz build` of `program`: its exit status and the text it printed.
+fn build_result(program: &str, label: &str) -> (bool, String) {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let source = directory.path().join("program.ynz");
+    std::fs::write(&source, program).expect("write the program");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ynz"))
+        .arg("build")
+        .arg(&source)
+        .env("CLICOLOR", "0")
+        .output()
+        .unwrap_or_else(|err| panic!("{label}: spawn `ynz build`: {err}"));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (output.status.success(), text)
+}
+
+/// A `for (entry in table)` body that keeps `entry` somewhere that outlives the iteration.
+fn entry_escape(body: &str) -> String {
+    format!(
+        "shape Holder {{\n  entry: MapEntry<number<10>, int>\n}}\n\
+         function entrypoint() -> nothing {{\n  let table: map<number<10>, int> = {{ 1.5: 1 }}\n  \
+         let list: array<MapEntry<number<10>, int>> = []\n  let wire: channel<MapEntry<number<10>, int>> = channel<MapEntry<number<10>, int>>()\n  \
+         for (entry in table) {{\n    {body}\n  }}\n}}\n"
+    )
+}
+
+#[test]
+fn typeck_refuses_every_way_a_map_entry_outlives_its_iteration() {
+    // Evidence for the C7 item 5 claim (High: an entry points at the loop's per-site staging, whose
+    // decimal key and value buffers the next iteration overwrites). Each escape is refused at
+    // compile time; the one accepted use that keeps an entry beyond the iteration is a `background`
+    // argument, which `value_to_stable_bits` re-homes (the case above).
+    let refused_by_a_store = [
+        ("let", "let kept = entry"),
+        ("list add", "list.add(entry)"),
+        ("shape literal", "let holder: Holder = { entry: entry }"),
+        ("array literal", "let items = [entry]"),
+    ];
+    for (label, body) in refused_by_a_store {
+        let (built, text) = build_result(&entry_escape(body), label);
+        assert!(!built, "{label}: `{body}` must not compile:\n{text}");
+        assert!(
+            text.contains("gives `entry` away"),
+            "{label}: refused for another reason:\n{text}"
+        );
+    }
+    let (built, text) = build_result(&entry_escape("wire.send(entry)"), "send");
+    assert!(!built, "a send of an entry must not compile:\n{text}");
+    assert!(text.contains("is not supported yet"), "send: {text}");
+    let (built, text) = build_result(&entry_escape("let copied = entry.copy()"), "copy");
+    assert!(!built, "a copy of an entry must not compile:\n{text}");
+    assert!(text.contains("cannot make a separate `MapEntry"), "copy: {text}");
+}

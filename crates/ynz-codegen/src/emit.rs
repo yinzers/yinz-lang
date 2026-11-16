@@ -6269,8 +6269,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|e| format!("maybe value cell bits {site}: {e}"))
             }
             Type::MapEntry {
+                key: ref entry_key_ty,
                 val: ref entry_val_ty,
-                ..
             } => {
                 // P3 step 5(b): a MapEntry value is a pointer to the map loop
                 // arm's PER-SITE {i64 key_bits, i64 val_bits} entry struct —
@@ -6304,7 +6304,32 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // this arm correct if that ever changes). The KEY half is
                 // self-contained for an int, bool, float or string key (i64 bits or a stable heap
                 // string pointer: the memcpy above owns it); a decimal key's bits are the address
-                // of the loop's per-site key buffer, which the next iteration overwrites.
+                // of the loop's per-site key buffer, which the next iteration overwrites, so it is
+                // copied into a heap cell of its own below (leaked with the value sub-cell, the
+                // accounted persist-cell class).
+                if self.is_inline_decimal(&self.resolve_type(entry_key_ty)) {
+                    let kslot = self
+                        .builder
+                        .build_struct_gep(entry_ty, cell, 0, &format!("{site}_me_k"))
+                        .map_err(|e| format!("{e}"))?;
+                    let kbits = self
+                        .builder
+                        .build_load(self.i64(), kslot, &format!("{site}_me_kbits"))
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let kptr = self
+                        .builder
+                        .build_int_to_ptr(kbits, self.ptr(), &format!("{site}_me_kptr"))
+                        .map_err(|e| format!("{e}"))?;
+                    let kcell = self.number_to_heap_cell(kptr, &format!("{site}_me_key"))?;
+                    let new_kbits = self
+                        .builder
+                        .build_ptr_to_int(kcell, self.i64(), &format!("{site}_me_knew"))
+                        .map_err(|e| format!("{e}"))?;
+                    self.builder
+                        .build_store(kslot, new_kbits)
+                        .map_err(|e| format!("{e}"))?;
+                }
                 let resolved_val_ty = self.resolve_type(entry_val_ty);
                 if matches!(resolved_val_ty, Type::Shape { .. } | Type::Maybe { .. })
                     || self.is_inline_decimal(&resolved_val_ty)
