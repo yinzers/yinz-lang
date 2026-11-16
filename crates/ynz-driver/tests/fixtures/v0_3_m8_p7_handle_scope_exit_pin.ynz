@@ -1,11 +1,10 @@
-// v0.3-M8 Phase 7 (Track 3, Branch B — RE-DEFER) — pins TODAY's handle-scope-exit semantics.
+// v0.3-M9 C8 (card #385) — a handle binding leaving its scope stops its task.
 //
-// The handle `h` is bound inside a block that exits while the child is still mid-work. No
-// scope-exit release pass exists for any local (registry `background-handle-cancel-injection`),
-// so leaving the block does NOT cancel the child: it runs to completion and prints
-// `child: done` while the parent is still alive. When the drop-story milestone lands its
-// scope-exit release pass, the handle arm calls `ynz_handle_free` here and the child is stopped
-// at its next suspension — `child: done` disappears, and this fixture's pin flips.
+// The handle `h` is bound inside a block that exits while the child is still mid-work. The
+// scope-exit release of the block calls `ynz_handle_free`, which stops the child at its next
+// suspension: `child: after first sleep` and `child: done` are lost, the parent's three lines
+// are not (`v03_m8_handle_scope_pin.rs`). Before C8 a suspending function released nothing, so
+// the child ran to completion here.
 function worker() -> int errors {
   wait sleep(20)
   print(`child: after first sleep`)
