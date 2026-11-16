@@ -24651,10 +24651,9 @@ fn sole_holder_transfer_free_kind<'ctx>(
         ynz_typeck::owned_copy::OwnedCopy::ArrayClone { .. } => {
             Some(BgArgFreeKind::HeapArrayPrimitive)
         }
-        // `BgArgFreeKind::None` is what the `MapClone` SpawnArg emission returns too: the drop
-        // ladder still has no map kind (that arm's own four-field deferral). Transferring is
-        // strictly better than copying anyway — one allocation instead of two, and the one
-        // that leaks is the one the program already made.
+        // `BgArgFreeKind::None` is what the `MapClone` SpawnArg emission returns too:
+        // `release_glue_free_kind` upgrades both to the map's release glue. Transferring is
+        // strictly better than copying — one allocation instead of two.
         ynz_typeck::owned_copy::OwnedCopy::MapClone => Some(BgArgFreeKind::None),
         // A `maybe` envelope is an entry-block alloca unless `emit_owned_copy` heap-celled it.
         ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone if minted_here => {
