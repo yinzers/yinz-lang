@@ -46,15 +46,18 @@ fn bignum_map_key_is_refused_with_a_teaching_diagnostic() {
 }
 
 #[test]
-fn sensitive_string_map_key_is_a_key_found_by_its_text() {
-    // Bug caught: a `sensitive string` key refused although the map holds, compares and releases
-    // it exactly as a `string`. Covers has, get, overwrite, growth, copy, return from its
-    // producer and iteration (a key prints as [REDACTED]). Tier: Medium.
-    assert_fixture_prints(
-        "v0_3_m9_c6b_map_key_sensitive_accepted.ynz",
-        false,
-        "true\n1\n2\n10\nfalse\n102\n102 103\n[REDACTED]\n",
-        "a `sensitive string` map key must be accepted and found by its text",
+fn sensitive_string_map_key_is_refused_with_a_teaching_diagnostic() {
+    // Bug caught: a `sensitive string` key compiled, so the map released the secret as an ordinary
+    // string and compared it with a comparison that is not constant-time (Product Manager ruling
+    // A, C7 review r1). Tier: Medium.
+    assert_refused_with(
+        "v0_3_m9_c6b_map_key_sensitive_refused.ynz",
+        &[
+            "A `map` cannot be keyed by `sensitive string`.",
+            "Key the map by a plain `string` or an `int` that is not a secret",
+            "`map<string, sensitive string>`",
+            "not constant-time",
+        ],
     );
 }
 

@@ -47,6 +47,7 @@ const TEMPLATES_WITHOUT_A_VARIANT: &[&str] = &[
     "UnionWhereVariantExpectedNoIsArm",
     "UnionVariantNotStorableNumberPrecision",
     "MapKeyNotStorableWideNumber",
+    "MapKeyNotStorableSensitive",
 ];
 
 /// PRE-EXISTING variant-backed templates whose emit sites still hand-write their text
@@ -1221,7 +1222,8 @@ fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles
 fn map_key_not_storable_is_rendered_from_the_registry() {
     // WHY: v0.3-M9 C6 follow-up — a shape key, a key of any other type and a `number` of more
     // than 34 digits each get their own true reason, from one registry home. A `number` key of
-    // 34 digits and a `sensitive string` key are map keys and get no diagnostic.
+    // 34 digits is a map key and gets no diagnostic. A `sensitive string` key is refused for its
+    // own reason (Product Manager ruling A, C7 review r1).
     assert_rendered(
         DiagnosticKind::MapKeyNotStorable,
         "shape Point { x: int }\n\
@@ -1267,9 +1269,19 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
          }",
         &[("key", "number<50>"), ("digits", "50")],
     );
+    assert_template_rendered(
+        "MapKeyNotStorableSensitive",
+        DiagnosticKind::MapKeyNotStorable,
+        "function entrypoint() -> nothing {\n\
+           let secrets: map<sensitive string, int> = {}\n\
+           print(secrets.count())\n\
+         }",
+        &[("key", "sensitive string")],
+    );
+    // The way out the sensitive-key refusal names, and the other keys a map holds.
     for accepted in [
         "map<number<34>, int>",
-        "map<sensitive string, int>",
+        "map<string, sensitive string>",
         "map<string, Point>",
     ] {
         assert_compiles(&format!(

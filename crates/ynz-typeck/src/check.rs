@@ -8920,15 +8920,17 @@ impl<'b> Checker<'b> {
     /// bytes (a `number` of up to 34 digits, `MAX_MAP_KEY_NUMBER_DIGITS`). A `number` of more digits
     /// is a variable-size heap object, a shape or an array is made of other values, so its slot
     /// would hold only an address and an equal key would be found at another one and miss. A
-    /// `sensitive string` is a `string` to the map (same slot, same release, same comparison), so
-    /// it is a key. Codegen's `map_key_kind` mirrors this list and only asserts it. An `Error` key
-    /// was reported where it was written, and a type parameter `K` is not known until an instance
-    /// binds it, so neither is reported here.
+    /// `sensitive string` has the string's slot but is refused anyway: a map would release the key
+    /// as an ordinary string and compare keys with a comparison that is not constant-time (Product
+    /// Manager ruling A, C7 review r1). Codegen's `map_key_kind` mirrors this list and only asserts
+    /// it. An `Error` key was reported where it was written, and a type parameter `K` is not known
+    /// until an instance binds it, so neither is reported here.
     ///
     /// Time: O(1)  Space: O(1)
     fn check_map_key_type(&mut self, key: &Type, span: &SourceSpan) {
         let shown = match key {
             Type::Number { precision } => format!("number<{precision}>"),
+            Type::Sensitive { .. } => "sensitive string".to_string(),
             other => type_name(other),
         };
         let diagnostic = match key {
@@ -8938,8 +8940,13 @@ impl<'b> Checker<'b> {
             | Type::Float
             | Type::Error
             | Type::TypeParam { .. } => return,
-            Type::Sensitive { inner } if matches!(inner.as_ref(), Type::String) => return,
             Type::Number { precision } if *precision <= MAX_MAP_KEY_NUMBER_DIGITS => return,
+            Type::Sensitive { .. } => registry_diag_template(
+                span.clone(),
+                DiagnosticKind::MapKeyNotStorable,
+                "MapKeyNotStorableSensitive",
+                &[("key", shown.as_str())],
+            ),
             Type::Number { precision } => {
                 let digits = precision.to_string();
                 registry_diag_template(

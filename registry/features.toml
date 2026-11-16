@@ -1814,6 +1814,17 @@ what_template = "A `map` cannot be keyed by `{key}`."
 what_instead_template = "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`)."
 why_template = "A map keeps a `number` key inside its own 16-byte slot, which holds up to 34 digits. A `{key}` can have up to {digits} digits and takes as much memory as its digits need, kept outside the map, so it does not fit in the slot. The slot could hold only its address, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
 
+# The same refusal for a `sensitive string` key: selected by `check_map_key_type`; the diagnostic
+# carries `MapKeyNotStorable`. `{key}` is the type (`sensitive string`). The reason is the secret
+# handling, not the slot: a map would release the key as an ordinary string and compare keys with
+# a comparison that is not constant-time. Decided v0.3-M9 C7 review r1 (Product Manager ruling A):
+# `git log --grep="sensitive map keys"`.
+[[diagnostic_template]]
+kind_name = "MapKeyNotStorableSensitive"
+what_template = "A `map` cannot be keyed by `{key}`."
+what_instead_template = "Key the map by a plain `string` or an `int` that is not a secret, such as an id or a name, and keep the secret as the map's value: `map<string, sensitive string>`."
+why_template = "A `{key}` is a secret. A map would free a key as an ordinary string and would compare keys with a comparison that is not constant-time: it takes longer the more leading bytes two keys share, so how long a lookup takes could reveal part of a secret."
+
 # v0.3-M9 C6 (parked 71): `background eat(choice)` with `choice` a union and `function eat<T>(held:
 # T)`. A task copies a union argument into a slot of its own, which exists only when the callee
 # declares the union type. Rendered by `check_background_union_argument_for_generic_callee`;
