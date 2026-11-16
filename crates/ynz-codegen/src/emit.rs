@@ -25439,20 +25439,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// True when a binding of the (resolved) type `ty` is one the plain emitter releases at its
-    /// scope exits: an array, a map, or a shape with no shape-typed field (strings, channels and
-    /// handles are never copied by a spawn). Mirrors `heap_class_of`'s split between `Shape` and
-    /// `NestedShape` (a shape-typed field is a heap cell).
+    /// scope exits: an array, a map, or a shape, flat or nested (`ReleaseKind::Shape` and
+    /// `NestedShape`; strings, channels and handles are never copied by a spawn). A shape the
+    /// shape table does not describe is not released here.
     ///
-    /// Time: O(f) for f fields  Space: O(1)
+    /// Time: O(1)  Space: O(1)
     fn plain_releases_type(&self, ty: &Type) -> bool {
         match ty {
             Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
-            Type::Shape { name } => self.shape_table.layout_shape(name).is_some_and(|shape| {
-                !shape
-                    .fields
-                    .iter()
-                    .any(|field| matches!(field.ty, Type::Shape { .. } | Type::Generic { .. }))
-            }),
+            Type::Shape { name } => self.shape_table.layout_shape(name).is_some(),
             _ => false,
         }
     }
@@ -26145,11 +26140,11 @@ fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
         | ReleaseKind::Map
         | ReleaseKind::Channel
         | ReleaseKind::TaskHandle
-        | ReleaseKind::Shape => true,
-        // SLICE 3: a nested shape, `maybe`, union view, `fixed` and errors-capable slot keep
-        // today's behaviour (no release). `dynamic` and a map entry never own a local slot.
-        ReleaseKind::NestedShape
-        | ReleaseKind::Maybe
+        | ReleaseKind::Shape
+        | ReleaseKind::NestedShape => true,
+        // SLICE 3: a `maybe`, union view, `fixed` and errors-capable slot keep today's behaviour
+        // (no release). `dynamic` and a map entry never own a local slot.
+        ReleaseKind::Maybe
         | ReleaseKind::Union
         | ReleaseKind::Fixed
         | ReleaseKind::ErrorsCapable
@@ -26358,7 +26353,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 | (ReleaseKind::Map, ReleaseStep::Map { .. })
                 | (ReleaseKind::Channel, ReleaseStep::Channel)
                 | (ReleaseKind::TaskHandle, ReleaseStep::Handle)
-                | (ReleaseKind::Shape, ReleaseStep::Shape { .. })
+                | (ReleaseKind::Shape | ReleaseKind::NestedShape, ReleaseStep::Shape { .. })
         );
         if !kind_matches_type {
             return Err(format!(

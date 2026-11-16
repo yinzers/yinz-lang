@@ -9,7 +9,8 @@
 // receiver, so the output cannot show a wrong read; the count pins the copy.
 // Allocations: the build of the no-write twin (7), the overwriting literal's `rows` array (2) and
 // the one receiver copy's `rows` array (2) = 11. Releases: the replaced element's `rows` array (2)
-// and the copy's (2) = 4.
+// and the copy's (2) plus `world` and its nested `bucket` released at the scope exit (C7 slice 3)
+// = 11: every allocation is freed.
 
 shape Bucket {
   rows: array<int>

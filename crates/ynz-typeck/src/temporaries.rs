@@ -342,7 +342,11 @@ impl Walk<'_> {
         matches!(
             heap_class_of(ty, &self.facts.tables),
             HeapClass::Heap(
-                ReleaseKind::String | ReleaseKind::Array | ReleaseKind::Map | ReleaseKind::Shape
+                ReleaseKind::String
+                    | ReleaseKind::Array
+                    | ReleaseKind::Map
+                    | ReleaseKind::Shape
+                    | ReleaseKind::NestedShape
             )
         )
     }

@@ -4,7 +4,7 @@
 // one call is no method chain, and the receiver needs no `let` (a `let` would copy it).
 // Allocations: `world`'s nested `bucket` (1 for the box, 2 for its `rows` array: header and
 // buffer), `first`'s `rows` array (2) and the list of one `Bucket` (2) = 7. The call copies no
-// receiver, and nothing is released before the program ends.
+// receiver; the scope exit releases all 7 (C7 slice 3: nested shapes are released).
 
 shape Bucket {
   rows: array<int>

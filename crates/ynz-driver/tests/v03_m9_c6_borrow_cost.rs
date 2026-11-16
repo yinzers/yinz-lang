@@ -189,7 +189,7 @@ cost_case!(
     "v0_3_m9_c6_cost_ufcs_receiver_no_write.ynz",
     "3\n",
     7,
-    0,
+    7,
     "a dotted UFCS receiver (`world.bucket.total(world.owners)`) copied although no argument of the call writes the world (cost, Rule 8)"
 );
 cost_case!(
@@ -197,7 +197,7 @@ cost_case!(
     "v0_3_m9_c6_cost_ufcs_receiver_write.ynz",
     "3\n",
     11,
-    4,
+    11,
     "a dotted UFCS receiver (`world.bucket.total(world.owners)`) read after another argument's `lend` of its root overwrote an element, or a copy never released (High)"
 );
 cost_case!(
