@@ -3983,6 +3983,21 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let moved = self.is_moved_cells(src_env);
         let final_bits =
             self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap, moved, take)?;
+        // A `maybe` of an envelope union holds a VIEW of a slot someone else owns (an element's, a
+        // field's, a per-site wrap's): a binding that keeps it would release what that owner
+        // releases, so the payload is copied into a slot of the binding's own, deep like every union
+        // copy (`union_to_owned`). A moved source hands its slot over, and a value a call returned
+        // already sits in a slot of the caller's (`take`). A stored form keeps the view.
+        let final_bits = if !heap && !take && !moved {
+            match self.envelope_union_variants(&self.resolve_type(inner_ty)) {
+                Some(variants) => {
+                    self.maybe_union_payload_copy(flag, bits, &variants, site)?
+                }
+                None => final_bits,
+            }
+        } else {
+            final_bits
+        };
 
         let dst_flag_gep = self
             .builder
@@ -4002,6 +4017,63 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.free_minted_maybe_cell(src_env, site)?;
         }
         Ok(owned_env)
+    }
+
+    /// The bits of a `maybe` of the envelope union `variants` after its payload is copied into a
+    /// slot of the binding's own: when `flag` is set, the view `bits` name is deep-copied
+    /// (`union_to_owned`) and the bits are the copy's view; `none` keeps its bits.
+    ///
+    /// Time: O(1) to emit; the copy it emits is as `union_persist_into`  Space: O(1) entry slot
+    fn maybe_union_payload_copy(
+        &self,
+        flag: inkwell::values::IntValue<'ctx>,
+        bits: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let has = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_has_union"),
+            )
+            .map_err(|err| format!("{site}: maybe union flag compare: {err}"))?;
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_union_copy"));
+        let cont_bb = self.append_block(&format!("{site}_union_cont"));
+        self.builder
+            .build_conditional_branch(has, copy_bb, cont_bb)
+            .map_err(|err| format!("{site}: maybe union branch: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let view = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_union_src"))
+            .map_err(|err| format!("{site}: maybe union view cast: {err}"))?;
+        let owned_view = self.union_to_owned(view, variants, &format!("{site}_maybe"))?;
+        let owned_bits = self
+            .builder
+            .build_ptr_to_int(owned_view, self.i64(), &format!("{site}_union_own_bits"))
+            .map_err(|err| format!("{site}: maybe union owned bits: {err}"))?;
+        // The copy may have opened blocks of its own; the phi's edge is where it ended.
+        let copy_end_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|err| format!("{site}: maybe union join: {err}"))?;
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.i64(), &format!("{site}_union_bits"))
+            .map_err(|err| format!("{site}: maybe union phi: {err}"))?;
+        phi.add_incoming(&[(&owned_bits, copy_end_bb), (&bits, pre_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
     }
 
     /// Give back the empty envelope cell an explicit `.copy()` of a `maybe` minted
@@ -26611,6 +26683,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             ReleaseStep::Array { .. } | ReleaseStep::Map { .. } if local => self
                 .release_fn(&inner, false)?
                 .map(|glue| glue.as_global_value().as_pointer_value()),
+            // A local `maybe` of an envelope union owns the union slot its view names (a copy
+            // `maybe_to_owned` made, or the slot a call's result landed in): the variant it holds
+            // is released through the view, as a local union binding's is. A stored `maybe` of a
+            // union has no release here.
+            ReleaseStep::Union { .. }
+                if local && self.envelope_union_variants(&inner).is_some() =>
+            {
+                self.release_form_fn(&inner, ReleaseForm::Local)?
+                    .map(|glue| glue.as_global_value().as_pointer_value())
+            }
             // A local `maybe` of a channel owns one counted reference (its holder took it or was
             // handed it); a `maybe` stored in a shape field or a list does not release it here.
             ReleaseStep::Channel if local => Some(

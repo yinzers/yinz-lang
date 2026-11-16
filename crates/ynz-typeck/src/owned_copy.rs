@@ -475,7 +475,7 @@ pub fn copy_is_independent(ty: &Type) -> bool {
 /// (`effective_ownership`'s `returns_fresh`), so the caller's binding takes it without a second
 /// copy. THE one answer for typeck's call-result classification and codegen's return seam
 /// (`authoritative-derivation.md`): a `string`, an `array`, a `map`, a shape, a `channel` and a
-/// `maybe` of one, a `maybe` of a string, shape or number, and a union with a shape variant. A channel's copy is a counted reference (`ynz_channel_share`,
+/// `maybe` of one, a `maybe` of a string, shape, number or union with a shape variant, and a union with a shape variant. A channel's copy is a counted reference (`ynz_channel_share`,
 /// the count channels already have), so a returned channel is one reference the caller owns and
 /// gives back once. Any other type returns what it names (a task handle has no copy, and a type
 /// parameter is only known per instance).
@@ -500,6 +500,9 @@ pub fn copied_at_return(ty: &Type) -> bool {
             Type::BuiltinChannel { .. } | Type::String => true,
             Type::Shape { name } => !name.is_empty(),
             Type::Number { precision } => *precision <= 34,
+            // A `maybe` of a union with a shape variant returns the union's slot by value, its payload a
+            // deep copy unless the value moves (the `Type::Maybe` return of an envelope union).
+            union @ Type::Union { .. } => crate::check::is_envelope_union(union),
             _ => false,
         },
         // A union with a shape variant is returned by value with its payload inline; its `return`
