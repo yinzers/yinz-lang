@@ -11557,7 +11557,8 @@ fn lower_sm_for<'ctx, 'g>(
         };
         let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
         let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "sm_ff_elem")?;
-        let held_copy = body_suspends && owned_elem.copied && hold_loop_copy(cg, owned_elem.value, &elem)?;
+        let held_copy =
+            body_suspends && owned_elem.copied && hold_loop_copy(cg, owned_elem.value, &elem)?;
         store(cg, owned_elem.value, &elem, var_slot)?;
         flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
 
@@ -16091,25 +16092,67 @@ fn stage_suspending_call_arg_bits<'ctx>(
                 .map_err(|e| format!("sm arg staging dec ptr_to_int {name}: {e}"));
         }
     }
+    let callee_takes_it = matches!(
+        cg.suspending_callee_param_ownership(callee_name, index),
+        Some(Some(OwnershipModifier::Give))
+    );
     if matches!(arg, Expr::StructLit { .. }) {
         // Exception 2 (doc above): anonymous aggregate — stage from a counted heap
         // cell via the one stable-bits marshalling point, never the dying stack temp.
         let arg_val = lower_expr(cg, arg)?;
         let arg_ty = cg.expr_type(arg);
-        return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
+        let Type::Shape { name: shape_name } = cg.resolve_type(&arg_ty) else {
+            return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
+        };
+        // The literal is fresh and nobody else holds it, so the cell TAKES its boxes instead of
+        // cloning them (the literal's own strings were never released: a statement temporary
+        // of a shape has no frame slot until C8 slice 4, and that release must then skip this
+        // literal). The cell is the argument's only owner: a `share` or bare position leaves it
+        // to the caller, which frees it when the statement ends, after the call completed.
+        let literal = arg_val.into_pointer_value();
+        cg.moved_cell_values.insert(literal.as_value_ref() as usize);
+        let cell = cg.shape_bytes_to_heap_cell(literal, &shape_name, "sm_arg_anon")?;
+        if !callee_takes_it {
+            cg.hold_copy_in_frame(cell, &arg_ty, ReleaseForm::Cell)?;
+        }
+        return cg
+            .builder
+            .build_ptr_to_int(cell, cg.i64(), "sm_arg_anon_bits")
+            .map_err(|err| format!("sm arg anon cell bits: {err}"));
     }
     let arg_val = lower_expr(cg, arg)?;
     let arg_ty = cg.expr_type(arg);
     // An argument typeck judged a copy (`non_owned_reads`) is copied here. The callee suspends,
-    // so no instruction after the call in this resume function can release the copy: it is
-    // released at C8's frame release (deferred, `IMP-ownership.md` "Non-owned reads").
+    // so the copy's pointer is held in a slot of the heap frame (`Cg::hold_copy_in_frame`), which
+    // the statement's end releases.
     let arg_span = arg.span();
     let arg_val = if cg
         .typed
         .non_owned_reads
         .must_copy(arg_span.start, arg_span.end)
     {
-        own_read_for_store(cg, arg, arg_val, &arg_ty, false, "sm_arg_copy")?.value
+        let owned = own_read_for_store(cg, arg, arg_val, &arg_ty, false, "sm_arg_copy")?;
+        // The caller releases the copy when the statement ends, after the callee completed; a
+        // `give` position is the callee's to release. Only a string, array or map is held (the
+        // kinds a heap frame slot keeps; any other kind leaks until C8 slice 4).
+        if owned.copied
+            && !callee_takes_it
+            && owned.release_target.is_none()
+            && owned.value.is_pointer_value()
+        {
+            let resolved = cg.resolve_type(&arg_ty);
+            if matches!(
+                release_step(&resolved),
+                ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+            ) {
+                cg.hold_copy_in_frame(
+                    owned.value.into_pointer_value(),
+                    &resolved,
+                    ReleaseForm::Local,
+                )?;
+            }
+        }
+        owned.value
     } else {
         arg_val
     };

@@ -71,6 +71,23 @@ macro_rules! balanced_fixture {
     };
 }
 
+/// `deferred_fixture!(case, "fixture.ynz", "producer: what leaks", "why it waits")` is `balanced_fixture!` for a
+/// producer that belongs to a later slice than the one the red test was filed under: the same body, with its
+/// own `#[ignore]` reason.
+macro_rules! deferred_fixture {
+    ($case:ident, $fixture:literal, $bug:literal, $reason:literal) => {
+        #[doc = $bug]
+        #[test]
+        #[ignore = $reason]
+        fn $case() {
+            at_both_optimization_levels(|no_optimize| {
+                let built = build($fixture, no_optimize);
+                assert_run_balances(&built, $bug, None, no_optimize);
+            });
+        }
+    };
+}
+
 /// `balanced_program!(case, SOURCE, "stdout", "producer: what leaks")`: the generated program,
 /// built and run at both optimization levels, prints `stdout` and frees what it allocates.
 macro_rules! balanced_program {
@@ -277,16 +294,17 @@ green_fixture!(
     "producer P3 (loop copies): the copy of a loop variable written in a suspending body is never released"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p4_suspending_call_argument_copy,
     "v0_3_m6_anon_struct_arg_pure_call.ynz",
     "producer P4 (suspending-call argument copies): the shape literal staged into `wait crew({ ... })` is copied and never released"
 );
 
-balanced_fixture!(
+deferred_fixture!(
     producer_p4_suspending_call_maybe_argument_copy,
     "v0_3_m6_maybe_arg_pure_call.ynz",
-    "producer P4 (suspending-call argument copies): the `maybe` staged into a suspending call is copied and never released"
+    "producer P4 (suspending-call argument copies): the `maybe` staged into a suspending call is copied and never released",
+    "planned RED (v0.3-M9 C8 slice 4): not an argument copy. The call stages the pointer of the crossing `maybe<int>` local `m` as it is; the leak is the local's own envelope cell (`m_env_cell`), a `maybe` local in a resume function, which `releases_in_instance` declines until slice 4"
 );
 
 green_fixture!(
@@ -470,4 +488,30 @@ green_program!(
     SM_LOOP_COPY_EARLY_RETURN,
     "v-1\n7\n",
     "slice 3: a `return` inside a suspending loop body leaves the loop variable's copy unreleased"
+);
+
+/// P4 with a string, array or map copy: an argument read from a place another argument of the same suspending
+/// call lends is copied (`MustCopy`), and the caller releases the copy when the statement ends
+/// (High-risk class: a data-integrity pairing, Medium tier: one integration test). Before slice 3 the
+/// copy was never released.
+const SM_STAGED_ARGUMENT_COPY: &str = "
+function use(share first: array<int>, lend rows: array<array<int>>) -> int {
+  wait sleep(1)
+  rows.add([9])
+  return first.count()
+}
+
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[1, 2, 3]]
+  let fallback: array<int> = [0]
+  let counted = wait use(rows[0].or(fallback), rows)
+  print(counted.toString())
+}
+";
+
+green_program!(
+    sm_staged_argument_copy_is_released_when_the_statement_ends,
+    SM_STAGED_ARGUMENT_COPY,
+    "3\n",
+    "slice 3: the copy of an argument staged into a suspending call is released at the statement end"
 );
