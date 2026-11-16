@@ -19609,6 +19609,12 @@ fn own_returned_value<'ctx>(
         return Ok(val);
     }
     let ty = cg.expr_type(expr);
+    // A channel, or a `maybe` of one, is returned as one counted reference the caller owns: a value
+    // that moves (a fresh one, an owned local at its last use) hands over the reference it holds, any
+    // other read (a parameter, an element, a field) takes a reference of its own.
+    if let Some(shared) = share_returned_channel(cg, val, &ty, site)? {
+        return Ok(shared);
+    }
     if !ynz_typeck::owned_copy::copied_at_return(&cg.resolve_type(&ty)) {
         return Ok(val);
     }
@@ -19622,6 +19628,47 @@ fn own_returned_value<'ctx>(
             .insert(owned.value.as_value_ref() as usize);
     }
     Ok(owned.value)
+}
+
+/// The value a `return` hands back for a channel or a `maybe` of one that does not move: a counted
+/// reference of its own (`ynz_channel_share`). `None` for any other type, and for a value that
+/// moves (it keeps the reference it holds).
+///
+/// O(1) time.
+fn share_returned_channel<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    site: &str,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    if !val.is_pointer_value() {
+        return Ok(None);
+    }
+    let pointer = val.into_pointer_value();
+    match cg.resolve_type(ty) {
+        Type::BuiltinChannel { .. } => {
+            if cg.is_moved_cells(pointer) {
+                return Ok(None);
+            }
+            let shared = cg
+                .builder
+                .build_call(cg.rt.ynz_channel_share, &[val.into()], &format!("{site}_share"))
+                .map_err(|err| format!("share the returned channel: {err}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_channel_share returned void")?;
+            Ok(Some(shared))
+        }
+        Type::Maybe { inner } if matches!(cg.resolve_type(&inner), Type::BuiltinChannel { .. }) => {
+            if cg.is_moved_cells(pointer) {
+                return Ok(None);
+            }
+            let owned = cg.maybe_to_owned(pointer, &inner, site)?;
+            share_maybe_channel_payload(cg, owned, site)?;
+            Ok(Some(owned.into()))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// True when the read of a place at `expr` may point at the place instead of copying it:
@@ -19796,23 +19843,6 @@ fn store_binding_of_read<'ctx>(
         let owned = own_read_for_store(cg, expr, val, ty, false, name)?;
         return store(cg, owned.value, ty, slot);
     }
-    // A channel result typeck judged a copy (a function returned its channel argument, or a piece
-    // of one): the binding takes a counted reference of its own (`ynz_channel_share`, as the deep
-    // copy of a shape does), which its scope exit gives back (`ynz_channel_free`). A fresh channel
-    // has no verdict and is stored as it is.
-    if matches!(cg.resolve_type(ty), Type::BuiltinChannel { .. })
-        && val.is_pointer_value()
-        && cg.typed.non_owned_reads.must_copy(expr.span().start, expr.span().end)
-    {
-        let shared = cg
-            .builder
-            .build_call(cg.rt.ynz_channel_share, &[val.into()], &format!("{name}_share"))
-            .map_err(|err| format!("share the channel held by `{name}`: {err}"))?
-            .try_as_basic_value()
-            .basic()
-            .ok_or("ynz_channel_share returned void")?;
-        return store(cg, shared, ty, slot);
-    }
     // A `maybe` of an array or map holds the container's pointer as its payload, which a copy of
     // the envelope shares: a read of a place that is not a view copies the payload as well.
     if let Type::Maybe { inner } = cg.resolve_type(ty) {
@@ -19860,6 +19890,41 @@ fn copy_maybe_container_payload<'ctx>(
     inner: &Type,
     site: &str,
 ) -> Result<(), String> {
+    replace_maybe_payload(cg, envelope, site, |payload| {
+        let (copied, _free) = emit_owned_copy(cg, Some(expr), payload, inner, CopyMode::Body, site)?;
+        Ok(copied)
+    })
+}
+
+/// Take a counted reference of its own to the channel a `maybe` envelope holds (when the maybe is
+/// set): a holder of a copy of an untraceable result owns one reference, which its scope exit
+/// gives back (`ynz_channel_free`).
+///
+/// O(1) time.
+fn share_maybe_channel_payload<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    envelope: PointerValue<'ctx>,
+    site: &str,
+) -> Result<(), String> {
+    replace_maybe_payload(cg, envelope, site, |payload| {
+        cg.builder
+            .build_call(cg.rt.ynz_channel_share, &[payload.into()], &format!("{site}_mc_share"))
+            .map_err(|err| format!("share the channel held by `{site}`: {err}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "ynz_channel_share returned void".to_string())
+    })
+}
+
+/// Replace the payload a set `maybe` envelope holds by `replace(payload)`; a `none` is left alone.
+///
+/// O(1) time to emit.
+fn replace_maybe_payload<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    envelope: PointerValue<'ctx>,
+    site: &str,
+    replace: impl FnOnce(BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, String>,
+) -> Result<(), String> {
     let flag_ptr = cg
         .builder
         .build_struct_gep(cg.maybe_type(), envelope, 0, &format!("{site}_mc_flag_ptr"))
@@ -19892,9 +19957,9 @@ fn copy_maybe_container_payload<'ctx>(
         .builder
         .build_load(cg.ptr(), bits_ptr, &format!("{site}_mc_payload"))
         .map_err(|err| format!("maybe payload copy load {site}: {err}"))?;
-    let (copied, _free) = emit_owned_copy(cg, Some(expr), payload, inner, CopyMode::Body, site)?;
+    let replaced = replace(payload)?;
     cg.builder
-        .build_store(bits_ptr, copied)
+        .build_store(bits_ptr, replaced)
         .map_err(|err| format!("maybe payload copy store {site}: {err}"))?;
     cg.builder
         .build_unconditional_branch(done_bb)
@@ -26118,6 +26183,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             ReleaseStep::Array { .. } | ReleaseStep::Map { .. } if local => self
                 .release_fn(&inner, false)?
                 .map(|glue| glue.as_global_value().as_pointer_value()),
+            // A local `maybe` of a channel owns one counted reference (its holder took it or was
+            // handed it); a `maybe` stored in a shape field or a list does not release it here.
+            ReleaseStep::Channel if local => Some(
+                self.rt
+                    .ynz_channel_free
+                    .as_global_value()
+                    .as_pointer_value(),
+            ),
             _ if !local && matches!(inner, Type::Number { precision } if precision <= 34) => Some(
                 self.rt
                     .ynz_number_cell_free

@@ -553,18 +553,17 @@ impl<'a> ReadTracker<'a> {
     /// an imported function that returns a `maybe` or a union, a function value, a `dynamic`
     /// dispatch): it may be a piece of an argument.
     fn is_untraceable_result(&self, value: &Expr) -> bool {
-        // A string, array, map or shape a function returns is an owned copy (`copied_at_return`):
-        // only a `maybe`, a union or a channel can still be a piece of an argument. A channel's
-        // copy is a counted reference (`ynz_channel_share`, as C6's deep copy takes one). A task
-        // handle cannot be named in a signature, and a `maybe` or union that holds a channel or a
-        // handle is refused by the copy table (`owned_copy_plan`), so it is left alone.
+        // A string, array, map, shape, channel or `maybe` of a channel a function returns is an owned
+        // copy (`copied_at_return`; a channel's copy is a counted reference, `ynz_channel_share`):
+        // only another `maybe` or a union can still be a piece of an argument. A `maybe` or union
+        // that holds a channel and a task handle are left alone (a union of a channel is item 7's
+        // untagged form; no function returns a handle).
         if !matches!(value, Expr::Call(_) | Expr::MethodCall { .. })
             || !self.type_of(value).is_some_and(|ty| {
-                matches!(ty, Type::BuiltinChannel { .. })
-                    || (matches!(ty, Type::Maybe { .. } | Type::Union { .. })
-                        && (!value_like(ty)
-                            || matches!(ty, Type::Maybe { inner } if matches!(inner.as_ref(), Type::String)))
-                        && !holds_a_conduit(ty))
+                matches!(ty, Type::Maybe { .. } | Type::Union { .. })
+                    && (!value_like(ty)
+                        || matches!(ty, Type::Maybe { inner } if matches!(inner.as_ref(), Type::String)))
+                    && !holds_a_conduit(ty)
             })
         {
             return false;

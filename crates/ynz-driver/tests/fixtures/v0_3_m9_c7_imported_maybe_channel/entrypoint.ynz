@@ -1,0 +1,17 @@
+// v0.3-M9 C7 slice 3b: `held` owns one counted reference to the channel an imported function hands
+// back, though its argument's owner (`local`) dies first; the channel is freed once, after both.
+import { firstChan } from `helpers`
+
+function underTest(condition: boolean) -> nothing {
+  let held: maybe<channel<int>> = none
+  if (condition) {
+    let local: array<channel<int>> = [channel<int>()]
+    held = firstChan(local)
+  }
+  print(1)
+}
+
+function entrypoint() -> nothing {
+  underTest(true)
+  underTest(false)
+}

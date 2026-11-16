@@ -482,9 +482,11 @@ pub fn copy_is_independent(ty: &Type) -> bool {
 /// use). A call to a function whose declared return type is one of these is `Fresh`
 /// (`effective_ownership`'s `returns_fresh`), so the caller's binding takes it without a second
 /// copy. THE one answer for typeck's call-result classification and codegen's return seam
-/// (`authoritative-derivation.md`): a `string`, an `array`, a `map` or a shape; any other type
-/// returns what it names (a `maybe`, a union, a channel and a task handle have their own return
-/// forms, and a type parameter is only known per instance).
+/// (`authoritative-derivation.md`): a `string`, an `array`, a `map`, a shape, a `channel` and a
+/// `maybe` of one. A channel's copy is a counted reference (`ynz_channel_share`,
+/// the count channels already have), so a returned channel is one reference the caller owns and
+/// gives back once. Any other type returns what it names (a task handle has no copy, and a type
+/// parameter is only known per instance).
 ///
 /// Time: O(1)  Space: O(1)
 pub fn copied_at_return(ty: &Type) -> bool {
@@ -493,6 +495,8 @@ pub fn copied_at_return(ty: &Type) -> bool {
         Type::Shape { name } => !name.is_empty(),
         Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
         Type::ErrorsCapable { inner } => copied_at_return(inner),
+        Type::BuiltinChannel { .. } => true,
+        Type::Maybe { inner } => matches!(inner.as_ref(), Type::BuiltinChannel { .. }),
         _ => false,
     }
 }

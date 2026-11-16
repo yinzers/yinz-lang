@@ -379,12 +379,21 @@ fn fold_parts<'e>(
 /// A user-function call result (plain call or UFCS): fresh iff the callee's every return is
 /// fresh, else a piece of whatever its arguments reach.
 fn call_result_provenance<'e>(
+    call: &Expr,
     callee: &str,
     args: impl Iterator<Item = &'e Expr>,
     ctx: &ProvenanceCtx<'_>,
 ) -> Provenance {
     if ctx.imported_fn_names.contains(callee) && !ctx.local_fns.contains(callee) {
-        return Provenance::Unknown;
+        // An imported body is not visible, but its declared return type says what its `return`
+        // does: a type copied at `return` is an owned value, as for a local function.
+        let returns_an_owned_copy =
+            (ctx.type_of)(call).is_some_and(|ty| crate::owned_copy::copied_at_return(&ty));
+        return if returns_an_owned_copy {
+            Provenance::Fresh
+        } else {
+            Provenance::Unknown
+        };
     }
     match ctx.returns_fresh_of(callee) {
         Freshness::Fresh => Provenance::Fresh,
@@ -447,7 +456,7 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             Expr::Ident(name, _)
                 if ctx.local_fns.contains(name) || ctx.imported_fn_names.contains(name) =>
             {
-                call_result_provenance(name, call.args.iter(), ctx)
+                call_result_provenance(expr, name, call.args.iter(), ctx)
             }
             // A free-function intrinsic (`range`, the string parsers, …) constructs its
             // result; nothing it returns is a piece of an argument.
@@ -475,6 +484,7 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
                 && (ctx.local_fns.contains(method) || ctx.imported_fn_names.contains(method))
             {
                 return call_result_provenance(
+                    expr,
                     method,
                     std::iter::once(receiver.as_ref()).chain(args.iter()),
                     ctx,

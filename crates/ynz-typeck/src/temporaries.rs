@@ -339,16 +339,21 @@ impl Walk<'_> {
         let Some(ty) = self.type_of(expr) else {
             return false;
         };
-        matches!(
-            heap_class_of(ty, &self.facts.tables),
-            HeapClass::Heap(
-                ReleaseKind::String
-                    | ReleaseKind::Array
-                    | ReleaseKind::Map
-                    | ReleaseKind::Shape
-                    | ReleaseKind::NestedShape
+        // A function hands back a channel, or a `maybe` of one, as a counted reference of its own
+        // (`copied_at_return`), which nobody gives back unless the statement does.
+        let owns_a_channel_reference = matches!(ty, Type::BuiltinChannel { .. })
+            || matches!(ty, Type::Maybe { inner } if matches!(inner.as_ref(), Type::BuiltinChannel { .. }));
+        owns_a_channel_reference
+            || matches!(
+                heap_class_of(ty, &self.facts.tables),
+                HeapClass::Heap(
+                    ReleaseKind::String
+                        | ReleaseKind::Array
+                        | ReleaseKind::Map
+                        | ReleaseKind::Shape
+                        | ReleaseKind::NestedShape
+                )
             )
-        )
     }
 
     /// The declared ownership of position `index` of the call of `name`: `None` when the

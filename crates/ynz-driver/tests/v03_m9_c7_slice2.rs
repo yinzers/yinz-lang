@@ -851,13 +851,14 @@ fn an_imported_maybe_result_is_a_copy_the_argument_owners_release_does_not_dangl
 const CHANNEL_HANDED_BACK_PROJECT: &str = "v0_3_m9_c7_imported_channel";
 
 /// Bug (High): `held = same(local)` stored the argument's own pointer, so `held` and `local` were
-/// one reference released twice (an early free of the channel, or, left unreleased, a leak). Now
-/// the binding takes its own counted reference (`ynz_channel_share`, the count channels already
-/// have) and the channel is freed once, after both are gone.
+/// one reference released twice (an early free of the channel, or, left unreleased, a leak). Now a
+/// function hands back a counted reference of its own: its `return` shares what it does not move
+/// (`ynz_channel_share`, the count channels already have, C7 slice 3b), the caller moves the result,
+/// and the channel is freed once, after both holders are gone.
 ///
 /// The runtime is not instrumented, so ASan cannot see a second release of a channel's count; the
-/// share is pinned in the IR (one per binding that holds a handed-back channel, at both
-/// optimization levels), and the run is ASan-clean with leak detection on (a channel nobody
+/// share is pinned in the IR (one per function that returns a channel it does not move: `same` and
+/// `passOn`, at both optimization levels), and the run is ASan-clean with leak detection on (a channel nobody
 /// releases is a leak: the control program with only plain channel locals is clean the same way).
 #[test]
 fn a_channel_handed_back_by_a_function_is_held_by_a_counted_reference() {
@@ -865,13 +866,13 @@ fn a_channel_handed_back_by_a_function_is_held_by_a_counted_reference() {
         let built = support::build(CHANNEL_HANDED_BACK_PROJECT, no_optimize);
         let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
         let shares = ir.matches("call ptr @ynz_channel_share(").count();
-        // One per binding that holds a handed-back channel; the optimizer may inline a function into
+        // One per function that hands back a channel it does not move; the optimizer may inline a function into
         // its callers and so repeat a call.
         let expected_ok = if no_optimize { shares == 2 } else { shares >= 2 };
         assert!(
             expected_ok,
-            "no_optimize={no_optimize}: one `ynz_channel_share` for each of the two bindings that \
-             hold a handed-back channel, got {shares}"
+            "no_optimize={no_optimize}: one `ynz_channel_share` for each of the two functions that \
+             hand back a channel they do not move, got {shares}"
         );
         let run = support::run_plain(CHANNEL_HANDED_BACK_PROJECT, no_optimize);
         assert_eq!(run.exit_code, 0, "stderr:\n{}", run.stderr);

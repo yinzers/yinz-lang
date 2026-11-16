@@ -49,7 +49,7 @@ use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::binding_names::BindingNames;
 use ynz_typeck::non_owned_reads::NonOwnedReads;
 use ynz_typeck::transfer_record::{
-    Escape, FunctionTransfers, NoFounderReason, ReleaseAnchor, RoleEvidence, TransferRecorder,
+    Escape, FunctionTransfers, ReleaseAnchor, RoleEvidence, TransferRecorder,
 };
 use ynz_typeck::{check_query, CheckOutput};
 
@@ -915,15 +915,13 @@ fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
     assert_eq!(founder_name(&transfers, "inner"), "outer");
 }
 
-/// (High) The honest remainder: an imported function that returns a `maybe` holding a `channel`
-/// may hand back a piece of its argument, and neither the copy table nor the store seam can take a
-/// counted reference through the envelope. `held` outlives `local`, so which of them owns the
-/// value is not known statically. Recorded as "no static founder", not guessed: nothing is
-/// released (a leak, never an early free). A drop flag cannot settle it: the holder may point
-/// into a value the scope exit frees (decided: Chief Architect, replacing the drop-flag ruling for
-/// `OutlivedByNonOwner`).
+/// (High) An imported function that returns a `maybe` holding a `channel` hands back a counted
+/// reference of its own (`copied_at_return`: its `return` shares what it does not move, C7 slice 3b;
+/// ruled by the Software Architect within the Chief Architect's counted-reference rule). The holder
+/// binds the result by move and is its own founder, so `held` and `local` are each released once and
+/// no class is left without a static founder (this was the reproducer of `NoStaticFounder`).
 #[test]
-fn a_non_owner_that_outlives_the_owner_leaves_no_static_founder() {
+fn a_maybe_channel_an_imported_function_returns_is_an_owner_in_a_class_of_its_own() {
     let library = "export function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
   return chans.first()
 }\n";
@@ -939,19 +937,14 @@ function entrypoint() -> nothing {
 }
 ";
     let transfers = record_of(&run_with_library(library, main), "underTest");
-    assert!(transfers.same_class("held", "local"), "{transfers:#?}");
-    let class = transfers.class_of("local").expect("class");
-    assert_eq!(
-        class.anchor,
-        ReleaseAnchor::NoStaticFounder(NoFounderReason::OutlivedByNonOwner {
-            holder: "held".to_string()
-        })
-    );
+    assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
+    assert_eq!(founder_name(&transfers, "held"), "held");
+    assert_eq!(founder_name(&transfers, "local"), "local");
 }
 
-/// (High) An imported function (or a local one) that returns its `channel` argument: the binding
-/// that holds the result takes a counted reference of its own (`ynz_channel_share`, `MustCopy` in
-/// `non_owned_reads`). It joins nothing, so `held` and `local` are each the founder of a class of
+/// (High) An imported function (or a local one) that returns its `channel` argument hands back a
+/// counted reference of its own (`ynz_channel_share` at the callee's `return`, `copied_at_return`),
+/// so the binding that holds the result owns it. It joins nothing, so `held` and `local` are each the founder of a class of
 /// their own and the channel is released once per reference.
 #[test]
 fn a_handed_back_channel_is_a_counted_reference_in_a_class_of_its_own() {
@@ -1175,10 +1168,11 @@ function underTest() -> int {
     assert_no_owner(&transfers_of(source, "underTest"), "row");
 }
 
-/// (High) `NoOwner` for an IMPORTED function's result: its allocation belongs to the other
-/// file, so this function may never release it.
+/// (High) An IMPORTED function's result of a type copied at `return` is an owned value, as a local
+/// function's is: the declared return type says what the unseen `return` does, so the binding that
+/// holds it founds its own class and releases it (C7 slice 3b; it was `NoOwner`, a leak).
 #[test]
-fn an_imported_functions_result_is_recorded_as_no_owner() {
+fn an_imported_functions_result_is_owned_by_the_binding_that_holds_it() {
     let library = "export function fresh() -> array<int> {
   return [1]
 }\n";
@@ -1191,7 +1185,7 @@ function entrypoint() -> nothing {
 }
 ";
     let transfers = record_of(&run_with_library(library, main), "underTest");
-    assert_no_owner(&transfers, "result");
+    assert_eq!(founder_name(&transfers, "result"), "result");
 }
 
 // ── inference that feeds the record ─────────────────────────────────────────

@@ -131,6 +131,6 @@ release_case!(
     "v0_3_m9_c6_soa_scatter.ynz",
     "2656\n278\n",
     73,
-    1,
-    "`pts[0] = ...` on a SoA array writes each field segment over the old element's without freeing its strings, while the same assignment on an AoS array frees them (High)"
+    73,
+    "`pts[0] = ...` on a SoA array writes each field segment over the old element's without freeing its strings, while the same assignment on an AoS array frees them (High); the array itself is released at its scope exit by field segment (C7 slice 3), so every string is freed"
 );

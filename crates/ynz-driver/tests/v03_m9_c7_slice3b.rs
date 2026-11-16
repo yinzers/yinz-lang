@@ -226,3 +226,95 @@ case!(
     Balance::HeapAndStrings,
     "an errors-capable local that is reassigned (outside its loop, after a narrowing read, after its string was taken) leaks the old ok payload or frees a taken one twice (High)"
 );
+
+// ── Item 2: a function hands back an owned channel reference ────────────────────────────────
+
+/// Run `program` under ASan with leak detection on. A channel is a counted `Arc` the runtime does
+/// not instrument, so a reference nobody gives back is a leak this run reports, and a reference
+/// given back twice is a free this run reports.
+fn assert_channels_balanced(label: &str, program: &str, expected: &str, no_optimize: bool) {
+    let built = support::build_source(program, label, no_optimize);
+    let sanitized = support::build_asan(&built);
+    let output = std::process::Command::new(&sanitized)
+        .env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0")
+        .output()
+        .expect("run the sanitized binary");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && !stderr.contains("Sanitizer"),
+        "{label} (no_optimize={no_optimize}): ASan or LeakSanitizer reported:\n{stderr}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "{label} (no_optimize={no_optimize})"
+    );
+}
+
+const CHANNELS_HANDED_BACK_AND_RELAYED: &str = "
+function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
+  return chans.first()
+}
+function relay(share chans: array<channel<int>>) -> maybe<channel<int>> {
+  let held = firstChan(chans)
+  return held
+}
+function passOn(share ch: channel<int>) -> channel<int> {
+  return ch
+}
+function relayChannel(share ch: channel<int>) -> channel<int> {
+  let held = passOn(ch)
+  return held
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (round in range(0, 20)) {
+    let chans: array<channel<int>> = [channel<int>()]
+    let got = relay(chans)
+    for (item in chans) {
+      let same = relayChannel(item)
+      let again = passOn(same)
+    }
+    firstChan(chans)
+    total = total + 1
+  }
+  print(total)
+}
+";
+
+#[test]
+fn a_returned_channel_or_maybe_channel_is_one_counted_reference_given_back_once() {
+    // Bug (High): a holder of an untraceable `maybe<channel>` result leaked (no founder), and an
+    // owned local the callee returned left its reference orphaned (the caller shared again).
+    // Every reference now has one owner: the callee's return shares what it does not move, the
+    // caller moves the result, and each holder gives its reference back at its scope exit.
+    at_both_optimization_levels(|no_optimize| {
+        assert_channels_balanced(
+            "channels_handed_back",
+            CHANNELS_HANDED_BACK_AND_RELAYED,
+            "20\n",
+            no_optimize,
+        );
+    });
+}
+
+/// An imported function hands back a `maybe` of its argument's channel and the argument's owner dies
+/// before the holder (the `NoStaticFounder` reproducer of `transfer_record.rs`): the holder owns a
+/// reference of its own, so the channel is neither leaked nor freed early.
+#[test]
+fn a_maybe_channel_an_imported_function_returns_outlives_its_arguments_owner() {
+    at_both_optimization_levels(|no_optimize| {
+        let built = support::build("v0_3_m9_c7_imported_maybe_channel", no_optimize);
+        let sanitized = support::build_asan(&built);
+        let output = std::process::Command::new(&sanitized)
+            .env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0")
+            .output()
+            .expect("run the sanitized binary");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && !stderr.contains("Sanitizer"),
+            "no_optimize={no_optimize}: ASan or LeakSanitizer reported:\n{stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n1\n");
+    });
+}
