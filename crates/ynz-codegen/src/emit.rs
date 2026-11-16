@@ -27264,9 +27264,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return false;
         }
         // A resume function releases exactly the kinds that have a frame slot across a suspension
-        // (`ReleaseKind::has_frame_backing`), the kinds the crossing set reads. A union or an
-        // errors-capable value (C8 slice 4) and a shape, `maybe`, `fixed` or type-parameter value
-        // is a leak here, never an early free: nothing keeps its bytes alive across a `wait`.
+        // (`ReleaseKind::has_frame_backing`), the kinds the crossing set reads. A union, an
+        // errors-capable value, a shape, a nested shape, a `maybe`, a `fixed` and a type-parameter
+        // value are C8 slice 4's (inline-aggregate frame regions): until then each is a leak here,
+        // never an early free, because nothing keeps its bytes alive across a `wait`.
         if self.sm_frame_ptr.is_some() && !kind.has_frame_backing() {
             return false;
         }
@@ -27309,8 +27310,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// An assignment replaces the value in `slot` (`assign.codegen_name`): load it, note whether it
     /// is live (a take nulls a slot), and for a flat shape snapshot its bytes first, because the
-    /// shape's per-site region is reused by the new value's copy. `None` where the plain emitter
-    /// does not release the binding (a state-machine function, a kind slice 3 owns, an SoA array).
+    /// shape's per-site region is reused by the new value's copy. `None` where the emitter does
+    /// not release the binding (a kind a resume function leaves to slice 4, an errors-capable
+    /// local, an SoA array). In a resume function the new value reaches the frame slot through the
+    /// statement's flush (`collect_crossing_writes`), as any assignment to a crossing local.
     ///
     /// O(1) time to emit; the snapshot is one struct-sized copy at run time (shape only).
     fn begin_assign_release(
@@ -27324,8 +27327,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if assign.kind == ynz_typeck::release_plan::ReleaseKind::ErrorsCapable {
             return Ok(None);
         }
-        if self.sm_frame_ptr.is_some()
-            || !self.releases_in_instance(assign.kind, &assign.held)
+        if !self.releases_in_instance(assign.kind, &assign.held)
             || self.soa_bindings.contains_key(name)
         {
             return Ok(None);

@@ -129,7 +129,6 @@ fn wait_statement_temporary_in_a_loop_is_released_once_per_iteration() {
 }
 
 #[test]
-#[ignore = "planned RED (v0.3-M9 C8 S2): a resume function does not release the value a reassignment replaces"]
 fn reassign_releases_the_old_array_and_string_in_a_resume_function() {
     assert_balanced_program(
         "reassign_in_resume_function",
@@ -142,4 +141,86 @@ fn reassign_releases_the_old_array_and_string_in_a_resume_function() {
         REASSIGN_ARRAY_AND_STRING,
         "3\n5\n",
     );
+}
+
+/// The assignment shapes a resume function must keep sound once the old value is released: the
+/// right side awaits (the old value is released after the resume), the right side reads the old
+/// value, the old value was given away first (its slot is null, so nothing is released), and the
+/// assignment repeats in a loop that suspends.
+const REASSIGN_SHAPES: &str = "
+function fresh() -> array<int> {
+  wait sleep(1)
+  return [7, 8, 9, 10]
+}
+
+function consume(give rows: array<int>) -> int {
+  wait sleep(1)
+  return rows.count()
+}
+
+function entrypoint() -> nothing {
+  let awaited: array<int> = wait fresh()
+  awaited = [1]
+  wait sleep(1)
+  print(awaited.count())
+
+  let label: string = `ab`.toUpperCase()
+  label = label.toUpperCase()
+  wait sleep(1)
+  print(label.count())
+
+  let handed: array<int> = [1, 2]
+  let taken: int = wait consume(handed)
+  handed = [3, 4, 5]
+  wait sleep(1)
+  print(taken + handed.count())
+
+  let looped: array<int> = [0]
+  let round: int = 0
+  while (round < 3) {
+    wait sleep(1)
+    looped = [round, round, round]
+    round = round + 1
+  }
+  print(looped.count())
+}
+";
+
+#[test]
+fn reassign_shapes_in_a_resume_function_balance_and_stay_asan_clean() {
+    assert_balanced_program("reassign_shapes", REASSIGN_SHAPES, "1\n2\n5\n3\n", true);
+    assert_asan_clean_program("reassign_shapes_asan", REASSIGN_SHAPES, "1\n2\n5\n3\n");
+}
+
+/// A map and a channel reassigned across a `wait`: the other frame-backed kinds a resume function
+/// releases at an assignment.
+const REASSIGN_MAP_AND_CHANNEL: &str = "
+function build() -> map<int, int> {
+  let built: map<int, int> = {}
+  built.set(2, 20)
+  built.set(3, 30)
+  return built
+}
+
+function entrypoint() -> nothing {
+  let table: map<int, int> = {}
+  table.set(1, 10)
+  let wire: channel<int> = channel<int>(2)
+  wait sleep(1)
+  table = build()
+  wire = channel<int>(4)
+  wait sleep(1)
+  print(table.count())
+}
+";
+
+#[test]
+fn reassign_a_map_and_a_channel_in_a_resume_function() {
+    assert_balanced_program(
+        "reassign_map_channel",
+        REASSIGN_MAP_AND_CHANNEL,
+        "2\n",
+        false,
+    );
+    assert_asan_clean_program("reassign_map_channel_asan", REASSIGN_MAP_AND_CHANNEL, "2\n");
 }
