@@ -915,25 +915,24 @@ fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
     assert_eq!(founder_name(&transfers, "inner"), "outer");
 }
 
-/// (High) The honest remainder: an imported function that returns a `maybe` may hand back a piece
-/// of its argument, and no read of its result can be judged a copy. `held` outlives `local`, so
-/// which of them owns the value is not known statically. Recorded as "no static founder", not
-/// guessed: nothing is released (a leak, never an early free). A drop flag cannot settle it: the
-/// holder may point into a value the scope exit frees (decided: Chief Architect, replacing the
-/// drop-flag ruling for `OutlivedByNonOwner`).
+/// (High) The honest remainder: an imported function that returns a `channel` may hand back its
+/// argument, and the copy table refuses a channel (`owned_copy_plan`), so no read of the result
+/// can be judged a copy. `held` outlives `local`, so which of them owns the value is not known
+/// statically. Recorded as "no static founder", not guessed: nothing is released (a leak, never
+/// an early free). A drop flag cannot settle it: the holder may point into a value the scope exit
+/// frees (decided: Chief Architect, replacing the drop-flag ruling for `OutlivedByNonOwner`).
 #[test]
 fn a_non_owner_that_outlives_the_owner_leaves_no_static_founder() {
-    let library = "export function keep(share held: array<int>) -> maybe<array<int>> {
-  return held
+    let library = "export function same(share ch: channel<int>) -> channel<int> {
+  return ch
 }\n";
-    let main = "import { keep } from `lib`
-function underTest(condition: boolean) -> int {
-  let held: maybe<array<int>> = none
+    let main = "import { same } from `lib`
+function underTest(condition: boolean) -> nothing {
+  let held: channel<int> = channel<int>()
   if (condition) {
-    let local: array<int> = [1]
-    held = keep(local)
+    let local: channel<int> = channel<int>()
+    held = same(local)
   }
-  return 1
 }
 function entrypoint() -> nothing {
 }
@@ -947,6 +946,32 @@ function entrypoint() -> nothing {
             holder: "held".to_string()
         })
     );
+}
+
+/// (High) An imported function that returns a `maybe` (or a union) may hand back a piece of its
+/// argument. The binding that holds the result outlives `local`, so it owns a copy
+/// (`MustCopy` in `non_owned_reads`): it joins nothing and `local` is its own founder.
+#[test]
+fn an_untraceable_maybe_result_is_a_copy_owner_in_a_class_of_its_own() {
+    let library = "export function firstRow(share rows: array<array<int>>) -> maybe<array<int>> {
+  return rows.first()
+}\n";
+    let main = "import { firstRow } from `lib`
+function underTest(condition: boolean) -> int {
+  let held: maybe<array<int>> = none
+  if (condition) {
+    let local: array<array<int>> = [[1]]
+    held = firstRow(local)
+  }
+  return 1
+}
+function entrypoint() -> nothing {
+}
+";
+    let transfers = record_of(&run_with_library(library, main), "underTest");
+    assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
+    assert_eq!(founder_name(&transfers, "held"), "held");
+    assert_eq!(founder_name(&transfers, "local"), "local");
 }
 
 /// (High) The field read that used to leave no static founder (`cell = owner.rows`, `cell`
@@ -1220,7 +1245,11 @@ fn a_field_of_a_call_result_is_a_piece_of_the_calls_arguments() {
 }}"
     );
     let transfers = transfers_of(&source, "underTest");
-    assert!(transfers.same_class("bags", "piece"), "{transfers:#?}");
+    // The read copies the field (a call result that may be a piece of its arguments is not a
+    // temporary to take from), so `piece` owns a value of its own: it joins nothing and is
+    // released at its own scope exit, and `bags` is never released while `piece` points into it.
+    assert!(!transfers.same_class("bags", "piece"), "{transfers:#?}");
+    assert_eq!(founder_name(&transfers, "piece"), "piece");
 }
 
 /// (High) Storing that piece is refused: `container.add(piece)` would put a value `bags` still

@@ -128,7 +128,7 @@ pub enum OmitReason {
     NotOwner,
     /// A `share`/`lend`/bare parameter is in its class: the caller owns the value.
     CallerOwns,
-    /// A non-owner outlives every owner (`NoStaticFounder`): an untraceable result; nothing releases it.
+    /// A non-owner outlives every owner (`NoStaticFounder`): an imported `channel` result; nothing releases it.
     NoStaticFounder,
     /// The type is a type parameter of a generic function.
     TypeParameter,

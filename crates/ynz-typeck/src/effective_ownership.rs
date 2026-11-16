@@ -221,6 +221,11 @@ impl EffectiveOwnershipReport {
             .unwrap_or(Freshness::MayAlias { param: None })
     }
 
+    /// The names of the LOCAL functions the fixpoint analyzed.
+    pub fn local_fn_names(&self) -> HashSet<String> {
+        self.per_fn.keys().cloned().collect()
+    }
+
     /// True when `name` is a LOCAL function the fixpoint analyzed.
     pub fn is_local_fn(&self, name: &str) -> bool {
         self.per_fn.contains_key(name)

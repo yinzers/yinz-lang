@@ -66,7 +66,8 @@ use ynz_ast::nodes::{Expr, FunctionDecl, PostfixOpKind};
 
 use crate::binding_names::{decl_key, BindingNames, DeclKey};
 use crate::effective_ownership::{
-    call_position_reads, value_like, EffectiveOwnership, EffectiveOwnershipReport,
+    call_position_reads, provenance, value_like, EffectiveOwnership, EffectiveOwnershipReport,
+    Provenance, ProvenanceCtx,
 };
 use crate::string_ownership::children;
 use crate::types::Type;
@@ -308,6 +309,8 @@ pub(crate) struct ReadTracker<'a> {
     imported_fn_names: &'a HashSet<String>,
     expr_types: &'a HashMap<(usize, usize), Type>,
     parameters: HashSet<DeclKey>,
+    /// The local functions, for `provenance`.
+    local_fn_names: HashSet<String>,
     read_only_parameters: HashSet<DeclKey>,
     candidates: Vec<Candidate>,
     /// The candidates of the loops whose body is being walked, innermost last.
@@ -327,6 +330,7 @@ impl<'a> ReadTracker<'a> {
             ownership,
             imported_fn_names,
             expr_types,
+            local_fn_names: ownership.local_fn_names(),
             parameters: HashSet::new(),
             read_only_parameters: HashSet::new(),
             candidates: Vec::new(),
@@ -499,13 +503,24 @@ impl<'a> ReadTracker<'a> {
     }
 
     /// True when `value` bound under `annotation` takes a piece of a temporary
-    /// (`is_taken_piece_of_a_temporary`, the one answer the checker's binding event reads too).
+    /// (`is_taken_piece_of_a_temporary`, the one answer the checker's binding event reads too) that
+    /// no name reaches. A call result that may be a piece of its arguments (a generic callee that
+    /// returns one of them) is not a temporary to take from: the binding would own what a name
+    /// still holds, so the read copies, and the checker binds it as a piece, not an owner.
     fn takes_a_piece_of_a_temporary(
         &self,
         value: &Expr,
         annotation: Option<&ynz_ast::nodes::Type>,
     ) -> bool {
-        is_taken_piece_of_a_temporary(
+        let type_of = |expr: &Expr| self.type_of(expr).cloned();
+        let ctx = ProvenanceCtx::from_report(
+            self.ownership,
+            &self.local_fn_names,
+            self.imported_fn_names,
+            &type_of,
+        );
+        matches!(provenance(value, &ctx), Provenance::Reaches(roots) if roots.is_empty())
+            && is_taken_piece_of_a_temporary(
             value,
             annotation,
             &|expr| self.type_of(expr).cloned(),
@@ -522,6 +537,32 @@ impl<'a> ReadTracker<'a> {
         );
         !(reaches_function
             && (self.ownership.is_local_fn(method) || self.imported_fn_names.contains(method)))
+    }
+
+    /// True when `value` is a call whose heap result typeck cannot trace to a holder (`Provenance::Unknown`:
+    /// an imported function that returns a `maybe` or a union, a function value, a `dynamic`
+    /// dispatch): it may be a piece of an argument.
+    fn is_untraceable_result(&self, value: &Expr) -> bool {
+        // A string, array, map or shape a function returns is an owned copy (`copied_at_return`):
+        // only a `maybe` or a union can still be a piece of an argument. A channel or a task handle
+        // is refused by the copy table (`owned_copy_plan`), so a type holding one is left alone.
+        if !matches!(value, Expr::Call(_) | Expr::MethodCall { .. })
+            || !self.type_of(value).is_some_and(|ty| {
+                matches!(ty, Type::Maybe { .. } | Type::Union { .. })
+                    && (!value_like(ty) || matches!(ty, Type::Maybe { inner } if matches!(inner.as_ref(), Type::String)))
+                    && !holds_a_conduit(ty)
+            })
+        {
+            return false;
+        }
+        let type_of = |expr: &Expr| self.type_of(expr).cloned();
+        let ctx = ProvenanceCtx::from_report(
+            self.ownership,
+            &self.local_fn_names,
+            self.imported_fn_names,
+            &type_of,
+        );
+        matches!(provenance(value, &ctx), Provenance::Unknown)
     }
 
     /// True when `value` reads a place that stays where it is: a field or element read, an
@@ -661,6 +702,14 @@ impl<'a> ReadTracker<'a> {
         value: &Expr,
         lets: &HashSet<DeclKey>,
     ) {
+        if self.is_untraceable_result(value) {
+            // An imported function that returns a `maybe` or a union may hand back a piece of an
+            // argument: the binding cannot point at it (the argument's owner may die first) and
+            // no name is known to hold it, so it owns a copy.
+            let span = value.span();
+            self.must_copy((span.start, span.end));
+            return;
+        }
         if !self.is_place_read(value) {
             return;
         }
@@ -1125,6 +1174,16 @@ impl<'a> ReadTracker<'a> {
                 .into_iter()
                 .any(|child| self.changes(child, target)),
         }
+    }
+}
+
+/// True when `ty` is or holds a channel or a task handle.
+fn holds_a_conduit(ty: &Type) -> bool {
+    match ty {
+        Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. } => true,
+        Type::Maybe { inner } => holds_a_conduit(inner),
+        Type::Union { variants } => variants.iter().any(holds_a_conduit),
+        _ => false,
     }
 }
 

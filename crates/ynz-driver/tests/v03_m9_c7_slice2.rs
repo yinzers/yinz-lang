@@ -775,3 +775,73 @@ case!(
     Balance::Heap,
     "`return picked` copies `picked`; `backup`, joined to it, was marked returned with its class and leaked per call (High)"
 );
+
+// ── A take from a call result that may be a piece of its arguments ──────────────────────────
+
+const TAKE_FROM_GENERIC_RESULT: &str = "
+shape Bag {
+  label: string
+  items: array<int>
+}
+
+function pickSecond<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function viaGet<T>(share all: array<T>, share fallback: T) -> T {
+  return all.get(0).or(fallback)
+}
+
+function entrypoint() -> nothing {
+  let a: Bag = { label: `a${1}`, items: [1, 2] }
+  let b: Bag = { label: `b${2}`, items: [3] }
+  let all: array<Bag> = [{ label: `c${3}`, items: [4, 5, 6] }]
+  let name: string = pickSecond(a, b).label
+  let rows: array<int> = pickSecond(a, b).items
+  let name2: string = viaGet(all, a).label
+  let rows2: array<int> = viaGet(all, a).items
+  print(name)
+  print(rows.count())
+  print(name2)
+  print(rows2.count())
+  print(b.label)
+  print(b.items.count())
+  print(all[0].or(a).label)
+  print(all[0].or(a).items.count())
+}
+";
+
+case!(
+    a_field_of_a_generic_call_result_is_copied_not_taken_from_the_callers_value,
+    TAKE_FROM_GENERIC_RESULT,
+    "b2\n1\nc3\n3\nb2\n1\nc3\n3\n",
+    Balance::HeapAndStrings,
+    "a field taken out of `pickSecond(a, b)`, a result that may be a piece of the caller's `b`, nulls or frees a value the caller still holds (High); before the verdict copied it the binding leaked one array per such `let`"
+);
+
+// ── An imported function's untraceable `maybe` result is a copy its holder owns ──────────────
+
+/// `helpers.firstRow` returns `rows.first()`, a piece of its argument; `held` outlives `local`.
+const IMPORTED_MAYBE_PROJECT: &str = "v0_3_m9_c7_imported_maybe";
+
+/// Bug (High): the holder of an untraceable result joined the argument's class and outlived it,
+/// so the class had no static founder and `local` was never released (alloc 200, free 80); a view
+/// of it would dangle once `local` is released. Now `held` owns a copy and `local` is released.
+/// What is left is exactly the copy `held` owns: a `maybe` is a slice-3 kind, so nothing releases
+/// it yet (2 counted allocations per pass of `pick(true)`, 20 passes: free 160 of 200).
+/// SLICE 3 turns this pin balanced (`IMP-ownership.md` hand-over).
+#[test]
+fn an_imported_maybe_result_is_a_copy_the_argument_owners_release_does_not_dangle() {
+    at_both_optimization_levels(|no_optimize| {
+        let built = build(IMPORTED_MAYBE_PROJECT, no_optimize);
+        let (run, counters) = run_counted(&built);
+        assert_eq!(run.exit_code, 0, "stderr:\n{}", run.stderr);
+        assert_eq!(run.stdout, "60\n");
+        assert_eq!(
+            (counters.alloc, counters.free),
+            (200, 160),
+            "no_optimize={no_optimize}: {counters:?}"
+        );
+        support::assert_asan_clean_and_prints(IMPORTED_MAYBE_PROJECT, no_optimize, "60\n");
+    });
+}
