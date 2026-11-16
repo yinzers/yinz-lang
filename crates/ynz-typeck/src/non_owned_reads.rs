@@ -154,6 +154,10 @@ pub(crate) fn is_taken_piece_of_a_temporary(
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NonOwnedReads {
     verdicts: HashMap<(usize, usize), ReadVerdict>,
+    /// The shapes a `Take` moves out of a temporary as a nested-shape cell (`let t: Tag = make().inner`):
+    /// the only cells that a take leaves null in a temporary, so the only cell releases that need a
+    /// null check (`taken_cell_shapes`).
+    taken_cell_shapes: HashSet<String>,
 }
 
 impl NonOwnedReads {
@@ -171,6 +175,15 @@ impl NonOwnedReads {
     /// True when the read at `start..end` takes a field out of a temporary.
     pub fn is_take(&self, start: usize, end: usize) -> bool {
         self.verdict(start, end) == Some(ReadVerdict::Take)
+    }
+
+    /// True when some `Take` of this module moves a nested shape named `shape` out of a temporary,
+    /// leaving its cell null there. A release of a nested-shape cell needs a null check exactly for
+    /// these shapes: a nulled field lives only in a temporary of the taking module, released by that
+    /// module's own release function (Rust's `Box` drop has no check, and `Option<Box>` carries the
+    /// same one).
+    pub fn takes_nested_shape(&self, shape: &str) -> bool {
+        self.taken_cell_shapes.contains(shape)
     }
 
     /// True when the read at `start..end` was judged and owns a copy.
@@ -756,7 +769,12 @@ impl<'a> ReadTracker<'a> {
         // The binding outlives the temporary a piece is read from: it takes the piece (a string,
         // array or map field), or copies it.
         if self.takes_a_piece_of_a_temporary(value, annotation) {
+            let taken_shape = match value_type {
+                Type::Shape { name } => Some(name.clone()),
+                _ => None,
+            };
             self.reads.verdicts.insert(value_span, ReadVerdict::Take);
+            self.reads.taken_cell_shapes.extend(taken_shape);
             return;
         }
         if !binding_holds_place(value_type) {

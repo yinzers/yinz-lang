@@ -24367,6 +24367,14 @@ fn lower_taken_field<'ctx>(
         ));
     }
     if cg.sm_frame_ptr.is_none() {
+        if let Type::Shape { name } = cg.resolve_type(&field_ty) {
+            if !cg.typed.non_owned_reads.takes_nested_shape(&name) {
+                return Err(format!(
+                    "internal: the take of nested shape `{name}` nulls a cell its release does not \
+                     check for null"
+                ));
+            }
+        }
         cg.builder
             .build_store(field_ptr, cg.ptr().const_null())
             .map_err(|err| format!("null the taken field `{field_name}`: {err}"))?;
@@ -25931,8 +25939,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or("release: missing value parameter")?
             .into_pointer_value();
         // A nested shape's cell is null once a `let` took it out of a temporary
-        // (`lower_taken_field`), and the temporary's release skips it.
-        if owns_cell && matches!(step, ReleaseStep::Shape { .. }) {
+        // (`lower_taken_field`), and the temporary's release skips it. Only a shape some `Take` of
+        // this module moves out can have a null cell here, so only its release checks (Rust's
+        // `Box` drop has no check; `Option<Box>`, where one can be absent, carries this one).
+        if owns_cell
+            && matches!(&step, ReleaseStep::Shape { name } if self.typed.non_owned_reads.takes_nested_shape(name))
+        {
             let release_cell = self.ctx.append_basic_block(release, "release_cell");
             let taken = self.ctx.append_basic_block(release, "release_cell_taken");
             let is_null = self
