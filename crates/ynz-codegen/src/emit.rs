@@ -19671,7 +19671,7 @@ fn remember_movable_string<'ctx>(
 ) -> Result<(), String> {
     let span = expr.span();
     if val.is_pointer_value()
-        && cg.typed.string_moves.contains(span.start, span.end)
+        && (cg.typed.string_moves.contains(span.start, span.end) || cg.is_type_parameter_move(expr))
         && is_string_like(&cg.resolve_type(&cg.expr_type(expr)))
     {
         cg.owned_string_values.insert(val.as_value_ref() as usize);
@@ -26658,7 +26658,9 @@ fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
         | ReleaseKind::Maybe
         | ReleaseKind::Union
         | ReleaseKind::Fixed
-        | ReleaseKind::ErrorsCapable => true,
+        | ReleaseKind::ErrorsCapable
+        // Whether an instance releases anything is `Cg::releases_in_instance`'s answer.
+        | ReleaseKind::TypeParameter => true,
         // `dynamic` and a map entry never own a local slot.
         ReleaseKind::Dynamic | ReleaseKind::MapEntry => false,
     }
@@ -26673,6 +26675,40 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get(name)
             .copied()
             .or_else(|| self.reload_slot(name))
+    }
+
+    /// True when `expr` reads a value typeck knows only as a type parameter `T` and says its store
+    /// takes by move (`TypedModule::heap_moves`). Typeck judged that store once, for the generic
+    /// body, as the move it is for any heap type (`give value` stored into `held` hands `value`
+    /// over and `value` is `Omitted(Moved)`), so an instance whose `T` is a string takes the
+    /// string too: a copy would leave `value` unreleased, and the string record
+    /// (`string_moves`) holds only reads typed `string` in the body.
+    ///
+    /// O(1) time.
+    fn is_type_parameter_move(&self, expr: &Expr) -> bool {
+        let span = expr.span();
+        matches!(
+            self.typed.expr_types.get(&(span.start, span.end)),
+            Some(Type::TypeParam { .. })
+        ) && self.typed.heap_moves.contains(span.start, span.end)
+    }
+
+    /// True when the plain emitter releases a binding of `kind` whose slot holds `held` in this
+    /// function (one instance of a generic function, or a plain one). A `TypeParameter` binding
+    /// releases only when its instance type owns heap: `T` = `int` has no pointer in its slot, so
+    /// nulling or releasing it would destroy the value.
+    ///
+    /// O(size of the type) time.
+    fn releases_in_instance(
+        &self,
+        kind: ynz_typeck::release_plan::ReleaseKind,
+        held: &Type,
+    ) -> bool {
+        if !plain_releases_kind(kind) {
+            return false;
+        }
+        kind != ynz_typeck::release_plan::ReleaseKind::TypeParameter
+            || release_step(&self.resolve_type(held)) != ReleaseStep::Nothing
     }
 
     /// The slots of the founders a read at `span` takes a value out of for `cause`, in a plain
@@ -26693,7 +26729,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         for site in self.typed.release_plan.move_site(span) {
             let name = site.founder_codegen_name.as_str();
             if site.cause != cause
-                || !plain_releases_kind(site.kind)
+                || !self.releases_in_instance(site.kind, &site.held)
                 || self.soa_bindings.contains_key(name)
             {
                 continue;
@@ -26727,7 +26763,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return Ok(None);
         }
         if self.sm_frame_ptr.is_some()
-            || !plain_releases_kind(assign.kind)
+            || !self.releases_in_instance(assign.kind, &assign.held)
             || self.soa_bindings.contains_key(name)
         {
             return Ok(None);
@@ -27155,7 +27191,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Fate::Release(kind) => (kind, false),
             Fate::ReleaseIfLive(kind) => (kind, true),
         };
-        if !plain_releases_kind(kind) {
+        if !self.releases_in_instance(kind, &entry.held) {
             return Ok(None);
         }
         // The type the slot holds, as the plan records it (`ReleaseEntry::held`): a binding declared
@@ -27180,6 +27216,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     ReleaseKind::ErrorsCapable,
                     ReleaseStep::ErrorsCapable { .. }
                 )
+                // A type parameter's instance: any type that owns heap (`releases_in_instance` already
+                // declined an instance that owns none).
+                | (ReleaseKind::TypeParameter, _)
         );
         if !kind_matches_type {
             return Err(format!(
@@ -27845,6 +27884,7 @@ mod copy_parity_tests {
             ReleaseKind::Fixed,
             ReleaseKind::MapEntry,
             ReleaseKind::ErrorsCapable,
+            ReleaseKind::TypeParameter,
         ];
         for kind in kinds {
             let (representative, expected): (Type, fn(&ReleaseStep) -> bool) = match kind {
@@ -27921,6 +27961,8 @@ mod copy_parity_tests {
                     },
                     |step| matches!(step, ReleaseStep::ErrorsCapable { .. }),
                 ),
+                // A type parameter releases by what its instance is: `T` = `string` here.
+                ReleaseKind::TypeParameter => (Type::String, |step| *step == ReleaseStep::String),
             };
             let step = release_step(&representative);
             assert!(

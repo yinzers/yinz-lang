@@ -41,8 +41,12 @@
 //! * Every binding whose value owns heap memory is classified with a real fate, of whatever kind
 //!   (`maybe`, `union`, `dynamic`, `fixed`, errors-capable values, nested shapes and generic
 //!   instances included); how codegen releases each kind is C6/C7's job. A value of a type
-//!   parameter is `Omitted(TypeParameter)` (a generic body is checked once, with the parameter
-//!   unresolved, and its lists apply to every instance). A type that cannot own heap is not listed.
+//!   parameter (or one that holds it, such as `maybe<T>`) is classified as if the parameter owned
+//!   heap, as `ReleaseKind::TypeParameter`: a generic body is checked once, with the parameter
+//!   unresolved, and its lists apply to every instance. Codegen lowers the body once per instance
+//!   and resolves `ReleaseEntry::held` there, so an instance whose type owns no heap (`T` = `int`)
+//!   releases nothing and one that does (`T` = `string`) releases by that type. A type that cannot
+//!   own heap is not listed.
 //! * The release owners (bindings with a releasing fate at some edge) feed the ONE crossing-set
 //!   producer: a release is a read at its edge, see [`ReleaseReads`]. Only a kind with a frame
 //!   slot across a suspension ([`ReleaseKind::has_frame_backing`]) is read today: the others
@@ -100,6 +104,11 @@ pub enum ReleaseKind {
     MapEntry,
     /// An errors-capable value: the error object, and the payload when it owns heap.
     ErrorsCapable,
+    /// A value of a type parameter of a generic function, or one that holds it (`maybe<T>`): a
+    /// generic body is checked once, so the plan cannot say what the instance releases. Codegen
+    /// resolves `ReleaseEntry::held` per instance (`T` = `string` releases a string, `T` = `int`
+    /// releases nothing).
+    TypeParameter,
 }
 
 impl ReleaseKind {
@@ -132,8 +141,6 @@ pub enum OmitReason {
     CallerOwns,
     /// A non-owner outlives every owner (`NoStaticFounder`): an imported `maybe<channel>` result; nothing releases it.
     NoStaticFounder,
-    /// The type is a type parameter of a generic function.
-    TypeParameter,
 }
 
 /// What happens to a binding at one exit edge.
@@ -183,6 +190,9 @@ pub struct MoveSite {
     pub founder_codegen_name: String,
     /// What the founder releases (the kinds the plain emitter nulls slots of).
     pub kind: ReleaseKind,
+    /// The type the founder's slot holds (`ReleaseEntry::held`): a founder of kind
+    /// `TypeParameter` is nulled only in an instance whose type owns heap.
+    pub held: Type,
     pub cause: MoveCause,
 }
 
@@ -974,7 +984,7 @@ fn fate_of(
                 entry.decl.2, function.name
             ))
         }
-        HeapClass::TypeParameter => return Ok(Fate::Omitted(OmitReason::TypeParameter)),
+        HeapClass::TypeParameter => ReleaseKind::TypeParameter,
         HeapClass::Heap(kind) => kind,
     };
     let reassigned = function.reassigned.contains(&entry.decl);
@@ -1294,12 +1304,14 @@ impl ReleasePlan {
                 }
                 if let Some(&kind) = releasing_if_live.get(&decl) {
                     let founder_codegen_name = codegen_name_of(&decl);
+                    let held = held_of.get(&decl).cloned().unwrap_or(Type::Error);
                     self.add_move_site(
                         site.span,
                         MoveSite {
                             founder: decl,
                             founder_codegen_name,
                             kind,
+                            held,
                             cause: MoveCause::Handed,
                         },
                     );
@@ -1317,6 +1329,7 @@ impl ReleasePlan {
                         founder: decl.clone(),
                         founder_codegen_name: codegen_name_of(decl),
                         kind,
+                        held: held_of.get(decl).cloned().unwrap_or(Type::Error),
                         cause: MoveCause::LastUse,
                     },
                 );
@@ -1341,8 +1354,8 @@ impl ReleasePlan {
     /// Where the plan disagrees with the live scope's consumed classes or the transfer record.
     /// Every listed binding must be classified with a real fate; an omission needs its reason:
     ///
-    /// * a binding that owns no heap is never listed; a type-parameter value is
-    ///   `Omitted(TypeParameter)` and nothing else is;
+    /// * a binding that owns no heap is never listed; a type-parameter value is judged like any
+    ///   other heap owner, as `ReleaseKind::TypeParameter`;
     /// * a string is released (`Release`/`ReleaseIfLive`) or `NotOwner` (a parameter, a cell) or
     ///   or a reassigned binding given on every path to the edge (`ReleaseIfLive`);
     /// * any other heap owner that is not reassigned: when it is the founder of its class, its
@@ -1371,23 +1384,9 @@ impl ReleasePlan {
                         violations.push(format!("{place} owns no heap but is listed"));
                         continue;
                     }
-                    HeapClass::TypeParameter => {
-                        if entry.fate != Fate::Omitted(OmitReason::TypeParameter) {
-                            violations.push(format!(
-                                "{place} is a type-parameter value with fate {:?}",
-                                entry.fate
-                            ));
-                        }
-                        continue;
-                    }
+                    HeapClass::TypeParameter => ReleaseKind::TypeParameter,
                     HeapClass::Heap(kind) => kind,
                 };
-                if entry.fate == Fate::Omitted(OmitReason::TypeParameter) {
-                    violations.push(format!(
-                        "{place} owns heap ({kind:?}) but is omitted as a type parameter"
-                    ));
-                    continue;
-                }
                 if kind == ReleaseKind::String {
                     let allowed = matches!(
                         entry.fate,

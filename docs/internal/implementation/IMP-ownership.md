@@ -334,7 +334,7 @@ Entries are keyed by `DeclKey` and the unique codegen name (`BindingNames`), nev
 | `Omitted(Moved)` | given, sent or stored on every path | live scope |
 | `Omitted(Returned)` | the returned value is or reaches its class | the returned value's holders |
 | `Omitted(NotOwner / CallerOwns / NoStaticFounder)` | another member founds the class; a borrowed parameter is in it; a non-owner outlives every owner (an imported `maybe<channel>` result; nothing is released) | transfer-record anchor |
-| `Omitted(TypeParameter)` | the value's type is, or holds, a type parameter of a generic function: the body alone cannot say whether it owns heap | `heap_class_of` |
+| `Release(TypeParameter)`, `ReleaseIfLive(TypeParameter)` | the value's type is, or holds, a type parameter of a generic function: the body alone cannot say whether it owns heap, so the plan judges it as if the parameter owned heap (the same anchor, moves and returns as any owner) and codegen resolves `ReleaseEntry::held` per instance (`T` = `string` releases a string, `T` = `int` releases nothing and its slot is never nulled). A string stored from a `T` read is taken, not copied, when typeck recorded the store as a move (`heap_moves`), so the instance agrees with the plan | `heap_class_of`, anchor, live scope |
 
 **Every binding whose value owns heap is listed, whatever the kind** (`heap_class_of`, one type fact): `string`, `array`, `map`, `channel`, background task handle, a flat shape with heap fields, a shape holding a shape (each shape-typed field is a heap cell; a recursive or undescribed shape is assumed to own heap), `maybe` / union / `fixed` with a heap-owning content, `dynamic`, a map entry with a heap-owning key or value, and every errors-capable value (the error object is heap). A type that cannot own heap (`int`, `boolean`, `options`, a shape of ints, a `maybe` of bits) is not listed. How codegen releases each kind is C6/C7's job; the record only has to be complete, and the corpus parity test rejects an omission with no reason. Generic bodies are checked once, so their lists apply to every instance.
 
@@ -361,7 +361,8 @@ The crossing set reads only the kinds with a frame slot across a suspension toda
 | `fixed<string>`, `fixed<Shape>` | each cell's item (a string, or a shape's heap cell and what it owns); any other heap item of a `fixed` is an internal error (the copy table refuses it) |
 | channel, task handle | one counted reference (`ynz_channel_free`); the handle aborts its task (`ynz_handle_free`) |
 | errors-capable | the error object, or the ok payload |
-| `dynamic`, type parameter | internal error: no such value exists in generated code |
+| `dynamic` | internal error: no such value exists in generated code |
+| type parameter | resolved per instance before `release_step` runs: an instance type that owns no heap releases nothing |
 
 Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a `fixed` `set` or index assignment, a map `set` over a present key, whose handed-in key copy is freed too). `emit_errors_capable_release`'s ok payload and a plain union view release through the same `stored_release`: one dispatch decides what a stored value's release is. The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for every argument (deferred, see "Non-owned reads"). Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
 

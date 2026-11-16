@@ -239,17 +239,36 @@ fn a_reassigned_owner_is_released_and_its_assignment_releases_the_old_value() {
 }
 
 /// Bug: a generic body is left out of the plan ("every scope"), or its type-parameter values are
-/// released as if their type were known.
+/// dropped from it (a given `T` leaked in every instance).
 #[test]
-fn a_generic_body_is_covered_and_its_parameter_values_are_omitted() {
+fn a_generic_body_is_covered_and_its_parameter_values_are_planned() {
     let output = clean(
         "function keep<T>(give value: T) -> T {\n  let spare = [1, 2]\n  print(`${spare.count()}`)\n  return value\n}\n",
     );
     let list = body_end(&output, "keep");
     assert_eq!(fate_of(&list, "spare"), Fate::Release(ARRAY));
+    // The value is returned: the caller owns it from then on, whatever `T` is.
     assert_eq!(
-        fate_of(&list, "value"),
-        Fate::Omitted(OmitReason::TypeParameter)
+        fate_of(&return_edges(&output, "keep")[0], "value"),
+        Fate::Omitted(OmitReason::Returned)
+    );
+}
+
+/// Bug (High: leak): a given `T` that nothing hands on was omitted as a type parameter, so every
+/// instance leaked it. It is a releasing fate of `ReleaseKind::TypeParameter`, which codegen
+/// resolves by the instance's type; stored on some paths only, it is released only if live.
+#[test]
+fn a_given_type_parameter_value_has_a_releasing_fate() {
+    let output = clean(
+        "function drop<T>(give value: T) -> nothing {\n  print(`x`)\n}\nfunction maybeKeep<T>(give value: T, flag: boolean) -> array<T> {\n  let items: array<T> = []\n  if (flag) {\n    items.add(value)\n  }\n  return items\n}\n",
+    );
+    assert_eq!(
+        fate_of(&body_end(&output, "drop"), "value"),
+        Fate::Release(ReleaseKind::TypeParameter)
+    );
+    assert_eq!(
+        fate_of(&body_end(&output, "maybeKeep"), "value"),
+        Fate::ReleaseIfLive(ReleaseKind::TypeParameter)
     );
 }
 
@@ -1350,10 +1369,7 @@ fn c1f_agreement(output: &CheckOutput) -> Vec<String> {
                 if !matches!(
                     entry.fate,
                     Fate::Omitted(
-                        OmitReason::NotOwner
-                            | OmitReason::CallerOwns
-                            | OmitReason::NoStaticFounder
-                            | OmitReason::TypeParameter
+                        OmitReason::NotOwner | OmitReason::CallerOwns | OmitReason::NoStaticFounder
                     )
                 ) {
                     findings.push(format!(
