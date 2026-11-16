@@ -376,6 +376,16 @@ A plain (non-suspending) function releases its heap locals at every exit edge of
 - **Unbound temporaries (`NoOwner`).** A fresh value no binding holds is released at the end of its statement.
 - **Reassignment.** The old value is released at the assignment, behind the same null check.
 
+**Slice 2 design (current state).**
+
+- **Move sites carry a cause and a kind.** `MoveSite { founder, founder_codegen_name, kind, cause }`. `cause` is `Handed` (a read typeck consumed: give, send, store, spawn give; the value always leaves the founder) or `LastUse` (a string last-use read: it leaves the founder only if the store seam takes it). Only a founder whose kind the plain emitter releases (string, array, map, channel, handle, flat shape) has sites.
+- **Where the slot is nulled.** `Handed`: the identifier read itself (`lower_expr_node`, `Expr::Ident`), so every sink (call argument, send, spawn, store) is covered by one hook. `LastUse`: `own_string_for_store` and `own_read_for_store` when they take the string instead of copying it, through the slots remembered for the loaded value. A last-use string passed to a call that only borrows is not a take: its slot stays and the scope releases it. A state-machine function nulls nothing (C8).
+- **`ReleaseIfLive` is "release if the slot is non-null"** for every kind. `StringTakeEvidence` is gone.
+- **Reassignment.** `Stmt::Assign` releases the old value when its binding is a released owner. Order: evaluate the value, load the old slot value (a `RHS` that took it already nulled it), store the new value through the store seam, then release the old one; a flat shape snapshots its old bytes first because its per-site region is reused. A reassigned owner is released at its exits like any owner, and `Moved::EveryPath` becomes `ReleaseIfLive` for it (a later revive may restore a value). The plan lists the assignments that release (`ReleasePlan::assign_release`).
+- **`give` parameters.** The callee releases a `give` parameter at its scope exits like an owner; the caller's slot is nulled at the give. The spawn ladder does not free an argument at a `give` position (the callee owns it); other positions release deep.
+- **Temporaries (`NoOwner`).** A heap value no binding holds is released at the end of its statement through the same emitter; a piece of a temporary that a `let` or assignment keeps is a `MustCopy`.
+- **`MustCopy` bindings** whose every binding event is fresh, a give parameter or a `MustCopy` read are owners released through the plan.
+
 Pinned by `v03_m9_release_safety` (ASan, both optimization levels, counters) and `v03_m9_c7_*`.
 
 ### Non-owned reads — view or copy
