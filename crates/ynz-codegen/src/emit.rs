@@ -23583,13 +23583,43 @@ fn push_c_string_terminator(bytes: &mut Vec<u8>) {
     bytes.push(0);
 }
 
+/// NUL-terminated text and who owns it, as [`to_text`] reports it: the producer alone knows whether it
+/// just built a heap string (a debug text, a `toString` result) or hands back one something else owns
+/// (a held string, a static, a bignum's decimal text). A consumer that drops the text after reading
+/// it releases a `fresh` one and leaves a `borrowed` one alone, so no caller re-derives which is which.
+#[derive(Clone, Copy)]
+struct Text<'ctx> {
+    ptr: PointerValue<'ctx>,
+    fresh: bool,
+}
+
+impl<'ctx> Text<'ctx> {
+    fn fresh(ptr: PointerValue<'ctx>) -> Self {
+        Self { ptr, fresh: true }
+    }
+
+    fn borrowed(ptr: PointerValue<'ctx>) -> Self {
+        Self { ptr, fresh: false }
+    }
+}
+
+/// The text of `val` as a string pointer the CALLER owns when `ty` is `int`, `float`, `number` or a
+/// `boolean` (`toString()`: a fresh heap string, or a static one for a `boolean`).
 fn to_c_string<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<PointerValue<'ctx>, String> {
+    to_text(cg, val, ty).map(|text| text.ptr)
+}
+
+fn to_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<Text<'ctx>, String> {
     match ty {
-        Type::String => Ok(val.into_pointer_value()),
+        Type::String => Ok(Text::borrowed(val.into_pointer_value())),
 
         // M8 P4: sensitive string — delegate to the runtime, which checks
         // YNZ_REVEAL_SENSITIVE at first call and returns either the raw pointer
@@ -23604,7 +23634,7 @@ fn to_c_string<'ctx>(
                 .basic()
                 .ok_or("ynz_sensitive_to_string returned void")?
                 .into_pointer_value();
-            Ok(ptr)
+            Ok(Text::borrowed(ptr))
         }
 
         Type::Bool => cg
@@ -23615,7 +23645,7 @@ fn to_c_string<'ctx>(
                 cg.globals.str_false.as_pointer_value(),
                 "bstr",
             )
-            .map(|v| v.into_pointer_value())
+            .map(|v| Text::borrowed(v.into_pointer_value()))
             .map_err(|e| format!("{e}")),
 
         // Runtime format shims return a fresh heap string the caller owns: `toString()` hands it to
@@ -23625,33 +23655,39 @@ fn to_c_string<'ctx>(
                 .builder
                 .build_call(cg.rt.int_to_string, &[val.into()], "int_str")
                 .map_err(|e| format!("{e}"))?;
-            Ok(c.try_as_basic_value()
-                .basic()
-                .ok_or("int_to_string returned void")?
-                .into_pointer_value())
+            Ok(Text::fresh(
+                c.try_as_basic_value()
+                    .basic()
+                    .ok_or("int_to_string returned void")?
+                    .into_pointer_value(),
+            ))
         }
         Type::Float => {
             let c = cg
                 .builder
                 .build_call(cg.rt.float_to_string, &[val.into()], "flt_str")
                 .map_err(|e| format!("{e}"))?;
-            Ok(c.try_as_basic_value()
-                .basic()
-                .ok_or("float_to_string returned void")?
-                .into_pointer_value())
+            Ok(Text::fresh(
+                c.try_as_basic_value()
+                    .basic()
+                    .ok_or("float_to_string returned void")?
+                    .into_pointer_value(),
+            ))
         }
         Type::Number { precision } if *precision <= 34 => {
             let c = cg
                 .builder
                 .build_call(cg.rt.decimal_to_string, &[val.into()], "dec_str")
                 .map_err(|e| format!("{e}"))?;
-            Ok(c.try_as_basic_value()
-                .basic()
-                .ok_or("decimal_to_string returned void")?
-                .into_pointer_value())
+            Ok(Text::fresh(
+                c.try_as_basic_value()
+                    .basic()
+                    .ok_or("decimal_to_string returned void")?
+                    .into_pointer_value(),
+            ))
         }
         // M8 P6: bignum (N > 34) is stored as a pointer to a decimal string — pass directly.
-        Type::Number { .. } => Ok(val.into_pointer_value()),
+        Type::Number { .. } => Ok(Text::borrowed(val.into_pointer_value())),
         // Default debug representation for user-defined shapes: "ShapeName { field: val, ... }"
         // Visible fields only. Nested shapes are printed recursively.
         Type::Shape { name } => {
@@ -23778,7 +23814,7 @@ fn to_c_string<'ctx>(
                 .ok_or("ynz_string_builder_finalize void")?
                 .into_pointer_value();
 
-            Ok(result)
+            Ok(Text::fresh(result))
         }
 
         // Array debug representation: "[elem1, elem2, ..., elem20, ... and N more]"
@@ -23963,7 +23999,7 @@ fn to_c_string<'ctx>(
                 .ok_or("ynz_string_builder_finalize void")?
                 .into_pointer_value();
 
-            Ok(result)
+            Ok(Text::fresh(result))
         }
 
         // Map debug representation: "{ key: val, key2: val2 }" using insertion order.
@@ -24105,11 +24141,11 @@ fn to_c_string<'ctx>(
                 .basic()
                 .ok_or("finalize void")?
                 .into_pointer_value();
-            Ok(result)
+            Ok(Text::fresh(result))
         }
         Type::BuiltinMap { .. } => {
             let g = build_string_global(cg.ctx, cg.module, "{ <map> }", "map_ph");
-            Ok(g.as_pointer_value())
+            Ok(Text::borrowed(g.as_pointer_value()))
         }
 
         // A `T | nothing` union is written by `write_value_text` (branch on null, no string is
@@ -24117,7 +24153,7 @@ fn to_c_string<'ctx>(
         // introspection is future work.
         Type::Union { .. } => {
             let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
-            Ok(g.as_pointer_value())
+            Ok(Text::borrowed(g.as_pointer_value()))
         }
 
         // Options type — val is the i64-extended i8 tag; delegate to options toString.
@@ -24128,7 +24164,8 @@ fn to_c_string<'ctx>(
                 .builder
                 .build_int_truncate(tag_i64, cg.ctx.i8_type(), "opt_tag_i8")
                 .map_err(|e| format!("{e}"))?;
-            lower_options_to_string(cg, tag_i8.into(), name).map(|v| v.into_pointer_value())
+            lower_options_to_string(cg, tag_i8.into(), name)
+                .map(|text| Text::borrowed(text.into_pointer_value()))
         }
 
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
@@ -24167,6 +24204,22 @@ fn write_text_ptr<'ctx>(
     }
 }
 
+/// [`write_text_ptr`], then release the text when it is a heap string this lowering just built (a
+/// shape's, array's or map's debug text, nested ones included): nothing holds it past the write.
+fn write_and_release_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    sink: TextSink<'ctx>,
+    text: Text<'ctx>,
+) -> Result<(), String> {
+    write_text_ptr(cg, sink, text.ptr)?;
+    if text.fresh {
+        cg.builder
+            .build_call(cg.rt.ynz_string_release, &[text.ptr.into()], "")
+            .map_err(|err| format!("release text: {err}"))?;
+    }
+    Ok(())
+}
+
 /// Write the text of `val` (type `ty`) to `sink`: the one path every consumer that reads the
 /// text at once and drops it goes through (`print`, `${}`, shape/array/map debug text).
 ///
@@ -24174,9 +24227,11 @@ fn write_text_ptr<'ctx>(
 /// writes straight to the sink: no heap string is built and nothing is released, which is what
 /// keeps `print(n)` at or below its cost before strings carried an owned header (Golden Rule 8).
 /// Only `n.toString()` builds an owned string (`to_c_string`). A `T | nothing` union branches on
-/// null and writes `none` or the inner text the same way. Every other type's text is a pointer
-/// that something else owns (a held string, a static, a debug string), so it is written and not
-/// released.
+/// null and writes `none` or the inner text the same way. Every other type's text comes from
+/// [`to_text`], which says whether it is a heap string it just built (a shape's, array's or map's debug
+/// text, at any nesting depth): that one is released right after the write, so `print(shape)` and the
+/// nested text of its fields free what they build. A held string, a static or a bignum's text is
+/// written and left alone.
 fn write_value_text<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
@@ -24196,14 +24251,14 @@ fn write_value_text<'ctx>(
             return match (non_nothing.next(), non_nothing.next()) {
                 (Some(inner), None) => write_optional_text(cg, val, inner, sink),
                 _ => {
-                    let text = to_c_string(cg, val, ty)?;
-                    write_text_ptr(cg, sink, text)
+                    let text = to_text(cg, val, ty)?;
+                    write_and_release_text(cg, sink, text)
                 }
             };
         }
         _ => {
-            let text = to_c_string(cg, val, ty)?;
-            return write_text_ptr(cg, sink, text);
+            let text = to_text(cg, val, ty)?;
+            return write_and_release_text(cg, sink, text);
         }
     };
     let call = match sink {
