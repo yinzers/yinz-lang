@@ -6302,7 +6302,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// How a map of `key_ty` keys stores and compares them: a string by pointer, a decimal128
     /// `number` inline in 16 bytes (hashed and compared by value), an `int`, `bool` or `float` as
     /// i64 bits. Any other key type (a `number<N>` past 34 digits, a `sensitive` string, a shape)
-    /// has no key family in the runtime, so it is an error here and not an i64 of pointer bits.
+    /// has no key family in the runtime. Typeck refuses those (`check_map_key_type`), so reaching one
+    /// here is an internal error, never an i64 of pointer bits.
     ///
     /// Time: O(1)  Space: O(1)
     fn map_key_kind(&self, key_ty: &Type) -> Result<MapKeyKind, String> {
@@ -6312,8 +6313,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Number { precision } if precision <= 34 => Ok(MapKeyKind::Number),
             Type::Int | Type::Bool | Type::Float => Ok(MapKeyKind::Int),
             other => Err(format!(
-                "codegen: a map keyed by {other:?} has no runtime key kind (keys are string, \
-                 number up to 34 digits, int, bool or float): this is a compiler bug"
+                "internal error: a map keyed by {other:?} reached codegen, but typeck refuses it \
+                 (`check_map_key_type`: keys are string, number up to 34 digits, int, bool or \
+                 float)"
             )),
         }
     }
@@ -25952,8 +25954,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
 /// A `background` argument that is an envelope union but reaches a parameter the callee declares as
 /// something else (a generic `T`) has no slot to be copied into: the ctx would carry the spawner's
-/// per-site union view, which dangles once the spawner returns. Refused here rather than handed
-/// over.
+/// per-site union view, which dangles once the spawner returns. Typeck refuses that spawn
+/// (`check_background_union_argument_for_generic_callee`); this only asserts it did.
 ///
 /// Time: O(1)  Space: O(1)
 fn reject_union_argument_without_slot(
@@ -25966,10 +25968,8 @@ fn reject_union_argument_without_slot(
         return Ok(());
     }
     Err(format!(
-        "codegen: argument {} of `background {callee}(..)` is a union, but `{callee}` declares that \
-         parameter as a generic type, so the task has no union slot to copy it into and would read \
-         the spawner's dead frame. Declare the parameter with the union type, or wrap the value in \
-         a shape field",
+        "internal error: argument {} of `background {callee}(..)` is a union passed to a generic \
+         parameter, which typeck refuses (`check_background_union_argument_for_generic_callee`)",
         arg_index + 1
     ))
 }

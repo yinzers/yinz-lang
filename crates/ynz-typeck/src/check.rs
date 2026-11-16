@@ -737,6 +737,10 @@ fn local_fn_names(module: &Module) -> HashSet<String> {
 /// (real workload evidence) — see the v0.3-M4 plan's Future Requirements.
 pub const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
 
+/// The most digits a `number` map key can have: up to this the key is a 128-bit decimal the map
+/// hashes and compares by value. Wider `number<N>` is a heap bignum.
+const MAX_MAP_KEY_NUMBER_DIGITS: u32 = 34;
+
 /// The `errors`-capable member names whose *dispatch* requires the receiver's un-stripped
 /// `Type::ErrorsCapable` — `resolve_ident`'s auto-propagation may already have narrowed a
 /// bare-ident receiver to its success type on THIS exact read (first use of an
@@ -5242,6 +5246,8 @@ impl<'b> Checker<'b> {
                     }
                 }
 
+                self.check_background_union_argument_for_generic_callee(inner, callee_name);
+
                 // v0.3-M4 Phase 4: record the shape types whose values cross THIS spawn
                 // boundary — the raw facts the false-sharing padding analysis partitions
                 // at end-of-module (`false_sharing::finalize_false_sharing`). This arm is
@@ -8723,6 +8729,122 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// Refuse a union value spawned into a parameter a generic callee declares as a bare type
+    /// parameter (`background eat(choice)` with `choice: Circle | Tag` and `function eat<T>(held:
+    /// T)`). The task owns a slot for a union only when the callee declares the union type; a
+    /// generic parameter gives it no slot to copy into, so the task would read the spawner's
+    /// frame after it returned. Codegen's `reject_union_argument_without_slot` only asserts this.
+    /// The receiver of a method-call spawn is argument 0, as in a call.
+    ///
+    /// Time: O(arguments)  Space: O(arguments)
+    fn check_background_union_argument_for_generic_callee(
+        &mut self,
+        spawn: &Expr,
+        callee_name: Option<&str>,
+    ) {
+        let Some(callee) = callee_name else { return };
+        let Some(signature) = self.generic_fn_table.fns.get(callee) else {
+            return;
+        };
+        let arguments: Vec<&Expr> = match spawn {
+            Expr::Call(call) => call.args.iter().collect(),
+            Expr::MethodCall { receiver, args, .. } => std::iter::once(receiver.as_ref())
+                .chain(args.iter())
+                .collect(),
+            _ => return,
+        };
+        let refused: Vec<(SourceSpan, String, String)> = arguments
+            .iter()
+            .zip(signature.params.iter())
+            .filter(|(_, (_, parameter_ty))| matches!(parameter_ty, Type::TypeParam { .. }))
+            .filter_map(|(argument, (parameter_name, _))| {
+                let span = argument.span();
+                let argument_ty = self.expr_types.get(&(span.start, span.end))?;
+                is_envelope_union(argument_ty)
+                    .then(|| (span.clone(), parameter_name.clone(), type_name(argument_ty)))
+            })
+            .collect();
+        for (span, parameter_name, union_name) in refused {
+            self.diags.push(Diagnostic::error(
+                span,
+                format!(
+                    "Cannot give the union `{union_name}` to `{callee}`'s generic parameter \
+                     `{parameter_name}` in a `background` call."
+                ),
+                "Declare the parameter with the union type instead of a type parameter, or wrap the \
+                 union in a shape field and pass the shape.",
+                "A `background` task keeps its own copy of a union argument, and it can make that \
+                 copy only when the function declares the union type. A generic parameter `T` \
+                 gives the task no union slot to copy into, so it would read the spawner's memory \
+                 after the spawner returned.",
+            ));
+        }
+    }
+
+    /// Report a `map` key type the runtime cannot look up by value. A map hashes and compares a
+    /// key by value for a `string`, an `int`, a `boolean`, a `float` and a `number` of up to 34
+    /// digits (`MAX_MAP_KEY_NUMBER_DIGITS`); every other key type would be compared by
+    /// its address, so an equal key would miss. Codegen's `map_key_kind` mirrors this list and
+    /// only asserts it. An `Error` key was reported where it was written, and a type parameter
+    /// `K` is not known until an instance binds it, so neither is reported here.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn check_map_key_type(&mut self, key: &Type, span: &SourceSpan) {
+        let (instead, why) = match key {
+            Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Float
+            | Type::Error
+            | Type::TypeParam { .. } => return,
+            Type::Number { precision } if *precision <= MAX_MAP_KEY_NUMBER_DIGITS => return,
+            Type::Number { precision } => (
+                format!(
+                    "Key the map by an `int` or a `string` id, or by a `number` of at most \
+                     {MAX_MAP_KEY_NUMBER_DIGITS} digits (`number<{MAX_MAP_KEY_NUMBER_DIGITS}>`)."
+                ),
+                format!(
+                    "A map finds a key by its value, and it can do that for a `number` held in \
+                     128 bits (up to {MAX_MAP_KEY_NUMBER_DIGITS} digits). A `number<{precision}>` is \
+                     a larger number held on the heap, so it would be compared by address and \
+                     `m[key]` would miss an equal number."
+                ),
+            ),
+            Type::Sensitive { .. } => (
+                "Key the map by a plain `string`, such as a non-secret id or a name.".to_string(),
+                "A map finds a key by its value, and it can do that for a plain `string`. A \
+                 `sensitive` string is a wrapper that hides its text, so it would be compared by \
+                 address and `m[key]` would miss an equal secret."
+                    .to_string(),
+            ),
+            other => (
+                format!(
+                    "Key the map by one of its fields (an `int` id or a `string` name) and keep \
+                     the `{shown}` as the map's value: `map<string, {shown}>`.",
+                    shown = type_name(other)
+                ),
+                format!(
+                    "A map finds a key by its value, and it can do that for a `string`, an `int`, \
+                     a `boolean`, a `float` and a `number` of up to {MAX_MAP_KEY_NUMBER_DIGITS} \
+                     digits. A `{}` key would be compared by address, so `m[key]` would miss an \
+                     equal key.",
+                    type_name(other)
+                ),
+            ),
+        };
+        let shown = match key {
+            Type::Number { precision } => format!("number<{precision}>"),
+            Type::Sensitive { .. } => "sensitive string".to_string(),
+            other => type_name(other),
+        };
+        self.diags.push(Diagnostic::error(
+            span.clone(),
+            format!("A `map` cannot be keyed by `{shown}`."),
+            instead,
+            why,
+        ));
+    }
+
     /// Report a built-in generic written with fewer type arguments than it takes (`map<int>`).
     ///
     /// Time: O(1)  Space: O(1)
@@ -8903,6 +9025,7 @@ impl<'b> Checker<'b> {
                         let mut args = resolved_args.into_iter();
                         let key = args.next().unwrap_or(Type::Error);
                         let val = args.next().unwrap_or(Type::Error);
+                        self.check_map_key_type(&key, span);
                         Type::BuiltinMap {
                             key: Box::new(key),
                             val: Box::new(val),
@@ -10673,6 +10796,11 @@ impl<'b> Checker<'b> {
                 "Add a type annotation: `let m: map<string, int> = {}`.",
                 "Without an annotation, the compiler cannot determine what type of keys and values this map holds.",
             ));
+        }
+
+        // A hinted key type was checked where its annotation was written.
+        if hint_key.is_none() {
+            self.check_map_key_type(&key_ty, span);
         }
 
         Type::BuiltinMap {
