@@ -348,19 +348,9 @@ fn elem_copy(ty: &Type) -> Option<ElemCopy> {
         OwnedCopy::ReceiverIsCopy | OwnedCopy::ShapeMemcpy => Some(ElemCopy::Inline),
         // A string cell is a pointer to bytes the cell owns: copy each one.
         OwnedCopy::StringClone => Some(ElemCopy::Nested),
-        // A `number` cell is 8 bytes of POINTER bits, not the 16-byte decimal itself
-        // (`Cg::array_elem_size` sizes it at 8, and `Cg::to_i64_bits` is what puts it there) —
-        // and the storage it points at belongs to whichever frame produced the number, which
-        // is the same fact [`OwnedCopy::FrameLocalImmutable`] states. Copying the cell is
-        // still the right answer, because the copy question is INDEPENDENCE and nothing can
-        // change what those bits point at: two cells reading one unchanging decimal can never
-        // disagree, exactly as for a `string`. What copying does NOT do is move that storage
-        // anywhere, so an `array<number>` handed to a task carries the same frame-storage
-        // exposure it would have carried with no copy in sight — a property of the container,
-        // not something the copy introduces, and not something this table can fix (there is no
-        // per-cell re-homing path today; `value_to_stable_bits` has no `Number` arm). Recorded
-        // as parked entry 70 rather than smuggled in here as an `ElemCopy` distinction that
-        // would claim to solve it.
+        // A decimal128 `number` sits in the cell itself (16 bytes, `Cg::array_elem_size`), so
+        // copying the cell copies the value and nothing points into the producing frame. (A
+        // `range` element is the other member of this plan; it is still a pointer cell.)
         OwnedCopy::FrameLocalImmutable { .. } => Some(ElemCopy::Inline),
         // The cell is a pointer to a separate allocation — follow it.
         OwnedCopy::ArrayClone { .. } | OwnedCopy::MapClone | OwnedCopy::MaybeCellClone => {

@@ -1647,7 +1647,8 @@ pub unsafe extern "C" fn ynz_map_clone_strings(
 // array<T> is a heap-allocated growable list storing elements BY VALUE, inline in
 // one contiguous buffer of `elem_size`-byte cells:
 //   - non-shape elements: elem_size = 8 (int/float/bool as i64 bits by value;
-//     string/number/other pointer types as pointer bits — scratch-doc Option A),
+//     string/other pointer types as pointer bits — scratch-doc Option A),
+//   - decimal128 `number` elements: elem_size = 16, the decimal inline in the cell,
 //   - shape elements: elem_size = the shape's LLVM ABI byte size; the element's
 //     struct bytes live inline in the buffer (the array OWNS them — no dangling
 //     stack/global element pointers, the M3a-guard miscompile class by construction).

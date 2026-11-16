@@ -84,6 +84,9 @@ fn empty_wait_cache() -> &'static WaitCache {
     EMPTY_WAIT_CACHE.get_or_init(WaitCache::new)
 }
 
+/// The byte size of a decimal128 `number` stored inline in an array or map cell.
+const DECIMAL_CELL_SIZE: u64 = 16;
+
 static EMPTY_SUSPEND_SET: std::sync::OnceLock<SuspendSet> = std::sync::OnceLock::new();
 fn empty_suspend_set() -> &'static SuspendSet {
     EMPTY_SUSPEND_SET.get_or_init(SuspendSet::new)
@@ -2842,9 +2845,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// ELEMENTS and map VALUES alike (the two ABIs mirror 1:1; a map-side twin
     /// of this match would be exactly the parallel-derivation corpse class).
     ///
-    /// Non-shape elements are 8-byte cells holding the i64-bit convention
-    /// (int/float/bool by value; string/number/every other pointer type as pointer
-    /// bits — scratch-doc Option A). Shape elements are stored inline at the
+    /// Other elements are 8-byte cells holding the i64-bit convention
+    /// (int/float/bool by value; string/every other pointer type as pointer bits —
+    /// scratch-doc Option A). A decimal128 `number` is stored inline, 16 bytes
+    /// ([`DECIMAL_CELL_SIZE`]), like a Rust `Vec<Decimal>` element. Shape elements are stored inline at the
     /// shape's LLVM ABI byte size, read from `shape_abi_sizes`
     /// (TargetData-accurate, computed once per module) — never re-derived here.
     fn array_elem_size(&self, elem_ty: &Type) -> Result<u64, String> {
@@ -2860,8 +2864,18 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .ok_or("array elem size: union lost its variants")?;
                 Ok(self.union_layout(&variants)?.slot_size)
             }
+            // A decimal128 `number` is 16 bytes and is stored inline, as a shape is. A cell that
+            // held a pointer to the producing frame's storage read a dead frame once that frame
+            // returned or its loop body reused the slot.
+            Type::Number { precision } if precision <= 34 => Ok(DECIMAL_CELL_SIZE),
             _ => Ok(8),
         }
+    }
+
+    /// Is a value of `ty` a decimal128 `number`, which an array or map stores inline in a
+    /// [`DECIMAL_CELL_SIZE`]-byte cell? (A `number<N>` past 34 digits is a pointer cell.)
+    fn is_inline_decimal(&self, ty: &Type) -> bool {
+        matches!(self.resolve_type(ty), Type::Number { precision } if precision <= 34)
     }
 
     // ── v0.3-M5 P5: SoA gather/scatter (design c) ────────────────────────────
@@ -3364,6 +3378,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
             return Ok(val.into_pointer_value());
         }
+        // A decimal128 value is a pointer to its 16 bytes; the runtime memcpys them into the cell
+        // before this returns, so the source may be a slot the next statement reuses.
+        if self.is_inline_decimal(elem_ty) {
+            return Ok(val.into_pointer_value());
+        }
         // C1f: an envelope union persists as its own slot (payload inline); the runtime memcpys
         // the staged slot bytes into the element cell.
         if let Some(variants) = self.envelope_union_variants(elem_ty) {
@@ -3522,6 +3541,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 let layout = self.union_layout(&variants)?;
                 self.alloca_in_entry_llvm(self.union_slot_llvm(&layout), &format!("{site}_out"))
             }
+            Type::Number { precision } if precision <= 34 => {
+                self.alloca_in_entry_llvm(self.i128(), &format!("{site}_out"))
+            }
             _ => self.alloca_in_entry_llvm(self.i64(), &format!("{site}_out")),
         }
     }
@@ -3564,7 +3586,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         elem_ty: &Type,
         site: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
+        if matches!(self.resolve_type(elem_ty), Type::Shape { .. })
+            || self.is_inline_decimal(elem_ty)
+        {
             return Ok(out.into());
         }
         if let Some(variants) = self.envelope_union_variants(elem_ty) {
@@ -3587,7 +3611,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         elem_ty: &Type,
         site: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
+        if matches!(self.resolve_type(elem_ty), Type::Shape { .. })
+            || self.is_inline_decimal(elem_ty)
+        {
             return self
                 .builder
                 .build_ptr_to_int(out, self.i64(), &format!("{site}_ptrbits"))
@@ -3697,11 +3723,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `array_elem_get_maybe`'s envelope is per-site storage reused across reads,
     /// and for shape elements its bits point at the equally-reused out buffer. An
     /// escaping maybe binding therefore needs BOTH copied: the envelope by value,
-    /// and (shape payloads only, guarded on the flag — a `none`'s bits may be 0)
-    /// the payload bytes into an owned region with bits repointed at the copy.
-    /// Non-shape payloads are self-contained i64 bits (values, or pointers that
-    /// are stable against per-site reuse — heap for string, frame-local STACK
-    /// allocas for number) — the envelope copy alone owns them.
+    /// and (shape and decimal payloads, guarded on the flag — a `none`'s bits may be 0)
+    /// the payload bytes into an owned region with bits repointed at the copy
+    /// (`maybe_payload_stable_bits`: an element read's payload points at a per-site
+    /// buffer). Other payloads are self-contained i64 bits (values, or heap pointers
+    /// such as a string) — the envelope copy alone owns them.
     fn maybe_to_owned(
         &self,
         src_env: PointerValue<'ctx>,
@@ -3896,7 +3922,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
         let wide = match self.resolve_type(inner_ty) {
             Type::Shape { name } => WidePayload::Shape(name),
-            Type::Number { precision } if precision <= 34 && heap => WidePayload::Number,
+            Type::Number { precision } if precision <= 34 => WidePayload::Number,
             // A `maybe<string>` owns its payload string: a store copies it like any other string.
             Type::String => WidePayload::String,
             _ => return Ok(bits),
@@ -3951,9 +3977,27 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 }
                 owned_pay
             }
-            // Number reaches here only with `heap = true` (the match above passes
-            // in-frame copies through) — the one authoritative i128 promotion.
-            WidePayload::Number => self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?,
+            // A number payload points at the 16 bytes of whatever produced it: a frame slot, or the
+            // per-site buffer an element read fills (reused by the next read at that site). A stored
+            // payload gets its own copy: a counted heap cell when it persists past the frame, the
+            // binding's own slot otherwise.
+            WidePayload::Number if heap => {
+                self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?
+            }
+            WidePayload::Number => {
+                let owned_pay =
+                    self.alloca_in_entry_llvm(self.i128(), &format!("{site}_num_own"))?;
+                self.builder
+                    .build_memcpy(
+                        owned_pay,
+                        1,
+                        src_pay,
+                        1,
+                        self.i64().const_int(DECIMAL_CELL_SIZE, false),
+                    )
+                    .map_err(|e| format!("maybe_payload_stable_bits number memcpy: {e}"))?;
+                owned_pay
+            }
             WidePayload::String => {
                 self.string_clone_call(src_pay.into(), &format!("{site}_str_pay"))?
             }
@@ -5992,8 +6036,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// pointer bits are overwritten with the site and die with the frame — so
     /// they clone into counted heap cells here; everything else is
     /// self-contained i64 bits (plain values, or pointers stable against
-    /// per-site reuse — heap for string, frame-local STACK allocas for
-    /// number). The persist surfaces that route through here
+    /// per-site reuse — heap for string; a decimal128 number is not marshalled here
+    /// for an array or map, whose cell holds its 16 bytes inline). The persist
+    /// surfaces that route through here
     /// (authoritative-derivation: one marshalling answer, no per-surface
     /// twins):
     ///
@@ -6092,7 +6137,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // always self-contained (i64 bits or a stable heap string
                 // pointer) — the memcpy above already owns it.
                 let resolved_val_ty = self.resolve_type(entry_val_ty);
-                if matches!(resolved_val_ty, Type::Shape { .. } | Type::Maybe { .. }) {
+                if matches!(resolved_val_ty, Type::Shape { .. } | Type::Maybe { .. })
+                    || self.is_inline_decimal(&resolved_val_ty)
+                {
                     let vslot = self
                         .builder
                         .build_struct_gep(entry_ty, cell, 1, &format!("{site}_me_v"))
@@ -6112,6 +6159,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         }
                         Type::Maybe { ref inner } => {
                             self.maybe_to_heap_cell(vptr, inner, &format!("{site}_me_val"))?
+                        }
+                        // A decimal value half points into the map loop's per-site value buffer.
+                        Type::Number { .. } => {
+                            self.number_to_heap_cell(vptr, &format!("{site}_me_val"))?
                         }
                         _ => unreachable!("guarded by the matches! above"),
                     };
@@ -20559,34 +20610,12 @@ fn lower_expr_node<'ctx>(
                     // BuiltinArray: heap-allocate via the by-value choke point.
                     let elem_ty = elem.as_ref().clone();
                     let arr_ptr = cg.array_new(&elem_ty, "arr_new")?;
-                    let in_sm = cg.sm_frame_ptr.is_some();
-                    for (elem_idx, elem_expr) in elements.iter().enumerate() {
+                    for elem_expr in elements.iter() {
                         let elem_ty2 = cg.expr_type(elem_expr);
-                        // NumberLit decimal128 elements in SM functions: emit a module-level
-                        // constant global instead of a stack alloca so the pointer survives
-                        // across suspension boundaries. Number elements remain POINTER cells
-                        // under the by-value ABI (elem_size 8, Option A), so this global is
-                        // still load-bearing — unlike shape elements, whose bytes now live
-                        // inline in the heap buffer (the former shape-global fold and its
-                        // `try_build_shape_global` helper were deleted with the M5 P2 cut:
-                        // push memcpys the struct-literal alloca's bytes before it dies, so
-                        // the buffer, not a global/stack pointer, is the stable owner).
-                        let elem_val = if in_sm
-                            && matches!(elem_ty2, Type::Number { precision } if precision <= 34)
-                        {
-                            if let Expr::NumberLit(s, _) = elem_expr {
-                                let bits: u128 = ynz_numerics::parse(s)
-                                    .ok_or_else(|| format!("bad decimal literal `{s}`"))?;
-                                let gname =
-                                    format!(".arr.dec.{}.{}", elem_idx, &s[..s.len().min(8)]);
-                                let g = build_decimal_global(cg.ctx, cg.module, bits, &gname);
-                                g.as_pointer_value().into()
-                            } else {
-                                lower_expr(cg, elem_expr)?
-                            }
-                        } else {
-                            lower_expr(cg, elem_expr)?
-                        };
+                        // The element's 16 bytes are copied into the array cell by the runtime
+                        // before the push returns, so whatever slot the literal or computed number
+                        // sits in may die or be reused straight away.
+                        let elem_val = lower_expr(cg, elem_expr)?;
                         // Always AoS: an ADMITTED array's literal is intercepted at
                         // its `Stmt::Let` (lower_soa_construction) and never
                         // reaches this arm.
@@ -26658,8 +26687,8 @@ fn lower_array_method<'ctx>(
             //
             // Element comparison semantics (v0.3-M5 P2):
             //   - non-shape elements: 8-byte cell BIT equality (int/bool value; float
-            //     bit pattern; number pointer identity — behavior-preserving
-            //     vs the uniform-slot ABI, locked by the step-1 matrix goldens);
+            //     bit pattern);
+            //   - decimal128 `number` elements: VALUE equality (`decimal_compare`, as `==`);
             //   - string elements: byte equality (`ynz_string_eq`, as `==`);
             //   - shape elements: field-wise VALUE equality via `shape_value_eq`
             //     (pointer identity has no by-value analogue; locked by the two RED
@@ -26687,7 +26716,8 @@ fn lower_array_method<'ctx>(
             };
             // Non-shape target: marshal to the full-width i64 cell ONCE, before the
             // loop (the widening also fixes the raw-i1 bool-target compare).
-            let target_bits = if elem_shape_name.is_none() {
+            let compares_decimals = cg.is_inline_decimal(elem);
+            let target_bits = if elem_shape_name.is_none() && !compares_decimals {
                 Some(cg.array_elem_bits64(target_val, &target_ty)?)
             } else {
                 None
@@ -26738,6 +26768,11 @@ fn lower_array_method<'ctx>(
                 // Field-wise value equality between the copied element bytes and
                 // the target shape pointer.
                 cg.shape_value_eq(target_val.into_pointer_value(), out, shape_name, "c_eq")?
+            } else if compares_decimals {
+                // A decimal element is found by its VALUE (`1.0` equals `1.00`, as `==` says), never
+                // by the address of the cell it sits in.
+                decimal_compare(cg, out, target_val.into_pointer_value(), &BinOpKind::EqEq)?
+                    .into_int_value()
             } else if matches!(cg.resolve_type(elem), Type::String) {
                 // A string element is found by its bytes (`ynz_string_eq`, the same equality
                 // as `==`), never by its pointer: every stored string is a copy of the one

@@ -34,7 +34,10 @@ fn assert_prints(source: &str, expected: &str) {
             "AddressSanitizer reported an error (no_optimize={no_optimize}):\n{}\n{source}",
             run.stderr
         );
-        assert_eq!(run.stdout, expected, "under ASan, no_optimize={no_optimize}");
+        assert_eq!(
+            run.stdout, expected,
+            "under ASan, no_optimize={no_optimize}"
+        );
     }
 }
 
@@ -126,10 +129,11 @@ fn maybe_number_read_from_an_element_survives_its_array_and_the_next_read() {
          let doubled: number = amount * 2.0\n  let values: array<number> = [amount, doubled]\n  \
          return values\n}\n",
         "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let values = make(amount)\n  \
-         let held: array<maybe<number>> = []\n  \
-         let first = pick(values, 0)\n  let second = pick(values, 1)\n  let scratch = clobber(5)\n  \
+         let first = pick(values, 0)\n  let second = pick(values, 1)\n  \
+         let latest: maybe<number> = values.get(0)\n  for (position in range(0, 2)) {\n    \
+         let found = values.get(position)\n    latest = found\n  }\n  let scratch = clobber(5)\n  \
          let fallback: number = 0.0\n  \
-         print(`${first.or(fallback)} ${second.or(fallback)} ${scratch} ${held.count()}`)\n",
+         print(`${first.or(fallback)} ${second.or(fallback)} ${scratch} ${latest.or(fallback)}`)\n",
     );
-    assert_prints(&source, "2.5 5.00 54 0\n");
+    assert_prints(&source, "2.5 5.00 54 5.00\n");
 }
