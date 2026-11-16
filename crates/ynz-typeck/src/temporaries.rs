@@ -78,6 +78,7 @@ const BORROWING_METHODS: &[&str] = &[
     "first",
     "last",
     "or",
+    "failed",
     "split",
     "add",
     "set",
@@ -438,6 +439,7 @@ impl Walk<'_> {
                         | ReleaseKind::Shape
                         | ReleaseKind::NestedShape
                         | ReleaseKind::Union
+                        | ReleaseKind::ErrorsCapable
                 )
             )
     }

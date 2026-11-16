@@ -20430,10 +20430,14 @@ type CallCopies<'ctx> = Vec<(BasicValueEnum<'ctx>, Type)>;
 /// copied by the store seam; the copy is recorded in `copies` for `release_call_copies`. Any
 /// other argument is passed as it is: a position the callee writes is the place itself, and a
 /// view reads the place the callee only reads.
+///
+/// At a `give` position (`gives`) the copy is handed over: the callee releases it, so the call does
+/// not record it in `copies` (releasing it after the call as well freed it twice).
 fn lower_call_argument<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     arg: &Expr,
     copies: &mut CallCopies<'ctx>,
+    gives: bool,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let val = lower_expr(cg, arg)?;
     let span = arg.span();
@@ -20442,7 +20446,7 @@ fn lower_call_argument<'ctx>(
     }
     let ty = cg.expr_type(arg);
     let owned = own_read_for_store(cg, arg, val, &ty, false, "call_arg")?;
-    if owned.copied {
+    if owned.copied && !gives {
         copies.push((owned.release_value(), ty));
     }
     Ok(owned.value)
@@ -21106,11 +21110,12 @@ fn lower_expr_node<'ctx>(
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
                     let mut arg_copies: CallCopies<'ctx> = Vec::new();
                     for (arg_index, arg) in call.args.iter().enumerate() {
-                        let mut val = lower_call_argument(cg, arg, &mut arg_copies)?;
-                        if matches!(
+                        let gives = matches!(
                             cg.plain_callee_param_ownership(name, arg_index),
                             Some(Some(OwnershipModifier::Give))
-                        ) {
+                        );
+                        let mut val = lower_call_argument(cg, arg, &mut arg_copies, gives)?;
+                        if gives {
                             val = own_given_maybe(cg, arg, val)?;
                         }
                         call_args.push(val.into());
@@ -24604,13 +24609,14 @@ fn lower_ufcs_call<'ctx>(
     };
     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
     for (extra_index, arg) in extra_args.iter().enumerate() {
-        let mut arg_val = lower_call_argument(cg, arg, &mut copies)?;
-        // The receiver is parameter 0, so the extra arguments start at parameter 1. A `maybe` at a
-        // `give` position is handed over as a plain call's is (`own_given_maybe`).
-        if matches!(
+        // The receiver is parameter 0, so the extra arguments start at parameter 1.
+        let gives = matches!(
             cg.plain_callee_param_ownership(method, extra_index + 1),
             Some(Some(OwnershipModifier::Give))
-        ) {
+        );
+        let mut arg_val = lower_call_argument(cg, arg, &mut copies, gives)?;
+        // A `maybe` at a `give` position is handed over as a plain call's is (`own_given_maybe`).
+        if gives {
             arg_val = own_given_maybe(cg, arg, arg_val)?;
         }
         args.push(arg_val.into());

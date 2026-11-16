@@ -974,8 +974,21 @@ impl<'a> ReadTracker<'a> {
         };
         let mut judged: Vec<((usize, usize), Option<ResolvedPlace>)> = Vec::new();
         for (position, argument) in arguments.iter().enumerate() {
-            if !reads(position)
-                || !self.is_place_read(argument)
+            if !reads(position) {
+                // A position the callee takes (`give`): a place read through a temporary
+                // (`eat(find(rows).or(fallback))`) is a view of the temporary's payload, which
+                // the statement end releases and the callee would release too, so the callee
+                // is handed a copy.
+                if self.is_place_read(argument)
+                    && self.through_temporary(argument)
+                    && self.type_of(argument).is_some_and(reader_holds_heap)
+                {
+                    let span = argument.span();
+                    self.must_copy((span.start, span.end));
+                }
+                continue;
+            }
+            if !self.is_place_read(argument)
                 || !self.type_of(argument).is_some_and(reader_holds_heap)
             {
                 continue;
