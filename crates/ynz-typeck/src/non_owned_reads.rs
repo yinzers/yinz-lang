@@ -87,7 +87,8 @@ pub enum ReadVerdict {
 
 /// True when a `let` (under `annotation`) or an assignment (`None`) of `value` takes a piece of a
 /// temporary: `value` is a chain of field reads off the result of a call of a Yinz function and
-/// names a string, array or map, and the annotation, if any, is that same type. THE one answer the
+/// names a string, array, map or shape (a nested shape is a heap cell the temporary owns), and
+/// the annotation, if any, is that same type. THE one answer the
 /// `Take` verdict (`NonOwnedReads`) and the checker's binding event (the binding owns what it
 /// takes, `check::binding_event_origin`) both read. `type_of` is the type oracle and `is_user_fn`
 /// says a name is a function a call can reach.
@@ -97,16 +98,27 @@ pub(crate) fn is_taken_piece_of_a_temporary(
     type_of: &dyn Fn(&Expr) -> Option<Type>,
     is_user_fn: &dyn Fn(&str) -> bool,
 ) -> bool {
-    let annotation_keeps_the_type = match annotation {
-        None => true,
-        Some(ynz_ast::nodes::Type::Generic { name, .. }) => name == "array" || name == "map",
-        Some(ynz_ast::nodes::Type::Named(name, _)) => name == "string",
-        Some(_) => false,
+    let value_type = type_of(value);
+    let annotation_keeps_the_type = match (annotation, &value_type) {
+        (None, _) => true,
+        (Some(ynz_ast::nodes::Type::Generic { name, .. }), _) => name == "array" || name == "map",
+        // A nested shape is taken only under its own name: any other annotation (a union, an
+        // alias) wraps or converts the value, which is a copy.
+        (Some(ynz_ast::nodes::Type::Named(name, _)), Some(Type::Shape { name: shape_name })) => {
+            name == shape_name
+        }
+        (Some(ynz_ast::nodes::Type::Named(name, _)), _) => name == "string",
+        (Some(_), _) => false,
     };
     if !annotation_keeps_the_type
         || !matches!(
-            type_of(value),
-            Some(Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. })
+            value_type,
+            Some(
+                Type::String
+                    | Type::BuiltinArray { .. }
+                    | Type::BuiltinMap { .. }
+                    | Type::Shape { .. }
+            )
         )
     {
         return false;

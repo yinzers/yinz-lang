@@ -2221,6 +2221,10 @@ struct Cg<'ctx, 'g> {
     // or a call result's slot, a union envelope view. Written by `lower_expr`, read by every copy
     // of a value's bytes (`Cg::is_moved_cells`); a value absent from it is copied deep.
     moved_cell_values: std::collections::HashSet<usize>,
+    // C7 slice 3b: the nested-shape cells a `let` or assignment takes out of a temporary
+    // (`lower_taken_field`), keyed by the LLVM value of the cell pointer. The store that copies
+    // the cell's bytes into the binding frees the emptied cell (`shape_bytes_to_owned`).
+    taken_shape_cells: std::collections::HashSet<usize>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -3839,6 +3843,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_memcpy(owned, 1, src, 1, size)
             .map_err(|e| format!("shape_bytes_to_owned memcpy: {e}"))?;
         self.deepen_unless_moved(src, owned, shape_name)?;
+        // A nested shape a `let` took out of a temporary (`lower_taken_field`): its bytes and
+        // everything they own are the binding's now, so only the emptied cell goes.
+        if self.taken_shape_cells.contains(&(src.as_value_ref() as usize)) {
+            self.builder
+                .build_call(self.rt.ynz_free, &[src.into(), size.into()], "")
+                .map_err(|err| format!("shape_bytes_to_owned free the taken cell: {err}"))?;
+        }
         Ok(owned)
     }
 
@@ -7515,6 +7526,7 @@ fn plain_cg<'ctx, 'g>(
         temporary_frames: Vec::new(),
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
+        taken_shape_cells: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -7949,6 +7961,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         temporary_frames: Vec::new(),
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
+        taken_shape_cells: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -24249,6 +24262,12 @@ fn lower_taken_field<'ctx>(
         cg.owned_string_values.insert(taken.as_value_ref() as usize);
     } else {
         cg.moved_cell_values.insert(taken.as_value_ref() as usize);
+        // A nested shape is a heap cell: the binding copies its bytes (strings and cells stay,
+        // nothing deepens) and frees the emptied cell (`shape_bytes_to_owned`). A state-machine
+        // function nulls nothing and releases no temporary, so it frees nothing either.
+        if cg.sm_frame_ptr.is_none() && matches!(cg.resolve_type(&field_ty), Type::Shape { .. }) {
+            cg.taken_shape_cells.insert(taken.as_value_ref() as usize);
+        }
     }
     Ok(taken)
 }
@@ -25798,6 +25817,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get_nth_param(0)
             .ok_or("release: missing value parameter")?
             .into_pointer_value();
+        // A nested shape's cell is null once a `let` took it out of a temporary
+        // (`lower_taken_field`), and the temporary's release skips it.
+        if owns_cell && matches!(step, ReleaseStep::Shape { .. }) {
+            let release_cell = self.ctx.append_basic_block(release, "release_cell");
+            let taken = self.ctx.append_basic_block(release, "release_cell_taken");
+            let is_null = self
+                .builder
+                .build_is_null(value, "cell_taken")
+                .map_err(|err| format!("release cell null check {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(is_null, taken, release_cell)
+                .map_err(|err| format!("release cell branch {name}: {err}"))?;
+            self.builder.position_at_end(taken);
+            self.builder
+                .build_return(None)
+                .map_err(|err| format!("release cell taken return {name}: {err}"))?;
+            self.builder.position_at_end(release_cell);
+        }
         self.emit_release_body(release, &step, &resolved, local, value, &name)?;
         if owns_cell {
             let size = self.release_cell_size(&step)?;
