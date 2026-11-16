@@ -389,6 +389,19 @@ A shared borrow is only valid while its owner exists. A background task might st
 
 **The one exception: `channel<T>` parameters.** A channel is built to be held by two tasks at once — that's its job — so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything you saw in the channels section above relies on this.
 
+**A union cannot go to a generic parameter of a `background` function.** A task keeps its own copy of a union argument, and it can make that copy only when the function declares the union type. A generic parameter gives the task no union slot to copy into, so the compiler refuses it:
+
+```ynz
+function eat<T>(held: T) -> nothing { ... }
+
+let choice: Circle | Tag = tag
+background eat(choice)
+// COMPILE ERROR: Cannot give the union `Circle | Tag` to `eat`'s generic parameter `held`
+// in a `background` call.
+// Declare `held` as `Circle | Tag` in `eat`'s signature instead of a type parameter,
+// or wrap the union in a shape field and pass the shape.
+```
+
 **The compiler figures out which one to use** when the function signature is `give`:
 
 If you don't use the value after the `background` call, the compiler infers `give` (transfers ownership to the task):

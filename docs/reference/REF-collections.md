@@ -320,6 +320,21 @@ scores["alice"] = 75         // sugar for scores.set("alice", 75)
 
 **A `number` key matches by value.** `1.0` and `1.00` are the same key, as `1.0 == 1.00` is `true`; setting one when the other is present replaces the value and keeps the key as first stored. `.contains` on an `array<number>` compares by value the same way.
 
+**A map key is found by what it holds.** A map can do that for a `string`, an `int`, a `boolean`, a `float` and a `number` of up to 34 digits. Any other key type is refused at compile time, because the map would compare where the key sits in memory instead of what it holds, and looking up a key equal to one you stored would miss:
+
+```
+let totals: map<number<50>, int> = {}
+// COMPILE ERROR: A `map` cannot be keyed by `number<50>`.
+// Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits.
+
+let labels: map<Point, string> = {}
+// COMPILE ERROR: A `map` cannot be keyed by `Point`.
+// Key the map by one of its fields (an `int` id or a `string` name) and keep the `Point`
+// as the map's value: `map<string, Point>`.
+```
+
+The same refusal covers a `sensitive string` (key by a plain `string`) and every other type, such as an `array` or a shape.
+
 **Bulk update with `.update({...})`:**
 
 ```
