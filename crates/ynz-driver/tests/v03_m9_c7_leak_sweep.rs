@@ -3,8 +3,8 @@
 //!
 //! The release plan's measure is `frees == allocations`. This sweep is the list of where that
 //! still fails, so a producer fix can be checked against the whole corpus and the next agent
-//! can see what is left. It is `#[ignore]` because it builds ~950 programs (about 90 s on 4
-//! cores): a dedicated-lane test, not a pre-push one.
+//! can see what is left. It is `#[ignore]` because it builds ~950 programs (about 3 to 5
+//! minutes on 4 cores): a dedicated-lane test, not a pre-push one.
 //!
 //! It asserts the one thing C7 owns: a `plain`-class fixture leaks only if it is listed in
 //! `KNOWN_PLAIN_LEAKS` with its reason, and every listed one still leaks (a fixed leak must leave
@@ -36,8 +36,6 @@
 mod support;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 
 /// The words that make a fixture "concurrency" for the sweep's grouping: a fixture without any is
 /// a plain program, whatever else it does.
@@ -124,57 +122,26 @@ fn measure(fixture: &str) -> Result<Outcome, &'static str> {
 }
 
 #[test]
-#[ignore = "a report over every fixture (~950 builds); run on demand with --ignored"]
+#[ignore = "builds and runs ~950 programs (about 5 minutes on 4 cores): a dedicated-lane test; run with --ignored"]
 fn sweep_every_fixture_for_leaks_and_classify_them() {
     let filter = std::env::var("YNZ_LEAK_SWEEP_FILTER").unwrap_or_default();
-    let fixtures_dir = support::fixture_path("");
-    let mut names: Vec<String> = std::fs::read_dir(&fixtures_dir)
-        .expect("read the fixtures directory")
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.contains(filter.as_str()))
-        .collect();
-    names.sort();
+    let names = support::fixture_names(&filter);
 
-    let cursor = AtomicUsize::new(0);
-    let leaks: Mutex<Vec<Outcome>> = Mutex::new(Vec::new());
-    let unmeasured: Mutex<Vec<(String, &'static str)>> = Mutex::new(Vec::new());
-    let balanced = AtomicUsize::new(0);
-    let workers = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(4)
-        .min(4);
-    // A worker claims the next fixture as it frees up: per-fixture cost varies widely.
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| loop {
-                let position = cursor.fetch_add(1, Ordering::Relaxed);
-                let Some(fixture) = names.get(position) else {
-                    break;
-                };
-                match measure(fixture) {
-                    Ok(outcome)
-                        if outcome.heap.0 != outcome.heap.1
-                            || outcome.strings.0 != outcome.strings.1 =>
-                    {
-                        leaks.lock().expect("leaks mutex").push(outcome);
-                    }
-                    Ok(_) => {
-                        balanced.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(class) => unmeasured
-                        .lock()
-                        .expect("unmeasured mutex")
-                        .push((fixture.clone(), class)),
-                }
-            });
+    let mut leaks: Vec<Outcome> = Vec::new();
+    let mut unmeasured: Vec<(String, &'static str)> = Vec::new();
+    let mut balanced = 0usize;
+    for (fixture, measured) in support::sweep_in_parallel(&names, measure) {
+        match measured {
+            Ok(outcome)
+                if outcome.heap.0 != outcome.heap.1 || outcome.strings.0 != outcome.strings.1 =>
+            {
+                leaks.push(outcome);
+            }
+            Ok(_) => balanced += 1,
+            Err(class) => unmeasured.push((fixture.to_string(), class)),
         }
-    });
-
-    let mut leaks = leaks.into_inner().expect("leaks mutex");
+    }
     leaks.sort_by(|left, right| (left.class, &left.fixture).cmp(&(right.class, &right.fixture)));
-    let mut unmeasured = unmeasured.into_inner().expect("unmeasured mutex");
-    unmeasured.sort();
 
     let mut report = String::new();
     for outcome in &leaks {
@@ -208,7 +175,7 @@ fn sweep_every_fixture_for_leaks_and_classify_them() {
     println!(
         "swept {} fixtures: {} balanced, {} leaking, {} unmeasured (report: {})",
         names.len(),
-        balanced.load(Ordering::Relaxed),
+        balanced,
         leaks.len(),
         unmeasured.len(),
         out_path.display()

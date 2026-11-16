@@ -521,3 +521,49 @@ pub fn assert_asan_clean(label: &str, program: &str, expected: &str, no_optimize
     );
     assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
 }
+
+/// The fixture names under `tests/fixtures` that contain `filter` (all of them when it is empty),
+/// sorted.
+pub fn fixture_names(filter: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(fixture_path(""))
+        .expect("read the fixtures directory")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(filter))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Run `measure` on every item at once, on up to four workers, and return each item with its
+/// result, sorted by item. A worker claims the next item as it frees up (per-item cost varies by
+/// more than an order of magnitude) and the result is sorted because completion order is not
+/// deterministic (`.claude/rules/test-parallelism.md`). O(n) time over n items / 4 workers.
+pub fn sweep_in_parallel<'items, Result: Send>(
+    items: &'items [String],
+    measure: impl Fn(&'items str) -> Result + Sync,
+) -> Vec<(&'items str, Result)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    let cursor = AtomicUsize::new(0);
+    let results: Mutex<Vec<(&'items str, Result)>> = Mutex::new(Vec::new());
+    let workers = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .min(4);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let position = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(position) else {
+                    break;
+                };
+                let result = measure(item);
+                results.lock().expect("results mutex").push((item, result));
+            });
+        }
+    });
+    let mut results = results.into_inner().expect("results mutex");
+    results.sort_by(|left, right| left.0.cmp(right.0));
+    results
+}
