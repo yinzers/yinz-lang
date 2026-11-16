@@ -19640,6 +19640,11 @@ fn own_returned_value<'ctx>(
     if let Some(shared) = share_returned_channel(cg, val, &ty, site)? {
         return Ok(shared);
     }
+    // An envelope union is copied by the `return` itself (`union_persist_into` into the returned
+    // slot, deep unless the value moves), so the store seam does not copy it a second time.
+    if matches!(cg.resolve_type(&ty), Type::Union { .. }) {
+        return Ok(val);
+    }
     if !ynz_typeck::owned_copy::copied_at_return(&cg.resolve_type(&ty)) {
         return Ok(val);
     }

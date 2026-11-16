@@ -352,6 +352,7 @@ impl Walk<'_> {
                         | ReleaseKind::Map
                         | ReleaseKind::Shape
                         | ReleaseKind::NestedShape
+                        | ReleaseKind::Union
                 )
             )
     }

@@ -1106,15 +1106,21 @@ fn returns_freshness_in_block(
                 ..
             } => {
                 // The new value of `name`: fresh iff its initializer is fresh. A `Whole(b)`
-                // initializer aliases `b` — both names now hold one value; neither is fresh.
+                // initializer is a store, which hands `b`'s value over (`let b = a` makes the new
+                // name the one owner and consumes `a`; a program that keeps reading `a` does not
+                // build): `name` is fresh exactly when `b` was, and `b` no longer is.
                 let p = provenance(value, ctx);
                 match p {
                     Provenance::Fresh => {
                         fresh_locals.insert(name.clone());
                     }
                     Provenance::Whole(b) => {
-                        fresh_locals.remove(&b);
-                        fresh_locals.remove(name);
+                        let handed_over_fresh_value = fresh_locals.remove(&b);
+                        if handed_over_fresh_value {
+                            fresh_locals.insert(name.clone());
+                        } else {
+                            fresh_locals.remove(name);
+                        }
                     }
                     Provenance::Reaches(_) | Provenance::Unknown => {
                         fresh_locals.remove(name);

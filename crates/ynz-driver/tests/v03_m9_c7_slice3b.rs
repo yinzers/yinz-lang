@@ -507,3 +507,56 @@ case!(
     Balance::HeapAndStrings,
     "a `let` that views a nested shape field reads the cell a field assignment or a root reassignment released (High)"
 );
+
+// ── Item 4: a union returned from a local is an owned value ─────────────────────────────────
+
+const A_UNION_RETURNED_FROM_A_LOCAL: &str = "
+shape Circle {
+  label: string
+}
+shape Square {
+  side: int
+}
+shape Figure = Circle | Square
+function make(index: int) -> Figure {
+  let circle: Circle = { label: `c${index}` }
+  let figure: Figure = circle
+  return figure
+}
+function relay(index: int) -> Figure {
+  let inner = make(index)
+  return inner
+}
+function pick(share figure: Figure) -> Figure {
+  return figure
+}
+function area(share figure: Figure) -> int {
+  if (figure) {
+    is Circle => {
+      return figure.label.count()
+    }
+    is Square => {
+      return figure.side
+    }
+  }
+  return 0
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (index in range(0, 50)) {
+    let first = make(index)
+    let second = relay(index)
+    let third = pick(first)
+    total = total + area(first) + area(second) + area(third) + area(make(index))
+  }
+  print(total)
+}
+";
+
+case!(
+    a_union_returned_from_a_local_or_a_parameter_is_owned_by_its_caller_once,
+    A_UNION_RETURNED_FROM_A_LOCAL,
+    "560\n",
+    Balance::Strings,
+    "a union a function returns (a moved local, a relayed result, a `share` parameter) is copied twice, or its payload strings are freed by the callee and again by the caller, or the unbound result leaks (High)"
+);
