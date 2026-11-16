@@ -3853,7 +3853,22 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         inner_ty: &Type,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
-        self.maybe_to_owned_dest(src_env, inner_ty, site, false)
+        self.maybe_to_owned_dest(src_env, inner_ty, site, false, false)
+    }
+
+    /// `maybe_to_owned` for a `maybe` a user function returned: its shape and number payload sit in a
+    /// heap cell the return made (`maybe_payload_stable_bits` with `heap`), and a string payload is a
+    /// clone the return made. The binding TAKES them: the shape's bytes move into the binding's own
+    /// slot with the strings and cells they own (no copy of either), and the empty cell is freed, so
+    /// the binding's release frees each allocation once. An array or map payload is the caller's
+    /// copy to make (`copy_maybe_container_payload`) and is left alone.
+    fn maybe_to_owned_taking(
+        &self,
+        src_env: PointerValue<'ctx>,
+        inner_ty: &Type,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        self.maybe_to_owned_dest(src_env, inner_ty, site, false, true)
     }
 
     /// Persist-side sibling of `maybe_to_owned` (v0.3-M5 P2 fix round 2): same
@@ -3867,7 +3882,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         inner_ty: &Type,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
-        self.maybe_to_owned_dest(src_env, inner_ty, site, true)
+        self.maybe_to_owned_dest(src_env, inner_ty, site, true, false)
     }
 
     /// Shared implementation for the two maybe ownership copies above — ONE
@@ -3881,6 +3896,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         inner_ty: &Type,
         site: &str,
         heap: bool,
+        take: bool,
     ) -> Result<PointerValue<'ctx>, String> {
         let owned_env = if heap {
             let raw = self
@@ -3915,7 +3931,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_int_value();
 
         let moved = self.is_moved_cells(src_env);
-        let final_bits = self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap, moved)?;
+        let final_bits =
+            self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap, moved, take)?;
 
         let dst_flag_gep = self
             .builder
@@ -4033,6 +4050,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         site: &str,
         heap: bool,
         moved: bool,
+        take: bool,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         enum WidePayload {
             Shape(String),
@@ -4089,7 +4107,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // The payload owns a copy of everything the shape owns unless the envelope it
                 // came from moves in; a moved payload still owns strings of its own (a string is
                 // moved by `string_moves`, not by this record).
-                if moved {
+                if take {
+                    // The cell and the strings and cells it owns are the binding's now; only the
+                    // emptied cell goes.
+                    self.builder
+                        .build_call(self.rt.ynz_free, &[src_pay.into(), size.into()], "")
+                        .map_err(|err| format!("maybe_payload_stable_bits free the taken cell: {err}"))?;
+                } else if moved {
                     self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
                 } else {
                     self.deepen_shape_fields(owned_pay, name)?;
@@ -4115,8 +4139,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         self.i64().const_int(DECIMAL_CELL_SIZE, false),
                     )
                     .map_err(|err| format!("maybe_payload_stable_bits number memcpy: {err}"))?;
+                if take {
+                    self.builder
+                        .build_call(self.rt.ynz_number_cell_free, &[src_pay.into()], "")
+                        .map_err(|err| format!("maybe_payload_stable_bits free the taken number: {err}"))?;
+                }
                 owned_pay
             }
+            // A taken string is the clone the return made.
+            WidePayload::String if take => src_pay,
             WidePayload::String => {
                 self.string_clone_call(src_pay.into(), &format!("{site}_str_pay"))?
             }
@@ -18946,6 +18977,7 @@ fn lower_stmt_return<'ctx>(
                                 "sm_ret_maybe",
                                 true,
                                 moved,
+                                false,
                             )?;
                             state_machine::store_return_value_errors(
                                 cg.ctx,
@@ -19226,7 +19258,7 @@ fn lower_stmt_return<'ctx>(
                     // store_field (FRAGO 009).
                     let moved = cg.is_moved_cells(env_ptr);
                     let stable_bits =
-                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true, moved)?;
+                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true, moved, false)?;
                     let mut env = cg.maybe_type().const_zero();
                     env = cg
                         .builder
@@ -19738,6 +19770,22 @@ fn store_binding_of_read<'ctx>(
             return store(cg, owned.into(), ty, slot);
         }
     }
+    // A `maybe` a function written in Yinz returned owns its payload (a heap cell or string the
+    // return made): the binding takes it instead of copying it, so nothing is orphaned and the
+    // binding's release frees each allocation once (`Cg::maybe_to_owned_taking`).
+    if let Type::Maybe { inner } = cg.resolve_type(ty) {
+        let inner = cg.resolve_type(&inner);
+        let owns_payload = matches!(inner, Type::String | Type::Shape { .. })
+            || cg.is_inline_decimal(&inner);
+        if owns_payload
+            && val.is_pointer_value()
+            && cg.sm_frame_ptr.is_none()
+            && cg.is_user_call(expr)
+        {
+            let owned = cg.maybe_to_owned_taking(val.into_pointer_value(), &inner, name)?;
+            return store(cg, owned.into(), ty, slot);
+        }
+    }
     store_binding(cg, val, ty, slot, name)
 }
 
@@ -19906,13 +19954,9 @@ fn release_call_copies<'ctx>(cg: &Cg<'ctx, '_>, copies: &CallCopies<'ctx>) -> Re
 /// type it cannot release is an error naming the type, never a skipped release. A cell no write
 /// has filled holds null: nothing to release.
 ///
-/// DEFERRED, four fields — a `fixed` list of unions:
-/// - WHAT: a replaced union item is not released.
-/// - WHY: a union item's cell layout (inline envelope or pointer to one) is not pinned by a
-///   test, and releasing it as the wrong one reads the cell as a tag.
-/// - COST: the replaced member's heap (a string field) leaks per overwrite; no memory is freed
-///   wrongly.
-/// - TRIGGER: C7 (#384) releases a `fixed` list at scope exit, which must pin that layout.
+/// A union item is the pointer to the VIEW the list was given (`value_to_stable_bits` stores a
+/// union's view, not a slot), so it is released through the union view release
+/// (`ReleaseHome::FixedCell`); `v03_m9_c7_slice3` pins that layout.
 ///
 /// O(1) time at the call site plus the item's release; O(1) space.
 fn release_replaced_fixed_cell<'ctx>(
@@ -19922,10 +19966,7 @@ fn release_replaced_fixed_cell<'ctx>(
     site: &str,
 ) -> Result<(), String> {
     let element_type = cg.resolve_type(element_type);
-    if matches!(element_type, Type::Union { .. }) {
-        return Ok(());
-    }
-    let Some(glue) = cg.stored_release(&element_type, ReleaseHome::Field)? else {
+    let Some(glue) = cg.stored_release(&element_type, ReleaseHome::FixedCell)? else {
         return Ok(());
     };
     let old = cg
@@ -25404,6 +25445,30 @@ enum ReleaseHome {
 type StoredRelease<'ctx> = Option<(PointerValue<'ctx>, bool)>;
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// True when `expr` is a call of a function written in Yinz (this module's or an imported
+    /// one): a dot-call reaches one only on a `Shape` or `dynamic` receiver, as typeck's
+    /// `is_user_call` says. Such a call returns an owned value: a `maybe`'s shape or number payload
+    /// is a heap cell the return made and its string a clone it made.
+    ///
+    /// O(1) time.
+    fn is_user_call(&self, expr: &Expr) -> bool {
+        let known = |name: &str| {
+            self.sig_table.fns.contains_key(name) || self.imported_fns.contains_key(name)
+        };
+        match expr {
+            Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _) if known(name)),
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                matches!(
+                    self.expr_type(receiver),
+                    Type::Shape { .. } | Type::Dynamic { .. }
+                ) && known(method)
+            }
+            _ => false,
+        }
+    }
+
     /// Does the callee take any parameter written `give`? Unknown callees (imported, generic
     /// instances) answer yes: the safe side. A given parameter can be stored into another
     /// parameter's container, so one `give` anywhere makes every deep release of the call
@@ -25902,7 +25967,27 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_gep(self.i64(), cells, &[index], "fixed_cell")
                 .map_err(|err| format!("{site} fixed gep: {err}"))?
         };
+        // A cell no write has filled holds null: nothing to release.
+        let held = self
+            .builder
+            .build_load(self.i64(), cell, "fixed_held")
+            .map_err(|err| format!("{site} fixed held load: {err}"))?
+            .into_int_value();
+        let filled = self
+            .builder
+            .build_int_compare(IntPredicate::NE, held, self.i64().const_zero(), "fixed_filled")
+            .map_err(|err| format!("{site} fixed filled: {err}"))?;
+        let release_bb = self.ctx.append_basic_block(function, "fixed_release");
+        let step_bb = self.ctx.append_basic_block(function, "fixed_step");
+        self.builder
+            .build_conditional_branch(filled, release_bb, step_bb)
+            .map_err(|err| format!("{site} fixed filled branch: {err}"))?;
+        self.builder.position_at_end(release_bb);
         self.call_stored_release(glue, cell, site)?;
+        self.builder
+            .build_unconditional_branch(step_bb)
+            .map_err(|err| format!("{site} fixed release join: {err}"))?;
+        self.builder.position_at_end(step_bb);
         let next = self
             .builder
             .build_int_add(index, self.i64().const_int(1, false), "fixed_next")

@@ -84,3 +84,188 @@ case!(
     Balance::HeapAndStrings,
     "a shape holding a shape (each shape-typed field is a heap cell) is never released at its scope exit: 100 cells and 200 strings leak (High)"
 );
+
+// ── Item 1: `maybe` locals ─────────────────────────────────────────────────────────────────
+
+const MAYBE_LOCALS_OF_EVERY_PAYLOAD_KIND_ARE_RELEASED: &str = r"
+shape Tag {
+  name: string
+  id: int
+}
+function entrypoint() -> nothing {
+  let names: array<string> = [`aa`, `bb`]
+  let tags: array<Tag> = [{ name: `n`, id: 1 }]
+  let rows: array<array<int>> = [[1, 2]]
+  let nums: array<number<34> > = [1.50]
+  let total: int = 0
+  for (i in range(0, 100)) {
+    let first: maybe<string> = names.get(0)
+    let tag: maybe<Tag> = tags.get(0)
+    let row: maybe<array<int>> = rows.get(0)
+    let num: maybe<number<34> > = nums.get(0)
+    total = total + first.or(`x`).count() + tag.or({ name: `z`, id: 0 }).id + row.or([]).count()
+  }
+  print(total)
+}
+";
+
+case!(
+    maybe_locals_of_every_payload_kind_are_released,
+    MAYBE_LOCALS_OF_EVERY_PAYLOAD_KIND_ARE_RELEASED,
+    "500\n",
+    Balance::HeapAndStrings,
+    "a `maybe` local (string, shape, array and number payloads) is never released at its scope exit: its payload copy leaks per iteration (High)"
+);
+
+const A_MAYBE_REASSIGNED_FROM_A_CALL_RELEASES_THE_VALUE_IT_REPLACES: &str = r"
+shape Tag {
+  name: string
+  id: int
+}
+function findTag(share tags: array<Tag>, index: int) -> maybe<Tag> {
+  return tags.get(index)
+}
+function findName(share names: array<string>, index: int) -> maybe<string> {
+  return names.get(index)
+}
+function entrypoint() -> nothing {
+  let tags: array<Tag> = [{ name: `a${1}`, id: 1 }, { name: `b${2}`, id: 2 }]
+  let names: array<string> = [`aa-${1}`, `bb-${2}`]
+  let held: maybe<Tag> = findTag(tags, 0)
+  let label: maybe<string> = findName(names, 0)
+  let total: int = 0
+  for (index in range(0, 50)) {
+    held = findTag(tags, index % 2)
+    label = findName(names, index % 2)
+    total = total + held.or({ name: `z`, id: 0 }).id + label.or(`q`).count()
+  }
+  print(total)
+}
+";
+
+case!(
+    a_maybe_reassigned_from_a_call_releases_the_value_it_replaces,
+    A_MAYBE_REASSIGNED_FROM_A_CALL_RELEASES_THE_VALUE_IT_REPLACES,
+    "275\n",
+    Balance::HeapAndStrings,
+    "a `maybe` reassigned in a loop reads its old payload after the new value reused its slot, or orphans the heap cell and strings a returned `maybe` carries (High)"
+);
+
+// ── Item 1: union views ─────────────────────────────────────────────────────────────────────
+
+const A_UNION_LOCAL_A_GIVEN_UNION_AND_A_REASSIGNED_UNION_ARE_RELEASED: &str = r"
+shape Circle {
+  label: string
+}
+shape Square {
+  side: int
+}
+shape Figure = Circle | Square
+function describe(give figure: Figure) -> int {
+  if (figure) {
+    is Circle => {
+      return figure.label.count()
+    }
+    is Square => {
+      return figure.side
+    }
+  }
+  return 0
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  let other: Circle = { label: `x` }
+  let kept: Figure = other
+  for (index in range(0, 50)) {
+    let circle: Circle = { label: `round-${index}` }
+    let figure: Figure = circle
+    total = total + describe(figure)
+    let again: Circle = { label: `y-${index}` }
+    let next: Figure = again
+    kept = next
+    if (kept) {
+      is Circle => {
+        total = total + kept.label.count()
+      }
+      is Square => {
+        total = total + 1
+      }
+    }
+  }
+  print(total)
+}
+";
+
+case!(
+    a_union_local_a_given_union_and_a_reassigned_union_are_released,
+    A_UNION_LOCAL_A_GIVEN_UNION_AND_A_REASSIGNED_UNION_ARE_RELEASED,
+    "580\n",
+    Balance::Strings,
+    "a union local is a view of a slot, so a release that treated it as the slot reads the tag from the payload; a given union parameter has no slot to release (High)"
+);
+
+// ── Item 1 and 5: `fixed` lists ────────────────────────────────────────────────────────────
+
+const FIXED_LISTS_OF_STRINGS_SHAPES_AND_ARRAYS_ARE_RELEASED_WITH_THEIR_ITEMS: &str = r"
+shape Tag {
+  name: string
+  id: int
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (index in range(0, 50)) {
+    let names: fixed<string> = [`a${index}`, `b${index}`]
+    let first: Tag = { name: `t${index}`, id: index }
+    let second: Tag = { name: `u${index}`, id: 1 }
+    let tags: fixed<Tag> = [first, second]
+    let row: array<int> = [index]
+    let other: array<int> = [1, 2]
+    let rows: fixed<array<int> > = [row, other]
+    names.set(0, `c${index}`)
+    let fallback: string = `f`
+    total = total + names[0].or(fallback).count() + rows.count() + tags.count()
+  }
+  print(total)
+}
+";
+
+case!(
+    fixed_lists_of_strings_shapes_and_arrays_are_released_with_their_items,
+    FIXED_LISTS_OF_STRINGS_SHAPES_AND_ARRAYS_ARE_RELEASED_WITH_THEIR_ITEMS,
+    "340\n",
+    Balance::HeapAndStrings,
+    "a `fixed` local never released at its scope exit leaks every string, shape cell and array it holds (High)"
+);
+
+const A_FIXED_LIST_OF_UNIONS_RELEASES_THE_ITEM_AN_OVERWRITE_REPLACES: &str = r"
+shape Circle {
+  label: string
+}
+shape Square {
+  side: int
+}
+shape Figure = Circle | Square
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (index in range(0, 50)) {
+    let circle: Circle = { label: `c${index}` }
+    let square: Square = { side: 2 }
+    let other: Circle = { label: `d${index}` }
+    let first: Figure = circle
+    let second: Figure = square
+    let third: Figure = other
+    let figs: fixed<Figure> = [first, second]
+    figs.set(0, third)
+    total = total + figs.count()
+  }
+  print(total)
+}
+";
+
+case!(
+    a_fixed_list_of_unions_releases_the_item_an_overwrite_replaces,
+    A_FIXED_LIST_OF_UNIONS_RELEASES_THE_ITEM_AN_OVERWRITE_REPLACES,
+    "100\n",
+    Balance::Strings,
+    "a union item replaced by `fixed.set` leaks its string variant, or is released through the wrong layout and double-freed (High)"
+);

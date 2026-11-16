@@ -164,7 +164,7 @@ store_case!(
     copied_containers_own_their_strings,
     "v0_3_m9_c3b_container_copy.ynz",
     "t-1\nv-1\nx-1\nx-1\n",
-    12,
+    11,
     "`.copy()` of a shape or a map, and a `maybe<string>` stored in a field or returned, hold the source's string pointer, so releasing both frees it twice (High)"
 );
 
@@ -180,7 +180,7 @@ store_case!(
     shape_in_a_maybe_owns_its_strings,
     "v0_3_m9_c3b_maybe_shape.ynz",
     "t-1\nt-1\n",
-    3,
+    2,
     "returning a `maybe<Tag>` memcpys the payload shape, so its `name` is the array element's pointer and a release of both frees it twice; a binding of the element read (`let found = tags.get(0)`) only reads it and is a view, which owns no string (High)"
 );
 

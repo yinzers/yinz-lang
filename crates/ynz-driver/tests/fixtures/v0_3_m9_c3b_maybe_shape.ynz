@@ -2,8 +2,9 @@
 // once it is returned or stored: the payload copy copies the string with it. A binding of the
 // element read only reads it and is a view of the element (C1f views).
 // Allocations: `t-1` is fresh and stored by move 1; `let found = tags.get(0)` is a view and copies
-// nothing 0; `pick` returns a payload copy 1 and `let picked = pick(tags)` copies it again 1.
-// Total 1+0+1+1 = 3.
+// nothing 0; `pick` returns a payload copy 1 and `let picked = pick(tags)` TAKES it (C7 slice 3: a
+// binding of a returned `maybe` owns the payload the return made, so it is not copied again) 0.
+// Total 1+0+1+0 = 2.
 // Expected output: one value per line below.
 
 shape Tag {
