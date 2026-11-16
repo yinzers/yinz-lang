@@ -1,0 +1,466 @@
+//! The temporaries of a statement: fresh heap values no binding holds, released where their
+//! statement ends (v0.3-M9 C7 slice 2; `IMP-ownership.md` "Scope-exit release on the plain path").
+//!
+//! `makeRows().count()`, `i.toString()` inside an interpolation, `makeBucket().rows.count()` and
+//! `for (row in makeRows())` each build a heap value that nothing names. The release plan lists
+//! bindings, so it cannot reach them; this record names them instead, by the span of the
+//! expression that builds each, and the release point of each. Codegen reads it and decides
+//! nothing (`.claude/rules/authoritative-derivation.md`).
+//!
+//! # What is a temporary
+//!
+//! An expression is a temporary when
+//!
+//! * it builds a value nobody else holds: a call of a Yinz function (every function returns an
+//!   owned value, `copied_at_return`, so this holds for an imported one too), an array, map or
+//!   shape literal, a fresh string (`string_ownership::is_fresh_string_expr`) or an explicit
+//!   `.copy()`;
+//! * the value owns heap the plain emitter releases: a string, array, map or flat shape; and
+//! * nothing takes it: a `let`, an assignment, a `return`, a store, a `give` argument, a
+//!   `background` argument or an element of a literal owns the value from then on, so it is not
+//!   a temporary. Every other position only reads it (an operand, an interpolated part, a
+//!   receiver, an argument at a position the callee does not own, a condition, the value of an
+//!   expression statement), and the value dies at the end of its statement.
+//!
+//! The walk is a whitelist: a built-in method not named in [`BORROWING_METHODS`], a call of an
+//! unknown function and every position not listed above take what they are given, so an
+//! unclassified use leaks a value and never frees one twice.
+//!
+//! A piece of a temporary (`makeBucket().rows`) is not itself a temporary: the call is, and its
+//! whole object graph is released at the statement end. A piece a `let` or assignment keeps is
+//! copied or taken before that (`non_owned_reads`: `Take` and `MustCopy`). A place read taken
+//! whole into a type the copy at `let` and `return` does not cover (a `maybe`, a union) suppresses
+//! every temporary inside it: such a copy would share the temporary's cells.
+//!
+//! # Where each is released
+//!
+//! | statement | key | released |
+//! |---|---|---|
+//! | expression statement, `let`, assignment, field or index assignment, `return` | the statement | after it (a `return`: after its value is built, before the exit edge) |
+//! | `if`, `match` | the statement | after the whole statement: a narrowed binding may read the scrutinee in an arm |
+//! | `while` | the condition | after the condition is evaluated, every pass |
+//! | `for` | the statement | after the loop |
+//!
+//! A state-machine function releases nothing here (C8's frame release).
+
+use std::collections::{HashMap, HashSet};
+
+use ynz_ast::nodes::{Block, Expr, Item, MatchPatternKind, OwnershipModifier, PostfixOpKind, Stmt};
+
+use crate::release_plan::{heap_class_of, HeapClass, ReleaseKind, TypeTables};
+use crate::signatures::FunctionSig;
+use crate::string_ownership::is_fresh_string_expr;
+use crate::types::Type;
+
+/// `(span.start, span.end)`.
+pub type Span = (usize, usize);
+
+/// Built-in methods that only read what they are given: their receiver and arguments are
+/// borrowed (a store position, `collection_store_positions`, takes its argument).
+const BORROWING_METHODS: &[&str] = &[
+    "count",
+    "byteCount",
+    "graphemeCount",
+    "contains",
+    "startsWith",
+    "endsWith",
+    "byteAt",
+    "indexOf",
+    "toUpperCase",
+    "toLowerCase",
+    "trim",
+    "substring",
+    "replace",
+    "toString",
+    "exists",
+    "get",
+    "first",
+    "last",
+    "or",
+    "add",
+    "set",
+];
+
+/// The temporaries of a module, by expression span.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Temporaries {
+    /// Expression span -> the span of the release point it dies at.
+    temporaries: HashMap<Span, Span>,
+    /// Release point -> the temporaries released there, in walk order.
+    released_at: HashMap<Span, Vec<Span>>,
+}
+
+impl Temporaries {
+    /// The release point of the temporary built by the expression at `start..end`.
+    pub fn release_point(&self, start: usize, end: usize) -> Option<Span> {
+        self.temporaries.get(&(start, end)).copied()
+    }
+
+    /// True when the expression at `start..end` builds a temporary.
+    pub fn is_temporary(&self, start: usize, end: usize) -> bool {
+        self.temporaries.contains_key(&(start, end))
+    }
+
+    /// The temporaries (expression spans) released at the release point `start..end`.
+    pub fn released_at(&self, start: usize, end: usize) -> &[Span] {
+        self.released_at
+            .get(&(start, end))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The number of temporaries in the record.
+    pub fn len(&self) -> usize {
+        self.temporaries.len()
+    }
+
+    /// True when the record holds none.
+    pub fn is_empty(&self) -> bool {
+        self.temporaries.is_empty()
+    }
+}
+
+/// What a position does with the value an expression builds there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Use {
+    /// Only read: the value dies at the end of its statement.
+    Borrowed,
+    /// Owned by someone from then on (a binding, a store, a callee, a task, the caller).
+    Taken,
+}
+
+/// What the walk reads of the checked module.
+pub struct TemporaryFacts<'a> {
+    /// The type of every expression.
+    pub expr_types: &'a HashMap<Span, Type>,
+    /// Every Yinz function a call can reach, local and imported.
+    pub callable_fns: &'a HashSet<String>,
+    /// The signature of every function the checker knows (the declared ownership of each
+    /// parameter).
+    pub signatures: &'a HashMap<String, FunctionSig>,
+    /// The shape tables `heap_class_of` reads.
+    pub tables: TypeTables<'a>,
+}
+
+/// Record the temporaries of every function of `module`.
+///
+/// O(size of the module) time and memory.
+pub fn record_temporaries(
+    module: &ynz_ast::nodes::Module,
+    facts: &TemporaryFacts<'_>,
+) -> Temporaries {
+    let mut walk = Walk {
+        facts,
+        out: Temporaries::default(),
+    };
+    for item in &module.items {
+        if let Item::Function(function) = item {
+            walk.block(&function.body);
+        }
+    }
+    walk.out
+}
+
+struct Walk<'a> {
+    facts: &'a TemporaryFacts<'a>,
+    out: Temporaries,
+}
+
+fn span_of(expr: &Expr) -> Span {
+    let span = expr.span();
+    (span.start, span.end)
+}
+
+impl Walk<'_> {
+    fn type_of(&self, expr: &Expr) -> Option<&Type> {
+        self.facts.expr_types.get(&span_of(expr))
+    }
+
+    fn block(&mut self, block: &Block) {
+        for stmt in &block.stmts {
+            self.stmt(stmt);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt) {
+        let key = crate::release_plan::stmt_span(stmt);
+        match stmt {
+            Stmt::Expr(expr) => self.value(expr, Use::Borrowed, key, false),
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+                self.value(value, Use::Taken, key, false)
+            }
+            Stmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    self.value(value, Use::Taken, key, false);
+                }
+            }
+            Stmt::FieldAssign { target, value, .. } => {
+                self.value(target, Use::Borrowed, key, false);
+                self.value(value, Use::Taken, key, false);
+            }
+            Stmt::IndexAssign {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                self.value(receiver, Use::Borrowed, key, false);
+                self.value(index, Use::Borrowed, key, false);
+                self.value(value, Use::Taken, key, false);
+            }
+            Stmt::If { cond, body, .. } => {
+                self.value(cond, Use::Borrowed, key, false);
+                self.block(body);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                self.value(scrutinee, Use::Borrowed, key, false);
+                for arm in arms {
+                    // A value pattern is compared, never released: left alone (a leak at worst).
+                    let _ = matches!(arm.pattern.kind, MatchPatternKind::Value(_));
+                    self.block(&arm.body);
+                }
+                if let Some(else_block) = else_arm {
+                    self.block(else_block);
+                }
+            }
+            Stmt::While { cond, body, .. } => {
+                // The condition runs every pass: its temporaries die after it, not after the loop.
+                self.value(cond, Use::Borrowed, span_of(cond), false);
+                self.block(body);
+            }
+            Stmt::For { iter, body, .. } => {
+                self.value(iter, Use::Borrowed, key, false);
+                self.block(body);
+            }
+        }
+    }
+
+    /// Walk `expr`, used as `usage`, whose temporaries are released at `key`. `suppress` is true
+    /// inside a place read taken whole into a type the copy does not cover.
+    fn value(&mut self, expr: &Expr, usage: Use, key: Span, suppress: bool) {
+        let suppress_inside = suppress
+            || (usage == Use::Taken
+                && self.is_piece_read(expr)
+                && !self.copy_covers(self.type_of(expr)));
+        self.children(expr, key, suppress_inside);
+        if usage == Use::Borrowed && !suppress && self.is_temporary(expr) {
+            let span = span_of(expr);
+            if self.out.temporaries.insert(span, key).is_none() {
+                self.out.released_at.entry(key).or_default().push(span);
+            }
+        }
+    }
+
+    /// True when a `let` or `return` of a place read of this type copies it (or takes it) before
+    /// the temporary behind the place dies.
+    fn copy_covers(&self, ty: Option<&Type>) -> bool {
+        matches!(
+            ty,
+            Some(
+                Type::String
+                    | Type::BuiltinArray { .. }
+                    | Type::BuiltinMap { .. }
+                    | Type::Shape { .. }
+            )
+        )
+    }
+
+    /// True when `expr` reads a place (a field, an element, a built-in method's result) instead of
+    /// building a value.
+    fn is_piece_read(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::FieldAccess { .. } | Expr::IndexAccess { .. } => true,
+            Expr::MethodCall { .. } => !self.builds_a_value(expr),
+            Expr::Wait(inner, _) => self.is_piece_read(inner),
+            _ => false,
+        }
+    }
+
+    /// True when `expr` is a call of a Yinz function or another form that returns a value of its
+    /// own (never a piece of an argument).
+    fn is_user_call(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _)
+                if self.facts.callable_fns.contains(name)),
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                matches!(
+                    self.type_of(receiver),
+                    Some(Type::Shape { .. } | Type::Dynamic { .. })
+                ) && self.facts.callable_fns.contains(method)
+            }
+            _ => false,
+        }
+    }
+
+    /// True when `expr` builds a value no other holder has seen.
+    fn builds_a_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => true,
+            Expr::PostfixOp {
+                op: PostfixOpKind::Copy,
+                ..
+            } => true,
+            _ if self.is_user_call(expr) => true,
+            _ => {
+                matches!(self.type_of(expr), Some(Type::String))
+                    && is_fresh_string_expr(expr, self.facts.expr_types, self.facts.callable_fns)
+            }
+        }
+    }
+
+    /// True when `expr` builds a value of a kind the plain emitter releases (a string, array,
+    /// map or flat shape) that nobody else holds.
+    fn is_temporary(&self, expr: &Expr) -> bool {
+        if !self.builds_a_value(expr) {
+            return false;
+        }
+        let Some(ty) = self.type_of(expr) else {
+            return false;
+        };
+        matches!(
+            heap_class_of(ty, &self.facts.tables),
+            HeapClass::Heap(
+                ReleaseKind::String | ReleaseKind::Array | ReleaseKind::Map | ReleaseKind::Shape
+            )
+        )
+    }
+
+    /// The declared ownership of position `index` of the call of `name`: `None` when the
+    /// function is unknown (its parameter is then assumed to take the value).
+    fn param_ownership(&self, name: &str, index: usize) -> Option<Option<OwnershipModifier>> {
+        self.facts
+            .signatures
+            .get(name)
+            .and_then(|signature| signature.param_ownerships.get(index).cloned())
+    }
+
+    /// The use a call of `name` makes of its argument at `index`.
+    fn argument_use(&self, name: &str, index: usize) -> Use {
+        match self.param_ownership(name, index) {
+            Some(Some(OwnershipModifier::Give)) | None => Use::Taken,
+            Some(_) => Use::Borrowed,
+        }
+    }
+
+    fn children(&mut self, expr: &Expr, key: Span, suppress: bool) {
+        match expr {
+            Expr::Ident(..)
+            | Expr::StringLit(..)
+            | Expr::Error(_)
+            | Expr::IntLit(..)
+            | Expr::NumberLit(..)
+            | Expr::BoolLit(..)
+            | Expr::SelfValue { .. }
+            | Expr::NoneLit { .. } => {}
+            Expr::Call(call) => {
+                let Expr::Ident(name, _) = &call.callee else {
+                    for arg in &call.args {
+                        self.value(arg, Use::Taken, key, suppress);
+                    }
+                    return;
+                };
+                for (index, arg) in call.args.iter().enumerate() {
+                    let usage = if self.facts.callable_fns.contains(name) {
+                        self.argument_use(name, index)
+                    } else if name == "sensitive" {
+                        // Identity at the ABI level: the result is the argument.
+                        Use::Taken
+                    } else {
+                        // `print`, `range`, `channel` and the other free built-ins read their
+                        // arguments.
+                        Use::Borrowed
+                    };
+                    self.value(arg, usage, key, suppress);
+                }
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                if self.is_user_call(expr) {
+                    self.value(receiver, self.argument_use(method, 0), key, suppress);
+                    for (index, arg) in args.iter().enumerate() {
+                        self.value(arg, self.argument_use(method, index + 1), key, suppress);
+                    }
+                    return;
+                }
+                if !BORROWING_METHODS.contains(&method.as_str()) {
+                    self.value(receiver, Use::Taken, key, suppress);
+                    for arg in args {
+                        self.value(arg, Use::Taken, key, suppress);
+                    }
+                    return;
+                }
+                self.value(receiver, Use::Borrowed, key, suppress);
+                let stores: &[usize] = self.type_of(receiver).map_or(&[], |ty| {
+                    crate::builtins::collection_store_positions(ty, method)
+                });
+                for (index, arg) in args.iter().enumerate() {
+                    let usage = if stores.contains(&index) {
+                        Use::Taken
+                    } else {
+                        Use::Borrowed
+                    };
+                    self.value(arg, usage, key, suppress);
+                }
+            }
+            Expr::BinOp { lhs, rhs, .. } => {
+                self.value(lhs, Use::Borrowed, key, suppress);
+                self.value(rhs, Use::Borrowed, key, suppress);
+            }
+            Expr::UnaryOp { operand, .. } => self.value(operand, Use::Borrowed, key, suppress),
+            Expr::FieldAccess { receiver, .. } => {
+                self.value(receiver, Use::Borrowed, key, suppress)
+            }
+            Expr::IndexAccess {
+                receiver, index, ..
+            } => {
+                self.value(receiver, Use::Borrowed, key, suppress);
+                self.value(index, Use::Borrowed, key, suppress);
+            }
+            Expr::PostfixOp { receiver, op, .. } => {
+                let usage = match op {
+                    PostfixOpKind::Copy => Use::Borrowed,
+                    PostfixOpKind::Freeze => Use::Taken,
+                };
+                self.value(receiver, usage, key, suppress);
+            }
+            Expr::StructLit { fields, .. } => {
+                for field in fields {
+                    self.value(&field.value, Use::Taken, key, suppress);
+                }
+            }
+            Expr::ArrayLit { elements, .. } => {
+                for element in elements {
+                    self.value(element, Use::Taken, key, suppress);
+                }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (entry_key, entry_value) in entries {
+                    self.value(entry_key, Use::Taken, key, suppress);
+                    self.value(entry_value, Use::Taken, key, suppress);
+                }
+            }
+            Expr::Is { expr: inner, .. } => self.value(inner, Use::Borrowed, key, suppress),
+            Expr::InterpolatedString(parts, _) => {
+                for part in parts {
+                    if let ynz_ast::nodes::StringPart::Expr(inner, _) = part {
+                        self.value(inner, Use::Borrowed, key, suppress);
+                    }
+                }
+            }
+            // A suspending form: a state-machine function releases nothing here (C8).
+            Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+                self.value(inner, Use::Taken, key, true)
+            }
+        }
+    }
+}
