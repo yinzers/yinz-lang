@@ -19777,10 +19777,7 @@ fn own_returned_value<'ctx>(
     }
     let owned = own_read_for_store(cg, expr, val, &ty, false, site)?;
     // A shape copy returned whole is not copied again where the return form persists it.
-    if owned.copied
-        && owned.value.is_pointer_value()
-        && matches!(cg.resolve_type(&ty), Type::Shape { .. })
-    {
+    if owned.value.is_pointer_value() && matches!(cg.resolve_type(&ty), Type::Shape { .. }) {
         cg.moved_cell_values
             .insert(owned.value.as_value_ref() as usize);
     }
@@ -29163,11 +29160,10 @@ fn lower_ec_auto_propagate<'ctx>(
 /// - **Outside an errors-capable caller**: just stores the struct; the caller
 ///   handles it via `.or()` / `.failed()`.
 ///
-/// For `-> number errors` callees the ok-word is a pointer into the callee's decimal128
-/// stack alloca. Non-SM (non-suspending) callees' stack allocas become invalid the
-/// moment the callee returns; calling the same callee a second time allocates a new
-/// frame at the same stack slot, clobbering the first binding's ok-pointer. Copy-on-bind
-/// copies the i128 into a per-binding alloca so each binding owns stable storage.
+/// For `-> number errors` callees the ok-word is a pointer to a 16-byte heap cell the callee's
+/// `return` made (`number_to_heap_cell`). Copy-on-bind copies the i128 into a per-binding alloca
+/// so each binding owns stable storage, and frees the cell, so the binding's result releases
+/// nothing for the number (its ok-word is a stack address).
 fn lower_errors_capable_call_result<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     mut result_struct: inkwell::values::StructValue<'ctx>,
@@ -29228,14 +29224,19 @@ fn lower_errors_capable_call_result<'ctx>(
             .build_load(cg.ctx.i128_type(), dec_ptr, "ec_cob_i128")
             .map_err(|e| format!("ec_result cob load i128 {callee_name}: {e}"))?
             .into_int_value();
-        // The ok-word points at the callee's frame-interior staging slot: only
-        // 8-aligned — claim that, not ABI 16.
+        // The ok-word points at the callee's heap cell, 16 bytes from `ynz_alloc` (8-aligned): claim
+        // that, not ABI 16.
         state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
             || format!("ec_result cob load i128 {callee_name}: no instruction value"),
         )?)?;
         cg.builder
             .build_store(binding_alloca, i128_val)
             .map_err(|e| format!("ec_result cob store {callee_name}: {e}"))?;
+        // The callee's `return` made the 16-byte heap cell this ok-word points at (`number_to_heap_cell`);
+        // the binding now owns its own copy in the alloca, so the cell is freed here, once.
+        cg.builder
+            .build_call(cg.rt.ynz_number_cell_free, &[dec_ptr.into()], "")
+            .map_err(|e| format!("ec_result cob free cell {callee_name}: {e}"))?;
         cg.builder
             .build_unconditional_branch(cob_merge_bb)
             .map_err(|e| format!("ec_result cob copy->merge {callee_name}: {e}"))?;

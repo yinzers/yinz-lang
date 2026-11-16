@@ -264,3 +264,98 @@ fn a_bignum_copied_into_a_let_a_field_and_a_return_is_released_once_each() {
         );
     });
 }
+
+const ERRORS_NUMBER: &str = "
+function price(n: int) -> number errors {
+  let total: number = 1.5
+  return total
+}
+
+function priceTwo(n: int) -> number errors {
+  return 2.5
+}
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let sum: number = 0.0
+  while (i < 50) {
+    let a = price(i)
+    let b = priceTwo(i)
+    sum = sum + a.or(0.0) + b.or(0.0)
+    i = i + 1
+  }
+  print(sum)
+}
+";
+
+/// The payload of an `errors` result of type `number` is a heap cell the `return` made; the
+/// result's release left it (High).
+#[test]
+fn an_errors_result_of_number_releases_its_payload_cell() {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("c7_r1_ec_number", ERRORS_NUMBER, "200.0\n", no_optimize);
+        assert_heap_balanced("c7_r1_ec_number", &counters, no_optimize);
+        assert_asan_clean("c7_r1_ec_number", ERRORS_NUMBER, "200.0\n", no_optimize);
+    });
+}
+
+const ERRORS_SHAPE: &str = "
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function makeBig(count: int) -> Big errors {
+  let big: Big = { label: `made`, count: count }
+  return big
+}
+
+function makeThing(count: int) -> Thing errors {
+  let big: Big = { label: `made`, count: count }
+  return big
+}
+
+function describe(share thing: Thing) -> int {
+  if (thing) {
+    is Tiny => {
+      return 0
+    }
+    is Big => {
+      return thing.count
+    }
+  }
+  return -1
+}
+
+function entrypoint() -> nothing {
+  let fallback: Big = { label: `none`, count: 0 }
+  let seed: Big = { label: `seed`, count: 0 }
+  let fallbackThing: Thing = seed
+  let i: int = 0
+  let total: int = 0
+  while (i < 50) {
+    let one = makeBig(i)
+    let two = makeThing(i)
+    let got: Big = one.or(fallback)
+    total = total + got.count + describe(two.or(fallbackThing))
+    i = i + 1
+  }
+  print(total)
+}
+";
+
+/// A shape local returned through an `errors` result moves into the result: the `return` neither
+/// copies it a second time nor leaves the local's strings behind (High).
+#[test]
+fn a_shape_returned_through_an_errors_result_is_moved_not_copied_twice() {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("c7_r1_ec_shape", ERRORS_SHAPE, "2450\n", no_optimize);
+        assert_heap_balanced("c7_r1_ec_shape", &counters, no_optimize);
+        assert_strings_balanced("c7_r1_ec_shape", &counters, no_optimize);
+        assert_asan_clean("c7_r1_ec_shape", ERRORS_SHAPE, "2450\n", no_optimize);
+    });
+}
