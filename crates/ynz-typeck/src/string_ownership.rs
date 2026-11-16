@@ -166,6 +166,16 @@ impl Recorder<'_> {
         for (stmt, after) in stmts.iter().zip(&live_after) {
             self.stmt(stmt, after);
         }
+        // The `let`s declared directly in this block die here.
+        let mut direct = HashSet::new();
+        for stmt in stmts {
+            if let Stmt::Let { name, name_span, .. } = stmt {
+                direct.insert(decl_key(name_span, name));
+            }
+        }
+        let mut inside = HashSet::new();
+        collect_lets(stmts, &mut inside);
+        self.reads.end_block(&direct, &inside, &self.lets);
     }
 
     fn stmt(&mut self, stmt: &Stmt, after: &HashSet<DeclKey>) {

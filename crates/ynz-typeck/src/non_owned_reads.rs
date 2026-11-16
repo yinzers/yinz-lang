@@ -768,6 +768,34 @@ impl<'a> ReadTracker<'a> {
         });
     }
 
+    /// A block was walked: the `let`s in `dying` (declared directly in it) die here, and `inside`
+    /// holds every `let` declared anywhere in it. A reader that is a `let` declared outside the
+    /// block and points into one that dies would point at a released value once the scope exit
+    /// frees it, so it owns a copy instead: a read must not outlive its root (Golden Rule 8: this
+    /// is the one case where a read with no write still copies, pinned by
+    /// `v03_m9_c6_borrow_cost`). O(c) for the c candidates.
+    pub(crate) fn end_block(
+        &mut self,
+        dying: &HashSet<DeclKey>,
+        inside: &HashSet<DeclKey>,
+        lets: &HashSet<DeclKey>,
+    ) {
+        for candidate in &mut self.candidates {
+            if !candidate.viable {
+                continue;
+            }
+            let outlives = match &candidate.reader {
+                Reader::Binding(holder) | Reader::Reassigned(holder) => {
+                    lets.contains(holder) && !inside.contains(holder)
+                }
+                Reader::LoopVariable(_) | Reader::Argument => false,
+            };
+            if outlives && candidate.roots.iter().any(|root| dying.contains(&root.key)) {
+                candidate.viable = false;
+            }
+        }
+    }
+
     /// The body of the innermost loop `begin_loop` opened (when it judged one) was walked.
     pub(crate) fn end_loop(&mut self, var_span: &ynz_diagnostics::SourceSpan, var: &str) {
         let key = decl_key(var_span, var);

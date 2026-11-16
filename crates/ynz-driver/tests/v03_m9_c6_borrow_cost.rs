@@ -7,8 +7,8 @@
 //! two each); the copy of a loop item or an argument is released after its iteration or call, the
 //! one of a `let` is released at its scope exit (C7 slice 1), so the frees pinned below include the
 //! program's own locals and only the allocation count pins the copy cost. A `let` copy of a place
-//! stays unreleased until slice 2 reads `non_owned_reads` into the plan, so such a case frees less
-//! than it allocates.
+//! is a copy owner (C7 slice 2b), released at its scope exit, so every case here frees what it
+//! allocates (a state-machine function releases nothing until C8).
 //!
 //! Approval condition of the non-owned-read design: EVERY site typeck judges has a no-write case
 //! pinned at zero extra copies: plain and state-machine loop, map-entry loop, union loop variable,
@@ -89,8 +89,24 @@ cost_case!(
     "v0_3_m9_c6_cost_let_write.ynz",
     "3\n",
     6,
-    4,
+    6,
     "a `let` of a field left pointing at the array the field assignment frees (High)"
+);
+cost_case!(
+    a_read_that_dies_with_its_roots_scope_copies_nothing,
+    "v0_3_m9_c6_cost_outlive_same_scope.ynz",
+    "3\n3\n",
+    4,
+    4,
+    "a `let` of a field copied because its root lives in a loop body, although the reader dies with it (cost, Rule 8)"
+);
+cost_case!(
+    a_read_that_outlives_its_roots_scope_is_copied_once,
+    "v0_3_m9_c6_cost_outlive_root.ynz",
+    "3\n",
+    6,
+    6,
+    "a reassignment left pointing at an array the root's scope exit frees, read after it (High)"
 );
 cost_case!(
     a_returned_field_is_copied_once_and_the_caller_binds_it_without_a_second_copy,

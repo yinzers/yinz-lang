@@ -1,0 +1,18 @@
+// v0.3-M9 C6 cost fixture: a reassignment from a field whose root dies before the reader does
+// owns ONE copy, although nothing writes the field (the root's scope exit releases it).
+// Allocations: `rows` literal (2), the bucket's literal (2), the copy (2).
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [0]
+  let enter: int = 1
+  if (enter == 1) {
+    let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+    rows = bucket.rows
+  }
+  print(rows.count())
+}

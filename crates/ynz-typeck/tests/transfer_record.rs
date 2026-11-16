@@ -915,11 +915,45 @@ fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
     assert_eq!(founder_name(&transfers, "inner"), "outer");
 }
 
-/// (High) The honest remainder: a piece binding outlives the owner of the value it reaches, so
-/// which value it holds at the owner's scope exit is only known at run time. Recorded as "no
-/// static founder", not guessed.
+/// (High) The honest remainder: an imported function that returns a `maybe` may hand back a piece
+/// of its argument, and no read of its result can be judged a copy. `held` outlives `local`, so
+/// which of them owns the value is not known statically. Recorded as "no static founder", not
+/// guessed: nothing is released (a leak, never an early free). A drop flag cannot settle it: the
+/// holder may point into a value the scope exit frees (decided: Chief Architect, replacing the
+/// drop-flag ruling for `OutlivedByNonOwner`).
 #[test]
 fn a_non_owner_that_outlives_the_owner_leaves_no_static_founder() {
+    let library = "export function keep(share held: array<int>) -> maybe<array<int>> {
+  return held
+}\n";
+    let main = "import { keep } from `lib`
+function underTest(condition: boolean) -> int {
+  let held: maybe<array<int>> = none
+  if (condition) {
+    let local: array<int> = [1]
+    held = keep(local)
+  }
+  return 1
+}
+function entrypoint() -> nothing {
+}
+";
+    let transfers = record_of(&run_with_library(library, main), "underTest");
+    assert!(transfers.same_class("held", "local"), "{transfers:#?}");
+    let class = transfers.class_of("local").expect("class");
+    assert_eq!(
+        class.anchor,
+        ReleaseAnchor::NoStaticFounder(NoFounderReason::OutlivedByNonOwner {
+            holder: "held".to_string()
+        })
+    );
+}
+
+/// (High) The field read that used to leave no static founder (`cell = owner.rows`, `cell`
+/// outlives `owner`) is a copy typeck judged `MustCopy`: `cell` owns a value of its own and joins
+/// nothing, so each is the founder of a class of its own.
+#[test]
+fn a_field_read_that_outlives_its_root_is_a_copy_owner_in_a_class_of_its_own() {
     let source = format!(
         "{BUCKET}function make() -> Bucket {{
   let bucket: Bucket = {{ rows: [9] }}
@@ -935,14 +969,9 @@ function underTest(condition: boolean) -> int {{
 }}"
     );
     let transfers = transfers_of(&source, "underTest");
-    assert!(transfers.same_class("cell", "owner"), "{transfers:#?}");
-    let class = transfers.class_of("owner").expect("class");
-    assert_eq!(
-        class.anchor,
-        ReleaseAnchor::NoStaticFounder(NoFounderReason::OutlivedByNonOwner {
-            holder: "cell".to_string()
-        })
-    );
+    assert!(!transfers.same_class("cell", "owner"), "{transfers:#?}");
+    assert_eq!(founder_name(&transfers, "cell"), "cell");
+    assert_eq!(founder_name(&transfers, "owner"), "owner");
 }
 
 const BUCKET: &str = "shape Bucket {\n  rows: array<int>\n}\n";

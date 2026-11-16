@@ -973,11 +973,14 @@ fn a_class_mate_of_the_founder_is_not_an_owner() {
     );
 }
 
-/// Bug: a binding that outlives its class's only owner is released with that owner (a use after
-/// free) or guessed to be the owner: the record says it has no static founder, so the plan omits
-/// both and leaves the decision to C7's run-time flag.
+/// Bug: a binding that outlives the owner of the field it reads (`cell = owner.rows`, `owner` dies
+/// at the end of the `if`) is left pointing at what the scope exit frees (a use after free), or
+/// both are left unreleased (a leak). The read is a copy that outlives its root, so `cell` owns it
+/// and both are released at their own scope exits (decided: Chief Architect, replacing the run-time
+/// drop-flag ruling for `OutlivedByNonOwner`; `transfer_record.rs` pins the no-static-founder case
+/// that is left).
 #[test]
-fn a_class_with_no_static_founder_releases_nothing_at_either_scope_end() {
+fn a_read_that_outlives_its_root_is_a_copy_released_at_both_scope_ends() {
     let output = clean(
         "shape Bucket {\n  rows: array<int>\n}\nfunction make() -> Bucket {\n  let bucket: Bucket = { rows: [9] }\n  return bucket\n}\nfunction under(condition: boolean) -> int {\n  let cell: array<int> = make().rows\n  if (condition) {\n    let owner: Bucket = make()\n    cell = owner.rows\n  }\n  return cell.count()\n}\n",
     );
@@ -993,12 +996,8 @@ fn a_class_with_no_static_founder_releases_nothing_at_either_scope_end() {
         .iter()
         .map(|entry| (entry.decl.2.clone(), entry.fate))
         .collect();
-    assert_eq!(
-        fate_of(&inner, "owner"),
-        Fate::Omitted(OmitReason::NoStaticFounder)
-    );
-    // `cell` is reassigned, so its omission is the reassignment's; the plan must not say owner.
-    assert!(!fate_of(&body_end(&output, "under"), "cell").releases());
+    assert_eq!(fate_of(&inner, "owner"), Fate::Release(ReleaseKind::Shape));
+    assert!(fate_of(&body_end(&output, "under"), "cell").releases());
 }
 
 /// Bug: a `return` lists the frames outermost first, or each frame first-declared first: codegen

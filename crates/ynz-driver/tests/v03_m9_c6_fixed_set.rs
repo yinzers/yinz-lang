@@ -88,8 +88,10 @@ fixed_set_case!(
     "c-3\nb-2\n",
     3,
     1,
+    // C7 slice 2b, 2 -> 4 strings: `firstItem` and `secondItem` read an item of a list the fixture
+    // writes, so each owns a copy (a copy owner) and releases its name at its scope exit.
     6,
-    2
+    4
 );
 // Items that are not strings or shapes: the cell holds a pointer the list owns, so the write
 // frees what it replaces through the same dispatch (`stored_release`). The frees are the
