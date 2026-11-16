@@ -416,10 +416,8 @@ impl Walk<'_> {
         // allocated (a string clone, a heap cell); a `let` takes it (`maybe_to_owned_taking`), so a
         // call whose `maybe` nothing binds (`find(rows).or(fallback)`, `.exists()`) frees it here.
         let owns_a_returned_payload = (self.is_user_call(expr) || self.is_fresh_maybe_string(expr))
-            && matches!(ty, Type::Maybe { inner } if matches!(
-                inner.as_ref(),
-                Type::String | Type::Shape { .. } | Type::Number { precision: ..=34 }
-            ));
+            && matches!(ty, Type::Maybe { inner } if !matches!(inner.as_ref(), Type::BuiltinChannel { .. }))
+            && crate::owned_copy::copied_at_return(ty);
         owns_a_channel_reference
             || owns_a_returned_payload
             || self.is_maybe_copy(expr)

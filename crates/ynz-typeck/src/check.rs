@@ -5683,7 +5683,11 @@ impl<'b> Checker<'b> {
             .get(&(value.span().start, value.span().end))
             .cloned()
             .unwrap_or(Type::Error);
-        if crate::owned_copy::copied_at_return(&ty) && !self.return_moves(value) {
+        // A `maybe` copies its payload at every `return`, a moved one included (a moved shape keeps
+        // only its own bytes; its strings are cloned), so no binding is left holding what it returns.
+        if crate::owned_copy::copied_at_return(&ty)
+            && (matches!(ty, Type::Maybe { .. }) || !self.return_moves(value))
+        {
             return Vec::new();
         }
         self.heap_holders_of(value)
@@ -5719,7 +5723,11 @@ impl<'b> Checker<'b> {
         // A fresh value, or an owned local at its last use (nothing runs after a `return`), is
         // handed to the caller whole; a parameter, a `const`, a field or an element stays with
         // its holder, so the returned copy must own boxes of its own.
-        if self.return_moves(value) {
+        let returns_a_maybe = self
+            .expr_types
+            .get(&(value.span().start, value.span().end))
+            .is_some_and(|ty| matches!(ty, Type::Maybe { .. }));
+        if self.return_moves(value) && !returns_a_maybe {
             self.record_heap_move(value);
         }
     }

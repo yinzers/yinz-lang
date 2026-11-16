@@ -2226,6 +2226,11 @@ struct Cg<'ctx, 'g> {
     // owns its cell and payload as they are (`maybe_to_owned_dest`) instead of copying them again and
     // orphaning the first copy.
     minted_maybe_copies: std::collections::HashSet<usize>,
+    // The envelopes of a `maybe` a Yinz function returned or a string `get` built (`lower_expr`), keyed by
+    // the LLVM value: each owns its payload (a string clone, a shape or number cell) and nothing else
+    // holds it, so a persist takes the payload instead of copying it and orphaning the first
+    // (`maybe_to_owned_dest`).
+    fresh_payload_maybes: std::collections::HashSet<usize>,
     // C7 slice 3b: the nested-shape cells a `let` or assignment takes out of a temporary
     // (`lower_taken_field`), keyed by the LLVM value of the cell pointer. The store that copies
     // the cell's bytes into the binding frees the emptied cell (`shape_bytes_to_owned`).
@@ -3937,7 +3942,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if minted && heap {
             return Ok(src_env);
         }
-        let take = take || minted;
+        let take = take
+            || minted
+            || (heap
+                && self
+                    .fresh_payload_maybes
+                    .contains(&(src_env.as_value_ref() as usize)));
         let owned_env = if heap {
             let raw = self
                 .maybe_type()
@@ -4183,7 +4193,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // payload gets its own copy: a counted heap cell when it persists past the frame, the
             // binding's own slot otherwise.
             WidePayload::Number if heap => {
-                self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?
+                let cell = self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?;
+                if take {
+                    self.builder
+                        .build_call(self.rt.ynz_number_cell_free, &[src_pay.into()], "")
+                        .map_err(|err| {
+                            format!("maybe_payload_stable_bits free the taken number: {err}")
+                        })?;
+                }
+                cell
             }
             WidePayload::Number => {
                 let owned_pay =
@@ -7658,6 +7676,7 @@ fn plain_cg<'ctx, 'g>(
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         minted_maybe_copies: std::collections::HashSet::new(),
+        fresh_payload_maybes: std::collections::HashSet::new(),
         taken_shape_cells: std::collections::HashSet::new(),
         box_cell_views: std::collections::HashSet::new(),
         wait_cache,
@@ -8095,6 +8114,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         minted_maybe_copies: std::collections::HashSet::new(),
+        fresh_payload_maybes: std::collections::HashSet::new(),
         taken_shape_cells: std::collections::HashSet::new(),
         box_cell_views: std::collections::HashSet::new(),
         wait_cache,
@@ -19448,6 +19468,11 @@ fn lower_stmt_return<'ctx>(
                         .minted_maybe_copies
                         .contains(&(env_ptr.as_value_ref() as usize));
                     let moved = cg.is_moved_cells(env_ptr);
+                    // A `maybe` a function returned or a string `get` built owns its payload and
+                    // nothing else holds it: the return passes that payload on instead of copying
+                    // it and orphaning the first.
+                    let takes_a_fresh_payload =
+                        cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr);
                     let stable_bits = if minted {
                         cg.free_minted_maybe_cell(env_ptr, "ret_maybe")?;
                         bits
@@ -19459,7 +19484,7 @@ fn lower_stmt_return<'ctx>(
                             "ret_maybe",
                             true,
                             moved,
-                            false,
+                            takes_a_fresh_payload,
                         )?
                     };
                     let mut env = cg.maybe_type().const_zero();
@@ -19643,6 +19668,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         let val = lower_expr_node(cg, expr)?;
         remember_movable_string(cg, expr, val)?;
         remember_moved_cells(cg, expr, val);
+        remember_fresh_payload_maybe(cg, expr, val);
         remember_box_cell_view(cg, expr, val);
         cg.bind_temporary(expr, val)?;
         return Ok(val);
@@ -19680,6 +19706,29 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         cg.moved_cell_values.insert(view.as_value_ref() as usize);
     }
     Ok(view)
+}
+
+/// A `maybe` a Yinz function returned, or a string `get` built, owns its payload: a later persist
+/// takes it (`Cg::fresh_payload_maybes`). A state-machine function releases nothing yet (C8), so it
+/// keeps copying.
+fn remember_fresh_payload_maybe<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+) {
+    if val.is_pointer_value()
+        && cg.sm_frame_ptr.is_none()
+        && (cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr))
+        && matches!(
+            cg.resolve_type(&cg.expr_type(expr)),
+            Type::Maybe { ref inner } if matches!(
+                cg.resolve_type(inner),
+                Type::String | Type::Shape { .. } | Type::Number { .. }
+            )
+        )
+    {
+        cg.fresh_payload_maybes.insert(val.as_value_ref() as usize);
+    }
 }
 
 /// A heap value typeck says a store takes by move (`TypedModule::heap_moves`) is remembered, so
@@ -19802,6 +19851,10 @@ fn own_returned_value<'ctx>(
     // An envelope union is copied by the `return` itself (`union_persist_into` into the returned
     // slot, deep unless the value moves), so the store seam does not copy it a second time.
     if matches!(cg.resolve_type(&ty), Type::Union { .. }) {
+        return Ok(val);
+    }
+    // A `maybe` is copied by the `return` itself too (its payload through `maybe_payload_stable_bits`).
+    if matches!(cg.resolve_type(&ty), Type::Maybe { .. }) {
         return Ok(val);
     }
     if !ynz_typeck::owned_copy::copied_at_return(&cg.resolve_type(&ty)) {
@@ -20268,6 +20321,35 @@ fn lower_call_argument<'ctx>(
         copies.push((owned.release_value(), ty));
     }
     Ok(owned.value)
+}
+
+/// The value of a `maybe` argument at a `give` position, as the callee releases it: a local's
+/// envelope with the payload inline. A `.copy()` of a `maybe` (a heap envelope cell and a payload
+/// cell) or a `maybe` a function returned (a payload cell) is that value's only holder, so the
+/// envelope takes the payload and gives the emptied cells back; any other argument is passed as it is.
+fn own_given_maybe<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &Expr,
+    val: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let Type::Maybe { inner } = cg.resolve_type(&cg.expr_type(arg)) else {
+        return Ok(val);
+    };
+    if !val.is_pointer_value() {
+        return Ok(val);
+    }
+    let envelope = val.into_pointer_value();
+    let key = envelope.as_value_ref() as usize;
+    let inner = cg.resolve_type(&inner);
+    if cg.minted_maybe_copies.contains(&key) {
+        return Ok(cg.maybe_to_owned(envelope, &inner, "give_arg")?.into());
+    }
+    if cg.fresh_payload_maybes.contains(&key) {
+        return Ok(cg
+            .maybe_to_owned_taking(envelope, &inner, "give_arg")?
+            .into());
+    }
+    Ok(val)
 }
 
 /// Release the argument copies a call made, right after the call instruction.
@@ -20898,8 +20980,14 @@ fn lower_expr_node<'ctx>(
                     })?;
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
                     let mut arg_copies: CallCopies<'ctx> = Vec::new();
-                    for arg in call.args.iter() {
-                        let val = lower_call_argument(cg, arg, &mut arg_copies)?;
+                    for (arg_index, arg) in call.args.iter().enumerate() {
+                        let mut val = lower_call_argument(cg, arg, &mut arg_copies)?;
+                        if matches!(
+                            cg.plain_callee_param_ownership(name, arg_index),
+                            Some(Some(OwnershipModifier::Give))
+                        ) {
+                            val = own_given_maybe(cg, arg, val)?;
+                        }
                         call_args.push(val.into());
                     }
                     // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
@@ -27471,11 +27559,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             })?;
             let ty = self.resolve_type(&ty);
             // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which).
-            let form = if self
-                .typed
-                .temporaries
-                .is_minted_maybe_copy(span.0, span.1)
-            {
+            let form = if self.typed.temporaries.is_minted_maybe_copy(span.0, span.1) {
                 ReleaseForm::Cell
             } else {
                 self.temporary_release_form(&ty)

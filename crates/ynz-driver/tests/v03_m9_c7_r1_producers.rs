@@ -179,7 +179,11 @@ function entrypoint() -> nothing {
 /// not a temporary, and a `return` of one copied it again.
 #[test]
 fn a_maybe_copy_nothing_binds_or_a_function_returns_is_released_once() {
-    assert_balanced_and_clean("c7r1_maybe_copy_temp", MAYBE_COPY_TEMPORARY_AND_RETURNED, "6\n");
+    assert_balanced_and_clean(
+        "c7r1_maybe_copy_temp",
+        MAYBE_COPY_TEMPORARY_AND_RETURNED,
+        "6\n",
+    );
 }
 
 // ── Group 5: a `fixed` list of shapes owns the cell of each item ────────────────────────────
@@ -274,4 +278,88 @@ function entrypoint() -> nothing {
 #[test]
 fn a_shape_with_a_maybe_field_releases_the_fields_envelope_cell() {
     assert_heap_balanced_and_clean("c7r1_maybe_field", SHAPE_WITH_A_MAYBE_FIELD, "3\n");
+}
+
+// ── Group 4: a `maybe` returned, persisted or given has one owner of its payload ────────────
+
+const MAYBE_RETURNED: &str = "
+shape Tag {
+  name: string
+}
+function firstTag(share list: array<Tag>) -> maybe<Tag> {
+  let found = list.get(0)
+  return found
+}
+function ownedTag(share list: array<Tag>) -> maybe<Tag> {
+  let found: maybe<Tag> = list.get(0)
+  let mine: maybe<Tag> = found.copy()
+  return mine
+}
+function passThrough(share found: maybe<Tag>) -> maybe<Tag> {
+  return found
+}
+function firstWord(share list: array<string>) -> maybe<string> {
+  let found = list.get(0)
+  return found
+}
+function entrypoint() -> nothing {
+  let tags: array<Tag> = [{name: `n`}]
+  let words: array<string> = [`aa`, `b`]
+  let first = firstTag(tags)
+  let owned = ownedTag(tags)
+  let through = passThrough(first)
+  let word = firstWord(words)
+  let again: maybe<Tag> = firstTag(tags)
+  again = ownedTag(tags)
+  print(first.or({name: `z`}).name.count() + owned.or({name: `z`}).name.count()
+    + through.or({name: `z`}).name.count() + word.or(`z`).count() + again.or({name: `z`}).name.count())
+}
+";
+
+/// Bug (High: leak): a function that returned a `maybe` copied its payload at the `return`, yet
+/// typeck called the returned local "returned" and planned no release for it (`copied_at_return`
+/// said a `maybe` is not copied), so the local's own copy of the shape's string leaked (6/5), and a
+/// returned owned local was copied twice.
+#[test]
+fn a_maybe_a_function_returns_is_copied_once_and_its_local_released() {
+    assert_balanced_and_clean("c7r1_maybe_returned", MAYBE_RETURNED, "6\n");
+}
+
+const MAYBE_PERSISTED_AND_GIVEN: &str = "
+shape Tag {
+  name: string
+}
+function firstTag(share list: array<Tag>) -> maybe<Tag> {
+  let found = list.get(0)
+  return found
+}
+function findFirst(share text: string) -> maybe<string> {
+  return text.get(0)
+}
+function eatTag(give found: maybe<Tag>) -> int {
+  return found.or({name: `z`}).name.count()
+}
+function entrypoint() -> nothing {
+  let tags: array<Tag> = [{name: `n`}]
+  let text: string = `hello`
+  let boxed: array<maybe<Tag> > = [firstTag(tags)]
+  boxed.add(firstTag(tags))
+  let words: array<maybe<string> > = [findFirst(text)]
+  words.add(text.get(1))
+  let current: maybe<Tag> = tags.get(0)
+  let total: int = eatTag(current.copy()) + eatTag(firstTag(tags))
+  print(boxed.count() + words.count() + total)
+}
+";
+
+/// Bug (High: leak): a `maybe` a function returned (or a string `get` built, or a `.copy()` of a
+/// `maybe`) owns its payload, but a persist into an array literal or `add` cloned it again, and a
+/// `give` parameter was handed the payload's heap cell its release does not free.
+#[test]
+fn a_fresh_maybe_stored_or_given_hands_its_payload_over_once() {
+    assert_balanced_and_clean(
+        "c7r1_maybe_persisted_given",
+        MAYBE_PERSISTED_AND_GIVEN,
+        "6\n",
+    );
 }
