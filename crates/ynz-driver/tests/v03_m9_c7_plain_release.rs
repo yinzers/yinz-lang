@@ -494,3 +494,60 @@ fn a_returned_maybe_nothing_binds_is_released_at_the_statement_end() {
         );
     });
 }
+
+const A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM: &str = "
+shape Circle {
+  label: string
+}
+shape Square {
+  side: int
+}
+shape Figure = Circle | Square
+function mk(index: int) -> Figure {
+  if (index % 2 == 0) {
+    let circle: Circle = { label: `circle${index}` }
+    return circle
+  }
+  let square: Square = { side: index }
+  return square
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  let current: Figure = mk(0)
+  for (index in range(0, 10)) {
+    if (current) {
+      is Circle => {
+        total = total + current.label.count()
+        current = mk(index + 1)
+      }
+      is Square => {
+        total = total + current.side
+        current = mk(index + 1)
+      }
+    }
+  }
+  print(total)
+}
+";
+
+/// An assignment inside an `is` arm of the binding it narrows wrote the arm's variant-payload slot
+/// (stale value after the arm) and the assignment release read that payload pointer as a union
+/// view (stack-buffer-overflow under ASan; the replaced union never freed) (High).
+#[test]
+fn a_union_reassigned_inside_its_own_is_arm_replaces_and_releases_the_whole_union() {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced(
+            "c7_union_arm_assign",
+            A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM,
+            "60\n",
+            no_optimize,
+        );
+        assert_strings_balanced("c7_union_arm_assign", &counters, no_optimize);
+        assert_asan_clean(
+            "c7_union_arm_assign",
+            A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM,
+            "60\n",
+            no_optimize,
+        );
+    });
+}

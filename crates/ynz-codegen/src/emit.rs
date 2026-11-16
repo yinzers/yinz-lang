@@ -17495,12 +17495,18 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
             span,
             ..
         } => {
-            let slot = *cg
-                .locals
-                .get(target.as_str())
+            // An `is` arm re-points a narrowed union binding at its variant payload; an assignment
+            // replaces the whole union, so it writes (and releases) the binding's OUTER slot and
+            // the binding is the whole union again for the rest of the arm (typeck clears the
+            // narrowing fact at the assignment, `IMP-narrowing.md` "Reassignment Invalidation").
+            let slot = cg
+                .reload_slot(target)
                 .ok_or_else(|| format!("undefined `{target}` in codegen"))?;
             let ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
+            if cg.locals.get(target.as_str()).copied() != Some(slot) {
+                cg.locals.insert(target.clone(), slot);
+            }
             // An errors-capable result is released through its original slot and rebound there
             // (`assign_errors_capable`).
             if cg.sm_frame_ptr.is_none()
