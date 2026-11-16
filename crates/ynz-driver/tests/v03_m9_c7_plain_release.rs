@@ -11,61 +11,9 @@
 mod support;
 
 use support::{
-    at_both_optimization_levels, build_asan, build_source, run_asan_binary, run_counted, Counters,
+    assert_asan_clean, assert_heap_balanced, assert_strings_balanced, at_both_optimization_levels,
+    run_balanced,
 };
-
-/// Build `program`, run it with the alloc counters on, and check it printed `expected`.
-fn run_balanced(label: &str, program: &str, expected: &str, no_optimize: bool) -> Counters {
-    let built = build_source(program, label, no_optimize);
-    let (run, counters) = run_counted(&built);
-    assert_eq!(
-        run.exit_code, 0,
-        "{label} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
-        run.stderr
-    );
-    assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
-    counters
-}
-
-fn assert_heap_balanced(label: &str, counters: &Counters, no_optimize: bool) {
-    assert!(
-        counters.alloc > 0,
-        "{label}: non-vacuous: the program must allocate: {counters:?}"
-    );
-    assert_eq!(
-        counters.free, counters.alloc,
-        "{label} (no_optimize={no_optimize}): every heap allocation must be freed: {counters:?}"
-    );
-}
-
-fn assert_strings_balanced(label: &str, counters: &Counters, no_optimize: bool) {
-    assert!(
-        counters.string_alloc > 0,
-        "{label}: non-vacuous: the program must build strings: {counters:?}"
-    );
-    assert_eq!(
-        counters.string_free, counters.string_alloc,
-        "{label} (no_optimize={no_optimize}): every string must be freed: {counters:?}"
-    );
-}
-
-/// Build `program` under AddressSanitizer and check it exits 0, reports nothing and prints
-/// `expected`.
-fn assert_asan_clean(label: &str, program: &str, expected: &str, no_optimize: bool) {
-    let built = build_source(program, label, no_optimize);
-    let run = run_asan_binary(&build_asan(&built));
-    assert!(
-        !run.stderr.contains("AddressSanitizer"),
-        "{label} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
-        run.stderr
-    );
-    assert_eq!(
-        run.exit_code, 0,
-        "{label} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
-        run.stderr
-    );
-    assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
-}
 
 const BLOCK_ENDS: &str = "
 function entrypoint() -> nothing {

@@ -464,3 +464,60 @@ pub fn concurrently<A: Send, B: Send>(
 pub fn at_both_optimization_levels(check: impl Fn(bool) + Sync) {
     concurrently(|| check(false), || check(true));
 }
+
+/// Build `program`, run it with the alloc counters on, and check it exits 0 and prints `expected`.
+/// Returns the counters. For the release suites (`v03_m9_c7_*`).
+pub fn run_balanced(label: &str, program: &str, expected: &str, no_optimize: bool) -> Counters {
+    let built = build_source(program, label, no_optimize);
+    let (run, counters) = run_counted(&built);
+    assert_eq!(
+        run.exit_code, 0,
+        "{label} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
+    counters
+}
+
+/// Every heap allocation of the run was freed, and there was at least one (a program that
+/// allocates nothing would balance trivially).
+pub fn assert_heap_balanced(label: &str, counters: &Counters, no_optimize: bool) {
+    assert!(
+        counters.alloc > 0,
+        "{label}: non-vacuous: the program must allocate: {counters:?}"
+    );
+    assert_eq!(
+        counters.free, counters.alloc,
+        "{label} (no_optimize={no_optimize}): every heap allocation must be freed: {counters:?}"
+    );
+}
+
+/// Every string of the run was freed, and there was at least one.
+pub fn assert_strings_balanced(label: &str, counters: &Counters, no_optimize: bool) {
+    assert!(
+        counters.string_alloc > 0,
+        "{label}: non-vacuous: the program must build strings: {counters:?}"
+    );
+    assert_eq!(
+        counters.string_free, counters.string_alloc,
+        "{label} (no_optimize={no_optimize}): every string must be freed: {counters:?}"
+    );
+}
+
+/// Build `program` under AddressSanitizer and check it exits 0, reports nothing and prints
+/// `expected`.
+pub fn assert_asan_clean(label: &str, program: &str, expected: &str, no_optimize: bool) {
+    let built = build_source(program, label, no_optimize);
+    let run = run_asan_binary(&build_asan(&built));
+    assert!(
+        !run.stderr.contains("AddressSanitizer"),
+        "{label} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.exit_code, 0,
+        "{label} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
+}
