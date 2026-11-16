@@ -456,8 +456,19 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             args,
             ..
         } => {
-            // UFCS: a user function reachable by this name IS the callee, receiver first.
-            if ctx.local_fns.contains(method) || ctx.imported_fn_names.contains(method) {
+            // UFCS: a user function reachable by this name IS the callee, receiver first, but a
+            // dot-call reaches a Yinz function only on a shape (or `dynamic` contract) receiver
+            // (`Checker::check_method_call` rules every built-in method of that name out first).
+            // On any other receiver the name is the built-in, whose result is borrowed even when a
+            // function shares its name: the same test `string_ownership::is_fresh_string_expr`
+            // makes, so a user `or` does not make `found.or(x)` read as `Fresh`.
+            let reaches_function = matches!(
+                (ctx.type_of)(receiver),
+                Some(Type::Shape { .. } | Type::Dynamic { .. })
+            );
+            if reaches_function
+                && (ctx.local_fns.contains(method) || ctx.imported_fn_names.contains(method))
+            {
                 return call_result_provenance(
                     method,
                     std::iter::once(receiver.as_ref()).chain(args.iter()),
