@@ -463,3 +463,54 @@ fn a_union_call_result_stored_into_a_field_or_a_let_leaves_no_box_shell() {
         );
     });
 }
+
+// ── PM ruling B: the tag follows the heap ───────────────────────────────────────────────────
+
+/// A function that takes a union, and a `let` that holds one: the two places a union gets a slot.
+fn union_program(union_type: &str, value: &str) -> String {
+    format!(
+        "
+function show(value: {union_type}) -> nothing {{
+  print(1)
+}}
+function entrypoint() -> nothing {{
+  let held: {union_type} = {value}
+  show(held)
+  print(2)
+}}
+"
+    )
+}
+
+#[test]
+fn a_union_of_value_types_has_no_tag_and_a_union_with_a_heap_variant_has() {
+    // Bug caught (High: layout and release): the union tag `{ i64 tag, payload }` applies only to a
+    // union with at least one heap variant (`string | int` included), as the Product Manager ruled
+    // (ruling B). A value-only union (`int | float`) is the variant's bare bits: no slot struct,
+    // no release function. A tag on it would cost a word per value and a release with nothing to
+    // release.
+    at_both_optimization_levels(|no_optimize| {
+        let value_only = build_source(
+            &union_program("int | float", "3"),
+            "value_only_union",
+            no_optimize,
+        );
+        let value_only_ir = std::fs::read_to_string(&value_only.ir).expect("read the IR");
+        assert!(
+            !value_only_ir.contains("{ i64, [1 x i64] }")
+                && !value_only_ir.contains("{ i64, i64 }"),
+            "no_optimize={no_optimize}: `int | float` must have no tagged slot:\n{value_only_ir}"
+        );
+        assert!(
+            !value_only_ir.contains("ynz_release_union"),
+            "no_optimize={no_optimize}: `int | float` has nothing to release:\n{value_only_ir}"
+        );
+    });
+    // The optimizer may fold a tag away, so the positive half reads the unoptimized IR.
+    let with_heap = build_source(&union_program("string | int", "3"), "heap_union", true);
+    let with_heap_ir = std::fs::read_to_string(&with_heap.ir).expect("read the IR");
+    assert!(
+        with_heap_ir.contains("{ i64, [1 x i64] }") && with_heap_ir.contains("ynz_release_union("),
+        "`string | int` must carry a tag word and release by it:\n{with_heap_ir}"
+    );
+}
