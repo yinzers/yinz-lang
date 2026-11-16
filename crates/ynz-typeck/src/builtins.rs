@@ -238,6 +238,23 @@ pub fn builtin_method_returns_fresh(method: &str) -> bool {
     matches!(method, "receive" | "split")
 }
 
+/// True when the built-in `method` on a `receiver` of this type returns a `maybe<string>` whose string
+/// payload is a fresh allocation nobody else holds: `string.get(index)` and `string.graphemeAt(index)`
+/// build a new string for the character (`ynz_string_codepoint_at`, `ynz_string_grapheme_at`), unlike
+/// `array.get` and `map.get`, whose payload is a cell of the receiver. Such a `maybe` is held the way a
+/// `maybe` a Yinz function returned is: the binding takes the payload, and a `maybe` nothing binds frees it
+/// (`temporaries`).
+///
+/// O(1) time.
+pub fn builtin_method_returns_fresh_maybe_string(receiver: &Type, method: &str) -> bool {
+    let on_a_string = match receiver {
+        Type::String => true,
+        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
+        _ => false,
+    };
+    on_a_string && matches!(method, "get" | "graphemeAt")
+}
+
 /// The typed argument positions of the built-in methods and the type each must have: the
 /// collection's element / key / value, `maybe`'s and an `errors` result's inner type, an `int`
 /// index, and the `string` methods with two arguments (`substring(start, end)`,

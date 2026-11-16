@@ -345,6 +345,20 @@ impl Walk<'_> {
         })
     }
 
+    /// True when `expr` is `string.get(i)` or `string.graphemeAt(i)`: a `maybe<string>` holding a new
+    /// string (`builtins::builtin_method_returns_fresh_maybe_string`).
+    fn is_fresh_maybe_string(&self, expr: &Expr) -> bool {
+        let Expr::MethodCall {
+            receiver, method, ..
+        } = expr
+        else {
+            return false;
+        };
+        self.type_of(receiver).is_some_and(|ty| {
+            crate::builtins::builtin_method_returns_fresh_maybe_string(ty, method)
+        })
+    }
+
     /// True when `expr` is a built-in method on a string whose result is a fresh heap value
     /// (`builtins::builtin_method_returns_fresh`: `s.split(sep)` builds an array of new strings).
     /// A channel or task handle `receive` is in the same table but is not a string method.
@@ -373,6 +387,7 @@ impl Walk<'_> {
             } => true,
             _ if self.is_user_call(expr) => true,
             _ if self.is_fresh_builtin_result(expr) => true,
+            _ if self.is_fresh_maybe_string(expr) => true,
             _ => {
                 matches!(self.type_of(expr), Some(Type::String))
                     && is_fresh_string_expr(expr, self.facts.expr_types, self.facts.callable_fns)
@@ -400,7 +415,7 @@ impl Walk<'_> {
         // A function returns a `maybe` of a string, shape or number with the payload its `return`
         // allocated (a string clone, a heap cell); a `let` takes it (`maybe_to_owned_taking`), so a
         // call whose `maybe` nothing binds (`find(rows).or(fallback)`, `.exists()`) frees it here.
-        let owns_a_returned_payload = self.is_user_call(expr)
+        let owns_a_returned_payload = (self.is_user_call(expr) || self.is_fresh_maybe_string(expr))
             && matches!(ty, Type::Maybe { inner } if matches!(
                 inner.as_ref(),
                 Type::String | Type::Shape { .. } | Type::Number { precision: ..=34 }

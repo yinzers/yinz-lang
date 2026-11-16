@@ -205,3 +205,40 @@ function entrypoint() -> nothing {
 fn a_fixed_list_of_heap_free_shapes_releases_its_item_cells() {
     assert_heap_balanced_and_clean("c7r1_fixed_flat_shapes", FIXED_OF_FLAT_SHAPES, "6\n");
 }
+
+/// [`assert_balanced_and_clean`] for a program that allocates strings only.
+fn assert_strings_balanced_and_clean(label: &str, program: &str, expected: &str) {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced(label, program, expected, no_optimize);
+        assert_strings_balanced(label, &counters, no_optimize);
+        assert_asan_clean(label, program, expected, no_optimize);
+    });
+}
+
+// ── Group 3 (string character reads): `get` and `graphemeAt` build a fresh string ───────────
+
+const STRING_CHARACTER_READS: &str = "
+function entrypoint() -> nothing {
+  let s: string = `hello`
+  let first = s.get(0)
+  let grapheme = s.graphemeAt(1)
+  let outside = s.get(100)
+  let total: int = first.or(`z`).count() + grapheme.or(`z`).count() + outside.or(`z`).count()
+  total = total + s.get(2).or(`z`).count() + s.graphemeAt(3).or(`z`).count()
+  let i: int = 0
+  while (i < 3) {
+    let each = s.get(i)
+    total = total + each.or(`z`).count()
+    i = i + 1
+  }
+  print(total)
+}
+";
+
+/// Bug (High: leak): `ynz_string_codepoint_at` / `ynz_string_grapheme_at` build a new string, which
+/// `let c = s.get(0)` then cloned again (the binding copies a `maybe<string>` it does not take) and
+/// a `maybe` nothing binds never freed (`let s = ...; let c = s.get(0)`: strings 3/2).
+#[test]
+fn a_string_character_read_frees_the_string_it_built() {
+    assert_strings_balanced_and_clean("c7r1_string_get", STRING_CHARACTER_READS, "8\n");
+}

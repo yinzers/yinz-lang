@@ -20018,6 +20018,14 @@ fn release_owned_read<'ctx>(
     Ok(())
 }
 
+/// True when `expr` is `string.get(i)` or `string.graphemeAt(i)`: a `maybe<string>` whose string is a
+/// fresh allocation (`ynz_typeck::builtins::builtin_method_returns_fresh_maybe_string`), which a
+/// binding takes the way it takes a `maybe` a Yinz function returned.
+fn is_fresh_maybe_string_call(cg: &Cg<'_, '_>, expr: &Expr) -> bool {
+    matches!(expr, Expr::MethodCall { receiver, method, .. }
+        if ynz_typeck::builtins::builtin_method_returns_fresh_maybe_string(&cg.expr_type(receiver), method))
+}
+
 /// Store the value of `expr` into the binding slot `slot` of `name`: an array or map goes through
 /// the store seam (`own_read_for_store`, which takes a moved value and copies a read of a place
 /// that is not a view); every other type through `store_binding`.
@@ -20063,7 +20071,7 @@ fn store_binding_of_read<'ctx>(
         if owns_payload
             && val.is_pointer_value()
             && cg.sm_frame_ptr.is_none()
-            && cg.is_user_call(expr)
+            && (cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr))
         {
             let owned = cg.maybe_to_owned_taking(val.into_pointer_value(), &inner, name)?;
             return store(cg, owned.into(), ty, slot);
