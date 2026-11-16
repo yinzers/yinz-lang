@@ -79,6 +79,16 @@ view_cases! {
         [("outer.inner", 1, false)],
         "a view live across a call that may write its root, read after the write (High)";
 
+    a_root_reassigned_while_the_view_is_live_is_not_a_view:
+        "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let second: Inner = { id: 9 }\n  let outer: Outer = { inner: first, tag: 2 }\n  let other: Outer = { inner: second, tag: 4 }\n  let inner = outer.inner\n  outer = other\n  print(inner.id)\n}\n",
+        [("outer.inner", 1, false)],
+        "a view of a nested shape read after its root was reassigned (the old root's cells are released) reads freed memory (C7 slice 3b, High)";
+
+    a_recursive_union_field_written_while_the_view_is_live_is_not_a_view:
+        "shape End {\n  flag: boolean\n}\nshape Node {\n  value: int\n  next: Node | End\n}\nfunction entrypoint() -> nothing {\n  let stop: End = { flag: true }\n  let last: Node = { value: 3, next: stop }\n  let head: Node = { value: 1, next: last }\n  let view = head.next\n  let tail: End = { flag: false }\n  let wrapped: Node | End = tail\n  head.next = wrapped\n  print(head.value)\n  if (view) {\n    is Node => {\n      print(view.value)\n    }\n    is End => {\n      print(0)\n    }\n  }\n}\n",
+        [("head.next", 1, false)],
+        "a view of a recursive-union box read after a field assignment released the box (C7 slice 3b, High)";
+
     a_root_written_after_the_last_read_of_the_view_is_still_a_view:
         "function entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  print(inner.id)\n  outer.tag = 5\n}\n",
         [("outer.inner", 1, true)],

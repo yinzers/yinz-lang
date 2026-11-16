@@ -419,3 +419,91 @@ fn typeck_refuses_every_way_a_map_entry_outlives_its_iteration() {
     assert!(!built, "a copy of an entry must not compile:\n{text}");
     assert!(text.contains("cannot make a separate `MapEntry"), "copy: {text}");
 }
+
+// ── Item 3: a write to a place a `let` would view makes the `let` a copy ────────────────────
+
+const A_RECURSIVE_UNION_BOX_REPLACED_UNDER_A_VIEW: &str = "
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  label: string
+  next: Node | End
+}
+function describe(share link: Node | End) -> int {
+  if (link) {
+    is Node => {
+      return link.value + link.label.count()
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (round in range(0, 20)) {
+    let stop: End = { flag: true }
+    let tail: End = { flag: false }
+    let after: End = { flag: true }
+    let last: Node = { value: 3, label: `last${round}`, next: stop }
+    let head: Node = { value: 1, label: `head${round}`, next: last }
+    let view = head.next
+    let second: Node = { value: 9, label: `second${round}`, next: tail }
+    let wrapped: Node | End = second
+    head.next = wrapped
+    total = total + describe(view)
+    let again = head.next
+    let fresh: Node = { value: 5, label: `fresh${round}`, next: after }
+    head = fresh
+    total = total + describe(again)
+  }
+  print(total)
+}
+";
+
+case!(
+    a_recursive_union_box_replaced_while_a_let_would_view_it_is_not_freed_under_the_reader,
+    A_RECURSIVE_UNION_BOX_REPLACED_UNDER_A_VIEW,
+    "500\n",
+    Balance::Strings,
+    "a `let` that views a recursive-union field reads the box a later field assignment or root reassignment released (High)"
+);
+
+const A_NESTED_CELL_REPLACED_OR_RELEASED_UNDER_A_VIEW: &str = "
+shape Tag {
+  name: string
+  id: int
+}
+shape Holder {
+  inner: Tag
+  label: string
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (round in range(0, 20)) {
+    let first: Tag = { name: `n${round}`, id: round }
+    let holder: Holder = { inner: first, label: `w${round}` }
+    let view = holder.inner
+    let replaced: Tag = { name: `replaced${round}`, id: 100 }
+    holder.inner = replaced
+    total = total + view.name.count() + view.id
+    let second = holder.inner
+    let again: Tag = { name: `again${round}`, id: 7 }
+    let other: Holder = { inner: again, label: `x` }
+    holder = other
+    total = total + second.name.count() + second.id
+  }
+  print(total)
+}
+";
+
+case!(
+    a_nested_cell_replaced_or_released_while_a_let_would_view_it_is_not_read_after_free,
+    A_NESTED_CELL_REPLACED_OR_RELEASED_UNDER_A_VIEW,
+    "2430\n",
+    Balance::HeapAndStrings,
+    "a `let` that views a nested shape field reads the cell a field assignment or a root reassignment released (High)"
+);
