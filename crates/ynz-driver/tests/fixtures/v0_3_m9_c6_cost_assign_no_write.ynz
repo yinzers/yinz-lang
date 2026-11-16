@@ -1,6 +1,8 @@
-// v0.3-M9 C6 cost fixture: reassigning a binding from a field nobody writes copies nothing.
-// Allocations: the field's literal (2) and the first value of `rows` (2); the assignment copies no
-// array.
+// v0.3-M9 C6 cost fixture: reassigning a binding from a field nobody writes copies the field once.
+// A reassigned binding owns every value it holds, so the reassignment is a copy even though the
+// field is never written (C7 slice 3b; a view would leave the binding with a place it does not own
+// and lose the release of its first value). Allocations: the field's literal (2), the first value
+// of `rows` (2) and the copy (2); all six are freed.
 
 shape Bucket {
   rows: array<int>

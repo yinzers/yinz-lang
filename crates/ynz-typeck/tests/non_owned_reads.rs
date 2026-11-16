@@ -308,10 +308,10 @@ verdict_cases! {
         "a UFCS receiver that points at an element the call's `lend` argument frees (High)";
 
     // ── reassignment ──
-    a_reassignment_from_a_field_nobody_writes_is_a_view:
+    a_reassignment_from_a_field_nobody_writes_is_a_copy:
         "shape Bucket {\n  rows: array<int>\n  id: int\n}\nfunction entrypoint() -> nothing {\n  let bucket: Bucket = { rows: [1, 2], id: 1 }\n  let rows: array<int> = [1]\n  rows = bucket.rows\n  print(rows.count())\n}\n",
-        [("bucket.rows", 1, VIEW)],
-        "a reassignment copied although the field is never written (cost, Rule 8)";
+        [("bucket.rows", 1, COPY)],
+        "a reassigned binding owns every value it holds: a view would lose the release of its first value (C7 slice 3b, High)";
 
     a_reassignment_from_a_field_that_is_then_overwritten_is_a_copy:
         "shape Bucket {\n  rows: array<int>\n  id: int\n}\nfunction entrypoint() -> nothing {\n  let bucket: Bucket = { rows: [1, 2], id: 1 }\n  let rows: array<int> = [1]\n  rows = bucket.rows\n  bucket.rows = [9]\n  print(rows.count())\n}\n",

@@ -217,12 +217,12 @@ cost_case!(
     "a plain-call `share` argument that reads an element another argument's `lend` overwrites, read after it was freed (High)"
 );
 cost_case!(
-    a_reassignment_from_a_field_nobody_writes_copies_nothing,
+    a_reassignment_from_a_field_nobody_writes_copies_it_once_and_balances,
     "v0_3_m9_c6_cost_assign_no_write.ynz",
     "3\n",
-    4,
-    2,
-    "a reassignment copied although the field is never written (cost, Rule 8)"
+    6,
+    6,
+    "a reassignment that views the field leaks the binding's first value, or one that copies leaks the copy (High)"
 );
 cost_case!(
     a_let_of_a_maybe_array_element_nobody_writes_copies_no_payload,

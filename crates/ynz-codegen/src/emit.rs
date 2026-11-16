@@ -17398,6 +17398,24 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
                 .ok_or_else(|| format!("undefined `{target}` in codegen"))?;
             let ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
+            // An errors-capable result is released through its original slot and rebound there
+            // (`assign_errors_capable`).
+            if cg.sm_frame_ptr.is_none()
+                && matches!(cg.resolve_type(&ty), Type::ErrorsCapable { .. })
+                && cg.ec_original_slots.contains_key(target.as_str())
+            {
+                if let Some(assign) = cg.typed.release_plan.assign_release(span).cloned() {
+                    if val.is_pointer_value() {
+                        cg.assign_errors_capable(
+                            target,
+                            slot,
+                            val.into_pointer_value(),
+                            &assign.held,
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
             // The value just evaluated may have taken the old one (a null slot); what the slot
             // holds now is released after the new value is stored.
             let replaced = match cg.typed.release_plan.assign_release(span).cloned() {
@@ -26744,6 +26762,72 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|err| format!("assign release join {name}: {err}"))?;
         self.builder.position_at_end(done_bb);
         Ok(())
+    }
+
+    /// `name = value` where `name` holds an errors-capable result: the old result is released and
+    /// the new one is bound. The new result is copied into a region of this assignment's own
+    /// (the call's result slot is per call site, so a loop's next call would overwrite what an
+    /// earlier pass bound), the old words are snapshotted before that copy, and the result goes
+    /// into the binding's original slot, the one its scope exit releases from (a narrowing read
+    /// re-points `locals` at a slot of the inner type). Returns after the old result's release.
+    /// A taken ok word is null and releases nothing.
+    ///
+    /// O(1) time to emit; at run time one 16-byte copy plus the release of the old result.
+    fn assign_errors_capable(
+        &self,
+        name: &str,
+        assign_slot: PointerValue<'ctx>,
+        new_result: PointerValue<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        let original = self
+            .ec_original_slots
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("internal: `{name}` holds no errors-capable result slot"))?;
+        let result_ty = errors_result_type(self.ctx);
+        let old = self
+            .builder
+            .build_load(self.ptr(), original, &format!("{name}_old_result"))
+            .map_err(|err| format!("assign ec old load {name}: {err}"))?
+            .into_pointer_value();
+        let live = self
+            .builder
+            .build_is_not_null(old, &format!("{name}_old_result_live"))
+            .map_err(|err| format!("assign ec old null check {name}: {err}"))?;
+        let snapshot = self.alloca_in_entry_llvm(result_ty, &format!("{name}_old_result_words"))?;
+        let copy_bb = self.append_block(&format!("{name}_old_result_copy"));
+        let copied_bb = self.append_block(&format!("{name}_old_result_copied"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, copied_bb)
+            .map_err(|err| format!("assign ec snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let words = self.i64().const_int(16, false);
+        self.builder
+            .build_memcpy(snapshot, 8, old, 8, words)
+            .map_err(|err| format!("assign ec snapshot copy {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(copied_bb)
+            .map_err(|err| format!("assign ec snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(copied_bb);
+        let owned = self.alloca_in_entry_llvm(result_ty, &format!("{name}_assigned_result"))?;
+        self.builder
+            .build_memcpy(owned, 8, new_result, 8, words)
+            .map_err(|err| format!("assign ec own copy {name}: {err}"))?;
+        self.builder
+            .build_store(original, owned)
+            .map_err(|err| format!("assign ec store original {name}: {err}"))?;
+        if assign_slot != original {
+            self.builder
+                .build_store(assign_slot, owned)
+                .map_err(|err| format!("assign ec store slot {name}: {err}"))?;
+        }
+        self.finish_assign_release(&ReplacedValue {
+            live,
+            held: snapshot,
+            ty: self.resolve_type(ty),
+            name: name.to_string(),
+        })
     }
 
     /// Store null into each of `slots`: the founder no longer holds what was taken.

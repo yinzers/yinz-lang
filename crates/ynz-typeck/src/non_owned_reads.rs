@@ -256,8 +256,6 @@ enum Reader {
     /// A `let` binding: others read through it, and it is live while a later statement mentions
     /// it.
     Binding(DeclKey),
-    /// A reassigned binding: live while a later statement mentions it, never read through.
-    Reassigned(DeclKey),
     /// A loop variable: live for the whole body while `body_active`, others read through it.
     LoopVariable(DeclKey),
     /// A call argument: judged once, when its call is evaluated.
@@ -282,7 +280,7 @@ struct Candidate {
 impl Candidate {
     fn holder(&self) -> Option<&DeclKey> {
         match &self.reader {
-            Reader::Binding(key) | Reader::Reassigned(key) | Reader::LoopVariable(key) => Some(key),
+            Reader::Binding(key) | Reader::LoopVariable(key) => Some(key),
             Reader::Argument => None,
         }
     }
@@ -293,7 +291,7 @@ impl Candidate {
     /// shape reads a heap value the frame keeps (a shape loop variable crossing a `wait` is
     /// embedded in the frame by codegen), so only a write to the place ends it.
     fn suspension_breaks(&self) -> bool {
-        matches!(self.reader, Reader::Binding(_) | Reader::Reassigned(_))
+        matches!(self.reader, Reader::Binding(_))
     }
 
     /// True when others may read through this candidate.
@@ -701,7 +699,7 @@ impl<'a> ReadTracker<'a> {
         lets: &HashSet<DeclKey>,
     ) {
         let reader = Reader::Binding(decl_key(name_span, name));
-        self.declare_binding(reader, annotation, value, lets);
+        self.declare_binding(Some(reader), annotation, value, lets);
     }
 
     /// A reassignment `name = value` was just evaluated.
@@ -720,7 +718,7 @@ impl<'a> ReadTracker<'a> {
             self.judge_unfollowable(value);
             return;
         }
-        self.declare_binding(Reader::Reassigned(key), None, value, lets);
+        self.declare_binding(None, None, value, lets);
     }
 
     /// A judged place read that cannot be followed owns a copy.
@@ -731,9 +729,11 @@ impl<'a> ReadTracker<'a> {
         }
     }
 
+    /// One `let` (`Some(reader)`) or reassignment (`None`) of a binding. A reassignment never views:
+    /// see the comment where it is judged.
     fn declare_binding(
         &mut self,
-        reader: Reader,
+        reader: Option<Reader>,
         annotation: Option<&ynz_ast::nodes::Type>,
         value: &Expr,
         lets: &HashSet<DeclKey>,
@@ -781,6 +781,17 @@ impl<'a> ReadTracker<'a> {
             self.must_copy(value_span);
             return;
         }
+        // A reassigned binding copies at every event. Its `let` is a view only while nothing writes the
+        // binding, and the reassignment is such a write, so the `let` owns a copy (or a fresh value);
+        // a reassignment that viewed would make the binding hold a place it does not own beside a value
+        // it does, and the release of the first value would be lost (an annotated `maybe<Tag>` that
+        // is reassigned from `tags.get(i)` leaked its first payload). It also outlives the iteration it
+        // is assigned in, which a view read through a loop variable of per-site staging does not
+        // (`m5_p3_mapshape_iter_escape`).
+        let Some(reader) = reader else {
+            self.must_copy(value_span);
+            return;
+        };
         let Some((roots, through)) = self
             .place_roots(value)
             .and_then(|idents| self.resolve_roots(&idents, lets))
@@ -788,14 +799,6 @@ impl<'a> ReadTracker<'a> {
             self.must_copy(value_span);
             return;
         };
-        // A reassigned binding outlives the statement and the iteration it is assigned in, while
-        // a view read through another reader (a loop variable of per-site staging) lives only as
-        // long as that reader: `keep = entry.value` in a loop would keep the last iteration's
-        // staging (`m5_p3_mapshape_iter_escape`).
-        if matches!(reader, Reader::Reassigned(_)) && !through.is_empty() {
-            self.must_copy(value_span);
-            return;
-        }
         self.candidates.push(Candidate {
             reader,
             roots,
@@ -870,7 +873,7 @@ impl<'a> ReadTracker<'a> {
                 continue;
             }
             let outlives = match &candidate.reader {
-                Reader::Binding(holder) | Reader::Reassigned(holder) => {
+                Reader::Binding(holder) => {
                     lets.contains(holder) && !inside.contains(holder)
                 }
                 Reader::LoopVariable(_) | Reader::Argument => false,

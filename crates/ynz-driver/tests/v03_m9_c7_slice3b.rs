@@ -134,3 +134,95 @@ case!(
     Balance::HeapAndStrings,
     "taking a nested shape (and one of its own nested shapes) out of a temporary frees the emptied cell twice, or leaves the temporary's release reading the taken cell (High)"
 );
+
+// ── Item 6: a reassigned binding owns every value it holds ──────────────────────────────────
+
+const A_REASSIGNED_MAYBE_COPIES_AT_EVERY_EVENT: &str = r"
+shape Tag {
+  name: string
+  id: int
+}
+function entrypoint() -> nothing {
+  let tags: array<Tag> = [{ name: `a${1}`, id: 1 }, { name: `b${2}`, id: 2 }]
+  let names: array<string> = [`aa-${1}`, `bb-${2}`]
+  let total: int = 0
+  for (round in range(0, 50)) {
+    let held: maybe<Tag> = tags.get(0)
+    let label: maybe<string> = names.get(0)
+    held = tags.get(1)
+    label = names.get(1)
+    total = total + held.or({ name: `z`, id: 0 }).id + label.or(`q`).count()
+  }
+  print(total)
+}
+";
+
+case!(
+    an_annotated_maybe_reassigned_from_an_element_releases_its_first_value,
+    A_REASSIGNED_MAYBE_COPIES_AT_EVERY_EVENT,
+    "300\n",
+    Balance::HeapAndStrings,
+    "an annotated `maybe` whose `let` copies and whose reassignment viewed an element lost the release of its first payload: one string per iteration (High)"
+);
+
+const A_REASSIGNED_ARRAY_COPIES_AT_EVERY_EVENT: &str = r"
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+function entrypoint() -> nothing {
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let total: int = 0
+  for (round in range(0, 50)) {
+    let rows: array<int> = [round]
+    rows = bucket.rows
+    total = total + rows.count()
+  }
+  print(total)
+}
+";
+
+case!(
+    an_array_reassigned_from_a_field_releases_its_first_value_and_its_copy,
+    A_REASSIGNED_ARRAY_COPIES_AT_EVERY_EVENT,
+    "150\n",
+    Balance::Heap,
+    "an array binding that is reassigned from a field it viewed lost its first value (leak) or freed the field's own array (High)"
+);
+
+// ── Item 6: an errors-capable local that is reassigned releases its old result ──────────────
+
+const AN_ERRORS_CAPABLE_LOCAL_REASSIGNED_RELEASES_THE_OLD_RESULT: &str = r"
+function load(index: int) -> string errors {
+  return `value-${index}`
+}
+function loadRows(index: int) -> array<int> errors {
+  return [index, index]
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  let result = load(0)
+  let rows = loadRows(0)
+  for (index in range(0, 50)) {
+    result = load(index)
+    rows = loadRows(index)
+    if (result.failed()) {
+      print(`bad`)
+    }
+    total = total + result.count()
+    let taken: string = result
+    total = total + taken.count()
+    result = load(index + 1)
+    total = total + result.or(`x`).count() + rows.or([]).count()
+  }
+  print(total)
+}
+";
+
+case!(
+    an_errors_capable_local_reassigned_releases_the_old_result,
+    AN_ERRORS_CAPABLE_LOCAL_REASSIGNED_RELEASES_THE_OLD_RESULT,
+    "1271\n",
+    Balance::HeapAndStrings,
+    "an errors-capable local that is reassigned (outside its loop, after a narrowing read, after its string was taken) leaks the old ok payload or frees a taken one twice (High)"
+);
