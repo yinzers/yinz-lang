@@ -9,7 +9,8 @@
 //! type and per spawn arm. Each case also runs once under AddressSanitizer, where a release of
 //! something the copy did not allocate (a shared array, a doubled free) is reported.
 //!
-//! Covers a deep array copy's items and a spawn-cloned map in a loop.
+//! Covers a deep array copy's items and a spawn-cloned map both spawned one after another and
+//! from a `for` loop (parked entries 67 and 68): the `looped_*` modules.
 //! A plain `string` is the one type whose copy is a bare allocation (no container around it).
 //! High tier: data integrity (a leak per spawn, or a free of memory another holder owns).
 
@@ -26,15 +27,28 @@ struct Case {
     read: &'static str,
 }
 
+/// Where the spawn statements of a program sit: one after another, or the one statement inside a
+/// `for` loop (the shape parked entries 67 and 68 name: a copy per iteration).
+#[derive(Clone, Copy)]
+enum SpawnSite {
+    Straight,
+    InLoop,
+}
+
 const TAG: &str = "shape Tag {\n  name: string\n  id: int\n}\n";
 
-fn program(case: &Case, suspending_callee: bool, spawns: usize) -> String {
+fn program(case: &Case, suspending_callee: bool, spawns: usize, site: SpawnSite) -> String {
     let callee_body = if suspending_callee {
         "  wait sleep(1)\n  print(777)\n"
     } else {
         "  print(777)\n"
     };
-    let spawn_lines = "  background show(value)\n".repeat(spawns);
+    let spawn_lines = match site {
+        SpawnSite::Straight => "  background show(value)\n".repeat(spawns),
+        SpawnSite::InLoop => {
+            format!("  for (round in range(0, {spawns})) {{\n    background show(value)\n  }}\n")
+        }
+    };
     format!(
         "{declarations}\nfunction show(value: {value_type}) -> nothing {{\n{callee_body}}}\n\n\
          function launch() -> nothing {{\n{setup}{spawn_lines}{read}}}\n\n\
@@ -52,8 +66,9 @@ fn counted_run(
     suspending_callee: bool,
     no_optimize: bool,
     spawns: usize,
+    site: SpawnSite,
 ) -> (u64, u64, u64, u64) {
-    let source = program(case, suspending_callee, spawns);
+    let source = program(case, suspending_callee, spawns, site);
     let built = build_source(&source, "c6 per-type program", no_optimize);
     let (output, counters) = run_counted(&built);
     assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
@@ -72,11 +87,11 @@ fn counted_run(
 
 /// Three more spawns allocate and free exactly the same number of cells and of heap strings:
 /// whatever the task's copy allocated, its release freed.
-fn assert_spawns_balance(case: &Case, suspending_callee: bool, no_optimize: bool) {
+fn assert_spawns_balance(case: &Case, suspending_callee: bool, no_optimize: bool, site: SpawnSite) {
     let (alloc_one, free_one, string_alloc_one, string_free_one) =
-        counted_run(case, suspending_callee, no_optimize, 1);
+        counted_run(case, suspending_callee, no_optimize, 1, site);
     let (alloc_four, free_four, string_alloc_four, string_free_four) =
-        counted_run(case, suspending_callee, no_optimize, 4);
+        counted_run(case, suspending_callee, no_optimize, 4, site);
     let extra_allocs = alloc_four - alloc_one;
     let extra_frees = free_four - free_one;
     let extra_string_allocs = string_alloc_four - string_alloc_one;
@@ -84,7 +99,7 @@ fn assert_spawns_balance(case: &Case, suspending_callee: bool, no_optimize: bool
     assert!(
         extra_allocs + extra_string_allocs > 0,
         "three more spawns allocated nothing: the program does not copy its argument\n{}",
-        program(case, suspending_callee, 4)
+        program(case, suspending_callee, 4, site)
     );
     assert_eq!(
         (extra_allocs, extra_string_allocs),
@@ -93,12 +108,12 @@ fn assert_spawns_balance(case: &Case, suspending_callee: bool, no_optimize: bool
          freed {extra_frees} cells and {extra_string_frees} strings: the task's copy of `{}` is \
          not released\n{}",
         case.value_type,
-        program(case, suspending_callee, 4)
+        program(case, suspending_callee, 4, site)
     );
 }
 
-fn assert_asan_clean(case: &Case, suspending_callee: bool, no_optimize: bool) {
-    let source = program(case, suspending_callee, 4);
+fn assert_asan_clean(case: &Case, suspending_callee: bool, no_optimize: bool, site: SpawnSite) {
+    let source = program(case, suspending_callee, 4, site);
     let built = build_source(&source, "c6 per-type asan program", no_optimize);
     let run = run_asan_binary(&build_asan(&built));
     assert!(
@@ -109,54 +124,102 @@ fn assert_asan_clean(case: &Case, suspending_callee: bool, no_optimize: bool) {
     assert_eq!(run.exit_code, 0, "stderr:\n{}\n{source}", run.stderr);
 }
 
-macro_rules! release_cases {
-    ($name:ident, $bug:literal, $case:expr) => {
+macro_rules! case_tests {
+    ($name:ident, $bug:literal, $case:expr, $site:expr) => {
         #[doc = $bug]
         mod $name {
             use super::*;
 
             #[test]
             fn cpu_callee_releases_the_copy() {
-                assert_spawns_balance(&$case, false, false);
+                assert_spawns_balance(&$case, false, false, $site);
             }
 
             #[test]
             fn state_machine_callee_releases_the_copy() {
-                assert_spawns_balance(&$case, true, false);
+                assert_spawns_balance(&$case, true, false, $site);
             }
 
             #[test]
             fn cpu_callee_asan() {
-                assert_asan_clean(&$case, false, false);
+                assert_asan_clean(&$case, false, false, $site);
             }
 
             #[test]
             fn state_machine_callee_asan() {
-                assert_asan_clean(&$case, true, false);
+                assert_asan_clean(&$case, true, false, $site);
             }
 
             #[test]
             fn cpu_callee_releases_the_copy_no_optimize() {
-                assert_spawns_balance(&$case, false, true);
+                assert_spawns_balance(&$case, false, true, $site);
             }
 
             #[test]
             fn state_machine_callee_releases_the_copy_no_optimize() {
-                assert_spawns_balance(&$case, true, true);
+                assert_spawns_balance(&$case, true, true, $site);
             }
 
             #[test]
             fn cpu_callee_asan_no_optimize() {
-                assert_asan_clean(&$case, false, true);
+                assert_asan_clean(&$case, false, true, $site);
             }
 
             #[test]
             fn state_machine_callee_asan_no_optimize() {
-                assert_asan_clean(&$case, true, true);
+                assert_asan_clean(&$case, true, true, $site);
             }
         }
     };
 }
+
+/// The cases whose spawns sit one after another in the function body.
+macro_rules! release_cases {
+    ($name:ident, $bug:literal, $case:expr) => {
+        case_tests!($name, $bug, $case, SpawnSite::Straight);
+    };
+}
+
+/// The cases whose one spawn statement sits inside a `for` loop, so the task copy is made once per
+/// iteration and a missed release grows with the loop.
+macro_rules! looped_release_cases {
+    ($name:ident, $bug:literal, $case:expr) => {
+        case_tests!($name, $bug, $case, SpawnSite::InLoop);
+    };
+}
+
+looped_release_cases!(
+    looped_array_of_arrays,
+    "parked 67: a nested array handed to a `background` spawn inside a loop leaks its inner arrays once per iteration (High)",
+    Case {
+        declarations: "",
+        value_type: "array<array<int>>",
+        setup: "  let first: array<int> = [1, 2]\n  let second: array<int> = [3]\n  let value: array<array<int>> = [first, second]\n",
+        read: "  print(value.count())\n",
+    }
+);
+
+looped_release_cases!(
+    looped_array_of_arrays_of_strings,
+    "parked 67: one allocation per leaf string and per inner array is made per iteration and each is released (High)",
+    Case {
+        declarations: "",
+        value_type: "array<array<string>>",
+        setup: "  let first: array<string> = [`a`, `b`]\n  let second: array<string> = [`c`]\n  let value: array<array<string>> = [first, second]\n",
+        read: "  print(value.count())\n",
+    }
+);
+
+looped_release_cases!(
+    looped_map_of_ints,
+    "parked 68: a spawn-cloned `map` in a spawn loop is released by nobody, so the heap grows with the loop (High)",
+    Case {
+        declarations: "",
+        value_type: "map<int, int>",
+        setup: "  let value: map<int, int> = {}\n  value.set(1, 2)\n",
+        read: "  print(value.count())\n",
+    }
+);
 
 release_cases!(
     array_of_strings,
