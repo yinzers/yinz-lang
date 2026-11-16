@@ -78,6 +78,7 @@ const BORROWING_METHODS: &[&str] = &[
     "first",
     "last",
     "or",
+    "split",
     "add",
     "set",
 ];
@@ -89,12 +90,22 @@ pub struct Temporaries {
     temporaries: HashMap<Span, Span>,
     /// Release point -> the temporaries released there, in walk order.
     released_at: HashMap<Span, Vec<Span>>,
+    /// The temporaries that are an explicit `.copy()` of a `maybe`: each owns a heap envelope cell
+    /// of its own (`OwnedCopy::MaybeCellClone`), which its release frees after the payload.
+    minted_maybe_copies: HashSet<Span>,
 }
 
 impl Temporaries {
     /// The release point of the temporary built by the expression at `start..end`.
     pub fn release_point(&self, start: usize, end: usize) -> Option<Span> {
         self.temporaries.get(&(start, end)).copied()
+    }
+
+    /// True when the temporary built by the expression at `start..end` is an explicit `.copy()` of a
+    /// `maybe`: it sits in a heap envelope cell of its own that its release frees
+    /// (`Cg::open_temporaries`).
+    pub fn is_minted_maybe_copy(&self, start: usize, end: usize) -> bool {
+        self.minted_maybe_copies.contains(&(start, end))
     }
 
     /// True when the expression at `start..end` builds a temporary.
@@ -266,6 +277,9 @@ impl Walk<'_> {
             let span = span_of(expr);
             if self.out.temporaries.insert(span, key).is_none() {
                 self.out.released_at.entry(key).or_default().push(span);
+                if self.is_maybe_copy(expr) {
+                    self.out.minted_maybe_copies.insert(span);
+                }
             }
         }
     }
@@ -315,6 +329,55 @@ impl Walk<'_> {
         }
     }
 
+    /// True when `expr` is an explicit `.copy()` of a `maybe` whose copy mints an envelope cell.
+    fn is_maybe_copy(&self, expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::PostfixOp {
+                op: PostfixOpKind::Copy,
+                ..
+            }
+        ) && self.type_of(expr).is_some_and(|ty| {
+            matches!(ty, Type::Maybe { .. })
+                && matches!(
+                    crate::owned_copy::owned_copy_plan(ty),
+                    crate::owned_copy::OwnedCopy::MaybeCellClone
+                )
+        })
+    }
+
+    /// True when `expr` is `string.get(i)` or `string.graphemeAt(i)`: a `maybe<string>` holding a new
+    /// string (`builtins::builtin_method_returns_fresh_maybe_string`).
+    fn is_fresh_maybe_string(&self, expr: &Expr) -> bool {
+        let Expr::MethodCall {
+            receiver, method, ..
+        } = expr
+        else {
+            return false;
+        };
+        self.type_of(receiver).is_some_and(|ty| {
+            crate::builtins::builtin_method_returns_fresh_maybe_string(ty, method)
+        })
+    }
+
+    /// True when `expr` is a built-in method on a string whose result is a fresh heap value
+    /// (`builtins::builtin_method_returns_fresh`: `s.split(sep)` builds an array of new strings).
+    /// A channel or task handle `receive` is in the same table but is not a string method.
+    fn is_fresh_builtin_result(&self, expr: &Expr) -> bool {
+        let Expr::MethodCall {
+            receiver, method, ..
+        } = expr
+        else {
+            return false;
+        };
+        let on_a_string = match self.type_of(receiver) {
+            Some(Type::String) => true,
+            Some(Type::Sensitive { inner }) => matches!(inner.as_ref(), Type::String),
+            _ => false,
+        };
+        on_a_string && crate::builtins::builtin_method_returns_fresh(method)
+    }
+
     /// True when `expr` builds a value no other holder has seen.
     fn builds_a_value(&self, expr: &Expr) -> bool {
         match expr {
@@ -324,6 +387,8 @@ impl Walk<'_> {
                 ..
             } => true,
             _ if self.is_user_call(expr) => true,
+            _ if self.is_fresh_builtin_result(expr) => true,
+            _ if self.is_fresh_maybe_string(expr) => true,
             _ => {
                 matches!(self.type_of(expr), Some(Type::String))
                     && is_fresh_string_expr(expr, self.facts.expr_types, self.facts.callable_fns)
@@ -351,17 +416,16 @@ impl Walk<'_> {
         // A function returns a `maybe` of a string, shape or number with the payload its `return`
         // allocated (a string clone, a heap cell); a `let` takes it (`maybe_to_owned_taking`), so a
         // call whose `maybe` nothing binds (`find(rows).or(fallback)`, `.exists()`) frees it here.
-        let owns_a_returned_payload = self.is_user_call(expr)
-            && matches!(ty, Type::Maybe { inner } if matches!(
-                inner.as_ref(),
-                Type::String | Type::Shape { .. } | Type::Number { precision: ..=34 }
-            ));
+        let owns_a_returned_payload = (self.is_user_call(expr) || self.is_fresh_maybe_string(expr))
+            && matches!(ty, Type::Maybe { inner } if !matches!(inner.as_ref(), Type::BuiltinChannel { .. }))
+            && crate::owned_copy::copied_at_return(ty);
         // A value of a type parameter `T` (`value.copy()` in a generic body): the body is checked once,
         // so it is recorded as one that may own heap, and codegen releases it only in an instance
         // whose `T` is a string, array, map or shape (`Cg::open_temporaries`).
         let is_type_parameter = matches!(ty, Type::TypeParam { .. });
         owns_a_channel_reference
             || owns_a_returned_payload
+            || self.is_maybe_copy(expr)
             || is_type_parameter
             || matches!(
                 heap_class_of(ty, &self.facts.tables),

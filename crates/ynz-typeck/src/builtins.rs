@@ -227,11 +227,32 @@ pub fn map_method_is_mutating(method: &str) -> bool {
 ///
 /// - `receive` — a channel/handle delivery: the receiver's `maybe<T>` is the sole reference
 ///   (`IMP-concurrency.md` "What this makes sound").
+/// - `split` — `ynz_string_split` builds a new array of new strings; no piece of the receiver is
+///   shared. Audited with it: of the built-in methods codegen lowers, `split` is the only other
+///   one that returns a fresh heap value (the string methods return strings, which `string_ownership`
+///   judges; `get`/`first`/`last`/`or`/`reveal` hand out a cell or the receiver).
 ///
 /// (`keys`/`values`/`entries` are typed as fresh arrays but have no codegen lowering yet —
 /// "not yet lowered in P4b" — so they carry no evidence and stay out until they do.)
 pub fn builtin_method_returns_fresh(method: &str) -> bool {
-    matches!(method, "receive")
+    matches!(method, "receive" | "split")
+}
+
+/// True when the built-in `method` on a `receiver` of this type returns a `maybe<string>` whose string
+/// payload is a fresh allocation nobody else holds: `string.get(index)` and `string.graphemeAt(index)`
+/// build a new string for the character (`ynz_string_codepoint_at`, `ynz_string_grapheme_at`), unlike
+/// `array.get` and `map.get`, whose payload is a cell of the receiver. Such a `maybe` is held the way a
+/// `maybe` a Yinz function returned is: the binding takes the payload, and a `maybe` nothing binds frees it
+/// (`temporaries`).
+///
+/// O(1) time.
+pub fn builtin_method_returns_fresh_maybe_string(receiver: &Type, method: &str) -> bool {
+    let on_a_string = match receiver {
+        Type::String => true,
+        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
+        _ => false,
+    };
+    on_a_string && matches!(method, "get" | "graphemeAt")
 }
 
 /// The typed argument positions of the built-in methods and the type each must have: the

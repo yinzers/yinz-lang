@@ -263,13 +263,19 @@ fn shape_class(fields: &[Type], tables: &TypeTables<'_>, visiting: &mut Vec<Stri
     {
         return HeapClass::Heap(ReleaseKind::NestedShape);
     }
+    // A `maybe` field is a pointer to a heap envelope cell whatever it holds (`store_field`,
+    // `maybe_to_heap_cell`), so a shape with one owns heap even when the payload owns none.
+    let has_a_maybe_field = fields
+        .iter()
+        .any(|field| matches!(field, Type::Maybe { .. }));
     let classes: Vec<HeapClass> = fields
         .iter()
         .map(|field| classify(field, tables, visiting))
         .collect();
-    if classes
-        .iter()
-        .any(|class| matches!(class, HeapClass::Heap(_)))
+    if has_a_maybe_field
+        || classes
+            .iter()
+            .any(|class| matches!(class, HeapClass::Heap(_)))
     {
         HeapClass::Heap(ReleaseKind::Shape)
     } else if classes.contains(&HeapClass::TypeParameter) {
@@ -365,6 +371,15 @@ fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> H
         }
         Type::Maybe { inner } => wrapped(classify(inner, tables, visiting), ReleaseKind::Maybe),
         Type::BuiltinFixed { elem, .. } => {
+            // A shape or `maybe` item of a `fixed` list sits in a heap cell of its own whatever it
+            // holds (`Cg::value_to_stable_bits`), so a list of heap-free shapes still owns cells.
+            if matches!(
+                elem.as_ref(),
+                Type::Shape { .. } | Type::Generic { .. } | Type::Maybe { .. }
+            ) && classify(elem, tables, visiting) == HeapClass::NoHeap
+            {
+                return HeapClass::Heap(ReleaseKind::Fixed);
+            }
             wrapped(classify(elem, tables, visiting), ReleaseKind::Fixed)
         }
         Type::Union { variants } => {
