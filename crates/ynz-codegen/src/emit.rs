@@ -1783,6 +1783,7 @@ fn lower_generic_function<'ctx>(
     );
     cg.type_subst = type_subst;
 
+    cg.begin_plain_release_tracking(f);
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
 
@@ -1793,12 +1794,7 @@ fn lower_generic_function<'ctx>(
         materialize_param(&mut cg, &param.name, llvm_param, concrete_ty)?;
     }
 
-    for stmt in &f.body.stmts {
-        if is_block_terminated(&cg) {
-            break;
-        }
-        lower_stmt(&mut cg, stmt)?;
-    }
+    lower_block_stmts(&mut cg, &f.body)?;
 
     if !is_block_terminated(&cg) {
         if ret_is_nothing {
@@ -2409,6 +2405,15 @@ struct Cg<'ctx, 'g> {
     // True once this function's single fused group has fired. Mirrors `m3d_spike_fired`'s
     // single-group discipline — `admitted_fused_group` only ever admits ONE top-level group.
     fused_group_fired: bool,
+    // v0.3-M9 C7: the type of every binding this function declares, by codegen name (filled at
+    // `let`, the handle `let` and parameter materialization). `emit_release_edge` reads it: a
+    // release-plan entry names a binding and a kind, the helper needs the type.
+    local_types: HashMap<String, Type>,
+    // v0.3-M9 C7 slice 1: what lowering has seen of the reads that may take a string out of its
+    // binding (`StringTakeEvidence`). Unused in a state-machine function (it releases nothing).
+    string_takes: StringTakeEvidence,
+    // v0.3-M9 C7 slice 1: the names of this function's `give` parameters (`emit_release_edge`).
+    given_params: HashSet<String>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -7160,6 +7165,7 @@ fn lower_function<'ctx, 'g>(
         m3d_spike,
     );
 
+    cg.begin_plain_release_tracking(f);
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
     #[cfg(test)]
@@ -7204,12 +7210,7 @@ fn lower_function<'ctx, 'g>(
         materialize_param(&mut cg, &param.name, llvm_param, &param_ty)?;
     }
 
-    for stmt in &f.body.stmts {
-        if is_block_terminated(&cg) {
-            break;
-        }
-        lower_stmt(&mut cg, stmt)?;
-    }
+    lower_block_stmts(&mut cg, &f.body)?;
 
     // Implicit terminator if the current block has no terminator yet.
     //
@@ -7511,6 +7512,9 @@ fn plain_cg<'ctx, 'g>(
         // Non-SM functions never reach lower_sm_block — the M3g fused path is never consulted.
         fused_group: None,
         fused_group_fired: false,
+        local_types: HashMap::new(),
+        string_takes: StringTakeEvidence::default(),
+        given_params: HashSet::new(),
     }
 }
 
@@ -7947,6 +7951,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         // only fires for a group gate 1 actually allocated state slots and frame reserve for.
         fused_group: fused_candidates.clone(),
         fused_group_fired: false,
+        local_types: HashMap::new(),
+        string_takes: StringTakeEvidence::default(),
+        given_params: HashSet::new(),
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -15868,7 +15875,9 @@ fn lower_let_background_handle<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     name: &str,
     bg_inner: &Expr,
+    handle_ty: Type,
 ) -> Result<(), String> {
+    cg.local_types.insert(name.to_string(), handle_ty);
     // Shape-receiver MethodCall spawns normalize to the Call-form twin (UFCS identity,
     // v0.3-M6 P1-1 site 8) — same normalization as `lower_expr_background`.
     let synthesized = synthesize_ufcs_call_expr(cg, bg_inner);
@@ -16902,6 +16911,7 @@ fn materialize_param<'ctx>(
     llvm_val: inkwell::values::BasicValueEnum<'ctx>,
     param_ty: &Type,
 ) -> Result<(), String> {
+    cg.local_types.insert(name.to_string(), param_ty.clone());
     match param_ty {
         // Pointer-typed params: incoming LLVM value is a ptr; store the ptr in a ptr-slot.
         Type::Shape { .. } | Type::Dynamic { .. }
@@ -17156,9 +17166,11 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             // `ynz_rt_spawn_handle`; a bare `background fn(...)` statement keeps the
             // fire-and-forget `ynz_rt_spawn` path byte-for-byte.
             if let Expr::Background(bg_inner, _) = value {
-                return lower_let_background_handle(cg, name, bg_inner);
+                let handle_ty = cg.expr_type(value);
+                return lower_let_background_handle(cg, name, bg_inner, handle_ty);
             }
             let val_ty = cg.expr_type(value);
+            cg.local_types.insert(name.clone(), val_ty.clone());
             // v0.3-M5 P5: SoA construction interception. The authority keys a
             // decision by decl_span ALONE (the name is renamed per binding for codegen, the
             // declaration span is not) — only THIS binding's literal
@@ -17405,8 +17417,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             r?;
         }
 
-        Stmt::Return { value, .. } => {
-            lower_stmt_return(cg, value.as_ref())?;
+        Stmt::Return { value, span } => {
+            lower_stmt_return(cg, value.as_ref(), span)?;
         }
 
         Stmt::FieldAssign { target, value, .. } => {
@@ -17514,12 +17526,7 @@ fn lower_stmt_if<'ctx>(
         .map_err(|e| format!("if branch: {e}"))?;
 
     cg.builder.position_at_end(then_bb);
-    for stmt in &body.stmts {
-        if is_block_terminated(cg) {
-            break;
-        }
-        lower_stmt(cg, stmt)?;
-    }
+    lower_block_stmts(cg, body)?;
     if !is_block_terminated(cg) {
         cg.builder
             .build_unconditional_branch(merge_bb)
@@ -17651,12 +17658,7 @@ fn lower_stmt_match<'ctx>(
         } else {
             None
         };
-        for stmt in &arm.body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, &arm.body)?;
         cg.restore_narrowed_local(narrowed);
         if !is_block_terminated(cg) {
             cg.builder
@@ -17669,12 +17671,7 @@ fn lower_stmt_match<'ctx>(
 
     // Emit else body (current position is final_fallthrough_bb or merge_bb).
     if let Some(else_body) = else_arm {
-        for stmt in &else_body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, else_body)?;
         if !is_block_terminated(cg) {
             cg.builder
                 .build_unconditional_branch(merge_bb)
@@ -17789,12 +17786,7 @@ fn lower_stmt_while<'ctx>(
         .map_err(|e| format!("{e}"))?;
 
     cg.builder.position_at_end(body_bb);
-    for stmt in &body.stmts {
-        if is_block_terminated(cg) {
-            break;
-        }
-        lower_stmt(cg, stmt)?;
-    }
+    lower_block_stmts(cg, body)?;
     if !is_block_terminated(cg) {
         emit_loop_preempt(cg)?;
         cg.loop_stack_restore(loop_sp)?;
@@ -17878,12 +17870,7 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, body)?;
 
         if !is_block_terminated(cg) {
             let next_i = cg
@@ -17970,12 +17957,7 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, body)?;
 
         cg.locals.remove(var);
         if !is_block_terminated(cg) {
@@ -18064,12 +18046,7 @@ fn lower_stmt_for<'ctx>(
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, body)?;
 
         if !is_block_terminated(cg) {
             if owned_elem.copied {
@@ -18146,12 +18123,7 @@ fn lower_stmt_for<'ctx>(
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, body)?;
 
         if !is_block_terminated(cg) {
             if owned_elem.copied {
@@ -18273,12 +18245,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.insert(var.to_string(), entry_var_slot);
 
-        for s in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, s)?;
-        }
+        lower_block_stmts(cg, body)?;
 
         cg.locals.remove(var);
 
@@ -18398,12 +18365,7 @@ fn lower_stmt_for<'ctx>(
         .build_store(var_slot, ctr_bind)
         .map_err(|e| format!("{e}"))?;
 
-    for stmt in &body.stmts {
-        if is_block_terminated(cg) {
-            break;
-        }
-        lower_stmt(cg, stmt)?;
-    }
+    lower_block_stmts(cg, body)?;
     if !is_block_terminated(cg) {
         let ctr_cur = cg
             .builder
@@ -18431,7 +18393,11 @@ fn lower_stmt_for<'ctx>(
     Ok(())
 }
 
-fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Result<(), String> {
+fn lower_stmt_return<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    value: Option<&Expr>,
+    edge: &ynz_diagnostics::SourceSpan,
+) -> Result<(), String> {
     // v0.3-M2 P7: inside a state-machine resume function, explicit `return expr` must
     // store the typed value in the frame's return_slot@16 and emit `ret i32 0` (Ready).
     // This is the fix for Bug A (value-returning SM) — the resume fn returns i32, not the Yinz type.
@@ -19005,7 +18971,8 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
     }
 
     if cg.is_main {
-        // Drain in-flight background tasks before exiting.
+        // Release every open scope, then drain in-flight background tasks before exiting.
+        cg.release_at_return(edge)?;
         cg.builder
             .build_call(cg.rt.ynz_rt_shutdown, &[], "rt_shutdown")
             .map_err(|e| format!("rt_shutdown: {e}"))?;
@@ -19024,9 +18991,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             None => {
                 // `-> nothing errors` function returning without a value.
                 let zero_result = cg.ec_result_llvm()?.const_zero();
-                cg.builder
-                    .build_return(Some(&zero_result))
-                    .map_err(|e| format!("ec void ret: {e}"))?;
+                build_return_after_release(cg, edge, Some(&zero_result), "ec void ret")?;
             }
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
@@ -19070,9 +19035,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         (cg.i64().const_zero(), val.into_pointer_value())
                     };
                     let result = cg.ec_union_result(err, view, &variants, maybe, "ec_union_ret")?;
-                    cg.builder
-                        .build_return(Some(&result))
-                        .map_err(|err| format!("ec union ret: {err}"))?;
+                    build_return_after_release(cg, edge, Some(&result), "ec union ret")?;
                     return Ok(());
                 }
                 // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
@@ -19121,18 +19084,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     .build_insert_value(result, success_bits, 1, "ec_val")
                     .map_err(|e| format!("ec insert val: {e}"))?
                     .into_struct_value();
-                cg.builder
-                    .build_return(Some(&result))
-                    .map_err(|e| format!("ec success ret: {e}"))?;
+                build_return_after_release(cg, edge, Some(&result), "ec success ret")?;
             }
         }
         return Ok(());
     }
     match value {
         None => {
-            cg.builder
-                .build_return(None)
-                .map_err(|e| format!("void ret: {e}"))?;
+            build_return_after_release(cg, edge, None, "void ret")?;
         }
         Some(expr) => {
             let mut val = lower_expr(cg, expr)?;
@@ -19159,9 +19118,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                             .ok_or("ret number load: no instruction value")?,
                         ptr_v,
                     )?;
-                    cg.builder
-                        .build_return(Some(&i128_val))
-                        .map_err(|e| format!("ret number: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&i128_val), "ret number")?;
                 }
                 // A `maybe` of an envelope union returns the union's slot BY VALUE (`none` the
                 // none tag), so the view in this frame is never read after `ret`.
@@ -19197,9 +19154,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         .builder
                         .build_load(slot_ty, scratch, "maybe_union_ret_value")
                         .map_err(|err| format!("maybe union ret load: {err}"))?;
-                    cg.builder
-                        .build_return(Some(&slot_value))
-                        .map_err(|err| format!("maybe union ret: {err}"))?;
+                    build_return_after_release(cg, edge, Some(&slot_value), "maybe union ret")?;
                 }
                 Type::Maybe { ref inner } => {
                     let env_ptr = val.into_pointer_value();
@@ -19223,9 +19178,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         .build_insert_value(env, stable_bits, 1, "ret_maybe_bits")
                         .map_err(|e| format!("ret maybe bits insert: {e}"))?
                         .into_struct_value();
-                    cg.builder
-                        .build_return(Some(&env))
-                        .map_err(|e| format!("ret maybe: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&env), "ret maybe")?;
                 }
                 // C1f (#423): an envelope union returns its slot BY VALUE, payload inline. The
                 // persist routine copies the value into a scratch slot (a shape variant's bytes
@@ -19248,9 +19201,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         .builder
                         .build_load(slot_ty, scratch, "union_ret_value")
                         .map_err(|err| format!("ret union load: {err}"))?;
-                    cg.builder
-                        .build_return(Some(&returned))
-                        .map_err(|err| format!("ret union: {err}"))?;
+                    build_return_after_release(cg, edge, Some(&returned), "ret union")?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {
                     let ptr_v = val.into_pointer_value();
@@ -19264,14 +19215,10 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         .builder
                         .build_load(struct_ty, ptr_v, "ret_shape_val")
                         .map_err(|e| format!("ret shape load: {e}"))?;
-                    cg.builder
-                        .build_return(Some(&sv))
-                        .map_err(|e| format!("ret shape: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&sv), "ret shape")?;
                 }
                 _ => {
-                    cg.builder
-                        .build_return(Some(&val))
-                        .map_err(|e| format!("ret: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&val), "ret")?;
                 }
             }
         }
@@ -19395,6 +19342,7 @@ fn channel_drop_glue<'ctx>(
 /// consumer of the result sees the union (`Cg::expr_type`). An `is` arm's narrowed binding
 /// already lowers to its envelope and is not wrapped again.
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    cg.string_takes.mark_borrow_contexts(expr);
     let span = expr.span();
     let key = (span.start, span.end);
     let Some(coercion) = cg.coercion_at(key).cloned() else {
@@ -20023,6 +19971,7 @@ fn lower_expr_node<'ctx>(
         }
 
         Expr::Ident(name, ident_span) => {
+            cg.string_takes.note_read(ident_span);
             if let Some(envelope) = cg.narrowed_envelope_use(name, ident_span)? {
                 return Ok(envelope.into());
             }
@@ -20061,7 +20010,8 @@ fn lower_expr_node<'ctx>(
                     } else {
                         ty.clone()
                     };
-                    let success_val = lower_ec_auto_propagate(cg, result_struct, &inner_ty)?;
+                    let success_val =
+                        lower_ec_auto_propagate(cg, result_struct, &inner_ty, ident_span)?;
                     let new_slot = cg.alloca(&inner_ty, &format!("{name}_ec_inner"))?;
                     store(cg, success_val, &inner_ty, new_slot)?;
                     cg.locals.insert(name.to_string(), new_slot);
@@ -20188,6 +20138,7 @@ fn lower_expr_node<'ctx>(
                     let ty = cg.expr_type(&call.args[0]);
                     let val = lower_expr(cg, &call.args[0])?;
                     lower_print(cg, val, &ty)?;
+                    release_printed_fresh_string(cg, &call.args[0], val, &ty)?;
                     Ok(cg.i32().const_int(0, false).into())
                 }
                 // M8 P4: `sensitive(value)` — identity at the ABI level (string ptr passes through).
@@ -25952,6 +25903,408 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 }
 
+// ── Scope-exit release on the plain path (v0.3-M9 C7, slice 1) ──────────────────────────────
+//
+// ONE emitter, `Cg::emit_release_edge`, releases the heap locals of a plain (non-suspending)
+// function at every exit edge `TypedModule::release_plan` records: the end of a block, a `return`,
+// an errors auto-propagation. It reads the plan and calls the one release helper
+// (`Cg::release_fn`); it derives no transfer fact of its own (`authoritative-derivation.md`).
+// A state-machine resume function emits no scope release (C8's frame release).
+//
+// Slice 1 releases a binding only when nothing in this slice can leave a second holder of its
+// value, because no move site nulls a slot yet (slice 2). `Cg::plain_release_of` is the ONE place
+// that says which entries those are, and every entry it declines is named there.
+
+/// A string method whose result never holds the receiver and which stores nothing: the read of its
+/// receiver is a borrow, never a take.
+const STRING_BORROW_METHODS: &[&str] = &[
+    "count",
+    "byteCount",
+    "graphemeCount",
+    "contains",
+    "startsWith",
+    "endsWith",
+    "byteAt",
+    "indexOf",
+    // These always build a new string (`FRESH_STRING_METHODS` in typeck's `string_ownership`).
+    "toUpperCase",
+    "toLowerCase",
+    "trim",
+    "substring",
+    "replace",
+];
+
+/// Evidence, gathered while a plain function lowers, that no read of a string binding takes the
+/// string out of it (v0.3-M9 C7 slice 1).
+///
+/// WHY: a `ReleaseIfLive` string is released only if its slot is live, but nothing nulls a slot
+/// until slice 2's move sites, so a string a store, a `give`, a send or a `return` took would be
+/// freed under its new holder. The plan lists a string's reads that MAY take it (`move_site`);
+/// the string is released when every one of them was lowered in a context that cannot take it
+/// (a method receiver that stores nothing, an interpolation part, an operand, a `print`
+/// argument). Positive evidence only: a read nobody classified keeps the string unreleased (a
+/// leak, never a double free). Slice 2 replaces this with the slot nulling and deletes it.
+#[derive(Default)]
+struct StringTakeEvidence {
+    /// Founder codegen name -> the spans of the plan's move sites inside this function.
+    move_sites: HashMap<String, Vec<(usize, usize)>>,
+    /// Spans of identifier reads a parent expression lowers as a borrow.
+    borrow_contexts: HashSet<(usize, usize)>,
+    /// Move-site spans whose read was lowered in a borrow context.
+    borrowed_sites: HashSet<(usize, usize)>,
+}
+
+impl StringTakeEvidence {
+    /// The plan's move sites inside the function body at `body`.
+    ///
+    /// O(move sites in the module) time, O(sites in the function) memory.
+    fn for_body(plan: &ynz_typeck::release_plan::ReleasePlan, body: &ynz_diagnostics::SourceSpan) -> Self {
+        let mut evidence = StringTakeEvidence::default();
+        for (span, site) in plan.move_sites() {
+            if body.start <= span.0 && span.1 <= body.end {
+                evidence
+                    .move_sites
+                    .entry(site.founder_codegen_name.clone())
+                    .or_default()
+                    .push(span);
+            }
+        }
+        evidence
+    }
+
+    /// Record which direct operands of `expr` are read as borrows. Called before `expr` lowers.
+    ///
+    /// O(parts) time.
+    fn mark_borrow_contexts(&mut self, expr: &Expr) {
+        let mut mark = |operand: &Expr| {
+            if let Expr::Ident(_, span) = operand {
+                self.borrow_contexts.insert((span.start, span.end));
+            }
+        };
+        match expr {
+            Expr::MethodCall {
+                receiver, method, ..
+            } if STRING_BORROW_METHODS.contains(&method.as_str()) => mark(receiver),
+            Expr::InterpolatedString(parts, _) => {
+                for part in parts {
+                    if let ynz_ast::nodes::StringPart::Expr(inner, _) = part {
+                        mark(inner);
+                    }
+                }
+            }
+            Expr::BinOp { op, lhs, rhs, .. }
+                if matches!(
+                    op,
+                    BinOpKind::Add
+                        | BinOpKind::Lt
+                        | BinOpKind::LtEq
+                        | BinOpKind::Gt
+                        | BinOpKind::GtEq
+                        | BinOpKind::EqEq
+                        | BinOpKind::NotEq
+                ) =>
+            {
+                mark(lhs);
+                mark(rhs);
+            }
+            Expr::Call(call) if matches!(&call.callee, Expr::Ident(name, _) if name == "print") => {
+                for argument in &call.args {
+                    mark(argument);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// An identifier read at `span` is being lowered: remember it when it is a move site that a
+    /// parent lowered as a borrow.
+    fn note_read(&mut self, span: &ynz_diagnostics::SourceSpan) {
+        let key = (span.start, span.end);
+        if self.borrow_contexts.contains(&key) {
+            self.borrowed_sites.insert(key);
+        }
+    }
+
+    /// `Some(true)` when every move site of `founder` was lowered as a borrow, `Some(false)` when
+    /// one was not (or was never seen), `None` when the plan has no move site for it.
+    fn every_read_borrows(&self, founder: &str) -> Option<bool> {
+        let sites = self.move_sites.get(founder)?;
+        Some(sites.iter().all(|site| self.borrowed_sites.contains(site)))
+    }
+}
+
+impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// Gather what `emit_release_edge` needs of the plain function `f` before its body lowers:
+    /// its `give` parameters and the plan's string move sites inside it.
+    fn begin_plain_release_tracking(&mut self, f: &FunctionDecl) {
+        self.given_params = f
+            .params
+            .iter()
+            .filter(|param| matches!(param.ownership, Some(OwnershipModifier::Give)))
+            .map(|param| param.name.clone())
+            .collect();
+        self.string_takes = StringTakeEvidence::for_body(&self.typed.release_plan, &f.body.span);
+    }
+
+    /// What slice 1 releases of one plan entry: its type and whether its slot is null-checked
+    /// first, or `None` for an entry this slice leaves unreleased (a leak, never an early or double
+    /// free). THE rule; every declined fate is named here.
+    ///
+    /// O(1) time.
+    fn plain_release_of(
+        &self,
+        entry: &ynz_typeck::release_plan::ReleaseEntry,
+    ) -> Result<Option<(Type, bool)>, String> {
+        use ynz_typeck::release_plan::{Fate, ReleaseKind};
+        let name = entry.codegen_name.as_str();
+        let (kind, only_if_live) = match entry.fate {
+            Fate::Omitted(_) => return Ok(None),
+            Fate::Release(kind) => (kind, false),
+            Fate::ReleaseIfLive(kind) => (kind, true),
+        };
+        match kind {
+            ReleaseKind::String
+            | ReleaseKind::Array
+            | ReleaseKind::Map
+            | ReleaseKind::Channel
+            | ReleaseKind::TaskHandle
+            | ReleaseKind::Shape => {}
+            // SLICE 3: a nested shape, `maybe`, union view, `fixed` and errors-capable slot keep
+            // today's behaviour (no release). `dynamic` and a map entry never own a local slot.
+            ReleaseKind::NestedShape
+            | ReleaseKind::Maybe
+            | ReleaseKind::Union
+            | ReleaseKind::Fixed
+            | ReleaseKind::ErrorsCapable
+            | ReleaseKind::Dynamic
+            | ReleaseKind::MapEntry => return Ok(None),
+        }
+        // SLICE 2: a `give` parameter. The callee releases what it was given only together with
+        // the caller's slot nulling and the spawn ladder dropping its flat free of such
+        // arguments (`callee_takes_a_given_parameter`); releasing it now frees a container the
+        // ladder frees again.
+        if self.given_params.contains(name) {
+            return Ok(None);
+        }
+        // An admitted-SoA array holds its items in per-field segments, not in the layout the
+        // array release walks. NOT SLICE 1's to release: left for the slice that pins that layout.
+        if self.soa_bindings.contains_key(name) {
+            return Ok(None);
+        }
+        if only_if_live {
+            // SLICE 2: a conditionally moved array, map, channel, handle or shape needs its move
+            // sites to null the slot; until then its slot stays non-null after a take.
+            if kind != ReleaseKind::String {
+                return Ok(None);
+            }
+            match self.string_takes.every_read_borrows(name) {
+                Some(true) => {}
+                // SLICE 2: a string some read may take (a store, a `give`, a send, a `return`).
+                Some(false) => return Ok(None),
+                None => {
+                    return Err(format!(
+                        "internal: the release plan releases `{name}` only if live, but lists no \
+                         read that moves it"
+                    ))
+                }
+            }
+        }
+        let ty = self
+            .local_types
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("internal: release of `{name}`: its type was never recorded"))?;
+        let resolved = self.resolve_type(&ty);
+        let step = release_step(&resolved);
+        let kind_matches_type = matches!(
+            (kind, &step),
+            (ReleaseKind::String, ReleaseStep::String)
+                | (ReleaseKind::Array, ReleaseStep::Array { .. })
+                | (ReleaseKind::Map, ReleaseStep::Map { .. })
+                | (ReleaseKind::Channel, ReleaseStep::Channel)
+                | (ReleaseKind::TaskHandle, ReleaseStep::Handle)
+                | (ReleaseKind::Shape, ReleaseStep::Shape { .. })
+        );
+        if !kind_matches_type {
+            return Err(format!(
+                "internal: the release plan lists `{name}` as {kind:?}, but its type is `{}`",
+                ynz_typeck::types::type_name(&resolved)
+            ));
+        }
+        Ok(Some((resolved, only_if_live)))
+    }
+
+    /// THE emitter of a scope exit on the plain path: for each entry of `entries` whose fate
+    /// releases (`plain_release_of`), load the binding's slot, skip a null one when the fate is
+    /// `ReleaseIfLive`, and call the type's release (`release_fn`). A shape local's slot holds the
+    /// address of its entry-block region, so its release does not free a cell (`owns_cell` false).
+    /// Emits nothing in a state-machine function (C8).
+    ///
+    /// O(entries) time to emit; at run time O(heap each entry owns).
+    fn emit_release_edge(
+        &self,
+        entries: &[ynz_typeck::release_plan::ReleaseEntry],
+        site: &str,
+    ) -> Result<(), String> {
+        if self.sm_frame_ptr.is_some() {
+            return Ok(());
+        }
+        for entry in entries {
+            let Some((ty, only_if_live)) = self.plain_release_of(entry)? else {
+                continue;
+            };
+            let name = entry.codegen_name.as_str();
+            let slot = *self
+                .locals
+                .get(name)
+                .ok_or_else(|| format!("internal: release of `{name}` at {site}: no slot"))?;
+            let Some(glue) = self.release_fn(&ty, false)? else {
+                continue;
+            };
+            let value = self
+                .builder
+                .build_load(self.ptr(), slot, &format!("{name}_release_value"))
+                .map_err(|err| format!("release load {name}: {err}"))?
+                .into_pointer_value();
+            let after = if only_if_live {
+                let release_bb = self.append_block(&format!("{site}_release_{name}"));
+                let after_bb = self.append_block(&format!("{site}_released_{name}"));
+                let live = self
+                    .builder
+                    .build_is_not_null(value, &format!("{name}_is_live"))
+                    .map_err(|err| format!("release null check {name}: {err}"))?;
+                self.builder
+                    .build_conditional_branch(live, release_bb, after_bb)
+                    .map_err(|err| format!("release branch {name}: {err}"))?;
+                self.builder.position_at_end(release_bb);
+                Some(after_bb)
+            } else {
+                None
+            };
+            self.builder
+                .build_call(glue, &[value.into()], "")
+                .map_err(|err| format!("release call {name}: {err}"))?;
+            if let Some(after_bb) = after {
+                self.builder
+                    .build_unconditional_branch(after_bb)
+                    .map_err(|err| format!("release join {name}: {err}"))?;
+                self.builder.position_at_end(after_bb);
+            }
+        }
+        Ok(())
+    }
+
+    /// The release at the end of `block`.
+    fn release_at_block_end(&self, block: &ynz_ast::nodes::Block) -> Result<(), String> {
+        if self.sm_frame_ptr.is_some() {
+            return Ok(());
+        }
+        let entries = self
+            .typed
+            .release_plan
+            .block_end(&block.span)
+            .ok_or_else(|| {
+                format!(
+                    "internal: the release plan has no block-end edge for the block at {}..{}",
+                    block.span.start, block.span.end
+                )
+            })?;
+        self.emit_release_edge(entries, "block_end")
+    }
+
+    /// The release at the `return` whose statement span is `span`.
+    fn release_at_return(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        if self.sm_frame_ptr.is_some() {
+            return Ok(());
+        }
+        let entries = self.typed.release_plan.return_edge(span).ok_or_else(|| {
+            format!(
+                "internal: the release plan has no return edge for the `return` at {}..{}",
+                span.start, span.end
+            )
+        })?;
+        self.emit_release_edge(entries, "return")
+    }
+
+    /// The release at the auto-propagation fired by the identifier read at `span`.
+    fn release_at_propagation(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        if self.sm_frame_ptr.is_some() {
+            return Ok(());
+        }
+        let entries = self
+            .typed
+            .release_plan
+            .propagation_edge(span)
+            .ok_or_else(|| {
+                format!(
+                    "internal: the release plan has no propagation edge for the read at {}..{}",
+                    span.start, span.end
+                )
+            })?;
+        self.emit_release_edge(entries, "propagation")
+    }
+}
+
+/// Lower the statements of `block`, then release its bindings at its end when control reaches it.
+/// THE block loop of every plain body: a function, an `if`, a `while`, a `for` and a `match` arm.
+///
+/// O(statements) time.
+fn lower_block_stmts<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    block: &ynz_ast::nodes::Block,
+) -> Result<(), String> {
+    for stmt in &block.stmts {
+        if is_block_terminated(cg) {
+            break;
+        }
+        lower_stmt(cg, stmt)?;
+    }
+    if !is_block_terminated(cg) {
+        cg.release_at_block_end(block)?;
+    }
+    Ok(())
+}
+
+/// `print` only reads its argument, so a string it was handed that nothing else holds (a fresh
+/// string, never a binding: typeck's `string_moves`, remembered by `lower_expr`) is released once
+/// printed. SLICE 1 releases this one unbound temporary because C2's `leak_string_loop` ends with
+/// `print(total.toString())`; every other temporary is slice 2's. Plain functions only.
+///
+/// O(1) time at the call site.
+fn release_printed_fresh_string<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    argument: &Expr,
+    value: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<(), String> {
+    let fresh = cg.sm_frame_ptr.is_none()
+        && !matches!(argument, Expr::Ident(..))
+        && is_string_like(&cg.resolve_type(ty))
+        && value.is_pointer_value()
+        && cg
+            .owned_string_values
+            .contains(&(value.as_value_ref() as usize));
+    if fresh {
+        release_owned_read(cg, value, ty, "print_fresh_string")?;
+    }
+    Ok(())
+}
+
+/// Release every open scope at the `return` at `edge`, then return `value`. The value is fully
+/// built by the caller before this runs, so nothing it reads is released first.
+fn build_return_after_release<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    edge: &ynz_diagnostics::SourceSpan,
+    value: Option<&dyn BasicValue<'ctx>>,
+    what: &str,
+) -> Result<(), String> {
+    cg.release_at_return(edge)?;
+    cg.builder
+        .build_return(value)
+        .map_err(|err| format!("{what}: {err}"))?;
+    Ok(())
+}
+
 /// A `background` argument that is an envelope union but reaches a parameter the callee declares as
 /// something else (a generic `T`) has no slot to be copied into: the ctx would carry the spawner's
 /// per-site union view, which dangles once the spawner returns. Typeck refuses that spawn
@@ -27345,11 +27698,15 @@ fn is_number_errors_callee(
 /// 3. If null → falls through to a "success" block and returns the success
 ///    value converted to the given inner type.
 ///
+/// `edge` is the span of the identifier read that fires it: the key of the plan's propagation
+/// edge.
+///
 /// Must only be called when `cg.is_errors_capable = true`.
 fn lower_ec_auto_propagate<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     result_struct: inkwell::values::StructValue<'ctx>,
     inner_ty: &Type,
+    edge: &ynz_diagnostics::SourceSpan,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let result_ty = errors_result_type(cg.ctx);
 
@@ -27376,6 +27733,8 @@ fn lower_ec_auto_propagate<'ctx>(
 
     // Propagation block: pop frame, wrap error, early-return.
     cg.builder.position_at_end(propagate_bb);
+    // Every open scope leaves here; the error object is the caller's (its class is `Returned`).
+    cg.release_at_propagation(edge)?;
     cg.builder
         .build_call(cg.rt.ynz_frame_pop, &[], "ap_pop")
         .map_err(|e| format!("ap pop: {e}"))?;
