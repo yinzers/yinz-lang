@@ -181,3 +181,27 @@ function entrypoint() -> nothing {
 fn a_maybe_copy_nothing_binds_or_a_function_returns_is_released_once() {
     assert_balanced_and_clean("c7r1_maybe_copy_temp", MAYBE_COPY_TEMPORARY_AND_RETURNED, "6\n");
 }
+
+// ── Group 5: a `fixed` list of shapes owns the cell of each item ────────────────────────────
+
+const FIXED_OF_FLAT_SHAPES: &str = "
+shape Part {
+  qty: int
+}
+function entrypoint() -> nothing {
+  let pair: fixed<Part> = [{qty: 1}, {qty: 2}]
+  let copied: fixed<Part> = pair.copy()
+  pair.set(0, {qty: 5})
+  pair[1] = {qty: 7}
+  let boxes: fixed<maybe<int> > = [none, none]
+  print(pair.count() + copied.count() + boxes.count())
+}
+";
+
+/// Bug (High: leak): `heap_class_of` called a `fixed` of a shape that owns no heap `NoHeap`, so the
+/// binding was never released, yet every item sits in a heap cell of its own
+/// (`value_to_stable_bits`): `let pair: fixed<Part> = [{qty: 1}, {qty: 2}]` was 2 allocs / 0 frees.
+#[test]
+fn a_fixed_list_of_heap_free_shapes_releases_its_item_cells() {
+    assert_heap_balanced_and_clean("c7r1_fixed_flat_shapes", FIXED_OF_FLAT_SHAPES, "6\n");
+}

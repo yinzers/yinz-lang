@@ -355,6 +355,15 @@ fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> H
         }
         Type::Maybe { inner } => wrapped(classify(inner, tables, visiting), ReleaseKind::Maybe),
         Type::BuiltinFixed { elem, .. } => {
+            // A shape or `maybe` item of a `fixed` list sits in a heap cell of its own whatever it
+            // holds (`Cg::value_to_stable_bits`), so a list of heap-free shapes still owns cells.
+            if matches!(
+                elem.as_ref(),
+                Type::Shape { .. } | Type::Generic { .. } | Type::Maybe { .. }
+            ) && classify(elem, tables, visiting) == HeapClass::NoHeap
+            {
+                return HeapClass::Heap(ReleaseKind::Fixed);
+            }
             wrapped(classify(elem, tables, visiting), ReleaseKind::Fixed)
         }
         Type::Union { variants } => {
