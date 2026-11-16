@@ -5,7 +5,7 @@
 
 mod support;
 
-use support::compile;
+use support::{assert_fixture_prints, compile};
 
 fn assert_refused_with(fixture_name: &str, fragments: &[&str]) {
     let compiled = compile(fixture_name);
@@ -80,5 +80,27 @@ fn union_argument_to_a_generic_background_callee_is_refused_with_a_teaching_diag
             "Declare `held` as `Circle | Tag` in `eat`'s signature",
             "gives it no union slot to copy into",
         ],
+    );
+}
+
+#[test]
+fn number_map_key_one_digit_past_the_widest_is_refused() {
+    // Bug caught: an off-by-one in the 34-digit limit (`<` for `<=`, or the reverse) refusing or
+    // accepting the wrong width. Tier: Medium.
+    assert_refused_with(
+        "v0_3_m9_c6b_map_key_just_past_widest_number_refused.ynz",
+        &["A `map` cannot be keyed by `number<35>`."],
+    );
+}
+
+#[test]
+fn number_map_key_of_the_widest_width_is_found_by_value() {
+    // Bug caught: the refusal also catching the 34-digit key a map does compare by value.
+    // Tier: Medium.
+    assert_fixture_prints(
+        "v0_3_m9_c6b_map_key_widest_number_accepted.ynz",
+        false,
+        "7\n",
+        "a `number<34>` map key must be accepted and found by value",
     );
 }
