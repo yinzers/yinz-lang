@@ -42,6 +42,11 @@
 //!
 //! Anything else judged is a [`ReadVerdict::MustCopy`].
 //!
+//! A temporary dies at the end of its statement (`crate::temporaries`), so a `let` or
+//! reassignment whose place chain passes through one never views it: a field of a call's result
+//! (a string, array or map) is a [`ReadVerdict::Take`], every other such read a
+//! [`ReadVerdict::MustCopy`].
+//!
 //! The live range comes from the one liveness walk of `string_ownership` (the same `after` sets
 //! C3b's `string_moves` uses): this module only judges the expressions that walk evaluates.
 //!
@@ -73,6 +78,10 @@ pub enum ReadVerdict {
     View,
     /// The reader owns a copy of the place's value, released with the reader's scope.
     MustCopy,
+    /// The place is a field of a temporary (`let rows = makeBucket().rows`): the reader takes the
+    /// field's pointer and the temporary's release skips it, as Rust moves a field out of a
+    /// temporary and drops the rest. No copy.
+    Take,
 }
 
 /// The verdict of every judged non-owned read, by the `(span.start, span.end)` of the expression
@@ -92,6 +101,11 @@ impl NonOwnedReads {
     /// True when the read at `start..end` points at its place.
     pub fn is_view(&self, start: usize, end: usize) -> bool {
         self.verdict(start, end) == Some(ReadVerdict::View)
+    }
+
+    /// True when the read at `start..end` takes a field out of a temporary.
+    pub fn is_take(&self, start: usize, end: usize) -> bool {
+        self.verdict(start, end) == Some(ReadVerdict::Take)
     }
 
     /// True when the read at `start..end` was judged and owns a copy.
@@ -392,6 +406,76 @@ impl<'a> ReadTracker<'a> {
         }
     }
 
+    /// True when the place chain of `value` passes through a temporary: a call result, or the
+    /// default of an `.or` that is built in place. A view of such a place would outlive the
+    /// temporary, which is released at the end of its statement.
+    fn through_temporary(&self, value: &Expr) -> bool {
+        match value {
+            Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } => {
+                self.through_temporary(receiver)
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } if self.is_builtin_method(receiver, method) => {
+                if ELEMENT_READ_METHODS.contains(&method.as_str()) {
+                    self.through_temporary(receiver)
+                } else if method == "or" && args.len() == 1 {
+                    self.through_temporary(receiver) || self.default_is_temporary(&args[0])
+                } else {
+                    false
+                }
+            }
+            Expr::Call(_) | Expr::MethodCall { .. } => true,
+            Expr::Wait(inner, _) => self.through_temporary(inner),
+            _ => false,
+        }
+    }
+
+    /// True when the default of an `.or` is a value built in place or a place read through one.
+    fn default_is_temporary(&self, default: &Expr) -> bool {
+        match default {
+            Expr::Ident(..) => false,
+            Expr::FieldAccess { .. } | Expr::IndexAccess { .. } => self.through_temporary(default),
+            Expr::MethodCall { .. } if self.is_place_read(default) => {
+                self.through_temporary(default)
+            }
+            _ => true,
+        }
+    }
+
+    /// True when `value` is a chain of field reads off a call's result and names a string, array
+    /// or map: the one piece of a temporary a binding takes without a copy.
+    fn takes_a_piece_of_a_temporary(&self, value: &Expr) -> bool {
+        if !matches!(
+            self.type_of(value),
+            Some(Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. })
+        ) {
+            return false;
+        }
+        let mut current = value;
+        let mut fields = 0;
+        while let Expr::FieldAccess { receiver, .. } = current {
+            current = receiver;
+            fields += 1;
+        }
+        fields > 0
+            && match current {
+                Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _)
+                    if self.ownership.is_local_fn(name) || self.imported_fn_names.contains(name.as_str())),
+                Expr::MethodCall {
+                    receiver, method, ..
+                } => {
+                    (self.ownership.is_local_fn(method)
+                        || self.imported_fn_names.contains(method.as_str()))
+                        && !self.is_builtin_method(receiver, method)
+                }
+                _ => false,
+            }
+    }
+
     /// True when `method` names a built-in on `receiver`: a user function of that name does not
     /// shadow it unless the receiver is a shape or a `dynamic` value (`is_fresh_string`).
     fn is_builtin_method(&self, receiver: &Expr, method: &str) -> bool {
@@ -548,7 +632,26 @@ impl<'a> ReadTracker<'a> {
         let Some(value_type) = self.type_of(value) else {
             return;
         };
+        // The binding outlives the temporary a piece is read from: it takes the piece (a string,
+        // array or map field), or copies it.
+        if self.takes_a_piece_of_a_temporary(value)
+            && match annotation {
+                None => true,
+                Some(ynz_ast::nodes::Type::Generic { name, .. }) => {
+                    name == "array" || name == "map"
+                }
+                Some(ynz_ast::nodes::Type::Named(name, _)) => name == "string",
+                Some(_) => false,
+            }
+        {
+            self.reads.verdicts.insert(value_span, ReadVerdict::Take);
+            return;
+        }
         if !binding_holds_place(value_type) {
+            return;
+        }
+        if self.through_temporary(value) {
+            self.must_copy(value_span);
             return;
         }
         // An annotation can wrap the value into a union or `maybe` slot, which a view cannot be;

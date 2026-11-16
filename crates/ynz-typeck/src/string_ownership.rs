@@ -370,40 +370,7 @@ impl Recorder<'_> {
 
     /// True when `expr` (typed `string`) builds a string no other holder has seen.
     fn is_fresh_string(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::InterpolatedString(parts, _) => parts
-                .iter()
-                .any(|part| matches!(part, StringPart::Expr(..))),
-            Expr::MethodCall {
-                receiver, method, ..
-            } => {
-                // A dot-call reaches a Yinz function only on a shape (or `dynamic` contract)
-                // receiver, and only after every built-in method of that name is ruled out
-                // (`Checker::check_method_call`). On any other receiver the name is a built-in
-                // such as `.or()`, whose result is borrowed even when a function shares its name.
-                let reaches_function = matches!(
-                    self.type_of(receiver),
-                    Some(Type::Shape { .. } | Type::Dynamic { .. })
-                );
-                if reaches_function && self.callable_fns.contains(method) {
-                    return true;
-                }
-                match self.type_of(receiver) {
-                    Some(Type::String) => FRESH_STRING_METHODS.contains(&method.as_str()),
-                    Some(Type::Int | Type::Float | Type::Number { .. }) => method == "toString",
-                    _ => false,
-                }
-            }
-            Expr::Call(call) => {
-                matches!(&call.callee, Expr::Ident(name, _) if self.callable_fns.contains(name))
-            }
-            Expr::PostfixOp {
-                op: PostfixOpKind::Copy,
-                ..
-            } => true,
-            Expr::Wait(inner, _) => self.is_fresh_string(inner),
-            _ => false,
-        }
+        is_fresh_string_expr(expr, self.expr_types, self.callable_fns)
     }
 
     // ── mentions: the `let` bindings an expression reads ────────────────────────────────
@@ -486,6 +453,57 @@ impl Recorder<'_> {
         for child in children(expr) {
             self.count_expr(child, counts);
         }
+    }
+}
+
+/// True when `expr` (typed `string`) builds a string no other holder has seen: an interpolation,
+/// a call of a Yinz function, a string method that always builds a new string, `toString`, or
+/// `.copy()`. THE one answer, read by the move record and by the temporaries record
+/// (`crate::temporaries`).
+///
+/// O(1) time.
+pub(crate) fn is_fresh_string_expr(
+    expr: &Expr,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callable_fns: &HashSet<String>,
+) -> bool {
+    let type_of = |expr: &Expr| {
+        let span = expr.span();
+        expr_types.get(&(span.start, span.end))
+    };
+    match expr {
+        Expr::InterpolatedString(parts, _) => parts
+            .iter()
+            .any(|part| matches!(part, StringPart::Expr(..))),
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
+            // A dot-call reaches a Yinz function only on a shape (or `dynamic` contract)
+            // receiver, and only after every built-in method of that name is ruled out
+            // (`Checker::check_method_call`). On any other receiver the name is a built-in
+            // such as `.or()`, whose result is borrowed even when a function shares its name.
+            let reaches_function = matches!(
+                type_of(receiver),
+                Some(Type::Shape { .. } | Type::Dynamic { .. })
+            );
+            if reaches_function && callable_fns.contains(method) {
+                return true;
+            }
+            match type_of(receiver) {
+                Some(Type::String) => FRESH_STRING_METHODS.contains(&method.as_str()),
+                Some(Type::Int | Type::Float | Type::Number { .. }) => method == "toString",
+                _ => false,
+            }
+        }
+        Expr::Call(call) => {
+            matches!(&call.callee, Expr::Ident(name, _) if callable_fns.contains(name))
+        }
+        Expr::PostfixOp {
+            op: PostfixOpKind::Copy,
+            ..
+        } => true,
+        Expr::Wait(inner, _) => is_fresh_string_expr(inner, expr_types, callable_fns),
+        _ => false,
     }
 }
 

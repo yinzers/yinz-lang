@@ -55,6 +55,7 @@ pub mod intrinsics;
 pub mod lints;
 pub mod may_block;
 pub mod non_owned_reads;
+pub mod temporaries;
 pub mod options_table;
 pub mod owned_copy;
 pub mod queries;

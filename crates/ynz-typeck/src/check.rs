@@ -3042,11 +3042,11 @@ impl<'b> Checker<'b> {
                     target,
                     target_span,
                     value,
-                    span: _,
+                    span,
                 } => {
                     // Reassignment invalidates early-return narrowing for the target binding.
                     early_return_narrowed.retain(|n| n != target);
-                    self.check_assign(target, target_span, value);
+                    self.check_assign(target, target_span, value, span);
                 }
                 Stmt::If { cond, body, .. } => {
                     // Detect early-return narrowing: `if (!m.exists()) { <recognized-exit> }`.
@@ -3985,7 +3985,13 @@ impl<'b> Checker<'b> {
         handle_ty
     }
 
-    fn check_assign(&mut self, target: &str, target_span: &SourceSpan, value: &Expr) {
+    fn check_assign(
+        &mut self,
+        target: &str,
+        target_span: &SourceSpan,
+        value: &Expr,
+        statement_span: &SourceSpan,
+    ) {
         self.note_binding_use(target, target_span);
         let value_ty = self.infer_expr(value, None);
 
@@ -4044,7 +4050,8 @@ impl<'b> Checker<'b> {
                 let declaration = self.declaration_of(target);
                 self.transfers_note_reassign(declaration.as_ref(), &event);
                 if let Some(declaration) = &declaration {
-                    self.release.note_reassign(declaration.clone());
+                    self.release
+                        .note_reassign(statement_span, declaration.clone());
                 }
                 // A reassignment names a NEW value, so the binding is no longer given away, and
                 // takes the new value's origin and class, on the path that reaches here only; a

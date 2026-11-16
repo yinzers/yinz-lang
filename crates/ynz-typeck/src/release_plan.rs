@@ -34,8 +34,10 @@
 //!
 //! # Decisions in force
 //!
-//! * A binding reassigned anywhere in its function is `Omitted(Reassigned)`: the old value is
-//!   leaked, never freed early.
+//! * A binding reassigned anywhere in its function is released like any owner, and each of its
+//!   assignments releases the value it replaces ([`AssignRelease`]), behind the same null check:
+//!   a take nulls the founder's slot, so a moved-from slot is skipped. A reassigned owner given
+//!   on every path to an edge is `ReleaseIfLive` there (a later assignment may have revived it).
 //! * Every binding whose value owns heap memory is classified with a real fate, of whatever kind
 //!   (`maybe`, `union`, `dynamic`, `fixed`, errors-capable values, nested shapes and generic
 //!   instances included); how codegen releases each kind is C6/C7's job. A value of a type
@@ -128,8 +130,6 @@ pub enum OmitReason {
     CallerOwns,
     /// A non-owner outlives every owner (`NoStaticFounder`): C7 decides with a run-time flag.
     NoStaticFounder,
-    /// The binding is reassigned somewhere in its function.
-    Reassigned,
     /// The type is a type parameter of a generic function.
     TypeParameter,
 }
@@ -180,6 +180,16 @@ pub struct MoveSite {
     /// What the founder releases (the kinds the plain emitter nulls slots of).
     pub kind: ReleaseKind,
     pub cause: MoveCause,
+}
+
+/// The assignment `name = value` releases the value it replaces: its binding is a released owner.
+/// Codegen loads the slot after the value is evaluated, stores the new value, then releases the old
+/// one if it was non-null (a take nulled the slot).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignRelease {
+    pub decl: DeclKey,
+    pub codegen_name: String,
+    pub kind: ReleaseKind,
 }
 
 /// Which kind of exit an edge is.
@@ -392,6 +402,8 @@ struct FunctionExits {
     edges: Vec<RawEdge>,
     move_sites: Vec<RawMoveSite>,
     reassigned: HashSet<DeclKey>,
+    /// Each `Stmt::Assign` (by statement span) and the binding it assigns.
+    assigns: Vec<(Span, DeclKey)>,
     /// Every binding the function declares (heap or not): a user name that two of them share
     /// names no single binding, so no read is fed under it (`resolve_function`).
     declared: HashSet<DeclKey>,
@@ -447,7 +459,7 @@ fn span_of(span: &SourceSpan) -> Span {
     (span.start, span.end)
 }
 
-fn stmt_span(stmt: &Stmt) -> Span {
+pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
     match stmt {
         Stmt::Expr(expr) => span_of(expr.span()),
         Stmt::Let { span, .. }
@@ -614,6 +626,7 @@ impl ReleaseRecorder {
             edges: Vec::new(),
             move_sites: Vec::new(),
             reassigned: HashSet::new(),
+            assigns: Vec::new(),
             declared: HashSet::new(),
         });
     }
@@ -685,12 +698,16 @@ impl ReleaseRecorder {
         function.declared.insert(decl.clone());
     }
 
-    /// The binding `decl` is reassigned.
-    pub fn note_reassign(&mut self, decl: DeclKey) {
+    /// The statement at `span` assigns the binding `decl`.
+    pub fn note_reassign(&mut self, span: &SourceSpan, decl: DeclKey) {
         let Some(function) = self.current.as_mut() else {
             self.outside_function("a reassignment");
             return;
         };
+        let key = span_of(span);
+        if !function.assigns.iter().any(|(seen, _)| *seen == key) {
+            function.assigns.push((key, decl.clone()));
+        }
         function.reassigned.insert(decl);
     }
 
@@ -885,9 +902,7 @@ fn fate_of(
         HeapClass::TypeParameter => return Ok(Fate::Omitted(OmitReason::TypeParameter)),
         HeapClass::Heap(kind) => kind,
     };
-    if function.reassigned.contains(&entry.decl) {
-        return Ok(Fate::Omitted(OmitReason::Reassigned));
-    }
+    let reassigned = function.reassigned.contains(&entry.decl);
     if kind == ReleaseKind::String {
         // A string owns its bytes whatever else it is joined to (a store copies or moves).
         if !entry.string_owner {
@@ -903,6 +918,8 @@ fn fate_of(
         );
         if owns_its_class {
             match entry.moved {
+                // A later assignment may revive a binding given on every path to here.
+                Moved::EveryPath if reassigned => return Ok(Fate::ReleaseIfLive(kind)),
                 Moved::EveryPath => return Ok(Fate::Omitted(OmitReason::Moved)),
                 Moved::SomePaths => return Ok(Fate::ReleaseIfLive(kind)),
                 Moved::No => {}
@@ -939,6 +956,7 @@ fn fate_of(
     Ok(match entry.moved {
         Moved::No => Fate::Release(kind),
         Moved::SomePaths => Fate::ReleaseIfLive(kind),
+        Moved::EveryPath if reassigned => Fate::ReleaseIfLive(kind),
         Moved::EveryPath => Fate::Omitted(OmitReason::Moved),
     })
 }
@@ -974,6 +992,7 @@ pub struct ReleasePlan {
     return_edge: HashMap<Span, Vec<ReleaseEntry>>,
     propagation_edge: HashMap<Span, Vec<ReleaseEntry>>,
     move_sites: HashMap<Span, Vec<MoveSite>>,
+    assign_releases: HashMap<Span, AssignRelease>,
     reads_user: HashMap<String, ReleaseReads>,
     reads_codegen: HashMap<String, ReleaseReads>,
     facts: Vec<EdgeFacts>,
@@ -1000,6 +1019,12 @@ impl ReleasePlan {
     /// The list for the auto-propagation fired by the identifier read at `span`.
     pub fn propagation_edge(&self, span: &SourceSpan) -> Option<&[ReleaseEntry]> {
         self.propagation_edge.get(&span_of(span)).map(Vec::as_slice)
+    }
+
+    /// The release the assignment at `span` makes of the value it replaces; `None` when its
+    /// binding is not a released owner (the old value is never freed there).
+    pub fn assign_release(&self, span: &SourceSpan) -> Option<&AssignRelease> {
+        self.assign_releases.get(&span_of(span))
     }
 
     /// The founders a read at `span` takes its value out of (one read can move several: a
@@ -1094,11 +1119,13 @@ impl ReleasePlan {
         let codegen_name_of =
             |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
         let mut releasing_if_live: HashMap<DeclKey, ReleaseKind> = HashMap::new();
+        let mut if_live_decls: HashSet<DeclKey> = HashSet::new();
         for ((kind, span, fates), raw_edge) in resolved.edges.iter().zip(&function.edges) {
             let list: Vec<ReleaseEntry> = fates
                 .iter()
                 .map(|(decl, fate)| {
                     if let Fate::ReleaseIfLive(kind) = fate {
+                        if_live_decls.insert(decl.clone());
                         releasing_if_live.insert(decl.clone(), *kind);
                     }
                     ReleaseEntry {
@@ -1137,6 +1164,30 @@ impl ReleasePlan {
         self.reads_user.insert(function.name.clone(), user_reads);
         self.reads_codegen
             .insert(function.name.clone(), resolved.reads);
+        // An assignment releases the old value of a binding that is released at some edge, so the
+        // reads that take its value must null its slot (move sites) even where every edge says
+        // `Release`.
+        let mut released_kinds: HashMap<DeclKey, ReleaseKind> = HashMap::new();
+        for (_, _, fates) in &resolved.edges {
+            for (decl, fate) in fates {
+                if let Fate::Release(kind) | Fate::ReleaseIfLive(kind) = fate {
+                    released_kinds.insert(decl.clone(), *kind);
+                }
+            }
+        }
+        for (span, decl) in &function.assigns {
+            if let Some(&kind) = released_kinds.get(decl) {
+                self.assign_releases.insert(
+                    *span,
+                    AssignRelease {
+                        decl: decl.clone(),
+                        codegen_name: codegen_name_of(decl),
+                        kind,
+                    },
+                );
+                releasing_if_live.entry(decl.clone()).or_insert(kind);
+            }
+        }
         // Move sites: where a read takes a value out of a founder that may release later.
         for site in &function.move_sites {
             if let Some(ReleaseAnchor::Founder { decl, .. }) = anchor_of(&site.named) {
@@ -1170,12 +1221,12 @@ impl ReleasePlan {
                 );
             }
         }
-        for decl in releasing_if_live.keys() {
+        for decl in if_live_decls {
             let has_site = self
                 .move_sites
                 .values()
                 .flatten()
-                .any(|site| &site.founder == decl);
+                .any(|site| &site.founder == &decl);
             if !has_site {
                 self.internal_errors.push(format!(
                     "internal: `{}` in `{}` is released only if live but no read moves it",
@@ -1192,7 +1243,7 @@ impl ReleasePlan {
     /// * a binding that owns no heap is never listed; a type-parameter value is
     ///   `Omitted(TypeParameter)` and nothing else is;
     /// * a string is released (`Release`/`ReleaseIfLive`) or `NotOwner` (a parameter, a cell) or
-    ///   `Reassigned`;
+    ///   or a reassigned binding given on every path to the edge (`ReleaseIfLive`);
     /// * any other heap owner that is not reassigned: when it is the founder of its class, its
     ///   class in `consumed_classes` and not returned => `Omitted(Moved)` or `ReleaseIfLive`, and
     ///   the record holds a given/sent/stored escape for the class; not consumed and not returned
@@ -1234,9 +1285,6 @@ impl ReleasePlan {
                     violations.push(format!(
                         "{place} owns heap ({kind:?}) but is omitted as a type parameter"
                     ));
-                    continue;
-                }
-                if matches!(entry.fate, Fate::Omitted(OmitReason::Reassigned)) {
                     continue;
                 }
                 if kind == ReleaseKind::String {

@@ -10055,6 +10055,11 @@ fn collect_crossing_writes(
     release_plan: &ynz_typeck::release_plan::ReleasePlan,
 ) {
     collect_crossing_writes_impl(stmt, crossing_names, out, false);
+    // Nothing runs after a `return`, so its read leaves no slot to flush (a flush emitted after the
+    // return's terminator is invalid IR).
+    if matches!(stmt, Stmt::Return { .. }) {
+        return;
+    }
     for founder in release_plan.founders_moved_in(stmt) {
         if crossing_names.contains(&founder) && !out.contains(&founder) {
             out.push(founder);
@@ -17299,13 +17304,24 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             }
         }
 
-        Stmt::Assign { target, value, .. } => {
+        Stmt::Assign {
+            target,
+            value,
+            span,
+            ..
+        } => {
             let slot = *cg
                 .locals
                 .get(target.as_str())
                 .ok_or_else(|| format!("undefined `{target}` in codegen"))?;
             let ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
+            // The value just evaluated may have taken the old one (a null slot); what the slot
+            // holds now is released after the new value is stored.
+            let replaced = match cg.typed.release_plan.assign_release(span).cloned() {
+                Some(assign) => cg.begin_assign_release(&assign, slot)?,
+                None => None,
+            };
             // Frame-embedded crossing shape local: its owned storage IS its
             // frame region (ptr alloca pre-wired in Step 1b). Copy the RHS
             // bytes INTO the region — the plain slot store this arm used to do
@@ -17346,6 +17362,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 } else {
                     store_binding_of_read(cg, value, val, &ty, slot, target)?;
                 }
+            }
+            if let Some(replaced) = replaced {
+                cg.finish_assign_release(&replaced)?;
             }
         }
 
@@ -25996,6 +26015,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 // at the identifier read of a value handed over, `Cg::take_string_slots` where the store seam takes
 // a string at its last use.
 
+/// The value an assignment replaces (`Cg::begin_assign_release`).
+struct ReplacedValue<'ctx> {
+    /// The slot held a value (not null: nothing took it).
+    live: inkwell::values::IntValue<'ctx>,
+    /// What the release is called on: the old pointer, or a snapshot of a shape's old bytes.
+    held: PointerValue<'ctx>,
+    ty: Type,
+    name: String,
+}
+
 /// True for the plan kinds the plain emitter releases, and so nulls slots of. Exhaustive: a new
 /// kind fails to compile until it says what it does.
 fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
@@ -26052,6 +26081,93 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             slots.push(slot);
         }
         Ok(slots)
+    }
+
+    /// An assignment replaces the value in `slot` (`assign.codegen_name`): load it, note whether it
+    /// is live (a take nulls a slot), and for a flat shape snapshot its bytes first, because the
+    /// shape's per-site region is reused by the new value's copy. `None` where the plain emitter
+    /// does not release the binding (a state-machine function, a kind slice 3 owns, an SoA array).
+    ///
+    /// O(1) time to emit; the snapshot is one struct-sized copy at run time (shape only).
+    fn begin_assign_release(
+        &self,
+        assign: &ynz_typeck::release_plan::AssignRelease,
+        slot: PointerValue<'ctx>,
+    ) -> Result<Option<ReplacedValue<'ctx>>, String> {
+        let name = assign.codegen_name.as_str();
+        if self.sm_frame_ptr.is_some()
+            || !plain_releases_kind(assign.kind)
+            || self.soa_bindings.contains_key(name)
+        {
+            return Ok(None);
+        }
+        let ty = self.local_types.get(name).cloned().ok_or_else(|| {
+            format!("internal: assignment release of `{name}`: its type was never recorded")
+        })?;
+        let resolved = self.resolve_type(&ty);
+        let old = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_old"))
+            .map_err(|err| format!("assign old load {name}: {err}"))?
+            .into_pointer_value();
+        let live = self
+            .builder
+            .build_is_not_null(old, &format!("{name}_old_live"))
+            .map_err(|err| format!("assign old null check {name}: {err}"))?;
+        let held = match &resolved {
+            Type::Shape { name: shape_name } => {
+                let struct_ty = self.shape_types.get(shape_name).ok_or_else(|| {
+                    format!("assign release: LLVM type for `{shape_name}` missing")
+                })?;
+                let snapshot =
+                    self.alloca_in_entry_llvm(struct_ty, &format!("{name}_old_snapshot"))?;
+                let size = self.shape_abi_size_const(shape_name, "assign release")?;
+                let copy_bb = self.append_block(&format!("{name}_old_snapshot_copy"));
+                let done_bb = self.append_block(&format!("{name}_old_snapshot_done"));
+                self.builder
+                    .build_conditional_branch(live, copy_bb, done_bb)
+                    .map_err(|err| format!("assign snapshot branch {name}: {err}"))?;
+                self.builder.position_at_end(copy_bb);
+                self.builder
+                    .build_memcpy(snapshot, 1, old, 1, size)
+                    .map_err(|err| format!("assign snapshot copy {name}: {err}"))?;
+                self.builder
+                    .build_unconditional_branch(done_bb)
+                    .map_err(|err| format!("assign snapshot join {name}: {err}"))?;
+                self.builder.position_at_end(done_bb);
+                snapshot
+            }
+            _ => old,
+        };
+        Ok(Some(ReplacedValue {
+            live,
+            held,
+            ty: resolved,
+            name: name.to_string(),
+        }))
+    }
+
+    /// Release the value `begin_assign_release` found in the slot, if it was live, after the new
+    /// value is stored.
+    fn finish_assign_release(&self, replaced: &ReplacedValue<'ctx>) -> Result<(), String> {
+        let Some(glue) = self.release_fn(&replaced.ty, false)? else {
+            return Ok(());
+        };
+        let name = replaced.name.as_str();
+        let release_bb = self.append_block(&format!("{name}_old_release"));
+        let done_bb = self.append_block(&format!("{name}_old_released"));
+        self.builder
+            .build_conditional_branch(replaced.live, release_bb, done_bb)
+            .map_err(|err| format!("assign release branch {name}: {err}"))?;
+        self.builder.position_at_end(release_bb);
+        self.builder
+            .build_call(glue, &[replaced.held.into()], "")
+            .map_err(|err| format!("assign release call {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("assign release join {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
     }
 
     /// Store null into each of `slots`: the founder no longer holds what was taken.

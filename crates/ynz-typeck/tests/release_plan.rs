@@ -212,16 +212,30 @@ fn a_borrowed_parameter_is_the_callers_and_a_give_parameter_is_released() {
     );
 }
 
-/// Bug: a reassigned binding's slot may hold a value another binding owns; it must never free.
+/// Bug: a reassigned owner leaks the value each assignment replaces (`Omitted(Reassigned)`), or its
+/// assignment frees a value it no longer owns: the plan releases it at its exit and records the
+/// release its assignment makes.
 #[test]
-fn a_reassigned_binding_is_never_released() {
+fn a_reassigned_owner_is_released_and_its_assignment_releases_the_old_value() {
     let output = clean(
         "function again() -> nothing {\n  let rows = [1, 2, 3]\n  rows = [4, 5]\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "again"), "rows"),
-        Fate::Omitted(OmitReason::Reassigned)
+        Fate::Release(ARRAY)
     );
+    let function = function_of(&output, "again");
+    let stmt_span = match &function.body.stmts[1] {
+        Stmt::Assign { span, .. } => span.clone(),
+        other => panic!("expected the assignment, got {other:?}"),
+    };
+    let release = output
+        .typed_module
+        .release_plan
+        .assign_release(&stmt_span)
+        .expect("the assignment releases the old value");
+    assert_eq!(release.decl.2, "rows");
+    assert_eq!(release.kind, ARRAY);
 }
 
 /// Bug: a generic body is left out of the plan ("every scope"), or its type-parameter values are
@@ -1391,8 +1405,18 @@ fn c1f_agreement(output: &CheckOutput) -> Vec<String> {
             .find(|entry| &entry.decl == decl)
             .expect("listed at its own block end");
         // The moved binding is the founder or an alias of it: an alias is `NotOwner` and the
-        // founder carries the move; a founder must be omitted.
-        if matches!(entry.fate, Fate::Release(_) | Fate::ReleaseIfLive(_)) {
+        // founder carries the move; a founder must be omitted, or released only if live while the
+        // move nulls its slot (a reassigned owner given on every path to the edge: an assignment
+        // may have revived it).
+        let nulled_at_the_store = plan
+            .move_sites()
+            .any(|(span, site)| span == (*start, *end) && &site.founder == decl);
+        let unsafe_release = match entry.fate {
+            Fate::Release(_) => true,
+            Fate::ReleaseIfLive(_) => !nulled_at_the_store,
+            Fate::Omitted(_) => false,
+        };
+        if unsafe_release {
             findings.push(format!(
                 "`{}` is moved by a store at {start}..{end} but released at the end of its block ({:?})",
                 entry.codegen_name, entry.fate
