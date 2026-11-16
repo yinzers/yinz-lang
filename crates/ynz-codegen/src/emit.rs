@@ -2181,6 +2181,10 @@ struct Cg<'ctx, 'g> {
     // M7 P4a: set of local names that hold errors-capable results (pointer to {i64, i64}).
     // When one of these is first used in an errors-capable function, auto-propagation fires.
     errors_capable_locals: std::collections::HashSet<String>,
+    // v0.3-M9 C7 slice 3: the slot an errors-capable local was bound into, by codegen name. A
+    // propagating or narrowing read re-points `locals` at a slot holding the success value (a view of
+    // the ok word), so the release of the result and the slot a move nulls are this one.
+    ec_original_slots: HashMap<String, PointerValue<'ctx>>,
     // v0.3-M1: per-compilation counter for unique `background` closure LLVM function names.
     // Per-Cg (not global static) so identical source always produces identical IR even
     // when multiple compilations run in the same process (LSP, test harness).
@@ -2421,6 +2425,9 @@ struct Cg<'ctx, 'g> {
     // v0.3-M9 C7 slice 2: the slots a string value, read at its last use, is taken out of if the
     // store seam takes it, by the value's LLVM reference (`Cg::note_string_last_use`).
     string_take_slots: HashMap<usize, Vec<PointerValue<'ctx>>>,
+    // v0.3-M9 C7 slice 3: a string read off an errors-capable result at its last use is the result's ok
+    // word: where the store seam takes it, this word is nulled, so the result's release skips it.
+    string_take_ec_words: HashMap<usize, PointerValue<'ctx>>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -7500,6 +7507,7 @@ fn plain_cg<'ctx, 'g>(
         options_table,
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
+        ec_original_slots: HashMap::new(),
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
@@ -7553,6 +7561,7 @@ fn plain_cg<'ctx, 'g>(
         fused_group_fired: false,
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
+        string_take_ec_words: HashMap::new(),
     }
 }
 
@@ -7932,6 +7941,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         // conflicts with the resume fn's `i32` return type.
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
+        ec_original_slots: HashMap::new(),
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
@@ -7993,6 +8003,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         fused_group_fired: false,
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
+        string_take_ec_words: HashMap::new(),
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -17358,6 +17369,7 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
             // M7 P4a: track bindings that hold errors-capable results.
             if matches!(val_ty, Type::ErrorsCapable { .. }) {
                 cg.errors_capable_locals.insert(name.clone());
+                cg.ec_original_slots.insert(name.clone(), slot);
             }
         }
 
@@ -19490,6 +19502,23 @@ fn remember_movable_string<'ctx>(
         && is_string_like(&cg.resolve_type(&cg.expr_type(expr)))
     {
         cg.owned_string_values.insert(val.as_value_ref() as usize);
+        // A string read off an errors-capable result is the result's ok word: the store seam nulls
+        // that word if it takes the string, so the result's release skips it.
+        if let Expr::Ident(name, _) = expr {
+            if let Some(original) = cg.ec_original_slots.get(name.as_str()).copied() {
+                let result = cg
+                    .builder
+                    .build_load(cg.ptr(), original, "ec_take_result")
+                    .map_err(|err| format!("ec take result load: {err}"))?
+                    .into_pointer_value();
+                let ok_word = cg
+                    .builder
+                    .build_struct_gep(errors_result_type(cg.ctx), result, 1, "ec_take_ok")
+                    .map_err(|err| format!("ec take ok gep: {err}"))?;
+                cg.string_take_ec_words
+                    .insert(val.as_value_ref() as usize, ok_word);
+            }
+        }
         // A binding read at its last use: the store seam nulls its slot if it takes the string.
         if matches!(expr, Expr::Ident(..)) {
             cg.note_string_last_use(val, span)?;
@@ -20145,6 +20174,7 @@ fn lower_expr_node<'ctx>(
                     let new_slot = cg.alloca(&inner_ty, &format!("{name}_ec_inner"))?;
                     store(cg, success_val, &inner_ty, new_slot)?;
                     cg.locals.insert(name.to_string(), new_slot);
+                    cg.null_handed_founders(ident_span)?;
                     return Ok(success_val);
                 } else if !matches!(ty, Type::ErrorsCapable { .. }) {
                     // Typeck narrowed the binding to the inner type (after a .failed() check or
@@ -20237,6 +20267,7 @@ fn lower_expr_node<'ctx>(
                     let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
                     store(cg, success_val, &ty, new_slot)?;
                     cg.locals.insert(name.to_string(), new_slot);
+                    cg.null_handed_founders(ident_span)?;
                     return Ok(success_val);
                 }
                 // If ErrorsCapable AND not errors-capable caller: fall through to load
@@ -26248,6 +26279,21 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .builder
                 .build_struct_gep(result_ty, result, 1, "ec_ok_ptr")
                 .map_err(|err| format!("{site} ec ok gep: {err}"))?;
+            // A taken payload leaves its word null.
+            let ok_word = self
+                .builder
+                .build_load(self.i64(), ok_ptr, "ec_ok_word")
+                .map_err(|err| format!("{site} ec ok load: {err}"))?
+                .into_int_value();
+            let held = self
+                .builder
+                .build_int_compare(IntPredicate::NE, ok_word, self.i64().const_zero(), "ec_ok_held")
+                .map_err(|err| format!("{site} ec ok cmp: {err}"))?;
+            let release_bb = self.ctx.append_basic_block(function, "ec_ok_release");
+            self.builder
+                .build_conditional_branch(held, release_bb, done)
+                .map_err(|err| format!("{site} ec ok branch: {err}"))?;
+            self.builder.position_at_end(release_bb);
             self.call_stored_release(glue, ok_ptr, site)?;
         }
         self.builder
@@ -26305,17 +26351,27 @@ fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
         | ReleaseKind::NestedShape
         | ReleaseKind::Maybe
         | ReleaseKind::Union
-        | ReleaseKind::Fixed => true,
-        // SLICE 3 (open): an errors-capable slot keeps today's behaviour (no release). `dynamic`
-        // and a map entry never own a local slot.
-        ReleaseKind::ErrorsCapable
-        | ReleaseKind::UntaggedUnion
+        | ReleaseKind::Fixed
+        | ReleaseKind::ErrorsCapable => true,
+        // `dynamic` and a map entry never own a local slot; nothing can release an untagged raw
+        // pointer (no tag says which variant it is).
+        ReleaseKind::UntaggedUnion
         | ReleaseKind::Dynamic
         | ReleaseKind::MapEntry => false,
     }
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// The slot a binding's value is released from and a move nulls: an errors-capable local's
+    /// original slot (a read re-points `locals` at the success value), the outer slot of a union an
+    /// `is` arm narrows, else the local's slot.
+    fn release_slot(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        self.ec_original_slots
+            .get(name)
+            .copied()
+            .or_else(|| self.reload_slot(name))
+    }
+
     /// The slots of the founders a read at `span` takes a value out of for `cause`, in a plain
     /// function. A founder whose kind the plain emitter does not release has no slot nulled, and a
     /// state-machine function nulls nothing (C8's frame release). A founder with no slot is an
@@ -26339,7 +26395,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             {
                 continue;
             }
-            let slot = self.reload_slot(name).ok_or_else(|| {
+            let slot = self.release_slot(name).ok_or_else(|| {
                 format!(
                     "internal: the read at {}..{} takes a value out of `{name}`, which has no slot",
                     span.start, span.end
@@ -26362,6 +26418,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         slot: PointerValue<'ctx>,
     ) -> Result<Option<ReplacedValue<'ctx>>, String> {
         let name = assign.codegen_name.as_str();
+        // An errors-capable local is bound once (a read re-points its slot at the success value),
+        // so a reassignment leaves the old result to leak rather than release through that slot.
+        if assign.kind == ynz_typeck::release_plan::ReleaseKind::ErrorsCapable {
+            return Ok(None);
+        }
         if self.sm_frame_ptr.is_some()
             || !plain_releases_kind(assign.kind)
             || self.soa_bindings.contains_key(name)
@@ -26683,6 +26744,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// The store seam took the string `value` instead of copying it: null the slots it was read
     /// from (`note_string_last_use`). Nothing for a string no binding held.
     fn take_string_slots(&self, value: BasicValueEnum<'ctx>) -> Result<(), String> {
+        if let Some(ok_word) = self.string_take_ec_words.get(&(value.as_value_ref() as usize)) {
+            self.builder
+                .build_store(*ok_word, self.i64().const_zero())
+                .map_err(|err| format!("null a taken ok word: {err}"))?;
+        }
         match self.string_take_slots.get(&(value.as_value_ref() as usize)) {
             Some(slots) => self.null_slots(slots),
             None => Ok(()),
@@ -26728,6 +26794,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 | (ReleaseKind::Maybe, ReleaseStep::Maybe { .. })
                 | (ReleaseKind::Union, ReleaseStep::Union { .. })
                 | (ReleaseKind::Fixed, ReleaseStep::Fixed { .. })
+                | (ReleaseKind::ErrorsCapable, ReleaseStep::ErrorsCapable { .. })
         );
         if !kind_matches_type {
             return Err(format!(
@@ -26760,7 +26827,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // An `is` arm re-points a narrowed union binding at its variant payload; the release
             // reads the binding's own (outer) slot, which holds the view.
             let slot = self
-                .reload_slot(name)
+                .release_slot(name)
                 .ok_or_else(|| format!("internal: release of `{name}` at {site}: no slot"))?;
             self.emit_slot_release(slot, &ty, only_if_live, name, site)?;
         }

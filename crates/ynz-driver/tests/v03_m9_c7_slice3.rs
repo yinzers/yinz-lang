@@ -269,3 +269,64 @@ case!(
     Balance::Strings,
     "a union item replaced by `fixed.set` leaks its string variant, or is released through the wrong layout and double-freed (High)"
 );
+
+// ── Item 1: errors-capable locals ───────────────────────────────────────────────────────────
+
+const AN_ERRORS_CAPABLE_LOCAL_IS_RELEASED_THROUGH_ITS_ORIGINAL_SLOT: &str = r"
+function load(index: int) -> string errors {
+  return `value-${index}`
+}
+function loadRows(index: int) -> array<int> errors {
+  return [index, index]
+}
+function relay(index: int) -> string errors {
+  let inner = load(index)
+  return inner
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (index in range(0, 50)) {
+    let first = load(index)
+    let rows = loadRows(index)
+    let second = relay(index)
+    total = total + first.or(`d`).count() + rows.or([]).count() + second.or(`e`).count()
+  }
+  print(total)
+}
+";
+
+case!(
+    an_errors_capable_local_is_released_through_its_original_slot,
+    AN_ERRORS_CAPABLE_LOCAL_IS_RELEASED_THROUGH_ITS_ORIGINAL_SLOT,
+    "880\n",
+    Balance::HeapAndStrings,
+    "an errors-capable local (string and array payloads, one returned through a relay) is never released: the ok payload leaks per call (High)"
+);
+
+const A_STRING_TAKEN_FROM_AN_ERRORS_CAPABLE_RESULT_IS_NOT_RELEASED_TWICE: &str = r"
+function load(index: int) -> string errors {
+  return `value-${index}`
+}
+function twin(index: int) -> int errors {
+  let first = load(index)
+  let second = first
+  let one: string = first
+  let two: string = second
+  return one.count() + two.count()
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (index in range(0, 50)) {
+    total = total + twin(index).or(0)
+  }
+  print(total)
+}
+";
+
+case!(
+    a_string_taken_from_an_errors_capable_result_is_not_released_twice,
+    A_STRING_TAKEN_FROM_AN_ERRORS_CAPABLE_RESULT_IS_NOT_RELEASED_TWICE,
+    "780\n",
+    Balance::Strings,
+    "a string read off a result at its last use is taken by a store, then freed again by the result's own release (double free, High)"
+);
