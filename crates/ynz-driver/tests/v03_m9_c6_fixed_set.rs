@@ -74,11 +74,13 @@ macro_rules! fixed_set_case {
 fixed_set_case!(
     fixed_string_set_and_index_assign,
     "v0_3_m9_c6_fixed_set_string.ynz",
+    // C7 slice 2, 2 -> 3: `fallback` is read last by `.or(fallback)`, which only borrows it, so its
+    // scope exit releases it.
     "c-3\nd-4\n",
     0,
     0,
     5,
-    2
+    3
 );
 fixed_set_case!(
     fixed_shape_set,

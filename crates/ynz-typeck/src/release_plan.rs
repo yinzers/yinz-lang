@@ -1156,9 +1156,9 @@ impl ReleasePlan {
         }
         for (span, decl) in strings.last_uses() {
             if let (Some(&kind), true) = (
-            releasing_if_live.get(decl),
-            function_declares(function, decl),
-        ) {
+                releasing_if_live.get(decl),
+                function_declares(function, decl),
+            ) {
                 self.add_move_site(
                     span,
                     MoveSite {

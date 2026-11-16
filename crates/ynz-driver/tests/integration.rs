@@ -11311,10 +11311,12 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
     );
     assert_eq!(
         alloc,
-        // 12 + 2: `let mine = bucket[0].or(spare)` is written (`mine.set`), so it owns a copy of the
-        // row (C6 non-owned reads: a written reader never points at its place); the copy is held to
-        // exit until C7's scope-exit release.
-        free + 14,
+        // C7 slice 2, 14 -> 12: the spawned `stash` is a plain callee, so it releases its `spare`
+        // local at its scope exit (2 allocations); `rows` is nulled at `bucket.add(rows)` and the
+        // ladder frees nothing at the `give` position. Still held: the task's `mine` copy (a
+        // `MustCopy` owner, released once the slice makes such a binding an owner) and the
+        // parent's `seed` and `bucket` (the entrypoint is a state machine: C8's release).
+        free + 12,
         "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
          being freed — check it is not the parent's container or its items, which is the \
          use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \

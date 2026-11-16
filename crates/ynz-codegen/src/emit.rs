@@ -1783,7 +1783,6 @@ fn lower_generic_function<'ctx>(
     );
     cg.type_subst = type_subst;
 
-    cg.begin_plain_release_tracking(f);
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
 
@@ -2412,8 +2411,6 @@ struct Cg<'ctx, 'g> {
     // v0.3-M9 C7 slice 2: the slots a string value, read at its last use, is taken out of if the
     // store seam takes it, by the value's LLVM reference (`Cg::note_string_last_use`).
     string_take_slots: HashMap<usize, Vec<PointerValue<'ctx>>>,
-    // v0.3-M9 C7 slice 1: the names of this function's `give` parameters (`emit_release_edge`).
-    given_params: HashSet<String>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -7165,7 +7162,6 @@ fn lower_function<'ctx, 'g>(
         m3d_spike,
     );
 
-    cg.begin_plain_release_tracking(f);
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
     #[cfg(test)]
@@ -7514,7 +7510,6 @@ fn plain_cg<'ctx, 'g>(
         fused_group_fired: false,
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
-        given_params: HashSet::new(),
     }
 }
 
@@ -7953,7 +7948,6 @@ fn lower_function_with_waits<'ctx, 'g>(
         fused_group_fired: false,
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
-        given_params: HashSet::new(),
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -21447,7 +21441,19 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         }
     }
 
-    emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg")
+    let copied = emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg")?;
+    // The spawn consumed the binding (its slot was nulled at the read) but the task got a copy
+    // of its own: nobody holds the original, so it is released here, once the copy exists.
+    if matches!(
+        sole_holder,
+        Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
+    ) && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
+        && cg.sm_frame_ptr.is_none()
+        && cg.plain_releases_type(&resolved)
+    {
+        release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
+    }
+    Ok(copied)
 }
 
 /// Emit the free calls for heap-copied `background` args inside the closure body.
@@ -21821,7 +21827,7 @@ fn lower_expr_background<'ctx>(
         }
         reject_union_argument_without_slot(cg, &ty, &callee_name, arg_index)?;
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
-        let kind = release_glue_free_kind(cg, kind, &ty, &callee_name)?;
+        let kind = release_glue_free_kind(cg, kind, &ty, &callee_name, arg_index)?;
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("background arg to_i64_bits: {e}"))?;
@@ -22087,7 +22093,7 @@ fn lower_sm_background_spawn<'ctx>(
         }
         reject_union_argument_without_slot(cg, &ty, callee_name, arg_index)?;
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
-        let kind = release_glue_free_kind(cg, kind, &ty, callee_name)?;
+        let kind = release_glue_free_kind(cg, kind, &ty, callee_name, arg_index)?;
         if first_channel_arg.is_none()
             && matches!(cg.resolve_type(&ty), Type::BuiltinChannel { .. })
         {
@@ -25288,6 +25294,66 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .unwrap_or(true)
     }
 
+    /// The declared ownership of parameter `index` of `callee` when `callee` is a plain
+    /// (non-suspending) function whose signature is known: `Some(declared modifier)`. `None` for a
+    /// suspending, generic or unknown callee, whose body this module does not release.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn plain_callee_param_ownership(
+        &self,
+        callee: &str,
+        index: usize,
+    ) -> Option<Option<OwnershipModifier>> {
+        if self.suspend_set.contains(callee) {
+            return None;
+        }
+        let signature = self
+            .sig_table
+            .fns
+            .get(callee)
+            .or_else(|| self.imported_fns.get(callee))?;
+        if signature.suspends {
+            return None;
+        }
+        signature.param_ownerships.get(index).cloned()
+    }
+
+    /// True when a binding of the (resolved) type `ty` is one the plain emitter releases at its
+    /// scope exits: an array, a map, or a shape with no shape-typed field (strings, channels and
+    /// handles are never copied by a spawn). Mirrors `heap_class_of`'s split between `Shape` and
+    /// `NestedShape` (a shape-typed field is a heap cell).
+    ///
+    /// Time: O(f) for f fields  Space: O(1)
+    fn plain_releases_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+            Type::Shape { name } => self.shape_table.layout_shape(name).is_some_and(|shape| {
+                !shape
+                    .fields
+                    .iter()
+                    .any(|field| matches!(field.ty, Type::Shape { .. } | Type::Generic { .. }))
+            }),
+            _ => false,
+        }
+    }
+
+    /// What the ladder frees of an argument at a `give` position of a plain callee that releases
+    /// it (`plain_releases_kind`): nothing for a string, array, map or channel (the callee frees
+    /// all of it), the shape's own cell for a flat shape (the callee frees the fields). A type the
+    /// plain emitter does not release keeps its free kind.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn free_kind_of_a_given_argument(&self, kind: BgArgFreeKind, ty: &Type) -> BgArgFreeKind {
+        let resolved = self.resolve_type(ty);
+        match &resolved {
+            string_like if is_string_like(string_like) => BgArgFreeKind::None,
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::BuiltinChannel { .. } => {
+                BgArgFreeKind::None
+            }
+            _ => kind,
+        }
+    }
+
     /// The release of one stored value of type `ty` in `home`; `None` when it owns nothing.
     /// Errors, naming the type, for a value whose release is unsupported.
     ///
@@ -25954,17 +26020,6 @@ fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
-    /// Gather what `emit_release_edge` needs of the plain function `f` before its body lowers:
-    /// its `give` parameters.
-    fn begin_plain_release_tracking(&mut self, f: &FunctionDecl) {
-        self.given_params = f
-            .params
-            .iter()
-            .filter(|param| matches!(param.ownership, Some(OwnershipModifier::Give)))
-            .map(|param| param.name.clone())
-            .collect();
-    }
-
     /// The slots of the founders a read at `span` takes a value out of for `cause`, in a plain
     /// function. A founder whose kind the plain emitter does not release has no slot nulled, and a
     /// state-machine function nulls nothing (C8's frame release). A founder with no slot is an
@@ -26057,13 +26112,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Fate::ReleaseIfLive(kind) => (kind, true),
         };
         if !plain_releases_kind(kind) {
-            return Ok(None);
-        }
-        // SLICE 2: a `give` parameter. The callee releases what it was given only together with
-        // the caller's slot nulling and the spawn ladder dropping its flat free of such
-        // arguments (`callee_takes_a_given_parameter`); releasing it now frees a container the
-        // ladder frees again.
-        if self.given_params.contains(name) {
             return Ok(None);
         }
         // An admitted-SoA array holds its items in per-field segments, not in the layout the
@@ -26335,27 +26383,32 @@ fn bg_union_arg_cell<'ctx>(
 /// glue frees more than the flat free does and the task may free it deeply. A type whose release
 /// is not supported is an internal error, not a silent fall back to the flat free.
 ///
-/// DEFERRED, four fields — the items of a `give` parameter's argument:
-/// - WHAT: every argument of a call whose callee declares any `give` parameter keeps the flat
-///   free, so its items, entries and string fields are not released by the ladder, and a plain
-///   `string` argument is not released at all.
-/// - WHY: the callee owns what it was given and may move it (store it in a container that is
-///   itself a ladder slot); a deep release would then free the same pointer twice until a move
-///   site nulls the slot, which is C7's change.
-/// - COST: the item bytes of such arguments leak per spawn (a container itself is freed; a plain
-///   string leaks whole).
-/// - TRIGGER: C7 (#384) lands move-site slot nulling.
-///
-/// Pinned by `bg_arg_container_add_gives_row` (integration: a `give` row stored into a container
-/// the ladder also owns must not double free).
+/// A `give` parameter of a plain callee is the callee's: it releases it at its scope exits (or
+/// moves it on, nulling its slot), so the ladder frees nothing of it but a shape's own cell (the
+/// callee releases the fields, never the cell it was handed). Every other position of such a
+/// callee is released deep like any argument: a given value the callee stored in one of them is
+/// owned by that container from then on, and the callee nulled its own slot at the store. A
+/// suspending callee (a state machine releases nothing before C8) and an unknown one keep the flat
+/// free of every argument when any parameter is `give`. Pinned by `bg_arg_container_add_gives_row`
+/// (integration: a `give` row stored into a container the ladder also owns must not double free)
+/// and `a_spawned_callee_releases_the_give_parameters_the_ladder_no_longer_frees`.
 fn release_glue_free_kind<'ctx>(
     cg: &Cg<'ctx, '_>,
     kind: BgArgFreeKind,
     ty: &Type,
     callee: &str,
+    arg_index: usize,
 ) -> Result<BgArgFreeKind, String> {
-    if cg.callee_takes_a_given_parameter(callee) {
-        return Ok(kind);
+    match cg.plain_callee_param_ownership(callee, arg_index) {
+        Some(Some(OwnershipModifier::Give)) => {
+            return Ok(cg.free_kind_of_a_given_argument(kind, ty));
+        }
+        Some(_) => {}
+        None => {
+            if cg.callee_takes_a_given_parameter(callee) {
+                return Ok(kind);
+            }
+        }
     }
     let resolved = cg.resolve_type(ty);
     let upgrade = match (&kind, &resolved) {

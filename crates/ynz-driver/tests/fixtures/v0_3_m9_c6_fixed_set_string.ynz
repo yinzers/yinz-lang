@@ -3,7 +3,8 @@
 // Heap strings: `a-1`, `b-2` (moved into the list's literal), `c-3` and `d-4` (the values the
 // `set` and the index assignment store) and the copy `let fallback` makes of its literal: 5
 // allocated. `value.set(0, ...)` releases `a-1` and
-// `value[1] = ...` releases `b-2`: 2 released.
+// `value[1] = ...` releases `b-2`: 2 released. `fallback` is released at the end of `entrypoint`
+// (C7 slice 2): 3 released.
 // Expected output: the two names the list holds at the end.
 
 function entrypoint() -> nothing {
