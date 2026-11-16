@@ -256,8 +256,8 @@ fn m8_p4_chan_array_buffered_at_exit_is_held_by_the_channel() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_array_drop_with_buffered.ynz",
         "buffered\n",
-        2,
-        "2 = the buffered array held by the never-torn-down channel",
+        0,
+        "0 = the buffered array is freed with the spawner's channel local, which a state-machine entrypoint now releases (C8 slice 2)",
     );
 }
 
@@ -289,8 +289,8 @@ fn m8_p4_chan_map_buffered_at_exit_is_held_by_the_channel() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_map_drop_with_buffered.ynz",
         "buffered\n",
-        5,
-        "5 = the buffered map held by the never-torn-down channel",
+        0,
+        "0 = the buffered map is freed with the spawner's channel local, which a state-machine entrypoint now releases (C8 slice 2)",
     );
 }
 
@@ -349,8 +349,8 @@ fn m8_p4_number_channel_buffered_cell_is_held_by_the_channel() {
     assert_runs_with_parity(
         "v0_3_m8_p4_number_chan_drop_with_buffered.ynz",
         "buffered\n",
-        1,
-        "1 = the buffered 16-byte cell held by the never-torn-down channel",
+        0,
+        "0 = the buffered 16-byte cell is freed with the spawner's channel local, which a state-machine entrypoint now releases (C8 slice 2)",
     );
 }
 

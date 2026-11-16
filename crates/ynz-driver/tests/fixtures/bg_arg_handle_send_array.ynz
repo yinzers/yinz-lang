@@ -2,7 +2,7 @@
 // its ladder-owned `array<int>` clone to a grandchild with `h.send(rows)` (the handle outbox,
 // which funnels into the same channel core). The grandchild must read the intact array after
 // the middle task has retired.
-function sink(inbox: channel<array<int>>, report: channel<int>) -> nothing {
+function sink(inbox: channel<array<int>>, report: channel<int>) -> int {
   // v0.3-M8: `receive()` is `maybe<array<int>>`; the values are pulled out BEFORE the
   // `report.send` suspension (a `maybe` cannot cross a suspension point yet).
   let delivered = inbox.receive()
@@ -14,12 +14,16 @@ function sink(inbox: channel<array<int>>, report: channel<int>) -> nothing {
     first = got[0].or(-1)
   }
   report.send(count * 100 + first)
+  return count
 }
 
 function relay(report: channel<int>, give rows: array<int>) -> nothing {
   let inbox: channel<array<int>> = channel<array<int>>(4)
   let h = background sink(inbox, report)
   h.send(rows)
+  // A handle leaving scope stops its task (v0.3-M9 C8): relay waits for sink to finish before it
+  // ends, so the grandchild reads the array and reports.
+  let finished = h.receive()
 }
 
 function entrypoint() -> nothing {

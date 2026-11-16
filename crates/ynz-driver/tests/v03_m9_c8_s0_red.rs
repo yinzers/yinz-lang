@@ -101,6 +101,20 @@ macro_rules! green_program {
     };
 }
 
+/// `green_fixture!` is `balanced_fixture!` for a producer a slice has fixed: the same body, no `#[ignore]`.
+macro_rules! green_fixture {
+    ($case:ident, $fixture:literal, $bug:literal) => {
+        #[doc = $bug]
+        #[test]
+        fn $case() {
+            at_both_optimization_levels(|no_optimize| {
+                let built = build($fixture, no_optimize);
+                assert_run_balances(&built, $bug, None, no_optimize);
+            });
+        }
+    };
+}
+
 // ── (a) C2 frame-retirement fixtures ────────────────────────────────────────────────────────
 
 /// ASan guard, green today and after C8: the caller's `free_frame` after Ready neither double
@@ -129,7 +143,7 @@ fn c2_spawn_drop_ladder_stays_asan_clean() {
     });
 }
 
-balanced_fixture!(
+green_fixture!(
     c2_caller_free_frame_balances,
     "v0_3_m9_c2_caller_free_frame.ynz",
     "producer P1 (frame locals): `kept`, `extra`, `inner`, `mine` of a suspending callee leak (30 allocations, 6 frees)"
@@ -222,7 +236,7 @@ function entrypoint() -> nothing {
 }
 ";
 
-balanced_program!(
+green_program!(
     producer_p1_frame_locals_at_scope_exit,
     SM_LOCALS,
     "8\n3\n",

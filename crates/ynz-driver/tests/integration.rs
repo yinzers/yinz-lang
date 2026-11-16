@@ -4656,8 +4656,9 @@ fn v03_m3a_p3_audit_array_number_sm_no_leak() {
          function — any growth with element count = decimal128 element leak; got alloc={alloc}"
     );
     assert_eq!(
-        free, 1,
-        "exactly 1 free (task frame) for array<number> SM function; got free={free}"
+        free, 3,
+        "exactly 3 frees (task frame + the local array's header and buffer) for array<number> SM \
+         function; got free={free}"
     );
 }
 
@@ -4701,8 +4702,9 @@ fn v03_m3a_p3_for_shape_loop_var_alloc_one() {
          buffer, element-count-independent); got alloc={alloc}"
     );
     assert_eq!(
-        free, 1,
-        "exactly 1 free (task frame) for array<Shape> loop var; got free={free}"
+        free, 3,
+        "exactly 3 frees (task frame + the local array's header and buffer) for array<Shape> loop \
+         var; got free={free}"
     );
 }
 
@@ -5515,7 +5517,8 @@ fn m3d_assert_fires_n_byte_identical_alloc_free(
 /// Since the v0.3-M5 P2 by-value ABI, array header+buffer allocations route through the
 /// COUNTED `ynz_alloc` (FRAGO 005 — the E8 gate must see element buffers; they were
 /// invisible raw malloc before, `baselines-p0.md` scope fact). Local arrays are not
-/// dropped at scope exit (pre-existing design), so an array-building fixture
+/// dropped at scope exit in a CPU-group host (pre-existing design; C8 slice 2 now releases a
+/// state-machine host's own locals, so these fixtures pin gap 0), so an array-building fixture
 /// legitimately shows `alloc == free + gap` where `gap` = 2 × (arrays constructed) +
 /// 5 × (maps constructed): buffers held until process exit. Pinning the exact gap
 /// keeps the mutation-proof teeth: a per-element or per-iteration allocation
@@ -5883,7 +5886,7 @@ fn v03_m3d_return_class_array_fires_byte_identical() {
     // WHY: an `array<int>`-returning CPU pair. Output asserts the element counts
     // (order-independent — no interleaving-dependent assertion). Asserts FIRE +
     // byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_array.ynz", "3\n4", 4);
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_array.ynz", "3\n4", 0);
 }
 
 #[test]
@@ -5893,7 +5896,7 @@ fn v03_m3d_return_class_map_fires_byte_identical() {
     // v0.3-M5 P3 by-value map ABI, each map's FIVE buffers (header/ctrl/keys/vals/order)
     // route through the COUNTED ynz_alloc (previously invisible raw malloc); locals are
     // never dropped (pre-existing design), so 2 maps × 5 buffers = a deliberate gap of 10.
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_map.ynz", "3\n5", 10);
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_map.ynz", "3\n5", 0);
 }
 
 #[test]
@@ -6200,7 +6203,7 @@ fn v03_m3d_same_callee_array_distinct_values() {
     // WHY: same callee `buildArr`, args 3 and 4 → element counts 3 and 4 (distinct, order-
     // independent). Proves same-callee members bind separate `array<int>` values. FIRE +
     // byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_array.ynz", "3\n4", 4);
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_array.ynz", "3\n4", 0);
 }
 
 #[test]
@@ -6210,7 +6213,7 @@ fn v03_m3d_same_callee_map_distinct_values() {
     // byte-identical + alloc==free+10 (2 maps × 5 counted, never-dropped buffers — the
     // v0.3-M5 P3 by-value map ABI made the pre-existing held-until-exit map memory VISIBLE
     // to the counter; see v03_m3d_return_class_map_fires_byte_identical's WHY).
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_map.ynz", "3\n5", 10);
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_map.ynz", "3\n5", 0);
 }
 
 #[test]
@@ -7496,7 +7499,7 @@ fn v03_m3d_danger_array_match_arm_fires_byte_identical() {
     // WHY: a heap-pointer return (`array<int>`) packed inside a `match` arm. Same pointer-slot
     // risk as the string-if-arm cell, but in match-arm frame machinery and with the counts read
     // inside the arm (so the int counts, not the array pointers, cross the arm boundary).
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_array_match_arm.ynz", "3\n5", 4);
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_array_match_arm.ynz", "3\n5", 0);
 }
 
 #[test]
@@ -7561,7 +7564,7 @@ fn v03_m3d_danger_same_callee_array_if_arm_fires_byte_identical() {
     m3d_assert_fires_byte_identical_alloc_gap(
         "v0_3_m3d_danger_same_callee_array_if_arm.ynz",
         "3\n6",
-        4,
+        0,
     );
 }
 
@@ -7586,7 +7589,7 @@ fn v03_m3d_danger_map_match_arm_fires_byte_identical() {
     // pointer travels through the result slot; that pack/bind must survive match-arm machinery.
     // alloc==free+10: 2 maps × 5 counted, never-dropped buffers (v0.3-M5 P3 by-value map ABI;
     // see v03_m3d_return_class_map_fires_byte_identical's WHY).
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_map_match_arm.ynz", "3\n5", 10);
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_map_match_arm.ynz", "3\n5", 0);
 }
 
 #[test]
@@ -11011,8 +11014,9 @@ fn m5_p5_bg_copy_alloc_gap_pin() {
     // prepare_bg_arg_for_ctx transfers ownership to the task instead of
     // re-cloning. Regression signature: the `.copy()` intermediate leaks and
     // the gap grows to 6 (alloc=11/free=5 observed pre-fix — the E8
-    // clone→drop-imbalance zero-tolerance class). Baseline gap = 4 (2
-    // never-drop local arrays × 2 cells, FRAGO 009 accounting).
+    // clone→drop-imbalance zero-tolerance class). Baseline gap = 2 (C8 slice 2: the
+    // state-machine host releases its locals; the 2 left are the spawn-site clone of a
+    // given array, whose original nobody releases, a spawn-ladder producer).
     let (alloc, free) = ynz_run_with_alloc_counter("m5_p3_sweep_bg_array_shape_give_wait.ynz");
     assert!(
         alloc > 0,
@@ -11020,9 +11024,9 @@ fn m5_p5_bg_copy_alloc_gap_pin() {
     );
     assert_eq!(
         alloc - free,
-        4,
-        "bg-arg copy alloc gap drifted: expected alloc-free == 4 (2 never-drop \
-         local arrays × 2 cells); gap 6 = the spawn-path re-clone leak returned \
+        2,
+        "bg-arg copy alloc gap drifted: expected alloc-free == 2 (the given array's spawn-site \
+         original); gap 4 = the spawn-path re-clone leak returned \
          (seg-4 4b regression); alloc={alloc} free={free}"
     );
 }
@@ -11050,7 +11054,9 @@ fn assert_bg_arg_handoff_fixture(
     expected_gap: u64,
     gap_explained: &str,
 ) {
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    // Built and run under the watchdog: a handle that stopped its task early leaves the parent
+    // waiting for a reply, which must fail the test, not hang it.
+    let (stdout, stderr, code) = build_to_tmpdir_and_run(&fixture(fixture_name), false);
     assert_eq!(
         code, 0,
         "{fixture_name} must exit 0 (a SIGSEGV here = the receiver read the ladder-freed \
@@ -11098,8 +11104,8 @@ fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_channel_send_array_never_drained.ynz",
         "never drained\n",
-        4,
-        "2 = the spawner's `rows` literal, 2 = the sent clone held by the never-torn-down channel",
+        2,
+        "2 = the sent clone held by the never-torn-down channel (C8 slice 2 releases the spawner's `rows` literal)",
     );
 }
 
@@ -11188,9 +11194,8 @@ fn bg_arg_handle_return_parent_reads_intact_array_after_child_retired() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_handle_return_array.ynz",
         "3\n4\n",
-        6,
-        "2 = the spawner's `rows` literal, 2 = the returned clone now held by `arr`, \
-         2 = the `fallback` empty-array literal",
+        2,
+        "2 = the returned clone, held by the `maybe` local `got` (C8 slice 2 releases the spawner's `rows`, `arr` and `fallback`; a `maybe` local is not released in a state machine yet)",
     );
 }
 
@@ -11226,9 +11231,8 @@ fn bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_handle_return_map.ynz",
         "2\n42\n",
-        10,
-        "5 = the returned map now held by `m` (header, table, two entry cells, one grow — \
-         identical to the synchronous control), 5 = the parent's `fallback` empty-map literal",
+        5,
+        "5 = the returned map (header, table, two entry cells, one grow), held by the `maybe` local `got` (C8 slice 2 releases `m` and `fallback`; a `maybe` local is not released in a state machine yet)",
     );
 }
 
@@ -11315,10 +11319,10 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
         // C7 slice 2, 14 -> 12: the spawned `stash` is a plain callee, so it releases its `spare`
         // local at its scope exit (2 allocations); `rows` is nulled at `bucket.add(rows)` and the
         // ladder frees nothing at the `give` position. C7 slice 2b, 12 -> 8: the task's `mine` is a
-        // copy owner and is released too. What is still held is exactly the parent's four locals
-        // (`seed`, `bucket`, `rows`, `fallback`, 2 counted allocations each: the entrypoint is a
-        // state machine, C8's release). ASan is clean at both optimization levels (measured).
-        free + 8,
+        // copy owner and is released too. C8 slice 2, 8 -> 2: the state-machine
+        // entrypoint releases its own locals. What is still held is one parent array (2 counted
+        // allocations), a spawn-ladder producer. ASan is clean at both optimization levels (measured).
+        free + 2,
         "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
          being freed — check it is not the parent's container or its items, which is the \
          use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \

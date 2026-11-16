@@ -2281,6 +2281,8 @@ struct Cg<'ctx, 'g> {
     // int/bool/float/ptr types use 1 slot; decimal128 and ErrorsCapable use 2 slots
     // (16 bytes stored directly in the frame — not a pointer to a stack buffer).
     sm_crossing_slot_indices: Vec<usize>,
+    // The resume function's parameter names, in frame-slot order (slot `i` holds parameter `i`).
+    sm_param_names: Vec<String>,
     // Set of crossing local names whose type is decimal128 (number with precision ≤ 34).
     // These use 2 frame slots and i128 alloca (not ptr alloca).
     sm_crossing_decimal128_set: HashSet<String>,
@@ -2443,7 +2445,7 @@ struct Cg<'ctx, 'g> {
     local_types: HashMap<String, Type>,
     // v0.3-M9 C7 slice 2: the slots a string value, read at its last use, is taken out of if the
     // store seam takes it, by the value's LLVM reference (`Cg::note_string_last_use`).
-    string_take_slots: HashMap<usize, Vec<PointerValue<'ctx>>>,
+    string_take_slots: HashMap<usize, Vec<MoveSlot<'ctx>>>,
     // v0.3-M9 C7 slice 3: a string read off an errors-capable result at its last use is the result's ok
     // word: where the store seam takes it, this word is nulled, so the result's release skips it.
     string_take_ec_words: HashMap<usize, PointerValue<'ctx>>,
@@ -7790,6 +7792,7 @@ fn plain_cg<'ctx, 'g>(
         sm_crossing_scalar_set: HashSet::new(),
         sm_crossing_bool_set: HashSet::new(),
         sm_crossing_slot_indices: Vec::new(),
+        sm_param_names: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(),
         sm_number_param_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
@@ -8228,6 +8231,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_scalar_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_bool_set: HashSet::new(),   // populated during alloca creation below
         sm_crossing_slot_indices: crossing_slot_indices.clone(),
+        sm_param_names: param_names.clone(),
         sm_crossing_decimal128_set: HashSet::new(), // populated during alloca creation below
         sm_number_param_set: HashSet::new(),        // populated during param alloca creation below
         sm_crossing_float_set: HashSet::new(),      // populated during alloca creation below
@@ -9765,8 +9769,44 @@ fn lower_sm_body<'ctx, 'g>(
 ///
 /// Extracted from `lower_sm_body` so control-flow handlers (`Stmt::If`, future loops) can
 /// recurse into their branch bodies with the same walk.
+///
+/// When control reaches the end of the block, the bindings it declared are released from the
+/// release plan's block-end edge (`Cg::release_at_block_end`), as `lower_block_stmts` does on the
+/// plain path. A block that ends in a `return` released at that `return` instead.
 #[allow(clippy::too_many_arguments)]
 fn lower_sm_block<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    block: &ynz_ast::nodes::Block,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    lower_sm_block_stmts(
+        cg,
+        block,
+        state_blocks,
+        pending_block,
+        frame_ptr,
+        waker_ctx,
+        param_names,
+        f,
+        shape_table,
+        current_state,
+    )?;
+    if !is_block_terminated(cg) {
+        cg.release_at_block_end(block)?;
+    }
+    Ok(())
+}
+
+/// The statements of `lower_sm_block`, with no scope release at the end.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_block_stmts<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     block: &ynz_ast::nodes::Block,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
@@ -20744,7 +20784,7 @@ fn lower_expr_node<'ctx>(
                             .map_err(|e| format!("sm nap branch: {e}"))?;
                         // Error path: store {error_ptr, 0} to frame return slot, signal Ready.
                         cg.builder.position_at_end(propagate_bb);
-                        cg.release_at_propagation(ident_span)?;
+                        cg.release_at_narrowed_error_path(ident_span)?;
                         state_machine::store_return_value_errors(
                             cg.ctx,
                             &cg.builder,
@@ -26155,6 +26195,28 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         signature.param_ownerships.get(index).cloned()
     }
 
+    /// The declared ownership of parameter `index` of `callee` when `callee` is a SUSPENDING
+    /// function whose signature is known (the counterpart of `plain_callee_param_ownership`): a
+    /// state machine releases the frame-backed kinds of its own `give` parameters at its scope
+    /// exits, as a plain callee does. `None` for a plain, generic or unknown callee.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn suspending_callee_param_ownership(
+        &self,
+        callee: &str,
+        index: usize,
+    ) -> Option<Option<OwnershipModifier>> {
+        let signature = self
+            .sig_table
+            .fns
+            .get(callee)
+            .or_else(|| self.imported_fns.get(callee))?;
+        if !signature.suspends {
+            return None;
+        }
+        signature.param_ownerships.get(index).cloned()
+    }
+
     /// True when a binding of the (resolved) type `ty` is one the plain emitter releases at its
     /// scope exits: an array, a map, or a shape, flat or nested (`ReleaseKind::Shape` and
     /// `NestedShape`; strings, channels and handles are never copied by a spawn). A shape the
@@ -26169,8 +26231,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
-    /// What the ladder frees of an argument at a `give` position of a plain callee that releases
-    /// it (`plain_releases_kind`): nothing for a string, array, map or channel (the callee frees
+    /// What the ladder frees of an argument at a `give` position of a plain or suspending callee
+    /// that releases it (`plain_releases_kind`): nothing for a string, array, map or channel (the callee frees
     /// all of it), the shape's own cell for a flat shape (the callee frees the fields). A type the
     /// plain emitter does not release keeps its free kind.
     ///
@@ -26988,6 +27050,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 // at the identifier read of a value handed over, `Cg::take_string_slots` where the store seam takes
 // a string at its last use.
 
+/// A founder's slot a move site nulls: the local's slot, and in a resume function the frame slot
+/// that backs it across a suspension (a parameter's, or a crossing local's). A resume re-reads the
+/// frame slot into the local's slot, so a move that nulled only the local's slot would be undone
+/// at the next resume and the scope exit would release a value that was handed away.
+struct MoveSlot<'ctx> {
+    local: PointerValue<'ctx>,
+    frame_slot: Option<usize>,
+}
+
 /// One temporary of a statement: the entry-block slot that holds the value it builds (null until it
 /// is built) and the type its release is called with (`Cg::open_temporaries`).
 struct TemporarySlot<'ctx> {
@@ -27073,24 +27144,27 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if !plain_releases_kind(kind) {
             return false;
         }
+        // A resume function releases exactly the kinds that have a frame slot across a suspension
+        // (`ReleaseKind::has_frame_backing`), the kinds the crossing set reads. A union or an
+        // errors-capable value (C8 slice 4) and a shape, `maybe`, `fixed` or type-parameter value
+        // is a leak here, never an early free: nothing keeps its bytes alive across a `wait`.
+        if self.sm_frame_ptr.is_some() && !kind.has_frame_backing() {
+            return false;
+        }
         kind != ynz_typeck::release_plan::ReleaseKind::TypeParameter
             || release_step(&self.resolve_type(held)) != ReleaseStep::Nothing
     }
 
     /// The slots of the founders a read at `span` takes a value out of for `cause`, in a plain
-    /// function. A founder whose kind the plain emitter does not release has no slot nulled, and a
-    /// state-machine function nulls nothing (C8's frame release). A founder with no slot is an
-    /// internal error: nulling the wrong slot, or none, is a double free.
+    /// function or a resume function. A founder whose kind the emitter does not release has no slot
+    /// nulled. A founder with no slot is an internal error: nulling the wrong slot, or none, is a double free.
     ///
     /// O(founders at the span) time.
     fn founder_slots_at(
         &self,
         span: &ynz_diagnostics::SourceSpan,
         cause: ynz_typeck::release_plan::MoveCause,
-    ) -> Result<Vec<PointerValue<'ctx>>, String> {
-        if self.sm_frame_ptr.is_some() {
-            return Ok(Vec::new());
-        }
+    ) -> Result<Vec<MoveSlot<'ctx>>, String> {
         let mut slots = Vec::new();
         for site in self.typed.release_plan.move_site(span) {
             let name = site.founder_codegen_name.as_str();
@@ -27106,7 +27180,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     span.start, span.end
                 )
             })?;
-            slots.push(slot);
+            slots.push(MoveSlot {
+                local: slot,
+                frame_slot: self.frame_slot_of(name),
+            });
         }
         Ok(slots)
     }
@@ -27493,13 +27570,46 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Store null into each of `slots`: the founder no longer holds what was taken.
-    fn null_slots(&self, slots: &[PointerValue<'ctx>]) -> Result<(), String> {
+    fn null_slots(&self, slots: &[MoveSlot<'ctx>]) -> Result<(), String> {
         for slot in slots {
             self.builder
-                .build_store(*slot, self.ptr().const_null())
+                .build_store(slot.local, self.ptr().const_null())
                 .map_err(|err| format!("null a taken slot: {err}"))?;
+            self.null_frame_slot(slot.frame_slot)?;
         }
         Ok(())
+    }
+
+    /// The frame slot index that backs the binding `name` across a suspension in a resume
+    /// function: its parameter index, or its crossing slot. `None` for a local that never leaves
+    /// one resume invocation, and in a plain function.
+    ///
+    /// O(parameters + crossing locals) time.
+    fn frame_slot_of(&self, name: &str) -> Option<usize> {
+        self.sm_frame_ptr?;
+        if let Some(index) = self.sm_param_names.iter().position(|param| param == name) {
+            return Some(index);
+        }
+        let position = self
+            .sm_crossing_names
+            .as_ref()?
+            .iter()
+            .position(|crossing| crossing == name)?;
+        self.sm_crossing_slot_indices.get(position).copied()
+    }
+
+    /// Store null into frame slot `frame_slot` of this resume function (nothing for `None`).
+    fn null_frame_slot(&self, frame_slot: Option<usize>) -> Result<(), String> {
+        let (Some(index), Some(frame_ptr)) = (frame_slot, self.sm_frame_ptr) else {
+            return Ok(());
+        };
+        state_machine::store_local_slot(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            index,
+            self.i64().const_zero(),
+        )
     }
 
     /// The identifier read at `span` hands its value over (a give, a send, a store, a spawn that
@@ -27598,7 +27708,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// THE emitter of a scope exit on the plain path: for each entry of `entries` whose fate
     /// releases (`plain_release_of`), release the binding's slot (`emit_slot_release`). A shape
     /// local's slot holds the address of its entry-block region, so its release does not free a
-    /// cell (`owns_cell` false). Emits nothing in a state-machine function (C8).
+    /// cell (`owns_cell` false).
     ///
     /// O(entries) time to emit; at run time O(heap each entry owns).
     fn emit_release_edge(
@@ -27606,9 +27716,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         entries: &[ynz_typeck::release_plan::ReleaseEntry],
         site: &str,
     ) -> Result<(), String> {
-        if self.sm_frame_ptr.is_some() {
-            return Ok(());
-        }
         for entry in entries {
             let Some((ty, only_if_live)) = self.plain_release_of(entry)? else {
                 continue;
@@ -27976,9 +28083,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// The release at the end of `block`.
     fn release_at_block_end(&self, block: &ynz_ast::nodes::Block) -> Result<(), String> {
-        if self.sm_frame_ptr.is_some() {
-            return Ok(());
-        }
         let entries = self
             .typed
             .release_plan
@@ -27989,17 +28093,30 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     block.span.start, block.span.end
                 )
             })?;
-        self.emit_release_edge(entries, "block_end")
+        self.emit_release_edge(entries, "block_end")?;
+        // The function runs on after a block end, and may suspend and be dropped there (C8 slice
+        // 6 releases a dropped task's frame from its slots): a released frame slot is nulled so
+        // that nothing frees it a second time. `return` and propagation leave the function.
+        for entry in entries {
+            if self.plain_release_of(entry)?.is_none() {
+                continue;
+            }
+            let name = entry.codegen_name.as_str();
+            if let (Some(frame_slot), Some(slot)) =
+                (self.frame_slot_of(name), self.release_slot(name))
+            {
+                self.null_slots(&[MoveSlot {
+                    local: slot,
+                    frame_slot: Some(frame_slot),
+                }])?;
+            }
+        }
+        Ok(())
     }
 
     /// The release at the `return` whose statement span is `span`.
     fn release_at_return(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
         self.release_open_temporaries("return_temporary")?;
-        // A resume function releases the temporaries of the open statements only; its loop copies
-        // and frame locals are later slices.
-        if self.sm_frame_ptr.is_some() {
-            return Ok(());
-        }
         self.release_open_loop_copies()?;
         let entries = self.typed.release_plan.return_edge(span).ok_or_else(|| {
             format!(
@@ -28013,10 +28130,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// The release at the auto-propagation fired by the identifier read at `span`.
     fn release_at_propagation(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
         self.release_open_temporaries("propagation_temporary")?;
-        // As `release_at_return`: a resume function releases temporaries only.
-        if self.sm_frame_ptr.is_some() {
-            return Ok(());
-        }
         self.release_open_loop_copies()?;
         let entries = self
             .typed
@@ -28029,6 +28142,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 )
             })?;
         self.emit_release_edge(entries, "propagation")
+    }
+
+    /// The error path a resume function emits for a re-read of an errors-capable local that typeck
+    /// already narrowed (`.failed()` checked, or propagated by an earlier read). It cannot run: the
+    /// error was handled before the narrowing. Typeck records an auto-propagation edge only for an
+    /// unnarrowed read, so there is usually no edge here; when one exists it is released, otherwise
+    /// the open statements' temporaries and loop copies are, and the locals are not.
+    fn release_at_narrowed_error_path(
+        &self,
+        span: &ynz_diagnostics::SourceSpan,
+    ) -> Result<(), String> {
+        match self.typed.release_plan.propagation_edge(span) {
+            Some(_) => self.release_at_propagation(span),
+            None => {
+                self.release_open_temporaries("narrowed_error_temporary")?;
+                self.release_open_loop_copies()
+            }
+        }
     }
 }
 
@@ -28139,8 +28270,10 @@ fn bg_union_arg_cell<'ctx>(
 /// callee releases the fields, never the cell it was handed). Every other position of such a
 /// callee is released deep like any argument: a given value the callee stored in one of them is
 /// owned by that container from then on, and the callee nulled its own slot at the store. A
-/// suspending callee (a state machine releases nothing before C8) and an unknown one keep the flat
-/// free of every argument when any parameter is `give`. Pinned by `bg_arg_container_add_gives_row`
+/// suspending callee releases the frame-backed kinds (string, array, map, channel) of its own `give`
+/// parameters at its scope exits (C8 slice 2), so the ladder frees nothing of such an argument
+/// either; its other positions, and every position of an unknown callee, keep the flat free when
+/// any parameter is `give`. Pinned by `bg_arg_container_add_gives_row`
 /// (integration: a `give` row stored into a container the ladder also owns must not double free)
 /// and `a_spawned_callee_releases_the_give_parameters_the_ladder_no_longer_frees`.
 fn release_glue_free_kind<'ctx>(
@@ -28156,6 +28289,15 @@ fn release_glue_free_kind<'ctx>(
         }
         Some(_) => {}
         None => {
+            // A suspending callee releases a `give` parameter of a frame-backed kind itself (a
+            // string, array, map or channel: `ReleaseKind::has_frame_backing`), so the ladder
+            // frees nothing of it; any other kind stays the ladder's (the state machine does not
+            // release it).
+            if let Some(Some(OwnershipModifier::Give)) =
+                cg.suspending_callee_param_ownership(callee, arg_index)
+            {
+                return Ok(cg.free_kind_of_a_given_argument(kind, ty));
+            }
             if cg.callee_takes_a_given_parameter(callee) {
                 return Ok(kind);
             }

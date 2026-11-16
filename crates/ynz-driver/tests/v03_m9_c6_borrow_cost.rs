@@ -121,7 +121,7 @@ cost_case!(
     "v0_3_m9_c6_cost_sm_loop_no_write.ynz",
     "1\n1\n",
     7,
-    1,
+    7,
     "a state-machine loop variable copied because a `wait` is in the body, although nothing writes the array (cost, Rule 8)"
 );
 cost_case!(
@@ -129,7 +129,7 @@ cost_case!(
     "v0_3_m9_c6_cost_sm_loop_write.ynz",
     "1\n1\n",
     15,
-    9,
+    15,
     "a state-machine loop variable left pointing at an item the body frees, or a copy never released (High)"
 );
 
@@ -245,6 +245,6 @@ cost_case!(
     "v0_3_m9_c6_cost_suspending_call_no_write.ynz",
     "2\n",
     7,
-    1,
+    7,
     "an argument staged into a suspending callee's frame copied although nothing writes its place (cost, Rule 8)"
 );

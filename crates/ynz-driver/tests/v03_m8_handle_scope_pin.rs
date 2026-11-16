@@ -12,11 +12,10 @@
 // three lines are not.
 //
 // Both tests run the fixture compiled (`ynz build`, not `ynz run`) at one optimization level
-// each, so a scope-exit release that only one level emits is caught. They are PLANNED RED until
-// C8 builds the release: today `h` leaves its block with the task still running and the child
-// prints `child: done` (the first test's assertion). Plan: card #385, plan #17. Registry entry
+// each, so a scope-exit release that only one level emits is caught. Plan: card #385, plan #17.
+// C8 slice 2 built the release (the tests were planned RED before it). Registry entry
 // `background-handle-cancel-injection` and the `background-handle-not-waited` lint retire in the
-// same change that removes the `#[ignore]`.
+// same change.
 //
 // One named test per level, no fixture loop (`.claude/rules/test-parallelism.md`).
 
@@ -75,7 +74,6 @@ fn assert_handle_leaving_scope_stops_the_child(no_optimize: bool) {
 /// A handle binding leaving its block stops the child: its completion line never prints
 /// (optimized build).
 #[test]
-#[ignore = "planned RED (v0.3-M9 C8): a suspending function releases no handle at its block end yet"]
 fn handle_leaving_its_block_stops_the_child_optimized() {
     assert_handle_leaving_scope_stops_the_child(false);
 }
@@ -84,7 +82,6 @@ fn handle_leaving_its_block_stops_the_child_optimized() {
 /// and the IR carries the call that does the stopping: one `ynz_handle_free` for the one handle
 /// binding. The IR check is the second half of the proof, not the proof: the behaviour above is.
 #[test]
-#[ignore = "planned RED (v0.3-M9 C8): a suspending function releases no handle at its block end yet"]
 fn handle_leaving_its_block_stops_the_child_unoptimized() {
     assert_handle_leaving_scope_stops_the_child(true);
     let built = support::build(FIXTURE, true);
