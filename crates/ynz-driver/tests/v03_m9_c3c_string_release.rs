@@ -86,8 +86,8 @@ release_case!(
     "v0_3_m9_c3c_shape_fields.ynz",
     "tag-1\ntag-1\n",
     2,
-    1,
-    "releasing a task's shape copy frees the struct but not the `string` field the copy cloned (High)"
+    2,
+    "releasing a task's shape copy frees the struct and the `string` field the copy cloned, and a resume function now releases the spawner's own `tag` at its scope exit (C8 slice 4a) (High)"
 );
 
 release_case!(

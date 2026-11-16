@@ -273,3 +273,57 @@ function entrypoint() -> nothing {{
     );
     assert_balanced("union_temporary", &source, "6\n");
 }
+
+/// Bug it catches: a shape given away on one path is `ReleaseIfLive`; its frame region is rebuilt
+/// as a non-null pointer at every resume, so the scope exit after a `wait` released a shape the
+/// callee had already released (a double free the move site's null could not stop).
+#[test]
+fn shape_given_away_on_one_path_is_released_once_across_a_wait() {
+    let source = "
+shape Crew {
+  name: string
+  size: int
+}
+
+function consume(give crew: Crew) -> int {
+  return crew.size
+}
+
+function entrypoint() -> nothing {
+  let crew: Crew = { name: `ab`.toUpperCase(), size: 3 }
+  let flag: int = `1`.toInt().or(0)
+  if (flag == 1) {
+    print(consume(crew))
+  }
+  wait sleep(1)
+  print(`done`)
+}
+";
+    assert_balanced("shape_given_one_path", source, "3\ndone\n");
+}
+
+/// Bug it catches: the same double free for an envelope union region (a union given away on one
+/// path, then a `wait`, was released again at the scope exit because the resume rebuilt its view
+/// from the region).
+#[test]
+fn union_given_away_on_one_path_is_released_once_across_a_wait() {
+    let source = format!(
+        "{THINGS}
+function consume(give thing: Thing) -> int {{
+  return describe(thing).count()
+}}
+
+function entrypoint() -> nothing {{
+  let big: Big = {{ label: `ab`.toUpperCase(), count: 3 }}
+  let thing: Thing = big
+  let flag: int = `1`.toInt().or(0)
+  if (flag == 1) {{
+    print(consume(thing))
+  }}
+  wait sleep(1)
+  print(`done`)
+}}
+"
+    );
+    assert_balanced("union_given_one_path", &source, "6\ndone\n");
+}

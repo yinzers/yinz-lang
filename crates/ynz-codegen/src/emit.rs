@@ -2350,6 +2350,14 @@ struct Cg<'ctx, 'g> {
     // - flush:  memcpy this alloca → frame slot region
     // cg.locals[name] points to this alloca so field access GEPs work correctly.
     sm_crossing_shape_allocas: HashMap<String, PointerValue<'ctx>>,
+    // Region-homed crossing locals (a frame-embedded shape, a union region): the frame slot that
+    // holds the local's MOVED flag. The region itself follows that slot. A move or a release sets
+    // the flag, a rebind clears it, and every resume re-derives the local's slot from it: a
+    // region's bytes are live data, so a move cannot null a word of them.
+    sm_region_flags: HashMap<String, usize>,
+    // The region pointer of each frame-embedded shape crossing local, computed once in sm_entry.
+    // A bind copies into it and re-points the local at it, whatever a move left in the local.
+    sm_crossing_shape_regions: HashMap<String, PointerValue<'ctx>>,
     // Crossing locals holding an envelope union, by name (`CrossingUnion`): their value lives in
     // a frame region, so a resume reads it back instead of a pointer into a dead stack.
     sm_crossing_unions: HashMap<String, CrossingUnion<'ctx>>,
@@ -6130,6 +6138,69 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(env)
     }
 
+    /// `region` itself, or null when the moved flag `flag_bits` (the local's first frame slot) is
+    /// set: what a resume makes of a region-homed local a move or a release left behind.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn null_if_moved(
+        &self,
+        flag_bits: inkwell::values::IntValue<'ctx>,
+        region: PointerValue<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let moved = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag_bits,
+                self.i64().const_zero(),
+                &format!("{name}_moved"),
+            )
+            .map_err(|err| format!("{name}: moved flag compare: {err}"))?;
+        Ok(self
+            .builder
+            .build_select(
+                moved,
+                self.ptr().const_null(),
+                region,
+                &format!("{name}_unless_moved"),
+            )
+            .map_err(|err| format!("{name}: select unless moved: {err}"))?
+            .into_pointer_value())
+    }
+
+    /// The frame region pointer of the frame-embedded shape crossing local `name`, computed once
+    /// in `sm_entry` (it dominates every state).
+    fn crossing_shape_region(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
+        self.sm_crossing_shape_regions
+            .get(name)
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "codegen: frame-embedded shape local `{name}` has no region pointer; the \
+                 classification of crossing locals and the lowering disagree, a compiler bug"
+                )
+            })
+    }
+
+    /// Where a bind of the frame-embedded shape local `name` copies its bytes: the region, which
+    /// the local is re-pointed at and marked live again whatever a move or a release left in its
+    /// slot. `slot` is the local's alloca.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn embed_dest(
+        &self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let region = self.crossing_shape_region(name)?;
+        self.builder
+            .build_store(slot, region)
+            .map_err(|err| format!("{name}: re-point the local at its region: {err}"))?;
+        self.set_moved_flag(self.region_flag_of(name), 0)?;
+        Ok(region)
+    }
+
     /// The frame region and variants of the crossing union local `name`.
     fn crossing_union(&self, name: &str) -> Result<&CrossingUnion<'ctx>, String> {
         self.sm_crossing_unions.get(name).ok_or_else(|| {
@@ -6160,6 +6231,31 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let crossing = self.crossing_union(name)?;
         let site = format!("{name}_cross");
         if !crossing.errors {
+            // A union that was moved or released since it was bound has nothing to persist: its
+            // view is null and its region's boxes belong to the taker. A bind clears the flag
+            // before this flush (`store_binding`, `bind_sm_result_and_flush`).
+            let flag = state_machine::load_local_slot(
+                self.ctx,
+                &self.builder,
+                frame_ptr,
+                slot_idx,
+                &format!("{site}_flag"),
+            )?;
+            let moved = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    flag,
+                    self.i64().const_zero(),
+                    &format!("{site}_is_moved"),
+                )
+                .map_err(|err| format!("{site}: moved flag compare: {err}"))?;
+            let persist_bb = self.append_block(&format!("{site}_flush_persist"));
+            let done_bb = self.append_block(&format!("{site}_flush_done"));
+            self.builder
+                .build_conditional_branch(moved, done_bb, persist_bb)
+                .map_err(|err| format!("{site}: moved flag branch: {err}"))?;
+            self.builder.position_at_end(persist_bb);
             let view = self
                 .builder
                 .build_load(self.ptr(), alloca, &format!("{site}_view"))
@@ -6178,6 +6274,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder
                 .build_store(alloca, region_view)
                 .map_err(|err| format!("{site}: point the local at its region: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|err| format!("{site}: flush join: {err}"))?;
+            self.builder.position_at_end(done_bb);
             return Ok(());
         }
         let ec_ty = errors_result_type(self.ctx);
@@ -6338,11 +6438,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         site: &str,
     ) -> Result<(), String> {
         let size = self.shape_abi_size_const(shape_name, "shape_bytes_into_embed_slot")?;
-        let dest = self
-            .builder
-            .build_load(self.ptr(), slot, &format!("{site}_frame_ptr"))
-            .map_err(|err| format!("embed slot frame ptr load {site}: {err}"))?
-            .into_pointer_value();
+        let dest = self.embed_dest(site, slot)?;
         self.builder
             .build_memcpy(dest, 1, src, 1, size)
             .map_err(|err| format!("embed slot memcpy {site}: {err}"))?;
@@ -7854,6 +7950,8 @@ fn plain_cg<'ctx, 'g>(
         sm_crossing_ec_struct_allocas: HashMap::new(),
         sm_crossing_shape_names: HashMap::new(),
         sm_crossing_shape_allocas: HashMap::new(),
+        sm_region_flags: HashMap::new(),
+        sm_crossing_shape_regions: HashMap::new(),
         sm_crossing_unions: HashMap::new(),
         sm_scope_depth: 0,
         narrowed_unions: Vec::new(),
@@ -8297,8 +8395,10 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_ec_struct_allocas: HashMap::new(), // populated during alloca creation below
         sm_crossing_shape_names: HashMap::new(),    // populated during alloca creation below
         sm_crossing_shape_allocas: HashMap::new(),  // populated during alloca creation below
-        sm_crossing_unions: HashMap::new(),         // populated in Step 1b' below
-        sm_crossing_ec_number_set: HashSet::new(),  // populated during alloca creation below
+        sm_region_flags: HashMap::new(),
+        sm_crossing_shape_regions: HashMap::new(),
+        sm_crossing_unions: HashMap::new(), // populated in Step 1b' below
+        sm_crossing_ec_number_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
         narrowed_unions: Vec::new(),
@@ -8611,8 +8711,9 @@ fn lower_function_with_waits<'ctx, 'g>(
             // address up to `FRAME_SHAPE_REGION_ALIGN` inside the slack
             // `shape_frame_slots` reserved. Every consumer below reads this pointer
             // from the ptr alloca; nothing recomputes it from `slot_idx`.
+            // The local's first frame slot is its moved flag; the region follows it.
             let frame_slot_byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
-                + (slot_idx as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+                + ((slot_idx + 1) as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
             let shape_region_ptr = state_machine::shape_frame_region_ptr(
                 ctx,
                 &cg_resume.builder,
@@ -8632,6 +8733,10 @@ fn lower_function_with_waits<'ctx, 'g>(
                 .builder
                 .build_store(*alloca, shape_region_ptr)
                 .map_err(|e| format!("sm shape wire store {cname}: {e}"))?;
+            cg_resume.sm_region_flags.insert(cname.clone(), slot_idx);
+            cg_resume
+                .sm_crossing_shape_regions
+                .insert(cname.clone(), shape_region_ptr);
         }
     }
 
@@ -8643,6 +8748,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     // cell outlives a suspension. Computed here, in sm_entry, so it dominates every state.
     {
         let mut crossing_unions: HashMap<String, CrossingUnion<'ctx>> = HashMap::new();
+        let mut region_flags: HashMap<String, usize> = HashMap::new();
         for (pos, cname) in crossing_names.iter().enumerate() {
             let Some(ty) = crossing_frame_type(&f.body.stmts, cname, typed, shape_table) else {
                 continue;
@@ -8658,8 +8764,12 @@ fn lower_function_with_waits<'ctx, 'g>(
                     f.name
                 ));
             }
-            // An `errors` result keeps its `{err, ok}` words in the first two slots.
-            let region_slot = crossing_slot_indices[pos] + if errors { 2 } else { 0 };
+            // An `errors` result keeps its `{err, ok}` words in the first two slots; any other union
+            // keeps its moved flag in the first (`Cg::sm_region_flags`).
+            let region_slot = crossing_slot_indices[pos] + if errors { 2 } else { 1 };
+            if !errors {
+                region_flags.insert(cname.clone(), crossing_slot_indices[pos]);
+            }
             let region_offset = state_machine::FRAME_OFFSET_LOCALS_START
                 + (region_slot as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
             let region = state_machine::shape_frame_region_ptr(
@@ -8679,6 +8789,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             );
         }
         cg_resume.sm_crossing_unions = crossing_unions;
+        cg_resume.sm_region_flags.extend(region_flags);
     }
 
     // Step 2 — Emit the switch on resume_point (still in sm_entry, after allocas).
@@ -9694,14 +9805,21 @@ fn reload_params_from_frame<'ctx>(
                         // Envelope union: a view of the frame region, rebuilt because the
                         // view pointer died with the previous resume.
                         let view = cg.reload_crossing_union(cname)?;
+                        // A union that was moved or released reads back as no value: the moved flag
+                        // (`bits`, the first slot) outlives the resume, the null in the local does not.
+                        let view = cg.null_if_moved(bits, view, cname)?;
                         cg.builder.build_store(alloca, view).map_err(|err| {
                             format!("sm crossing reload union store {cname}: {err}")
                         })?;
                     } else if is_shape_embed {
-                        // Shape crossing local: frame-embedded. The ptr alloca is re-wired
-                        // to the frame's slot region in Step 1b on every resume call — no
-                        // reload needed here. The alloca already holds the correct ptr.
-                        // This is a no-op for shape crossing locals.
+                        // Shape crossing local: frame-embedded. The ptr alloca is re-wired to the
+                        // frame's slot region in Step 1b on every resume call; a shape that was
+                        // moved or released reads back as null (the moved flag is `bits`).
+                        let region = cg.crossing_shape_region(cname)?;
+                        let wired = cg.null_if_moved(bits, region, cname)?;
+                        cg.builder.build_store(alloca, wired).map_err(|err| {
+                            format!("sm crossing reload shape store {cname}: {err}")
+                        })?;
                     } else {
                         // Pointer alloca (string/array/map/etc.): reconstruct ptr from i64.
                         let ptr_val = cg
@@ -11424,15 +11542,7 @@ fn lower_sm_for<'ctx, 'g>(
             // one step. (The pre-M5 special case memcpy'd from a heap element pointer here;
             // by-value storage erased that indirection, so the choke point's out-pointer IS
             // the destination.) No flush needed — frame bytes are live at the right spot.
-            let dest_ptr = cg
-                .builder
-                .build_load(
-                    cg.ctx.ptr_type(inkwell::AddressSpace::default()),
-                    var_slot,
-                    &format!("{var}_arr_shape_frame_ptr"),
-                )
-                .map_err(|e| format!("sm for array shape frame ptr load {var}: {e}"))?
-                .into_pointer_value();
+            let dest_ptr = cg.embed_dest(var, var_slot)?;
             // SoA shape-embed: the gather honors the SAME out-pointer contract —
             // element bytes land DIRECTLY in the frame region.
             let _flag = cg.array_elem_get_into(
@@ -12582,15 +12692,7 @@ fn bind_sm_result_and_flush<'ctx>(
                     )
                     .map_err(|e| format!("bind_sm_result shape int_to_ptr {name}: {e}"))?;
                 // Load the frame region ptr from the ptr alloca (pre-wired to frame slot region).
-                let dest_ptr = cg
-                    .builder
-                    .build_load(
-                        cg.ctx.ptr_type(inkwell::AddressSpace::default()),
-                        alloca,
-                        &format!("{name}_bind_frame_ptr"),
-                    )
-                    .map_err(|e| format!("bind_sm_result shape load frame ptr {name}: {e}"))?
-                    .into_pointer_value();
+                let dest_ptr = cg.embed_dest(name, alloca)?;
                 cg.builder
                     .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
                     .map_err(|e| format!("bind_sm_result shape memcpy {name}: {e}"))?;
@@ -12683,6 +12785,7 @@ fn bind_sm_result_and_flush<'ctx>(
         // An envelope union result: persist it into the local's frame region (and point the local at
         // the region's view), so it outlives this resume.
         if cg.sm_crossing_unions.contains_key(name) {
+            cg.set_moved_flag(cg.region_flag_of(name), 0)?;
             cg.flush_crossing_union(name, alloca, frame_ptr, slot_idx)?;
         }
         Ok(alloca)
@@ -12976,7 +13079,8 @@ fn union_frame_slots(variants: &[Type], sizes: &HashMap<String, u64>) -> usize {
 
 /// Frame slots the crossing local `cname` takes: decimal128 two, a decimal `errors` result
 /// three, any other `errors` result two (plus a union region when its success value is an
-/// envelope union), a shape its bytes, an envelope union its region, everything else one.
+/// envelope union), a shape its bytes and an envelope union its region (each behind one moved-flag
+/// slot, `Cg::sm_region_flags`), everything else one.
 /// The ONE count behind the frame layout, the frame size and the resume function's slot indices.
 fn crossing_local_slot_count(
     stmts: &[Stmt],
@@ -13000,9 +13104,9 @@ fn crossing_local_slot_count(
             None => 2,
         },
         // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
-        Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
+        Some(Type::Shape { name: ref sname }) => 1 + shape_frame_slots(sname, shape_abi_sizes),
         Some(ref union @ Type::Union { .. }) => match crossing_union_variants(union) {
-            Some(variants) => union_frame_slots(&variants, shape_abi_sizes),
+            Some(variants) => 1 + union_frame_slots(&variants, shape_abi_sizes),
             None => 1,
         },
         _ => 1,
@@ -17892,15 +17996,7 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
                     let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
                     // Load the frame region ptr from the ptr alloca (pre-wired to frame
                     // in Step 1b). Memcpy from the temp stack alloca into the frame region.
-                    let dest_ptr = cg
-                        .builder
-                        .build_load(
-                            cg.ctx.ptr_type(AddressSpace::default()),
-                            slot,
-                            &format!("{name}_frame_ptr"),
-                        )
-                        .map_err(|e| format!("sm shape let load frame ptr {name}: {e}"))?
-                        .into_pointer_value();
+                    let dest_ptr = cg.embed_dest(name, slot)?;
                     cg.builder
                         .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
                         .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
@@ -27391,6 +27487,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 struct MoveSlot<'ctx> {
     local: PointerValue<'ctx>,
     frame_slot: Option<usize>,
+    /// The moved flag of a region-homed local (`Cg::sm_region_flags`): a move sets it, so the
+    /// next resume re-derives a null local instead of the region pointer.
+    moved_flag: Option<usize>,
 }
 
 /// One temporary of a statement: the entry-block slot that holds the value it builds (null until it
@@ -27521,6 +27620,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             slots.push(MoveSlot {
                 local: slot,
                 frame_slot: self.frame_slot_of(name),
+                moved_flag: self.region_flag_of(name),
             });
         }
         Ok(slots)
@@ -27915,6 +28015,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_store(slot.local, self.ptr().const_null())
                 .map_err(|err| format!("null a taken slot: {err}"))?;
             self.null_frame_slot(slot.frame_slot)?;
+            self.set_moved_flag(slot.moved_flag, 1)?;
         }
         Ok(())
     }
@@ -27926,6 +28027,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// O(parameters + crossing locals) time.
     fn frame_slot_of(&self, name: &str) -> Option<usize> {
         self.sm_frame_ptr?;
+        if self.sm_region_flags.contains_key(name) {
+            return None;
+        }
         if let Some(index) = self.sm_param_names.iter().position(|param| param == name) {
             return Some(index);
         }
@@ -27935,6 +28039,26 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .iter()
             .position(|crossing| crossing == name)?;
         self.sm_crossing_slot_indices.get(position).copied()
+    }
+
+    /// The moved-flag frame slot of the region-homed local `name` (`sm_region_flags`).
+    fn region_flag_of(&self, name: &str) -> Option<usize> {
+        self.sm_region_flags.get(name).copied()
+    }
+
+    /// Store `value` into the moved-flag slot `flag` (nothing for `None`): 1 after a move or a
+    /// release, 0 when the local is bound again.
+    fn set_moved_flag(&self, flag: Option<usize>, value: u64) -> Result<(), String> {
+        let (Some(index), Some(frame_ptr)) = (flag, self.sm_frame_ptr) else {
+            return Ok(());
+        };
+        state_machine::store_local_slot(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            index,
+            self.i64().const_int(value, false),
+        )
     }
 
     /// Store null into frame slot `frame_slot` of this resume function (nothing for `None`).
@@ -28597,6 +28721,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.null_slots(&[MoveSlot {
                     local: slot,
                     frame_slot: Some(frame_slot),
+                    moved_flag: None,
+                }])?;
+            } else if let (Some(flag), Some(slot)) =
+                (self.region_flag_of(name), self.release_slot(name))
+            {
+                self.null_slots(&[MoveSlot {
+                    local: slot,
+                    frame_slot: None,
+                    moved_flag: Some(flag),
                 }])?;
             }
         }
@@ -31399,6 +31532,10 @@ fn store_binding<'ctx>(
                 .envelope_union_variants(&union)
                 .ok_or("store_binding: union lost its variants")?;
             let is_crossing = cg.sm_crossing_unions.contains_key(name);
+            if is_crossing {
+                // A bind makes the local live again, whatever a move or a release left in its flag.
+                cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+            }
             let view = if is_crossing {
                 val.into_pointer_value()
             } else {
