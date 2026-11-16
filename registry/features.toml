@@ -1790,6 +1790,41 @@ what_template = "`{value}` has type `{actual}`, but `{callee}` needs `{bound}` f
 what_instead_template = "Pass a value of type `{bound}` for `{param}`. {alternative}."
 why_template = "`{callee}` is compiled once for each type `{typeParam}` stands for, and this call makes it `{bound}`, so `{callee}` handles `{param}` as `{bound}`. A `{actual}` is laid out differently, so reading it as `{bound}` gives wrong values, or goes past the end of the `{actual}` and can crash."
 
+# v0.3-M9 C6 follow-up (Product Manager ruling, card #383): a `map<K, V>` whose key type `K` has no
+# key slot. A map keeps a key in a slot of 8 bytes (`int`, `boolean`, `float`, and a `string`'s
+# address, compared by text) or 16 bytes (a `number` of up to 34 digits, kept inline); a shape, an
+# array or any other type is not one such value, so its slot would hold only an address, and an
+# equal key would be found at another address and miss. Rendered by `check_map_key_type`; `{key}`
+# is the key type, `{key_is}` says why it is not one 8- or 16-byte value, `{recovery}` is the way
+# out (a shape's names the compiling `map<string, Shape>`). The `number<N>` of more than 34 digits
+# has its own text below, because its reason is its size, not its layout.
+# Decided v0.3-M9 C6 follow-up: `git log --grep=MapKeyNotStorable`.
+[[diagnostic_template]]
+kind_name = "MapKeyNotStorable"
+what_template = "A `map` cannot be keyed by `{key}`."
+what_instead_template = "{recovery}"
+why_template = "A map keeps each key in one slot of 8 bytes (for an `int`, a `boolean`, a `float`, or a `string`, which is compared by its text) or of 16 bytes (for a `number` of up to 34 digits). A `{key}` {key_is}, so its slot could hold only the address where it lives, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
+
+# The same refusal for a `number` of more than 34 digits (`number<50>`): selected by
+# `check_map_key_type`; the diagnostic carries `MapKeyNotStorable`. `{key}` is the type
+# (`number<50>`), `{digits}` its digit count (`50`).
+[[diagnostic_template]]
+kind_name = "MapKeyNotStorableWideNumber"
+what_template = "A `map` cannot be keyed by `{key}`."
+what_instead_template = "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`)."
+why_template = "A map keeps a `number` key inside its own 16-byte slot, which holds up to 34 digits. A `{key}` can have up to {digits} digits and takes as much memory as its digits need, kept outside the map, so it does not fit in the slot. The slot could hold only its address, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
+
+# v0.3-M9 C6 (parked 71): `background eat(choice)` with `choice` a union and `function eat<T>(held:
+# T)`. A task copies a union argument into a slot of its own, which exists only when the callee
+# declares the union type. Rendered by `check_background_union_argument_for_generic_callee`;
+# `{union}` the union type, `{callee}` the function, `{parameter}` its generic parameter.
+# Decided v0.3-M9 C6: `git log --grep=BackgroundUnionToGenericParameter`.
+[[diagnostic_template]]
+kind_name = "BackgroundUnionToGenericParameter"
+what_template = "Cannot give the union `{union}` to `{callee}`'s generic parameter `{parameter}` in a `background` call."
+what_instead_template = "Declare `{parameter}` as `{union}` in `{callee}`'s signature instead of a type parameter, or wrap the union in a shape field and pass the shape."
+why_template = "A `background` task keeps its own copy of every argument, because it can still be running after the function that spawned it has returned. It can only copy a union when `{callee}` declares the union type. A generic parameter gives it no union slot to copy into, so the task would read the spawner's memory after the spawner returned."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full

@@ -15,7 +15,7 @@ pub use decimal128::bits::{
     MAX_COEFFICIENT, MAX_EXPONENT, MIN_EXPONENT, NEG_INF, NEG_ZERO, POS_INF, POS_ZERO, QUIET_NAN,
 };
 pub use decimal128::format::format;
-pub use decimal128::ops::{abs, add, compare, div, key_equal, mul, neg, normalized, sub};
+pub use decimal128::ops::{abs, add, compare, div, mul, neg, sub};
 pub use decimal128::parse::parse;
 pub use decimal128::Decimal128Bits;
 pub use decimal_n::BigNum;

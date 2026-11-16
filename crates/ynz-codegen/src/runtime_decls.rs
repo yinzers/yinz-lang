@@ -95,7 +95,7 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_map_new(i64 elem_size) -> ptr
     pub ynz_map_new: FunctionValue<'ctx>,
     // ynz_map_new_decimal_keys(i64 elem_size) -> ptr: a map whose keys are decimal128 numbers held
-    // inline (16 bytes), hashed and compared by value
+    // inline (16 bytes), hashed and compared as those 16 bytes
     pub ynz_map_new_decimal_keys: FunctionValue<'ctx>,
     // ynz_map_get_decimal(ptr map, ptr key16, ptr out) -> i64 has-flag; same contract as ynz_map_get
     pub ynz_map_get_decimal: FunctionValue<'ctx>,

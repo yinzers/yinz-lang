@@ -951,8 +951,9 @@ pub unsafe extern "C" fn ynz_siphash_str(ptr: *const u8) -> u64 {
 //   1 byte control: 0x80 = empty, 0xFE = deleted, low 7 bits of hash = present.
 //   `key_size` bytes key: 8 (stored as i64 — int/bool/float by value, string/ptr as i64 cast), or 16
 //   for a decimal128 `number` key, held INLINE (a key that pointed into the producing frame read a
-//   dead frame once that returned). A decimal key is hashed and compared by VALUE
-//   (`ynz_numerics::normalized` / `key_equal`): `1.0` and `1.00` are one key, as `==` has it.
+//   dead frame once that returned). A decimal key is hashed and compared as its 16 stored BYTES,
+//   nothing more: the same value in the same scale is one key, while `1.0` and `1.00` are two (a
+//   key is not normalized: that is a hashing semantic the storage does not need).
 //   `elem_size` bytes value, stored BY VALUE inline in one contiguous `vals`
 //   buffer of `elem_size`-byte cells (mirrors the array ABI 1:1 — no twin):
 //     - non-shape values: elem_size = 8 (i64 bits by value, or stable pointer bits),
@@ -1145,31 +1146,20 @@ unsafe fn decimal_key_bits(key: *const u8) -> u128 {
     u128::from_ne_bytes(std::ptr::read_unaligned(key as *const [u8; 16]))
 }
 
-/// The hash of a decimal128 key: SipHash-2-4 of its VALUE in normalized form (sign, exponent and
-/// coefficient with trailing zeros stripped, or a tag for an infinity or NaN), so `1.0`, `1.00`
-/// and `10E-1` hash alike, as [`ynz_numerics::key_equal`] holds them equal. The one hash every
-/// decimal-key probe, growth and lookup uses.
+/// The hash of a decimal128 key: SipHash-2-4 of its 16 stored bytes. Two keys hash alike exactly
+/// when [`find_slot_decimal`] holds them equal (the same 16 bytes). The one hash every decimal-key
+/// probe, growth and lookup uses.
 ///
-/// O(1) time (one decode and up to six 128-bit divisions), O(1) space.
+/// O(1) time, O(1) space.
 fn decimal_key_hash(bits: u128) -> u64 {
-    let value = ynz_numerics::normalized(bits);
-    let kind_tag: u8 = match value.kind {
-        ynz_numerics::D128Kind::Finite => 0,
-        ynz_numerics::D128Kind::Infinity => 1,
-        ynz_numerics::D128Kind::QuietNaN | ynz_numerics::D128Kind::SignalingNaN => 2,
-    };
-    let mut bytes = [0u8; 22];
-    bytes[0] = kind_tag;
-    bytes[1] = value.sign as u8;
-    bytes[2..6].copy_from_slice(&value.exponent.to_le_bytes());
-    bytes[6..22].copy_from_slice(&value.coefficient.to_le_bytes());
-    siphash24(&bytes)
+    siphash24(&bits.to_ne_bytes())
 }
 
 /// THE decimal-key slot probe: the same bucket walk as `find_slot` and `find_slot_str`, comparing
-/// the 16 stored bytes of a candidate slot with `key` by VALUE (`ynz_numerics::key_equal`) — a
-/// bit comparison would tell `1.0` from `1.00`. Every decimal-key lookup (`ynz_map_get_decimal`,
-/// `ynz_map_set_decimal`'s overwrite check, `ynz_map_iter_get_decimal`) routes through this one helper.
+/// the 16 stored bytes of a candidate slot with the 16 bytes of `key`. A bit comparison is all the
+/// inline storage needs; the bytes are not normalized, so `1.0` and `1.00` are two keys. Every
+/// decimal-key lookup (`ynz_map_get_decimal`, `ynz_map_set_decimal`'s overwrite check,
+/// `ynz_map_iter_get_decimal`) routes through this one helper.
 ///
 /// Time: O(1) expected, O(cap) worst case. Space: O(1).
 unsafe fn find_slot_decimal(map: *const YnzMap, hash: u64, key: *const u8) -> Option<usize> {
@@ -1182,9 +1172,7 @@ unsafe fn find_slot_decimal(map: *const YnzMap, hash: u64, key: *const u8) -> Op
         if ctrl == CTRL_EMPTY {
             return None;
         }
-        if ctrl == h2
-            && ynz_numerics::key_equal(decimal_key_bits(decimal_key_slot(map, slot_index)), wanted)
-        {
+        if ctrl == h2 && decimal_key_bits(decimal_key_slot(map, slot_index)) == wanted {
             return Some(slot_index);
         }
         slot_index = (slot_index + 1) & (cap - 1);
@@ -1491,9 +1479,9 @@ pub unsafe extern "C" fn ynz_map_set_str(
 }
 
 /// Get a value by decimal128 key (a pointer to the number's 16 bytes): copies `elem_size` bytes
-/// into `out` and returns 1 on hit; zeroes `out` and returns 0 on miss. The key matches by
-/// VALUE, so a lookup by `2.50` finds the entry stored under `2.5`. Same flag-return contract as
-/// [`ynz_map_get`]; a map holds `has` as this flag too.
+/// into `out` and returns 1 on hit; zeroes `out` and returns 0 on miss. The key matches when its
+/// 16 bytes equal the stored ones, so `2.50` does not find the entry stored under `2.5`. Same
+/// flag-return contract as [`ynz_map_get`]; a map holds `has` as this flag too.
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new_decimal_keys` and not yet freed.
@@ -1521,10 +1509,10 @@ pub unsafe extern "C" fn ynz_map_get_decimal(
 
 /// Set a key-value pair with a decimal128 key (a pointer to the number's 16 bytes): copies the 16
 /// key bytes and `elem_size` value bytes out of `key` and `src` BEFORE returning (overwrite on a
-/// hit, insert on a miss), so both may point at stack slots that die at once. A hit keeps the key
-/// the map holds (`2.5` stays `2.5` when `2.50` overwrites it) and replaces only the value, as
-/// `ynz_map_set_str` keeps its stored key. Same value-glue contract as [`ynz_map_set`]; a number
-/// key owns nothing to release.
+/// hit, insert on a miss), so both may point at stack slots that die at once. A hit is a key whose
+/// 16 bytes equal the stored ones (`2.5` and `2.50` are two keys); it keeps the stored key and
+/// replaces only the value, as `ynz_map_set_str` keeps its stored key. Same value-glue contract as
+/// [`ynz_map_set`]; a number key owns nothing to release.
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new_decimal_keys` and not yet freed.
@@ -5758,46 +5746,6 @@ mod release_walk_tests {
         ynz_numerics::parse(text).expect(text).to_ne_bytes()
     }
 
-    /// Bug: hashing the raw bits would put `1.0` and `1.00` in different buckets, so a lookup by an
-    /// equal computed key misses. High: data integrity (hash and equality are one contract).
-    #[test]
-    fn equal_decimals_hash_alike_and_unequal_ones_differ() {
-        let spellings: [&[&str]; 8] = [
-            // 33 trailing zeros is the longest run a 34-digit coefficient holds.
-            &[
-                "1",
-                "1.0",
-                "1.00",
-                "10E-1",
-                "0.10E1",
-                "1.000000000000000000000000000000000",
-            ],
-            &["2.5", "2.50", "25E-1", "250E-2", "0.25E1"],
-            &["0", "-0", "0.000", "0E+9", "-0.0"],
-            &["-3", "-3.0", "-3.000", "-30E-1", "-0.3E1"],
-            &["1E+33", "10E+32", "1000000000000000000000000000000000"],
-            &["Infinity", "Inf", "+Infinity"],
-            &["-Infinity", "-Inf"],
-            &["NaN", "-NaN"],
-        ];
-        let mut group_hashes = Vec::new();
-        for group in spellings {
-            let hashes: Vec<u64> = group
-                .iter()
-                .map(|text| decimal_key_hash(u128::from_ne_bytes(decimal(text))))
-                .collect();
-            assert!(hashes.iter().all(|hash| *hash == hashes[0]), "{group:?}");
-            group_hashes.push(hashes[0]);
-        }
-        group_hashes.sort_unstable();
-        group_hashes.dedup();
-        assert_eq!(
-            group_hashes.len(),
-            spellings.len(),
-            "distinct values share a hash"
-        );
-    }
-
     unsafe fn decimal_get(map: *const YnzMap, key: &str) -> Option<i64> {
         let mut out = [0u8; 8];
         let found = ynz_map_get_decimal(map, decimal(key).as_ptr(), out.as_mut_ptr());
@@ -5814,18 +5762,24 @@ mod release_walk_tests {
         );
     }
 
-    /// Bug: a decimal key compared by bits, by address, or read as 8 bytes: `2.50` misses `2.5`, an
-    /// equal key adds a second entry, growth loses keys, iteration reads a half key. High: data
-    /// integrity.
+    /// Bug: a decimal key stored as 8 bytes, or its slot moved by the wrong width, so a key does not
+    /// round-trip, an identical key is not found, growth loses keys, iteration reads half a key, or
+    /// a copy shares the source's key buffer. A key of another scale is another key: the map holds
+    /// the 16 bytes and nothing more. High: data integrity.
     #[test]
-    fn decimal_keys_match_by_value_overwrite_grow_iterate_and_clone() {
+    fn decimal_keys_round_trip_overwrite_grow_iterate_and_clone() {
         unsafe {
             let map = ynz_map_new_decimal_keys(8);
             decimal_set(map, "2.5", 1);
-            assert_eq!(decimal_get(map, "2.50"), Some(1));
+            assert_eq!(decimal_get(map, "2.5"), Some(1));
             assert_eq!(decimal_get(map, "2.6"), None);
-            decimal_set(map, "2.500", 2);
-            assert_eq!(ynz_map_count(map), 1, "an equal key overwrites");
+            assert_eq!(
+                decimal_get(map, "2.50"),
+                None,
+                "2.50 is other bytes than 2.5: the map does not normalize a key"
+            );
+            decimal_set(map, "2.5", 2);
+            assert_eq!(ynz_map_count(map), 1, "an identical key overwrites");
             assert_eq!(decimal_get(map, "2.5"), Some(2));
 
             // Past several growths of the slot buffers and the order buffer (64 entries).
@@ -5834,7 +5788,7 @@ mod release_walk_tests {
             }
             assert_eq!(ynz_map_count(map), 301);
             for entry in 0..300i64 {
-                assert_eq!(decimal_get(map, &format!("{entry}.250")), Some(entry));
+                assert_eq!(decimal_get(map, &format!("{entry}.25")), Some(entry));
             }
             assert_eq!(decimal_get(map, "2.5"), Some(2));
 
@@ -5844,7 +5798,7 @@ mod release_walk_tests {
                 ynz_map_iter_get_decimal(map, 0, key.as_mut_ptr(), value.as_mut_ptr()),
                 1
             );
-            assert_eq!(key, decimal("2.5"), "the first spelling is the stored key");
+            assert_eq!(key, decimal("2.5"), "the key round-trips byte for byte");
             assert_eq!(i64::from_ne_bytes(value), 2);
             assert_eq!(
                 ynz_map_iter_get_decimal(map, 1, key.as_mut_ptr(), value.as_mut_ptr()),
@@ -5861,7 +5815,7 @@ mod release_walk_tests {
             let copy = ynz_map_clone(map);
             decimal_set(map, "2.5", 99);
             decimal_set(map, "7", 7);
-            assert_eq!(decimal_get(copy, "2.50"), Some(2), "a copy is independent");
+            assert_eq!(decimal_get(copy, "2.5"), Some(2), "a copy is independent");
             assert_eq!(decimal_get(copy, "7"), None);
             assert_eq!(ynz_map_count(copy), 301);
             assert_eq!(
@@ -5874,31 +5828,31 @@ mod release_walk_tests {
         }
     }
 
-    /// Bug: NaN, an infinity or a negative zero as a key. A NaN key that never equals itself is
-    /// inserted again by every `set` and never found; `-0` and `0` land in two entries; the two
-    /// infinities collapse into one. High: data integrity.
+    /// Bug: a key whose bytes are not an ordinary finite number (a NaN, an infinity, a negative
+    /// zero) mis-stored or mis-hashed, so an identical key is inserted again by every `set` or
+    /// never found. Each is held as the bytes it is. High: data integrity.
     #[test]
-    fn special_decimal_keys_are_one_entry_per_value() {
+    fn special_decimal_keys_are_found_by_their_own_bytes() {
         unsafe {
             let map = ynz_map_new_decimal_keys(8);
             for (key, value) in [
                 ("NaN", 1),
-                ("-NaN", 2),
-                ("Infinity", 3),
-                ("-Infinity", 4),
-                ("0", 5),
-                ("-0.00", 6),
-                ("1E+33", 7),
-                ("1000000000000000000000000000000000", 8),
+                ("Infinity", 2),
+                ("-Infinity", 3),
+                ("0", 4),
+                ("-0", 5),
+                ("1E+33", 6),
             ] {
                 decimal_set(map, key, value);
+                decimal_set(map, key, value * 10);
             }
-            assert_eq!(ynz_map_count(map), 5, "NaN, +inf, -inf, zero, 10^33");
-            assert_eq!(decimal_get(map, "NaN"), Some(2));
-            assert_eq!(decimal_get(map, "Inf"), Some(3));
-            assert_eq!(decimal_get(map, "-Inf"), Some(4));
-            assert_eq!(decimal_get(map, "0E+5"), Some(6));
-            assert_eq!(decimal_get(map, "10E+32"), Some(8));
+            assert_eq!(ynz_map_count(map), 6, "one entry per distinct key bytes");
+            assert_eq!(decimal_get(map, "NaN"), Some(10));
+            assert_eq!(decimal_get(map, "Infinity"), Some(20));
+            assert_eq!(decimal_get(map, "-Infinity"), Some(30));
+            assert_eq!(decimal_get(map, "0"), Some(40));
+            assert_eq!(decimal_get(map, "-0"), Some(50));
+            assert_eq!(decimal_get(map, "1E+33"), Some(60));
             assert_eq!(decimal_get(map, "1"), None);
             ynz_map_release(map, None, None, 0);
         }

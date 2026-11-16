@@ -318,22 +318,20 @@ scores["alice"]              // sugar for scores.get("alice") → maybe<number>
 scores["alice"] = 75         // sugar for scores.set("alice", 75)
 ```
 
-**A `number` key matches by value.** `1.0` and `1.00` are the same key, as `1.0 == 1.00` is `true`; setting one when the other is present replaces the value and keeps the key as first stored. `.contains` on an `array<number>` compares by value the same way.
+**A `number` key matches the number as stored.** A map keeps a `number` key in its own slot and finds a key by comparing the stored digits, so `1.0` set twice is one key, while `1.0` and `1.00` are two (`1.0 == 1.00` is still `true`; a map key does not use `==`). A key computed to the same value and scale, such as `0.5 + 0.5` for `1.0`, is the same key. Matching `1.0` and `1.00` as one key is not decided yet. `.contains` on an `array<number>` still compares with `==`, so it finds `1.00` for `1.0`.
 
-**A map key is found by what it holds.** A map can do that for a `string`, an `int`, a `boolean`, a `float` and a `number` of up to 34 digits. Any other key type is refused at compile time, because the map would compare where the key sits in memory instead of what it holds, and looking up a key equal to one you stored would miss:
+**A map keeps each key in one slot.** The slot is 8 bytes for an `int`, a `boolean`, a `float` or a `string` (a `sensitive string` is a `string` to the map: same slot, same text comparison), and 16 bytes for a `number` of up to 34 digits. Any other key type is refused at compile time. A `number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live. Either way a lookup with a key equal to one you stored would miss, because it lives at another address:
 
 ```
 let totals: map<number<50>, int> = {}
 // COMPILE ERROR: A `map` cannot be keyed by `number<50>`.
-// Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits.
+// Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`).
 
 let labels: map<Point, string> = {}
 // COMPILE ERROR: A `map` cannot be keyed by `Point`.
 // Key the map by one of its fields (an `int` id or a `string` name) and keep the `Point`
 // as the map's value: `map<string, Point>`.
 ```
-
-The same refusal covers a `sensitive string` (key by a plain `string`) and every other type, such as an `array` or a shape.
 
 **Bulk update with `.update({...})`:**
 

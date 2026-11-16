@@ -514,3 +514,14 @@ mod string_handed_over_whole {
     );
     handed_over_case!(literal, false, "", "`literal`");
 }
+
+release_cases!(
+    map_of_sensitive_strings,
+    "a `map<sensitive string, int>` copy's secret keys (held by raw pointer) are not released, or are released twice (High)",
+    Case {
+        declarations: "",
+        value_type: "map<sensitive string, int>",
+        setup: "  let secret: sensitive string = sensitive(`k`)\n  let value: map<sensitive string, int> = {}\n  value.set(secret, 1)\n",
+        read: "  print(value.count())\n",
+    }
+);

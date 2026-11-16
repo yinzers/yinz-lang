@@ -46,6 +46,7 @@ const TEMPLATES_WITHOUT_A_VARIANT: &[&str] = &[
     "UnionWhereVariantExpectedNameIt",
     "UnionWhereVariantExpectedNoIsArm",
     "UnionVariantNotStorableNumberPrecision",
+    "MapKeyNotStorableWideNumber",
 ];
 
 /// PRE-EXISTING variant-backed templates whose emit sites still hand-write their text
@@ -1214,4 +1215,105 @@ fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles
             ("via", ""),
         ],
     );
+}
+
+#[test]
+fn map_key_not_storable_is_rendered_from_the_registry() {
+    // WHY: v0.3-M9 C6 follow-up — a shape key, a key of any other type and a `number` of more
+    // than 34 digits each get their own true reason, from one registry home. A `number` key of
+    // 34 digits and a `sensitive string` key are map keys and get no diagnostic.
+    assert_rendered(
+        DiagnosticKind::MapKeyNotStorable,
+        "shape Point { x: int }\n\
+         function entrypoint() -> nothing {\n\
+           let spots: map<Point, int> = {}\n\
+           print(spots.count())\n\
+         }",
+        &[
+            ("key", "Point"),
+            (
+                "key_is",
+                "is a shape, which holds several fields rather than one value",
+            ),
+            (
+                "recovery",
+                "Key the map by one of its fields (an `int` id or a `string` name) and keep the \
+                 `Point` as the map's value: `map<string, Point>`.",
+            ),
+        ],
+    );
+    assert_rendered(
+        DiagnosticKind::MapKeyNotStorable,
+        "function entrypoint() -> nothing {\n\
+           let rows: map<array<int>, int> = {}\n\
+           print(rows.count())\n\
+         }",
+        &[
+            ("key", "array<int>"),
+            ("key_is", "is not a single value of 8 or 16 bytes"),
+            (
+                "recovery",
+                "Key the map by a `string` or an `int` that stands for the `array<int>`, such as \
+                 an id or a name.",
+            ),
+        ],
+    );
+    assert_template_rendered(
+        "MapKeyNotStorableWideNumber",
+        DiagnosticKind::MapKeyNotStorable,
+        "function entrypoint() -> nothing {\n\
+           let prices: map<number<50>, int> = {}\n\
+           print(prices.count())\n\
+         }",
+        &[("key", "number<50>"), ("digits", "50")],
+    );
+    for accepted in [
+        "map<number<34>, int>",
+        "map<sensitive string, int>",
+        "map<string, Point>",
+    ] {
+        assert_compiles(&format!(
+            "shape Point {{ x: int }}\n\
+             function entrypoint() -> nothing {{\n\
+               let table: {accepted} = {{}}\n\
+               print(table.count())\n\
+             }}"
+        ));
+    }
+}
+
+#[test]
+fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
+    // WHY: v0.3-M9 C6 — the refusal's text comes from the registry, and both ways out it names
+    // (declare the union type, or pass a shape that holds the union) compile.
+    let program = |callee: &str, argument: &str| {
+        format!(
+            "shape Circle {{ radius: float }}\n\
+             shape Tag {{ name: string }}\n\
+             shape Holder {{ choice: Circle | Tag }}\n\
+             {callee}\n\
+             function entrypoint() -> nothing {{\n\
+               let tag: Tag = {{ name: `boxed` }}\n\
+               let choice: Circle | Tag = tag\n\
+               let other: Tag = {{ name: `kept` }}\n\
+               let holder: Holder = {{ choice: other }}\n\
+               background eat({argument})\n\
+             }}"
+        )
+    };
+    let generic = "function eat<T>(held: T) -> nothing { print(`ate`) }";
+    assert_rendered(
+        DiagnosticKind::BackgroundUnionToGenericParameter,
+        &program(generic, "choice"),
+        &[
+            ("union", "Circle | Tag"),
+            ("callee", "eat"),
+            ("parameter", "held"),
+        ],
+    );
+    assert_compiles(&program(
+        "function eat(held: Circle | Tag) -> nothing { print(`ate`) }",
+        "choice",
+    ));
+    assert_compiles(&program(generic, "holder"));
 }
