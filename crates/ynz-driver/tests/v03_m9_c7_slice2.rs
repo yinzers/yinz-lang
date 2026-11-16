@@ -649,9 +649,9 @@ case!(
     "`found.or(backup)` read as a call of the user's `or` is `Fresh`: `picked` becomes a second owner of `backup` and frees it twice (High)"
 );
 
-// ── Item 2: a class with no static founder gets a run-time drop flag ────────────────────────
+// ── Item 2: a field read that outlives its owner is a copy, released once ──────────────────
 
-const NO_STATIC_FOUNDER: &str = "
+const FIELD_READ_OUTLIVES_OWNER: &str = "
 shape Bucket {
   rows: array<int>
 }
@@ -682,11 +682,11 @@ function entrypoint() -> nothing {
 ";
 
 case!(
-    a_class_with_no_static_founder_is_released_by_a_run_time_flag,
-    NO_STATIC_FOUNDER,
+    a_field_read_that_outlives_its_owner_is_a_copy_released_once,
+    FIELD_READ_OUTLIVES_OWNER,
     "40\n",
     Balance::Heap,
-    "`cell = owner.rows` where `cell` outlives `owner`: releasing `owner` at its block end leaves `cell` dangling, releasing nothing leaks both (High)"
+    "`cell = owner.rows` where `cell` outlives `owner` must copy the rows: a view freed with `owner` leaves `cell` dangling, and an unreleased copy leaks (High)"
 );
 
 const LOOP_EARLY_RETURN_MAP: &str = "

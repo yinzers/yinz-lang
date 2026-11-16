@@ -29,8 +29,8 @@
 //! accepted spelling of t3): storing a value hands it over, and typeck's transfer record notes
 //! each store as an escape of the stored value (`ynz-typeck/tests/transfer_record.rs` asserts
 //! the facts); these programs are the end-to-end guard that the release pass frees none of
-//! them early. The read-after-store programs are refused now (`v03_m9_store_hands_over.rs`). Green today for the same reason as the
-//! exit classes above.
+//! them early. The read-after-store programs are refused now (`v03_m9_store_hands_over.rs`).
+//! Written green before C7 for the same reason as the exit classes above.
 //!
 //! ## Leak fixtures (alloc/free counters)
 //!
@@ -241,7 +241,7 @@ mod leak_heap_local_loop {
 mod leak_string_loop {
     #[test]
     fn optimized() {
-        // red until C7: no scope-exit release yet (4,000 string allocs, 0 frees on the base)
+        // red on the pre-C7 base: no scope-exit release (4,000 string allocs, 0 frees)
         super::assert_strings_balance(false);
     }
 
