@@ -89,13 +89,9 @@ pub enum ReleaseKind {
     NestedShape,
     /// `maybe<T>` of a heap-owning `T`: the envelope and its payload.
     Maybe,
-    /// A union with a heap-owning variant: the envelope and its payload.
+    /// A union with a heap-owning variant: the envelope and its payload, released by the variant
+    /// its tag names (a union of heap variants such as `string | array<int>` included).
     Union,
-    /// A union with no shape variant and more than one heap-owning variant (`string | array<int>`):
-    /// the slot holds the raw pointer of whichever variant it was given, with no tag, so nothing
-    /// can say how to release it. A union with ONE heap-owning variant (`map<..> | nothing`) is
-    /// classified as that variant: its slot is that variant's raw pointer, null for `nothing`.
-    UntaggedUnion,
     /// `dynamic Contract`: the boxed data behind the fat pointer.
     Dynamic,
     /// `fixed<T>` of a heap-owning `T`: the items it holds.
@@ -366,17 +362,15 @@ fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> H
                 .iter()
                 .map(|variant| classify(variant, tables, visiting))
                 .collect();
-            // A union with no shape variant is the variant's raw pointer, null for `nothing`
-            // (`is_envelope_union`): the slot holds what its one heap variant holds, and a second
-            // heap variant leaves nothing that names which one a pointer is.
+            // A union that is not an envelope union (`is_envelope_union`) holds at most one
+            // variant beside `nothing`, or none that owns heap: its slot is that variant's raw
+            // pointer, null for `nothing`, so it is that variant.
             if !is_envelope_union(ty) && !classes.contains(&HeapClass::TypeParameter) {
-                let mut heap = classes
+                if let Some(only) = classes
                     .iter()
-                    .filter(|class| matches!(class, HeapClass::Heap(_)));
-                match (heap.next(), heap.next()) {
-                    (Some(only), None) => return *only,
-                    (Some(_), Some(_)) => return HeapClass::Heap(ReleaseKind::UntaggedUnion),
-                    _ => {}
+                    .find(|class| matches!(class, HeapClass::Heap(_)))
+                {
+                    return *only;
                 }
             }
             if classes
@@ -485,7 +479,8 @@ impl ReleaseReads {
     /// True when every owner `earlier` reads at an edge is read here too (this one may read more:
     /// the copy owners, which are known only once the walk's reads are judged).
     pub fn covers(&self, earlier: &ReleaseReads) -> bool {
-        let covers_edge = |mine: &HashMap<Span, Vec<String>>, theirs: &HashMap<Span, Vec<String>>| {
+        let covers_edge = |mine: &HashMap<Span, Vec<String>>,
+                           theirs: &HashMap<Span, Vec<String>>| {
             theirs.iter().all(|(span, names)| {
                 mine.get(span)
                     .is_some_and(|here| names.iter().all(|name| here.contains(name)))

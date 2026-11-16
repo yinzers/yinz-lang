@@ -374,19 +374,38 @@ fn heap_class_of_each_type() {
             },
             HeapClass::Heap(ReleaseKind::Maybe),
         ),
-        // A union with no shape variant is the variant's raw pointer (`is_envelope_union`): its one
-        // heap variant is what the slot holds, and two heap variants leave no tag to say which.
+        // A union with no shape variant and one variant beside `nothing` is that variant's raw
+        // pointer (`is_envelope_union`): the slot holds what its one heap variant holds. With two
+        // variants beside `nothing`, one of them heap (`string | array<int>`, `int | array<int>`,
+        // `string | channel<int>`), the slot is tagged and releases by the variant its tag names.
         (
             Type::Union {
-                variants: vec![Type::Int, array.clone()],
+                variants: vec![Type::Nothing, array.clone()],
             },
             HeapClass::Heap(ARRAY),
         ),
         (
             Type::Union {
+                variants: vec![Type::Int, array.clone()],
+            },
+            HeapClass::Heap(ReleaseKind::Union),
+        ),
+        (
+            Type::Union {
                 variants: vec![Type::String, array.clone()],
             },
-            HeapClass::Heap(ReleaseKind::UntaggedUnion),
+            HeapClass::Heap(ReleaseKind::Union),
+        ),
+        (
+            Type::Union {
+                variants: vec![
+                    Type::String,
+                    Type::BuiltinChannel {
+                        elem: Box::new(Type::Int),
+                    },
+                ],
+            },
+            HeapClass::Heap(ReleaseKind::Union),
         ),
         (
             Type::Union {

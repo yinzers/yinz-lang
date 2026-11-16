@@ -2225,6 +2225,11 @@ struct Cg<'ctx, 'g> {
     // (`lower_taken_field`), keyed by the LLVM value of the cell pointer. The store that copies
     // the cell's bytes into the binding frees the emptied cell (`shape_bytes_to_owned`).
     taken_shape_cells: std::collections::HashSet<usize>,
+    // C7 slice 4: the union views a MOVED read of a union binding or a moved Yinz call result (`lower_expr`), keyed by the
+    // LLVM value. For a recursive (boxed) union such a view's data word is the box cell its slot
+    // owns, which the consuming store takes as it is instead of allocating a cell and leaking the
+    // emptied one (`union_persist_into_as`).
+    box_cell_views: std::collections::HashSet<usize>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -3845,7 +3850,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.deepen_unless_moved(src, owned, shape_name)?;
         // A nested shape a `let` took out of a temporary (`lower_taken_field`): its bytes and
         // everything they own are the binding's now, so only the emptied cell goes.
-        if self.taken_shape_cells.contains(&(src.as_value_ref() as usize)) {
+        if self
+            .taken_shape_cells
+            .contains(&(src.as_value_ref() as usize))
+        {
             self.builder
                 .build_call(self.rt.ynz_free, &[src.into(), size.into()], "")
                 .map_err(|err| format!("shape_bytes_to_owned free the taken cell: {err}"))?;
@@ -4130,7 +4138,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     // emptied cell goes.
                     self.builder
                         .build_call(self.rt.ynz_free, &[src_pay.into(), size.into()], "")
-                        .map_err(|err| format!("maybe_payload_stable_bits free the taken cell: {err}"))?;
+                        .map_err(|err| {
+                            format!("maybe_payload_stable_bits free the taken cell: {err}")
+                        })?;
                 } else if moved {
                     self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
                 } else {
@@ -4160,7 +4170,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 if take {
                     self.builder
                         .build_call(self.rt.ynz_number_cell_free, &[src_pay.into()], "")
-                        .map_err(|err| format!("maybe_payload_stable_bits free the taken number: {err}"))?;
+                        .map_err(|err| {
+                            format!("maybe_payload_stable_bits free the taken number: {err}")
+                        })?;
                 }
                 owned_pay
             }
@@ -4683,7 +4695,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .cloned()
                 .unwrap_or(Type::Error),
         );
-        if let Some(refusal) = ynz_typeck::check::envelope_refusal(&variant, &plain_ty) {
+        if let Some(refusal) =
+            ynz_typeck::check::envelope_refusal(&variant, &plain_ty, &coercion.slot)
+        {
             return Err(format!(
                 "codegen: {site}: a `{plain_ty:?}` value reached a union's `{variant:?}` \
                  variant ({refusal:?}) although typeck refuses that before codegen runs; this \
@@ -4695,6 +4709,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::String
             | Type::BuiltinArray { .. }
             | Type::Number { precision: 35.. }
+            | Type::BuiltinChannel { .. }
             | Type::BuiltinMap { .. } => self
                 .builder
                 .build_ptr_to_int(
@@ -5047,8 +5062,21 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_switch(tag, raw_bb, &switch_cases)
             .map_err(|err| format!("union persist tag switch {site}: {err}"))?;
+        // A moved union binding of a recursive union hands its box cell over: the slot takes the
+        // cell pointer, nothing is allocated and no emptied cell is left behind.
+        let takes_cell =
+            layout.boxed && !deep && self.box_cell_views.contains(&(src.as_value_ref() as usize));
         for ((index, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
             self.builder.position_at_end(*case_bb);
+            if takes_cell {
+                self.builder
+                    .build_store(payload_addr, data)
+                    .map_err(|err| format!("union persist take cell {site}: {err}"))?;
+                self.builder
+                    .build_unconditional_branch(done_bb)
+                    .map_err(|err| format!("union persist take cell branch {site}: {err}"))?;
+                continue;
+            }
             let payload = self.union_payload_ptr(src, &format!("{site}_src_pay{index}"))?;
             self.clone_shape_variant_into_slot(
                 payload,
@@ -5066,6 +5094,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_store(payload_addr, data)
             .map_err(|err| format!("union persist raw store {site}: {err}"))?;
+        // A string, array, map or channel variant the slot did not take by move is copied: the
+        // byte copy left it pointing at the source's value, and both slots release it
+        // (`union_deepen_fn`).
+        if deep && self.union_has_copied_variant(variants) {
+            let deepen = self.union_deepen_fn(variants)?;
+            self.builder
+                .build_call(deepen, &[dst.into()], &format!("{site}_persist_deepen"))
+                .map_err(|err| format!("union persist deepen {site}: {err}"))?;
+        }
         self.builder
             .build_unconditional_branch(done_bb)
             .map_err(|err| format!("union persist raw branch {site}: {err}"))?;
@@ -5115,6 +5152,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
         }
         Ok(())
+    }
+
+    /// True when a slot of the union `variants` holds a value of its own that a copy of the slot
+    /// must copy: a `string`, array, map or channel variant (a shape variant is cloned by
+    /// `clone_shape_variant_into_slot`).
+    ///
+    /// Time: O(v) for v variants  Space: O(1)
+    fn union_has_copied_variant(&self, variants: &[Type]) -> bool {
+        variants.iter().any(|variant| {
+            let variant = self.resolve_type(variant);
+            is_string_like(&variant)
+                || matches!(
+                    variant,
+                    Type::BuiltinArray { .. }
+                        | Type::BuiltinMap { .. }
+                        | Type::BuiltinChannel { .. }
+                )
+        })
     }
 
     /// True when a slot of the union `variants` can own a heap cell: it is boxed (recursive), or
@@ -5359,7 +5414,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 continue;
             }
             if is_string_like(&variant)
-                || matches!(variant, Type::BuiltinArray { .. } | Type::BuiltinMap { .. })
+                || matches!(
+                    variant,
+                    Type::BuiltinArray { .. }
+                        | Type::BuiltinMap { .. }
+                        | Type::BuiltinChannel { .. }
+                )
             {
                 let block = self
                     .ctx
@@ -5402,14 +5462,29 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .builder
                 .build_load(self.ptr(), payload_addr, "variant_original")
                 .map_err(|err| format!("union deepen variant load: {err}"))?;
-            let (copied, _) = emit_owned_copy(
-                self,
-                None,
-                original,
-                &variant,
-                CopyMode::Body,
-                "deepen_variant",
-            )?;
+            // A channel is shared, not copied: the copy holds a counted reference of its own.
+            let copied: BasicValueEnum<'ctx> = if matches!(variant, Type::BuiltinChannel { .. }) {
+                self.builder
+                    .build_call(
+                        self.rt.ynz_channel_share,
+                        &[original.into()],
+                        "deepen_variant_share",
+                    )
+                    .map_err(|err| format!("union deepen variant share: {err}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_channel_share returned void")?
+            } else {
+                emit_owned_copy(
+                    self,
+                    None,
+                    original,
+                    &variant,
+                    CopyMode::Body,
+                    "deepen_variant",
+                )?
+                .0
+            };
             self.builder
                 .build_store(payload_addr, copied)
                 .map_err(|err| format!("union deepen variant store: {err}"))?;
@@ -7552,6 +7627,7 @@ fn plain_cg<'ctx, 'g>(
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         taken_shape_cells: std::collections::HashSet::new(),
+        box_cell_views: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -7987,6 +8063,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         taken_shape_cells: std::collections::HashSet::new(),
+        box_cell_views: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -18189,7 +18266,8 @@ fn lower_stmt_for<'ctx>(
 
         let open_copies = cg.open_loop_copies.len();
         if owned_elem.copied {
-            cg.open_loop_copies.push((owned_elem.release_value(), elem.clone()));
+            cg.open_loop_copies
+                .push((owned_elem.release_value(), elem.clone()));
         }
         lower_block_stmts(cg, body)?;
         cg.open_loop_copies.truncate(open_copies);
@@ -18271,7 +18349,8 @@ fn lower_stmt_for<'ctx>(
 
         let open_copies = cg.open_loop_copies.len();
         if owned_elem.copied {
-            cg.open_loop_copies.push((owned_elem.release_value(), elem.clone()));
+            cg.open_loop_copies
+                .push((owned_elem.release_value(), elem.clone()));
         }
         lower_block_stmts(cg, body)?;
         cg.open_loop_copies.truncate(open_copies);
@@ -19325,8 +19404,15 @@ fn lower_stmt_return<'ctx>(
                     // a return-side twin). Same never-drop-cells posture as
                     // store_field (FRAGO 009).
                     let moved = cg.is_moved_cells(env_ptr);
-                    let stable_bits =
-                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true, moved, false)?;
+                    let stable_bits = cg.maybe_payload_stable_bits(
+                        flag,
+                        bits,
+                        inner,
+                        "ret_maybe",
+                        true,
+                        moved,
+                        false,
+                    )?;
                     let mut env = cg.maybe_type().const_zero();
                     env = cg
                         .builder
@@ -19508,6 +19594,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         let val = lower_expr_node(cg, expr)?;
         remember_movable_string(cg, expr, val)?;
         remember_moved_cells(cg, expr, val);
+        remember_box_cell_view(cg, expr, val);
         cg.bind_temporary(expr, val)?;
         return Ok(val);
     };
@@ -19527,7 +19614,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     }
     let val = own_string_for_store(cg, val, &plain_ty, "union_wrap")?;
     // The envelope views the value it wraps: a value that moves in moves on through its view.
-    let wrapped_value_moves = cg.typed.heap_moves.contains(span.start, span.end);
+    // A string, array, map or channel variant is owned by the envelope the moment it is wrapped (the
+    // string just copied above, a fresh or consumed array, map or channel): a slot the envelope is
+    // persisted into takes it as it is (`union_persist_into_as`). A shape variant moves only when
+    // typeck says the shape does.
+    let wraps_a_shape = matches!(
+        cg.resolve_type(&coercion.slot),
+        Type::Union { ref variants }
+            if variants
+                .get(coercion.tag)
+                .is_some_and(|variant| matches!(cg.resolve_type(variant), Type::Shape { .. }))
+    );
+    let wrapped_value_moves = !wraps_a_shape || cg.typed.heap_moves.contains(span.start, span.end);
     let view = cg.wrap_into_union_envelope(expr, val, &coercion)?;
     if wrapped_value_moves && view.is_pointer_value() {
         cg.moved_cell_values.insert(view.as_value_ref() as usize);
@@ -19541,6 +19639,18 @@ fn remember_moved_cells<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValu
     let span = expr.span();
     if val.is_pointer_value() && cg.typed.heap_moves.contains(span.start, span.end) {
         cg.moved_cell_values.insert(val.as_value_ref() as usize);
+    }
+}
+
+/// A moved read of a union binding, or a moved result of a Yinz function, is a view over the box
+/// cell the binding's slot (the caller's result slot) owns (`Cg::box_cell_views`).
+fn remember_box_cell_view<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValueEnum<'ctx>) {
+    if (matches!(expr, Expr::Ident(..)) || cg.is_user_call(expr))
+        && val.is_pointer_value()
+        && cg.is_moved_cells(val.into_pointer_value())
+        && cg.envelope_union_variants(&cg.expr_type(expr)).is_some()
+    {
+        cg.box_cell_views.insert(val.as_value_ref() as usize);
     }
 }
 
@@ -19682,7 +19792,11 @@ fn share_returned_channel<'ctx>(
             }
             let shared = cg
                 .builder
-                .build_call(cg.rt.ynz_channel_share, &[val.into()], &format!("{site}_share"))
+                .build_call(
+                    cg.rt.ynz_channel_share,
+                    &[val.into()],
+                    &format!("{site}_share"),
+                )
                 .map_err(|err| format!("share the returned channel: {err}"))?
                 .try_as_basic_value()
                 .basic()
@@ -19895,8 +20009,8 @@ fn store_binding_of_read<'ctx>(
     // binding's release frees each allocation once (`Cg::maybe_to_owned_taking`).
     if let Type::Maybe { inner } = cg.resolve_type(ty) {
         let inner = cg.resolve_type(&inner);
-        let owns_payload = matches!(inner, Type::String | Type::Shape { .. })
-            || cg.is_inline_decimal(&inner);
+        let owns_payload =
+            matches!(inner, Type::String | Type::Shape { .. }) || cg.is_inline_decimal(&inner);
         if owns_payload
             && val.is_pointer_value()
             && cg.sm_frame_ptr.is_none()
@@ -19921,7 +20035,8 @@ fn copy_maybe_container_payload<'ctx>(
     site: &str,
 ) -> Result<(), String> {
     replace_maybe_payload(cg, envelope, site, |payload| {
-        let (copied, _free) = emit_owned_copy(cg, Some(expr), payload, inner, CopyMode::Body, site)?;
+        let (copied, _free) =
+            emit_owned_copy(cg, Some(expr), payload, inner, CopyMode::Body, site)?;
         Ok(copied)
     })
 }
@@ -19938,7 +20053,11 @@ fn share_maybe_channel_payload<'ctx>(
 ) -> Result<(), String> {
     replace_maybe_payload(cg, envelope, site, |payload| {
         cg.builder
-            .build_call(cg.rt.ynz_channel_share, &[payload.into()], &format!("{site}_mc_share"))
+            .build_call(
+                cg.rt.ynz_channel_share,
+                &[payload.into()],
+                &format!("{site}_mc_share"),
+            )
             .map_err(|err| format!("share the channel held by `{site}`: {err}"))?
             .try_as_basic_value()
             .basic()
@@ -26168,7 +26287,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_int_value();
         let filled = self
             .builder
-            .build_int_compare(IntPredicate::NE, held, self.i64().const_zero(), "fixed_filled")
+            .build_int_compare(
+                IntPredicate::NE,
+                held,
+                self.i64().const_zero(),
+                "fixed_filled",
+            )
             .map_err(|err| format!("{site} fixed filled: {err}"))?;
         let release_bb = self.ctx.append_basic_block(function, "fixed_release");
         let step_bb = self.ctx.append_basic_block(function, "fixed_step");
@@ -26457,7 +26581,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .into_int_value();
             let held = self
                 .builder
-                .build_int_compare(IntPredicate::NE, ok_word, self.i64().const_zero(), "ec_ok_held")
+                .build_int_compare(
+                    IntPredicate::NE,
+                    ok_word,
+                    self.i64().const_zero(),
+                    "ec_ok_held",
+                )
                 .map_err(|err| format!("{site} ec ok cmp: {err}"))?;
             let release_bb = self.ctx.append_basic_block(function, "ec_ok_release");
             self.builder
@@ -26523,11 +26652,8 @@ fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
         | ReleaseKind::Union
         | ReleaseKind::Fixed
         | ReleaseKind::ErrorsCapable => true,
-        // `dynamic` and a map entry never own a local slot; nothing can release an untagged raw
-        // pointer (no tag says which variant it is).
-        ReleaseKind::UntaggedUnion
-        | ReleaseKind::Dynamic
-        | ReleaseKind::MapEntry => false,
+        // `dynamic` and a map entry never own a local slot.
+        ReleaseKind::Dynamic | ReleaseKind::MapEntry => false,
     }
 }
 
@@ -26634,7 +26760,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
             Type::Maybe { inner } => self.snapshot_old_maybe(old, live, inner, name)?,
             Type::Union { variants } => self.snapshot_old_union(old, live, variants, name)?,
-            Type::BuiltinFixed { size: Some(size), .. } => {
+            Type::BuiltinFixed {
+                size: Some(size), ..
+            } => {
                 let snapshot = self.alloca_in_entry_llvm(
                     self.i64().array_type(*size as u32),
                     &format!("{name}_old_cells"),
@@ -26646,7 +26774,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|err| format!("assign fixed snapshot branch {name}: {err}"))?;
                 self.builder.position_at_end(copy_bb);
                 self.builder
-                    .build_memcpy(snapshot, 8, old, 8, self.i64().const_int(*size as u64 * 8, false))
+                    .build_memcpy(
+                        snapshot,
+                        8,
+                        old,
+                        8,
+                        self.i64().const_int(*size as u64 * 8, false),
+                    )
                     .map_err(|err| format!("assign fixed snapshot copy {name}: {err}"))?;
                 self.builder
                     .build_unconditional_branch(done_bb)
@@ -26843,7 +26977,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .map_err(|err| format!("assign union snapshot payload copy {name}: {err}"))?;
             let repointed = self
                 .builder
-                .build_ptr_to_int(payload_snapshot, self.i64(), &format!("{name}_old_union_repoint"))
+                .build_ptr_to_int(
+                    payload_snapshot,
+                    self.i64(),
+                    &format!("{name}_old_union_repoint"),
+                )
                 .map_err(|err| format!("assign union snapshot repoint {name}: {err}"))?;
             self.builder
                 .build_store(data_slot, repointed)
@@ -26980,7 +27118,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// The store seam took the string `value` instead of copying it: null the slots it was read
     /// from (`note_string_last_use`). Nothing for a string no binding held.
     fn take_string_slots(&self, value: BasicValueEnum<'ctx>) -> Result<(), String> {
-        if let Some(ok_word) = self.string_take_ec_words.get(&(value.as_value_ref() as usize)) {
+        if let Some(ok_word) = self
+            .string_take_ec_words
+            .get(&(value.as_value_ref() as usize))
+        {
             self.builder
                 .build_store(*ok_word, self.i64().const_zero())
                 .map_err(|err| format!("null a taken ok word: {err}"))?;
@@ -27021,11 +27162,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 | (ReleaseKind::Map, ReleaseStep::Map { .. })
                 | (ReleaseKind::Channel, ReleaseStep::Channel)
                 | (ReleaseKind::TaskHandle, ReleaseStep::Handle)
-                | (ReleaseKind::Shape | ReleaseKind::NestedShape, ReleaseStep::Shape { .. })
+                | (
+                    ReleaseKind::Shape | ReleaseKind::NestedShape,
+                    ReleaseStep::Shape { .. }
+                )
                 | (ReleaseKind::Maybe, ReleaseStep::Maybe { .. })
                 | (ReleaseKind::Union, ReleaseStep::Union { .. })
                 | (ReleaseKind::Fixed, ReleaseStep::Fixed { .. })
-                | (ReleaseKind::ErrorsCapable, ReleaseStep::ErrorsCapable { .. })
+                | (
+                    ReleaseKind::ErrorsCapable,
+                    ReleaseStep::ErrorsCapable { .. }
+                )
         );
         if !kind_matches_type {
             return Err(format!(
@@ -27109,7 +27256,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let field_releases = self.shape_field_releases(&info.shape_name)?;
         if !field_releases.is_empty() {
             let data = self.soa_data_ptr(arr, &format!("{name}_soa_release"))?;
-            let counter = self.alloca_in_entry_llvm(self.i64(), &format!("{name}_soa_release_i"))?;
+            let counter =
+                self.alloca_in_entry_llvm(self.i64(), &format!("{name}_soa_release_i"))?;
             self.builder
                 .build_store(counter, self.i64().const_zero())
                 .map_err(|err| format!("soa release counter {name}: {err}"))?;
@@ -27145,12 +27293,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         info.shape_name
                     )
                 })?;
-                let address = self.soa_field_addr(data, segment, index, &format!("{name}_soa_rel"))?;
+                let address =
+                    self.soa_field_addr(data, segment, index, &format!("{name}_soa_rel"))?;
                 self.call_stored_release((glue, inline), address, &format!("{name}_soa_rel"))?;
             }
             let next = self
                 .builder
-                .build_int_add(index, self.i64().const_int(1, false), &format!("{name}_soa_release_next"))
+                .build_int_add(
+                    index,
+                    self.i64().const_int(1, false),
+                    &format!("{name}_soa_release_next"),
+                )
                 .map_err(|err| format!("soa release add {name}: {err}"))?;
             self.builder
                 .build_store(counter, next)
@@ -27663,7 +27816,6 @@ mod copy_parity_tests {
             ReleaseKind::NestedShape,
             ReleaseKind::Maybe,
             ReleaseKind::Union,
-            ReleaseKind::UntaggedUnion,
             ReleaseKind::Dynamic,
             ReleaseKind::Fixed,
             ReleaseKind::MapEntry,
@@ -27713,19 +27865,6 @@ mod copy_parity_tests {
                 ReleaseKind::Union => (
                     Type::Union {
                         variants: vec![Type::Int, Type::String],
-                    },
-                    |step| matches!(step, ReleaseStep::Union { .. }),
-                ),
-                // No tag says which variant a raw pointer is, so the plain emitter leaves it; the step
-                // table still names the union.
-                ReleaseKind::UntaggedUnion => (
-                    Type::Union {
-                        variants: vec![
-                            Type::String,
-                            Type::BuiltinArray {
-                                elem: Box::new(Type::Int),
-                            },
-                        ],
                     },
                     |step| matches!(step, ReleaseStep::Union { .. }),
                 ),

@@ -7521,7 +7521,7 @@ impl<'b> Checker<'b> {
         };
         if let Type::Union { variants } = slot_ty {
             let variant = &variants[coercion.tag];
-            if let Some(refusal) = envelope_refusal(variant, value_ty) {
+            if let Some(refusal) = envelope_refusal(variant, value_ty, slot_ty) {
                 self.diags.push(union_variant_refusal_diag(
                     value, value_ty, slot_ty, variant, refusal,
                 ));
@@ -11290,7 +11290,15 @@ pub enum EnvelopeRefusal {
 /// concrete type is only known after monomorphization).
 ///
 /// Time: O(1)  Space: O(1)
-pub fn envelope_refusal(variant: &Type, value_ty: &Type) -> Option<EnvelopeRefusal> {
+pub fn envelope_refusal(variant: &Type, value_ty: &Type, slot: &Type) -> Option<EnvelopeRefusal> {
+    // A channel is a counted reference the slot owns and releases (`ynz_channel_free`): only a
+    // union of heap variants with no shape variant (`string | channel<int>`) holds one. A union
+    // with a shape variant keeps its channel variant refused.
+    let slot_has_shape_variant = matches!(slot, Type::Union { variants }
+        if variants.iter().any(|variant| matches!(variant, Type::Shape { .. })));
+    if matches!(variant, Type::BuiltinChannel { .. }) && !slot_has_shape_variant {
+        return None;
+    }
     match variant {
         Type::Number { precision: 35.. } => match value_ty {
             Type::Number { precision: 35.. } => None,
@@ -11561,15 +11569,62 @@ fn is_errors_maybe_of_envelope_union(candidate: &Type) -> bool {
     }
 }
 
-/// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
-/// `{tag, data}` envelope. Any other union (`map<..> | nothing`) is the variant's raw pointer,
-/// null for `nothing`, and has no envelope to build.
+/// A union with a shape variant (`Tiny | Big`, `Circle | nothing`), or one with no shape variant
+/// that holds heap beside at least one other variant (`string | array<int>`, `string | channel<int>`,
+/// `string | int`), is a pointer to a tagged `{tag, data}` envelope and is stored as a tagged slot
+/// (`UnionLayout`, one tag word beside the payload, as a Rust `enum`): the tag is what says which
+/// variant a scope exit releases. Any other union (`map<..> | nothing`, `int | float`) is the
+/// variant's raw pointer or bits, null for `nothing`, and has no envelope to build: it owns at most
+/// one heap value, whose kind its type names.
 pub fn is_envelope_union(candidate: &Type) -> bool {
     match candidate {
-        Type::Union { variants } => variants
-            .iter()
-            .any(|variant| matches!(variant, Type::Shape { .. })),
+        Type::Union { variants } => {
+            variants
+                .iter()
+                .any(|variant| matches!(variant, Type::Shape { .. }))
+                || is_tagged_union_of_heap(variants)
+        }
         _ => false,
+    }
+}
+
+/// True for the variants of a union with NO shape variant that needs a tag to be released: two or
+/// more variants that are not `nothing`, one of which may own heap. With one such variant the
+/// slot is that variant's raw pointer (null for `nothing`) and its own type says how to release it.
+fn is_tagged_union_of_heap(variants: &[Type]) -> bool {
+    let mut present = variants
+        .iter()
+        .filter(|variant| !matches!(variant, Type::Nothing));
+    let count = present.clone().count();
+    count >= 2 && present.any(type_may_own_heap)
+}
+
+/// Whether a value of `ty` may own heap memory, judged by the type's form alone (a shape is
+/// assumed to; a type parameter may be instantiated with heap).
+fn type_may_own_heap(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::BuiltinArray { .. }
+        | Type::BuiltinMap { .. }
+        | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. }
+        | Type::Shape { .. }
+        | Type::Generic { .. }
+        | Type::TypeParam { .. }
+        | Type::Dynamic { .. }
+        | Type::MapEntry { .. }
+        | Type::ErrorsCapable { .. } => true,
+        Type::Maybe { inner } | Type::Sensitive { inner } => type_may_own_heap(inner),
+        Type::BuiltinFixed { elem, .. } => type_may_own_heap(elem),
+        Type::Union { variants } => variants.iter().any(type_may_own_heap),
+        Type::Nothing
+        | Type::Error
+        | Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Number { .. }
+        | Type::Range { .. }
+        | Type::Options { .. } => false,
     }
 }
 

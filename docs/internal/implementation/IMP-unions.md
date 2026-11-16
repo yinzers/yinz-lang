@@ -90,10 +90,12 @@ the waiting caller copies it out before the frame is freed. A binding that cross
 a region of the function's frame (`crossing_local_slot_count`); every resume rebuilds the view from
 it, so no pointer into a resume function's stack survives a suspension. None of these allocates.
 
+**Heap-variant unions** (`string | array<int>`, `string | channel<int>`, `string | int`: no shape variant, two or more variants beside `nothing`, one of which may own heap; `is_envelope_union`) are envelope unions with no shape variant, so they take every path above (wrap, parameter, return, store, frame region) with the same slot: `{ i64 tag, 8-byte payload }`, 16 bytes, `UnionLayout` with no shape variants. The cost of the tag is one word, as a Rust `enum` discriminant. The payload word is the value's bits or the heap pointer the slot owns. A wrap owns its payload from the start (a string is copied, a fresh or consumed array, map or channel moves in); a COPY of a slot (a binding made from a place, a `return` of a parameter) copies a string, array or map variant and shares a channel variant (`union_deepen_fn`, called by `union_persist_into_as` unless the source moves), so every owner releases its own. A channel variant is refused in a union with a shape variant (`envelope_refusal`). A union with one variant beside `nothing` (`map<..> | nothing`) stays the variant's raw pointer, null for `nothing`.
+
 **Recursive unions** (a variant reaches the union through shape fields, so no finite inline size)
 are the one exception: the slot is `{ tag, word }` and a shape variant's bytes live in a heap cell
 the slot owns, one per box, as `Box<T>` in a Rust enum. A store MOVES such a value when it is
-a move and COPIES it deep otherwise (next section), exactly where Rust moves or clones. The same
+a move and COPIES it deep otherwise (next section), exactly where Rust moves or clones. A moved union BINDING or call result hands its box cell to the slot it is stored into (a field, a `let`) (`Cg::box_cell_views`): no new cell, no emptied cell left behind. The same
 holds for a non-recursive union whose shape variant has such a field.
 
 **Moving and copying a value that owns boxes.** A shape, union or `maybe` that owns

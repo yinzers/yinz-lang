@@ -17,7 +17,8 @@ pub const CACHE_LINE_BYTES: u32 = 64;
 /// hold a pointer, so the lowering translates at the slot boundary.
 pub const UNION_NONE_TAG: u64 = u64::MAX;
 
-/// The in-slot layout of one ENVELOPE union (a union with a shape variant): the ONE answer to
+/// The in-slot layout of one ENVELOPE union (a union with a shape variant, or one of heap variants
+/// with no shape variant, `string | array<int>`: `is_envelope_union`): the ONE answer to
 /// "how many bytes is a slot of this union and where is its payload". Computed once, in
 /// `emit_shape_types`, from the shapes' ABI sizes; every consumer (array element size, map value
 /// size, shape field type, return, staged argument, and C6's release helper) reads it through
@@ -62,8 +63,8 @@ fn align_up(value: u64, align: u64) -> u64 {
 }
 
 /// Compute the layout of the union `variants` from the shapes' `(abi size, abi align)` in `abi`.
-/// Errors when `variants` has no shape variant (not an envelope union) or when an inline layout
-/// needs the ABI of a shape that is not in `abi` yet.
+/// A union with no shape variant is the tag word and one 8-byte payload word. Errors when an
+/// inline layout needs the ABI of a shape that is not in `abi` yet.
 fn compute_union_layout(
     variants: &[Type],
     boxed: bool,
@@ -77,11 +78,6 @@ fn compute_union_layout(
             _ => None,
         })
         .collect();
-    if shape_variants.is_empty() {
-        return Err(format!(
-            "union layout: `{variants:?}` has no shape variant, so it is not an envelope union"
-        ));
-    }
     if boxed {
         return Ok(UnionLayout {
             boxed,
@@ -537,8 +533,27 @@ mod union_layout_tests {
             ),
             (true, 8, 16, 8)
         );
-        // a union with no shape variant has no envelope: refused, never a silent layout
-        assert!(compute_union_layout(&[Type::Int, Type::Nothing], false, &sizes).is_err());
+        // a union of heap variants with no shape variant (`string | array<int>`) is the tag word
+        // and one 8-byte payload word: the cost of the tag is one word, as a Rust `enum`
+        // discriminant, and the layout comes from this one function
+        let heap_only = [
+            Type::String,
+            Type::BuiltinArray {
+                elem: Box::new(Type::Int),
+            },
+        ];
+        let tagged = compute_union_layout(&heap_only, false, &HashMap::new()).expect("layout");
+        assert_eq!(
+            (
+                tagged.boxed,
+                tagged.payload_offset,
+                tagged.payload_size,
+                tagged.slot_size,
+                tagged.slot_align
+            ),
+            (false, 8, 8, 16, 8)
+        );
+        assert!(tagged.shape_variants.is_empty());
     }
 
     // Bug caught: an unboxed recursive union has no finite size, and a traversal-order
