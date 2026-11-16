@@ -50,7 +50,7 @@ use ynz_ast::nodes::{Block, Expr, Item, MatchPatternKind, OwnershipModifier, Pos
 use crate::release_plan::{heap_class_of, HeapClass, ReleaseKind, TypeTables};
 use crate::signatures::FunctionSig;
 use crate::string_ownership::is_fresh_string_expr;
-use crate::types::Type;
+use crate::types::{is_owned_text, Type};
 
 /// `(span.start, span.end)`.
 pub type Span = (usize, usize);
@@ -213,7 +213,8 @@ impl Walk<'_> {
                 // `table[key] = value` stores the key in the map, which owns it from then on
                 // (`collection_store_positions` says the same of `table.set(key, value)`); an
                 // array or `fixed` index is an `int`.
-                let index_usage = if matches!(self.type_of(receiver), Some(Type::BuiltinMap { .. })) {
+                let index_usage = if matches!(self.type_of(receiver), Some(Type::BuiltinMap { .. }))
+                {
                     Use::Taken
                 } else {
                     Use::Borrowed
@@ -279,6 +280,7 @@ impl Walk<'_> {
                 | Type::BuiltinMap { .. }
                 | Type::Shape { .. },
             ) => true,
+            Some(ty) if is_owned_text(ty) => true,
             // A value that owns no heap (an `int`, a `boolean`) cannot share a temporary's cells.
             Some(ty) => matches!(heap_class_of(ty, &self.facts.tables), HeapClass::NoHeap),
             None => false,
@@ -324,7 +326,7 @@ impl Walk<'_> {
             } => true,
             _ if self.is_user_call(expr) => true,
             _ => {
-                matches!(self.type_of(expr), Some(Type::String))
+                self.type_of(expr).is_some_and(is_owned_text)
                     && is_fresh_string_expr(expr, self.facts.expr_types, self.facts.callable_fns)
             }
         }

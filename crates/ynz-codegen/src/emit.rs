@@ -19712,6 +19712,8 @@ fn remember_movable_string<'ctx>(
 fn is_string_like(ty: &Type) -> bool {
     match ty {
         Type::String => true,
+        // A bignum is heap decimal text: owned, copied and released like a string.
+        Type::Number { .. } => ynz_typeck::types::is_bignum(ty),
         Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
         _ => false,
     }
@@ -25720,6 +25722,8 @@ enum ReleaseStep {
 /// THE exhaustive per-`Type` release table (see [`ReleaseStep`]).
 fn release_step(ty: &Type) -> ReleaseStep {
     match ty {
+        // A bignum (`number<N>`, N > 34) is a pointer to heap decimal text: released like a string.
+        Type::Number { .. } if ynz_typeck::types::is_bignum(ty) => ReleaseStep::String,
         Type::Nothing
         | Type::Error
         | Type::Int
@@ -28141,17 +28145,22 @@ mod copy_parity_tests {
     }
 
     #[test]
-    fn bignum_number_is_refused_not_aliased() {
+    fn bignum_number_is_cloned_text_not_aliased() {
         // WHY: v0.3-M8 Phase 4 fix round 3, should-fix 5 — bignum (precision > 34) lowers as a
         // POINTER to a heap decimal string (`llvm_type_for`), not an i128 value; the
         // whole-variant sweep above only samples `Number { precision: 34 }` (a value), so it
-        // cannot see this within-variant edge case. It used to sit in the alias arm; under the
-        // 2026-09-06 ruling an alias is not an answer, so it is a refusal until the design for
-        // wider numbers lands.
+        // cannot see this within-variant edge case. An alias is not an answer (2026-09-06
+        // ruling), and since C7 r1 a bignum is released like a string, so it is COPIED like one:
+        // the copy table and the release table agree on the same one type fact (`is_bignum`).
         let bignum = Type::Number { precision: 40 };
+        assert_eq!(
+            owned_copy_plan(&bignum),
+            OwnedCopy::StringClone,
+            "bignum `number` (a pointer to heap text) must be copied as text, never aliased"
+        );
         assert!(
-            matches!(owned_copy_plan(&bignum), OwnedCopy::Refused(_)),
-            "bignum `number` (a pointer) must not be copied by handing back the pointer"
+            matches!(release_step(&bignum), ReleaseStep::String),
+            "a bignum is released exactly as a string, the form its copy allocates"
         );
         assert!(
             !ynz_typeck::types::is_trivially_copyable(&bignum),
@@ -30376,7 +30385,9 @@ fn store_binding<'ctx>(
             store(cg, view.into(), ty, slot)
         }
         // A string binding owns its bytes: a borrowed string is copied, a movable one is taken.
-        Type::String | Type::Sensitive { .. } => {
+        Type::String | Type::Sensitive { .. } | Type::Number { .. }
+            if is_string_like(&cg.resolve_type(ty)) =>
+        {
             let owned = own_string_for_store(cg, val, ty, name)?;
             store(cg, owned, ty, slot)
         }
@@ -30448,14 +30459,9 @@ fn store_field<'ctx>(
                 .build_store(field_ptr, bits)
                 .map_err(|e| format!("{e}"))?;
         }
-        Type::Number { .. } => {
-            // N > 34: field stores a pointer to the decimal string; val is already a ptr.
-            cg.builder
-                .build_store(field_ptr, val)
-                .map_err(|e| format!("{e}"))?;
-        }
-        // A string field owns its bytes: a borrowed string is copied, a movable one is taken.
-        Type::String | Type::Sensitive { .. } => {
+        // A string field owns its bytes: a borrowed string is copied, a movable one is taken. A
+        // bignum (N > 34) is a pointer to heap decimal text and is stored the same way.
+        Type::String | Type::Sensitive { .. } | Type::Number { .. } => {
             let owned = own_string_for_store(cg, val, ty, "field_str")?;
             cg.builder
                 .build_store(field_ptr, owned)

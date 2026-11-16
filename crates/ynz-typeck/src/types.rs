@@ -239,6 +239,23 @@ pub fn type_name(t: &Type) -> String {
 ///
 /// The auto-parallelization independence analysis uses this to decide whether a call
 /// argument is a potential aliased write: only heap-typed, non-`share` arguments can be.
+/// The widest `number<N>` that is a decimal128 value (an i128, no heap). A `number` wider than this is a
+/// bignum: a pointer to heap decimal text, released like a `string`.
+pub const DECIMAL128_MAX_PRECISION: u32 = 34;
+
+/// True when a value of `ty` is text on the heap that one holder owns and every other holder copies: a
+/// `string` or a bignum (`number<N>`, N > 34, a pointer to heap decimal text). The one fact the
+/// string-ownership records (moves, non-owned reads, temporaries, the copy table) answer from.
+pub fn is_owned_text(ty: &Type) -> bool {
+    matches!(ty, Type::String) || is_bignum(ty)
+}
+
+/// True when `ty` is a bignum (`number<N>`, N > 34): the ONE type fact the release plan
+/// (`heap_class_of`) and codegen's release table (`release_step`) both answer from.
+pub fn is_bignum(ty: &Type) -> bool {
+    matches!(ty, Type::Number { precision } if *precision > DECIMAL128_MAX_PRECISION)
+}
+
 pub fn is_trivially_copyable(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Float | Type::Bool)
         // N ≤ 34: decimal128, an i128 value — trivially copyable. N > 34: bignum, a pointer

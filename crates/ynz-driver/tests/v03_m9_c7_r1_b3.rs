@@ -210,3 +210,57 @@ fn a_string_loop_variable_that_is_kept_is_copied_not_released_twice() {
         );
     });
 }
+
+const BIGNUM_HOLDERS: &str = "
+shape Money {
+  amount: number<100>
+  label: string
+}
+function twice(share x: number<100>) -> number<100> {
+  let y: number<100> = x + x
+  return y
+}
+function pass(x: number<100>) -> number<100> {
+  return x
+}
+function entrypoint() -> nothing {
+  let a: number<100> = 1.5
+  let b: number<100> = 2.25
+  let c: number<100> = a + b
+  let d: number<100> = c
+  print(d)
+  c = c + a
+  print(c)
+  print(twice(c))
+  let e: number<100> = pass(d)
+  print(e)
+  let m: Money = { amount: c, label: `x` }
+  print(m)
+  if (a < b) {
+    let f: number<100> = a * b
+    print(f)
+  }
+}
+";
+
+/// A bignum is owned text, so every second holder copies it (a `let`, a field, a returned
+/// parameter) and the release frees each copy once: no leak and no double free (High).
+#[test]
+fn a_bignum_copied_into_a_let_a_field_and_a_return_is_released_once_each() {
+    let expected = "3.75\n5.25\n10.5\n3.75\nMoney { amount: 5.25, label: x }\n3.375\n";
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced(
+            "c7_r1_bignum_holders",
+            BIGNUM_HOLDERS,
+            expected,
+            no_optimize,
+        );
+        assert_strings_balanced("c7_r1_bignum_holders", &counters, no_optimize);
+        assert_asan_clean(
+            "c7_r1_bignum_holders",
+            BIGNUM_HOLDERS,
+            expected,
+            no_optimize,
+        );
+    });
+}

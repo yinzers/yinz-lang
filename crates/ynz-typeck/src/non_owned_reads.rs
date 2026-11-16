@@ -70,7 +70,7 @@ use crate::effective_ownership::{
     Provenance, ProvenanceCtx,
 };
 use crate::string_ownership::children;
-use crate::types::Type;
+use crate::types::{is_bignum, Type};
 
 /// What a non-owned read does with the place it reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,6 +253,7 @@ fn reader_holds_heap(ty: &Type) -> bool {
             | Type::Shape { .. }
             | Type::Union { .. }
     ) || matches!(ty, Type::Sensitive { inner } if matches!(inner.as_ref(), Type::String))
+        || is_bignum(ty)
 }
 
 /// One identifier a place is read through, and whether the function can write it.
@@ -544,11 +545,11 @@ impl<'a> ReadTracker<'a> {
         );
         matches!(provenance(value, &ctx), Provenance::Reaches(roots) if roots.is_empty())
             && is_taken_piece_of_a_temporary(
-            value,
-            annotation,
-            &|expr| self.type_of(expr).cloned(),
-            &|name| self.ownership.is_local_fn(name) || self.imported_fn_names.contains(name),
-        )
+                value,
+                annotation,
+                &|expr| self.type_of(expr).cloned(),
+                &|name| self.ownership.is_local_fn(name) || self.imported_fn_names.contains(name),
+            )
     }
 
     /// True when `method` names a built-in on `receiver`: a user function of that name does not
@@ -603,7 +604,9 @@ impl<'a> ReadTracker<'a> {
         match value {
             Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _)
                 if self.ownership.is_local_fn(name) || self.imported_fn_names.contains(name)),
-            Expr::MethodCall { receiver, method, .. } => {
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
                 (self.ownership.is_local_fn(method) || self.imported_fn_names.contains(method))
                     && !self.is_builtin_method(receiver, method)
             }
@@ -894,9 +897,7 @@ impl<'a> ReadTracker<'a> {
                 continue;
             }
             let outlives = match &candidate.reader {
-                Reader::Binding(holder) => {
-                    lets.contains(holder) && !inside.contains(holder)
-                }
+                Reader::Binding(holder) => lets.contains(holder) && !inside.contains(holder),
                 Reader::LoopVariable(_) | Reader::Argument => false,
             };
             if outlives && candidate.roots.iter().any(|root| dying.contains(&root.key)) {

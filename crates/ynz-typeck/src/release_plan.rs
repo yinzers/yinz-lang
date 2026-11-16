@@ -64,6 +64,7 @@ use crate::generics::{apply_substitution, GenericShapeTable};
 use crate::shapes::ShapeTable;
 use crate::string_ownership::StringMoves;
 use crate::transfer_record::{MemberFacts, ReleaseAnchor, TransferRecord};
+use crate::types::is_bignum;
 use crate::types::{type_name, Type};
 
 /// `(span.start, span.end)`.
@@ -298,6 +299,8 @@ pub fn slot_held_type(ty: &Type, tables: &TypeTables<'_>) -> Type {
 
 fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> HeapClass {
     match ty {
+        // A bignum is heap decimal text, released like a string.
+        Type::Number { .. } if is_bignum(ty) => HeapClass::Heap(ReleaseKind::String),
         Type::Nothing
         | Type::Error
         | Type::Int
