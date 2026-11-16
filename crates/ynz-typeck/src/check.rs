@@ -703,7 +703,7 @@ fn record_string_moves_of(
     crate::string_ownership::StringMoves,
     crate::non_owned_reads::NonOwnedReads,
 ) {
-    let callable: HashSet<String> = local_fns.union(imported_fns).cloned().collect();
+    let callable = callable_fns_of(local_fns, imported_fns);
     crate::string_ownership::record_moves_and_reads(
         module,
         expr_types,
@@ -727,7 +727,7 @@ fn record_temporaries_of(
     generic_fn_table: &GenericFnTable,
     tables: crate::release_plan::TypeTables<'_>,
 ) -> crate::temporaries::Temporaries {
-    let callable: HashSet<String> = local_fns.union(imported_fns).cloned().collect();
+    let callable = callable_fns_of(local_fns, imported_fns);
     let signatures = &sig_table.fns;
     crate::temporaries::record_temporaries(
         module,
@@ -740,6 +740,10 @@ fn record_temporaries_of(
             tables,
         },
     )
+}
+/// Every Yinz function a call can reach: the module's own and the imported ones.
+fn callable_fns_of(local_fns: &HashSet<String>, imported_fns: &HashSet<String>) -> HashSet<String> {
+    local_fns.union(imported_fns).cloned().collect()
 }
 
 /// The names of the functions `module` defines — the local half of the call-graph boundary
@@ -954,6 +958,9 @@ pub struct TypedModule {
     /// C7 slice 2: the fresh heap values no binding holds, each with the statement-end release point
     /// it dies at (`crate::temporaries`). Codegen releases them there and decides nothing.
     pub temporaries: crate::temporaries::Temporaries,
+    /// Every function written in Yinz that a call can reach, local and imported: the one set the move
+    /// record, the temporaries record and codegen test a call against (`string_ownership::is_user_call`).
+    pub callable_fns: HashSet<String>,
     /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
     /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
@@ -1005,6 +1012,7 @@ impl TypedModule {
             heap_moves: self.heap_moves.clone(),
             non_owned_reads: self.non_owned_reads.clone(),
             temporaries: self.temporaries.clone(),
+            callable_fns: self.callable_fns.clone(),
         })
     }
 }
@@ -1141,6 +1149,7 @@ pub fn check(
         heap_moves: checker.heap_moves,
         non_owned_reads,
         temporaries,
+        callable_fns: callable_fns_of(&checker.local_fn_names, checker.imported_fn_names),
     };
     (
         typed,
@@ -1273,6 +1282,7 @@ pub fn check_with_kernel_mode(
         heap_moves: checker.heap_moves,
         non_owned_reads,
         temporaries,
+        callable_fns: callable_fns_of(&checker.local_fn_names, checker.imported_fn_names),
     };
     (typed, checker.mono_table, checker.diags)
 }

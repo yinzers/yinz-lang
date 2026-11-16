@@ -469,6 +469,37 @@ impl Recorder<'_> {
     }
 }
 
+/// True when `expr` is a call of a function written in Yinz, local or imported (`callable_fns`):
+/// `f(x)`, or a dot-call that reaches one. A dot-call reaches a Yinz function only on a shape (or
+/// `dynamic` contract) receiver, and only after every built-in method of that name is ruled out
+/// (`Checker::check_method_call`); on any other receiver the name is a built-in such as `.or()`,
+/// whose result is borrowed even when a function shares its name. THE one answer: the move record,
+/// the temporaries record (`crate::temporaries`) and codegen (`TypedModule::callable_fns`) all read
+/// it, so they cannot disagree on which call returns an owned value (authoritative-derivation).
+///
+/// O(1) time.
+pub fn is_user_call(
+    expr: &Expr,
+    expr_types: &HashMap<(usize, usize), Type>,
+    callable_fns: &HashSet<String>,
+) -> bool {
+    match expr {
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
+            let span = receiver.span();
+            matches!(
+                expr_types.get(&(span.start, span.end)),
+                Some(Type::Shape { .. } | Type::Dynamic { .. })
+            ) && callable_fns.contains(method)
+        }
+        Expr::Call(call) => {
+            matches!(&call.callee, Expr::Ident(name, _) if callable_fns.contains(name))
+        }
+        _ => false,
+    }
+}
+
 /// True when `expr` (typed `string`) builds a string no other holder has seen: an interpolation,
 /// a call of a Yinz function, a string method that always builds a new string, `toString`, or
 /// `.copy()`. THE one answer, read by the move record and by the temporaries record
@@ -484,35 +515,22 @@ pub(crate) fn is_fresh_string_expr(
         let span = expr.span();
         expr_types.get(&(span.start, span.end))
     };
+    if is_user_call(expr, expr_types, callable_fns) {
+        return true;
+    }
     match expr {
         Expr::InterpolatedString(parts, _) => parts
             .iter()
             .any(|part| matches!(part, StringPart::Expr(..))),
         Expr::MethodCall {
             receiver, method, ..
-        } => {
-            // A dot-call reaches a Yinz function only on a shape (or `dynamic` contract)
-            // receiver, and only after every built-in method of that name is ruled out
-            // (`Checker::check_method_call`). On any other receiver the name is a built-in
-            // such as `.or()`, whose result is borrowed even when a function shares its name.
-            let reaches_function = matches!(
-                type_of(receiver),
-                Some(Type::Shape { .. } | Type::Dynamic { .. })
-            );
-            if reaches_function && callable_fns.contains(method) {
-                return true;
+        } => match type_of(receiver) {
+            Some(Type::String) => FRESH_STRING_METHODS.contains(&method.as_str()),
+            Some(Type::Int | Type::Float | Type::Number { .. } | Type::Options { .. }) => {
+                method == "toString"
             }
-            match type_of(receiver) {
-                Some(Type::String) => FRESH_STRING_METHODS.contains(&method.as_str()),
-                Some(Type::Int | Type::Float | Type::Number { .. } | Type::Options { .. }) => {
-                    method == "toString"
-                }
-                _ => false,
-            }
-        }
-        Expr::Call(call) => {
-            matches!(&call.callee, Expr::Ident(name, _) if callable_fns.contains(name))
-        }
+            _ => false,
+        },
         Expr::PostfixOp {
             op: PostfixOpKind::Copy,
             ..

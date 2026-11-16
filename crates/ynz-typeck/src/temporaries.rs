@@ -316,19 +316,7 @@ impl Walk<'_> {
     /// True when `expr` is a call of a Yinz function or another form that returns a value of its
     /// own (never a piece of an argument).
     fn is_user_call(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _)
-                if self.facts.callable_fns.contains(name)),
-            Expr::MethodCall {
-                receiver, method, ..
-            } => {
-                matches!(
-                    self.type_of(receiver),
-                    Some(Type::Shape { .. } | Type::Dynamic { .. })
-                ) && self.facts.callable_fns.contains(method)
-            }
-            _ => false,
-        }
+        crate::string_ownership::is_user_call(expr, self.facts.expr_types, self.facts.callable_fns)
     }
 
     /// True when `expr` is an explicit `.copy()` of a `maybe` whose copy mints an envelope cell.
