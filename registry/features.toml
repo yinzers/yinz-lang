@@ -1818,7 +1818,7 @@ why_template = "A map keeps a `number` key inside its own 16-byte slot, which ho
 # carries `MapKeyNotStorable`. `{key}` is the type (`sensitive string`). The reason is the secret
 # handling, not the slot: a map would release the key as an ordinary string and compare keys with
 # a comparison that is not constant-time. Decided v0.3-M9 C7 review r1 (Product Manager ruling A):
-# `git log --grep="sensitive map keys"`.
+# `git log --grep="refuse map<sensitive string, V> again"`.
 [[diagnostic_template]]
 kind_name = "MapKeyNotStorableSensitive"
 what_template = "A `map` cannot be keyed by `{key}`."
