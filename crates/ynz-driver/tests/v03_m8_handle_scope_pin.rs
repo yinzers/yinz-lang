@@ -13,9 +13,9 @@
 //
 // Both tests run the fixture compiled (`ynz build`, not `ynz run`) at one optimization level
 // each, so a scope-exit release that only one level emits is caught. Plan: card #385, plan #17.
-// C8 slice 2 built the release (the tests were planned RED before it). Registry entry
-// `background-handle-cancel-injection` and the `background-handle-not-waited` lint retire in the
-// same change.
+// C8 slice 2 built the release (the tests were planned RED before it). The registry entry
+// `background-handle-cancel-injection` and the `background-handle-not-waited` lint still stand;
+// they retire in C8 slice 7.
 //
 // One named test per level, no fixture loop (`.claude/rules/test-parallelism.md`).
 
