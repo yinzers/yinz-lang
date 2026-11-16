@@ -265,13 +265,13 @@ green_program!(
     "producer P2 (temporaries): a call result and a fresh string in a suspending function are never released at their statement end"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p3_loop_copy_overwrite_before_wait,
     "v0_3_m9_c6_borrow_sm_loop_map_overwrite.ynz",
     "producer P3 (loop copies): the map-entry copy a suspending `for` body reads before its `wait` after an overwrite is never released"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p3_loop_copy_body_write,
     "v0_3_m3a_p1_for_body_write.ynz",
     "producer P3 (loop copies): the copy of a loop variable written in a suspending body is never released"
@@ -289,13 +289,13 @@ balanced_fixture!(
     "producer P4 (suspending-call argument copies): the `maybe` staged into a suspending call is copied and never released"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p5_cpu_group_result_string,
     "v0_3_m3d_return_class_string.ynz",
     "producer P5 (CPU-group results): the strings two spike-group members return into the host's result slots are never released"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p5_cpu_group_result_array,
     "v0_3_m3d_return_class_array.ynz",
     "producer P5 (CPU-group results): the arrays two spike-group members return into the host's result slots are never released"
@@ -416,4 +416,58 @@ balanced_program!(
     PLAIN_SHAPE_INTO_UNION_SPAWN,
     "777\n",
     "plain producer: a shape spawned into a union parameter of a non-suspending task leaves one of its two strings unfreed"
+);
+
+// ── C8 slice 3: regressions the producer fixtures do not pin ────────────────────────────────
+
+/// A suspending `for` over a fresh call result calls the function once, not once per header and
+/// body evaluation (Medium: before slice 3 `made` printed 7 times and 6 arrays leaked).
+const SM_LOOP_ITERABLE_ONCE: &str = "
+function make() -> array<int> {
+  print(`made`)
+  return [1, 2, 3]
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  for (x in make()) {
+    total = total + x
+  }
+  wait sleep(1)
+  print(total.toString())
+}
+";
+
+green_program!(
+    sm_loop_over_a_fresh_collection_evaluates_it_once,
+    SM_LOOP_ITERABLE_ONCE,
+    "made\n6\n",
+    "slice 3: the iterated call of a suspending `for` is evaluated once and its array freed once"
+);
+
+/// A `return` inside a suspending loop body releases the copy of the loop variable (Medium: the
+/// early exit left the entry's copy unreleased).
+const SM_LOOP_COPY_EARLY_RETURN: &str = "
+function scan() -> int {
+  let table: map<string, string> = { `k`: `v-${1}` }
+  for (entry in table) {
+    table[`k`] = `w-${2}`
+    print(entry.value)
+    wait sleep(1)
+    return 7
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let found = scan()
+  print(found.toString())
+}
+";
+
+green_program!(
+    sm_loop_copy_is_released_by_a_return_in_the_body,
+    SM_LOOP_COPY_EARLY_RETURN,
+    "v-1\n7\n",
+    "slice 3: a `return` inside a suspending loop body leaves the loop variable's copy unreleased"
 );

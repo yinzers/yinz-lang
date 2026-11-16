@@ -2300,6 +2300,11 @@ struct Cg<'ctx, 'g> {
     sm_wait_temporary_base: usize,
     sm_wait_temporary_next: usize,
     sm_wait_temporary_end: usize,
+    // `temporary_frames.len()` right after each statement frame or loop-iteration frame that lives
+    // in the heap frame was pushed, innermost last: `Cg::hold_copy_in_frame` adds a copy to the
+    // innermost frame only when that frame is one of these (a frame of entry-block slots could not
+    // keep the copy across a `wait`).
+    wait_frame_marks: Vec<usize>,
     // Set of crossing local names whose type is decimal128 (number with precision ≤ 34).
     // These use 2 frame slots and i128 alloca (not ptr alloca).
     sm_crossing_decimal128_set: HashSet<String>,
@@ -7813,6 +7818,7 @@ fn plain_cg<'ctx, 'g>(
         sm_wait_temporary_base: 0,
         sm_wait_temporary_next: 0,
         sm_wait_temporary_end: 0,
+        wait_frame_marks: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(),
         sm_number_param_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
@@ -8257,6 +8263,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_wait_temporary_base: wait_temporary_base,
         sm_wait_temporary_next: wait_temporary_base,
         sm_wait_temporary_end: wait_temporary_base + wait_temporary_slots,
+        wait_frame_marks: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(), // populated during alloca creation below
         sm_number_param_set: HashSet::new(),        // populated during param alloca creation below
         sm_crossing_float_set: HashSet::new(),      // populated during alloca creation below
@@ -11326,6 +11333,7 @@ fn lower_sm_for<'ctx, 'g>(
         // function lowers all body statements in ONE Cg, so a binding
         // registered at Let time is visible here across state blocks).
         let soa_info = cg.soa_expr_info(iter);
+        let held_iter = hold_loop_iterable(cg, iter)?;
 
         // Init index to 0 and flush to frame slot.
         let zero = cg.i64().const_zero();
@@ -11349,7 +11357,7 @@ fn lower_sm_for<'ctx, 'g>(
             .build_store(idx_alloca, idx_cur)
             .map_err(|e| format!("{e}"))?;
         // Re-evaluate array pointer and count at header — reloads from frame-backed local.
-        let arr_ptr_h = lower_expr(cg, iter)?.into_pointer_value();
+        let arr_ptr_h = loop_iterable_pointer(cg, iter, held_iter)?;
         let cnt_cur = cg
             .builder
             .build_call(cg.rt.ynz_array_count, &[arr_ptr_h.into()], "sm_a_cnt")
@@ -11367,7 +11375,8 @@ fn lower_sm_for<'ctx, 'g>(
             .map_err(|e| format!("sm for array cond: {e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let arr_cur = lower_expr(cg, iter)?.into_pointer_value();
+        cg.open_iteration_frame();
+        let arr_cur = loop_iterable_pointer(cg, iter, held_iter)?;
         // Use the existing crossing-local alloca if `var` is already frame-backed; otherwise
         // create a new sm_entry alloca. Creating a duplicate alloca would make cg.locals[var]
         // point to a different alloca than the one the frame reload writes into, causing the
@@ -11382,6 +11391,7 @@ fn lower_sm_for<'ctx, 'g>(
         let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
         let mut owned_elem: Option<OwnedRead<'ctx>> = None;
         let mut embed_copy = false;
+        let mut held_copy = false;
         if cg.sm_crossing_shape_embed_set.contains(var) {
             // Shape-embed loop var: `var_slot` is the ptr alloca pre-wired to the frame
             // region (Step 1b in lower_function_with_waits). The by-value get writes the
@@ -11422,6 +11432,9 @@ fn lower_sm_for<'ctx, 'g>(
             let elem_val = cg.array_elem_from_out(out, &elem, "sm_a_get")?;
             owned_elem = Some(own_loop_element(cg, iter, elem_val, &elem, "sm_a_elem")?);
             let elem_val = owned_elem.as_ref().map_or(elem_val, |owned| owned.value);
+            if body_suspends && owned_elem.as_ref().is_some_and(|owned| owned.copied) {
+                held_copy = hold_loop_copy(cg, elem_val, &elem)?;
+            }
             store(cg, elem_val, &elem, var_slot)?;
             flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
         }
@@ -11440,6 +11453,8 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
+        // The iteration's end releases the copy held in its frame slot.
+        cg.close_temporaries(true)?;
 
         if !is_block_terminated(cg) {
             // Release this iteration's allocas before the back edge (leaf bodies only).
@@ -11454,6 +11469,7 @@ fn lower_sm_for<'ctx, 'g>(
                 owned_elem.as_ref(),
                 embed_copy,
                 body_suspends,
+                held_copy,
             )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
@@ -11529,6 +11545,7 @@ fn lower_sm_for<'ctx, 'g>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
+        cg.open_iteration_frame();
         let arr_cur = lower_expr(cg, iter)?.into_pointer_value();
         let elem_val = cg.fixed_cell_value(arr_cur, idx_cur, &elem, "sm_ff_gep")?;
         let var_slot = if let Some(&existing) = cg.locals.get(var) {
@@ -11540,6 +11557,7 @@ fn lower_sm_for<'ctx, 'g>(
         };
         let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
         let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "sm_ff_elem")?;
+        let held_copy = body_suspends && owned_elem.copied && hold_loop_copy(cg, owned_elem.value, &elem)?;
         store(cg, owned_elem.value, &elem, var_slot)?;
         flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
 
@@ -11555,6 +11573,7 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
+        cg.close_temporaries(true)?;
 
         if !is_block_terminated(cg) {
             release_sm_loop_copy(
@@ -11565,6 +11584,7 @@ fn lower_sm_for<'ctx, 'g>(
                 Some(&owned_elem),
                 false,
                 body_suspends,
+                held_copy,
             )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
@@ -11597,6 +11617,7 @@ fn lower_sm_for<'ctx, 'g>(
     if let Type::BuiltinMap { key, val } = &iter_ty {
         let key_ty = key.as_ref().clone();
         let val_ty = val.as_ref().clone();
+        let held_iter = hold_loop_iterable(cg, iter)?;
 
         let zero = cg.i64().const_zero();
         cg.builder
@@ -11619,7 +11640,7 @@ fn lower_sm_for<'ctx, 'g>(
             .build_store(idx_alloca, idx_cur)
             .map_err(|e| format!("{e}"))?;
         // Re-evaluate map pointer and count at header — reloads from frame-backed local.
-        let map_ptr_h = lower_expr(cg, iter)?.into_pointer_value();
+        let map_ptr_h = loop_iterable_pointer(cg, iter, held_iter)?;
         let cnt_cur = cg.map_count_val(map_ptr_h, "sm_mf_cnt")?;
         let lt = cg
             .builder
@@ -11630,7 +11651,8 @@ fn lower_sm_for<'ctx, 'g>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let map_cur = lower_expr(cg, iter)?.into_pointer_value();
+        cg.open_iteration_frame();
+        let map_cur = loop_iterable_pointer(cg, iter, held_iter)?;
         let entry_ty = cg
             .ctx
             .struct_type(&[cg.i64().into(), cg.i64().into()], false);
@@ -11663,6 +11685,17 @@ fn lower_sm_for<'ctx, 'g>(
         let owned_entry = own_map_entry(cg, iter, k_val, v_bits, &key_ty, &val_ty)?;
         let (k_val, v_bits) = (owned_entry.key_bits, owned_entry.value_bits);
         let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
+        // A suspending body keeps each copy in a slot of the iteration's frame (the entry is not
+        // read after a `wait`, but a `return` in the body and the iteration end release it from
+        // the slot); a kind the slot cannot hold stays with the SSA release below.
+        if body_suspends {
+            if let Some(key) = owned_entry.key {
+                hold_loop_copy(cg, key, &key_ty)?;
+            }
+            if let Some(value) = owned_entry.value {
+                hold_loop_copy(cg, value, &val_ty)?;
+            }
+        }
         let k_dst = cg
             .builder
             .build_struct_gep(entry_ty, entry_slot, 0, "sm_mf_kd")
@@ -11696,14 +11729,15 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
+        cg.close_temporaries(true)?;
 
         if !is_block_terminated(cg) {
             // Release this iteration's allocas before the back edge (leaf bodies only).
             if let Some(sp) = loop_sp {
                 cg.loop_stack_restore(sp)?;
             }
-            // The entry is not read after a `wait` (Check 2c) and its copies are not persisted in
-            // the frame: a body that suspends releases them at C8's frame release (deferred).
+            // A body that suspends released the copies it held at the iteration's end
+            // (`close_temporaries`); the entry is not read after a `wait` (Check 2c).
             if !body_suspends {
                 release_map_entry(cg, &owned_entry, &key_ty, &val_ty)?;
             }
@@ -12813,7 +12847,7 @@ fn wait_temporary_slot_count(
                     stmt,
                 ) {
                     let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
-                    typed.temporaries.released_at(start, end).len()
+                    typed.temporaries.released_at(start, end).len() + copy_slot_count(stmt, typed)
                 } else {
                     0
                 };
@@ -12826,6 +12860,45 @@ fn wait_temporary_slot_count(
             .sum()
     }
     count_block(&f.body, typed, suspend_set, back_edge_yield)
+}
+
+/// The frame slots the copies a suspending statement makes need (`Cg::hold_copy_in_frame`): one
+/// per read typeck judged `MustCopy` that sits in the statement itself, not in a block nested in
+/// it (a nested statement counts its own), and two for the map a `for` iterates (its key and its
+/// value are each copied). A loop variable's copy and the copy of an argument staged into a
+/// suspending call are the two producers; a read that turns out to be a view, or whose type owns
+/// no heap, leaves its slot unused, which costs 8 bytes.
+///
+/// O(copies of the program) time.
+fn copy_slot_count(stmt: &Stmt, typed: &TypedModule) -> usize {
+    let nested: Vec<(usize, usize)> = ynz_typeck::release_plan::nested_blocks(stmt)
+        .into_iter()
+        .map(|block| (block.span.start, block.span.end))
+        .collect();
+    let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
+    let iterated_map = match stmt {
+        Stmt::For { iter, .. } => {
+            let span = iter.span();
+            matches!(
+                typed.expr_types.get(&(span.start, span.end)),
+                Some(Type::BuiltinMap { .. })
+            )
+            .then_some((span.start, span.end))
+        }
+        _ => None,
+    };
+    typed
+        .non_owned_reads
+        .copies()
+        .filter(|&(copy_start, copy_end)| {
+            copy_start >= start
+                && copy_end <= end
+                && !nested
+                    .iter()
+                    .any(|&(from, to)| copy_start >= from && copy_end <= to)
+        })
+        .map(|span| if Some(span) == iterated_map { 2 } else { 1 })
+        .sum()
 }
 
 /// The type that decides how the crossing local `target` is held in the frame: a union
@@ -20700,18 +20773,91 @@ fn release_replaced_fixed_cell<'ctx>(
     Ok(())
 }
 
+/// Evaluate the iterated expression of a suspending `for` ONCE, before its header, when it is a
+/// fresh value typeck recorded as a temporary of the statement that lives in the heap frame (an
+/// array or map literal, a call result, `.copy()`): the temporary's slot then holds the one
+/// collection the header and every iteration read back (`loop_iterable_pointer`). The header and
+/// the body used to evaluate it again each time, which called the function again on every pass
+/// (an effect repeated) and allocated a collection per evaluation that only the last one's slot
+/// ever freed. A place (`rows`, `board.rows`) is not a temporary: it is re-read each time, so a
+/// write that replaces the place in the body is seen.
+///
+/// O(1) time to emit; the evaluation runs once per loop.
+fn hold_loop_iterable<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    iter: &Expr,
+) -> Result<Option<PointerValue<'ctx>>, String> {
+    let span = iter.span();
+    let Some(slot) = cg.held_temporary_slot((span.start, span.end)) else {
+        return Ok(None);
+    };
+    lower_expr(cg, iter)?;
+    Ok(Some(slot))
+}
+
+/// The collection a suspending `for` iterates, read back at the header and in the body: the held
+/// temporary when `hold_loop_iterable` kept one, else the iterated place re-read.
+///
+/// O(1) time.
+fn loop_iterable_pointer<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    iter: &Expr,
+    held: Option<PointerValue<'ctx>>,
+) -> Result<PointerValue<'ctx>, String> {
+    match held {
+        Some(slot) => Ok(cg
+            .builder
+            .build_load(cg.ptr(), slot, "sm_iterable")
+            .map_err(|err| format!("sm for iterable load: {err}"))?
+            .into_pointer_value()),
+        None => Ok(lower_expr(cg, iter)?.into_pointer_value()),
+    }
+}
+
+/// Keep the copy a suspending loop made for its variable in the iteration's frame slot, so the
+/// iteration's end (and a `return` or propagation in the body) releases it from there. The copy
+/// is an SSA value of one resume invocation and the body may suspend, so only the slot reaches
+/// the release. A string, array or map only (the kinds a heap frame slot keeps, as
+/// `ReleaseKind::has_frame_backing`); returns whether the copy is held. Any other kind stays
+/// with `release_sm_loop_copy` (a leak until C8 slice 4).
+///
+/// O(1) time.
+fn hold_loop_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    copy: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<bool, String> {
+    let resolved = cg.resolve_type(ty);
+    if !copy.is_pointer_value()
+        || !matches!(
+            release_step(&resolved),
+            ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+        )
+    {
+        return Ok(false);
+    }
+    if cg.hold_copy_in_frame(copy.into_pointer_value(), &resolved, ReleaseForm::Local)? {
+        Ok(true)
+    } else {
+        Err(
+            "internal: a suspending loop copied its variable outside a heap-frame statement"
+                .to_string(),
+        )
+    }
+}
+
 /// Release what a state-machine loop copied for its variable, at the end of an iteration.
 ///
 /// * A shape embedded in the frame (`embed_copy`) lives in the frame region its pointer slot
 ///   names: its owned fields are released there, whatever the body does.
 /// * A copy made in a body that does not suspend is an SSA value of the same resume function:
 ///   released directly.
-/// * A copy made in a body that suspends is released from the loop variable's frame slot when
-///   the variable is a crossing local (the slot is reloaded after a resume); otherwise nothing
-///   persists the copy's pointer and it is released at C8's frame release (DEFERRED: WHAT: the
-///   copy of a loop variable that is read before a `wait` but not after it; WHY: no frame slot
-///   holds it, and a slot is a frame-layout change C8 owns; COST: one copy leaked per iteration,
-///   only when the body writes the iterated collection; TRIGGER: C8 (#385) frame release).
+/// * A string, array or map copy made in a body that suspends is `held` in a slot of the
+///   iteration's heap frame (`hold_loop_copy`): `Cg::close_temporaries` released it already, and a
+///   `return` in the body did too, so nothing is emitted here.
+/// * Any other kind made in a body that suspends is released from the loop variable's frame slot
+///   when the variable is a crossing local (the slot is reloaded after a resume); otherwise it
+///   leaks until C8 slice 4 gives the kind frame bytes.
 ///
 /// O(1) time at the call site plus the copy's release; O(1) space.
 fn release_sm_loop_copy<'ctx>(
@@ -20722,7 +20868,11 @@ fn release_sm_loop_copy<'ctx>(
     owned: Option<&OwnedRead<'ctx>>,
     embed_copy: bool,
     body_suspends: bool,
+    held: bool,
 ) -> Result<(), String> {
+    if held {
+        return Ok(());
+    }
     if embed_copy {
         let region = cg
             .builder
@@ -28062,7 +28212,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         frame_backed: bool,
     ) -> Result<bool, String> {
         let spans = self.typed.temporaries.released_at(key.0, key.1).to_vec();
-        if spans.is_empty() {
+        if spans.is_empty() && !frame_backed {
             return Ok(false);
         }
         let mut frame = Vec::with_capacity(spans.len());
@@ -28130,6 +28280,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             });
         }
         self.temporary_frames.push(frame);
+        if frame_backed {
+            self.wait_frame_marks.push(self.temporary_frames.len());
+        }
         Ok(true)
     }
 
@@ -28189,6 +28342,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if !opened {
             return Ok(());
         }
+        if self.wait_frame_marks.last() == Some(&self.temporary_frames.len()) {
+            self.wait_frame_marks.pop();
+        }
         let frame = self.temporary_frames.pop().ok_or_else(|| {
             "internal: a statement closed a temporary frame nobody opened".to_string()
         })?;
@@ -28196,6 +28352,64 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return Ok(());
         }
         self.release_temporary_frame(&frame, "statement_end")
+    }
+
+    /// Open an empty frame of heap-frame slots for one iteration of a suspending loop: the copies
+    /// its variable makes (`hold_copy_in_frame`) are released by `close_temporaries(true)` at the
+    /// iteration's end, and by a `return` or auto-propagation inside the body
+    /// (`release_open_temporaries`), which read every open frame.
+    fn open_iteration_frame(&mut self) {
+        self.temporary_frames.push(Vec::new());
+        self.wait_frame_marks.push(self.temporary_frames.len());
+    }
+
+    /// The slot of the temporary built by the expression at `span` when it lives in a slot of the
+    /// heap frame (a suspending statement's temporary): what survives a `wait` and can be read back
+    /// after a resume. `None` for a value no open frame names, or one in an entry-block slot.
+    fn held_temporary_slot(&self, span: (usize, usize)) -> Option<PointerValue<'ctx>> {
+        self.temporary_frames
+            .iter()
+            .rev()
+            .flat_map(|frame| frame.iter())
+            .find(|temporary| temporary.span == span && temporary.frame_slot.is_some())
+            .map(|temporary| temporary.slot)
+    }
+
+    /// Keep `value`, a copy a suspending statement made (a loop variable's, an argument staged into
+    /// a suspending call), in a slot of the heap frame and give it to the innermost open frame, so
+    /// the end of that statement or iteration releases it, as does a `return` or auto-propagation
+    /// in between. The pointer survives a `wait` there: an SSA value does not (a resume gets a new
+    /// stack frame). Returns false, holding nothing, when the innermost open frame is not a
+    /// heap-frame one (a statement routed here for a CPU group alone, which reserves no slots).
+    /// Running out of reserved slots is an internal error (`copy_slot_count`).
+    ///
+    /// O(1) time.
+    fn hold_copy_in_frame(
+        &mut self,
+        value: PointerValue<'ctx>,
+        ty: &Type,
+        form: ReleaseForm,
+    ) -> Result<bool, String> {
+        if self.wait_frame_marks.last() != Some(&self.temporary_frames.len()) {
+            return Ok(false);
+        }
+        let index = self.next_wait_temporary_slot()?;
+        let slot = self.frame_slot_ptr_in_entry(index)?;
+        self.builder
+            .build_store(slot, value)
+            .map_err(|err| format!("hold a copy in the frame: {err}"))?;
+        let frame = self
+            .temporary_frames
+            .last_mut()
+            .ok_or("internal: a copy was held with no open frame")?;
+        frame.push(TemporarySlot {
+            span: (usize::MAX, usize::MAX),
+            slot,
+            frame_slot: Some(index),
+            ty: ty.clone(),
+            form,
+        });
+        Ok(true)
     }
 
     /// Release every live temporary of every open statement, innermost first: what a `return` and
