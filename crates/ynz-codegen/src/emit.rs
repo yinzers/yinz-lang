@@ -10505,6 +10505,15 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     current_state: &mut usize,
 ) -> Result<(), String> {
+    // A temporary's slot is an entry-block `alloca`, which a resume does not keep. The statements
+    // that suspend open no temporary frame (`Cg::open_temporaries`); this checks it.
+    if !cg.temporary_frames.is_empty() {
+        return Err(
+            "internal: a statement that suspends was lowered inside an open temporary frame; its \
+             temporaries would not survive the resume"
+                .to_string(),
+        );
+    }
     match stmt {
         // v0.3-M4 Phase 2 — suspending conduit-method statements (`ch.send(v)`,
         // `let x = ch.receive()`, `h.send(v)`, `let r = h.receive()`), classified via the
@@ -19370,6 +19379,7 @@ fn lower_stmt_return<'ctx>(
                 }
             }
         }
+        cg.release_at_return(edge)?;
         cg.builder
             .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
             .map_err(|e| format!("sm resume ready ret: {e}"))?;
@@ -20734,6 +20744,7 @@ fn lower_expr_node<'ctx>(
                             .map_err(|e| format!("sm nap branch: {e}"))?;
                         // Error path: store {error_ptr, 0} to frame return slot, signal Ready.
                         cg.builder.position_at_end(propagate_bb);
+                        cg.release_at_propagation(ident_span)?;
                         state_machine::store_return_value_errors(
                             cg.ctx,
                             &cg.builder,
@@ -27788,14 +27799,18 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// A statement is about to run: open a frame of the temporaries typeck recorded for the
     /// release point `key` (`TypedModule::temporaries`), one entry-block slot each, set to null
     /// here so a temporary built on one path only (or not yet built) releases nothing. Returns
-    /// whether a frame was opened, for `close_temporaries`. A state-machine function releases no
-    /// temporary (C8).
+    /// whether a frame was opened, for `close_temporaries`.
+    ///
+    /// A state-machine function opens frames the same way, for the statements it lowers through
+    /// `lower_stmt`. Those never contain a suspension (`stmt_needs_sm_walker` routes a statement
+    /// with a `wait`, a suspending call or a conduit suspension to `lower_sm_stmt_with_wait`, which
+    /// opens no frame), so a slot is built, read and released inside one resume invocation and
+    /// an entry-block `alloca` is enough: no temporary needs a frame slot, and neither the frame
+    /// layout nor the crossing set changes. A wait-bearing statement's temporaries are never
+    /// built into a slot (`bind_temporary` finds no frame) and leak: a later slice's producer.
     ///
     /// O(t) time for t temporaries of the statement.
     fn open_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
-        if self.sm_frame_ptr.is_some() {
-            return Ok(false);
-        }
         let spans = self.typed.temporaries.released_at(key.0, key.1).to_vec();
         if spans.is_empty() {
             return Ok(false);
@@ -27979,10 +27994,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// The release at the `return` whose statement span is `span`.
     fn release_at_return(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        self.release_open_temporaries("return_temporary")?;
+        // A resume function releases the temporaries of the open statements only; its loop copies
+        // and frame locals are later slices.
         if self.sm_frame_ptr.is_some() {
             return Ok(());
         }
-        self.release_open_temporaries("return_temporary")?;
         self.release_open_loop_copies()?;
         let entries = self.typed.release_plan.return_edge(span).ok_or_else(|| {
             format!(
@@ -27995,10 +28012,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// The release at the auto-propagation fired by the identifier read at `span`.
     fn release_at_propagation(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        self.release_open_temporaries("propagation_temporary")?;
+        // As `release_at_return`: a resume function releases temporaries only.
         if self.sm_frame_ptr.is_some() {
             return Ok(());
         }
-        self.release_open_temporaries("propagation_temporary")?;
         self.release_open_loop_copies()?;
         let entries = self
             .typed

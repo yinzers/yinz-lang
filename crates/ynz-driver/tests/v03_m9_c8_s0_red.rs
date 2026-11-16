@@ -87,6 +87,20 @@ macro_rules! balanced_program {
     };
 }
 
+/// `green_program!` is `balanced_program!` for a producer a slice has fixed: the same body, no `#[ignore]`.
+macro_rules! green_program {
+    ($case:ident, $source:expr, $expected:literal, $bug:literal) => {
+        #[doc = $bug]
+        #[test]
+        fn $case() {
+            at_both_optimization_levels(|no_optimize| {
+                let built = build_source($source, stringify!($case), no_optimize);
+                assert_run_balances(&built, $bug, Some($expected), no_optimize);
+            });
+        }
+    };
+}
+
 // ── (a) C2 frame-retirement fixtures ────────────────────────────────────────────────────────
 
 /// ASan guard, green today and after C8: the caller's `free_frame` after Ready neither double
@@ -230,7 +244,7 @@ function entrypoint() -> nothing {
 }
 ";
 
-balanced_program!(
+green_program!(
     producer_p2_statement_end_temporaries,
     SM_TEMPORARIES,
     "3\ntotal 3\n",
