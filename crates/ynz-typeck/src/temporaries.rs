@@ -15,7 +15,8 @@
 //!   owned value, `copied_at_return`, so this holds for an imported one too), an array, map or
 //!   shape literal, a fresh string (`string_ownership::is_fresh_string_expr`) or an explicit
 //!   `.copy()`;
-//! * the value owns heap the plain emitter releases: a string, array, map or flat shape; and
+//! * the value owns heap the plain emitter releases: a string, array, map or flat shape, or a
+//!   value of a type parameter (judged per instance by codegen); and
 //! * nothing takes it: a `let`, an assignment, a `return`, a store, a `give` argument, a
 //!   `background` argument or an element of a literal owns the value from then on, so it is not
 //!   a temporary. Every other position only reads it (an operand, an interpolated part, a
@@ -355,8 +356,13 @@ impl Walk<'_> {
                 inner.as_ref(),
                 Type::String | Type::Shape { .. } | Type::Number { precision: ..=34 }
             ));
+        // A value of a type parameter `T` (`value.copy()` in a generic body): the body is checked once,
+        // so it is recorded as one that may own heap, and codegen releases it only in an instance
+        // whose `T` is a string, array, map or shape (`Cg::open_temporaries`).
+        let is_type_parameter = matches!(ty, Type::TypeParam { .. });
         owns_a_channel_reference
             || owns_a_returned_payload
+            || is_type_parameter
             || matches!(
                 heap_class_of(ty, &self.facts.tables),
                 HeapClass::Heap(

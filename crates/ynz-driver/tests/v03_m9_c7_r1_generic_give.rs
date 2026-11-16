@@ -188,3 +188,34 @@ function entrypoint() -> nothing {
         "b 4\n2\n2\n",
     );
 }
+
+#[test]
+fn a_fresh_type_parameter_value_no_binding_holds_is_released_per_instance() {
+    // Bug (High: leak): `value.copy()` and an `.or` fallback built from it have type `T`, which
+    // `temporaries` did not list, so the copy leaked in every instance whose `T` owns heap
+    // (string, array, shape); the `int` instance owns nothing and must stay untouched.
+    assert_balanced_and_clean(
+        "c7_r1_temporary",
+        "
+shape Row {
+  name: string
+}
+function burn<T>(share value: T) -> nothing {
+  let items: array<T> = []
+  value.copy()
+  items.get(0).or(value.copy())
+  print(1)
+}
+function entrypoint() -> nothing {
+  let n = 4
+  let name: string = `a ${n}`
+  burn(name)
+  burn([n, 1])
+  let row: Row = { name: `b ${n}` }
+  burn(row)
+  burn(5)
+}
+",
+        "1\n1\n1\n1\n",
+    );
+}

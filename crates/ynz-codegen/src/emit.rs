@@ -27453,7 +27453,25 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     span.0, span.1
                 )
             })?;
+            // Typeck records a temporary of type `T` as one that may own heap. This instance owns
+            // what its type says: no slot for an `int`, and none for a kind this emitter does not
+            // release as a temporary (a leak, never a double free).
+            let declared_as_type_parameter = matches!(ty, Type::TypeParam { .. });
             let ty = self.resolve_type(&ty);
+            if declared_as_type_parameter
+                && !(self.releases_in_instance(
+                    ynz_typeck::release_plan::ReleaseKind::TypeParameter,
+                    &ty,
+                ) && matches!(
+                    release_step(&ty),
+                    ReleaseStep::String
+                        | ReleaseStep::Array { .. }
+                        | ReleaseStep::Map { .. }
+                        | ReleaseStep::Shape { .. }
+                ))
+            {
+                continue;
+            }
             let slot = self.alloca_in_entry_llvm(self.ptr(), "temporary")?;
             self.builder
                 .build_store(slot, self.ptr().const_null())
