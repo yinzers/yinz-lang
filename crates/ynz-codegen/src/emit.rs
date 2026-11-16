@@ -2409,9 +2409,9 @@ struct Cg<'ctx, 'g> {
     // `let`, the handle `let` and parameter materialization). `emit_release_edge` reads it: a
     // release-plan entry names a binding and a kind, the helper needs the type.
     local_types: HashMap<String, Type>,
-    // v0.3-M9 C7 slice 1: what lowering has seen of the reads that may take a string out of its
-    // binding (`StringTakeEvidence`). Unused in a state-machine function (it releases nothing).
-    string_takes: StringTakeEvidence,
+    // v0.3-M9 C7 slice 2: the slots a string value, read at its last use, is taken out of if the
+    // store seam takes it, by the value's LLVM reference (`Cg::note_string_last_use`).
+    string_take_slots: HashMap<usize, Vec<PointerValue<'ctx>>>,
     // v0.3-M9 C7 slice 1: the names of this function's `give` parameters (`emit_release_edge`).
     given_params: HashSet<String>,
 }
@@ -7513,7 +7513,7 @@ fn plain_cg<'ctx, 'g>(
         fused_group: None,
         fused_group_fired: false,
         local_types: HashMap::new(),
-        string_takes: StringTakeEvidence::default(),
+        string_take_slots: HashMap::new(),
         given_params: HashSet::new(),
     }
 }
@@ -7952,7 +7952,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         fused_group: fused_candidates.clone(),
         fused_group_fired: false,
         local_types: HashMap::new(),
-        string_takes: StringTakeEvidence::default(),
+        string_take_slots: HashMap::new(),
         given_params: HashSet::new(),
     };
 
@@ -19342,12 +19342,11 @@ fn channel_drop_glue<'ctx>(
 /// consumer of the result sees the union (`Cg::expr_type`). An `is` arm's narrowed binding
 /// already lowers to its envelope and is not wrapped again.
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
-    cg.string_takes.mark_borrow_contexts(expr);
     let span = expr.span();
     let key = (span.start, span.end);
     let Some(coercion) = cg.coercion_at(key).cloned() else {
         let val = lower_expr_node(cg, expr)?;
-        remember_movable_string(cg, expr, val);
+        remember_movable_string(cg, expr, val)?;
         remember_moved_cells(cg, expr, val);
         return Ok(val);
     };
@@ -19358,7 +19357,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     let plain_ty = cg.expr_type(expr);
     if let (Ok(val), false) = (&lowered, cg.is_narrowed_envelope_ident(expr)) {
         // A string entering a union slot is stored in the envelope: the slot owns its bytes.
-        remember_movable_string(cg, expr, *val);
+        remember_movable_string(cg, expr, *val)?;
     }
     cg.coercion_inner = outer;
     let val = lowered?;
@@ -19387,14 +19386,23 @@ fn remember_moved_cells<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValu
 /// A string typeck says nobody else holds (a fresh string, or the last use of its binding:
 /// `TypedModule::string_moves`) is remembered, so the store that takes it can move it instead
 /// of copying it.
-fn remember_movable_string<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValueEnum<'ctx>) {
+fn remember_movable_string<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+) -> Result<(), String> {
     let span = expr.span();
     if val.is_pointer_value()
         && cg.typed.string_moves.contains(span.start, span.end)
         && is_string_like(&cg.resolve_type(&cg.expr_type(expr)))
     {
         cg.owned_string_values.insert(val.as_value_ref() as usize);
+        // A binding read at its last use: the store seam nulls its slot if it takes the string.
+        if matches!(expr, Expr::Ident(..)) {
+            cg.note_string_last_use(val, span)?;
+        }
     }
+    Ok(())
 }
 
 /// True for the types whose value is a string pointer (`string`, `sensitive string`).
@@ -19425,6 +19433,7 @@ fn own_string_for_store<'ctx>(
         .owned_string_values
         .contains(&(val.as_value_ref() as usize))
     {
+        cg.take_string_slots(val)?;
         return Ok(val);
     }
     let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
@@ -19533,11 +19542,14 @@ fn own_read_for_store<'ctx>(
     let pointer = val.into_pointer_value();
     match &resolved {
         string if is_string_like(string) => {
-            if may_point
-                || cg
-                    .owned_string_values
-                    .contains(&(val.as_value_ref() as usize))
+            if may_point {
+                return Ok(kept);
+            }
+            if cg
+                .owned_string_values
+                .contains(&(val.as_value_ref() as usize))
             {
+                cg.take_string_slots(val)?;
                 return Ok(kept);
             }
             let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
@@ -19971,7 +19983,6 @@ fn lower_expr_node<'ctx>(
         }
 
         Expr::Ident(name, ident_span) => {
-            cg.string_takes.note_read(ident_span);
             if let Some(envelope) = cg.narrowed_envelope_use(name, ident_span)? {
                 return Ok(envelope.into());
             }
@@ -20113,7 +20124,9 @@ fn lower_expr_node<'ctx>(
                 // which returns the ptr for .or()/.failed() method dispatch.
             }
 
-            load(cg, slot, &ty, name)
+            let loaded = load(cg, slot, &ty, name)?;
+            cg.null_handed_founders(ident_span)?;
+            Ok(loaded)
         }
 
         Expr::BinOp { op, lhs, rhs, .. } => {
@@ -25911,135 +25924,38 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 // (`Cg::release_fn`); it derives no transfer fact of its own (`authoritative-derivation.md`).
 // A state-machine resume function emits no scope release (C8's frame release).
 //
-// Slice 1 releases a binding only when nothing in this slice can leave a second holder of its
-// value, because no move site nulls a slot yet (slice 2). `Cg::plain_release_of` is the ONE place
-// that says which entries those are, and every entry it declines is named there.
+// `Cg::plain_release_of` is the ONE place that says which plan entries are released, and every
+// entry it declines is named there. A move site (`MoveSite`) nulls the founder's slot at the take,
+// so a `ReleaseIfLive` entry is released exactly when its slot is non-null: `Cg::null_handed_founders`
+// at the identifier read of a value handed over, `Cg::take_string_slots` where the store seam takes
+// a string at its last use.
 
-/// A string method whose result never holds the receiver and which stores nothing: the read of its
-/// receiver is a borrow, never a take.
-const STRING_BORROW_METHODS: &[&str] = &[
-    "count",
-    "byteCount",
-    "graphemeCount",
-    "contains",
-    "startsWith",
-    "endsWith",
-    "byteAt",
-    "indexOf",
-    // These always build a new string (`FRESH_STRING_METHODS` in typeck's `string_ownership`).
-    "toUpperCase",
-    "toLowerCase",
-    "trim",
-    "substring",
-    "replace",
-];
-
-/// Evidence, gathered while a plain function lowers, that no read of a string binding takes the
-/// string out of it (v0.3-M9 C7 slice 1).
-///
-/// WHY: a `ReleaseIfLive` string is released only if its slot is live, but nothing nulls a slot
-/// until slice 2's move sites, so a string a store, a `give`, a send or a `return` took would be
-/// freed under its new holder. The plan lists a string's reads that MAY take it (`move_site`);
-/// the string is released when every one of them was lowered in a context that cannot take it
-/// (a method receiver that stores nothing, an interpolation part, an operand, a `print`
-/// argument). Positive evidence only: a read nobody classified keeps the string unreleased (a
-/// leak, never a double free). Slice 2 replaces this with the slot nulling and deletes it.
-#[derive(Default)]
-struct StringTakeEvidence {
-    /// Founder codegen name -> the spans of the plan's move sites inside this function.
-    move_sites: HashMap<String, Vec<(usize, usize)>>,
-    /// Spans of identifier reads a parent expression lowers as a borrow.
-    borrow_contexts: HashSet<(usize, usize)>,
-    /// Move-site spans whose read was lowered in a borrow context.
-    borrowed_sites: HashSet<(usize, usize)>,
-}
-
-impl StringTakeEvidence {
-    /// The plan's move sites inside the function body at `body`.
-    ///
-    /// O(move sites in the module) time, O(sites in the function) memory.
-    fn for_body(
-        plan: &ynz_typeck::release_plan::ReleasePlan,
-        body: &ynz_diagnostics::SourceSpan,
-    ) -> Self {
-        let mut evidence = StringTakeEvidence::default();
-        for (span, site) in plan.move_sites() {
-            if body.start <= span.0 && span.1 <= body.end {
-                evidence
-                    .move_sites
-                    .entry(site.founder_codegen_name.clone())
-                    .or_default()
-                    .push(span);
-            }
-        }
-        evidence
-    }
-
-    /// Record which direct operands of `expr` are read as borrows. Called before `expr` lowers.
-    ///
-    /// O(parts) time.
-    fn mark_borrow_contexts(&mut self, expr: &Expr) {
-        let mut mark = |operand: &Expr| {
-            if let Expr::Ident(_, span) = operand {
-                self.borrow_contexts.insert((span.start, span.end));
-            }
-        };
-        match expr {
-            Expr::MethodCall {
-                receiver, method, ..
-            } if STRING_BORROW_METHODS.contains(&method.as_str()) => mark(receiver),
-            Expr::InterpolatedString(parts, _) => {
-                for part in parts {
-                    if let ynz_ast::nodes::StringPart::Expr(inner, _) = part {
-                        mark(inner);
-                    }
-                }
-            }
-            Expr::BinOp {
-                op:
-                    BinOpKind::Add
-                    | BinOpKind::Lt
-                    | BinOpKind::LtEq
-                    | BinOpKind::Gt
-                    | BinOpKind::GtEq
-                    | BinOpKind::EqEq
-                    | BinOpKind::NotEq,
-                lhs,
-                rhs,
-                ..
-            } => {
-                mark(lhs);
-                mark(rhs);
-            }
-            Expr::Call(call) if matches!(&call.callee, Expr::Ident(name, _) if name == "print") => {
-                for argument in &call.args {
-                    mark(argument);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// An identifier read at `span` is being lowered: remember it when it is a move site that a
-    /// parent lowered as a borrow.
-    fn note_read(&mut self, span: &ynz_diagnostics::SourceSpan) {
-        let key = (span.start, span.end);
-        if self.borrow_contexts.contains(&key) {
-            self.borrowed_sites.insert(key);
-        }
-    }
-
-    /// `Some(true)` when every move site of `founder` was lowered as a borrow, `Some(false)` when
-    /// one was not (or was never seen), `None` when the plan has no move site for it.
-    fn every_read_borrows(&self, founder: &str) -> Option<bool> {
-        let sites = self.move_sites.get(founder)?;
-        Some(sites.iter().all(|site| self.borrowed_sites.contains(site)))
+/// True for the plan kinds the plain emitter releases, and so nulls slots of. Exhaustive: a new
+/// kind fails to compile until it says what it does.
+fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
+    use ynz_typeck::release_plan::ReleaseKind;
+    match kind {
+        ReleaseKind::String
+        | ReleaseKind::Array
+        | ReleaseKind::Map
+        | ReleaseKind::Channel
+        | ReleaseKind::TaskHandle
+        | ReleaseKind::Shape => true,
+        // SLICE 3: a nested shape, `maybe`, union view, `fixed` and errors-capable slot keep
+        // today's behaviour (no release). `dynamic` and a map entry never own a local slot.
+        ReleaseKind::NestedShape
+        | ReleaseKind::Maybe
+        | ReleaseKind::Union
+        | ReleaseKind::Fixed
+        | ReleaseKind::ErrorsCapable
+        | ReleaseKind::Dynamic
+        | ReleaseKind::MapEntry => false,
     }
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Gather what `emit_release_edge` needs of the plain function `f` before its body lowers:
-    /// its `give` parameters and the plan's string move sites inside it.
+    /// its `give` parameters.
     fn begin_plain_release_tracking(&mut self, f: &FunctionDecl) {
         self.given_params = f
             .params
@@ -26047,10 +25963,84 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .filter(|param| matches!(param.ownership, Some(OwnershipModifier::Give)))
             .map(|param| param.name.clone())
             .collect();
-        self.string_takes = StringTakeEvidence::for_body(&self.typed.release_plan, &f.body.span);
     }
 
-    /// What slice 1 releases of one plan entry: its type and whether its slot is null-checked
+    /// The slots of the founders a read at `span` takes a value out of for `cause`, in a plain
+    /// function. A founder whose kind the plain emitter does not release has no slot nulled, and a
+    /// state-machine function nulls nothing (C8's frame release). A founder with no slot is an
+    /// internal error: nulling the wrong slot, or none, is a double free.
+    ///
+    /// O(founders at the span) time.
+    fn founder_slots_at(
+        &self,
+        span: &ynz_diagnostics::SourceSpan,
+        cause: ynz_typeck::release_plan::MoveCause,
+    ) -> Result<Vec<PointerValue<'ctx>>, String> {
+        if self.sm_frame_ptr.is_some() {
+            return Ok(Vec::new());
+        }
+        let mut slots = Vec::new();
+        for site in self.typed.release_plan.move_site(span) {
+            let name = site.founder_codegen_name.as_str();
+            if site.cause != cause
+                || !plain_releases_kind(site.kind)
+                || self.soa_bindings.contains_key(name)
+            {
+                continue;
+            }
+            let slot = *self.locals.get(name).ok_or_else(|| {
+                format!(
+                    "internal: the read at {}..{} takes a value out of `{name}`, which has no slot",
+                    span.start, span.end
+                )
+            })?;
+            slots.push(slot);
+        }
+        Ok(slots)
+    }
+
+    /// Store null into each of `slots`: the founder no longer holds what was taken.
+    fn null_slots(&self, slots: &[PointerValue<'ctx>]) -> Result<(), String> {
+        for slot in slots {
+            self.builder
+                .build_store(*slot, self.ptr().const_null())
+                .map_err(|err| format!("null a taken slot: {err}"))?;
+        }
+        Ok(())
+    }
+
+    /// The identifier read at `span` hands its value over (a give, a send, a store, a spawn that
+    /// gives it): null the founder's slot, so a `ReleaseIfLive` release skips it.
+    fn null_handed_founders(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        let slots = self.founder_slots_at(span, ynz_typeck::release_plan::MoveCause::Handed)?;
+        self.null_slots(&slots)
+    }
+
+    /// `value` is a string read at its last use: remember the founders' slots, so that the store
+    /// seam nulls them if (and only if) it takes the string (`take_string_slots`).
+    fn note_string_last_use(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        span: &ynz_diagnostics::SourceSpan,
+    ) -> Result<(), String> {
+        let slots = self.founder_slots_at(span, ynz_typeck::release_plan::MoveCause::LastUse)?;
+        if !slots.is_empty() {
+            self.string_take_slots
+                .insert(value.as_value_ref() as usize, slots);
+        }
+        Ok(())
+    }
+
+    /// The store seam took the string `value` instead of copying it: null the slots it was read
+    /// from (`note_string_last_use`). Nothing for a string no binding held.
+    fn take_string_slots(&self, value: BasicValueEnum<'ctx>) -> Result<(), String> {
+        match self.string_take_slots.get(&(value.as_value_ref() as usize)) {
+            Some(slots) => self.null_slots(slots),
+            None => Ok(()),
+        }
+    }
+
+    /// What the plain emitter releases of one plan entry: its type and whether its slot is null-checked
     /// first, or `None` for an entry this slice leaves unreleased (a leak, never an early or double
     /// free). THE rule; every declined fate is named here.
     ///
@@ -26066,22 +26056,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Fate::Release(kind) => (kind, false),
             Fate::ReleaseIfLive(kind) => (kind, true),
         };
-        match kind {
-            ReleaseKind::String
-            | ReleaseKind::Array
-            | ReleaseKind::Map
-            | ReleaseKind::Channel
-            | ReleaseKind::TaskHandle
-            | ReleaseKind::Shape => {}
-            // SLICE 3: a nested shape, `maybe`, union view, `fixed` and errors-capable slot keep
-            // today's behaviour (no release). `dynamic` and a map entry never own a local slot.
-            ReleaseKind::NestedShape
-            | ReleaseKind::Maybe
-            | ReleaseKind::Union
-            | ReleaseKind::Fixed
-            | ReleaseKind::ErrorsCapable
-            | ReleaseKind::Dynamic
-            | ReleaseKind::MapEntry => return Ok(None),
+        if !plain_releases_kind(kind) {
+            return Ok(None);
         }
         // SLICE 2: a `give` parameter. The callee releases what it was given only together with
         // the caller's slot nulling and the spawn ladder dropping its flat free of such
@@ -26094,24 +26070,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // array release walks. SLICE 3 owns releasing them (it pins that layout).
         if self.soa_bindings.contains_key(name) {
             return Ok(None);
-        }
-        if only_if_live {
-            // SLICE 2: a conditionally moved array, map, channel, handle or shape needs its move
-            // sites to null the slot; until then its slot stays non-null after a take.
-            if kind != ReleaseKind::String {
-                return Ok(None);
-            }
-            match self.string_takes.every_read_borrows(name) {
-                Some(true) => {}
-                // SLICE 2: a string some read may take (a store, a `give`, a send, a `return`).
-                Some(false) => return Ok(None),
-                None => {
-                    return Err(format!(
-                        "internal: the release plan releases `{name}` only if live, but lists no \
-                         read that moves it"
-                    ))
-                }
-            }
         }
         let ty =
             self.local_types.get(name).cloned().ok_or_else(|| {

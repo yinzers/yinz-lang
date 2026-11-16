@@ -161,11 +161,25 @@ pub struct ReleaseEntry {
     pub fate: Fate,
 }
 
-/// A read that moves a value out of its founder: codegen nulls the founder's slot right after it.
+/// Why a read takes a value out of its founder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveCause {
+    /// The read was handed over (a give, a send, a store, a spawn that gives it): the value always
+    /// leaves the founder, so codegen nulls its slot at the identifier read.
+    Handed,
+    /// A string at its last use: it leaves the founder only where the store seam takes it, so
+    /// codegen nulls the slot there (a call that only borrows it leaves the string owned).
+    LastUse,
+}
+
+/// A read that moves a value out of its founder: codegen nulls the founder's slot at the take.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MoveSite {
     pub founder: DeclKey,
     pub founder_codegen_name: String,
+    /// What the founder releases (the kinds the plain emitter nulls slots of).
+    pub kind: ReleaseKind,
+    pub cause: MoveCause,
 }
 
 /// Which kind of exit an edge is.
@@ -1079,13 +1093,13 @@ impl ReleasePlan {
         let holes: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let codegen_name_of =
             |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
-        let mut releasing_if_live: HashSet<DeclKey> = HashSet::new();
+        let mut releasing_if_live: HashMap<DeclKey, ReleaseKind> = HashMap::new();
         for ((kind, span, fates), raw_edge) in resolved.edges.iter().zip(&function.edges) {
             let list: Vec<ReleaseEntry> = fates
                 .iter()
                 .map(|(decl, fate)| {
-                    if matches!(fate, Fate::ReleaseIfLive(_)) {
-                        releasing_if_live.insert(decl.clone());
+                    if let Fate::ReleaseIfLive(kind) = fate {
+                        releasing_if_live.insert(decl.clone(), *kind);
                     }
                     ReleaseEntry {
                         decl: decl.clone(),
@@ -1126,30 +1140,37 @@ impl ReleasePlan {
         // Move sites: where a read takes a value out of a founder that may release later.
         for site in &function.move_sites {
             if let Some(ReleaseAnchor::Founder { decl, .. }) = anchor_of(&site.named) {
-                if releasing_if_live.contains(&decl) {
+                if let Some(&kind) = releasing_if_live.get(&decl) {
                     let founder_codegen_name = codegen_name_of(&decl);
                     self.add_move_site(
                         site.span,
                         MoveSite {
                             founder: decl,
                             founder_codegen_name,
+                            kind,
+                            cause: MoveCause::Handed,
                         },
                     );
                 }
             }
         }
         for (span, decl) in strings.last_uses() {
-            if releasing_if_live.contains(decl) && function_declares(function, decl) {
+            if let (Some(&kind), true) = (
+            releasing_if_live.get(decl),
+            function_declares(function, decl),
+        ) {
                 self.add_move_site(
                     span,
                     MoveSite {
                         founder: decl.clone(),
                         founder_codegen_name: codegen_name_of(decl),
+                        kind,
+                        cause: MoveCause::LastUse,
                     },
                 );
             }
         }
-        for decl in &releasing_if_live {
+        for decl in releasing_if_live.keys() {
             let has_site = self
                 .move_sites
                 .values()
