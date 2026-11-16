@@ -311,3 +311,49 @@ fn storing_numbers_allocates_nothing_per_element() {
         "1000 numbers allocated {many} cells against {few} for 10: a cell per element"
     );
 }
+
+#[test]
+fn union_variant_holding_a_number_survives_container_return_and_spawn() {
+    // Bug caught: a number reaching a union through a shape variant (a bare `number` variant is
+    // refused: "can't be stored in a union yet") pointing into the building frame, in an array
+    // of unions, as a returned union, or as a spawned task's argument. Tier: High.
+    let source = program(
+        "shape Circle {\n  radius: float\n}\nshape Boxed {\n  value: number\n}\n\
+         shape Thing = Circle | Boxed\n\n\
+         function describe(share held: Thing) -> number {\n  let fallback: number = 0.0\n  \
+         if (held) {\n    is Boxed => {\n      return held.value\n    }\n    is Circle => {\n      \
+         return fallback\n    }\n  }\n  return fallback\n}\n\n\
+         function make(seed: number) -> array<Thing> {\n  let doubled: number = seed * 2.0\n  \
+         let first: Boxed = { value: seed }\n  let second: Boxed = { value: doubled }\n  \
+         let items: array<Thing> = []\n  let one: Thing = first\n  let two: Thing = second\n  \
+         items.add(one)\n  items.add(two)\n  return items\n}\n\n\
+         function produce(seed: number) -> Thing {\n  let doubled: number = seed * 2.0\n  \
+         let boxed: Boxed = { value: doubled }\n  let wrapped: Thing = boxed\n  return wrapped\n}\n\n\
+         function slow(held: Thing) -> nothing {\n  wait sleep(80)\n  print(`task ${describe(held)}`)\n}\n\n\
+         function launch(seed: number) -> nothing {\n  let doubled: number = seed * 2.0\n  \
+         let boxed: Boxed = { value: doubled }\n  let wrapped: Thing = boxed\n  \
+         background slow(wrapped)\n}\n",
+        "  let seed: number = 1.5\n  let items = make(seed)\n  let single = produce(seed)\n  \
+         launch(seed)\n  let scratch = clobber(5)\n  let spare: Boxed = { value: 0.0 }\n  \
+         let fallback: Thing = spare\n  let one = items[1].or(fallback)\n  \
+         print(`${describe(one)} ${describe(single)} ${scratch}`)\n  wait sleep(400)\n",
+    );
+    for no_optimize in [false, true] {
+        let built = build_source(&source, "c6 union number", no_optimize);
+        let (output, _) = run_counted(&built);
+        assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
+        assert!(
+            output.stdout.contains("3.00 3.00 54\n"),
+            "{}",
+            output.stdout
+        );
+        assert!(output.stdout.contains("task 3.00\n"), "{}", output.stdout);
+        let run = run_asan_binary(&build_asan(&built));
+        assert!(
+            !run.stderr.contains("AddressSanitizer"),
+            "AddressSanitizer reported an error:\n{}",
+            run.stderr
+        );
+        assert!(run.stdout.contains("3.00 3.00 54\n") && run.stdout.contains("task 3.00\n"));
+    }
+}

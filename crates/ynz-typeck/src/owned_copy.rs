@@ -350,7 +350,8 @@ fn elem_copy(ty: &Type) -> Option<ElemCopy> {
         OwnedCopy::StringClone => Some(ElemCopy::Nested),
         // A decimal128 `number` sits in the cell itself (16 bytes, `Cg::array_elem_size`), so
         // copying the cell copies the value and nothing points into the producing frame. (A
-        // `range` element is the other member of this plan; it is still a pointer cell.)
+        // `range` is the other member of this plan; codegen cannot lower a range element yet,
+        // so no array, map or `fixed` of ranges builds.)
         OwnedCopy::FrameLocalImmutable { .. } => Some(ElemCopy::Inline),
         // The cell is a pointer to a separate allocation — follow it.
         OwnedCopy::ArrayClone { .. } | OwnedCopy::MapClone | OwnedCopy::MaybeCellClone => {
