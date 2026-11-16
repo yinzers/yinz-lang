@@ -213,7 +213,7 @@ cost_case!(
     "v0_3_m9_c6_cost_maybe_array_let_no_write.ynz",
     "3\n",
     6,
-    4,
+    6,
     "a `let` of a `maybe<array>` and of its `.or` copying the payload array although the list is never written (cost, Rule 8)"
 );
 cost_case!(
@@ -221,7 +221,7 @@ cost_case!(
     "v0_3_m9_c6_cost_maybe_map_let_no_write.ynz",
     "1\n",
     12,
-    7,
+    12,
     "a `let` of a `maybe<map>` and of its `.or` copying the payload map although the list is never written (cost, Rule 8)"
 );
 cost_case!(

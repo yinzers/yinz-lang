@@ -117,6 +117,27 @@ pub struct AliasClass {
 }
 
 impl AliasClass {
+    /// The anchor `codegen_name` is judged by. A class joins bindings whose values one name may
+    /// reach (`found.or(backup)` reaches `rows`' item or `backup`), so it can hold several
+    /// `Owner`s, each bound only to fresh values of its own and so each its own allocation. The
+    /// class names ONE founder; when nothing in the class escapes on any path (nothing is
+    /// returned, given, sent or stored, so nothing was handed over), every other `Owner` founds
+    /// its own allocation and is released at its own scope exit like the founder, instead of
+    /// leaking. Any escape leaves the class anchor alone: a handed-over class is judged whole.
+    pub fn anchor_for(&self, codegen_name: &str) -> ReleaseAnchor {
+        if matches!(self.anchor, ReleaseAnchor::Founder { .. }) && self.escapes.is_empty() {
+            if let Some(member) = self.members.iter().find(|member| {
+                member.codegen_name == codegen_name && member.role == MemberRole::Owner
+            }) {
+                return ReleaseAnchor::Founder {
+                    decl: member.decl.clone(),
+                    codegen_name: member.codegen_name.clone(),
+                };
+            }
+        }
+        self.anchor.clone()
+    }
+
     /// True when `codegen_name` is a member.
     pub fn has_member(&self, codegen_name: &str) -> bool {
         self.members
@@ -382,7 +403,7 @@ impl TransferRecorder {
                     class
                         .members
                         .iter()
-                        .map(|member| (member.decl.clone(), class.anchor.clone()))
+                        .map(|member| (member.decl.clone(), class.anchor_for(&member.codegen_name)))
                 })
                 .collect(),
             Err(message) => {

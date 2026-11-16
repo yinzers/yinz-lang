@@ -763,7 +763,7 @@ impl ReleaseRecorder {
                 transfers
                     .function(&function.name)?
                     .class_of(codegen_name)
-                    .map(|class| class.anchor.clone())
+                    .map(|class| class.anchor_for(codegen_name))
             };
             let codegen_name_of =
                 |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
@@ -1304,7 +1304,7 @@ impl ReleasePlan {
                     violations.push(format!("{place} has no class in the record"));
                     continue;
                 };
-                let is_founder = matches!(&class.anchor,
+                let is_founder = matches!(&class.anchor_for(&entry.codegen_name),
                     ReleaseAnchor::Founder { decl, .. } if *decl == entry.decl);
                 if !is_founder {
                     let expected = match &class.anchor {
