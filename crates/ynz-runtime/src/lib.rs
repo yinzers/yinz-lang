@@ -5754,11 +5754,23 @@ mod release_walk_tests {
     /// equal computed key misses. High: data integrity (hash and equality are one contract).
     #[test]
     fn equal_decimals_hash_alike_and_unequal_ones_differ() {
-        let spellings = [
-            ["1", "1.0", "1.00", "10E-1", "0.10E1"],
-            ["2.5", "2.50", "25E-1", "250E-2", "0.25E1"],
-            ["0", "-0", "0.000", "0E+9", "-0.0"],
-            ["-3", "-3.0", "-3.000", "-30E-1", "-0.3E1"],
+        let spellings: [&[&str]; 8] = [
+            // 33 trailing zeros is the longest run a 34-digit coefficient holds.
+            &[
+                "1",
+                "1.0",
+                "1.00",
+                "10E-1",
+                "0.10E1",
+                "1.000000000000000000000000000000000",
+            ],
+            &["2.5", "2.50", "25E-1", "250E-2", "0.25E1"],
+            &["0", "-0", "0.000", "0E+9", "-0.0"],
+            &["-3", "-3.0", "-3.000", "-30E-1", "-0.3E1"],
+            &["1E+33", "10E+32", "1000000000000000000000000000000000"],
+            &["Infinity", "Inf", "+Infinity"],
+            &["-Infinity", "-Inf"],
+            &["NaN", "-NaN"],
         ];
         let mut group_hashes = Vec::new();
         for group in spellings {
@@ -5775,11 +5787,6 @@ mod release_walk_tests {
             group_hashes.len(),
             spellings.len(),
             "distinct values share a hash"
-        );
-        let nan = decimal_key_hash(ynz_numerics::QUIET_NAN);
-        assert_eq!(
-            nan,
-            decimal_key_hash(ynz_numerics::neg(ynz_numerics::QUIET_NAN))
         );
     }
 
@@ -5856,6 +5863,83 @@ mod release_walk_tests {
             assert_eq!(key, decimal("299.25"));
             ynz_map_release(copy, None, None, 0);
             ynz_map_release(map, None, None, 0);
+        }
+    }
+
+    /// Bug: NaN, an infinity or a negative zero as a key. A NaN key that never equals itself is
+    /// inserted again by every `set` and never found; `-0` and `0` land in two entries; the two
+    /// infinities collapse into one. High: data integrity.
+    #[test]
+    fn special_decimal_keys_are_one_entry_per_value() {
+        unsafe {
+            let map = ynz_map_new_decimal_keys(8);
+            for (key, value) in [
+                ("NaN", 1),
+                ("-NaN", 2),
+                ("Infinity", 3),
+                ("-Infinity", 4),
+                ("0", 5),
+                ("-0.00", 6),
+                ("1E+33", 7),
+                ("1000000000000000000000000000000000", 8),
+            ] {
+                dec_set(map, key, value);
+            }
+            assert_eq!(ynz_map_count(map), 5, "NaN, +inf, -inf, zero, 10^33");
+            assert_eq!(dec_get(map, "NaN"), Some(2));
+            assert_eq!(dec_get(map, "Inf"), Some(3));
+            assert_eq!(dec_get(map, "-Inf"), Some(4));
+            assert_eq!(dec_get(map, "0E+5"), Some(6));
+            assert_eq!(dec_get(map, "10E+32"), Some(8));
+            assert_eq!(dec_get(map, "1"), None);
+            ynz_map_release(map, None, None, 0);
+        }
+    }
+
+    /// Bug: the one `map_grow` (shared by int, string and decimal keys) or `order_push` moving an
+    /// int or string key by the wrong width or hash, so growth past the first rehash loses or
+    /// scrambles entries. Int and string keys behave as before decimal keys existed. High: data
+    /// integrity.
+    #[test]
+    fn int_and_string_keys_still_grow_find_and_keep_insertion_order() {
+        const KEYS: i64 = 300;
+        unsafe {
+            let ints = ynz_map_new(8);
+            let strings = ynz_map_new(8);
+            for entry in 0..KEYS {
+                let value = entry * 3;
+                ynz_map_set(ints, entry * 7919, value.to_ne_bytes().as_ptr(), None, 0);
+                let key = ynz_string_clone(format!("key {entry}\0").as_ptr());
+                ynz_map_set_str(strings, key, value.to_ne_bytes().as_ptr(), None, None, 0);
+            }
+            assert_eq!(ynz_map_count(ints), KEYS);
+            assert_eq!(ynz_map_count(strings), KEYS);
+            let mut out = [0u8; 8];
+            for entry in 0..KEYS {
+                assert_eq!(ynz_map_get(ints, entry * 7919, out.as_mut_ptr()), 1);
+                assert_eq!(i64::from_ne_bytes(out), entry * 3);
+                let probe = ynz_string_clone(format!("key {entry}\0").as_ptr());
+                assert_eq!(ynz_map_get_str(strings, probe, out.as_mut_ptr()), 1);
+                assert_eq!(i64::from_ne_bytes(out), entry * 3);
+                ynz_string_release(probe);
+            }
+            assert_eq!(ynz_map_get(ints, -1, out.as_mut_ptr()), 0);
+            let mut key_bits = 0i64;
+            for position in [0, KEYS - 1] {
+                assert_eq!(
+                    ynz_map_iter_get(ints, position, &mut key_bits, out.as_mut_ptr()),
+                    1
+                );
+                assert_eq!(key_bits, position * 7919, "insertion order of int keys");
+                assert_eq!(i64::from_ne_bytes(out), position * 3);
+                assert_eq!(
+                    ynz_map_iter_get_str(strings, position, &mut key_bits, out.as_mut_ptr()),
+                    1
+                );
+                assert_eq!(i64::from_ne_bytes(out), position * 3);
+            }
+            ynz_map_release(ints, None, None, 0);
+            ynz_map_release(strings, Some(release_string_glue), None, 0);
         }
     }
 }
