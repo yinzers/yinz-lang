@@ -21281,9 +21281,9 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // change WHICH allocation the task's drop ladder releases (today it owns and frees the
     // clone, and the several exact-gap E8 pins over the hand-off path encode that), which is
     // release-pass work and not a copy fix. That boundary is the one commit `6be6773` drew and
-    // this round keeps; the residual sharing left in the REFUSED arm — a default-deny `Give` of
-    // a union, where no copy exists to make — is named in parked entry 71 rather than left
-    // resting on the false claim above.
+    // this round keeps. A REFUSED type that reaches this arm is a type with no owned copy; a
+    // union parameter never does: both spawn arms give the task a slot of its own first (the
+    // state-machine arm persists it into the callee frame, the CPU arm into `bg_union_arg_cell`).
     let consumed_shape_needs_no_copy = matches!(resolved, Type::BuiltinMap { .. })
         || matches!(
             ynz_typeck::owned_copy::owned_copy_plan(&resolved),
@@ -21664,9 +21664,23 @@ fn lower_expr_background<'ctx>(
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
     let mut arg_types: Vec<Type> = Vec::new();
     let mut free_kinds: Vec<BgArgFreeKind> = Vec::new();
-    for arg in &call.args {
+    for (arg_index, arg) in call.args.iter().enumerate() {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        // An envelope-union argument is the spawner's per-site view, which dies with the
+        // spawner's frame: the task gets a slot of its own (`bg_union_arg_cell`), which the
+        // closure reads back as a view and releases after the call.
+        if let Some(union_ty) = cg
+            .callee_param_type(&callee_name, arg_index)
+            .filter(|param_ty| cg.envelope_union_variants(param_ty).is_some())
+        {
+            let (cell_bits, kind) =
+                bg_union_arg_cell(cg, val.into_pointer_value(), &union_ty, &callee_name)?;
+            arg_vals_i64.push(cell_bits);
+            arg_types.push(union_ty);
+            free_kinds.push(kind);
+            continue;
+        }
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         let kind = release_glue_free_kind(cg, kind, &ty, &callee_name)?;
         let bits = cg
@@ -21756,9 +21770,24 @@ fn lower_expr_background<'ctx>(
             .build_load(cg.i64(), slot, "cl_arg")
             .map_err(|e| format!("closure load: {e}"))?
             .into_int_value();
-        let val = cg
-            .i64_bits_to(bits, ty)
-            .map_err(|e| format!("closure i64_bits_to: {e}"))?;
+        let val = match cg.envelope_union_variants(ty) {
+            // The ctx holds the task's own union slot; the callee takes a view of it.
+            Some(variants) => {
+                let slot = cg
+                    .builder
+                    .build_int_to_ptr(bits, cg.ptr(), "cl_union_slot")
+                    .map_err(|e| format!("closure union slot: {e}"))?;
+                // The view's frame envelope belongs to the closure, not to the spawning
+                // function whose `current_fn` the emitter still holds.
+                let spawning_fn = std::mem::replace(&mut cg.current_fn, closure_fn);
+                let view = cg.union_slot_to_value(slot, &variants, "cl_union");
+                cg.current_fn = spawning_fn;
+                view?.into()
+            }
+            None => cg
+                .i64_bits_to(bits, ty)
+                .map_err(|e| format!("closure i64_bits_to: {e}"))?,
+        };
         call_args.push(val.into());
     }
 
@@ -25197,6 +25226,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|err| format!("release env size: {err}"))
             }
             ReleaseStep::Fixed { size, .. } => Ok(self.i64().const_int(size * 8, false)),
+            // An envelope union's own cell is its slot: the tag and the largest variant.
+            ReleaseStep::Union { variants } => Ok(self
+                .i64()
+                .const_int(self.union_layout(variants)?.slot_size, false)),
             other => Err(format!("internal: {other:?} has no heap cell of its own")),
         }
     }
@@ -25220,10 +25253,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let resolved = self.resolve_type(ty);
         let step = release_step(&resolved);
         let owns_cell = owns_cell
-            && matches!(
+            && (matches!(
                 step,
                 ReleaseStep::Shape { .. } | ReleaseStep::Maybe { .. } | ReleaseStep::Fixed { .. }
-            );
+            ) || (matches!(step, ReleaseStep::Union { .. })
+                && self.envelope_union_variants(&resolved).is_some()));
         let name = format!(
             "ynz_release_{}{}",
             mangle_type(&resolved),
@@ -25705,6 +25739,47 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder.position_at_end(done);
         Ok(())
     }
+}
+
+/// The task's own slot for an envelope-union `background` argument of a CPU callee: a heap cell
+/// holding the union persisted by value (a copy of what it owns, as a stored union does), plus
+/// the free kind the closure uses after the call.
+///
+/// A union value is a per-site view on the spawner's frame, so passing it through the ctx would
+/// hand the task a pointer that dangles once the spawner returns (parked entry 71). The closure
+/// rebuilds a view of the cell for the callee. A callee that declares `give` may move the payload
+/// somewhere else, so only the cell itself is freed then (the same limit as
+/// `release_glue_free_kind`); otherwise the slot's contents are released and the cell freed by
+/// the one release helper.
+///
+/// Time: O(1) here, O(n) at run time in the cells the union owns  Space: O(1)
+fn bg_union_arg_cell<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    value: PointerValue<'ctx>,
+    union_ty: &Type,
+    callee: &str,
+) -> Result<(inkwell::values::IntValue<'ctx>, BgArgFreeKind), String> {
+    let variants = cg.envelope_union_variants(union_ty).ok_or_else(|| {
+        "internal: a background union argument is not an envelope union".to_string()
+    })?;
+    let byte_size = cg.union_layout(&variants)?.slot_size;
+    let cell = cg.heap_cell(cg.i64().const_int(byte_size, false), "bg_union")?;
+    cg.union_persist_into(value, cell, &variants, "bg_union")?;
+    let kind = if cg.callee_takes_a_given_parameter(callee) {
+        BgArgFreeKind::HeapShape { byte_size }
+    } else {
+        match cg.release_fn(union_ty, true)? {
+            Some(glue) => BgArgFreeKind::ReleaseGlue {
+                glue_name: glue.get_name().to_string_lossy().into_owned(),
+            },
+            None => BgArgFreeKind::HeapShape { byte_size },
+        }
+    };
+    let bits = cg
+        .builder
+        .build_ptr_to_int(cell, cg.i64(), "bg_union_bits")
+        .map_err(|e| format!("bg union cell bits: {e}"))?;
+    Ok((bits, kind))
 }
 
 /// Upgrade the flat free kind of a `background` argument to the type's release glue, when the

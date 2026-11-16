@@ -27,6 +27,8 @@ enum Callee {
 enum Argument {
     FieldRead,
     ConsumedBinding,
+    /// A `Tag` binding handed to the union parameter, which the spawn consumes.
+    ShapeIntoUnion,
 }
 
 const DECLARATIONS: &str = "shape Circle {\n  radius: float\n}\nshape Tag {\n  name: string\n}\n\
@@ -54,6 +56,9 @@ fn union_spawn_program(callee: Callee, argument: Argument, tasks: usize) -> Stri
             "  let tag: Tag = {{ name: `boxed` }}\n  let choice: Circle | Tag = tag\n  \
              background eat(choice)\n  print({tasks})\n"
         ),
+        Argument::ShapeIntoUnion => format!(
+            "  let tag: Tag = {{ name: `boxed` }}\n  background eat(tag)\n  print({tasks})\n"
+        ),
     };
     format!(
         "{DECLARATIONS}\nfunction eat(held: Circle | Tag) -> nothing {{\n{wait_for_the_spawner}  \
@@ -70,7 +75,7 @@ fn union_spawn_program(callee: Callee, argument: Argument, tasks: usize) -> Stri
 fn assert_task_reads_its_own_union(callee: Callee, argument: Argument, no_optimize: bool) {
     let tasks = match argument {
         Argument::FieldRead => 3,
-        Argument::ConsumedBinding => 1,
+        Argument::ConsumedBinding | Argument::ShapeIntoUnion => 1,
     };
     let source = union_spawn_program(callee, argument, tasks);
     let built = build_source(&source, "c6 union spawn", no_optimize);
@@ -138,4 +143,68 @@ union_spawn_cases!(
     "parked 71: a state-machine task reads a union binding the spawn consumed (High)",
     Callee::StateMachine,
     Argument::ConsumedBinding
+);
+
+/// `(cell alloc, cell free, string alloc, string free)` of one run that spawns `tasks` tasks from
+/// a `for` loop, each handed `box.choice` (a `Tag` holding a string).
+fn counted_union_loop_run(suspending_callee: bool, tasks: usize) -> (u64, u64, u64, u64) {
+    let callee_wait = if suspending_callee {
+        "  wait sleep(1)\n"
+    } else {
+        ""
+    };
+    let source = format!(
+        "{DECLARATIONS}\nfunction eat(held: Circle | Tag) -> nothing {{\n{callee_wait}  \
+         print(777)\n}}\n\nfunction launch() -> nothing {{\n  \
+         let tag: Tag = {{ name: `boxed` }}\n  let box: Box = {{ choice: tag, id: 1 }}\n  \
+         for (round in range(0, {tasks})) {{\n    background eat(box.choice)\n  }}\n  \
+         print(box.id)\n}}\n\nfunction entrypoint() -> nothing {{\n  launch()\n  \
+         wait sleep(300)\n}}\n"
+    );
+    let built = build_source(&source, "c6 union loop counts", false);
+    let (output, counters) = run_counted(&built);
+    assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
+    assert_eq!(
+        output.stdout.matches("777\n").count(),
+        tasks,
+        "every task must have run before the counters are read:\n{source}"
+    );
+    (
+        counters.alloc,
+        counters.free,
+        counters.string_alloc,
+        counters.string_free,
+    )
+}
+
+/// Three more loop iterations add exactly as many frees as allocations for a CPU callee: the
+/// task's slot and the string it owns are released through the one release helper.
+#[test]
+fn cpu_callee_releases_its_union_slot_in_a_spawn_loop() {
+    // Bug caught: the task's union slot (a cell, and a string the slot owns) freed by nobody, so
+    // a spawn in a loop grows the heap. Tier: High.
+    let (alloc_one, free_one, string_alloc_one, string_free_one) = counted_union_loop_run(false, 1);
+    let (alloc_four, free_four, string_alloc_four, string_free_four) =
+        counted_union_loop_run(false, 4);
+    assert!(
+        string_alloc_four > string_alloc_one,
+        "three more spawns copied no string: the slot was not persisted by value"
+    );
+    assert_eq!(
+        (alloc_four - alloc_one, string_alloc_four - string_alloc_one),
+        (free_four - free_one, string_free_four - string_free_one),
+        "three more spawns must free what they allocate (cells, strings)"
+    );
+}
+union_spawn_cases!(
+    cpu_callee_shape_into_union,
+    "parked 71: a CPU task handed a plain shape for its union parameter reads a dead envelope (High)",
+    Callee::Cpu,
+    Argument::ShapeIntoUnion
+);
+union_spawn_cases!(
+    state_machine_callee_shape_into_union,
+    "parked 71: a state-machine task handed a plain shape for its union parameter (High)",
+    Callee::StateMachine,
+    Argument::ShapeIntoUnion
 );
