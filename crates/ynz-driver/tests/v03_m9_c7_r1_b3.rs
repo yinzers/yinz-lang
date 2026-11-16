@@ -359,3 +359,42 @@ fn a_shape_returned_through_an_errors_result_is_moved_not_copied_twice() {
         assert_asan_clean("c7_r1_ec_shape", ERRORS_SHAPE, "2450\n", no_optimize);
     });
 }
+
+const ERRORS_MAYBE: &str = "
+function pick(n: int) -> maybe<int> errors {
+  let items: array<int> = [4, 5]
+  let got = items.get(n)
+  return got
+}
+
+function pickWord(n: int) -> maybe<string> errors {
+  let words: array<string> = [`a`, `b`]
+  let got = words.get(n)
+  return got
+}
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let total: int = 0
+  let none_int: maybe<int> = none
+  while (i < 30) {
+    let one = pick(i % 3)
+    let word = pickWord(1)
+    total = total + one.or(none_int).or(0) + 1
+    i = i + 1
+  }
+  print(total)
+}
+";
+
+/// The envelope cell an `errors` result of a `maybe` carries is owned by the caller's binding, so
+/// its release frees it (High: it was `NotOwner`, so every call leaked a cell).
+#[test]
+fn an_errors_result_of_maybe_releases_its_envelope_cell() {
+    let expected = "120\n";
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("c7_r1_ec_maybe", ERRORS_MAYBE, expected, no_optimize);
+        assert_heap_balanced("c7_r1_ec_maybe", &counters, no_optimize);
+        assert_asan_clean("c7_r1_ec_maybe", ERRORS_MAYBE, expected, no_optimize);
+    });
+}

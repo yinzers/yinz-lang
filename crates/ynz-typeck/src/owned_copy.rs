@@ -487,7 +487,12 @@ pub fn copied_at_return(ty: &Type) -> bool {
         Type::Number { .. } => is_bignum(ty),
         Type::Shape { name } => !name.is_empty(),
         Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
-        Type::ErrorsCapable { inner } => copied_at_return(inner),
+        // An `errors` result owns what its `return` allocated: the inner value's copy, and for a
+        // `maybe` the envelope cell the return always makes (`maybe_to_heap_cell`), whatever its
+        // payload, so the caller's binding owns the cell and releases it.
+        Type::ErrorsCapable { inner } => {
+            copied_at_return(inner) || matches!(inner.as_ref(), Type::Maybe { .. })
+        }
         Type::BuiltinChannel { .. } => true,
         Type::Maybe { inner } => matches!(inner.as_ref(), Type::BuiltinChannel { .. }),
         // A union with a shape variant is returned by value with its payload inline; its `return`

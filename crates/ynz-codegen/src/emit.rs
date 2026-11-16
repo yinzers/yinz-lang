@@ -26639,7 +26639,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // The ok word holds the payload as a stored value of its type (a string, array or map
         // pointer, a shape's or `maybe`'s heap cell, a channel reference): the one dispatch
         // every stored value releases through.
-        if let Some(glue) = self.stored_release(inner, ReleaseHome::Field)? {
+        // An envelope union is the exception: the standard result pair holds a `{tag, data}` VIEW of it
+        // (`ec_union_result_to_standard`), not the slot a `Field` home would release in place, so the
+        // view form is called on the pointer the ok word holds.
+        let inner_resolved = self.resolve_type(inner);
+        let payload_release = if self.envelope_union_variants(&inner_resolved).is_some() {
+            self.release_form_fn(&inner_resolved, ReleaseForm::Local)?
+                .map(|glue| (glue.as_global_value().as_pointer_value(), false))
+        } else {
+            self.stored_release(inner, ReleaseHome::Field)?
+        };
+        if let Some(glue) = payload_release {
             let ok_ptr = self
                 .builder
                 .build_struct_gep(result_ty, result, 1, "ec_ok_ptr")
