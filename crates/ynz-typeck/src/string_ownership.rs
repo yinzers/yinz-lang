@@ -504,7 +504,9 @@ pub(crate) fn is_fresh_string_expr(
             }
             match type_of(receiver) {
                 Some(Type::String) => FRESH_STRING_METHODS.contains(&method.as_str()),
-                Some(Type::Int | Type::Float | Type::Number { .. }) => method == "toString",
+                Some(Type::Int | Type::Float | Type::Number { .. } | Type::Options { .. }) => {
+                    method == "toString"
+                }
                 _ => false,
             }
         }

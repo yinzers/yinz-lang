@@ -21442,9 +21442,10 @@ fn lower_expr_node<'ctx>(
                             // Produce a null-terminated string from the expression value.
                             if let Type::Options { name } = &sub_ty {
                                 // An options value arrives as its i8 tag, not the i64 a field load gives.
-                                let text =
-                                    lower_options_to_string(cg, val, name)?.into_pointer_value();
-                                write_text_ptr(cg, TextSink::Builder(builder), text)?;
+                                let text = Text::fresh(
+                                    lower_options_to_string(cg, val, name)?.into_pointer_value(),
+                                );
+                                write_and_release_text(cg, TextSink::Builder(builder), text)?;
                             } else {
                                 write_value_text(cg, val, &sub_ty, TextSink::Builder(builder))?;
                             }
@@ -24218,8 +24219,9 @@ fn to_text<'ctx>(
                 .builder
                 .build_int_truncate(tag_i64, cg.ctx.i8_type(), "opt_tag_i8")
                 .map_err(|e| format!("{e}"))?;
+            // `ynz_string_from_static` wraps the name in a counted string: fresh, the caller releases it.
             lower_options_to_string(cg, tag_i8.into(), name)
-                .map(|text| Text::borrowed(text.into_pointer_value()))
+                .map(|text| Text::fresh(text.into_pointer_value()))
         }
 
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),

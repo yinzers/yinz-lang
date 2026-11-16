@@ -411,3 +411,34 @@ fn an_errors_result_of_maybe_releases_its_envelope_cell() {
         assert_asan_clean("c7_r1_ec_maybe", ERRORS_MAYBE, expected, no_optimize);
     });
 }
+
+const OPTIONS_TEXT: &str = "
+options Level { low, high }
+
+shape Reading {
+  count: int
+  level: Level
+}
+
+function entrypoint() -> nothing {
+  let level: Level = Level.high
+  let name: string = `yinz`
+  print(level.toString())
+  print(`${name}-${level}`)
+  let reading: Reading = { count: 2, level: Level.low }
+  print(reading)
+}
+";
+
+/// The name an `options` value turns into (`toString`, `${}`, the field of a printed shape) is a
+/// counted string `ynz_string_from_static` makes: it is released like any other text (High: it
+/// was `borrowed`/not fresh, so every use leaked one string).
+#[test]
+fn the_text_of_an_options_value_is_released() {
+    let expected = "high\nyinz-high\nReading { count: 2, level: low }\n";
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("c7_r1_options_text", OPTIONS_TEXT, expected, no_optimize);
+        assert_strings_balanced("c7_r1_options_text", &counters, no_optimize);
+        assert_asan_clean("c7_r1_options_text", OPTIONS_TEXT, expected, no_optimize);
+    });
+}
