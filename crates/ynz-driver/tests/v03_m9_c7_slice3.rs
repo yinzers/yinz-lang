@@ -330,3 +330,35 @@ case!(
     Balance::Strings,
     "a string read off a result at its last use is taken by a store, then freed again by the result's own release (double free, High)"
 );
+
+// ── Item 2: SoA-bound arrays ────────────────────────────────────────────────────────────────
+
+/// An array literal of 70 `Part`s (past the SoA admission threshold) read in a `for` loop that
+/// touches two fields, so typeck admits it for the segmented layout; each item owns a string and an
+/// array.
+fn soa_program() -> String {
+    let items: Vec<String> = (0..70)
+        .map(|item| {
+            format!("{{ x: {item}, y: 1, label: `l${{round}}-{item}`, extra: [{item}] }}")
+        })
+        .collect();
+    format!(
+        "shape Part {{\n  x: int\n  y: int\n  label: string\n  extra: array<int>\n}}\n\n\
+         function entrypoint() -> nothing {{\n  let total: int = 0\n  for (round in range(0, 10)) {{\n    \
+         let parts: array<Part> = [{items}]\n    for (part in parts) {{\n      total = total + part.x + part.y\n    }}\n  }}\n  \
+         print(total)\n}}\n",
+        items = items.join(", ")
+    )
+}
+
+/// An admitted-SoA array local is never released: its per-field strings and arrays (and the
+/// buffer) leak, or its item-layout release reads the segments as items and frees garbage (High).
+#[test]
+fn an_soa_array_releases_each_field_segment() {
+    check(
+        "an_soa_array_releases_each_field_segment",
+        &soa_program(),
+        "24850\n",
+        Balance::HeapAndStrings,
+    );
+}

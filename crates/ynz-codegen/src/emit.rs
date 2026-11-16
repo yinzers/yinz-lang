@@ -26774,11 +26774,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if !plain_releases_kind(kind) {
             return Ok(None);
         }
-        // An admitted-SoA array holds its items in per-field segments, not in the layout the
-        // array release walks. SLICE 3 owns releasing them (it pins that layout).
-        if self.soa_bindings.contains_key(name) {
-            return Ok(None);
-        }
         // The type the slot holds, as the plan records it (`ReleaseEntry::held`): a binding declared
         // as a union with no shape variant holds its one heap variant's raw pointer.
         let resolved = self.resolve_type(&entry.held);
@@ -26829,7 +26824,122 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             let slot = self
                 .release_slot(name)
                 .ok_or_else(|| format!("internal: release of `{name}` at {site}: no slot"))?;
+            // An admitted-SoA array holds its items in per-field segments, not in the layout the array
+            // release walks: it walks the segments instead.
+            if let Some(info) = self.soa_bindings.get(name) {
+                self.emit_soa_release(slot, info, only_if_live, name, site)?;
+                continue;
+            }
             self.emit_slot_release(slot, &ty, only_if_live, name, site)?;
+        }
+        Ok(())
+    }
+
+    /// Release an admitted-SoA array local: its items sit in per-field segments of ONE buffer, not
+    /// in the item layout `release_fn(array<Shape>)` walks. Each heap-owning field of each of the
+    /// `cap` items is released with the field glue every shape release uses
+    /// (`shape_field_releases`), then the header and buffer go with an item-blind
+    /// `ynz_array_release` (the array owns nothing else; `len == cap` for its whole life).
+    ///
+    /// O(cap · heap fields) time at run time, O(1) to emit.
+    fn emit_soa_release(
+        &self,
+        slot: PointerValue<'ctx>,
+        info: &SoaArrayInfo<'ctx>,
+        only_if_live: bool,
+        name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let arr = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_soa_release_value"))
+            .map_err(|err| format!("soa release load {name}: {err}"))?
+            .into_pointer_value();
+        let after = if only_if_live {
+            let release_bb = self.append_block(&format!("{site}_soa_release_{name}"));
+            let after_bb = self.append_block(&format!("{site}_soa_released_{name}"));
+            let live = self
+                .builder
+                .build_is_not_null(arr, &format!("{name}_soa_live"))
+                .map_err(|err| format!("soa release null check {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(live, release_bb, after_bb)
+                .map_err(|err| format!("soa release branch {name}: {err}"))?;
+            self.builder.position_at_end(release_bb);
+            Some(after_bb)
+        } else {
+            None
+        };
+        let field_releases = self.shape_field_releases(&info.shape_name)?;
+        if !field_releases.is_empty() {
+            let data = self.soa_data_ptr(arr, &format!("{name}_soa_release"))?;
+            let counter = self.alloca_in_entry_llvm(self.i64(), &format!("{name}_soa_release_i"))?;
+            self.builder
+                .build_store(counter, self.i64().const_zero())
+                .map_err(|err| format!("soa release counter {name}: {err}"))?;
+            let head = self.append_block(&format!("{name}_soa_release_head"));
+            let body = self.append_block(&format!("{name}_soa_release_body"));
+            let done = self.append_block(&format!("{name}_soa_release_done"));
+            self.builder
+                .build_unconditional_branch(head)
+                .map_err(|err| format!("soa release br {name}: {err}"))?;
+            self.builder.position_at_end(head);
+            let index = self
+                .builder
+                .build_load(self.i64(), counter, &format!("{name}_soa_release_index"))
+                .map_err(|err| format!("soa release index {name}: {err}"))?
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::ULT,
+                    index,
+                    self.i64().const_int(info.cap, false),
+                    &format!("{name}_soa_release_more"),
+                )
+                .map_err(|err| format!("soa release cmp {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(more, body, done)
+                .map_err(|err| format!("soa release cond {name}: {err}"))?;
+            self.builder.position_at_end(body);
+            for (field_index, glue, inline) in field_releases {
+                let segment = info.segments.get(field_index as usize).ok_or_else(|| {
+                    format!(
+                        "soa release: shape `{}` has no segment for field {field_index}",
+                        info.shape_name
+                    )
+                })?;
+                let address = self.soa_field_addr(data, segment, index, &format!("{name}_soa_rel"))?;
+                self.call_stored_release((glue, inline), address, &format!("{name}_soa_rel"))?;
+            }
+            let next = self
+                .builder
+                .build_int_add(index, self.i64().const_int(1, false), &format!("{name}_soa_release_next"))
+                .map_err(|err| format!("soa release add {name}: {err}"))?;
+            self.builder
+                .build_store(counter, next)
+                .map_err(|err| format!("soa release store {name}: {err}"))?;
+            self.builder
+                .build_unconditional_branch(head)
+                .map_err(|err| format!("soa release loop {name}: {err}"))?;
+            self.builder.position_at_end(done);
+        }
+        self.builder
+            .build_call(
+                self.rt.ynz_array_release,
+                &[
+                    arr.into(),
+                    self.ptr().const_null().into(),
+                    self.i32().const_zero().into(),
+                ],
+                "",
+            )
+            .map_err(|err| format!("soa release free {name}: {err}"))?;
+        if let Some(after_bb) = after {
+            self.builder
+                .build_unconditional_branch(after_bb)
+                .map_err(|err| format!("soa release join {name}: {err}"))?;
+            self.builder.position_at_end(after_bb);
         }
         Ok(())
     }
