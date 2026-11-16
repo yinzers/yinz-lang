@@ -2358,6 +2358,14 @@ struct Cg<'ctx, 'g> {
     // The region pointer of each frame-embedded shape crossing local, computed once in sm_entry.
     // A bind copies into it and re-points the local at it, whatever a move left in the local.
     sm_crossing_shape_regions: HashMap<String, PointerValue<'ctx>>,
+    // Crossing `maybe` locals homed in a frame region (`MaybeRegion`), by name.
+    sm_crossing_maybe_regions: HashMap<String, PointerValue<'ctx>>,
+    // The payload type of each region-homed `maybe` crossing local.
+    sm_crossing_maybe_inner: HashMap<String, Type>,
+    // While a binding of a region-homed `maybe` is being stored: the region (envelope) and the place
+    // its shape or number payload goes (`maybe_to_owned_dest` reads them instead of allocating).
+    maybe_env_dest: std::cell::Cell<Option<PointerValue<'ctx>>>,
+    maybe_payload_dest: std::cell::Cell<Option<PointerValue<'ctx>>>,
     // Crossing locals holding an envelope union, by name (`CrossingUnion`): their value lives in
     // a frame region, so a resume reads it back instead of a pointer into a dead stack.
     sm_crossing_unions: HashMap<String, CrossingUnion<'ctx>>,
@@ -3990,6 +3998,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_int_z_extend(raw, self.i64(), &format!("{site}_env_sz"))
                 .map_err(|e| format!("maybe env size zext {site}: {e}"))?;
             self.heap_cell(env_size, &format!("{site}_env"))?
+        } else if let Some(region) = self.maybe_env_dest.get() {
+            // A binding homed in a frame region (`MaybeRegion`): the envelope is the region.
+            region
         } else {
             self.alloca_in_entry_llvm(self.maybe_type(), &format!("{site}_env_own"))?
         };
@@ -4263,6 +4274,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // position-independent, so the same acquisition point serves both.
                 let owned_pay = if heap {
                     self.heap_cell(size, &format!("{site}_pay"))?
+                } else if let Some(region) = self.maybe_payload_dest.get() {
+                    region
                 } else {
                     let struct_ty = self.shape_types.get(name).ok_or_else(|| {
                         format!("maybe_payload_stable_bits: LLVM type for `{name}` missing")
@@ -4306,8 +4319,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 cell
             }
             WidePayload::Number => {
-                let owned_pay =
-                    self.alloca_in_entry_llvm(self.i128(), &format!("{site}_num_own"))?;
+                let owned_pay = match self.maybe_payload_dest.get() {
+                    Some(region) => region,
+                    None => self.alloca_in_entry_llvm(self.i128(), &format!("{site}_num_own"))?,
+                };
                 self.builder
                     .build_memcpy(
                         owned_pay,
@@ -6171,6 +6186,26 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// The frame region pointer of the frame-embedded shape crossing local `name`, computed once
     /// in `sm_entry` (it dominates every state).
+    /// Where the payload of a `maybe` homed in `region` goes: 16 bytes in, the first 16-aligned
+    /// address after the envelope (the region itself is 16-aligned).
+    fn maybe_region_payload_ptr(
+        &self,
+        region: PointerValue<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        // SAFETY: `maybe_frame_slots` reserved the envelope and the payload behind it.
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.ctx.i8_type(),
+                    region,
+                    &[self.i64().const_int(16, false)],
+                    &format!("{name}_maybe_payload"),
+                )
+                .map_err(|err| format!("{name}: maybe payload gep: {err}"))
+        }
+    }
+
     fn crossing_shape_region(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
         self.sm_crossing_shape_regions
             .get(name)
@@ -7952,6 +7987,10 @@ fn plain_cg<'ctx, 'g>(
         sm_crossing_shape_allocas: HashMap::new(),
         sm_region_flags: HashMap::new(),
         sm_crossing_shape_regions: HashMap::new(),
+        sm_crossing_maybe_regions: HashMap::new(),
+        sm_crossing_maybe_inner: HashMap::new(),
+        maybe_env_dest: std::cell::Cell::new(None),
+        maybe_payload_dest: std::cell::Cell::new(None),
         sm_crossing_unions: HashMap::new(),
         sm_scope_depth: 0,
         narrowed_unions: Vec::new(),
@@ -8397,6 +8436,10 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_shape_allocas: HashMap::new(),  // populated during alloca creation below
         sm_region_flags: HashMap::new(),
         sm_crossing_shape_regions: HashMap::new(),
+        sm_crossing_maybe_regions: HashMap::new(),
+        sm_crossing_maybe_inner: HashMap::new(),
+        maybe_env_dest: std::cell::Cell::new(None),
+        maybe_payload_dest: std::cell::Cell::new(None),
         sm_crossing_unions: HashMap::new(), // populated in Step 1b' below
         sm_crossing_ec_number_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
@@ -8790,6 +8833,48 @@ fn lower_function_with_waits<'ctx, 'g>(
         }
         cg_resume.sm_crossing_unions = crossing_unions;
         cg_resume.sm_region_flags.extend(region_flags);
+    }
+
+    // Step 1b'' — Locate the frame region of every crossing `maybe` local: the moved flag slot, then
+    // the 16-byte envelope and the payload bytes a shape or decimal payload needs. The local's
+    // alloca is wired to the region as a shape's is; a bind copies into it (`maybe_env_dest`), so no
+    // heap cell is allocated for the envelope. Computed here, in sm_entry, so it dominates every state.
+    {
+        let mut maybe_regions: HashMap<String, PointerValue<'ctx>> = HashMap::new();
+        let mut maybe_inner: HashMap<String, Type> = HashMap::new();
+        for (pos, cname) in crossing_names.iter().enumerate() {
+            let Some(Type::Maybe { inner }) =
+                crossing_frame_type(&f.body.stmts, cname, typed, shape_table)
+            else {
+                continue;
+            };
+            if maybe_region_payload_bytes(&inner, shape_abi_sizes).is_none() {
+                continue;
+            }
+            let slot_idx = crossing_slot_indices[pos];
+            let region_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + ((slot_idx + 1) as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                region_offset,
+                &format!("{cname}_maybe"),
+            )?;
+            let alloca = *cg_resume
+                .locals
+                .get(cname)
+                .ok_or_else(|| format!("sm maybe wire: alloca for `{cname}` missing"))?;
+            cg_resume
+                .builder
+                .build_store(alloca, region)
+                .map_err(|e| format!("sm maybe wire store {cname}: {e}"))?;
+            cg_resume.sm_region_flags.insert(cname.clone(), slot_idx);
+            maybe_regions.insert(cname.clone(), region);
+            maybe_inner.insert(cname.clone(), (*inner).clone());
+        }
+        cg_resume.sm_crossing_maybe_regions = maybe_regions;
+        cg_resume.sm_crossing_maybe_inner = maybe_inner;
     }
 
     // Step 2 — Emit the switch on resume_point (still in sm_entry, after allocas).
@@ -9811,6 +9896,14 @@ fn reload_params_from_frame<'ctx>(
                         cg.builder.build_store(alloca, view).map_err(|err| {
                             format!("sm crossing reload union store {cname}: {err}")
                         })?;
+                    } else if let Some(region) =
+                        cg.sm_crossing_maybe_regions.get(cname.as_str()).copied()
+                    {
+                        // A `maybe` homed in a frame region: re-wired like a shape; null once moved.
+                        let wired = cg.null_if_moved(bits, region, cname)?;
+                        cg.builder.build_store(alloca, wired).map_err(|err| {
+                            format!("sm crossing reload maybe store {cname}: {err}")
+                        })?;
                     } else if is_shape_embed {
                         // Shape crossing local: frame-embedded. The ptr alloca is re-wired to the
                         // frame's slot region in Step 1b on every resume call; a shape that was
@@ -10351,6 +10444,11 @@ fn flush_var_slot_to_frame<'ctx>(
     if cg.sm_crossing_unions.contains_key(name) {
         // Envelope union (or `errors` union result): its value lives in a frame region.
         return cg.flush_crossing_union(name, alloca, frame_ptr, slot_idx);
+    }
+    if cg.sm_crossing_maybe_regions.contains_key(name) {
+        // A `maybe` homed in a frame region: its bytes are already live there and the first slot is
+        // its moved flag, which only a move, a release and a bind write.
+        return Ok(());
     }
     if cg.sm_crossing_scalar_set.contains(name) {
         // Int: i64 alloca — raw i64 load, 1 slot.
@@ -12737,6 +12835,31 @@ fn bind_sm_result_and_flush<'ctx>(
                     .map_err(|e| format!("bind_sm_result float store {name}: {e}"))?;
                 state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, as_i64)?;
             }
+            // A `maybe` homed in a frame region: the result is copied INTO the region, as a bind of
+            // any other `maybe` copies it (`store_binding_of_read`); the first slot stays its moved flag.
+            inkwell::values::BasicValueEnum::PointerValue(envelope)
+                if cg.sm_crossing_maybe_regions.contains_key(name) =>
+            {
+                let region = cg.sm_crossing_maybe_regions[name];
+                let inner = cg.sm_crossing_maybe_inner[name].clone();
+                cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+                cg.maybe_env_dest.set(Some(region));
+                cg.maybe_payload_dest
+                    .set(Some(cg.maybe_region_payload_ptr(region, name)?));
+                // A string, container or value payload comes out of a callee or a channel as the
+                // binding's own (a copy of it would be an allocation the program does not make
+                // today); a shape or decimal payload is copied into the region.
+                let take = !matches!(
+                    cg.resolve_type(&inner),
+                    Type::Shape { .. } | Type::Number { .. }
+                ) || ynz_typeck::types::is_bignum(&cg.resolve_type(&inner));
+                let owned = cg.maybe_to_owned_dest(envelope, &inner, name, false, take);
+                cg.maybe_env_dest.set(None);
+                cg.maybe_payload_dest.set(None);
+                cg.builder
+                    .build_store(alloca, owned?)
+                    .map_err(|e| format!("bind_sm_result maybe store {name}: {e}"))?;
+            }
             _ => {
                 // Int/bool/ptr (non-shape): convert to i64 bits, store into alloca, flush 1 slot.
                 let bits = match return_val {
@@ -13077,6 +13200,29 @@ fn union_frame_slots(variants: &[Type], sizes: &HashMap<String, u64>) -> usize {
     (bytes.max(8) as usize).div_ceil(8) + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
 }
 
+/// The bytes a frame region holds behind the 16-byte envelope of a crossing `maybe<inner>` local:
+/// a shape payload's bytes, a decimal128 payload's 16, nothing for a payload that is a value or a
+/// heap pointer. `None` for a payload that needs a slot of its own on the resume stack (an
+/// envelope union, `maybe_union_payload_copy`), which no region backs: that local keeps the heap
+/// cell its argument escape promotes it to (`store_binding`) and is not released in a resume
+/// function (`ReleaseKind::has_frame_backing_for`).
+///
+/// Time: O(1)  Space: O(1)
+fn maybe_region_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> Option<u64> {
+    match inner {
+        Type::Union { .. } if ynz_typeck::check::is_envelope_union(inner) => None,
+        Type::Shape { name } => sizes.get(name).copied(),
+        Type::Number { precision } if *precision <= 34 => Some(DECIMAL_CELL_SIZE),
+        _ => Some(0),
+    }
+}
+
+/// Frame slots a `maybe` region of `payload_bytes` takes: the envelope, the payload behind it,
+/// and the alignment slack `shape_frame_region_ptr` rounds into.
+fn maybe_frame_slots(payload_bytes: u64) -> usize {
+    (16 + payload_bytes).div_ceil(8) as usize + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
+}
+
 /// Frame slots the crossing local `cname` takes: decimal128 two, a decimal `errors` result
 /// three, any other `errors` result two (plus a union region when its success value is an
 /// envelope union), a shape its bytes and an envelope union its region (each behind one moved-flag
@@ -13105,6 +13251,12 @@ fn crossing_local_slot_count(
         },
         // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
         Some(Type::Shape { name: ref sname }) => 1 + shape_frame_slots(sname, shape_abi_sizes),
+        // A `maybe`: its moved flag, then the envelope and payload region.
+        Some(Type::Maybe { ref inner }) => match maybe_region_payload_bytes(inner, shape_abi_sizes)
+        {
+            Some(payload_bytes) => 1 + maybe_frame_slots(payload_bytes),
+            None => 1,
+        },
         Some(ref union @ Type::Union { .. }) => match crossing_union_variants(union) {
             Some(variants) => 1 + union_frame_slots(&variants, shape_abi_sizes),
             None => 1,
@@ -18000,6 +18152,9 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
                     cg.builder
                         .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
                         .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
+                    // The copy owns what it owns, as every shape binding does (`shape_bytes_to_owned`):
+                    // a value read from another binding clones its boxes, a fresh one hands them over.
+                    cg.deepen_unless_moved(src_ptr, dest_ptr, &shape_name)?;
                     true
                 } else {
                     false
@@ -20611,6 +20766,30 @@ fn is_fresh_maybe_string_call(cg: &Cg<'_, '_>, expr: &Expr) -> bool {
 /// the store seam (`own_read_for_store`, which takes a moved value and copies a read of a place
 /// that is not a view); every other type through `store_binding`.
 fn store_binding_of_read<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    slot: PointerValue<'ctx>,
+    name: &str,
+) -> Result<(), String> {
+    // A `maybe` homed in a frame region is copied INTO the region (envelope, then a shape or
+    // decimal payload behind it); the bind makes the local live again.
+    let Some(region) = cg.sm_crossing_maybe_regions.get(name).copied() else {
+        return store_binding_of_read_into(cg, expr, val, ty, slot, name);
+    };
+    cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+    cg.maybe_env_dest.set(Some(region));
+    cg.maybe_payload_dest
+        .set(Some(cg.maybe_region_payload_ptr(region, name)?));
+    let stored = store_binding_of_read_into(cg, expr, val, ty, slot, name);
+    cg.maybe_env_dest.set(None);
+    cg.maybe_payload_dest.set(None);
+    stored
+}
+
+/// `store_binding_of_read` for a binding whose destination storage is already decided.
+fn store_binding_of_read_into<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     expr: &Expr,
     val: BasicValueEnum<'ctx>,
@@ -27585,7 +27764,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // errors-capable value, a shape, a nested shape, a `maybe`, a `fixed` and a type-parameter
         // value are C8 slice 4's (inline-aggregate frame regions): until then each is a leak here,
         // never an early free, because nothing keeps its bytes alive across a `wait`.
-        if self.sm_frame_ptr.is_some() && !kind.has_frame_backing() {
+        if self.sm_frame_ptr.is_some() && !kind.has_frame_backing_for(&self.resolve_type(held)) {
             return false;
         }
         kind != ynz_typeck::release_plan::ReleaseKind::TypeParameter
@@ -31509,10 +31688,13 @@ fn store_binding<'ctx>(
             Ok(())
         }
         Type::Maybe { ref inner } => {
+            // A crossing `maybe` homed in a frame region is copied into it (`store_binding_of_read`),
+            // not promoted to a heap cell.
             let is_crossing = cg
                 .sm_crossing_names
                 .as_deref()
-                .is_some_and(|v| v.iter().any(|n| n == name));
+                .is_some_and(|v| v.iter().any(|n| n == name))
+                && !cg.sm_crossing_maybe_regions.contains_key(name);
             let owned = if is_crossing {
                 cg.maybe_to_heap_cell(val.into_pointer_value(), inner, name)?
             } else {

@@ -327,3 +327,48 @@ function entrypoint() -> nothing {{
     );
     assert_balanced("union_given_one_path", &source, "6\ndone\n");
 }
+
+/// Bug it catches: a `maybe<Crew>` envelope and its shape payload sat in resume-stack slots, so a
+/// release after the `wait` freed the strings of a dead stack copy (or a reassignment left the old
+/// payload unreleased). Covers the payload region and the reassignment's snapshot.
+#[test]
+fn maybe_of_a_shape_local_with_a_payload_region_is_released_and_reassigned() {
+    let source = format!(
+        "{CREW}
+function entrypoint() -> nothing {{
+  let crews: array<Crew> = [{{ name: `ab`.toUpperCase(), size: 3 }}, {{ name: `cd`.toUpperCase(), size: 4 }}]
+  let found: maybe<Crew> = crews.get(0)
+  found = crews.get(1)
+  let fallback: Crew = {{ name: `zz`.toUpperCase(), size: 0 }}
+  let chosen: Crew = found.or(fallback)
+  print(chosen.size)
+  wait sleep(1)
+  print(`done`)
+}}
+"
+    );
+    assert_balanced("maybe_shape_local", &source, "4\ndone\n");
+}
+
+/// Bug it catches: a `maybe` given away on one path was released again after the `wait` (the
+/// resume re-derived the local from its region).
+#[test]
+fn maybe_given_away_on_one_path_is_released_once_across_a_wait() {
+    let source = "
+function consume(give name: maybe<string>) -> int {
+  return name.or(`none`).count()
+}
+
+function entrypoint() -> nothing {
+  let names: array<string> = [`a-${1}`, `b-${2}`]
+  let found: maybe<string> = names.get(0)
+  let flag: int = `1`.toInt().or(0)
+  if (flag == 1) {
+    print(consume(found))
+  }
+  wait sleep(1)
+  print(`done`)
+}
+";
+    assert_balanced("maybe_given_one_path", source, "3\ndone\n");
+}

@@ -300,11 +300,10 @@ green_fixture!(
     "producer P4 (suspending-call argument copies): the shape literal staged into `wait crew({ ... })` is copied and never released"
 );
 
-deferred_fixture!(
+green_fixture!(
     producer_p4_suspending_call_maybe_argument_copy,
     "v0_3_m6_maybe_arg_pure_call.ynz",
-    "producer P4 (suspending-call argument copies): the `maybe` staged into a suspending call is copied and never released",
-    "planned RED (v0.3-M9 C8 slice 4): not an argument copy. The call stages the pointer of the crossing `maybe<int>` local `m` as it is; the leak is the local's own envelope cell (`m_env_cell`), a `maybe` local in a resume function, which `releases_in_instance` declines until slice 4"
+    "producer P4 (suspending-call argument copies): the `maybe` staged into a suspending call is copied and never released"
 );
 
 green_fixture!(

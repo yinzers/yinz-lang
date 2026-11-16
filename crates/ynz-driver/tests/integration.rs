@@ -10755,10 +10755,10 @@ fn v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak() {
     );
     assert_eq!(
         alloc,
-        free + 5,
-        "heap-cell loop parity drifted: expected alloc = free + 5 (5 maybe envelope \
-         cells, per-iteration bind-time promotions held to process exit; the union loop \
-         allocates nothing). alloc={alloc} free={free}"
+        free,
+        "heap-cell loop parity drifted: expected alloc = free (a crossing `maybe` is homed in a frame \
+         region, so the 5 per-iteration envelope cells this probe used to leak are not allocated; the \
+         union loop allocates nothing). alloc={alloc} free={free}"
     );
 }
 
@@ -11088,8 +11088,8 @@ fn bg_arg_channel_send_receiver_reads_intact_array_after_task_retired() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_channel_send_array.ynz",
         "3\n10\n30\n",
-        4,
-        "2 = the spawner's `rows` literal, 2 = the sent clone now held by the receiver's `got`",
+        2,
+        "2 = the spawner's `rows` literal (the sent clone held by the receiver's `got` is now released)",
     );
 }
 
@@ -11181,8 +11181,8 @@ fn bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_handle_send_array.ynz",
         "307\n",
-        4,
-        "2 = the spawner's `rows` literal, 2 = the forwarded clone now held by sink's `got`",
+        2,
+        "2 = the spawner's `rows` literal (the forwarded clone held by sink's `got` is now released)",
     );
 }
 
@@ -11211,10 +11211,10 @@ fn bg_arg_two_arrays_send_one_releases_only_the_sent_slot() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_two_arrays_send_one.ynz",
         "2\n7\n3\n10\n",
-        6,
-        "2 = the spawner's `rows` literal, 2 = the spawner's `scratch` literal, 2 = the sent \
-         `rows` clone now held by the receiver's `got` (the `scratch` clone is freed by the \
-         ladder at retire — it was never handed off)",
+        4,
+        "2 = the spawner's `rows` literal, 2 = the spawner's `scratch` literal (the receiver's `got` is now \
+         released by its `maybe` local; the `scratch` clone is freed by the ladder at retire — it was \
+         never handed off)",
     );
 }
 

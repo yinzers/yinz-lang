@@ -235,8 +235,8 @@ fn m8_p4_chan_array_roundtrip_receiver_is_sole_holder() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_array_roundtrip.ynz",
         "3\n10\n30\nend\n",
-        2,
-        "2 = the task-built array now held by the receiver's `got`",
+        0,
+        "nothing is held at exit: the receiver's `maybe` local releases the task-built array (C8 slice 4a)",
     );
 }
 
@@ -268,9 +268,9 @@ fn m8_p4_chan_map_roundtrip_both_task_built_and_give_bg_arg() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_map_roundtrip.ynz",
         "2\n2\n3\n9\nend\n",
-        10,
-        "5 = the task-built map held by `first`'s value, 5 = the given spawner map held by \
-         `second`'s value (header + ctrl + keys + vals + insert_order each)",
+        0,
+        "nothing is held at exit: both maps are released by their `maybe` locals at the resume \
+         function's scope exit (C8 slice 4a)",
     );
 }
 
@@ -311,8 +311,9 @@ fn m8_p4_flow_every_admitted_payload_form_sends() {
     assert_runs_with_parity(
         "v0_3_m8_p4_flow_admitted_forms.ynz",
         "3\n4\n4\n2\n0\n5\nend\n",
-        12,
-        "6 received arrays × 2 counted allocs each, held by the consumer at exit",
+        0,
+        "nothing is held at exit: every received array is released by its `maybe` local at the \
+         resume function's scope exit (C8 slice 4a)",
     );
 }
 
@@ -448,10 +449,9 @@ fn m8_p4_fix2_builder_with_a_computed_scalar_local_is_fresh_and_sends() {
     assert_runs_with_parity(
         "v0_3_m8_p4_builder_with_computed_scalar_is_fresh.ynz",
         "1\n3\nend\n",
-        2,
-        "the received one-element array (2 counted allocs) held by the consumer, which a resume \
-         function does not release yet (an array crossing no `wait`); the bucket is a flat shape \
-         the resume function now releases at its scope exit (C8 slice 4a)",
+        0,
+        "nothing is held at exit: the received array and the flat shape bucket are released by \
+         the resume function at its scope exit (C8 slice 4a)",
     );
 }
 
