@@ -21853,6 +21853,7 @@ fn lower_expr_background<'ctx>(
             free_kinds.push(kind);
             continue;
         }
+        reject_union_argument_without_slot(cg, &ty, &callee_name, arg_index)?;
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         let kind = release_glue_free_kind(cg, kind, &ty, &callee_name)?;
         let bits = cg
@@ -22118,6 +22119,7 @@ fn lower_sm_background_spawn<'ctx>(
             free_kinds.push(BgArgFreeKind::None);
             continue;
         }
+        reject_union_argument_without_slot(cg, &ty, callee_name, arg_index)?;
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         let kind = release_glue_free_kind(cg, kind, &ty, callee_name)?;
         if first_channel_arg.is_none()
@@ -25947,6 +25949,30 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder.position_at_end(done);
         Ok(())
     }
+}
+
+/// A `background` argument that is an envelope union but reaches a parameter the callee declares as
+/// something else (a generic `T`) has no slot to be copied into: the ctx would carry the spawner's
+/// per-site union view, which dangles once the spawner returns. Refused here rather than handed
+/// over.
+///
+/// Time: O(1)  Space: O(1)
+fn reject_union_argument_without_slot(
+    cg: &Cg<'_, '_>,
+    argument_ty: &Type,
+    callee: &str,
+    arg_index: usize,
+) -> Result<(), String> {
+    if cg.envelope_union_variants(argument_ty).is_none() {
+        return Ok(());
+    }
+    Err(format!(
+        "codegen: argument {} of `background {callee}(..)` is a union, but `{callee}` declares that \
+         parameter as a generic type, so the task has no union slot to copy it into and would read \
+         the spawner's dead frame. Declare the parameter with the union type, or wrap the value in \
+         a shape field",
+        arg_index + 1
+    ))
 }
 
 /// The task's own slot for an envelope-union `background` argument of a CPU callee: a heap cell
