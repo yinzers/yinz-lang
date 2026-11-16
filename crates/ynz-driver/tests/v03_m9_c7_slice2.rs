@@ -827,9 +827,8 @@ const IMPORTED_MAYBE_PROJECT: &str = "v0_3_m9_c7_imported_maybe";
 /// Bug (High): the holder of an untraceable result joined the argument's class and outlived it,
 /// so the class had no static founder and `local` was never released (alloc 200, free 80); a view
 /// of it would dangle once `local` is released. Now `held` owns a copy and `local` is released.
-/// What is left is exactly the copy `held` owns: a `maybe` is a slice-3 kind, so nothing releases
-/// it yet (2 counted allocations per pass of `pick(true)`, 20 passes: free 160 of 200).
-/// SLICE 3 turns this pin balanced (`IMP-ownership.md` hand-over).
+/// The copy `held` owns (2 counted allocations per pass of `pick(true)`, 20 passes) is released
+/// at its scope exit since C7 slice 3 released `maybe` locals: alloc 200, free 200 (was 160).
 #[test]
 fn an_imported_maybe_result_is_a_copy_the_argument_owners_release_does_not_dangle() {
     at_both_optimization_levels(|no_optimize| {
@@ -839,7 +838,7 @@ fn an_imported_maybe_result_is_a_copy_the_argument_owners_release_does_not_dangl
         assert_eq!(run.stdout, "60\n");
         assert_eq!(
             (counters.alloc, counters.free),
-            (200, 160),
+            (200, 200),
             "no_optimize={no_optimize}: {counters:?}"
         );
         support::assert_asan_clean_and_prints(IMPORTED_MAYBE_PROJECT, no_optimize, "60\n");

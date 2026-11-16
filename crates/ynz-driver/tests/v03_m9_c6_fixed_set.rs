@@ -80,30 +80,31 @@ fixed_set_case!(
     0,
     0,
     5,
-    3
+    5
 );
 fixed_set_case!(
     fixed_shape_set,
     "v0_3_m9_c6_fixed_set_shape.ynz",
     "c-3\nb-2\n",
     3,
-    1,
+    3,
     // C7 slice 2b, 2 -> 4 strings: `firstItem` and `secondItem` read an item of a list the fixture
     // writes, so each owns a copy (a copy owner) and releases its name at its scope exit.
+    // C7 slice 3, 1 -> 3 cells and 4 -> 6 strings: the `fixed` list is released at its scope exit.
     6,
-    4
+    6
 );
 // Items that are not strings or shapes: the cell holds a pointer the list owns, so the write
 // frees what it replaces through the same dispatch (`stored_release`). The frees are the
 // replaced item plus the `fallback` the fixture reads with `.or(fallback)`, which is released at
 // scope exit now that an alias class with no escape releases each of its owners; the items the
-// list still holds (a `fixed` list is slice 3's kind) stay unreleased.
+// list still holds are released with it at its scope exit (C7 slice 3: every allocation is freed).
 fixed_set_case!(
     fixed_array_set_and_index_assign,
     "v0_3_m9_c6_fixed_set_array.ynz",
     "3\n1\n",
     10,
-    6,
+    10,
     0,
     0
 );
@@ -112,16 +113,16 @@ fixed_set_case!(
     "v0_3_m9_c6_fixed_set_map.ynz",
     "2\n1\n",
     20,
-    10,
+    20,
     4,
-    1
+    4
 );
 fixed_set_case!(
     fixed_maybe_set_and_index_assign,
     "v0_3_m9_c6_fixed_set_maybe.ynz",
     "2\n",
     6,
-    4,
+    6,
     8,
-    4
+    8
 );

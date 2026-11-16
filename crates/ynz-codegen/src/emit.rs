@@ -26224,6 +26224,7 @@ fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
         // SLICE 3 (open): an errors-capable slot keeps today's behaviour (no release). `dynamic`
         // and a map entry never own a local slot.
         ReleaseKind::ErrorsCapable
+        | ReleaseKind::UntaggedUnion
         | ReleaseKind::Dynamic
         | ReleaseKind::MapEntry => false,
     }
@@ -26282,10 +26283,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         {
             return Ok(None);
         }
-        let ty = self.local_types.get(name).cloned().ok_or_else(|| {
-            format!("internal: assignment release of `{name}`: its type was never recorded")
-        })?;
-        let resolved = self.resolve_type(&ty);
+        let resolved = self.resolve_type(&assign.held);
         let old = self
             .builder
             .build_load(self.ptr(), slot, &format!("{name}_old"))
@@ -26630,11 +26628,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if self.soa_bindings.contains_key(name) {
             return Ok(None);
         }
-        let ty =
-            self.local_types.get(name).cloned().ok_or_else(|| {
-                format!("internal: release of `{name}`: its type was never recorded")
-            })?;
-        let resolved = self.resolve_type(&ty);
+        // The type the slot holds, as the plan records it (`ReleaseEntry::held`): a binding declared
+        // as a union with no shape variant holds its one heap variant's raw pointer.
+        let resolved = self.resolve_type(&entry.held);
         let step = release_step(&resolved);
         let kind_matches_type = matches!(
             (kind, &step),
@@ -26645,9 +26641,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 | (ReleaseKind::TaskHandle, ReleaseStep::Handle)
                 | (ReleaseKind::Shape | ReleaseKind::NestedShape, ReleaseStep::Shape { .. })
                 | (ReleaseKind::Maybe, ReleaseStep::Maybe { .. })
-                // A binding declared as a plain union holds the plain value it was given (its
-                // `local_types` entry is that value's type), released by that type.
-                | (ReleaseKind::Union, _)
+                | (ReleaseKind::Union, ReleaseStep::Union { .. })
                 | (ReleaseKind::Fixed, ReleaseStep::Fixed { .. })
         );
         if !kind_matches_type {
@@ -27171,6 +27165,7 @@ mod copy_parity_tests {
             ReleaseKind::NestedShape,
             ReleaseKind::Maybe,
             ReleaseKind::Union,
+            ReleaseKind::UntaggedUnion,
             ReleaseKind::Dynamic,
             ReleaseKind::Fixed,
             ReleaseKind::MapEntry,
@@ -27220,6 +27215,19 @@ mod copy_parity_tests {
                 ReleaseKind::Union => (
                     Type::Union {
                         variants: vec![Type::Int, Type::String],
+                    },
+                    |step| matches!(step, ReleaseStep::Union { .. }),
+                ),
+                // No tag says which variant a raw pointer is, so the plain emitter leaves it; the step
+                // table still names the union.
+                ReleaseKind::UntaggedUnion => (
+                    Type::Union {
+                        variants: vec![
+                            Type::String,
+                            Type::BuiltinArray {
+                                elem: Box::new(Type::Int),
+                            },
+                        ],
                     },
                     |step| matches!(step, ReleaseStep::Union { .. }),
                 ),

@@ -59,6 +59,7 @@ use ynz_ast::nodes::{Block, Expr, Stmt};
 use ynz_diagnostics::SourceSpan;
 
 use crate::binding_names::{BindingNames, DeclKey};
+use crate::check::is_envelope_union;
 use crate::generics::{apply_substitution, GenericShapeTable};
 use crate::shapes::ShapeTable;
 use crate::string_ownership::StringMoves;
@@ -90,6 +91,11 @@ pub enum ReleaseKind {
     Maybe,
     /// A union with a heap-owning variant: the envelope and its payload.
     Union,
+    /// A union with no shape variant and more than one heap-owning variant (`string | array<int>`):
+    /// the slot holds the raw pointer of whichever variant it was given, with no tag, so nothing
+    /// can say how to release it. A union with ONE heap-owning variant (`map<..> | nothing`) is
+    /// classified as that variant: its slot is that variant's raw pointer, null for `nothing`.
+    UntaggedUnion,
     /// `dynamic Contract`: the boxed data behind the fat pointer.
     Dynamic,
     /// `fixed<T>` of a heap-owning `T`: the items it holds.
@@ -158,6 +164,8 @@ pub struct ReleaseEntry {
     pub decl: DeclKey,
     /// The unique name codegen's AST carries (`BindingNames`).
     pub codegen_name: String,
+    /// The type the binding's slot holds (`slot_held_type`): what its release is called on.
+    pub held: Type,
     pub fate: Fate,
 }
 
@@ -189,6 +197,8 @@ pub struct MoveSite {
 pub struct AssignRelease {
     pub decl: DeclKey,
     pub codegen_name: String,
+    /// The type the binding's slot holds (`slot_held_type`).
+    pub held: Type,
     pub kind: ReleaseKind,
 }
 
@@ -263,6 +273,33 @@ fn shape_class(fields: &[Type], tables: &TypeTables<'_>, visiting: &mut Vec<Stri
     }
 }
 
+/// The type a binding's slot really holds, for the release of what it owns: a union with no shape
+/// variant and ONE heap-owning variant (`map<..> | nothing`) holds that variant's raw pointer, so
+/// it is that variant (`classify` says the same); any other type is itself. A binding's
+/// `local_types` entry can name either the declared union (a call result) or the plain variant (a
+/// value written in place); both hold the same raw pointer, and this is the one answer.
+///
+/// O(size of the type, with shapes expanded once each).
+pub fn slot_held_type(ty: &Type, tables: &TypeTables<'_>) -> Type {
+    let Type::Union { variants } = ty else {
+        return ty.clone();
+    };
+    if is_envelope_union(ty)
+        || variants
+            .iter()
+            .any(|variant| heap_class_of(variant, tables) == HeapClass::TypeParameter)
+    {
+        return ty.clone();
+    }
+    let mut heap = variants
+        .iter()
+        .filter(|variant| matches!(heap_class_of(variant, tables), HeapClass::Heap(_)));
+    match (heap.next(), heap.next()) {
+        (Some(only), None) => slot_held_type(only, tables),
+        _ => ty.clone(),
+    }
+}
+
 fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> HeapClass {
     match ty {
         Type::Nothing
@@ -329,6 +366,19 @@ fn classify(ty: &Type, tables: &TypeTables<'_>, visiting: &mut Vec<String>) -> H
                 .iter()
                 .map(|variant| classify(variant, tables, visiting))
                 .collect();
+            // A union with no shape variant is the variant's raw pointer, null for `nothing`
+            // (`is_envelope_union`): the slot holds what its one heap variant holds, and a second
+            // heap variant leaves nothing that names which one a pointer is.
+            if !is_envelope_union(ty) && !classes.contains(&HeapClass::TypeParameter) {
+                let mut heap = classes
+                    .iter()
+                    .filter(|class| matches!(class, HeapClass::Heap(_)));
+                match (heap.next(), heap.next()) {
+                    (Some(only), None) => return *only,
+                    (Some(_), Some(_)) => return HeapClass::Heap(ReleaseKind::UntaggedUnion),
+                    _ => {}
+                }
+            }
             if classes
                 .iter()
                 .any(|class| matches!(class, HeapClass::Heap(_)))
@@ -371,6 +421,8 @@ fn wrapped(content: HeapClass, kind: ReleaseKind) -> HeapClass {
 pub struct RawEntry {
     pub decl: DeclKey,
     pub heap: HeapClass,
+    /// The type the slot holds (`slot_held_type`).
+    pub held: Type,
     /// True for a `let`/`const` string: the only strings that own their bytes.
     pub string_owner: bool,
     /// The binding's alias class in the live scope at the edge.
@@ -1155,6 +1207,12 @@ impl ReleasePlan {
         let holes: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let codegen_name_of =
             |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
+        let held_of: HashMap<DeclKey, Type> = function
+            .edges
+            .iter()
+            .flat_map(|edge| edge.entries.iter())
+            .map(|entry| (entry.decl.clone(), entry.held.clone()))
+            .collect();
         let mut releasing_if_live: HashMap<DeclKey, ReleaseKind> = HashMap::new();
         let mut if_live_decls: HashSet<DeclKey> = HashSet::new();
         for ((kind, span, fates), raw_edge) in resolved.edges.iter().zip(&function.edges) {
@@ -1168,6 +1226,7 @@ impl ReleasePlan {
                     ReleaseEntry {
                         decl: decl.clone(),
                         codegen_name: codegen_name_of(decl),
+                        held: held_of.get(decl).cloned().unwrap_or(Type::Error),
                         fate: *fate,
                     }
                 })
@@ -1219,6 +1278,7 @@ impl ReleasePlan {
                     AssignRelease {
                         decl: decl.clone(),
                         codegen_name: codegen_name_of(decl),
+                        held: held_of.get(decl).cloned().unwrap_or(Type::Error),
                         kind,
                     },
                 );

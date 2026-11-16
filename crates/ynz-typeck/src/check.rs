@@ -34,7 +34,7 @@ use crate::{
 
 use crate::binding_names::{decl_key, DeclKey};
 use crate::release_plan::{
-    heap_class_of, EdgeKind, HeapClass, Moved, RawEntry, ReleaseReads, TypeTables,
+    heap_class_of, slot_held_type, EdgeKind, HeapClass, Moved, RawEntry, ReleaseReads, TypeTables,
 };
 
 /// One give made while a loop body was being checked: where it happened, why the entries it
@@ -5635,6 +5635,13 @@ impl<'b> Checker<'b> {
                 };
                 entries.push(RawEntry {
                     decl: decl_key(&entry.defined_at, name),
+                    held: slot_held_type(
+                        &entry.ty,
+                        &TypeTables {
+                            shapes: self.shape_table,
+                            generic_shapes: self.generic_shape_table,
+                        },
+                    ),
                     heap,
                     // A `let`/`const` string, or a `give` parameter, owns its bytes; a `share`/
                     // `lend`/bare parameter and a loop cell do not.
