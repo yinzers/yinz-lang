@@ -25958,7 +25958,10 @@ impl StringTakeEvidence {
     /// The plan's move sites inside the function body at `body`.
     ///
     /// O(move sites in the module) time, O(sites in the function) memory.
-    fn for_body(plan: &ynz_typeck::release_plan::ReleasePlan, body: &ynz_diagnostics::SourceSpan) -> Self {
+    fn for_body(
+        plan: &ynz_typeck::release_plan::ReleasePlan,
+        body: &ynz_diagnostics::SourceSpan,
+    ) -> Self {
         let mut evidence = StringTakeEvidence::default();
         for (span, site) in plan.move_sites() {
             if body.start <= span.0 && span.1 <= body.end {
@@ -25992,18 +25995,19 @@ impl StringTakeEvidence {
                     }
                 }
             }
-            Expr::BinOp { op, lhs, rhs, .. }
-                if matches!(
-                    op,
+            Expr::BinOp {
+                op:
                     BinOpKind::Add
-                        | BinOpKind::Lt
-                        | BinOpKind::LtEq
-                        | BinOpKind::Gt
-                        | BinOpKind::GtEq
-                        | BinOpKind::EqEq
-                        | BinOpKind::NotEq
-                ) =>
-            {
+                    | BinOpKind::Lt
+                    | BinOpKind::LtEq
+                    | BinOpKind::Gt
+                    | BinOpKind::GtEq
+                    | BinOpKind::EqEq
+                    | BinOpKind::NotEq,
+                lhs,
+                rhs,
+                ..
+            } => {
                 mark(lhs);
                 mark(rhs);
             }
@@ -26087,7 +26091,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return Ok(None);
         }
         // An admitted-SoA array holds its items in per-field segments, not in the layout the
-        // array release walks. NOT SLICE 1's to release: left for the slice that pins that layout.
+        // array release walks. SLICE 3 owns releasing them (it pins that layout).
         if self.soa_bindings.contains_key(name) {
             return Ok(None);
         }
@@ -26109,11 +26113,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 }
             }
         }
-        let ty = self
-            .local_types
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("internal: release of `{name}`: its type was never recorded"))?;
+        let ty =
+            self.local_types.get(name).cloned().ok_or_else(|| {
+                format!("internal: release of `{name}`: its type was never recorded")
+            })?;
         let resolved = self.resolve_type(&ty);
         let step = release_step(&resolved);
         let kind_matches_type = matches!(
@@ -26267,8 +26270,10 @@ fn lower_block_stmts<'ctx>(
 
 /// `print` only reads its argument, so a string it was handed that nothing else holds (a fresh
 /// string, never a binding: typeck's `string_moves`, remembered by `lower_expr`) is released once
-/// printed. SLICE 1 releases this one unbound temporary because C2's `leak_string_loop` ends with
-/// `print(total.toString())`; every other temporary is slice 2's. Plain functions only.
+/// printed. This is a special case of the `NoOwner` temporaries class (a fresh value no binding holds),
+/// released here because C2's `leak_string_loop` ends with `print(total.toString())`. Slice 2
+/// replaces it with the general release at the end of the statement that made the temporary and
+/// DELETES this function. Plain functions only.
 ///
 /// O(1) time at the call site.
 fn release_printed_fresh_string<'ctx>(
