@@ -70,16 +70,17 @@ function m8Eat(give rows: array<int>) -> nothing {
   print(rows.count().toString())
 }
 
-// pick — returns its argument through a type parameter (`MayAlias` under the `returns_fresh`
-// fixpoint fact: a function returning a string, array, map or shape hands back an owned copy, so
-// only a type parameter still returns a piece), so a `let` bound to its result is `Reaches(b)`,
-// never transferable.
-function m8Pick<T>(share b: T) -> T {
+// pick — returns its argument through a `maybe`. A function returning a string, array, map, shape,
+// channel or an envelope union hands back an owned copy (`copied_at_return`, and a generic call
+// result is an owned copy of the instance's type), so those results are fresh; a `maybe` of
+// anything but a channel still returns a piece (`MayAlias` under the `returns_fresh` fixpoint
+// fact), so a `let` bound to its result is `Reaches(b)`, never transferable.
+function m8Pick(share b: maybe<Bucket>) -> maybe<Bucket> {
   return b
 }
 
-function m8EatBucket(give owner: Bucket) -> nothing {
-  print(owner.rows.count().toString())
+function m8EatBucket(give owner: maybe<Bucket>) -> nothing {
+  print(owner.exists().toString())
 }
 
 // stash — a `give` position that is NOT the receiver of a UFCS dot-call (probe 1: UFCS
@@ -205,10 +206,10 @@ function m8TransferNeedsCopyLoopCell(lend wire: channel<array<int>>) -> nothing 
 }
 
 // WHY: TransferNeedsCopy — a CALL RESULT THAT RETURNS A PIECE of its argument (`m8Pick`
-// returns `b`, so `again` is `Reaches(bucket)` under the `returns_fresh` fact — probe 7).
+// returns `b`, so `again` is `Reaches(held)` under the `returns_fresh` fact — probe 7).
 function m8TransferNeedsCopyReturnsPiece() -> nothing {
-  let bucket: Bucket = { rows: [1, 2, 3] }
-  let again = m8Pick(bucket)
+  let held: maybe<Bucket> = none
+  let again = m8Pick(held)
   m8EatBucket(again)
 }
 
