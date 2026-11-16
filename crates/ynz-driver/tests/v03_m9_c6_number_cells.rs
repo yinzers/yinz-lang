@@ -357,3 +357,19 @@ fn union_variant_holding_a_number_survives_container_return_and_spawn() {
         assert!(run.stdout.contains("3.00 3.00 54\n") && run.stdout.contains("task 3.00\n"));
     }
 }
+
+#[test]
+fn map_keyed_by_numbers_returned_from_its_producer() {
+    // RED until the map holds decimal keys inline (parked 70, routed to a builder): a `number`
+    // key is still 8 bytes of pointer bits into the producer's frame, so after `keyed` returns
+    // `entry.key` reads the dead frame (garbage at -O0) and `get(2.5)` compares addresses and
+    // always misses. Tier: High.
+    let source = program(
+        "function keyed() -> map<number, string> {\n  let table: map<number, string> = {}\n  \
+         let price: number = 2.5\n  table.set(price, `two and a half`)\n  return table\n}\n",
+        "  let table = keyed()\n  let scratch = clobber(3)\n  for (entry in table) {\n    \
+         print(entry.key)\n  }\n  let probe: number = 2.50\n  \
+         print(table.get(probe).or(`missing`))\n  print(scratch)\n",
+    );
+    assert_prints(&source, "2.5\ntwo and a half\n36\n");
+}
