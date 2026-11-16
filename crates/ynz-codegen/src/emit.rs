@@ -27214,7 +27214,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.emit_soa_release(slot, info, only_if_live, name, site)?;
                 continue;
             }
-            self.emit_slot_release(slot, &ty, only_if_live, name, site)?;
+            self.emit_slot_release(slot, &ty, ReleaseForm::Local, only_if_live, name, site)?;
         }
         Ok(())
     }
@@ -27345,11 +27345,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         &self,
         slot: PointerValue<'ctx>,
         ty: &Type,
+        form: ReleaseForm,
         only_if_live: bool,
         name: &str,
         site: &str,
     ) -> Result<(), String> {
-        let Some(glue) = self.local_release_fn(ty)? else {
+        let Some(glue) = self.release_form_fn(ty, form)? else {
             return Ok(());
         };
         let value = self
@@ -27444,6 +27445,22 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
+    /// The release form of a temporary's value. A `maybe` a function returned carries the payload
+    /// its `return` allocated (a string clone, a shape's heap cell, a number's cell: the stored
+    /// forms `emit_maybe_payload_release` frees); every other temporary releases as a local does.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn temporary_release_form(&self, ty: &Type) -> ReleaseForm {
+        match ty {
+            Type::Maybe { inner } => match self.resolve_type(inner) {
+                Type::String | Type::Shape { .. } => ReleaseForm::Value,
+                Type::Number { precision } if precision <= 34 => ReleaseForm::Value,
+                _ => ReleaseForm::Local,
+            },
+            _ => ReleaseForm::Local,
+        }
+    }
+
     /// The release of one statement's temporaries, last built first: each slot's value if it is
     /// non-null.
     fn release_temporary_frame(
@@ -27455,6 +27472,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.emit_slot_release(
                 temporary.slot,
                 &temporary.ty,
+                self.temporary_release_form(&temporary.ty),
                 true,
                 &format!("temporary{index}"),
                 site,

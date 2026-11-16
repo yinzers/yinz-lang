@@ -630,7 +630,11 @@ impl<'a> ReadTracker<'a> {
                     ))
                     || (method == "or"
                         && (self.is_place_read(receiver)
-                            || matches!(receiver.as_ref(), Expr::Ident(..))))
+                            || matches!(receiver.as_ref(), Expr::Ident(..))
+                            // `find(rows).or(fallback)`: the read passes through the call's
+                            // result, a temporary that dies at the statement end, so a binding of
+                            // it owns a copy (`through_temporary`).
+                            || self.is_user_function_call(receiver)))
             }
             Expr::Wait(inner, _) => self.is_place_read(inner),
             _ => false,

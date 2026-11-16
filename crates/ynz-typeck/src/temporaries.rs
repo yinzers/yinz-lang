@@ -347,7 +347,16 @@ impl Walk<'_> {
         // (`copied_at_return`), which nobody gives back unless the statement does.
         let owns_a_channel_reference = matches!(ty, Type::BuiltinChannel { .. })
             || matches!(ty, Type::Maybe { inner } if matches!(inner.as_ref(), Type::BuiltinChannel { .. }));
+        // A function returns a `maybe` of a string, shape or number with the payload its `return`
+        // allocated (a string clone, a heap cell); a `let` takes it (`maybe_to_owned_taking`), so a
+        // call whose `maybe` nothing binds (`find(rows).or(fallback)`, `.exists()`) frees it here.
+        let owns_a_returned_payload = self.is_user_call(expr)
+            && matches!(ty, Type::Maybe { inner } if matches!(
+                inner.as_ref(),
+                Type::String | Type::Shape { .. } | Type::Number { precision: ..=34 }
+            ));
         owns_a_channel_reference
+            || owns_a_returned_payload
             || matches!(
                 heap_class_of(ty, &self.facts.tables),
                 HeapClass::Heap(

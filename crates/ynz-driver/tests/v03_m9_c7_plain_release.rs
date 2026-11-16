@@ -441,3 +441,56 @@ fn a_generic_call_result_and_its_argument_temporary_are_released() {
         );
     });
 }
+
+const A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS: &str = "
+shape Row {
+  name: string
+  vals: array<int>
+}
+function find(share rows: array<Row>, index: int) -> maybe<Row> {
+  return rows.get(index)
+}
+function findName(share names: array<string>, index: int) -> maybe<string> {
+  return names.get(index)
+}
+function entrypoint() -> nothing {
+  let rows: array<Row> = [{ name: `a${1}`, vals: [1] }, { name: `b${2}`, vals: [2, 3] }]
+  let names: array<string> = [`x${1}`, `y${2}`]
+  let total: int = 0
+  for (index in range(0, 6)) {
+    let fallback: Row = { name: `d`, vals: [] }
+    if (find(rows, index).exists()) {
+      total = total + 1
+    }
+    total = total + findName(names, index).or(`q`).count()
+    let chosen: Row = find(rows, index).or(fallback)
+    total = total + chosen.name.count() + find(rows, index).or(fallback).vals.count()
+  }
+  print(total)
+}
+";
+
+/// A user function returns a `maybe` of a string or shape with the payload its `return` allocated.
+/// A call whose `maybe` nothing binds (`.exists()`, `.or(..)`) leaked that payload, and
+/// `let chosen = find(..).or(fallback)` copied the read yet the plan listed `chosen` as a
+/// non-owner (the call-receiver `.or` was not judged a read through a temporary), leaking the
+/// copy (High: leak).
+#[test]
+fn a_returned_maybe_nothing_binds_is_released_at_the_statement_end() {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced(
+            "c7_returned_maybe",
+            A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS,
+            "21\n",
+            no_optimize,
+        );
+        assert_heap_balanced("c7_returned_maybe", &counters, no_optimize);
+        assert_strings_balanced("c7_returned_maybe", &counters, no_optimize);
+        assert_asan_clean(
+            "c7_returned_maybe",
+            A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS,
+            "21\n",
+            no_optimize,
+        );
+    });
+}
