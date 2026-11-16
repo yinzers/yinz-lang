@@ -1286,10 +1286,12 @@ fn a_field_of_a_call_result_is_a_piece_of_the_calls_arguments() {
     assert_eq!(founder_name(&transfers, "piece"), "piece");
 }
 
-/// (High) Storing that piece is refused: `container.add(piece)` would put a value `bags` still
-/// holds into `container`, two owners of one array.
+/// (High) A generic callee's `return` copies a heap-typed result at its instance, so
+/// `firstBag(bags, empty).items` is a field of an owned value, not a piece of `bags`: storing it
+/// is accepted and `bags` and `container` hold different arrays. (It was refused as a piece of
+/// `bags`, which also left the result unreleased: a leak per call.)
 #[test]
-fn storing_a_piece_of_a_call_result_is_rejected() {
+fn storing_a_field_of_a_generic_call_result_is_accepted_it_owns_its_value() {
     let source = format!(
         "{FIRST_BAG}function underTest() -> array<array<int>> {{
   let bags: array<Bag> = [{{ items: [1] }}]
@@ -1300,7 +1302,8 @@ fn storing_a_piece_of_a_call_result_is_rejected() {
   return container
 }}"
     );
-    assert_rejected_with(&source, "so someone here still holds it");
+    let transfers = transfers_of(&source, "underTest");
+    assert!(!transfers.same_class("bags", "piece"), "{transfers:#?}");
 }
 
 /// (High) Bug caught: a store whose PLACE is a call result (`firstBag(bags, empty).items = numbers`) was

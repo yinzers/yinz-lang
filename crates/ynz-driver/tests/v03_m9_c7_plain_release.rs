@@ -399,3 +399,45 @@ fn a_returned_local_string_is_not_released_at_the_return() {
         assert_strings_balanced("c7_string_returned", &counters, no_optimize);
     });
 }
+
+const GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY: &str = "
+function ident<T>(share value: T) -> T {
+  return value
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (round in range(0, 10)) {
+    let kept: array<int> = [round]
+    let bound: array<int> = ident(kept)
+    let from_literal: array<int> = ident([round, 1])
+    total = total + bound.count() + from_literal.count()
+    total = total + ident([round, 1, 2]).count()
+  }
+  print(total)
+}
+";
+
+/// A call of a generic function whose result is a heap type: its `return` copies, so the call is
+/// an owned value (bound by move, or a temporary released at the statement end), and an array
+/// literal passed to its `share` parameter is a temporary the caller releases. Typeck judged the
+/// result by the unresolved `T` (a `MayAlias`: the `let` copied it again and nothing released
+/// the result), and a generic callee was absent from the signature table, so its argument
+/// was assumed taken. Both leaked 1 to 3 arrays per call (High: leak).
+#[test]
+fn a_generic_call_result_and_its_argument_temporary_are_released() {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced(
+            "c7_generic_call",
+            GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY,
+            "60\n",
+            no_optimize,
+        );
+        assert_heap_balanced("c7_generic_call", &counters, no_optimize);
+        assert_asan_clean(
+            "c7_generic_call",
+            GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY,
+            "60\n",
+            no_optimize,
+        );
+    });
+}

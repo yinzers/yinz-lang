@@ -139,6 +139,10 @@ pub struct TemporaryFacts<'a> {
     /// The signature of every function the checker knows (the declared ownership of each
     /// parameter).
     pub signatures: &'a HashMap<String, FunctionSig>,
+    /// The generic functions' signatures: a generic callee is absent from `signatures`, and an
+    /// unknown callee is assumed to take its arguments, which left a temporary passed to a
+    /// generic function unreleased.
+    pub generic_signatures: &'a HashMap<String, crate::generics::GenericFnSig>,
     /// The shape tables `heap_class_of` reads.
     pub tables: TypeTables<'a>,
 }
@@ -360,8 +364,11 @@ impl Walk<'_> {
     /// The declared ownership of position `index` of the call of `name`: `None` when the
     /// function is unknown (its parameter is then assumed to take the value).
     fn param_ownership(&self, name: &str, index: usize) -> Option<Option<OwnershipModifier>> {
+        if let Some(signature) = self.facts.signatures.get(name) {
+            return signature.param_ownerships.get(index).cloned();
+        }
         self.facts
-            .signatures
+            .generic_signatures
             .get(name)
             .and_then(|signature| signature.param_ownerships.get(index).cloned())
     }

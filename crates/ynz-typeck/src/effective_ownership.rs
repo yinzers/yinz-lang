@@ -397,6 +397,16 @@ fn call_result_provenance<'e>(
     }
     match ctx.returns_fresh_of(callee) {
         Freshness::Fresh => Provenance::Fresh,
+        // A generic function's declared return type is a type parameter, which the fixpoint
+        // cannot say is copied at `return`; codegen resolves it per instance and does copy a
+        // heap-typed result there. The call's own (instantiated) type is the answer, as for an
+        // imported callee above: without it a generic call result was neither bound by move nor
+        // released as a temporary, and its `let` copied it a second time.
+        Freshness::MayAlias { .. }
+            if (ctx.type_of)(call).is_some_and(|ty| crate::owned_copy::copied_at_return(&ty)) =>
+        {
+            Provenance::Fresh
+        }
         Freshness::MayAlias { .. } => match fold_parts(args, ctx, true) {
             // A fresh-argument call to a may-alias callee still returns a piece of
             // SOMETHING (a global, an argument's temporary) — never transferable.

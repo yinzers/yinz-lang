@@ -985,19 +985,19 @@ fn a_give_string_parameter_is_released_by_the_callee_and_omitted_by_the_caller()
     );
 }
 
-/// Bug: every member of an alias class releases (a double free): only the founder does, and the
-/// class mate is `NotOwner`.
+/// A call result is an owner of its own value, whatever the callee's declared type: a generic
+/// callee's `return` copies a heap-typed result at its instance, so `second` holds an array of its
+/// own and releases it (as `first` releases its own); the class `first` founds does not reach it.
+/// Bug (leak): the result was judged a piece of `first` (`MayAlias`, the type parameter unresolved)
+/// and neither bound by move nor released.
 #[test]
-fn a_class_mate_of_the_founder_is_not_an_owner() {
+fn a_generic_call_result_is_an_owner_of_its_own_value() {
     let output = clean(
         "function pass<T>(share rows: T) -> T {\n  return rows\n}\nfunction mate() -> nothing {\n  let first = [1]\n  let second = pass(first)\n  print(`${second.count()}`)\n}\n",
     );
     let list = body_end(&output, "mate");
     assert_eq!(fate_of(&list, "first"), Fate::Release(ARRAY));
-    assert_eq!(
-        fate_of(&list, "second"),
-        Fate::Omitted(OmitReason::NotOwner)
-    );
+    assert_eq!(fate_of(&list, "second"), Fate::Release(ARRAY));
 }
 
 /// Bug: a binding that outlives the owner of the field it reads (`cell = owner.rows`, `owner` dies

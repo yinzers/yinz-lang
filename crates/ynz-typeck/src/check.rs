@@ -724,6 +724,7 @@ fn record_temporaries_of(
     local_fns: &HashSet<String>,
     imported_fns: &HashSet<String>,
     sig_table: &SignatureTable,
+    generic_fn_table: &GenericFnTable,
     tables: crate::release_plan::TypeTables<'_>,
 ) -> crate::temporaries::Temporaries {
     let callable: HashSet<String> = local_fns.union(imported_fns).cloned().collect();
@@ -735,6 +736,7 @@ fn record_temporaries_of(
             union_coercions,
             callable_fns: &callable,
             signatures,
+            generic_signatures: &generic_fn_table.fns,
             tables,
         },
     )
@@ -1116,6 +1118,7 @@ pub fn check(
         &checker.local_fn_names,
         checker.imported_fn_names,
         checker.sig_table,
+        checker.generic_fn_table,
         crate::release_plan::TypeTables {
             shapes: checker.shape_table,
             generic_shapes: checker.generic_shape_table,
@@ -1247,6 +1250,7 @@ pub fn check_with_kernel_mode(
         &checker.local_fn_names,
         checker.imported_fn_names,
         checker.sig_table,
+        checker.generic_fn_table,
         crate::release_plan::TypeTables {
             shapes: checker.shape_table,
             generic_shapes: checker.generic_shape_table,
