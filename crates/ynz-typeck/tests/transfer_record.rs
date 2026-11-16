@@ -915,23 +915,24 @@ fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
     assert_eq!(founder_name(&transfers, "inner"), "outer");
 }
 
-/// (High) The honest remainder: an imported function that returns a `channel` may hand back its
-/// argument, and the copy table refuses a channel (`owned_copy_plan`), so no read of the result
-/// can be judged a copy. `held` outlives `local`, so which of them owns the value is not known
-/// statically. Recorded as "no static founder", not guessed: nothing is released (a leak, never
-/// an early free). A drop flag cannot settle it: the holder may point into a value the scope exit
-/// frees (decided: Chief Architect, replacing the drop-flag ruling for `OutlivedByNonOwner`).
+/// (High) The honest remainder: an imported function that returns a `maybe` holding a `channel`
+/// may hand back a piece of its argument, and neither the copy table nor the store seam can take a
+/// counted reference through the envelope. `held` outlives `local`, so which of them owns the
+/// value is not known statically. Recorded as "no static founder", not guessed: nothing is
+/// released (a leak, never an early free). A drop flag cannot settle it: the holder may point
+/// into a value the scope exit frees (decided: Chief Architect, replacing the drop-flag ruling for
+/// `OutlivedByNonOwner`).
 #[test]
 fn a_non_owner_that_outlives_the_owner_leaves_no_static_founder() {
-    let library = "export function same(share ch: channel<int>) -> channel<int> {
-  return ch
+    let library = "export function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
+  return chans.first()
 }\n";
-    let main = "import { same } from `lib`
+    let main = "import { firstChan } from `lib`
 function underTest(condition: boolean) -> nothing {
-  let held: channel<int> = channel<int>()
+  let held: maybe<channel<int>> = none
   if (condition) {
-    let local: channel<int> = channel<int>()
-    held = same(local)
+    let local: array<channel<int>> = [channel<int>()]
+    held = firstChan(local)
   }
 }
 function entrypoint() -> nothing {
@@ -946,6 +947,45 @@ function entrypoint() -> nothing {
             holder: "held".to_string()
         })
     );
+}
+
+/// (High) An imported function (or a local one) that returns its `channel` argument: the binding
+/// that holds the result takes a counted reference of its own (`ynz_channel_share`, `MustCopy` in
+/// `non_owned_reads`). It joins nothing, so `held` and `local` are each the founder of a class of
+/// their own and the channel is released once per reference.
+#[test]
+fn a_handed_back_channel_is_a_counted_reference_in_a_class_of_its_own() {
+    let library = "export function same(share ch: channel<int>) -> channel<int> {
+  return ch
+}\n";
+    let main = "import { same } from `lib`
+function passOn(share ch: channel<int>) -> channel<int> {
+  return ch
+}
+function viaImport(condition: boolean) -> nothing {
+  let held: channel<int> = channel<int>()
+  if (condition) {
+    let local: channel<int> = channel<int>()
+    held = same(local)
+  }
+}
+function viaLocal(condition: boolean) -> nothing {
+  let held: channel<int> = channel<int>()
+  if (condition) {
+    let local: channel<int> = channel<int>()
+    held = passOn(local)
+  }
+}
+function entrypoint() -> nothing {
+}
+";
+    let output = run_with_library(library, main);
+    for function in ["viaImport", "viaLocal"] {
+        let transfers = record_of(&output, function);
+        assert!(!transfers.same_class("held", "local"), "{function}: {transfers:#?}");
+        assert_eq!(founder_name(&transfers, "held"), "held");
+        assert_eq!(founder_name(&transfers, "local"), "local");
+    }
 }
 
 /// (High) An imported function that returns a `maybe` (or a union) may hand back a piece of its

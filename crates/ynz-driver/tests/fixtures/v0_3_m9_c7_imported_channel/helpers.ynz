@@ -1,0 +1,5 @@
+// An imported function that hands back its channel argument: typeck cannot trace which holder the
+// result is.
+export function same(share ch: channel<array<int>>) -> channel<array<int>> {
+  return ch
+}

@@ -845,3 +845,47 @@ fn an_imported_maybe_result_is_a_copy_the_argument_owners_release_does_not_dangl
         support::assert_asan_clean_and_prints(IMPORTED_MAYBE_PROJECT, no_optimize, "60\n");
     });
 }
+
+// ── A function that hands back its channel argument: the holder takes a counted reference ───
+
+/// `same` (imported) and `passOn` (local) return their channel argument; `held` outlives `local`.
+const CHANNEL_HANDED_BACK_PROJECT: &str = "v0_3_m9_c7_imported_channel";
+
+/// Bug (High): `held = same(local)` stored the argument's own pointer, so `held` and `local` were
+/// one reference released twice (an early free of the channel, or, left unreleased, a leak). Now
+/// the binding takes its own counted reference (`ynz_channel_share`, the count channels already
+/// have) and the channel is freed once, after both are gone.
+///
+/// The runtime is not instrumented, so ASan cannot see a second release of a channel's count; the
+/// share is pinned in the IR (one per binding that holds a handed-back channel, at both
+/// optimization levels), and the run is ASan-clean with leak detection on (a channel nobody
+/// releases is a leak: the control program with only plain channel locals is clean the same way).
+#[test]
+fn a_channel_handed_back_by_a_function_is_held_by_a_counted_reference() {
+    at_both_optimization_levels(|no_optimize| {
+        let built = support::build(CHANNEL_HANDED_BACK_PROJECT, no_optimize);
+        let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
+        let shares = ir.matches("call ptr @ynz_channel_share(").count();
+        // One per binding that holds a handed-back channel; the optimizer may inline a function into
+        // its callers and so repeat a call.
+        let expected_ok = if no_optimize { shares == 2 } else { shares >= 2 };
+        assert!(
+            expected_ok,
+            "no_optimize={no_optimize}: one `ynz_channel_share` for each of the two bindings that \
+             hold a handed-back channel, got {shares}"
+        );
+        let run = support::run_plain(CHANNEL_HANDED_BACK_PROJECT, no_optimize);
+        assert_eq!(run.exit_code, 0, "stderr:\n{}", run.stderr);
+        assert_eq!(run.stdout, "1\n");
+        let sanitized = support::build_asan(&built);
+        let checked = std::process::Command::new(&sanitized)
+            .env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0")
+            .output()
+            .expect("run the sanitized binary");
+        let stderr = String::from_utf8_lossy(&checked.stderr);
+        assert!(
+            checked.status.success() && !stderr.contains("Sanitizer"),
+            "no_optimize={no_optimize}: ASan or LeakSanitizer reported:\n{stderr}"
+        );
+    });
+}

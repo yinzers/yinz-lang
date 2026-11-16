@@ -544,13 +544,17 @@ impl<'a> ReadTracker<'a> {
     /// dispatch): it may be a piece of an argument.
     fn is_untraceable_result(&self, value: &Expr) -> bool {
         // A string, array, map or shape a function returns is an owned copy (`copied_at_return`):
-        // only a `maybe` or a union can still be a piece of an argument. A channel or a task handle
-        // is refused by the copy table (`owned_copy_plan`), so a type holding one is left alone.
+        // only a `maybe`, a union or a channel can still be a piece of an argument. A channel's
+        // copy is a counted reference (`ynz_channel_share`, as C6's deep copy takes one). A task
+        // handle cannot be named in a signature, and a `maybe` or union that holds a channel or a
+        // handle is refused by the copy table (`owned_copy_plan`), so it is left alone.
         if !matches!(value, Expr::Call(_) | Expr::MethodCall { .. })
             || !self.type_of(value).is_some_and(|ty| {
-                matches!(ty, Type::Maybe { .. } | Type::Union { .. })
-                    && (!value_like(ty) || matches!(ty, Type::Maybe { inner } if matches!(inner.as_ref(), Type::String)))
-                    && !holds_a_conduit(ty)
+                matches!(ty, Type::BuiltinChannel { .. })
+                    || (matches!(ty, Type::Maybe { .. } | Type::Union { .. })
+                        && (!value_like(ty)
+                            || matches!(ty, Type::Maybe { inner } if matches!(inner.as_ref(), Type::String)))
+                        && !holds_a_conduit(ty))
             })
         {
             return false;
@@ -562,7 +566,27 @@ impl<'a> ReadTracker<'a> {
             self.imported_fn_names,
             &type_of,
         );
-        matches!(provenance(value, &ctx), Provenance::Unknown)
+        match provenance(value, &ctx) {
+            Provenance::Unknown => true,
+            // A user function whose result may be one of its arguments (`pick(rows, other)`):
+            // the same hazard, traced to its roots. A built-in element read (`rows.get(0)`) is a
+            // place read, judged as a view or a copy by the place rules.
+            Provenance::Reaches(roots) => !roots.is_empty() && self.is_user_function_call(value),
+            Provenance::Fresh | Provenance::Whole(_) => false,
+        }
+    }
+
+    /// True when `value` calls a Yinz function (local or imported), not a built-in method.
+    fn is_user_function_call(&self, value: &Expr) -> bool {
+        match value {
+            Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _)
+                if self.ownership.is_local_fn(name) || self.imported_fn_names.contains(name)),
+            Expr::MethodCall { receiver, method, .. } => {
+                (self.ownership.is_local_fn(method) || self.imported_fn_names.contains(method))
+                    && !self.is_builtin_method(receiver, method)
+            }
+            _ => false,
+        }
     }
 
     /// True when `value` reads a place that stays where it is: a field or element read, an

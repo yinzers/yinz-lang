@@ -19704,6 +19704,23 @@ fn store_binding_of_read<'ctx>(
         let owned = own_read_for_store(cg, expr, val, ty, false, name)?;
         return store(cg, owned.value, ty, slot);
     }
+    // A channel result typeck judged a copy (a function returned its channel argument, or a piece
+    // of one): the binding takes a counted reference of its own (`ynz_channel_share`, as the deep
+    // copy of a shape does), which its scope exit gives back (`ynz_channel_free`). A fresh channel
+    // has no verdict and is stored as it is.
+    if matches!(cg.resolve_type(ty), Type::BuiltinChannel { .. })
+        && val.is_pointer_value()
+        && cg.typed.non_owned_reads.must_copy(expr.span().start, expr.span().end)
+    {
+        let shared = cg
+            .builder
+            .build_call(cg.rt.ynz_channel_share, &[val.into()], &format!("{name}_share"))
+            .map_err(|err| format!("share the channel held by `{name}`: {err}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("ynz_channel_share returned void")?;
+        return store(cg, shared, ty, slot);
+    }
     // A `maybe` of an array or map holds the container's pointer as its payload, which a copy of
     // the envelope shares: a read of a place that is not a view copies the payload as well.
     if let Type::Maybe { inner } = cg.resolve_type(ty) {
