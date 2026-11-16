@@ -3,8 +3,8 @@
 /// All operations use round-half-even (IEEE 754 default rounding mode).
 /// Special-value propagation follows IEEE 754-2008 §6.
 use super::bits::{
-    decimal_digits, decode, encode_finite, encode_infinity, round_half_even, DECIMAL_DIGITS,
-    MAX_COEFFICIENT, MAX_EXPONENT, MIN_EXPONENT, POW10, QUIET_NAN,
+    decimal_digits, decode, encode_finite, encode_infinity, round_half_even, D128Value,
+    DECIMAL_DIGITS, MAX_COEFFICIENT, MAX_EXPONENT, MIN_EXPONENT, POW10, QUIET_NAN,
 };
 use super::wide::U256;
 
@@ -163,6 +163,49 @@ pub fn compare(a: u128, b: u128) -> i32 {
     } else {
         cmp
     }
+}
+
+/// Are two decimal128 values the SAME KEY of a hash map: `compare` reports them equal (`1.0` and
+/// `1.00`, `+0` and `-0` included), or both are NaN. A map cannot hold a key that never equals
+/// itself, so NaN, which `compare` calls unordered, is one key here.
+///
+/// O(1) time and space (one decode of each operand).
+pub fn key_equal(a: u128, b: u128) -> bool {
+    match compare(a, b) {
+        0 => true,
+        2 => decode(a).is_nan() && decode(b).is_nan(),
+        _ => false,
+    }
+}
+
+/// The normalized form of a decimal128, a function of its VALUE only: the same for exactly the
+/// pairs [`key_equal`] accepts, so a hash of it agrees with `key_equal`. A finite non-zero value
+/// loses its trailing zero digits (`1.00` → coefficient 1, exponent 0), a zero loses its sign
+/// and exponent, a NaN loses its sign; an infinity keeps its sign.
+///
+/// The exponent of a stripped value can pass `MAX_EXPONENT`: this is a key to hash, never a value
+/// to encode.
+///
+/// O(1) time (at most six 128-bit divisions), O(1) space.
+pub fn normalized(bits: u128) -> D128Value {
+    let mut value = decode(bits);
+    if value.is_nan() {
+        value.sign = false;
+    } else if value.is_zero() {
+        value.sign = false;
+        value.exponent = 0;
+    } else if value.is_finite() {
+        // Strip 10^32, 10^16, ... 10^1 in turn: each divides at most once, and together they
+        // remove any run of up to 63 zeros (a 34-digit coefficient has at most 33).
+        for zeros in [32u32, 16, 8, 4, 2, 1] {
+            let factor = POW10[zeros as usize];
+            if value.coefficient % factor == 0 {
+                value.coefficient /= factor;
+                value.exponent += zeros as i32;
+            }
+        }
+    }
+    value
 }
 
 fn add_sub(a: u128, b: u128, negate_b: bool) -> u128 {
@@ -788,6 +831,70 @@ mod tests {
         let pos_zero = encode_finite(false, 0, 0);
         let neg_zero = encode_finite(true, 0, 0);
         assert_eq!(compare(pos_zero, neg_zero), 0);
+    }
+
+    /// Spellings of one value in several scales, every distinct value once: the same value has
+    /// the same `normalized` form and is `key_equal`, a different value has neither.
+    #[test]
+    fn normalized_form_and_key_equality_agree_with_compare() {
+        // Bug caught: a map hashing the raw bits would send `1.0` and `1.00` to different
+        // buckets, so a lookup by an equal computed key misses.
+        let spellings: [&[&str]; 8] = [
+            &["1", "1.0", "1.00", "1.000000000000000000000000000000000", "0.10E1"],
+            &["2.5", "2.50", "25E-1", "250E-2"],
+            &["-2.5", "-2.50", "-25E-1"],
+            &["0", "0.0", "0.000", "-0", "-0.00", "0E+10"],
+            &["1E+33", "1000000000000000000000000000000000", "10E+32"],
+            &["123456789012345678901234567890.1234", "123456789012345678901234567890.12340"],
+            &["Infinity", "+Infinity"],
+            &["-Infinity"],
+        ];
+        for (group_index, group) in spellings.iter().enumerate() {
+            for left in group.iter() {
+                for right in group.iter() {
+                    assert!(key_equal(from_str(left), from_str(right)), "{left} vs {right}");
+                    assert_eq!(
+                        normalized(from_str(left)),
+                        normalized(from_str(right)),
+                        "{left} vs {right}"
+                    );
+                }
+                for other_group in spellings.iter().skip(group_index + 1) {
+                    for other in other_group.iter() {
+                        assert!(!key_equal(from_str(left), from_str(other)), "{left} vs {other}");
+                        assert_ne!(
+                            normalized(from_str(left)),
+                            normalized(from_str(other)),
+                            "{left} vs {other}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nan_is_one_key_whatever_its_sign() {
+        // Bug caught: a NaN key that never equals itself is inserted again on every `set` and
+        // can never be found.
+        let nan = QUIET_NAN;
+        let negative_nan = neg(QUIET_NAN);
+        assert!(key_equal(nan, nan));
+        assert!(key_equal(nan, negative_nan));
+        assert_eq!(normalized(nan), normalized(negative_nan));
+        assert!(!key_equal(nan, from_str("1")));
+    }
+
+    #[test]
+    fn normalized_strips_any_run_of_trailing_zeros() {
+        // Bug caught: a strip that handles only some run lengths leaves `10^k` unequal to `1`.
+        for zeros in 0..=33u32 {
+            let spelled = format!("1E+{zeros}");
+            let bits = from_str(&spelled);
+            let value = normalized(bits);
+            assert_eq!(value.coefficient, 1, "{spelled}");
+            assert_eq!(value.exponent, zeros as i32, "{spelled}");
+        }
     }
 
     #[test]
