@@ -11,11 +11,11 @@
 //! (`sanitize_address`) and linked with `clang -fsanitize=address` (see `support`), then must
 //! (a) exit 0 with no AddressSanitizer report and (b) print the exact values.
 //!
-//! These are GREEN today, and say so: nothing frees a scope's heap locals yet, so there is
-//! nothing to free early or twice. They are the guard that the release pass does not. They
-//! cannot be red before that pass exists, so `v03_m9_asan_harness_controls` proves the harness
-//! reports an early and a double free; the leak group below is the red half. Leak detection
-//! is off for them (it IS red today) — balance is asserted by the counters instead.
+//! These were written GREEN before the scope-exit release pass (C7) existed, when nothing freed a
+//! scope's heap locals, as the guard that the pass frees nothing early or twice; they stay as
+//! that guard now that it runs. `v03_m9_asan_harness_controls` proves the harness reports an
+//! early and a double free. Leak detection is off for them: balance is asserted by the counters
+//! of the leak group below instead.
 //!
 //! Why 18 tests where the SOP says "about 8" per High-tier unit: the card requires one fixture
 //! for each of nine exit classes, and each class is lowered by a different emitter site per
@@ -32,15 +32,15 @@
 //! them early. The read-after-store programs are refused now (`v03_m9_store_hands_over.rs`). Green today for the same reason as the
 //! exit classes above.
 //!
-//! ## Leak fixtures (alloc/free counters) — RED until the release pass lands
+//! ## Leak fixtures (alloc/free counters)
 //!
 //! A 2,000-iteration loop must free what it allocates, for heap locals (`ynz_alloc`/`ynz_free`
 //! counters) and for strings (the string alloc/free counters of C2's runtime change).
 //!
-//! | test | red on the base because |
+//! | test | red on the pre-C7 base because |
 //! |---|---|
-//! | `leak_heap_local_loop::*` | red until C7: no scope-exit release yet, 4,000 allocations / 0 frees |
-//! | `leak_string_loop::*`     | red until C7: no scope-exit release yet, strings are never freed |
+//! | `leak_heap_local_loop::*` | no scope-exit release: 4,000 allocations / 0 frees |
+//! | `leak_string_loop::*`     | no scope-exit release: strings are never freed |
 //!
 //! Every test builds and runs its own program in its own process, and reads its own counter
 //! file (`.claude/rules/test-parallelism.md`); one named test per case so the runner
@@ -131,8 +131,9 @@ asan_case!(
 //
 // Typeck's transfer record used to miss these transfers; its facts are asserted in
 // `ynz-typeck/tests/transfer_record.rs`. Here each program is the end-to-end guard for the
-// release pass: green today (nothing frees), red the moment C7 frees a value something still
-// holds. One program per process, at both optimization levels, like the exit classes above.
+// release pass: written green before C7 (nothing freed), red the moment a release frees a value
+// something still holds. One program per process, at both optimization levels, like the exit
+// classes above.
 asan_case!(
     store_field_set,
     "v0_3_m9_c5a_field_set_store.ynz",
@@ -224,14 +225,13 @@ fn assert_strings_balance(no_optimize: bool) {
 mod leak_heap_local_loop {
     #[test]
     fn optimized() {
-        // red until C7: no scope-exit release yet (4,000 allocs, 0 frees on the base)
+        // red on the pre-C7 base: no scope-exit release (4,000 allocs, 0 frees)
         super::assert_heap_locals_balance(false);
     }
 
     #[test]
     fn no_optimize() {
         // WHY: same leak at -O0.
-        // red until C7: no scope-exit release yet
         super::assert_heap_locals_balance(true);
     }
 }
@@ -248,7 +248,6 @@ mod leak_string_loop {
     #[test]
     fn no_optimize() {
         // WHY: same leak at -O0.
-        // red until C7: no scope-exit release yet
         super::assert_strings_balance(true);
     }
 }
