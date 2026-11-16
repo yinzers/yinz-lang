@@ -94,6 +94,15 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_siphash_init: FunctionValue<'ctx>,
     // ynz_map_new(i64 elem_size) -> ptr
     pub ynz_map_new: FunctionValue<'ctx>,
+    // ynz_map_new_decimal_keys(i64 elem_size) -> ptr: a map whose keys are decimal128 numbers held
+    // inline (16 bytes), hashed and compared by value
+    pub ynz_map_new_decimal_keys: FunctionValue<'ctx>,
+    // ynz_map_get_dec(ptr map, ptr key16, ptr out) -> i64 has-flag; same contract as ynz_map_get
+    pub ynz_map_get_dec: FunctionValue<'ctx>,
+    // ynz_map_set_dec(ptr map, ptr key16, ptr src, ptr value_glue, i32 values_inline) -> void
+    pub ynz_map_set_dec: FunctionValue<'ctx>,
+    // ynz_map_iter_get_dec(ptr map, i64 pos, ptr key16_out, ptr val_out) -> i64 has-flag
+    pub ynz_map_iter_get_dec: FunctionValue<'ctx>,
     // ynz_map_get(ptr map, i64 key, ptr out) -> i64 has-flag; copies elem_size
     // value bytes into out on hit, zeroes out on miss
     pub ynz_map_get: FunctionValue<'ctx>,
@@ -511,6 +520,29 @@ impl<'ctx> RuntimeDecls<'ctx> {
 
             ynz_siphash_init: declare_fn(module, "ynz_siphash_init", void.fn_type(&[], false)),
             ynz_map_new: declare_fn(module, "ynz_map_new", ptr.fn_type(&[i64.into()], false)),
+            ynz_map_new_decimal_keys: declare_fn(
+                module,
+                "ynz_map_new_decimal_keys",
+                ptr.fn_type(&[i64.into()], false),
+            ),
+            ynz_map_get_dec: declare_fn(
+                module,
+                "ynz_map_get_dec",
+                i64.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+            ),
+            ynz_map_set_dec: declare_fn(
+                module,
+                "ynz_map_set_dec",
+                void.fn_type(
+                    &[ptr.into(), ptr.into(), ptr.into(), ptr.into(), i32.into()],
+                    false,
+                ),
+            ),
+            ynz_map_iter_get_dec: declare_fn(
+                module,
+                "ynz_map_iter_get_dec",
+                i64.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into()], false),
+            ),
             ynz_map_get: declare_fn(
                 module,
                 "ynz_map_get",

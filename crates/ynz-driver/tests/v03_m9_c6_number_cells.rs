@@ -373,3 +373,195 @@ fn map_keyed_by_numbers_returned_from_its_producer() {
     );
     assert_prints(&source, "2.5\ntwo and a half\n36\n");
 }
+
+// ── `number` map keys (parked entry 70, the keys half) ────────────────────────────────────────
+//
+// A key is held inline, 16 bytes, and hashed and compared by VALUE (`1.0` and `1.00` are one
+// key, as `==` has it), the cost of Rust's `HashMap<Decimal, V>`.
+
+#[test]
+fn number_key_is_found_by_a_computed_equal_value_of_another_scale() {
+    // Bug caught: lookup comparing the key's bits (or its address): `1.000` computed from other
+    // numbers misses the entry stored under `1.0`. Covers `get`, `has` and the bracket read.
+    // Tier: High.
+    let source = program(
+        "",
+        "  let table: map<number, string> = {}\n  let stored: number = 1.0\n  \
+         table.set(stored, `one`)\n  let half: number = 0.5\n  let scale: number = 1.00\n  \
+         let computed: number = half + half * scale\n  \
+         print(table.get(computed).or(`missing`))\n  print(table.has(computed))\n  \
+         print(table[computed].or(`missing`))\n  let other: number = 1.5\n  \
+         print(table.has(other))\n  print(table.get(other).or(`missing`))\n",
+    );
+    assert_prints(&source, "one\ntrue\none\nfalse\nmissing\n");
+}
+
+#[test]
+fn number_key_equal_in_value_overwrites_and_keeps_the_stored_key() {
+    // Bug caught: an equal key of another scale inserting a second entry (count 2), or an
+    // overwrite replacing the stored key. Zero of any scale is one key too. Tier: High.
+    let source = program(
+        "",
+        "  let table: map<number, string> = {}\n  let first: number = 1.0\n  \
+         let second: number = 1.00\n  let third: number = 0.5 * 2.000\n  \
+         table.set(first, `first`)\n  table.set(second, `second`)\n  table[third] = `third`\n  \
+         print(table.count())\n  for (entry in table) {\n    print(`${entry.key} ${entry.value}`)\n  }\n  \
+         let zero: number = 0.0\n  let half: number = 0.5\n  let also_zero: number = half - half * 1.0\n  \
+         table.set(zero, `zero`)\n  table.set(also_zero, `still zero`)\n  \
+         print(table.count())\n  print(table.get(also_zero).or(`missing`))\n",
+    );
+    assert_prints(&source, "1\n1.0 third\n2\nstill zero\n");
+}
+
+#[test]
+fn number_keys_survive_growth_past_several_rehashes() {
+    // Bug caught: a rehash that hashes the pointer or 8 of the 16 key bytes, or moves value
+    // cells but not keys, losing entries once the table grows (16 slots at first, 200 keys
+    // here, and the insertion-order buffer holds 64). Tier: High.
+    let source = program(
+        "",
+        "  let table: map<number, int> = {}\n  let step: number = 0.5\n  let key: number = 0.0\n  \
+         for (round in range(0, 200)) {\n    table.set(key, round)\n    key = key + step\n  }\n  \
+         let probe: number = 0.00\n  let total = 0\n  let missing = 0\n  \
+         for (round in range(0, 200)) {\n    total = total + table.get(probe).or(0 - 1)\n    \
+         probe = probe + 0.50\n  }\n  let beyond: number = 100.00\n  \
+         print(`${table.count()} ${total} ${table.get(beyond).or(0 - 1)}`)\n  \
+         let key_total: number = 0.0\n  let value_total = 0\n  for (entry in table) {\n    \
+         key_total = key_total + entry.key\n    value_total = value_total + entry.value\n  }\n  \
+         print(`${key_total} ${value_total}`)\n  print(missing)\n",
+    );
+    assert_prints(&source, "200 19900 -1\n9950.0 19900\n0\n");
+}
+
+#[test]
+fn copy_of_a_number_keyed_map_is_independent_of_a_later_set() {
+    // Bug caught: a copy sharing the source's key buffer (or reading it at 8 bytes a key), so
+    // a later overwrite or insert shows in the copy. The values are arrays, so the copy also
+    // runs the nested-value deep copy, which reads each key back and sets it again. Tier: High.
+    let source = program(
+        "",
+        "  let table: map<number, array<int>> = {}\n  let low: number = 1.5\n  let high: number = 2.5\n  \
+         let one: array<int> = [1]\n  let two: array<int> = [2, 2]\n  table.set(low, one)\n  \
+         table.set(high, two)\n  let copy = table.copy()\n  let probe: number = 1.50\n  \
+         let replacement: array<int> = [7, 7, 7]\n  table.set(probe, replacement)\n  \
+         let extra: number = 3.5\n  table.set(extra, [4, 4, 4, 4])\n  let absent: array<int> = []\n  \
+         print(`${copy.count()} ${table.count()}`)\n  \
+         print(`${copy.get(probe).or(absent).count()} ${table.get(probe).or(absent).count()}`)\n  \
+         print(copy.has(extra))\n  for (entry in copy) {\n    print(`${entry.key} ${entry.value.count()}`)\n  }\n",
+    );
+    assert_prints(&source, "2 3\n1 3\nfalse\n1.5 1\n2.5 2\n");
+}
+
+#[test]
+fn number_keyed_map_literal_and_channel_round_trip() {
+    // Bug caught: a literal or a channel hop (a copy of the map) keeping 8-byte keys. Tier: High.
+    let source = program(
+        "",
+        "  let literal: map<number, string> = {1.5: `a`, 2.5: `b`}\n  let probe: number = 2.50\n  \
+         let line: channel<map<number, string>> = channel<map<number, string>>(2)\n  \
+         line.send(literal.copy())\n  let empty: map<number, string> = {}\n  \
+         let got = line.receive()\n  let received = got.or(empty)\n  print(received.get(probe).or(`missing`))\n  \
+         for (entry in received) {\n    print(entry.key)\n  }\n",
+    );
+    assert_prints(&source, "b\n1.5\n2.5\n");
+}
+
+/// A function spawns three tasks with a `map<number, string>` it still reads, then returns; the
+/// caller clobbers the stack before the tasks (which first wait or spin) read their copies.
+fn spawned_number_keys_program(suspending_callee: bool) -> String {
+    let wait_for_the_spawner = if suspending_callee {
+        "  wait sleep(100)\n"
+    } else {
+        "  let spins = 0\n  let mixed = 1\n  while (spins < 60000000) {\n    \
+         mixed = (mixed * 31 + spins) % 1000003\n    spins = spins + 1\n  }\n  \
+         if (mixed < 0) {\n    print(mixed)\n  }\n"
+    };
+    format!(
+        "function show(table: map<number, string>) -> nothing {{\n{wait_for_the_spawner}  \
+         let probe: number = 5.000\n  let key_total: number = 0.0\n  let names = ``\n  \
+         for (entry in table) {{\n    key_total = key_total + entry.key\n    names = `${{names}}${{entry.value}} `\n  }}\n  \
+         print(`${{table.get(probe).or(`missing`)}} ${{names}}${{key_total}}`)\n}}\n\n\
+         function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \
+         let table: map<number, string> = {{}}\n  table.set(amount, `two`)\n  \
+         table.set(doubled, `four`)\n  \
+         for (round in range(0, 3)) {{\n    background show(table)\n  }}\n  \
+         print(table.count())\n}}\n\n{CLOBBER}\
+         function entrypoint() -> nothing {{\n  let seed: number = 1.5\n  \
+         let amount: number = seed + 1.0\n  launch(amount)\n  let scratch = clobber(5)\n  \
+         print(scratch)\n  wait sleep(1500)\n}}\n"
+    )
+}
+
+fn assert_spawned_tasks_read_their_number_keys(suspending_callee: bool) {
+    let source = spawned_number_keys_program(suspending_callee);
+    let expected_lines = |stdout: &str| {
+        assert_eq!(
+            stdout.matches("four two four 7.50\n").count(),
+            3,
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains("2\n") && stdout.contains("54\n"),
+            "{stdout}"
+        );
+    };
+    for no_optimize in [false, true] {
+        let built = build_source(&source, "c6 number key spawn", no_optimize);
+        let (output, _) = run_counted(&built);
+        assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
+        expected_lines(&output.stdout);
+        let run = run_asan_binary(&build_asan(&built));
+        assert!(
+            !run.stderr.contains("AddressSanitizer"),
+            "AddressSanitizer reported an error:\n{}",
+            run.stderr
+        );
+        expected_lines(&run.stdout);
+    }
+}
+
+#[test]
+fn spawned_cpu_tasks_read_the_number_keys_of_a_finished_spawner() {
+    // Bug caught: a task's copy of the map holding keys that point into the spawner's dead frame.
+    // Tier: High.
+    assert_spawned_tasks_read_their_number_keys(false);
+}
+
+#[test]
+fn spawned_state_machine_tasks_read_the_number_keys_of_a_finished_spawner() {
+    // Bug caught: as above through the state-machine arm. Tier: High.
+    assert_spawned_tasks_read_their_number_keys(true);
+}
+
+#[test]
+fn spawns_of_a_number_keyed_map_in_a_loop_balance() {
+    // Bug caught: a spawn copy of a number-keyed map that leaks or frees buffers it shares with
+    // the spawner (the key buffer is sized by the key, not by 8). Three more spawns must add as
+    // many frees as allocations. Tier: High.
+    let counts = |tasks: usize| {
+        let source = format!(
+            "function show(table: map<number, array<int>>) -> nothing {{\n  print(777)\n}}\n\n\
+             function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \
+             let items: array<int> = [1, 2]\n  let table: map<number, array<int>> = {{}}\n  \
+             table.set(amount, items.copy())\n  table.set(doubled, items)\n  \
+             for (round in range(0, {tasks})) {{\n    background show(table)\n  }}\n  \
+             print(table.count())\n}}\n\nfunction entrypoint() -> nothing {{\n  \
+             let seed: number = 1.5\n  let amount: number = seed + 1.0\n  launch(amount)\n  \
+             wait sleep(300)\n}}\n"
+        );
+        let built = build_source(&source, "c6 number key spawn counts", false);
+        let (output, counters) = run_counted(&built);
+        assert_eq!(output.exit_code, 0, "{}", output.stderr);
+        assert_eq!(
+            output.stdout.matches("777\n").count(),
+            tasks,
+            "{}",
+            output.stdout
+        );
+        (counters.alloc, counters.free)
+    };
+    let (alloc_one, free_one) = counts(1);
+    let (alloc_four, free_four) = counts(4);
+    assert!(alloc_four > alloc_one, "three more spawns copied nothing");
+    assert_eq!(alloc_four - alloc_one, free_four - free_one);
+}

@@ -840,19 +840,31 @@ mod tests {
         // Bug caught: a map hashing the raw bits would send `1.0` and `1.00` to different
         // buckets, so a lookup by an equal computed key misses.
         let spellings: [&[&str]; 8] = [
-            &["1", "1.0", "1.00", "1.000000000000000000000000000000000", "0.10E1"],
+            &[
+                "1",
+                "1.0",
+                "1.00",
+                "1.000000000000000000000000000000000",
+                "0.10E1",
+            ],
             &["2.5", "2.50", "25E-1", "250E-2"],
             &["-2.5", "-2.50", "-25E-1"],
             &["0", "0.0", "0.000", "-0", "-0.00", "0E+10"],
             &["1E+33", "1000000000000000000000000000000000", "10E+32"],
-            &["123456789012345678901234567890.1234", "123456789012345678901234567890.12340"],
+            &[
+                "123456789012345678901234567890.1234",
+                "123456789012345678901234567890.12340",
+            ],
             &["Infinity", "+Infinity"],
             &["-Infinity"],
         ];
         for (group_index, group) in spellings.iter().enumerate() {
             for left in group.iter() {
                 for right in group.iter() {
-                    assert!(key_equal(from_str(left), from_str(right)), "{left} vs {right}");
+                    assert!(
+                        key_equal(from_str(left), from_str(right)),
+                        "{left} vs {right}"
+                    );
                     assert_eq!(
                         normalized(from_str(left)),
                         normalized(from_str(right)),
@@ -861,7 +873,10 @@ mod tests {
                 }
                 for other_group in spellings.iter().skip(group_index + 1) {
                     for other in other_group.iter() {
-                        assert!(!key_equal(from_str(left), from_str(other)), "{left} vs {other}");
+                        assert!(
+                            !key_equal(from_str(left), from_str(other)),
+                            "{left} vs {other}"
+                        );
                         assert_ne!(
                             normalized(from_str(left)),
                             normalized(from_str(other)),

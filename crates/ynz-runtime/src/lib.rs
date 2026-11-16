@@ -1308,7 +1308,10 @@ unsafe fn order_push(map: *mut YnzMap, key: *const u8) {
             new_order,
             (*map).count as usize * key_size,
         );
-        ynz_free((*map).insert_order as *mut u8, (old_cap as usize) * key_size);
+        ynz_free(
+            (*map).insert_order as *mut u8,
+            (old_cap as usize) * key_size,
+        );
         (*map).insert_order = new_order as *mut i64;
         (*map).order_cap = new_cap;
     }
@@ -1545,11 +1548,7 @@ pub unsafe extern "C" fn ynz_map_set_dec(
     let (h2, _) = h2_and_start(hash, (*map).capacity as usize);
     let idx = find_insert_slot(map, hash);
     *(*map).ctrl.add(idx) = h2;
-    std::ptr::copy_nonoverlapping(
-        key,
-        decimal_key_slot(map, idx),
-        DECIMAL_KEY_SIZE as usize,
-    );
+    std::ptr::copy_nonoverlapping(key, decimal_key_slot(map, idx), DECIMAL_KEY_SIZE as usize);
     std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
     order_push(map, key);
     (*map).count += 1;
@@ -5772,9 +5771,16 @@ mod release_walk_tests {
         }
         group_hashes.sort_unstable();
         group_hashes.dedup();
-        assert_eq!(group_hashes.len(), spellings.len(), "distinct values share a hash");
+        assert_eq!(
+            group_hashes.len(),
+            spellings.len(),
+            "distinct values share a hash"
+        );
         let nan = decimal_key_hash(ynz_numerics::QUIET_NAN);
-        assert_eq!(nan, decimal_key_hash(ynz_numerics::neg(ynz_numerics::QUIET_NAN)));
+        assert_eq!(
+            nan,
+            decimal_key_hash(ynz_numerics::neg(ynz_numerics::QUIET_NAN))
+        );
     }
 
     unsafe fn dec_get(map: *const YnzMap, key: &str) -> Option<i64> {
@@ -5784,7 +5790,13 @@ mod release_walk_tests {
     }
 
     unsafe fn dec_set(map: *mut YnzMap, key: &str, value: i64) {
-        ynz_map_set_dec(map, decimal(key).as_ptr(), value.to_ne_bytes().as_ptr(), None, 0);
+        ynz_map_set_dec(
+            map,
+            decimal(key).as_ptr(),
+            value.to_ne_bytes().as_ptr(),
+            None,
+            0,
+        );
     }
 
     /// Bug: a decimal key compared by bits, by address, or read as 8 bytes: `2.50` misses `2.5`, an
@@ -5813,13 +5825,22 @@ mod release_walk_tests {
 
             let mut key = [0u8; 16];
             let mut value = [0u8; 8];
-            assert_eq!(ynz_map_iter_get_dec(map, 0, key.as_mut_ptr(), value.as_mut_ptr()), 1);
+            assert_eq!(
+                ynz_map_iter_get_dec(map, 0, key.as_mut_ptr(), value.as_mut_ptr()),
+                1
+            );
             assert_eq!(key, decimal("2.5"), "the first spelling is the stored key");
             assert_eq!(i64::from_ne_bytes(value), 2);
-            assert_eq!(ynz_map_iter_get_dec(map, 1, key.as_mut_ptr(), value.as_mut_ptr()), 1);
+            assert_eq!(
+                ynz_map_iter_get_dec(map, 1, key.as_mut_ptr(), value.as_mut_ptr()),
+                1
+            );
             assert_eq!(key, decimal("0.25"));
             assert_eq!(i64::from_ne_bytes(value), 0);
-            assert_eq!(ynz_map_iter_get_dec(map, 301, key.as_mut_ptr(), value.as_mut_ptr()), 0);
+            assert_eq!(
+                ynz_map_iter_get_dec(map, 301, key.as_mut_ptr(), value.as_mut_ptr()),
+                0
+            );
             assert_eq!(key, [0u8; 16]);
 
             let copy = ynz_map_clone(map);
@@ -5828,7 +5849,10 @@ mod release_walk_tests {
             assert_eq!(dec_get(copy, "2.50"), Some(2), "a copy is independent");
             assert_eq!(dec_get(copy, "7"), None);
             assert_eq!(ynz_map_count(copy), 301);
-            assert_eq!(ynz_map_iter_get_dec(copy, 300, key.as_mut_ptr(), value.as_mut_ptr()), 1);
+            assert_eq!(
+                ynz_map_iter_get_dec(copy, 300, key.as_mut_ptr(), value.as_mut_ptr()),
+                1
+            );
             assert_eq!(key, decimal("299.25"));
             ynz_map_release(copy, None, None, 0);
             ynz_map_release(map, None, None, 0);
