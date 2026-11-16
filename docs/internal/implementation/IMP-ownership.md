@@ -366,6 +366,18 @@ The crossing set reads only the kinds with a frame slot across a suspension toda
 
 Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a `fixed` `set` or index assignment, a map `set` over a present key, whose handed-in key copy is freed too). `emit_errors_capable_release`'s ok payload and a plain union view release through the same `stored_release`: one dispatch decides what a stored value's release is. The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for every argument (deferred, see "Non-owned reads"). Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
 
+### Scope-exit release on the plain path (C7, in progress)
+
+A plain (non-suspending) function releases its heap locals at every exit edge of `TypedModule::release_plan`, through ONE emitter, `Cg::emit_release_edge` (`ynz-codegen/src/emit.rs`), which calls `Cg::release_fn` (the C6 helper) for each entry whose fate releases. Suspension frames stay C8's: a state-machine resume function emits no scope release.
+
+- **Edges.** Block end (function body, `if` body, loop body per iteration, match arm), `return`, auto-propagation, each read by span from the plan; the value of a `return` is fully built before its edge runs.
+- **Fates.** `Release`: load the binding's slot, call the helper. `ReleaseIfLive`: the same behind a null check; every plan `MoveSite` nulls the founder's slot when the value is taken (a `give`, a send, a store, a string taken by the store seam). A last-use string passed to a call that only borrows is not a take: the slot stays and the scope releases it.
+- **Drop flags.** A class with `NoStaticFounder(OutlivedByNonOwner)` gets a per-binding flag in null-slot style, only for bindings of that class (Chief Architect ruling).
+- **Unbound temporaries (`NoOwner`).** A fresh value no binding holds is released at the end of its statement.
+- **Reassignment.** The old value is released at the assignment, behind the same null check.
+
+Pinned by `v03_m9_release_safety` (ASan, both optimization levels, counters) and `v03_m9_c7_*`.
+
 ### Non-owned reads — view or copy
 
 A read of a place someone else owns (`b.rows`, `rows[i].or(d)`, a loop's element, a call's argument) has two honest forms. A **view** points at the place: no allocation, as a Rust borrow. A **copy** owns a value of its own. Overwriting a place releases the value it held (the helper above), so a view that is still read after its place is written reads freed memory. Typeck therefore decides, per read, and codegen copies unless typeck proved a view. **Cost: no write while the reader lives means no copy; a write means one copy per affected `let`, loop iteration or call** (what Rust's `.clone()` costs where its borrow checker refuses a borrow), so Golden Rule 8 holds and the language gains no rule. Pinned by `v03_m9_c6_borrow_cost`.
