@@ -227,11 +227,15 @@ pub fn map_method_is_mutating(method: &str) -> bool {
 ///
 /// - `receive` — a channel/handle delivery: the receiver's `maybe<T>` is the sole reference
 ///   (`IMP-concurrency.md` "What this makes sound").
+/// - `split` — `ynz_string_split` builds a new array of new strings; no piece of the receiver is
+///   shared. Audited with it: of the built-in methods codegen lowers, `split` is the only other
+///   one that returns a fresh heap value (the string methods return strings, which `string_ownership`
+///   judges; `get`/`first`/`last`/`or`/`reveal` hand out a cell or the receiver).
 ///
 /// (`keys`/`values`/`entries` are typed as fresh arrays but have no codegen lowering yet —
 /// "not yet lowered in P4b" — so they carry no evidence and stay out until they do.)
 pub fn builtin_method_returns_fresh(method: &str) -> bool {
-    matches!(method, "receive")
+    matches!(method, "receive" | "split")
 }
 
 /// The typed argument positions of the built-in methods and the type each must have: the

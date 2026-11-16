@@ -77,6 +77,7 @@ const BORROWING_METHODS: &[&str] = &[
     "first",
     "last",
     "or",
+    "split",
     "add",
     "set",
 ];
@@ -314,6 +315,24 @@ impl Walk<'_> {
         }
     }
 
+    /// True when `expr` is a built-in method on a string whose result is a fresh heap value
+    /// (`builtins::builtin_method_returns_fresh`: `s.split(sep)` builds an array of new strings).
+    /// A channel or task handle `receive` is in the same table but is not a string method.
+    fn is_fresh_builtin_result(&self, expr: &Expr) -> bool {
+        let Expr::MethodCall {
+            receiver, method, ..
+        } = expr
+        else {
+            return false;
+        };
+        let on_a_string = match self.type_of(receiver) {
+            Some(Type::String) => true,
+            Some(Type::Sensitive { inner }) => matches!(inner.as_ref(), Type::String),
+            _ => false,
+        };
+        on_a_string && crate::builtins::builtin_method_returns_fresh(method)
+    }
+
     /// True when `expr` builds a value no other holder has seen.
     fn builds_a_value(&self, expr: &Expr) -> bool {
         match expr {
@@ -323,6 +342,7 @@ impl Walk<'_> {
                 ..
             } => true,
             _ if self.is_user_call(expr) => true,
+            _ if self.is_fresh_builtin_result(expr) => true,
             _ => {
                 matches!(self.type_of(expr), Some(Type::String))
                     && is_fresh_string_expr(expr, self.facts.expr_types, self.facts.callable_fns)
