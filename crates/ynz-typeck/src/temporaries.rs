@@ -42,7 +42,7 @@
 //! | `while` | the condition | after the condition is evaluated, every pass |
 //! | `for` | the statement | after the loop |
 //!
-//! A state-machine function releases nothing here (C8's frame release).
+//! A statement that suspends keeps its temporaries in frame slots (`Cg::open_wait_temporaries`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -592,10 +592,13 @@ impl Walk<'_> {
                     }
                 }
             }
-            // A suspending form: a state-machine function releases nothing here (C8).
-            Expr::Wait(inner, _) | Expr::Background(inner, _) => {
-                self.value(inner, Use::Taken, key, true)
-            }
+            // The value a `wait` produces is taken by its position like any call result. What the
+            // awaited call is handed is judged as for a plain call: a temporary of the statement
+            // that survives the suspension in a frame slot (C8 slice 2, `open_wait_temporaries`).
+            Expr::Wait(inner, _) => self.value(inner, Use::Taken, key, suppress),
+            // A `background` call hands its arguments to the task: nothing is a temporary of this
+            // statement.
+            Expr::Background(inner, _) => self.value(inner, Use::Taken, key, true),
         }
     }
 }

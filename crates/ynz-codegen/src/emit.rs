@@ -416,7 +416,13 @@ pub fn build_frame_layouts_with_unions(
             let (cpu_group_slots, cpu_reserve) =
                 cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
 
-            let n_locals = f.params.len() + crossing_slots;
+            let wait_temporary_slots = wait_temporary_slot_count(
+                f,
+                typed,
+                suspend_set,
+                typed.back_edge_yield_admitted.contains(&f.name),
+            );
+            let n_locals = f.params.len() + crossing_slots + wait_temporary_slots;
             // own_base (start of own-local slots) is pushed past the CPU-slot reserve so
             // crossing locals never alias a handle/result slot.
             let own_base =
@@ -874,8 +880,14 @@ fn compute_frame_size(
                     );
                     let (_, reserve) =
                         cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
+                    let wait_temporary_slots = wait_temporary_slot_count(
+                        f,
+                        typed,
+                        suspend_set,
+                        typed.back_edge_yield_admitted.contains(&f.name),
+                    );
                     return Some((
-                        f.params.len() + crossing_slots,
+                        f.params.len() + crossing_slots + wait_temporary_slots,
                         is_number_errors_return(f),
                         reserve,
                     ));
@@ -2283,6 +2295,11 @@ struct Cg<'ctx, 'g> {
     sm_crossing_slot_indices: Vec<usize>,
     // The resume function's parameter names, in frame-slot order (slot `i` holds parameter `i`).
     sm_param_names: Vec<String>,
+    // The frame slots the temporaries of suspending statements take: `base..end` are reserved by the
+    // layout, `next` is the first not yet given to a statement (`Cg::next_wait_temporary_slot`).
+    sm_wait_temporary_base: usize,
+    sm_wait_temporary_next: usize,
+    sm_wait_temporary_end: usize,
     // Set of crossing local names whose type is decimal128 (number with precision ≤ 34).
     // These use 2 frame slots and i128 alloca (not ptr alloca).
     sm_crossing_decimal128_set: HashSet<String>,
@@ -7793,6 +7810,9 @@ fn plain_cg<'ctx, 'g>(
         sm_crossing_bool_set: HashSet::new(),
         sm_crossing_slot_indices: Vec::new(),
         sm_param_names: Vec::new(),
+        sm_wait_temporary_base: 0,
+        sm_wait_temporary_next: 0,
+        sm_wait_temporary_end: 0,
         sm_crossing_decimal128_set: HashSet::new(),
         sm_number_param_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
@@ -8053,13 +8073,15 @@ fn lower_function_with_waits<'ctx, 'g>(
     // For spike functions, the CPU-slot reserve is included so the fallback frame-size
     // formula (FRAME_HEADER_SIZE + own_locals_size(n_locals)) produces the right total
     // without double-counting spike_extra_frame_bytes.
+    let crossing_total_slots =
+        crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes);
+    // The frame slots of the temporaries of suspending statements follow the crossing locals.
+    let wait_temporary_base = crossing_slot_base + crossing_total_slots;
+    let wait_temporary_slots = wait_temporary_slot_count(f, typed, suspend_set, back_edge_yield);
     let n_locals = if spike_active_here {
-        n_params
-            + spike_slot_reserve
-            + crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes)
+        n_params + spike_slot_reserve + crossing_total_slots + wait_temporary_slots
     } else {
-        n_params
-            + crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes)
+        n_params + crossing_total_slots + wait_temporary_slots
     };
 
     // Look up the composed frame layout for this function. The total_size covers
@@ -8232,6 +8254,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_bool_set: HashSet::new(),   // populated during alloca creation below
         sm_crossing_slot_indices: crossing_slot_indices.clone(),
         sm_param_names: param_names.clone(),
+        sm_wait_temporary_base: wait_temporary_base,
+        sm_wait_temporary_next: wait_temporary_base,
+        sm_wait_temporary_end: wait_temporary_base + wait_temporary_slots,
         sm_crossing_decimal128_set: HashSet::new(), // populated during alloca creation below
         sm_number_param_set: HashSet::new(),        // populated during param alloca creation below
         sm_crossing_float_set: HashSet::new(),      // populated during alloca creation below
@@ -9325,17 +9350,32 @@ fn count_suspension_expr(
 /// suspension-source arm)? One helper so every routing site stays in lock-step
 /// (authoritative-derivation: never a per-site re-derived disjunct).
 fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
+    stmt_needs_sm_walker_for(
+        cg.suspend_set,
+        &cg.typed.expr_types,
+        cg.back_edge_yield,
+        stmt,
+    )
+}
+
+/// `stmt_needs_sm_walker` without a `Cg`: the frame layout counts the frame slots of a suspending
+/// statement's temporaries (`wait_temporary_slot_count`) with the SAME predicate the resume
+/// function routes by, never a second copy of it.
+fn stmt_needs_sm_walker_for(
+    suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
+    back_edge_yield: bool,
+    stmt: &Stmt,
+) -> bool {
     stmt_contains_wait(stmt)
-        || stmt_contains_suspending_call(stmt, cg.suspend_set, &cg.typed.expr_types)
-        || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
+        || stmt_contains_suspending_call(stmt, suspend_set, expr_types)
+        || ynz_typeck::stmt_contains_conduit_suspend(stmt, expr_types)
         // v0.3-M7 Phase 6: in an ADMITTED function, a statement that IS or CONTAINS a
         // qualifying loop routes through the SM walker so the loop reaches its SM arm's
         // back-edge poll-yield (a wait-free `if` wrapping a hot loop must not strand the
         // loop in plain lowering). THE one containment predicate — never re-derived.
-        || (cg.back_edge_yield
-            && ynz_typeck::stmt_contains_back_edge_yield(stmt, &cg.typed.expr_types))
+        || (back_edge_yield && ynz_typeck::stmt_contains_back_edge_yield(stmt, expr_types))
 }
-
 /// True if the statement contains a direct call to a suspending user-defined function.
 ///
 /// Used alongside `stmt_contains_wait` to detect suspension points that don't have an
@@ -10545,15 +10585,44 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     current_state: &mut usize,
 ) -> Result<(), String> {
-    // A temporary's slot is an entry-block `alloca`, which a resume does not keep. The statements
-    // that suspend open no temporary frame (`Cg::open_temporaries`); this checks it.
-    if !cg.temporary_frames.is_empty() {
-        return Err(
-            "internal: a statement that suspends was lowered inside an open temporary frame; its \
-             temporaries would not survive the resume"
-                .to_string(),
-        );
-    }
+    // The temporaries of a statement that suspends live in frame slots, so they survive the
+    // resume (`Cg::open_wait_temporaries`); the statement's end releases them. A statement routed
+    // here for a CPU group alone is not counted by `wait_temporary_slot_count` and opens none.
+    let opened = if stmt_needs_sm_walker(cg, stmt) {
+        cg.open_wait_temporaries(ynz_typeck::release_plan::stmt_span(stmt))?
+    } else {
+        false
+    };
+    lower_sm_stmt_with_wait_body(
+        cg,
+        stmt,
+        state_blocks,
+        pending_block,
+        frame_ptr,
+        waker_ctx,
+        param_names,
+        f,
+        shape_table,
+        current_state,
+    )?;
+    cg.close_temporaries(opened)
+}
+
+/// The lowering of a statement that suspends, inside the temporary frame `lower_sm_stmt_with_wait`
+/// opened for it.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    stmt: &Stmt,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
     match stmt {
         // v0.3-M4 Phase 2 — suspending conduit-method statements (`ch.send(v)`,
         // `let x = ch.receive()`, `h.send(v)`, `let r = h.receive()`), classified via the
@@ -12710,6 +12779,53 @@ fn crossing_local_total_slots(
             crossing_local_slot_count(&f.body.stmts, cname, typed, shape_table, shape_abi_sizes)
         })
         .sum()
+}
+
+/// The frame slots the temporaries of `f`'s suspending statements need: one per temporary typeck
+/// recorded at the release point of a statement the resume function routes through the SM walker
+/// (`stmt_needs_sm_walker_for`), at every nesting depth. A temporary built in such a statement
+/// must survive its `wait`, which an entry-block slot does not (a resume gets a fresh stack
+/// frame), so it lives in the heap frame after the crossing locals (`Cg::open_wait_temporaries`).
+/// The slots are an upper bound: a temporary whose type the emitter releases no slot kind of
+/// (`open_temporaries` skips it) leaves its slot unused, which costs 8 bytes and nothing else.
+///
+/// O(statements) time.
+fn wait_temporary_slot_count(
+    f: &ynz_ast::nodes::FunctionDecl,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    back_edge_yield: bool,
+) -> usize {
+    fn count_block(
+        block: &ynz_ast::nodes::Block,
+        typed: &TypedModule,
+        suspend_set: &SuspendSet,
+        back_edge_yield: bool,
+    ) -> usize {
+        block
+            .stmts
+            .iter()
+            .map(|stmt| {
+                let own = if stmt_needs_sm_walker_for(
+                    suspend_set,
+                    &typed.expr_types,
+                    back_edge_yield,
+                    stmt,
+                ) {
+                    let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
+                    typed.temporaries.released_at(start, end).len()
+                } else {
+                    0
+                };
+                let nested: usize = ynz_typeck::release_plan::nested_blocks(stmt)
+                    .into_iter()
+                    .map(|inner| count_block(inner, typed, suspend_set, back_edge_yield))
+                    .sum();
+                own + nested
+            })
+            .sum()
+    }
+    count_block(&f.body, typed, suspend_set, back_edge_yield)
 }
 
 /// The type that decides how the crossing local `target` is held in the frame: a union
@@ -27065,6 +27181,9 @@ struct TemporarySlot<'ctx> {
     /// The span of the expression that builds the temporary (`TypedModule::temporaries`).
     span: (usize, usize),
     slot: PointerValue<'ctx>,
+    /// The frame slot index when the temporary lives in the heap frame (a suspending statement's),
+    /// so its release nulls it: the next pass of a loop must not free it again.
+    frame_slot: Option<usize>,
     ty: Type,
     /// How the value in the slot sits: the form its release is called with.
     form: ReleaseForm,
@@ -27918,6 +28037,28 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///
     /// O(t) time for t temporaries of the statement.
     fn open_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
+        self.open_temporary_frame(key, false)
+    }
+
+    /// `open_temporaries` for a statement the resume function routes through the SM walker (it
+    /// contains a `wait`, a suspending call or a conduit suspension): each temporary lives in a
+    /// slot of the heap frame (after the crossing locals; `wait_temporary_slot_count` reserved
+    /// it), because an entry-block `alloca` does not survive the resume. Only a string, array or
+    /// map is given one (`ReleaseKind::has_frame_backing`): the pointer is stable across a
+    /// suspension. A flat shape, a `maybe`, a union or a `fixed` temporary has no frame bytes yet
+    /// (slice 4) and leaks, as a temporary of a plain statement of an unsupported kind does.
+    ///
+    /// O(t) time for t temporaries of the statement.
+    fn open_wait_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
+        self.open_temporary_frame(key, true)
+    }
+
+    /// The one frame opener behind `open_temporaries` and `open_wait_temporaries`.
+    fn open_temporary_frame(
+        &mut self,
+        key: (usize, usize),
+        frame_backed: bool,
+    ) -> Result<bool, String> {
         let spans = self.typed.temporaries.released_at(key.0, key.1).to_vec();
         if spans.is_empty() {
             return Ok(false);
@@ -27955,25 +28096,88 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             {
                 continue;
             }
+            if frame_backed
+                && !matches!(
+                    release_step(&ty),
+                    ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+                )
+            {
+                continue;
+            }
             // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which).
             let form = if self.typed.temporaries.is_minted_maybe_copy(span.0, span.1) {
                 ReleaseForm::Cell
             } else {
                 self.temporary_release_form(&ty)
             };
-            let slot = self.alloca_in_entry_llvm(self.ptr(), "temporary")?;
+            let (slot, frame_slot) = if frame_backed {
+                let index = self.next_wait_temporary_slot()?;
+                (self.frame_slot_ptr_in_entry(index)?, Some(index))
+            } else {
+                (self.alloca_in_entry_llvm(self.ptr(), "temporary")?, None)
+            };
             self.builder
                 .build_store(slot, self.ptr().const_null())
                 .map_err(|err| format!("null a temporary slot: {err}"))?;
             frame.push(TemporarySlot {
                 span,
                 slot,
+                frame_slot,
                 ty,
                 form,
             });
         }
         self.temporary_frames.push(frame);
         Ok(true)
+    }
+
+    /// The next free frame slot for a temporary of a suspending statement. Running out is an
+    /// internal error: `wait_temporary_slot_count` and the statements lowered disagree, and a slot
+    /// past the reservation would be bytes of another local or a child frame.
+    fn next_wait_temporary_slot(&mut self) -> Result<usize, String> {
+        if self.sm_wait_temporary_next >= self.sm_wait_temporary_end {
+            return Err(format!(
+                "internal: the frame of `{}` reserves {} slot(s) for temporaries of suspending \
+                 statements and a statement needs another",
+                self.current_fn.get_name().to_string_lossy(),
+                self.sm_wait_temporary_end - self.sm_wait_temporary_base
+            ));
+        }
+        let index = self.sm_wait_temporary_next;
+        self.sm_wait_temporary_next += 1;
+        Ok(index)
+    }
+
+    /// The address of frame slot `index` of this resume function, computed in the ENTRY block so
+    /// it dominates every state block (a continuation state is reached from the dispatch switch,
+    /// not from the block that opened the statement).
+    fn frame_slot_ptr_in_entry(&self, index: usize) -> Result<PointerValue<'ctx>, String> {
+        let frame_ptr = self
+            .sm_frame_ptr
+            .ok_or("internal: a frame slot was asked for outside a resume function")?;
+        let entry_bb = self
+            .current_fn
+            .get_first_basic_block()
+            .ok_or("internal: a resume function has no entry block")?;
+        let saved_bb = self.builder.get_insert_block();
+        self.position_for_entry_alloca(entry_bb);
+        let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
+            + (index as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+        // SAFETY: `index` is below `sm_wait_temporary_end`, inside the slots the frame layout
+        // reserved for this function's own locals.
+        let slot = unsafe {
+            self.builder.build_gep(
+                self.ctx.i8_type(),
+                frame_ptr,
+                &[self.i64().const_int(byte_offset, false)],
+                "wait_temporary_slot",
+            )
+        }
+        .map_err(|err| format!("wait temporary slot gep: {err}"));
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        slot
     }
 
     /// The statement `open_temporaries` opened a frame for is done: release its temporaries when
@@ -28038,6 +28242,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 &format!("temporary{index}"),
                 site,
             )?;
+            self.null_frame_slot(temporary.frame_slot)?;
         }
         Ok(())
     }

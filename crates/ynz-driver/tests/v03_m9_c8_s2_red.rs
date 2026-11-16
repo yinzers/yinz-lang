@@ -95,7 +95,6 @@ fn assert_asan_clean_program(label: &str, program: &str, expected: &str) {
 }
 
 #[test]
-#[ignore = "planned RED (v0.3-M9 C8 S2): a temporary of a statement that suspends has no frame slot"]
 fn wait_statement_temporary_array_and_string_are_released() {
     assert_balanced_program(
         "wait_statement_temporary",
@@ -115,7 +114,6 @@ fn wait_statement_temporary_stays_asan_clean() {
 }
 
 #[test]
-#[ignore = "planned RED (v0.3-M9 C8 S2): a temporary of a statement that suspends has no frame slot"]
 fn wait_statement_temporary_in_a_loop_is_released_once_per_iteration() {
     assert_balanced_program(
         "wait_statement_temporary_loop",

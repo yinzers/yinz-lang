@@ -565,7 +565,10 @@ pub fn stmt_span(stmt: &Stmt) -> Span {
     }
 }
 
-fn nested_blocks(stmt: &Stmt) -> Vec<&Block> {
+/// The blocks nested directly in `stmt`: the body of an `if`, `while` or `for`, every `match` arm and its `else` arm.
+///
+/// O(arms) time.
+pub fn nested_blocks(stmt: &Stmt) -> Vec<&Block> {
     match stmt {
         Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => vec![body],
         Stmt::Match { arms, else_arm, .. } => arms
