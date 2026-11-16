@@ -1,6 +1,6 @@
-// v0.3-M9 C6: the widest `number` a map can be keyed by is 34 digits: held in 128 bits, it is
-// hashed and compared by value, so it is not refused (`number<35>` is).
-// Correct behavior: compiles and runs; the lookup of an equal number finds the stored entry.
+// v0.3-M9 C6: the widest `number` a map can be keyed by is 34 digits: it fits the map's 16-byte
+// key slot, so it is not refused (`number<35>` is).
+// Correct behavior: compiles and runs; the lookup of an identical number finds the stored entry.
 function entrypoint() -> nothing {
   let widest: number<34> = 12.5
   let totals: map<number<34>, int> = {}

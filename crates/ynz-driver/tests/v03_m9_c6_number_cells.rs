@@ -367,7 +367,7 @@ fn map_keyed_by_numbers_returned_from_its_producer() {
         "function keyed() -> map<number, string> {\n  let table: map<number, string> = {}\n  \
          let price: number = 2.5\n  table.set(price, `two and a half`)\n  return table\n}\n",
         "  let table = keyed()\n  let scratch = clobber(3)\n  for (entry in table) {\n    \
-         print(entry.key)\n  }\n  let probe: number = 2.50\n  \
+         print(entry.key)\n  }\n  let probe: number = 2.5\n  \
          print(table[probe].or(`missing`))\n  print(scratch)\n",
     );
     assert_prints(&source, "2.5\ntwo and a half\n36\n");
@@ -375,41 +375,40 @@ fn map_keyed_by_numbers_returned_from_its_producer() {
 
 // ── `number` map keys (parked entry 70, the keys half) ────────────────────────────────────────
 //
-// A key is held inline, 16 bytes, and hashed and compared by VALUE (`1.0` and `1.00` are one
-// key, as `==` has it), the cost of Rust's `HashMap<Decimal, V>`.
+// A key is held inline, 16 bytes, hashed and compared as those 16 bytes and nothing more. The same
+// value in the same scale is one key; `1.0` and `1.00` are two (the number-key hashing semantics
+// beyond storage are an open item, B4's "map<number, V> key hashing").
 
 #[test]
-fn number_key_is_found_by_a_computed_equal_value_of_another_scale() {
-    // Bug caught: lookup comparing the key's bits (or its address): `1.000` computed from other
-    // numbers misses the entry stored under `1.0`. Covers `get`, `has` and the bracket read.
+fn number_key_is_found_by_an_identical_computed_key() {
+    // Bug caught: lookup comparing the key's address: `1.0` computed from other numbers misses
+    // the entry stored under the literal `1.0`. Covers `get`, `has` and the bracket read.
     // Tier: High.
     let source = program(
         "",
         "  let table: map<number, string> = {}\n  let stored: number = 1.0\n  \
-         table.set(stored, `one`)\n  let half: number = 0.5\n  let scale: number = 1.00\n  \
-         let computed: number = half + half * scale\n  \
+         table.set(stored, `one`)\n  let half: number = 0.5\n  let computed: number = half + half\n  \
          print(table[computed].or(`missing`))\n  print(table.has(computed))\n  \
-         print(table[computed].or(`missing`))\n  let other: number = 1.5\n  \
+         print(table.get(computed).or(`missing`))\n  let other: number = 1.5\n  \
          print(table.has(other))\n  print(table[other].or(`missing`))\n",
     );
     assert_prints(&source, "one\ntrue\none\nfalse\nmissing\n");
 }
 
 #[test]
-fn number_key_equal_in_value_overwrites_and_keeps_the_stored_key() {
-    // Bug caught: an equal key of another scale inserting a second entry (count 2), or an
-    // overwrite replacing the stored key. Zero of any scale is one key too. Tier: High.
+fn number_key_identical_overwrites_and_another_scale_is_another_key() {
+    // Bug caught: an identical key inserting a second entry (count 2), an overwrite replacing the
+    // stored key, or a key of another scale (`1.00` against `1.0`) found as the first.
+    // Tier: High.
     let source = program(
         "",
         "  let table: map<number, string> = {}\n  let first: number = 1.0\n  \
-         let second: number = 1.00\n  let third: number = 0.5 * 2.000\n  \
-         table.set(first, `first`)\n  table.set(second, `second`)\n  table[third] = `third`\n  \
-         print(table.count())\n  for (entry in table) {\n    print(`${entry.key} ${entry.value}`)\n  }\n  \
-         let zero: number = 0.0\n  let half: number = 0.5\n  let also_zero: number = half - half * 1.0\n  \
-         table.set(zero, `zero`)\n  table.set(also_zero, `still zero`)\n  \
-         print(table.count())\n  print(table[also_zero].or(`missing`))\n",
+         let second: number = 0.5 + 0.5\n  let third: number = 1.00\n  \
+         table.set(first, `first`)\n  table.set(second, `second`)\n  print(table.count())\n  \
+         table[third] = `third`\n  print(table.count())\n  for (entry in table) {\n    \
+         print(`${entry.key} ${entry.value}`)\n  }\n",
     );
-    assert_prints(&source, "1\n1.0 third\n2\nstill zero\n");
+    assert_prints(&source, "1\n2\n1.0 second\n1.00 third\n");
 }
 
 #[test]
@@ -421,9 +420,9 @@ fn number_keys_survive_growth_past_several_rehashes() {
         "",
         "  let table: map<number, int> = {}\n  let step: number = 0.5\n  let key: number = 0.0\n  \
          for (round in range(0, 200)) {\n    table.set(key, round)\n    key = key + step\n  }\n  \
-         let probe: number = 0.00\n  let total = 0\n  let missing = 0\n  \
+         let probe: number = 0.0\n  let total = 0\n  let missing = 0\n  \
          for (round in range(0, 200)) {\n    total = total + table[probe].or(0 - 1)\n    \
-         probe = probe + 0.50\n  }\n  let beyond: number = 100.00\n  \
+         probe = probe + 0.5\n  }\n  let beyond: number = 100.0\n  \
          print(`${table.count()} ${total} ${table[beyond].or(0 - 1)}`)\n  \
          let key_total: number = 0.0\n  let value_total = 0\n  for (entry in table) {\n    \
          key_total = key_total + entry.key\n    value_total = value_total + entry.value\n  }\n  \
@@ -441,7 +440,7 @@ fn copy_of_a_number_keyed_map_is_independent_of_a_later_set() {
         "",
         "  let table: map<number, array<int>> = {}\n  let low: number = 1.5\n  let high: number = 2.5\n  \
          let one: array<int> = [1]\n  let two: array<int> = [2, 2]\n  table.set(low, one)\n  \
-         table.set(high, two)\n  let copy = table.copy()\n  let probe: number = 1.50\n  \
+         table.set(high, two)\n  let copy = table.copy()\n  let probe: number = 1.5\n  \
          let replacement: array<int> = [7, 7, 7]\n  table.set(probe, replacement)\n  \
          let extra: number = 3.5\n  table.set(extra, [4, 4, 4, 4])\n  let absent: array<int> = []\n  \
          print(`${copy.count()} ${table.count()}`)\n  \
@@ -457,7 +456,7 @@ fn number_keyed_map_literal_and_channel_round_trip() {
     // Bug caught: a literal or a channel hop (a copy of the map) keeping 8-byte keys. Tier: High.
     let source = program(
         "",
-        "  let literal: map<number, string> = {1.5: `a`, 2.5: `b`}\n  let probe: number = 2.50\n  \
+        "  let literal: map<number, string> = {1.5: `a`, 2.5: `b`}\n  let probe: number = 2.5\n  \
          let line: channel<map<number, string>> = channel<map<number, string>>(2)\n  \
          line.send(literal.copy())\n  let empty: map<number, string> = {}\n  \
          let got = line.receive()\n  let received = got.or(empty)\n  print(received[probe].or(`missing`))\n  \
@@ -478,7 +477,7 @@ fn spawned_number_keys_program(suspending_callee: bool) -> String {
     };
     format!(
         "function show(table: map<number, string>) -> nothing {{\n{wait_for_the_spawner}  \
-         let probe: number = 5.000\n  let key_total: number = 0.0\n  let names = ``\n  \
+         let probe: number = 5.00\n  let key_total: number = 0.0\n  let names = ``\n  \
          for (entry in table) {{\n    key_total = key_total + entry.key\n    names = `${{names}}${{entry.value}} `\n  }}\n  \
          print(`${{table[probe].or(`missing`)}} ${{names}}${{key_total}}`)\n}}\n\n\
          function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \

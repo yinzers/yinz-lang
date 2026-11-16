@@ -32,27 +32,29 @@ fn assert_refused_with(fixture_name: &str, fragments: &[&str]) {
 
 #[test]
 fn bignum_map_key_is_refused_with_a_teaching_diagnostic() {
-    // Bug caught: a `number<50>` key compiled and was compared by address. Tier: Medium.
+    // Bug caught: a `number<50>` key compiled and was compared by address. The true reason is its
+    // size: it does not fit the map's 16-byte key slot. Tier: Medium.
     assert_refused_with(
         "v0_3_m9_c6b_map_key_bignum_refused.ynz",
         &[
             "A `map` cannot be keyed by `number<50>`.",
             "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits",
-            "compare where it sits in memory",
+            "does not fit in the slot",
+            "can have up to 50 digits",
         ],
     );
 }
 
 #[test]
-fn sensitive_string_map_key_is_refused_with_a_teaching_diagnostic() {
-    // Bug caught: a `sensitive` key compiled and was compared by address. Tier: Medium.
-    assert_refused_with(
-        "v0_3_m9_c6b_map_key_sensitive_refused.ynz",
-        &[
-            "A `map` cannot be keyed by `sensitive string`.",
-            "Key the map by a plain `string`",
-            "compare where it sits in memory",
-        ],
+fn sensitive_string_map_key_is_a_key_found_by_its_text() {
+    // Bug caught: a `sensitive string` key refused although the map holds, compares and releases
+    // it exactly as a `string`. Covers has, get, overwrite, growth, copy, return from its
+    // producer and iteration (a key prints as [REDACTED]). Tier: Medium.
+    assert_fixture_prints(
+        "v0_3_m9_c6b_map_key_sensitive_accepted.ynz",
+        false,
+        "true\n1\n2\n10\nfalse\n102\n102 103\n[REDACTED]\n",
+        "a `sensitive string` map key must be accepted and found by its text",
     );
 }
 
@@ -65,7 +67,7 @@ fn shape_map_key_is_refused_with_a_teaching_diagnostic() {
             "A `map` cannot be keyed by `Point`.",
             "Key the map by one of its fields",
             "`map<string, Point>`",
-            "compare where it sits in memory",
+            "could hold only the address where it lives",
         ],
     );
 }
@@ -94,13 +96,13 @@ fn number_map_key_one_digit_past_the_widest_is_refused() {
 }
 
 #[test]
-fn number_map_key_of_the_widest_width_is_found_by_value() {
-    // Bug caught: the refusal also catching the 34-digit key a map does compare by value.
+fn number_map_key_of_the_widest_width_is_found_by_an_identical_number() {
+    // Bug caught: the refusal also catching the 34-digit key that fits the map's 16-byte key slot.
     // Tier: Medium.
     assert_fixture_prints(
         "v0_3_m9_c6b_map_key_widest_number_accepted.ynz",
         false,
         "7\n",
-        "a `number<34>` map key must be accepted and found by value",
+        "a `number<34>` map key must be accepted and found by an identical number",
     );
 }

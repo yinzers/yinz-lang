@@ -6460,23 +6460,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     // `array_elem_src_ptr`, `array_elem_out_buffer`, `array_elem_bits_from_out`)
     // — one derivation for both collection ABIs, never a map-side twin.
 
-    /// How a map of `key_ty` keys stores and compares them: a string by pointer, a decimal128
-    /// `number` inline in 16 bytes (hashed and compared by value), an `int`, `bool` or `float` as
-    /// i64 bits. Any other key type (a `number<N>` past 34 digits, a `sensitive` string, a shape)
-    /// has no key family in the runtime. Typeck refuses those (`check_map_key_type`), so reaching one
-    /// here is an internal error, never an i64 of pointer bits.
+    /// How a map of `key_ty` keys stores and compares them: a string or `sensitive string` by
+    /// pointer (compared by its text, released by the one string glue), a decimal128 `number`
+    /// inline in 16 bytes (hashed and compared as those 16 bytes), an `int`, `bool` or `float` as
+    /// i64 bits. Any other key type (a `number<N>` past 34 digits, a shape) has no key slot in the
+    /// runtime. Typeck refuses those (`check_map_key_type`), so reaching one here is an internal
+    /// error, never an i64 of pointer bits.
     ///
     /// Time: O(1)  Space: O(1)
     fn map_key_kind(&self, key_ty: &Type) -> Result<MapKeyKind, String> {
         let resolved = self.resolve_type(key_ty);
         match resolved {
-            Type::String => Ok(MapKeyKind::String),
+            string_like if is_string_like(&string_like) => Ok(MapKeyKind::String),
             Type::Number { precision } if precision <= 34 => Ok(MapKeyKind::Number),
             Type::Int | Type::Bool | Type::Float => Ok(MapKeyKind::Int),
             other => Err(format!(
                 "internal error: a map keyed by {other:?} reached codegen, but typeck refuses it \
-                 (`check_map_key_type`: keys are string, number up to 34 digits, int, bool or \
-                 float)"
+                 (`check_map_key_type`: keys are string, sensitive string, number up to 34 \
+                 digits, int, bool or float)"
             )),
         }
     }
@@ -29267,7 +29268,7 @@ enum MapKeyKind {
     Int,
     /// A string key: a pointer to its bytes, compared by content.
     String,
-    /// A decimal128 `number` key: held inline in 16 bytes, hashed and compared by value.
+    /// A decimal128 `number` key: held inline in 16 bytes, hashed and compared as those 16 bytes.
     Number,
 }
 

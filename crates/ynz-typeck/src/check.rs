@@ -8899,105 +8899,87 @@ impl<'b> Checker<'b> {
             })
             .collect();
         for (span, parameter_name, union_name) in refused {
-            self.diags.push(Diagnostic::error(
+            self.diags.push(registry_diag(
                 span,
-                format!(
-                    "Cannot give the union `{union_name}` to `{callee}`'s generic parameter \
-                     `{parameter_name}` in a `background` call."
-                ),
-                format!(
-                    "Declare `{parameter_name}` as `{union_name}` in `{callee}`'s signature \
-                     instead of a type parameter, or wrap the union in a shape field and pass \
-                     the shape."
-                ),
-                format!(
-                    "A `background` task keeps its own copy of every argument, because it can \
-                     still be running after the function that spawned it has returned. It can \
-                     only copy a union when `{callee}` declares the union type. A generic \
-                     parameter gives it no union slot to copy into, so the task would read the \
-                     spawner's memory after the spawner returned."
-                ),
+                DiagnosticKind::BackgroundUnionToGenericParameter,
+                &[
+                    ("union", union_name.as_str()),
+                    ("callee", callee),
+                    ("parameter", parameter_name.as_str()),
+                ],
             ));
         }
     }
 
-    /// Report a `map` key type the runtime cannot look up by value. A map hashes and compares a
-    /// key by what it holds for a `string`, an `int`, a `boolean`, a `float` and a `number` of up
-    /// to 34 digits (`MAX_MAP_KEY_NUMBER_DIGITS`); every other key type would be compared by where
-    /// it sits in memory, so an equal key would miss. Codegen's `map_key_kind` mirrors this list
-    /// and only asserts it. An `Error` key was reported where it was written, and a type parameter
-    /// `K` is not known until an instance binds it, so neither is reported here.
+    /// Report a `map` key type no key slot holds. A map keeps a key in a slot of 8 bytes (an
+    /// `int`, a `boolean`, a `float`, or a `string` by its address, compared by its text) or of 16
+    /// bytes (a `number` of up to 34 digits, `MAX_MAP_KEY_NUMBER_DIGITS`). A `number` of more digits
+    /// is a variable-size heap object, a shape or an array is made of other values, so its slot
+    /// would hold only an address and an equal key would be found at another one and miss. A
+    /// `sensitive string` is a `string` to the map (same slot, same release, same comparison), so
+    /// it is a key. Codegen's `map_key_kind` mirrors this list and only asserts it. An `Error` key
+    /// was reported where it was written, and a type parameter `K` is not known until an instance
+    /// binds it, so neither is reported here.
     ///
     /// Time: O(1)  Space: O(1)
     fn check_map_key_type(&mut self, key: &Type, span: &SourceSpan) {
         let shown = match key {
             Type::Number { precision } => format!("number<{precision}>"),
-            Type::Sensitive { .. } => "sensitive string".to_string(),
             other => type_name(other),
         };
-        // The one explanation of which keys a map finds by value, shared by every refusal below
-        // and by REF-collections.md ("A map key is found by what it holds").
-        let by_value_keys = format!(
-            "A map finds a key by comparing what it holds, and it can do that for a `string`, an \
-             `int`, a `boolean`, a `float` and a `number` of up to {MAX_MAP_KEY_NUMBER_DIGITS} \
-             digits."
-        );
-        let (instead, why) = match key {
+        let diagnostic = match key {
             Type::String
             | Type::Int
             | Type::Bool
             | Type::Float
             | Type::Error
             | Type::TypeParam { .. } => return,
+            Type::Sensitive { inner } if matches!(inner.as_ref(), Type::String) => return,
             Type::Number { precision } if *precision <= MAX_MAP_KEY_NUMBER_DIGITS => return,
-            Type::Number { .. } => (
-                format!(
-                    "Key the map by an `int` or a `string` id, or by a `number` of at most \
-                     {MAX_MAP_KEY_NUMBER_DIGITS} digits (`number<{MAX_MAP_KEY_NUMBER_DIGITS}>`)."
-                ),
-                format!(
-                    "{by_value_keys} A `{shown}` is a larger number kept on the heap, so the map \
-                     would compare where it sits in memory instead of its digits, and looking up \
-                     a number equal to one you stored would miss."
-                ),
-            ),
-            Type::Sensitive { .. } => (
-                "Key the map by a plain `string`, such as a non-secret id or a name.".to_string(),
-                format!(
-                    "{by_value_keys} A `{shown}` is a wrapper that hides its text, so the map \
-                     would compare where it sits in memory instead of its text, and looking up \
-                     a secret equal to one you stored would miss."
-                ),
-            ),
-            Type::Shape { .. } => (
-                format!(
+            Type::Number { precision } => {
+                let digits = precision.to_string();
+                registry_diag_template(
+                    span.clone(),
+                    DiagnosticKind::MapKeyNotStorable,
+                    "MapKeyNotStorableWideNumber",
+                    &[("key", shown.as_str()), ("digits", digits.as_str())],
+                )
+            }
+            Type::Shape { .. } => {
+                let recovery = format!(
                     "Key the map by one of its fields (an `int` id or a `string` name) and keep \
                      the `{shown}` as the map's value: `map<string, {shown}>`."
-                ),
-                format!(
-                    "{by_value_keys} A `{shown}` is a shape, so the map would compare where it \
-                     sits in memory instead of its fields, and looking up a `{shown}` equal to \
-                     one you stored would miss."
-                ),
-            ),
-            _ => (
-                format!(
-                    "Key the map by a `string` or an `int` that identifies the `{shown}`, and keep \
-                     the `{shown}` as the map's value: `map<string, {shown}>`."
-                ),
-                format!(
-                    "{by_value_keys} A `{shown}` is none of those, so the map would compare where \
-                     it sits in memory instead of what it holds, and looking up a `{shown}` equal \
-                     to one you stored would miss."
-                ),
-            ),
+                );
+                registry_diag(
+                    span.clone(),
+                    DiagnosticKind::MapKeyNotStorable,
+                    &[
+                        ("key", shown.as_str()),
+                        (
+                            "key_is",
+                            "is a shape, which holds several fields rather than one value",
+                        ),
+                        ("recovery", recovery.as_str()),
+                    ],
+                )
+            }
+            _ => {
+                let recovery = format!(
+                    "Key the map by a `string` or an `int` that stands for the `{shown}`, such as \
+                     an id or a name."
+                );
+                registry_diag(
+                    span.clone(),
+                    DiagnosticKind::MapKeyNotStorable,
+                    &[
+                        ("key", shown.as_str()),
+                        ("key_is", "is not a single value of 8 or 16 bytes"),
+                        ("recovery", recovery.as_str()),
+                    ],
+                )
+            }
         };
-        self.diags.push(Diagnostic::error(
-            span.clone(),
-            format!("A `map` cannot be keyed by `{shown}`."),
-            instead,
-            why,
-        ));
+        self.diags.push(diagnostic);
     }
 
     /// Report a built-in generic written with fewer type arguments than it takes (`map<int>`).

@@ -72,6 +72,14 @@ pub enum DiagnosticKind {
     /// (`same(big, tiny)` makes `T` a `Big`, then a `Tiny` arrives). The function is built for
     /// the first type and would read the second as it. v0.3-M9 C1g.
     ArgumentConflictsWithTypeParameter,
+    /// A `map` written with a key type whose value the map cannot hold in one of its key slots
+    /// (8 bytes, or 16 for a `number` of up to 34 digits): a `number` of more than 34 digits, a
+    /// shape, an array, any other type. The slot would hold only an address, so an equal key
+    /// would miss. v0.3-M9 C6 follow-up, as ruled by the Product Manager.
+    MapKeyNotStorable,
+    /// A `background` call passes a union to a parameter the generic callee declares as a bare
+    /// type parameter: the task has no slot to copy the union into. v0.3-M9 C6.
+    BackgroundUnionToGenericParameter,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -144,6 +152,10 @@ impl DiagnosticKind {
             DiagnosticKind::ArgumentConflictsWithTypeParameter => {
                 "ArgumentConflictsWithTypeParameter"
             }
+            DiagnosticKind::MapKeyNotStorable => "MapKeyNotStorable",
+            DiagnosticKind::BackgroundUnionToGenericParameter => {
+                "BackgroundUnionToGenericParameter"
+            }
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -180,6 +192,8 @@ impl DiagnosticKind {
         "SuspendingResultIntoUnionLet",
         "SuspendingResultIntoUnionReturn",
         "ArgumentConflictsWithTypeParameter",
+        "MapKeyNotStorable",
+        "BackgroundUnionToGenericParameter",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -220,6 +234,10 @@ impl DiagnosticKind {
             }
             DiagnosticKind::ArgumentConflictsWithTypeParameter => {
                 "not the type this call needs".to_string()
+            }
+            DiagnosticKind::MapKeyNotStorable => "can't be a map key".to_string(),
+            DiagnosticKind::BackgroundUnionToGenericParameter => {
+                "declare the union type".to_string()
             }
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
