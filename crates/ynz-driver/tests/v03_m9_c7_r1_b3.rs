@@ -442,3 +442,76 @@ fn the_text_of_an_options_value_is_released() {
         assert_asan_clean("c7_r1_options_text", OPTIONS_TEXT, expected, no_optimize);
     });
 }
+
+const UNION_ARGUMENTS: &str = "
+shape Circle {
+  radius: float
+}
+shape Mixed = Circle | string
+
+function kindShare(share value: Mixed) -> int {
+  if (value) {
+    is Circle => {
+      return 1
+    }
+    else => {
+      return 2
+    }
+  }
+}
+
+function kindBare(value: Mixed) -> int {
+  if (value) {
+    is Circle => {
+      return 1
+    }
+    else => {
+      return 2
+    }
+  }
+}
+
+function kindGive(give value: Mixed) -> int {
+  if (value) {
+    is Circle => {
+      return 1
+    }
+    else => {
+      return 2
+    }
+  }
+}
+
+function entrypoint() -> nothing {
+  let circle: Circle = { radius: 1.5 }
+  let name: string = `yinz`.toUpperCase()
+  let i: int = 0
+  let total: int = 0
+  while (i < 20) {
+    total = total + kindShare(`literal`)
+    total = total + kindBare(`literal`)
+    total = total + kindGive(`literal`)
+    total = total + kindShare(name)
+    total = total + kindShare(`fresh`.toUpperCase())
+    total = total + kindGive(name.toLowerCase())
+    total = total + kindShare(circle)
+    i = i + 1
+  }
+  print(total)
+  print(name)
+}
+";
+
+/// A string coerced into a union at a call argument is copied into an envelope the callee only
+/// reads (`share` or bare): the call's statement releases it. A `give` argument is the callee's, so
+/// the caller releases nothing (High: the envelope leaked one string per call; a caller release of
+/// a given envelope would be a double free).
+#[test]
+fn a_union_envelope_minted_for_a_call_argument_is_released_unless_given() {
+    let expected = format!("{}\nYINZ\n", 20 * (2 + 2 + 2 + 2 + 2 + 2 + 1));
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("c7_r1_union_args", UNION_ARGUMENTS, &expected, no_optimize);
+        assert_strings_balanced("c7_r1_union_args", &counters, no_optimize);
+        assert_asan_clean("c7_r1_union_args", UNION_ARGUMENTS, &expected, no_optimize);
+    });
+}

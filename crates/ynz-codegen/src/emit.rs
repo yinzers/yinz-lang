@@ -19692,6 +19692,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     if wrapped_value_moves && view.is_pointer_value() {
         cg.moved_cell_values.insert(view.as_value_ref() as usize);
     }
+    cg.bind_temporary(expr, view)?;
     Ok(view)
 }
 
@@ -27537,6 +27538,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     span.0, span.1
                 )
             })?;
+            // An argument coerced into a union parameter: the temporary is the envelope the call mints
+            // (`envelope_argument` in typeck), of the union slot's type, not of the plain value.
+            let ty = match self.coercion_at(span) {
+                Some(coercion) => coercion.slot.clone(),
+                None => ty,
+            };
             let ty = self.resolve_type(&ty);
             let slot = self.alloca_in_entry_llvm(self.ptr(), "temporary")?;
             self.builder

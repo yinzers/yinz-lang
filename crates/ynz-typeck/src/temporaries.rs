@@ -392,6 +392,28 @@ impl Walk<'_> {
         }
     }
 
+    /// An argument of a Yinz function that typeck coerces into a union parameter (`kind(`text`)`) is
+    /// copied into an envelope the call mints; when the callee only reads it (anything but `give`) the
+    /// envelope is a temporary of the statement: it owns the text it wrapped (a copy, or the fresh
+    /// string moved in) and nothing else releases it. Recorded under the argument's span, and codegen
+    /// reads the union slot from `union_coercions` for the temporary's type. Only owned text enters
+    /// an envelope by copy: a shape variant is viewed, an `int` owns nothing.
+    ///
+    /// O(1) time.
+    fn envelope_argument(&mut self, arg: &Expr, usage: Use, key: Span, suppress: bool) {
+        let span = span_of(arg);
+        if usage != Use::Borrowed
+            || suppress
+            || !self.facts.union_coercions.contains_key(&span)
+            || !self.type_of(arg).is_some_and(is_owned_text)
+        {
+            return;
+        }
+        if self.out.temporaries.insert(span, key).is_none() {
+            self.out.released_at.entry(key).or_default().push(span);
+        }
+    }
+
     fn children(&mut self, expr: &Expr, key: Span, suppress: bool) {
         match expr {
             Expr::Ident(..)
@@ -421,6 +443,9 @@ impl Walk<'_> {
                         Use::Borrowed
                     };
                     self.value(arg, usage, key, suppress);
+                    if self.facts.callable_fns.contains(name) {
+                        self.envelope_argument(arg, usage, key, suppress);
+                    }
                 }
             }
             Expr::MethodCall {
@@ -433,6 +458,12 @@ impl Walk<'_> {
                     self.value(receiver, self.argument_use(method, 0), key, suppress);
                     for (index, arg) in args.iter().enumerate() {
                         self.value(arg, self.argument_use(method, index + 1), key, suppress);
+                        self.envelope_argument(
+                            arg,
+                            self.argument_use(method, index + 1),
+                            key,
+                            suppress,
+                        );
                     }
                     return;
                 }
