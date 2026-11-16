@@ -127,6 +127,7 @@ impl ReleaseKind {
                 | ReleaseKind::TaskHandle
                 | ReleaseKind::Shape
                 | ReleaseKind::Union
+                | ReleaseKind::NestedShape
         )
     }
 }

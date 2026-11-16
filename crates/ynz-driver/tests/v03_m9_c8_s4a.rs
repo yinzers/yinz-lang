@@ -8,7 +8,9 @@
 
 mod support;
 
-use support::{at_both_optimization_levels, build_source, run_counted};
+use support::{
+    at_both_optimization_levels, build_asan, build_source, run_asan_binary, run_counted,
+};
 
 /// Build and run `source` at both optimization levels; it must print `expected`, exit 0 and free
 /// every heap allocation and every string it allocates.
@@ -29,6 +31,12 @@ fn assert_balanced(label: &str, source: &str, expected: &str) {
         assert_eq!(
             counters.string_free, counters.string_alloc,
             "{label} (no_optimize={no_optimize}): every string must be freed: {counters:?}"
+        );
+        let sanitized = run_asan_binary(&build_asan(&built));
+        assert!(
+            !sanitized.stderr.contains("AddressSanitizer") && sanitized.exit_code == 0,
+            "{label} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+            sanitized.stderr
         );
     });
 }
