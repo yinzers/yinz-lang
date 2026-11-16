@@ -1,0 +1,7 @@
+// v0.3-M9 C7 review r1 (Product Manager ruling A): a `sensitive string` is not a map key. A map
+// would release it as an ordinary string and compare it without constant-time care.
+// Correct behavior: does not compile; the refusal names the type, a key to use, and why.
+function entrypoint() -> nothing {
+  let counts: map<sensitive string, int> = {}
+  print(counts.count())
+}
