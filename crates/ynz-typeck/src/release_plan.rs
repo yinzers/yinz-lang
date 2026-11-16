@@ -62,7 +62,7 @@ use crate::binding_names::{BindingNames, DeclKey};
 use crate::generics::{apply_substitution, GenericShapeTable};
 use crate::shapes::ShapeTable;
 use crate::string_ownership::StringMoves;
-use crate::transfer_record::{ReleaseAnchor, TransferRecord};
+use crate::transfer_record::{MemberFacts, ReleaseAnchor, TransferRecord};
 use crate::types::{type_name, Type};
 
 /// `(span.start, span.end)`.
@@ -376,8 +376,6 @@ pub struct RawEntry {
     /// The binding's alias class in the live scope at the edge.
     pub class: u64,
     pub moved: Moved,
-    /// The returned value is, or reaches, this binding's class.
-    pub returned: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -385,6 +383,8 @@ struct RawEdge {
     kind: EdgeKind,
     span: Span,
     consumed_classes: BTreeSet<u64>,
+    /// For a `return`: the bindings the returned value is, or reaches, when it is not a fresh copy.
+    returned_holders: Vec<DeclKey>,
     entries: Vec<RawEntry>,
 }
 
@@ -430,6 +430,22 @@ pub struct ReleaseReads {
 }
 
 impl ReleaseReads {
+    /// True when every owner `earlier` reads at an edge is read here too (this one may read more:
+    /// the copy owners, which are known only once the walk's reads are judged).
+    pub fn covers(&self, earlier: &ReleaseReads) -> bool {
+        let covers_edge = |mine: &HashMap<Span, Vec<String>>, theirs: &HashMap<Span, Vec<String>>| {
+            theirs.iter().all(|(span, names)| {
+                mine.get(span)
+                    .is_some_and(|here| names.iter().all(|name| here.contains(name)))
+            })
+        };
+        self.file == earlier.file
+            && self.body_span == earlier.body_span
+            && covers_edge(&self.block_end, &earlier.block_end)
+            && covers_edge(&self.return_edge, &earlier.return_edge)
+            && covers_edge(&self.propagation_edge, &earlier.propagation_edge)
+    }
+
     /// True when no edge releases anything.
     pub fn is_empty(&self) -> bool {
         self.block_end.is_empty() && self.return_edge.is_empty() && self.propagation_edge.is_empty()
@@ -649,6 +665,7 @@ impl ReleaseRecorder {
         kind: EdgeKind,
         span: &SourceSpan,
         consumed_classes: BTreeSet<u64>,
+        returned_holders: Vec<DeclKey>,
         entries: Vec<RawEntry>,
     ) {
         let Some(function) = self.current.as_mut() else {
@@ -668,6 +685,7 @@ impl ReleaseRecorder {
             kind,
             span: key,
             consumed_classes,
+            returned_holders,
             entries,
         });
     }
@@ -712,14 +730,14 @@ impl ReleaseRecorder {
     }
 
     /// The current function's walk is over: its release reads in the user's names, computed from
-    /// `anchors` (`TransferRecorder::current_anchors`). The suspension guards run on these, before
+    /// `facts` (`TransferRecorder::current_facts`). The suspension guards run on these, before
     /// the module's records are finished.
-    pub fn end_function(&mut self, anchors: &HashMap<DeclKey, ReleaseAnchor>) -> ReleaseReads {
+    pub fn end_function(&mut self, facts: &HashMap<DeclKey, MemberFacts>) -> ReleaseReads {
         let Some(function) = self.current.clone() else {
             self.outside_function("the end of a function");
             return ReleaseReads::default();
         };
-        let lookup = |decl: &DeclKey| anchors.get(decl).cloned();
+        let lookup = |decl: &DeclKey| facts.get(decl).cloned();
         match resolve_function(&function, &lookup, None, Names::User, &|decl: &DeclKey| {
             decl.2.clone()
         }) {
@@ -736,7 +754,7 @@ impl ReleaseRecorder {
         }
     }
 
-    /// Close the last function and build the plan. Codegen names come from `names`, anchors from
+    /// Close the last function and build the plan. Codegen names come from `names`, the record's facts from
     /// `transfers`, string moves from `strings`. A hole is kept in `ReleasePlan::internal_errors`,
     /// never skipped.
     ///
@@ -763,7 +781,7 @@ impl ReleaseRecorder {
                 transfers
                     .function(&function.name)?
                     .class_of(codegen_name)
-                    .map(|class| class.anchor_for(codegen_name))
+                    .and_then(|class| class.facts_for(codegen_name))
             };
             let codegen_name_of =
                 |decl: &DeclKey| codegen_name_or_note(names, decl, &function.name, &holes);
@@ -783,12 +801,17 @@ impl ReleaseRecorder {
             );
             match (resolved, user_reads) {
                 (Ok(resolved), Ok(user_reads)) => {
-                    // The early pass wrote the owners in the user's names; the final pass must
-                    // agree with it, or the guards and the frame layout read different sets.
-                    if self.early_reads.get(&function.name) != Some(&user_reads.reads) {
+                    // The early pass wrote the owners known before the walk's reads were judged
+                    // (in the user's names); the final pass knows the copy owners too. It must
+                    // keep every early owner, or the guards read a set the frame layout does not.
+                    if !self
+                        .early_reads
+                        .get(&function.name)
+                        .is_some_and(|early| user_reads.reads.covers(early))
+                    {
                         plan.internal_errors.push(format!(
                             "internal: the release owners of `{}` changed between the end of \
-                             its walk and the end of the module",
+                             its walk and the end of the module (an early owner is gone)",
                             function.name
                         ));
                     }
@@ -828,7 +851,7 @@ struct ResolvedFunction {
 /// Codegen's names are unique, so every owner is read there.
 fn resolve_function(
     function: &FunctionExits,
-    anchor_of: &dyn Fn(&DeclKey) -> Option<ReleaseAnchor>,
+    facts_of: &dyn Fn(&DeclKey) -> Option<MemberFacts>,
     moves_by_binding: Option<&HashMap<DeclKey, Vec<Span>>>,
     names: Names,
     name_of: &dyn Fn(&DeclKey) -> String,
@@ -847,7 +870,7 @@ fn resolve_function(
         let mut fates = Vec::with_capacity(edge.entries.len());
         let mut owners: Vec<String> = Vec::new();
         for entry in &edge.entries {
-            let fate = fate_of(function, edge, entry, anchor_of, moves_by_binding)?;
+            let fate = fate_of(function, edge, entry, facts_of, moves_by_binding)?;
             // A release is a read at its edge, for the kinds with a frame slot across a suspension.
             // An owner whose user name is shared (`ambiguous`, empty in the codegen space) is
             // skipped on purpose, not dropped by accident: it is a frame-backed kind, which no
@@ -885,11 +908,16 @@ fn ambiguous_user_names(function: &FunctionExits) -> HashSet<&str> {
 }
 
 /// THE fate rule. One function, read by the early and the final pass alike.
+///
+/// A binding's fate depends on what happened to ITS OWN value: whether a read naming it handed it
+/// over (`MemberFacts::moved_directly`; the live scope's consumed state is per alias class, so it
+/// also reports a give of any joined owner) and whether the returned value is, or may point into,
+/// it (`MemberFacts::aliases` against the edge's returned holders).
 fn fate_of(
     function: &FunctionExits,
     edge: &RawEdge,
     entry: &RawEntry,
-    anchor_of: &dyn Fn(&DeclKey) -> Option<ReleaseAnchor>,
+    facts_of: &dyn Fn(&DeclKey) -> Option<MemberFacts>,
     moves_by_binding: Option<&HashMap<DeclKey, Vec<Span>>>,
 ) -> Result<Fate, String> {
     let kind = match entry.heap {
@@ -903,21 +931,32 @@ fn fate_of(
         HeapClass::Heap(kind) => kind,
     };
     let reassigned = function.reassigned.contains(&entry.decl);
+    let Some(facts) = facts_of(&entry.decl) else {
+        return Err(format!(
+            "internal: `{}` in `{}` has no release anchor in the transfer record",
+            entry.decl.2, function.name
+        ));
+    };
+    let moved = if facts.moved_directly {
+        entry.moved
+    } else {
+        Moved::No
+    };
     if kind == ReleaseKind::String {
         // A string owns its bytes whatever else it is joined to (a store copies or moves).
         if !entry.string_owner {
             return Ok(Fate::Omitted(OmitReason::NotOwner));
         }
-        // A string given to a `give` parameter (or sent, stored) is handed over like any heap
-        // value: the callee releases it, so a caller whose class was given on every path omits it.
+        // A string given to a `give` parameter (or sent, stored) is handed over like any given value
+        // (the callee releases it), so a caller whose string was given on every path omits it.
         // Only the founder of its OWN class is judged by the scope: a string joined to a piece's
         // class owns a copy that the class's give does not take.
         let owns_its_class = matches!(
-            anchor_of(&entry.decl),
-            Some(ReleaseAnchor::Founder { decl, .. }) if decl == entry.decl
+            &facts.anchor,
+            ReleaseAnchor::Founder { decl, .. } if *decl == entry.decl
         );
         if owns_its_class {
-            match entry.moved {
+            match moved {
                 // A later assignment may revive a binding given on every path to here.
                 Moved::EveryPath if reassigned => return Ok(Fate::ReleaseIfLive(kind)),
                 Moved::EveryPath => return Ok(Fate::Omitted(OmitReason::Moved)),
@@ -935,25 +974,23 @@ fn fate_of(
             Fate::Release(kind)
         });
     }
-    let Some(anchor) = anchor_of(&entry.decl) else {
-        return Err(format!(
-            "internal: `{}` in `{}` has no release anchor in the transfer record",
-            entry.decl.2, function.name
-        ));
-    };
-    match anchor {
+    match &facts.anchor {
         ReleaseAnchor::CallerOwns { .. } => return Ok(Fate::Omitted(OmitReason::CallerOwns)),
         ReleaseAnchor::NoOwner => return Ok(Fate::Omitted(OmitReason::NotOwner)),
         ReleaseAnchor::NoStaticFounder(_) => return Ok(Fate::Omitted(OmitReason::NoStaticFounder)),
-        ReleaseAnchor::Founder { decl, .. } if decl != entry.decl => {
+        ReleaseAnchor::Founder { decl, .. } if *decl != entry.decl => {
             return Ok(Fate::Omitted(OmitReason::NotOwner))
         }
         ReleaseAnchor::Founder { .. } => {}
     }
-    if entry.returned {
+    if edge
+        .returned_holders
+        .iter()
+        .any(|holder| facts.aliases.contains(holder))
+    {
         return Ok(Fate::Omitted(OmitReason::Returned));
     }
-    Ok(match entry.moved {
+    Ok(match moved {
         Moved::No => Fate::Release(kind),
         Moved::SomePaths => Fate::ReleaseIfLive(kind),
         Moved::EveryPath if reassigned => Fate::ReleaseIfLive(kind),
@@ -1111,7 +1148,7 @@ impl ReleasePlan {
         function: &FunctionExits,
         resolved: ResolvedFunction,
         user_reads: ReleaseReads,
-        anchor_of: &dyn Fn(&DeclKey) -> Option<ReleaseAnchor>,
+        facts_of: &dyn Fn(&DeclKey) -> Option<MemberFacts>,
         names: &BindingNames,
         strings: &StringMoves,
     ) {
@@ -1155,7 +1192,7 @@ impl ReleasePlan {
                         codegen_name: codegen_name_of(&entry.decl),
                         heap: entry.heap,
                         class: entry.class,
-                        returned: entry.returned,
+                        returned: *fate == Fate::Omitted(OmitReason::Returned),
                         fate: *fate,
                     })
                     .collect(),
@@ -1190,7 +1227,16 @@ impl ReleasePlan {
         }
         // Move sites: where a read takes a value out of a founder that may release later.
         for site in &function.move_sites {
-            if let Some(ReleaseAnchor::Founder { decl, .. }) = anchor_of(&site.named) {
+            if let Some(MemberFacts {
+                anchor: ReleaseAnchor::Founder { decl, .. },
+                ..
+            }) = facts_of(&site.named)
+            {
+                // A read that hands a binding over nulls THAT binding's slot; a binding another
+                // one founds (a piece, a joined owner it does not own) has none to null.
+                if decl != site.named {
+                    continue;
+                }
                 if let Some(&kind) = releasing_if_live.get(&decl) {
                     let founder_codegen_name = codegen_name_of(&decl);
                     self.add_move_site(
@@ -1323,20 +1369,21 @@ impl ReleasePlan {
                     continue;
                 }
                 let consumed = edge.consumed_classes.contains(&entry.class);
-                let moved_escape = class.escapes.iter().any(|escape| {
-                    matches!(
-                        escape,
-                        Escape::Given { .. } | Escape::Sent { .. } | Escape::Stored { .. }
-                    )
+                let facts = class.facts_for(&entry.codegen_name);
+                let moved_escape = facts.as_ref().is_some_and(|facts| facts.moved_directly);
+                let returned_escape = facts.as_ref().is_some_and(|facts| {
+                    class.members.iter().any(|member| {
+                        facts.aliases.contains(&member.decl)
+                            && member.escapes.contains(&Escape::Returned)
+                    })
                 });
-                let returned_escape = class.escapes.contains(&Escape::Returned);
                 let ok = if entry.returned {
                     entry.fate == Fate::Omitted(OmitReason::Returned) && returned_escape
-                } else if consumed {
+                } else if consumed && moved_escape {
                     matches!(
                         entry.fate,
                         Fate::Omitted(OmitReason::Moved) | Fate::ReleaseIfLive(_)
-                    ) && moved_escape
+                    )
                 } else {
                     entry.fate == Fate::Release(kind)
                 };

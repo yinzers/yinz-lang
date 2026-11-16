@@ -30,6 +30,12 @@
 //! | `for (cell in m)` | `cell` joins `m` |
 //! | an untraceable result (an imported call) | joins every binding the expression mentions |
 //!
+//! A read of a place that typeck judged a copy (`ReadVerdict::MustCopy`, `non_owned_reads`) binds
+//! a value of its own: the event neither joins a class nor makes its binding a piece. A binding
+//! whose every event is fresh, a `give` parameter, a copy or a take is a **copy owner**: an owner
+//! like any other, released at its own scope exit. The verdicts exist only after the walk, so
+//! every event keeps the span of the value it bound and its joins are applied when the record is
+//! built (`TransferRecorder::finish`).
 //! # Who frees what
 //!
 //! A class must free every distinct object in it exactly once, container and stored elements
@@ -40,12 +46,16 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::binding_names::{BindingNames, DeclKey};
+use crate::non_owned_reads::{NonOwnedReads, ReadVerdict};
+
+/// `(span.start, span.end)` of the value expression a binding event bound.
+pub type ValueSpan = (usize, usize);
 
 /// How a member can take part in releasing its class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemberRole {
-    /// Bound only to fresh values it is the first holder of (`Origin::Owned`, or a `give`
-    /// parameter): a candidate founder.
+    /// Bound only to values it is the first holder of (`Origin::Owned`, a `give` parameter, a
+    /// copy of a place or a piece taken out of a temporary): a candidate founder.
     Owner,
     /// A parameter declared `share`, `lend` or bare: the caller keeps the value.
     BorrowedParam,
@@ -62,6 +72,38 @@ pub struct ClassMember {
     /// The binding's unique name inside its function, as codegen's AST carries it.
     pub codegen_name: String,
     pub role: MemberRole,
+    /// The frame path of the scope the binding was declared in (`Scope::path`).
+    pub path: Vec<u32>,
+    /// The escapes whose read named THIS binding (a class's `escapes` are the union over its
+    /// members).
+    pub escapes: Vec<Escape>,
+    /// An owner at least one of whose events is a copy of a place (`ReadVerdict::MustCopy`).
+    pub copy_owner: bool,
+}
+
+impl ClassMember {
+    /// True when a read naming this binding handed its value over (given, sent or stored).
+    fn moved_directly(&self) -> bool {
+        self.escapes.iter().any(|escape| {
+            matches!(
+                escape,
+                Escape::Given { .. } | Escape::Sent { .. } | Escape::Stored { .. }
+            )
+        })
+    }
+}
+
+/// What a release decision needs to know about one binding, from the record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberFacts {
+    /// Where the binding's release is anchored (`AliasClass::anchor_for`).
+    pub anchor: ReleaseAnchor,
+    /// A read naming this binding gave, sent or stored it. Only then can the class's consumed
+    /// state in the live scope be about this binding's own value.
+    pub moved_directly: bool,
+    /// Every binding that may point into this binding's value: itself and the pieces of its
+    /// class. A `return` of one of them that does not copy returns this binding's value.
+    pub aliases: Vec<DeclKey>,
 }
 
 /// How a member's value can leave this function's hands.
@@ -119,16 +161,36 @@ pub struct AliasClass {
 impl AliasClass {
     /// The anchor `codegen_name` is judged by. A class joins bindings whose values one name may
     /// reach (`found.or(backup)` reaches `rows`' item or `backup`), so it can hold several
-    /// `Owner`s, each bound only to fresh values of its own and so each its own allocation. The
-    /// class names ONE founder; when nothing in the class escapes on any path (nothing is
-    /// returned, given, sent or stored, so nothing was handed over), every other `Owner` founds
-    /// its own allocation and is released at its own scope exit like the founder, instead of
-    /// leaking. Any escape leaves the class anchor alone: a handed-over class is judged whole.
+    /// `Owner`s, each bound only to values of its own and so each its own allocation. The class
+    /// names ONE founder; every other `Owner` founds its own allocation and is released at its
+    /// own scope exit like the founder, whether or not the class escapes (an escape names the
+    /// binding that was handed over: `ClassMember::escapes`). One exception keeps it safe: a
+    /// `Piece` whose scope strictly encloses the owner's may still point into the owner's value
+    /// when the owner dies, so that owner is left to the class anchor (never released early).
     pub fn anchor_for(&self, codegen_name: &str) -> ReleaseAnchor {
-        if matches!(self.anchor, ReleaseAnchor::Founder { .. }) && self.escapes.is_empty() {
-            if let Some(member) = self.members.iter().find(|member| {
-                member.codegen_name == codegen_name && member.role == MemberRole::Owner
-            }) {
+        match self
+            .members
+            .iter()
+            .position(|member| member.codegen_name == codegen_name)
+        {
+            Some(index) => self.anchor_of_member(index),
+            None => self.anchor.clone(),
+        }
+    }
+
+    /// `anchor_for` for the member at `index` (declared names are not unique, positions are).
+    pub fn anchor_of_member(&self, index: usize) -> ReleaseAnchor {
+        let member = &self.members[index];
+        if matches!(self.anchor, ReleaseAnchor::Founder { .. }) && member.role == MemberRole::Owner
+        {
+            let outlived_by_piece = self.members.iter().any(|other| {
+                other.role == MemberRole::Piece
+                    && other.path.len() < member.path.len()
+                    && member.path.starts_with(&other.path)
+            });
+            let is_class_founder = matches!(&self.anchor,
+                ReleaseAnchor::Founder { decl, .. } if *decl == member.decl);
+            if is_class_founder || !outlived_by_piece {
                 return ReleaseAnchor::Founder {
                     decl: member.decl.clone(),
                     codegen_name: member.codegen_name.clone(),
@@ -136,6 +198,31 @@ impl AliasClass {
             }
         }
         self.anchor.clone()
+    }
+
+    /// What a release decision needs about the member at `index`.
+    pub fn facts_of_member(&self, index: usize) -> MemberFacts {
+        let member = &self.members[index];
+        let mut aliases = vec![member.decl.clone()];
+        aliases.extend(
+            self.members
+                .iter()
+                .filter(|other| other.role == MemberRole::Piece && other.decl != member.decl)
+                .map(|other| other.decl.clone()),
+        );
+        MemberFacts {
+            anchor: self.anchor_of_member(index),
+            moved_directly: member.moved_directly(),
+            aliases,
+        }
+    }
+
+    /// The facts of the member `codegen_name`.
+    pub fn facts_for(&self, codegen_name: &str) -> Option<MemberFacts> {
+        self.members
+            .iter()
+            .position(|member| member.codegen_name == codegen_name)
+            .map(|index| self.facts_of_member(index))
     }
 
     /// True when `codegen_name` is a member.
@@ -209,9 +296,21 @@ struct BindingState {
     /// The frame path (`Scope::path`) of the scope the binding was declared in.
     path: Vec<u32>,
     borrowed_param: bool,
-    /// True once any event bound it to a non-owned value: it cannot be trusted to hold only
-    /// fresh values, so it never anchors a release.
-    ever_piece: bool,
+    /// Every event that bound a non-owned value, by the span of the value it read (`None`: no
+    /// place read to judge, e.g. a loop cell or an untraceable result). An event whose read
+    /// typeck judged a copy binds a value of its own (`resolved_event`); any other
+    /// means the binding cannot be trusted to hold only values of its own, so it never anchors
+    /// a release.
+    piece_events: Vec<Option<ValueSpan>>,
+}
+
+/// A join recorded at a binding event; applied when the record is built, unless the event's read
+/// turned out to be a copy.
+#[derive(Clone)]
+struct PendingJoin {
+    first: usize,
+    second: usize,
+    event: Option<ValueSpan>,
 }
 
 #[derive(Clone)]
@@ -219,18 +318,37 @@ struct FunctionState {
     name: String,
     bindings: Vec<BindingState>,
     index: HashMap<DeclKey, usize>,
-    /// Union-find parent links over `bindings`.
-    parent: Vec<usize>,
+    joins: Vec<PendingJoin>,
     escapes: Vec<(usize, Escape)>,
 }
 
-impl FunctionState {
-    /// Join two bindings; true when they were in different classes.
-    fn union(&mut self, first: usize, second: usize) -> bool {
+/// True when the event that read the value at `event` bound a value of its own: typeck judged the
+/// read a copy (`non_owned_reads`). A `Take` is not resolved here: the checker already binds a take
+/// as a fresh value when the piece is of a temporary no name reaches, and a take of a call result
+/// that is a piece of its arguments (a generic callee) stays a piece joined to them.
+fn resolved_event(reads: &NonOwnedReads, event: Option<ValueSpan>) -> bool {
+    event.is_some_and(|(start, end)| {
+        reads.verdict(start, end) == Some(ReadVerdict::MustCopy)
+    })
+}
+
+/// Union-find over binding positions.
+struct Partition {
+    parent: Vec<usize>,
+}
+
+impl Partition {
+    fn new(count: usize) -> Self {
+        Self {
+            parent: (0..count).collect(),
+        }
+    }
+
+    fn union(&mut self, first: usize, second: usize) {
         let first_root = self.find(first);
         let second_root = self.find(second);
         if first_root == second_root {
-            return false;
+            return;
         }
         // The smaller index stays the root so class order follows declaration order.
         let (kept, absorbed) = if first_root < second_root {
@@ -239,7 +357,6 @@ impl FunctionState {
             (second_root, first_root)
         };
         self.parent[absorbed] = kept;
-        true
     }
 
     fn find(&mut self, mut node: usize) -> usize {
@@ -292,21 +409,28 @@ impl TransferRecorder {
             name: function_name.to_string(),
             bindings: Vec::new(),
             index: HashMap::new(),
-            parent: Vec::new(),
+            joins: Vec::new(),
             escapes: Vec::new(),
         });
     }
 
-    /// Record a declaration in the scope at `path`. A node walked twice is declared once; its
-    /// later events only add evidence.
-    pub fn declare(&mut self, decl: DeclKey, path: Vec<u32>, event: RoleEvidence) {
+    /// Record a declaration in the scope at `path`; `value` is the span of the value its first
+    /// event read, when it read a place. A node walked twice is declared once; its later events
+    /// only add evidence.
+    pub fn declare(
+        &mut self,
+        decl: DeclKey,
+        path: Vec<u32>,
+        event: RoleEvidence,
+        value: Option<ValueSpan>,
+    ) {
         let Some(function) = self.current.as_mut() else {
             self.internal_errors
                 .push(outside_function_message("a declaration", Some(&decl)));
             return;
         };
         if let Some(&existing) = function.index.get(&decl) {
-            Self::apply_event(&mut function.bindings[existing], event);
+            Self::apply_event(&mut function.bindings[existing], event, value);
             return;
         }
         let position = function.bindings.len();
@@ -314,24 +438,28 @@ impl TransferRecorder {
             decl: decl.clone(),
             path,
             borrowed_param: false,
-            ever_piece: false,
+            piece_events: Vec::new(),
         };
-        Self::apply_event(&mut binding, event);
+        Self::apply_event(&mut binding, event, value);
         function.bindings.push(binding);
         function.index.insert(decl, position);
-        function.parent.push(position);
     }
 
-    fn apply_event(binding: &mut BindingState, event: RoleEvidence) {
+    fn apply_event(binding: &mut BindingState, event: RoleEvidence, value: Option<ValueSpan>) {
         match event {
             RoleEvidence::Owner => {}
             RoleEvidence::BorrowedParam => binding.borrowed_param = true,
-            RoleEvidence::Piece => binding.ever_piece = true,
+            RoleEvidence::Piece => {
+                if !binding.piece_events.contains(&value) {
+                    binding.piece_events.push(value);
+                }
+            }
         }
     }
 
-    /// A later binding event (a reassignment) bound `decl` to a value of this role.
-    pub fn note_event(&mut self, decl: &DeclKey, event: RoleEvidence) {
+    /// A later binding event (a reassignment) bound `decl` to a value of this role, read from the
+    /// value at `value`.
+    pub fn note_event(&mut self, decl: &DeclKey, event: RoleEvidence, value: Option<ValueSpan>) {
         let Some(function) = self.current.as_mut() else {
             self.internal_errors
                 .push(outside_function_message("a binding event", Some(decl)));
@@ -342,11 +470,12 @@ impl TransferRecorder {
                 .push(undeclared_message("a binding event", &function.name, decl));
             return;
         };
-        Self::apply_event(&mut function.bindings[position], event);
+        Self::apply_event(&mut function.bindings[position], event, value);
     }
 
-    /// The two bindings denote or reach one value from now on.
-    pub fn join(&mut self, first: &DeclKey, second: &DeclKey) {
+    /// The two bindings denote or reach one value from now on. `event` is the span of the value
+    /// whose read made them so, when a copy of it would not (`resolved_event`).
+    pub fn join(&mut self, first: &DeclKey, second: &DeclKey, event: Option<ValueSpan>) {
         let Some(function) = self.current.as_mut() else {
             self.internal_errors
                 .push(outside_function_message("a join", Some(first)));
@@ -364,7 +493,18 @@ impl TransferRecorder {
                 .push(undeclared_message("a join", &function.name, undeclared));
             return;
         };
-        function.union(first_position, second_position);
+        let pending = PendingJoin {
+            first: first_position,
+            second: second_position,
+            event,
+        };
+        if !function
+            .joins
+            .iter()
+            .any(|seen| seen.first == pending.first && seen.second == pending.second && seen.event == pending.event)
+        {
+            function.joins.push(pending);
+        }
     }
 
     /// The value `decl` holds leaves this function's hands.
@@ -382,20 +522,22 @@ impl TransferRecorder {
         function.escapes.push((position, escape));
     }
 
-    /// The release anchor of every binding the current function has declared so far, keyed by
-    /// declaration: the class partition as it stands. Used when a function's walk ends, before
-    /// `BindingNames` has named its bindings, so a pass that needs the anchors inside the walk
-    /// (the release plan's owner set, which the suspension guards read) asks the same partition
-    /// `finish` will build. A hole in the partition is recorded in `internal_errors` and yields an
-    /// empty map. O(b · d) time and O(b) memory for b bindings at frame depth d.
-    pub fn current_anchors(&mut self) -> HashMap<DeclKey, ReleaseAnchor> {
+    /// What a release decision needs about every binding the current function has declared so
+    /// far, keyed by declaration: the class partition as it stands, before any read is judged (a
+    /// copy of a place is not yet known to be one). Used when a function's walk ends, before
+    /// `BindingNames` has named its bindings, so a pass that needs the facts inside the walk (the
+    /// release plan's owner set, which the suspension guards read) asks the same partition
+    /// `finish` will build, minus the copies. A hole in the partition is recorded in
+    /// `internal_errors` and yields an empty map. O(b · d) time and O(b) memory for b bindings at
+    /// frame depth d.
+    pub fn current_facts(&mut self) -> HashMap<DeclKey, MemberFacts> {
         let Some(function) = self.current.clone() else {
             self.internal_errors
                 .push(outside_function_message("a request for anchors", None));
             return HashMap::new();
         };
         let declared_name = |decl: &DeclKey| Some(decl.2.clone());
-        match build_function(function, &declared_name) {
+        match build_function(function, &declared_name, &NonOwnedReads::default()) {
             Ok(transfers) => transfers
                 .classes
                 .iter()
@@ -403,7 +545,8 @@ impl TransferRecorder {
                     class
                         .members
                         .iter()
-                        .map(|member| (member.decl.clone(), class.anchor_for(&member.codegen_name)))
+                        .enumerate()
+                        .map(|(index, member)| (member.decl.clone(), class.facts_of_member(index)))
                 })
                 .collect(),
             Err(message) => {
@@ -415,11 +558,12 @@ impl TransferRecorder {
 
     /// Close the last function and build the record. Codegen names come from `names`, which
     /// must have named every declaration this recorder saw (the checker declares both at the
-    /// same event). An event the recorder could not place, or a declaration `names` lacks, ends
-    /// up in `TransferRecord::internal_errors`; it is never skipped.
+    /// same event); `reads` says which place reads are copies. An event the recorder could not
+    /// place, or a declaration `names` lacks, ends up in `TransferRecord::internal_errors`; it
+    /// is never skipped.
     ///
     /// O(b · d) time and O(b) memory for b bindings at frame depth d.
-    pub fn finish(mut self, names: &BindingNames) -> TransferRecord {
+    pub fn finish(mut self, names: &BindingNames, reads: &NonOwnedReads) -> TransferRecord {
         if let Some(last) = self.current.take() {
             self.finished.push(last);
         }
@@ -430,7 +574,7 @@ impl TransferRecorder {
         for function in self.finished {
             let name = function.name.clone();
             let codegen_name_of = |decl: &DeclKey| names.codegen_name(decl).map(str::to_string);
-            match build_function(function, &codegen_name_of) {
+            match build_function(function, &codegen_name_of, reads) {
                 Ok(transfers) => {
                     record.functions.insert(name, transfers);
                 }
@@ -444,13 +588,20 @@ impl TransferRecorder {
 /// One function's classes; an error when a recorded binding has no codegen name or a class has no
 /// anchor candidate (a hole in the record, see `TransferRecord::internal_errors`).
 fn build_function(
-    mut function: FunctionState,
+    function: FunctionState,
     codegen_name_of: &dyn Fn(&DeclKey) -> Option<String>,
+    reads: &NonOwnedReads,
 ) -> Result<FunctionTransfers, String> {
     let count = function.bindings.len();
+    let mut partition = Partition::new(count);
+    for join in &function.joins {
+        if !resolved_event(reads, join.event) {
+            partition.union(join.first, join.second);
+        }
+    }
     let mut roots: Vec<usize> = Vec::with_capacity(count);
     for position in 0..count {
-        roots.push(function.find(position));
+        roots.push(partition.find(position));
     }
     let mut class_order: Vec<usize> = Vec::new();
     let mut seen: HashSet<usize> = HashSet::new();
@@ -468,19 +619,33 @@ fn build_function(
             .iter()
             .map(|&position| {
                 let binding = &function.bindings[position];
+                let is_piece = binding
+                    .piece_events
+                    .iter()
+                    .any(|event| !resolved_event(reads, *event));
                 let role = if binding.borrowed_param {
                     MemberRole::BorrowedParam
-                } else if binding.ever_piece {
+                } else if is_piece {
                     MemberRole::Piece
                 } else {
                     MemberRole::Owner
                 };
+                let copy_owner = role == MemberRole::Owner && !binding.piece_events.is_empty();
                 let codegen_name = codegen_name_of(&binding.decl)
                     .ok_or_else(|| undeclared_in_names_message(&function.name, &binding.decl))?;
+                let mut own_escapes: Vec<Escape> = Vec::new();
+                for (escaped, escape) in &function.escapes {
+                    if *escaped == position && !own_escapes.contains(escape) {
+                        own_escapes.push(escape.clone());
+                    }
+                }
                 Ok(ClassMember {
                     decl: binding.decl.clone(),
                     codegen_name,
                     role,
+                    path: binding.path.clone(),
+                    escapes: own_escapes,
+                    copy_owner,
                 })
             })
             .collect::<Result<Vec<ClassMember>, String>>()?;

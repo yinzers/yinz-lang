@@ -47,6 +47,7 @@ use support::{
 use ynz_diagnostics::DiagnosticKind;
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::binding_names::BindingNames;
+use ynz_typeck::non_owned_reads::NonOwnedReads;
 use ynz_typeck::transfer_record::{
     Escape, FunctionTransfers, NoFounderReason, ReleaseAnchor, RoleEvidence, TransferRecorder,
 };
@@ -1138,7 +1139,8 @@ function underTest() -> nothing {{
 }
 
 /// (High) A builtin method's result can be an ARGUMENT, not only a piece of the receiver:
-/// `cache.first().or(fallback)` returns `fallback` when the cache is empty, `left.concat(right)`
+/// `cache.first().or(fallback)` returns `fallback` when the cache is empty (a view while nothing
+/// copies it, a copy that owns its value once it is returned), `left.concat(right)`
 /// holds the elements of both. Returned, `fallback` / `right` must escape with it.
 #[test]
 fn a_builtin_methods_result_reaches_its_heap_arguments() {
@@ -1148,8 +1150,10 @@ fn a_builtin_methods_result_reaches_its_heap_arguments() {
   return found
 }";
     let transfers = transfers_of(or_source, "pick");
-    assert!(transfers.same_class("found", "fallback"), "{transfers:#?}");
-    assert_eq!(escapes_of(&transfers, "fallback"), vec![Escape::Returned]);
+    // `found` is returned, so typeck judges `cache.first().or(fallback)` a copy: `found` owns a value
+    // of its own and joins nothing.
+    assert!(!transfers.same_class("found", "fallback"), "{transfers:#?}");
+    assert!(transfers.class_of("found").is_some_and(|class| class.members[0].copy_owner));
 
     let concat_source = "function both() -> array<array<int>> {
   let left: array<array<int>> = [[1]]
@@ -1283,7 +1287,7 @@ fn a_given_then_revived_binding_keeps_its_given_escape() {
 fn assert_one_internal_error(drive: impl FnOnce(&mut TransferRecorder), needle: &str) {
     let mut recorder = TransferRecorder::default();
     drive(&mut recorder);
-    let record = recorder.finish(&BindingNames::default());
+    let record = recorder.finish(&BindingNames::default(), &NonOwnedReads::default());
     let messages = record.internal_errors();
     let mentioning = messages
         .iter()
@@ -1304,7 +1308,7 @@ fn key(start: usize, name: &str) -> (usize, usize, String) {
 #[test]
 fn an_event_before_any_function_is_an_internal_error() {
     assert_one_internal_error(
-        |recorder| recorder.join(&key(0, "first"), &key(2, "second")),
+        |recorder| recorder.join(&key(0, "first"), &key(2, "second"), None),
         "while no function was being walked",
     );
 }
@@ -1316,8 +1320,8 @@ fn a_join_naming_an_undeclared_binding_is_an_internal_error() {
     assert_one_internal_error(
         |recorder| {
             recorder.begin_function("underTest");
-            recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner);
-            recorder.join(&key(0, "declared"), &key(2, "undeclared"));
+            recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner, None);
+            recorder.join(&key(0, "declared"), &key(2, "undeclared"), None);
         },
         "in `underTest`, which it never saw declared",
     );
@@ -1343,7 +1347,7 @@ fn a_binding_event_for_an_undeclared_binding_is_an_internal_error() {
     assert_one_internal_error(
         |recorder| {
             recorder.begin_function("underTest");
-            recorder.note_event(&key(2, "undeclared"), RoleEvidence::Piece);
+            recorder.note_event(&key(2, "undeclared"), RoleEvidence::Piece, None);
         },
         "in `underTest`, which it never saw declared",
     );
@@ -1355,8 +1359,8 @@ fn a_binding_event_for_an_undeclared_binding_is_an_internal_error() {
 fn a_declared_binding_with_no_codegen_name_is_an_internal_error() {
     let mut recorder = TransferRecorder::default();
     recorder.begin_function("underTest");
-    recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner);
-    let record = recorder.finish(&BindingNames::default());
+    recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner, None);
+    let record = recorder.finish(&BindingNames::default(), &NonOwnedReads::default());
     let messages = record.internal_errors();
     assert!(
         messages.len() == 1 && messages[0].contains("has no codegen name from type checking"),

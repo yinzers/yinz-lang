@@ -28,7 +28,7 @@ use crate::{
     shapes::ShapeTable,
     signatures::SignatureTable,
     suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
-    transfer_record::{Escape, RoleEvidence},
+    transfer_record::{Escape, RoleEvidence, ValueSpan},
     types::{arc_shareable, channel_elem_drop, type_name, Type},
 };
 
@@ -1097,7 +1097,6 @@ pub fn check(
     };
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
-    let transfers = checker.transfers.finish(&binding_names);
     let (string_moves, non_owned_reads) = record_string_moves_of(
         module,
         &checker.expr_types,
@@ -1106,6 +1105,7 @@ pub fn check(
         checker.imported_fn_names,
         checker.ownership,
     );
+    let transfers = checker.transfers.finish(&binding_names, &non_owned_reads);
     let release_plan = checker
         .release
         .finish(&binding_names, &transfers, &string_moves);
@@ -1228,7 +1228,6 @@ pub fn check_with_kernel_mode(
     };
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
-    let transfers = checker.transfers.finish(&binding_names);
     let (string_moves, non_owned_reads) = record_string_moves_of(
         module,
         &checker.expr_types,
@@ -1237,6 +1236,7 @@ pub fn check_with_kernel_mode(
         checker.imported_fn_names,
         checker.ownership,
     );
+    let transfers = checker.transfers.finish(&binding_names, &non_owned_reads);
     let release_plan = checker
         .release
         .finish(&binding_names, &transfers, &string_moves);
@@ -1829,12 +1829,12 @@ impl<'b> Checker<'b> {
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
         self.check_stmts(&f.body.stmts);
-        self.record_exit(EdgeKind::BlockEnd, &f.body.span, &HashSet::new());
+        self.record_exit(EdgeKind::BlockEnd, &f.body.span, Vec::new());
         self.scope.pop();
 
         // The release owners in the user's names, for the suspension guards below: the same
         // owners (and so the same crossing set) codegen's frame layout reads.
-        let release_reads = self.release.end_function(&self.transfers.current_anchors());
+        let release_reads = self.release.end_function(&self.transfers.current_facts());
 
         // Check 3 runs AFTER check_stmts (v0.3-M6 P1-1 site 9 reorder, mirroring checks
         // 1a–1c below): the UFCS arm of the sub-expression walker reads receiver types
@@ -2601,10 +2601,10 @@ impl<'b> Checker<'b> {
             );
         }
         self.check_stmts(&f.body.stmts);
-        self.record_exit(EdgeKind::BlockEnd, &f.body.span, &HashSet::new());
+        self.record_exit(EdgeKind::BlockEnd, &f.body.span, Vec::new());
         self.scope.pop();
 
-        self.release.end_function(&self.transfers.current_anchors());
+        self.release.end_function(&self.transfers.current_facts());
 
         // Clear type params when done with this function.
         for gp in &f.generics {
@@ -3313,7 +3313,8 @@ impl<'b> Checker<'b> {
         let event =
             self.binding_event_origin(value, name, annotation, &format!("let {name} = {{value}}"));
         let declaration = decl_key(name_span, name);
-        self.declare_binding(
+        let value_span = Some((value.span().start, value.span().end));
+        self.declare_binding_of(
             name.to_string(),
             ScopeEntry {
                 ty: binding_ty,
@@ -3327,8 +3328,9 @@ impl<'b> Checker<'b> {
                 alias_class: event.alias_class,
                 defined_at: name_span.clone(),
             },
+            value_span,
         );
-        self.record_joins(&declaration, &event.joined);
+        self.record_joins(&declaration, &event.joined, value_span);
     }
 
     /// fr23 (v0.3-M7 Phase 9, FRAGO 016; unified FRAGO 020; consumption redesigned
@@ -4109,7 +4111,11 @@ impl<'b> Checker<'b> {
                     &format!("{target} = {{value}}"),
                 );
                 let declaration = self.declaration_of(target);
-                self.transfers_note_reassign(declaration.as_ref(), &event);
+                self.transfers_note_reassign(
+                    declaration.as_ref(),
+                    &event,
+                    Some((value.span().start, value.span().end)),
+                );
                 if let Some(declaration) = &declaration {
                     self.release
                         .note_reassign(statement_span, declaration.clone());
@@ -4503,7 +4509,7 @@ impl<'b> Checker<'b> {
     /// Close the arm `body` of the open branch point: an arm that always returns never reaches the
     /// join. O(size of `body`) for the return-path analysis.
     fn end_branch_arm(&mut self, body: &Block) {
-        self.record_exit(EdgeKind::BlockEnd, &body.span, &HashSet::new());
+        self.record_exit(EdgeKind::BlockEnd, &body.span, Vec::new());
         let returns = crate::return_paths::analyze_stmts(&body.stmts).all_paths_return;
         self.scope.end_arm(returns);
     }
@@ -4609,7 +4615,7 @@ impl<'b> Checker<'b> {
         );
         if let Some(declaration) = self.declaration_of(var) {
             for (_, holder) in &iterated_holders {
-                self.transfers.join(&declaration, holder);
+                self.transfers.join(&declaration, holder, None);
             }
         }
         let loop_mark = self.begin_loop_body();
@@ -4662,13 +4668,8 @@ impl<'b> Checker<'b> {
         self.check_stmt_return_value(value, span);
         // The release edge: every open frame leaves scope, minus whatever the returned value is
         // or reaches. After the value was inferred, so a give inside it is already consumed.
-        let returned_classes: HashSet<u64> = value
-            .map(|expr| self.heap_holders_of(expr))
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|(name, _)| self.scope.class_of(name))
-            .collect();
-        self.record_exit(EdgeKind::Return, span, &returned_classes);
+        let returned_holders = value.map_or_else(Vec::new, |expr| self.returned_holders_of(expr));
+        self.record_exit(EdgeKind::Return, span, returned_holders);
     }
 
     fn check_stmt_return_value(&mut self, value: Option<&Expr>, span: &SourceSpan) {
@@ -5428,6 +5429,11 @@ impl<'b> Checker<'b> {
     /// declaration for the per-binding codegen names (`crate::binding_names`), keyed by where
     /// the binding was declared and the name it was declared with.
     fn declare_binding(&mut self, name: String, entry: ScopeEntry) {
+        self.declare_binding_of(name, entry, None);
+    }
+
+    /// `declare_binding` for a binding whose first event read the value at `value` (a `let`).
+    fn declare_binding_of(&mut self, name: String, entry: ScopeEntry, value: Option<ValueSpan>) {
         let declaration = decl_key(&entry.defined_at, &name);
         self.binding_names.declare(declaration.clone());
         self.release.note_declared(&declaration);
@@ -5435,6 +5441,7 @@ impl<'b> Checker<'b> {
             declaration,
             self.scope.path(),
             role_evidence_of(&entry.origin),
+            value,
         );
         self.scope.insert(name, entry);
     }
@@ -5448,21 +5455,26 @@ impl<'b> Checker<'b> {
 
     /// Record that the binding just declared (or reassigned) as `target` now denotes or reaches
     /// the same value as every binding in `joined`.
-    fn record_joins(&mut self, target: &DeclKey, joined: &[DeclKey]) {
+    fn record_joins(&mut self, target: &DeclKey, joined: &[DeclKey], value: Option<ValueSpan>) {
         for other in joined {
-            self.transfers.join(target, other);
+            self.transfers.join(target, other, value);
         }
     }
 
     /// A reassignment is a binding event: it adds role evidence for the binding and joins it to
     /// the declarations its new value holds.
-    fn transfers_note_reassign(&mut self, declaration: Option<&DeclKey>, event: &BindingEvent) {
+    fn transfers_note_reassign(
+        &mut self,
+        declaration: Option<&DeclKey>,
+        event: &BindingEvent,
+        value: Option<ValueSpan>,
+    ) {
         let Some(declaration) = declaration else {
             return;
         };
         self.transfers
-            .note_event(declaration, role_evidence_of(&event.origin));
-        self.record_joins(declaration, &event.joined);
+            .note_event(declaration, role_evidence_of(&event.origin), value);
+        self.record_joins(declaration, &event.joined, value);
     }
 
     /// The named bindings that hold (some of) the heap value `value` denotes, as (name,
@@ -5597,7 +5609,7 @@ impl<'b> Checker<'b> {
     /// innermost frame; a `return` and an auto-propagation list every open frame, innermost first.
     /// Each frame lists its last declared binding first. `returned_classes` are the alias
     /// classes the returned value is or reaches. O(open entries).
-    fn record_exit(&mut self, kind: EdgeKind, span: &SourceSpan, returned_classes: &HashSet<u64>) {
+    fn record_exit(&mut self, kind: EdgeKind, span: &SourceSpan, returned_holders: Vec<DeclKey>) {
         let innermost = self.scope.innermost_frame();
         let frames: Vec<usize> = match kind {
             EdgeKind::BlockEnd => vec![innermost],
@@ -5632,13 +5644,12 @@ impl<'b> Checker<'b> {
                         && !matches!(entry.origin, Origin::Cell(_)),
                     class: entry.alias_class,
                     moved,
-                    returned: returned_classes.contains(&entry.alias_class),
                 });
             }
         }
         let consumed_classes = self.scope.consumed_classes();
         self.release
-            .note_exit(kind, span, consumed_classes, entries);
+            .note_exit(kind, span, consumed_classes, returned_holders, entries);
     }
 
     /// Record that a heap-valued `value` is taken by move: codegen takes its boxes without
@@ -5651,15 +5662,30 @@ impl<'b> Checker<'b> {
         self.heap_moves.insert(span.start, span.end);
     }
 
-    /// A `return`: every binding holding (a piece of) the returned value escapes.
-    fn record_return(&mut self, value: &Expr) {
-        for (_, holder) in self.heap_holders_of(value) {
-            self.transfers.escape(&holder, Escape::Returned);
+    /// The bindings a `return` of `value` leaves holding something the caller now has: those the
+    /// returned value is or reaches, unless it is a fresh copy. A string, array, map or shape the
+    /// return does not MOVE is copied at the `return` (`own_returned_value`), so the caller holds
+    /// a value of its own and nothing here is returned; any other type is returned as it is.
+    fn returned_holders_of(&self, value: &Expr) -> Vec<DeclKey> {
+        let ty = self
+            .expr_types
+            .get(&(value.span().start, value.span().end))
+            .cloned()
+            .unwrap_or(Type::Error);
+        if crate::owned_copy::copied_at_return(&ty) && !self.return_moves(value) {
+            return Vec::new();
         }
-        // A fresh value, or an owned local at its last use (nothing runs after a `return`), is
-        // handed to the caller whole; a parameter, a `const`, a field or an element stays with
-        // its holder, so the returned copy must own boxes of its own.
-        let owned_whole = match self.provenance_of(value) {
+        self.heap_holders_of(value)
+            .into_iter()
+            .map(|(_, holder)| holder)
+            .collect()
+    }
+
+    /// True when a `return` of `value` hands the caller the value itself, not a copy: a fresh value,
+    /// or an owned local at its last use (nothing runs after a `return`); a parameter, a `const`, a
+    /// field or an element stays with its holder.
+    fn return_moves(&self, value: &Expr) -> bool {
+        match self.provenance_of(value) {
             Provenance::Fresh => true,
             Provenance::Whole(name) => self.scope.lookup(&name).is_some_and(|entry| {
                 !entry.is_const
@@ -5671,8 +5697,18 @@ impl<'b> Checker<'b> {
                     && self.non_give_param_in_class(entry.alias_class).is_none()
             }),
             Provenance::Reaches(_) | Provenance::Unknown => false,
-        };
-        if owned_whole {
+        }
+    }
+
+    /// A `return`: every binding holding (a piece of) the returned value escapes.
+    fn record_return(&mut self, value: &Expr) {
+        for (_, holder) in self.heap_holders_of(value) {
+            self.transfers.escape(&holder, Escape::Returned);
+        }
+        // A fresh value, or an owned local at its last use (nothing runs after a `return`), is
+        // handed to the caller whole; a parameter, a `const`, a field or an element stays with
+        // its holder, so the returned copy must own boxes of its own.
+        if self.return_moves(value) {
             self.record_heap_move(value);
         }
     }
@@ -5882,11 +5918,8 @@ impl<'b> Checker<'b> {
                     if let Some(declaration) = self.declaration_of(name) {
                         self.transfers.escape(&declaration, Escape::Returned);
                     }
-                    self.record_exit(
-                        EdgeKind::Propagation,
-                        span,
-                        &HashSet::from([propagated_class]),
-                    );
+                    let propagated: Vec<DeclKey> = self.declaration_of(name).into_iter().collect();
+                    self.record_exit(EdgeKind::Propagation, span, propagated);
                     return inner;
                 }
                 // Outside an errors function: return the full ErrorsCapable type.

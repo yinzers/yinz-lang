@@ -803,8 +803,10 @@ fn a_binding_shadowed_in_its_own_block_is_still_released() {
     );
 }
 
-/// Bug: a shadowed owner whose class is returned through a class-mate is released anyway (double
-/// free with the caller) when the scope forgets it or freezes its state at the shadowing.
+/// Bug: a shadowed owner is judged by the wrong binding of its name (the scope forgets it or freezes
+/// its state at the shadowing). `return passed` copies `passed` at the `return` (a string, array, map
+/// or shape the return does not move is copied), so the caller holds a value of its own and both
+/// `rows` are released; before the copy-owner change the return marked the whole class returned.
 #[test]
 fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
     let output = clean(
@@ -820,8 +822,8 @@ fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
     assert_eq!(firsts.len(), 2, "both `rows` are listed: {list:?}");
     assert_eq!(
         firsts.iter().filter(|fate| fate.releases()).count(),
-        1,
-        "only the unrelated second `rows` releases: {list:?}"
+        2,
+        "both `rows` release, the caller holds a copy of `passed`: {list:?}"
     );
     assert!(
         output
