@@ -6217,6 +6217,36 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| e.to_string())
     }
 
+    /// The return of a shape read out of an errors-capable local took the shape's boxes into a new
+    /// cell: free the old ok-word cell `old_cell` (its shell only: the boxes moved) and null the
+    /// ok word of the result at `result_slot`, so the binding's release skips it.
+    ///
+    /// O(1) time and space.
+    fn free_taken_ec_shape_cell(
+        &self,
+        result_slot: PointerValue<'ctx>,
+        old_cell: PointerValue<'ctx>,
+        shape_name: &str,
+    ) -> Result<(), String> {
+        let size = self.shape_abi_size_const(shape_name, "free_taken_ec_shape_cell")?;
+        self.builder
+            .build_call(self.rt.ynz_free, &[old_cell.into(), size.into()], "")
+            .map_err(|err| format!("free the taken errors cell: {err}"))?;
+        let result = self
+            .builder
+            .build_load(self.ptr(), result_slot, "ec_taken_result")
+            .map_err(|err| format!("load the taken errors result: {err}"))?
+            .into_pointer_value();
+        let ok_word = self
+            .builder
+            .build_struct_gep(errors_result_type(self.ctx), result, 1, "ec_taken_ok")
+            .map_err(|err| format!("gep the taken errors ok word: {err}"))?;
+        self.builder
+            .build_store(ok_word, self.i64().const_zero())
+            .map_err(|err| format!("null the taken errors ok word: {err}"))?;
+        Ok(())
+    }
+
     /// Persist-side ownership (v0.3-M5 P2 fix round 2): clone shape bytes into
     /// a counted heap cell and return the cell pointer. See `heap_cell` for
     /// why the entry-block owned regions cannot back a persist. Reads the same
@@ -19250,6 +19280,20 @@ fn lower_stmt_return<'ctx>(
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                // A shape read out of an errors-capable local (`let r = make(); return r`) that the return
+                // moves lives in the result's ok-word cell: the return builds its own cell and takes the
+                // boxes, so the old cell's shell is freed below and the result's ok word is nulled.
+                let taken_shell = match (expr, cg.resolve_type(&val_ty)) {
+                    (Expr::Ident(name, _), Type::Shape { .. })
+                        if val.is_pointer_value()
+                            && cg.is_moved_cells(val.into_pointer_value()) =>
+                    {
+                        cg.ec_original_slots
+                            .get(name.as_str())
+                            .map(|slot| (*slot, val.into_pointer_value()))
+                    }
+                    _ => None,
+                };
                 let val = own_returned_value(cg, expr, val, "ec_return_str")?;
                 // C1f (#423): an envelope union success value returns BY VALUE as the result's
                 // slot (`ec_result_type`), payload inline, so neither this frame's envelope nor a
@@ -19312,6 +19356,9 @@ fn lower_stmt_return<'ctx>(
                     Type::Shape { ref name } if !name.is_empty() => {
                         let cell =
                             cg.shape_bytes_to_heap_cell(val.into_pointer_value(), name, "ec_ret")?;
+                        if let Some((result_slot, old_cell)) = taken_shell {
+                            cg.free_taken_ec_shape_cell(result_slot, old_cell, name)?;
+                        }
                         cg.builder
                             .build_ptr_to_int(cell, cg.i64(), "ec_ret_shape_bits")
                             .map_err(|e| format!("ec ret shape bits: {e}"))?

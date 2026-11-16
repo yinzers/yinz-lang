@@ -275,13 +275,19 @@ function priceTwo(n: int) -> number errors {
   return 2.5
 }
 
+function relayPrice(n: int) -> number errors {
+  let inner = price(n)
+  return inner
+}
+
 function entrypoint() -> nothing {
   let i: int = 0
   let sum: number = 0.0
   while (i < 50) {
     let a = price(i)
     let b = priceTwo(i)
-    sum = sum + a.or(0.0) + b.or(0.0)
+    let c = relayPrice(i)
+    sum = sum + a.or(0.0) + b.or(0.0) + c.or(0.0)
     i = i + 1
   }
   print(sum)
@@ -293,9 +299,9 @@ function entrypoint() -> nothing {
 #[test]
 fn an_errors_result_of_number_releases_its_payload_cell() {
     at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_r1_ec_number", ERRORS_NUMBER, "200.0\n", no_optimize);
+        let counters = run_balanced("c7_r1_ec_number", ERRORS_NUMBER, "275.0\n", no_optimize);
         assert_heap_balanced("c7_r1_ec_number", &counters, no_optimize);
-        assert_asan_clean("c7_r1_ec_number", ERRORS_NUMBER, "200.0\n", no_optimize);
+        assert_asan_clean("c7_r1_ec_number", ERRORS_NUMBER, "275.0\n", no_optimize);
     });
 }
 
@@ -331,6 +337,11 @@ function describe(share thing: Thing) -> int {
   return -1
 }
 
+function relayBig(count: int) -> Big errors {
+  let inner = makeBig(count)
+  return inner
+}
+
 function entrypoint() -> nothing {
   let fallback: Big = { label: `none`, count: 0 }
   let seed: Big = { label: `seed`, count: 0 }
@@ -340,8 +351,10 @@ function entrypoint() -> nothing {
   while (i < 50) {
     let one = makeBig(i)
     let two = makeThing(i)
+    let three = relayBig(i)
+    let relayed: Big = three.or(fallback)
     let got: Big = one.or(fallback)
-    total = total + got.count + describe(two.or(fallbackThing))
+    total = total + got.count + relayed.count + describe(two.or(fallbackThing))
     i = i + 1
   }
   print(total)
@@ -353,10 +366,10 @@ function entrypoint() -> nothing {
 #[test]
 fn a_shape_returned_through_an_errors_result_is_moved_not_copied_twice() {
     at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_r1_ec_shape", ERRORS_SHAPE, "2450\n", no_optimize);
+        let counters = run_balanced("c7_r1_ec_shape", ERRORS_SHAPE, "3675\n", no_optimize);
         assert_heap_balanced("c7_r1_ec_shape", &counters, no_optimize);
         assert_strings_balanced("c7_r1_ec_shape", &counters, no_optimize);
-        assert_asan_clean("c7_r1_ec_shape", ERRORS_SHAPE, "2450\n", no_optimize);
+        assert_asan_clean("c7_r1_ec_shape", ERRORS_SHAPE, "3675\n", no_optimize);
     });
 }
 
