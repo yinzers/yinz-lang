@@ -2221,6 +2221,11 @@ struct Cg<'ctx, 'g> {
     // or a call result's slot, a union envelope view. Written by `lower_expr`, read by every copy
     // of a value's bytes (`Cg::is_moved_cells`); a value absent from it is copied deep.
     moved_cell_values: std::collections::HashSet<usize>,
+    // The heap envelope cells an explicit `.copy()` of a `maybe` minted (`lower_postfix_op`), keyed by
+    // the LLVM value. A copy is a value nobody else holds, so the one store or binding that takes it
+    // owns its cell and payload as they are (`maybe_to_owned_dest`) instead of copying them again and
+    // orphaning the first copy.
+    minted_maybe_copies: std::collections::HashSet<usize>,
     // C7 slice 3b: the nested-shape cells a `let` or assignment takes out of a temporary
     // (`lower_taken_field`), keyed by the LLVM value of the cell pointer. The store that copies
     // the cell's bytes into the binding frees the emptied cell (`shape_bytes_to_owned`).
@@ -3924,6 +3929,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         heap: bool,
         take: bool,
     ) -> Result<PointerValue<'ctx>, String> {
+        // A cell an explicit `.copy()` minted is held by nobody else: a persist keeps it as it is, a
+        // binding takes its payload and gives the emptied cell back.
+        let minted = self
+            .minted_maybe_copies
+            .contains(&(src_env.as_value_ref() as usize));
+        if minted && heap {
+            return Ok(src_env);
+        }
+        let take = take || minted;
         let owned_env = if heap {
             let raw = self
                 .maybe_type()
@@ -3974,7 +3988,23 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_store(dst_val_gep, final_bits)
             .map_err(|e| format!("{e}"))?;
+        if minted {
+            self.free_minted_maybe_cell(src_env, site)?;
+        }
         Ok(owned_env)
+    }
+
+    /// Give back the empty envelope cell an explicit `.copy()` of a `maybe` minted
+    /// (`minted_maybe_copies`) once its flag and payload bits have been taken out of it.
+    fn free_minted_maybe_cell(&self, cell: PointerValue<'ctx>, site: &str) -> Result<(), String> {
+        let envelope_size = self
+            .maybe_type()
+            .size_of()
+            .ok_or_else(|| format!("{site}: maybe envelope size_of unavailable"))?;
+        self.builder
+            .build_call(self.rt.ynz_free, &[cell.into(), envelope_size.into()], "")
+            .map_err(|err| format!("free the minted copy cell of {site}: {err}"))?;
+        Ok(())
     }
 
     /// THE codegen call that copies a string (`ynz_string_clone`): a fresh counted heap string
@@ -7627,6 +7657,7 @@ fn plain_cg<'ctx, 'g>(
         temporary_frames: Vec::new(),
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
+        minted_maybe_copies: std::collections::HashSet::new(),
         taken_shape_cells: std::collections::HashSet::new(),
         box_cell_views: std::collections::HashSet::new(),
         wait_cache,
@@ -8063,6 +8094,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         temporary_frames: Vec::new(),
         open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
+        minted_maybe_copies: std::collections::HashSet::new(),
         taken_shape_cells: std::collections::HashSet::new(),
         box_cell_views: std::collections::HashSet::new(),
         wait_cache,
@@ -19410,16 +19442,26 @@ fn lower_stmt_return<'ctx>(
                     // heap cell (flag-guarded; the shared promotion discipline, never
                     // a return-side twin). Same never-drop-cells posture as
                     // store_field (FRAGO 009).
+                    // A `.copy()` of a `maybe` already holds its payload in a heap cell of its own: the
+                    // return keeps it and gives the emptied envelope cell back.
+                    let minted = cg
+                        .minted_maybe_copies
+                        .contains(&(env_ptr.as_value_ref() as usize));
                     let moved = cg.is_moved_cells(env_ptr);
-                    let stable_bits = cg.maybe_payload_stable_bits(
-                        flag,
-                        bits,
-                        inner,
-                        "ret_maybe",
-                        true,
-                        moved,
-                        false,
-                    )?;
+                    let stable_bits = if minted {
+                        cg.free_minted_maybe_cell(env_ptr, "ret_maybe")?;
+                        bits
+                    } else {
+                        cg.maybe_payload_stable_bits(
+                            flag,
+                            bits,
+                            inner,
+                            "ret_maybe",
+                            true,
+                            moved,
+                            false,
+                        )?
+                    };
                     let mut env = cg.maybe_type().const_zero();
                     env = cg
                         .builder
@@ -24738,6 +24780,9 @@ fn lower_postfix_op<'ctx>(
                 CopyMode::Body,
                 "copy",
             )?;
+            if matches!(cg.resolve_type(&recv_ty), Type::Maybe { .. }) && val.is_pointer_value() {
+                cg.minted_maybe_copies.insert(val.as_value_ref() as usize);
+            }
             Ok(val)
         }
     }
@@ -26631,6 +26676,8 @@ struct TemporarySlot<'ctx> {
     span: (usize, usize),
     slot: PointerValue<'ctx>,
     ty: Type,
+    /// How the value in the slot sits: the form its release is called with.
+    form: ReleaseForm,
 }
 
 /// The value an assignment replaces (`Cg::begin_assign_release`).
@@ -27415,11 +27462,26 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 )
             })?;
             let ty = self.resolve_type(&ty);
+            // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which).
+            let form = if self
+                .typed
+                .temporaries
+                .is_minted_maybe_copy(span.0, span.1)
+            {
+                ReleaseForm::Cell
+            } else {
+                self.temporary_release_form(&ty)
+            };
             let slot = self.alloca_in_entry_llvm(self.ptr(), "temporary")?;
             self.builder
                 .build_store(slot, self.ptr().const_null())
                 .map_err(|err| format!("null a temporary slot: {err}"))?;
-            frame.push(TemporarySlot { span, slot, ty });
+            frame.push(TemporarySlot {
+                span,
+                slot,
+                ty,
+                form,
+            });
         }
         self.temporary_frames.push(frame);
         Ok(true)
@@ -27478,7 +27540,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.emit_slot_release(
                 temporary.slot,
                 &temporary.ty,
-                self.temporary_release_form(&temporary.ty),
+                temporary.form,
                 true,
                 &format!("temporary{index}"),
                 site,
