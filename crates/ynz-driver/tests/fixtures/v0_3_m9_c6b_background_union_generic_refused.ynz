@@ -1,0 +1,23 @@
+// v0.3-M9 C6 (parked 71): a `background` task copies a union argument into a slot of its own, and
+// can only do that when the callee declares the union type. A generic `T` gives it no slot, so the
+// task would read the spawner's dead frame.
+// Correct behavior: does not compile; the refusal names the union, the parameter, what to
+// declare instead, and why.
+shape Circle {
+  radius: float
+}
+
+shape Tag {
+  name: string
+}
+
+function eat<T>(held: T) -> nothing {
+  print(`ate`)
+}
+
+function entrypoint() -> nothing {
+  let tag: Tag = { name: `boxed` }
+  let choice: Circle | Tag = tag
+  background eat(choice)
+  wait sleep(50)
+}

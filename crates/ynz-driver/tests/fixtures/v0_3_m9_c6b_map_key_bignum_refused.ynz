@@ -1,0 +1,7 @@
+// v0.3-M9 C6: a map key must be found by value. A `number` of up to 34 digits is held in 128
+// bits and is; a `number<50>` is a heap bignum and would be compared by address.
+// Correct behavior: does not compile; the refusal names the type, a key to use, and why.
+function entrypoint() -> nothing {
+  let totals: map<number<50>, int> = {}
+  print(totals.count())
+}
