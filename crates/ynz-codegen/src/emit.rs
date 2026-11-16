@@ -18095,9 +18095,17 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
         cg.locals.insert(var.to_string(), var_slot);
 
+        // `ynz_string_codepoint_at` builds a fresh one-character string for each pass: the loop owns
+        // it for its iteration (a store of the variable copies it, `non_owned_reads`), so the
+        // iteration end releases it, and so does a `return` or an auto-propagation inside the body
+        // (`open_loop_copies`).
+        let open_copies = cg.open_loop_copies.len();
+        cg.open_loop_copies.push((ch_ptr, Type::String));
         lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         if !is_block_terminated(cg) {
+            release_owned_read(cg, ch_ptr, &Type::String, "si_char")?;
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "si_ni")

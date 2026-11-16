@@ -162,3 +162,51 @@ fn a_bignum_local_and_a_bignum_temporary_are_released() {
         }
     });
 }
+
+const STRING_LOOP_KEEPS: &str = "
+function firstVowel(word: string) -> string {
+  for (letter in word) {
+    if (letter == `e` || letter == `o`) {
+      return letter
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let kept: array<string> = []
+  let last: string = `-`
+  for (c in `abc`) {
+    let same: string = c
+    kept.add(c)
+    last = c
+    print(same)
+  }
+  print(kept.count())
+  print(last)
+  print(firstVowel(`hello`))
+  print(firstVowel(`xyz`))
+}
+";
+
+/// A string loop's variable stored, assigned, bound or returned inside the body leaves the
+/// per-character release exactly one owner each: no leak and no double free (High).
+#[test]
+fn a_string_loop_variable_that_is_kept_is_copied_not_released_twice() {
+    let expected = "a\nb\nc\n3\nc\ne\nnone\n";
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced(
+            "c7_r1_for_string_keep",
+            STRING_LOOP_KEEPS,
+            expected,
+            no_optimize,
+        );
+        assert_strings_balanced("c7_r1_for_string_keep", &counters, no_optimize);
+        assert_asan_clean(
+            "c7_r1_for_string_keep",
+            STRING_LOOP_KEEPS,
+            expected,
+            no_optimize,
+        );
+    });
+}
