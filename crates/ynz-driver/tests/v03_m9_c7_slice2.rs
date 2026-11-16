@@ -717,3 +717,61 @@ case!(
     Balance::HeapAndStrings,
     "`return` in a map loop whose body writes the map: the entry's key and value copies are released only at the iteration end (High)"
 );
+
+// ── Item 3: every owner of an alias class that escapes is released ──────────────────────────
+
+const JOINED_OWNERS_ESCAPE: &str = "
+function eat(give rows: array<array<int>>) -> int {
+  return rows.count()
+}
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let total: int = 0
+  while (i < 20) {
+    let rows: array<array<int>> = [[1, 2]]
+    let backup: array<int> = [7]
+    let picked: array<int> = rows[0].or(backup)
+    let seen: int = picked.count()
+    total = total + eat(rows) + seen
+    i = i + 1
+  }
+  print(total)
+}
+";
+
+case!(
+    a_joined_owner_is_released_when_its_classmate_is_given,
+    JOINED_OWNERS_ESCAPE,
+    "60\n",
+    Balance::Heap,
+    "`rows[0].or(backup)` joins `backup` to `rows`' class; giving `rows` made the class escape, so `backup` (an owner of its own allocation) leaked per pass (High)"
+);
+
+const JOINED_OWNERS_RETURNED: &str = "
+function choose(share rows: array<array<int>>) -> array<int> {
+  let backup: array<int> = [7]
+  let picked: array<int> = rows[0].or(backup)
+  return picked
+}
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let total: int = 0
+  while (i < 20) {
+    let rows: array<array<int>> = [[1, 2]]
+    let chosen: array<int> = choose(rows)
+    total = total + chosen.count()
+    i = i + 1
+  }
+  print(total)
+}
+";
+
+case!(
+    a_joined_owner_is_released_when_a_piece_of_its_class_is_returned,
+    JOINED_OWNERS_RETURNED,
+    "40\n",
+    Balance::Heap,
+    "`return picked` copies `picked`; `backup`, joined to it, was marked returned with its class and leaked per call (High)"
+);
