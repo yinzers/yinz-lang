@@ -26082,27 +26082,16 @@ type StoredRelease<'ctx> = Option<(PointerValue<'ctx>, bool)>;
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// True when `expr` is a call of a function written in Yinz (this module's or an imported
-    /// one): a dot-call reaches one only on a `Shape` or `dynamic` receiver, as typeck's
-    /// `is_user_call` says. Such a call returns an owned value: a `maybe`'s shape or number payload
+    /// one): typeck's `string_ownership::is_user_call`, over `TypedModule::callable_fns`. Such a call returns an owned value: a `maybe`'s shape or number payload
     /// is a heap cell the return made and its string a clone it made.
     ///
     /// O(1) time.
     fn is_user_call(&self, expr: &Expr) -> bool {
-        let known = |name: &str| {
-            self.sig_table.fns.contains_key(name) || self.imported_fns.contains_key(name)
-        };
-        match expr {
-            Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _) if known(name)),
-            Expr::MethodCall {
-                receiver, method, ..
-            } => {
-                matches!(
-                    self.expr_type(receiver),
-                    Type::Shape { .. } | Type::Dynamic { .. }
-                ) && known(method)
-            }
-            _ => false,
-        }
+        ynz_typeck::string_ownership::is_user_call(
+            expr,
+            &self.typed.expr_types,
+            &self.typed.callable_fns,
+        )
     }
 
     /// Does the callee take any parameter written `give`? Unknown callees (imported, generic
@@ -26713,12 +26702,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .as_global_value()
                     .as_pointer_value(),
             ),
-            _ if !local && matches!(inner, Type::Number { precision } if precision <= 34) => Some(
-                self.rt
-                    .ynz_number_cell_free
-                    .as_global_value()
-                    .as_pointer_value(),
-            ),
+            _ if !local
+                && matches!(inner, Type::Number { precision } if precision <= ynz_typeck::types::DECIMAL128_MAX_PRECISION) =>
+            {
+                Some(
+                    self.rt
+                        .ynz_number_cell_free
+                        .as_global_value()
+                        .as_pointer_value(),
+                )
+            }
             _ => None,
         };
         let Some(glue) = payload_release else {
@@ -27895,7 +27888,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         match ty {
             Type::Maybe { inner } => match self.resolve_type(inner) {
                 Type::String | Type::Shape { .. } => ReleaseForm::Value,
-                Type::Number { precision } if precision <= 34 => ReleaseForm::Value,
+                Type::Number { precision }
+                    if precision <= ynz_typeck::types::DECIMAL128_MAX_PRECISION =>
+                {
+                    ReleaseForm::Value
+                }
                 _ => ReleaseForm::Local,
             },
             _ => ReleaseForm::Local,
