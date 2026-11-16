@@ -88,9 +88,25 @@ took out of a temporary is null, `lower_taken_field`). Rust's `Box` drop has no 
 
 The check costs 0.1–0.25 ns per release (0.4–1.1 ms over 4.2 million releases, 1–2.5%), a
 predictable never-taken branch. It is a measurable cost over Rust's `Box` drop, small, and only
-where the cell's origin is opaque. **Reported, not changed.** If it matters, the cheap removal is to
-emit the check only for a shape type some `Take` in the module reads a field of (a nulled field is
-only ever in a temporary of the taking module, released by that module's own release function).
+where the cell's origin is opaque. **Changed in C7 slice 4**: the check is emitted only for a shape some
+`Take` in the module moves out (`NonOwnedReads::takes_nested_shape`; a nulled field is only ever in a
+temporary of the taking module, released by that module's own release function).
+
+**Re-measure after the change** (slice 4). `proj`: `helpers` exports `Tag { id }`, `Wrap { inner: Tag, count }`
+and `make`; `entrypoint` runs `let wrap = make(i)`, `acc = acc + wrap.count` 2^22 times (the cell is
+never read, otherwise LLVM proves it non-null and folds the check in both builds). Both builds are the
+`--no-optimize` IR of each module, compiled separately by `clang -O2` and linked against the
+release-profile runtime. The "with check" build is the same compiler with the condition forced on.
+Optimized IR of the entry module: 1 `icmp eq ptr .., null` with the check, 0 without. Medians of 31
+alternating runs, three rounds:
+
+| | with the check | without (slice 4) |
+|---|---|---|
+| 2^22 allocate + release | 42.2, 41.6, 41.6 ms | 41.3, 41.5, 41.4 ms |
+
+The difference is 0.05-0.9 ms over 4.2 million releases (0.01-0.2 ns each), inside the run-to-run
+spread; the check is gone from the IR, which is what the change promises. Both forms are pinned by
+`v03_m9_c7_slice4`.
 
 ## 4. What costs more than Rust (for the lead)
 
