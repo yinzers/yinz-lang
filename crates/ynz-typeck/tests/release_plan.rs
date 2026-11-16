@@ -508,13 +508,13 @@ fn only_a_kind_with_frame_backing_feeds_the_crossing_set() {
     );
     assert_eq!(
         crossing_names(&output, "sleeper", Names::User),
-        vec!["label".to_string(), "rows".to_string()],
-        "the array and the flat shape cross (frame backed: a shape is embedded in the frame); \
-         `fixed<string>` has no frame home yet"
+        vec!["label".to_string(), "rows".to_string(), "words".to_string()],
+        "the array, the flat shape and the `fixed` list cross (each has a frame home)"
     );
     assert!(ReleaseKind::Array.has_frame_backing());
     assert!(ReleaseKind::Shape.has_frame_backing());
-    assert!(!ReleaseKind::Fixed.has_frame_backing());
+    assert!(ReleaseKind::Fixed.has_frame_backing());
+    assert!(!ReleaseKind::Dynamic.has_frame_backing());
 }
 
 // ── The crossing set ────────────────────────────────────────────────────────────────────────

@@ -2362,6 +2362,8 @@ struct Cg<'ctx, 'g> {
     sm_crossing_maybe_regions: HashMap<String, PointerValue<'ctx>>,
     // The payload type of each region-homed `maybe` crossing local.
     sm_crossing_maybe_inner: HashMap<String, Type>,
+    // Crossing `fixed` list locals homed in a frame region, by name: the region and its byte size.
+    sm_crossing_fixed_regions: HashMap<String, (PointerValue<'ctx>, u64)>,
     // While a binding of a region-homed `maybe` is being stored: the region (envelope) and the place
     // its shape or number payload goes (`maybe_to_owned_dest` reads them instead of allocating).
     maybe_env_dest: std::cell::Cell<Option<PointerValue<'ctx>>>,
@@ -7989,6 +7991,7 @@ fn plain_cg<'ctx, 'g>(
         sm_crossing_shape_regions: HashMap::new(),
         sm_crossing_maybe_regions: HashMap::new(),
         sm_crossing_maybe_inner: HashMap::new(),
+        sm_crossing_fixed_regions: HashMap::new(),
         maybe_env_dest: std::cell::Cell::new(None),
         maybe_payload_dest: std::cell::Cell::new(None),
         sm_crossing_unions: HashMap::new(),
@@ -8438,6 +8441,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_shape_regions: HashMap::new(),
         sm_crossing_maybe_regions: HashMap::new(),
         sm_crossing_maybe_inner: HashMap::new(),
+        sm_crossing_fixed_regions: HashMap::new(),
         maybe_env_dest: std::cell::Cell::new(None),
         maybe_payload_dest: std::cell::Cell::new(None),
         sm_crossing_unions: HashMap::new(), // populated in Step 1b' below
@@ -8875,6 +8879,41 @@ fn lower_function_with_waits<'ctx, 'g>(
         }
         cg_resume.sm_crossing_maybe_regions = maybe_regions;
         cg_resume.sm_crossing_maybe_inner = maybe_inner;
+    }
+
+    // Step 1b''' — the frame region of every crossing `fixed` list local, wired like a `maybe`'s.
+    {
+        let mut fixed_regions: HashMap<String, (PointerValue<'ctx>, u64)> = HashMap::new();
+        for (pos, cname) in crossing_names.iter().enumerate() {
+            let Some(Type::BuiltinFixed {
+                elem,
+                size: Some(count),
+            }) = crossing_frame_type(&f.body.stmts, cname, typed, shape_table)
+            else {
+                continue;
+            };
+            let slot_idx = crossing_slot_indices[pos];
+            let region_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + ((slot_idx + 1) as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                region_offset,
+                &format!("{cname}_fixed"),
+            )?;
+            let alloca = *cg_resume
+                .locals
+                .get(cname)
+                .ok_or_else(|| format!("sm fixed wire: alloca for `{cname}` missing"))?;
+            cg_resume
+                .builder
+                .build_store(alloca, region)
+                .map_err(|e| format!("sm fixed wire store {cname}: {e}"))?;
+            cg_resume.sm_region_flags.insert(cname.clone(), slot_idx);
+            fixed_regions.insert(cname.clone(), (region, fixed_region_bytes(&elem, count)));
+        }
+        cg_resume.sm_crossing_fixed_regions = fixed_regions;
     }
 
     // Step 2 — Emit the switch on resume_point (still in sm_entry, after allocas).
@@ -9896,6 +9935,14 @@ fn reload_params_from_frame<'ctx>(
                         cg.builder.build_store(alloca, view).map_err(|err| {
                             format!("sm crossing reload union store {cname}: {err}")
                         })?;
+                    } else if let Some((region, _)) =
+                        cg.sm_crossing_fixed_regions.get(cname.as_str()).copied()
+                    {
+                        // A `fixed` list homed in a frame region: re-wired like a `maybe`.
+                        let wired = cg.null_if_moved(bits, region, cname)?;
+                        cg.builder.build_store(alloca, wired).map_err(|err| {
+                            format!("sm crossing reload fixed store {cname}: {err}")
+                        })?;
                     } else if let Some(region) =
                         cg.sm_crossing_maybe_regions.get(cname.as_str()).copied()
                     {
@@ -10445,7 +10492,9 @@ fn flush_var_slot_to_frame<'ctx>(
         // Envelope union (or `errors` union result): its value lives in a frame region.
         return cg.flush_crossing_union(name, alloca, frame_ptr, slot_idx);
     }
-    if cg.sm_crossing_maybe_regions.contains_key(name) {
+    if cg.sm_crossing_maybe_regions.contains_key(name)
+        || cg.sm_crossing_fixed_regions.contains_key(name)
+    {
         // A `maybe` homed in a frame region: its bytes are already live there and the first slot is
         // its moved flag, which only a move, a release and a bind write.
         return Ok(());
@@ -13217,6 +13266,21 @@ fn maybe_region_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> Opt
     }
 }
 
+/// The bytes of a `fixed<elem>` list of `count` cells: 16 per decimal128 cell, 8 otherwise (the
+/// block `Cg::fixed_block_type` lays out).
+fn fixed_region_bytes(elem: &Type, count: usize) -> u64 {
+    let cell = match elem {
+        Type::Number { precision } if *precision <= 34 => DECIMAL_CELL_SIZE,
+        _ => 8,
+    };
+    count as u64 * cell
+}
+
+/// Frame slots a `fixed` region of `bytes` takes, with the alignment slack.
+fn fixed_frame_slots(bytes: u64) -> usize {
+    bytes.div_ceil(8) as usize + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
+}
+
 /// Frame slots a `maybe` region of `payload_bytes` takes: the envelope, the payload behind it,
 /// and the alignment slack `shape_frame_region_ptr` rounds into.
 fn maybe_frame_slots(payload_bytes: u64) -> usize {
@@ -13251,6 +13315,11 @@ fn crossing_local_slot_count(
         },
         // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
         Some(Type::Shape { name: ref sname }) => 1 + shape_frame_slots(sname, shape_abi_sizes),
+        // A `fixed` list: its moved flag, then its cells.
+        Some(Type::BuiltinFixed {
+            ref elem,
+            size: Some(count),
+        }) => 1 + fixed_frame_slots(fixed_region_bytes(elem, count)),
         // A `maybe`: its moved flag, then the envelope and payload region.
         Some(Type::Maybe { ref inner }) => match maybe_region_payload_bytes(inner, shape_abi_sizes)
         {
@@ -20773,6 +20842,15 @@ fn store_binding_of_read<'ctx>(
     slot: PointerValue<'ctx>,
     name: &str,
 ) -> Result<(), String> {
+    // A `fixed` list homed in a frame region takes the cells of the block it was given.
+    if let Some((region, bytes)) = cg.sm_crossing_fixed_regions.get(name).copied() {
+        cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+        let source = val.into_pointer_value();
+        cg.builder
+            .build_memmove(region, 8, source, 8, cg.i64().const_int(bytes, false))
+            .map_err(|err| format!("{name}: copy the cells into the fixed region: {err}"))?;
+        return store(cg, region.into(), ty, slot);
+    }
     // A `maybe` homed in a frame region is copied INTO the region (envelope, then a shape or
     // decimal payload behind it); the bind makes the local live again.
     let Some(region) = cg.sm_crossing_maybe_regions.get(name).copied() else {

@@ -372,3 +372,21 @@ function entrypoint() -> nothing {
 ";
     assert_balanced("maybe_given_one_path", source, "3\ndone\n");
 }
+
+/// Bug it catches: a `fixed` list's cells sat on the resume stack, so a whole-list reassignment
+/// and an element `set` before a `wait` released (or kept) cells of a dead block.
+#[test]
+fn fixed_list_reassigned_and_updated_before_a_wait_is_released_once() {
+    let source = "
+function entrypoint() -> nothing {
+  let list: fixed<string> = [`p-${1}`, `q-${2}`]
+  let other: fixed<string> = [`r-${3}`, `s-${4}`]
+  list = other
+  list.set(0, `t-${5}`)
+  print(list.count())
+  wait sleep(1)
+  print(`done`)
+}
+";
+    assert_balanced("fixed_reassigned", source, "2\ndone\n");
+}

@@ -143,6 +143,7 @@ impl ReleaseKind {
                 | ReleaseKind::Union
                 | ReleaseKind::NestedShape
                 | ReleaseKind::Maybe
+                | ReleaseKind::Fixed
         )
     }
 }
