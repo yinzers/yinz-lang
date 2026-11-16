@@ -128,7 +128,7 @@ pub enum OmitReason {
     NotOwner,
     /// A `share`/`lend`/bare parameter is in its class: the caller owns the value.
     CallerOwns,
-    /// A non-owner outlives every owner (`NoStaticFounder`): C7 decides with a run-time flag.
+    /// A non-owner outlives every owner (`NoStaticFounder`): an untraceable result; nothing releases it.
     NoStaticFounder,
     /// The type is a type parameter of a generic function.
     TypeParameter,

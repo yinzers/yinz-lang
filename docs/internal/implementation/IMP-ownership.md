@@ -300,14 +300,14 @@ The reassignment rule in one line: `rows = other` is a store, so `other` is hand
 - **anchor**: `Founder` = the owner whose scope exits last, earliest declared on a tie; `CallerOwns` (a borrowed parameter is in the class); `NoOwner` (all pieces: the allocation belongs to code this function cannot see); `NoStaticFounder(OutlivedByNonOwner)` (a non-owner outlives every owner, so which value it holds at the owner's exit is known only at run time — reported, never guessed);
 - **escapes** on at least one path: returned, given, sent, or stored (`Escape::Stored { place }`: the place owns the value from then on, a temporary included). A store never joins two classes; classes join only where a name keeps reading a piece of another value (a field, an item, a loop cell, a call result that is a piece of its argument) or an untraceable result.
 
-**The two anchors with no static release point are C7's, decided** (Software Architect ruling, plan #17 C5a). The record reports them; it does not release them. Each is pinned by a typeck-fact test now and gets its ASan fixture when C7 lands:
+**The two anchors with no static release point are C7's, decided** (Software Architect ruling, plan #17 C5a). The record reports them; it does not release them. Each is pinned by a typeck-fact test now:
 
 | anchor | what C7 does | typeck-fact fixture (`ynz-typeck/tests/transfer_record.rs`) |
 |---|---|---|
-| `NoStaticFounder(OutlivedByNonOwner)` | a run-time drop flag decides, where the holder's value is known only at run time, which value is released | `a_non_owner_that_outlives_the_owner_leaves_no_static_founder` |
+| `NoStaticFounder(OutlivedByNonOwner)` | nothing is released (a leak, never an early free). A read that would outlive its root is a copy (a copy owner), so what is left is an untraceable result (an imported call that returns a `maybe`, union or type parameter) held outside its argument's scope; no drop flag (decided: Chief Architect) | `a_non_owner_that_outlives_the_owner_leaves_no_static_founder` |
 | `NoOwner` | the temporary is released at the end of the statement that made it (a piece of a temporary, a loop cell of a temporary, an imported function's result); no binding has a release duty | `a_piece_of_a_temporary_is_recorded_as_no_owner`, `a_loop_cell_of_a_temporary_is_recorded_as_no_owner`, `an_imported_functions_result_is_recorded_as_no_owner` |
 
-Until C7, neither anchor is released (a leak, never an early or double free).
+`NoOwner` is released at statement end since slice 2; `NoStaticFounder` is never released (a leak, never an early or double free).
 
 A hole in the recorder's own bookkeeping (an event with no function being walked or naming an undeclared binding, a binding with no codegen name, a class with no anchor candidate) is never skipped: it is kept as a string in `TransferRecord::internal_errors`, and `TypedModule::with_codegen_names` fails on it with the other record holes, so `codegen_query` reports the compiler-bug diagnostic and builds nothing.
 
@@ -333,7 +333,7 @@ Entries are keyed by `DeclKey` and the unique codegen name (`BindingNames`), nev
 | `ReleaseIfLive(kind)` | moved on some paths, or on every path for a reassigned owner (an assignment may revive it): release if the slot is non-null; every move site nulls the founder's slot (`MoveSite`) | live scope (`ScopeEntry::consumed_on_every_path`), or `string_moves` for strings |
 | `Omitted(Moved)` | given, sent or stored on every path | live scope |
 | `Omitted(Returned)` | the returned value is or reaches its class | the returned value's holders |
-| `Omitted(NotOwner / CallerOwns / NoStaticFounder)` | another member founds the class; a borrowed parameter is in it; a non-owner outlives every owner (C7's run-time flag) | transfer-record anchor |
+| `Omitted(NotOwner / CallerOwns / NoStaticFounder)` | another member founds the class; a borrowed parameter is in it; a non-owner outlives every owner (an untraceable result; nothing is released) | transfer-record anchor |
 | `Omitted(TypeParameter)` | the value's type is, or holds, a type parameter of a generic function: the body alone cannot say whether it owns heap | `heap_class_of` |
 
 **Every binding whose value owns heap is listed, whatever the kind** (`heap_class_of`, one type fact): `string`, `array`, `map`, `channel`, background task handle, a flat shape with heap fields, a shape holding a shape (each shape-typed field is a heap cell; a recursive or undescribed shape is assumed to own heap), `maybe` / union / `fixed` with a heap-owning content, `dynamic`, a map entry with a heap-owning key or value, and every errors-capable value (the error object is heap). A type that cannot own heap (`int`, `boolean`, `options`, a shape of ints, a `maybe` of bits) is not listed. How codegen releases each kind is C6/C7's job; the record only has to be complete, and the corpus parity test rejects an omission with no reason. Generic bodies are checked once, so their lists apply to every instance.
@@ -390,6 +390,8 @@ A plain (non-suspending) function releases its heap locals at every exit edge of
 - **Returns.** A string, array, map or shape that a `return` does not move is copied at the `return`, so it marks no binding returned; any other type keeps the class spread (`Checker::returned_holders_of`).
 
 **Hand-over to slice 3.**
+- *A `maybe` binding leaks its payload copy* (`let x: maybe<string> = table.get(k)`; `v0_3_m9_c6_borrow_map_growth_overwrite` frees 163 of 165 strings): `Maybe` is a slice-3 kind. TRIGGER: slice 3 releases `Maybe`.
+- *`NoStaticFounder` is left only for an untraceable result* (see "No drop flags"); 0 instances in the corpus, one synthetic pin in `transfer_record.rs`.
 - *Nested-shape pieces of a temporary move instead of copying* (`let x = make().inner`, `inner` a shape; Golden Rule 8). Moved to slice 3 (Chief Architect ruling): it needs the nested shape's own release, and `NestedShape` is a slice-3 kind. WHAT: take the nested cell pointer, null the field, skip it in the temporary's release. NEEDS: `plain_releases_kind` and `temporaries.rs` releasing `NestedShape`, and a null-tolerant nested-cell release (`stored_release` of a shape field reads the cell's fields). COST until then: the piece is deep-copied (one copy per such `let`) and the temporary leaks. TRIGGER: slice 3 releases nested shapes.
 
 Pinned by `v03_m9_release_safety` (ASan, both optimization levels, counters) and `v03_m9_c7_*`.
