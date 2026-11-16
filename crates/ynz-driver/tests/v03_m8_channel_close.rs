@@ -448,9 +448,10 @@ fn m8_p4_fix2_builder_with_a_computed_scalar_local_is_fresh_and_sends() {
     assert_runs_with_parity(
         "v0_3_m8_p4_builder_with_computed_scalar_is_fresh.ynz",
         "1\n3\nend\n",
-        4,
-        "the received one-element array (2 counted allocs) held by the consumer, plus the \
-         bucket's rows array (2 counted allocs) held by `bucket` — nothing is freed at scope exit",
+        2,
+        "the received one-element array (2 counted allocs) held by the consumer, which a resume \
+         function does not release yet (an array crossing no `wait`); the bucket is a flat shape \
+         the resume function now releases at its scope exit (C8 slice 4a)",
     );
 }
 

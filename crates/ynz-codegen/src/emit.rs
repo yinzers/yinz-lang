@@ -5149,11 +5149,29 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         nullable: bool,
         site: &str,
     ) -> Result<(), String> {
-        let layout = self.union_layout(variants)?;
-        let slot_ty = self.union_slot_llvm(&layout);
         // A source typeck says a store takes by move hands over the boxes its shape variant owns;
         // any other source keeps them, so the slot clones them (`clone_shape_variant_into_slot`).
         let deep = !self.is_moved_cells(src);
+        self.union_persist_into_core(src, dst, variants, nullable, deep, site)
+    }
+
+    /// `union_persist_into_as` with the move decision made by the caller: `deep` false hands the
+    /// boxes the source owns to the slot. A crossing union local's flush passes false: its source
+    /// is the binding's own slot (or the region itself), which the region replaces as the value's
+    /// one home, so cloning would leave the replaced slot's boxes with no owner.
+    ///
+    /// Time and space: as `union_persist_into`
+    fn union_persist_into_core(
+        &self,
+        src: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        variants: &[Type],
+        nullable: bool,
+        deep: bool,
+        site: &str,
+    ) -> Result<(), String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
         let done_bb = self.append_block(&format!("{site}_persist_done"));
         if nullable {
             let none_bb = self.append_block(&format!("{site}_persist_none"));
@@ -6147,7 +6165,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_load(self.ptr(), alloca, &format!("{site}_view"))
                 .map_err(|err| format!("{site}: load the union view: {err}"))?
                 .into_pointer_value();
-            self.union_persist_into(view, crossing.region, &crossing.variants, &site)?;
+            self.union_persist_into_core(
+                view,
+                crossing.region,
+                &crossing.variants,
+                self.union_has_nothing(&crossing.variants),
+                false,
+                &site,
+            )?;
             let region_view =
                 self.union_slot_to_value(crossing.region, &crossing.variants, &site)?;
             self.builder
@@ -32604,7 +32629,10 @@ pub fn union_region_roles(
         if !ynz_typeck::check::is_envelope_union(ty) {
             return Ok(None);
         }
-        Ok(Some(shape_types.union_layout(variants)?.slot_size))
+        Ok(Some(
+            shape_types.union_layout(variants)?.slot_size
+                + state_machine::FRAME_SHAPE_REGION_SLACK_BYTES,
+        ))
     };
     // A returned `maybe` of an envelope union rides the `Return` region like the union itself.
     let return_slot_size = |ty: &Type| -> Result<Option<u64>, String> {

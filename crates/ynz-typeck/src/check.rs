@@ -1990,6 +1990,7 @@ impl<'b> Checker<'b> {
             let CrossingNames {
                 names: crossings,
                 arg_escape_only,
+                release_only,
             } = crossing_local_names_with_provenance(
                 &f.body.stmts,
                 &param_names_ref,
@@ -2009,6 +2010,9 @@ impl<'b> Checker<'b> {
                 &release_reads,
             );
             for crossing_name in &crossings {
+                if release_only.contains(crossing_name.as_str()) {
+                    continue;
+                }
                 // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
                 // whose ONLY crossing provenance is arg-escape is held in a frame region of its
                 // own (the union slot, payload inline; `crossing_local_slot_count` in codegen) —
@@ -2124,6 +2128,11 @@ impl<'b> Checker<'b> {
             // additionally check the iterator's element type via find_for_loop_var_type_in_stmts.
             // Any unsupported type in any source triggers the guard.
             for crossing_name in &crossings {
+                // A local that crosses only through its release is not read after a `wait`: nothing
+                // here would be rejected for it (`CrossingNames::release_only`).
+                if release_only.contains(crossing_name.as_str()) {
+                    continue;
+                }
                 // RHS expression type (catches let-binding inferred types).
                 let rhs_ty = find_crossing_local_typeck_type_in_map(
                     &f.body.stmts,
@@ -13440,6 +13449,13 @@ pub struct CrossingNames {
     pub names: Vec<String>,
     /// Names whose only crossing provenance is the arg-escape collector.
     pub arg_escape_only: std::collections::HashSet<String>,
+    /// Names that cross ONLY because a scope-exit release is a read after a suspension: every
+    /// crossing span the one lexical scan recorded for the name is a release read
+    /// (`ReleaseReads::synthetic_read_spans`), and no arg-escape or conduit collector marked it.
+    /// The user never reads such a local after a `wait`, so the guards that reject a read after a
+    /// `wait` (Check 2, Check 2b, the M3d probe, back-edge admission) skip it; codegen gives it a
+    /// frame home so its release reads live bytes. ONE fact, read by every guard.
+    pub release_only: std::collections::HashSet<String>,
 }
 
 /// Provenance-returning core behind [`crossing_local_names`] /
@@ -13484,6 +13500,19 @@ pub fn crossing_local_names_with_provenance(
                 None
             }
         })
+        .collect();
+    let lexical_names = names.len();
+    // A crossing recorded at a release read is not the user reading the local after a suspension.
+    let synthetic_spans = release_reads.synthetic_read_spans();
+    let release_only: std::collections::HashSet<String> = names[..lexical_names]
+        .iter()
+        .filter(|name| {
+            crossings
+                .iter()
+                .filter(|c| c.name == **name)
+                .all(|c| synthetic_spans.contains(&(c.use_span.start, c.use_span.end)))
+        })
+        .cloned()
         .collect();
     // v0.3-M4: every conduit-typed local (`channel<T>` / background task handle) is marked
     // crossing — a SOUND over-approximation (recorded in the plan). The conduit local IS the
@@ -13542,10 +13571,11 @@ pub fn crossing_local_names_with_provenance(
     let arg_escape_only: std::collections::HashSet<String> = arg_escape_qualified
         .into_iter()
         .filter(|name| {
-            crossings
-                .iter()
-                .filter(|c| c.name == *name)
-                .all(|c| arg_spans.contains(&(c.use_span.start, c.use_span.end)))
+            crossings.iter().filter(|c| c.name == *name).all(|c| {
+                // A release read is not a read by the user (`release_only`).
+                let span = (c.use_span.start, c.use_span.end);
+                arg_spans.contains(&span) || synthetic_spans.contains(&span)
+            })
         })
         .map(str::to_string)
         .collect();
@@ -13569,6 +13599,7 @@ pub fn crossing_local_names_with_provenance(
     CrossingNames {
         names,
         arg_escape_only,
+        release_only,
     }
 }
 
@@ -15454,6 +15485,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
     let CrossingNames {
         names: crossings,
         arg_escape_only,
+        release_only,
     } = crossing_local_names_with_provenance(
         &f.body.stmts,
         &param_names_ref,
@@ -15500,7 +15532,10 @@ pub(crate) fn suspension_guards_fire_for_fn(
                         .iter()
                         .any(|field| matches!(&field.ty, Type::Shape { .. }))
                 });
-            if has_nested_shape && !arg_escape_union_ok {
+            if has_nested_shape
+                && !arg_escape_union_ok
+                && !release_only.contains(crossing_name.as_str())
+            {
                 return true;
             }
         }
@@ -15530,7 +15565,11 @@ pub(crate) fn suspension_guards_fire_for_fn(
         });
         let arg_escape_maybe_ok = arg_escape_only.contains(crossing_name.as_str())
             && matches!(effective_ty, Some(Type::Maybe { .. }));
-        if effective_ty.is_some() && !arg_escape_maybe_ok && !arg_escape_union_ok {
+        if effective_ty.is_some()
+            && !arg_escape_maybe_ok
+            && !arg_escape_union_ok
+            && !release_only.contains(crossing_name.as_str())
+        {
             return true;
         }
 

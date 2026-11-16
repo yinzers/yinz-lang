@@ -401,6 +401,11 @@ pub const FRAME_SHAPE_REGION_ALIGN: u32 = 16;
 pub const FRAME_SHAPE_REGION_SLACK_SLOTS: usize =
     ((FRAME_SHAPE_REGION_ALIGN as u64 - FRAME_LOCAL_SLOT_SIZE) / FRAME_LOCAL_SLOT_SIZE) as usize;
 
+/// [`FRAME_SHAPE_REGION_SLACK_SLOTS`] in bytes: what a union region of a frame layout reserves beyond
+/// its slot so that [`frame_region_ptr`] can round the region up to [`FRAME_SHAPE_REGION_ALIGN`].
+pub const FRAME_SHAPE_REGION_SLACK_BYTES: u64 =
+    FRAME_SHAPE_REGION_SLACK_SLOTS as u64 * FRAME_LOCAL_SLOT_SIZE;
+
 /// The ONE producer of a frame-embedded shape's region pointer: `frame_ptr + byte_offset`
 /// rounded up to [`FRAME_SHAPE_REGION_ALIGN`].
 ///
@@ -1050,8 +1055,11 @@ pub fn default_target_machine(
         .ok_or_else(|| "LLVM: failed to create target machine".to_string())
 }
 
-/// Return a GEP pointer to the frame region at `region_byte_offset` within `frame_ptr` (a union
-/// slot a `UnionRegion` reserves). Produces a pointer without reading or writing it.
+/// Return a pointer to the frame region at `region_byte_offset` within `frame_ptr` (a union slot a
+/// `UnionRegion` reserves), rounded up to [`FRAME_SHAPE_REGION_ALIGN`] by [`shape_frame_region_ptr`]:
+/// a union slot holds shape variants whose `number` fields are `align 16` i128 loads, and the
+/// region's frame offset is only 8-aligned (a child sub-frame sits at any 8-multiple of its parent).
+/// `UnionRegion::size` includes the slack. Produces a pointer without reading or writing it.
 ///
 /// Time: O(1)  Space: O(1)
 pub fn frame_region_ptr<'ctx>(
@@ -1061,15 +1069,6 @@ pub fn frame_region_ptr<'ctx>(
     region_byte_offset: u64,
     name: &str,
 ) -> Result<PointerValue<'ctx>, String> {
-    // SAFETY: the offset comes from `FrameLayout::union_regions`, inside the composed frame.
-    unsafe {
-        builder
-            .build_gep(
-                ctx.i8_type(),
-                frame_ptr,
-                &[ctx.i64_type().const_int(region_byte_offset, false)],
-                name,
-            )
-            .map_err(|err| format!("frame_region_ptr gep {name}: {err}"))
-    }
+    // The offset comes from `FrameLayout::union_regions`, which reserved the slack the rounding uses.
+    shape_frame_region_ptr(ctx, builder, frame_ptr, region_byte_offset, name)
 }

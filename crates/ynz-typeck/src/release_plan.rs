@@ -125,6 +125,8 @@ impl ReleaseKind {
                 | ReleaseKind::Map
                 | ReleaseKind::Channel
                 | ReleaseKind::TaskHandle
+                | ReleaseKind::Shape
+                | ReleaseKind::Union
         )
     }
 }
@@ -519,6 +521,18 @@ impl ReleaseReads {
             && covers_edge(&self.block_end, &earlier.block_end)
             && covers_edge(&self.return_edge, &earlier.return_edge)
             && covers_edge(&self.propagation_edge, &earlier.propagation_edge)
+    }
+
+    /// The spans of the reads `with_reads` adds. None is the span of a source expression (a block
+    /// end and a propagation read are zero-width, a `return` read has the statement's own span), so
+    /// a crossing whose `use_span` is in this set was caused by a release alone, never by user code.
+    ///
+    /// O(e) time and memory for e edges.
+    pub fn synthetic_read_spans(&self) -> HashSet<Span> {
+        let block_ends = self.block_end.keys().map(|span| (span.1, span.1));
+        let returns = self.return_edge.keys().copied();
+        let propagations = self.propagation_edge.keys().map(|span| (span.1, span.1));
+        block_ends.chain(returns).chain(propagations).collect()
     }
 
     /// True when no edge releases anything.
