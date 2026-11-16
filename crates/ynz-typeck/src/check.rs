@@ -3310,7 +3310,8 @@ impl<'b> Checker<'b> {
         // and alias class come from the initializer's provenance — a NEW entry; a shadowed
         // outer entry keeps its own origin, class and consumed state (it still names its
         // old value). The same rule `check_assign` applies on a reassignment.
-        let event = self.binding_event_origin(value, name, &format!("let {name} = {{value}}"));
+        let event =
+            self.binding_event_origin(value, name, annotation, &format!("let {name} = {{value}}"));
         let declaration = decl_key(name_span, name);
         self.declare_binding(
             name.to_string(),
@@ -4101,8 +4102,12 @@ impl<'b> Checker<'b> {
                 // reassigned names a NEW value — revive-on-reassign: `eat(rows); rows =
                 // [4, 5]; rows.count()` is a correct program), and it joins the new value's
                 // class per the initializer table.
-                let event =
-                    self.binding_event_origin(value, target, &format!("{target} = {{value}}"));
+                let event = self.binding_event_origin(
+                    value,
+                    target,
+                    None,
+                    &format!("{target} = {{value}}"),
+                );
                 let declaration = self.declaration_of(target);
                 self.transfers_note_reassign(declaration.as_ref(), &event);
                 if let Some(declaration) = &declaration {
@@ -6913,8 +6918,20 @@ impl<'b> Checker<'b> {
         &mut self,
         value: &Expr,
         target: &str,
+        annotation: Option<&AstType>,
         copy_template: &str,
     ) -> BindingEvent {
+        // `let rows = makeBucket().rows`: the binding takes the field out of the temporary
+        // (`ReadVerdict::Take`) and owns it, as it owns a fresh value.
+        if matches!(self.provenance_of(value), Provenance::Reaches(ref roots) if roots.is_empty())
+            && self.takes_a_piece_of_a_temporary(value, annotation)
+        {
+            return BindingEvent {
+                origin: Origin::Owned,
+                alias_class: self.scope.new_class(),
+                joined: Vec::new(),
+            };
+        }
         match self.provenance_of(value) {
             Provenance::Fresh => {
                 self.record_heap_move(value);
@@ -6977,6 +6994,20 @@ impl<'b> Checker<'b> {
                 joined: self.mentioned_declarations(value),
             },
         }
+    }
+
+    /// True when `value`, bound under `annotation`, takes a piece of a temporary
+    /// (`non_owned_reads::is_taken_piece_of_a_temporary`).
+    fn takes_a_piece_of_a_temporary(&self, value: &Expr, annotation: Option<&AstType>) -> bool {
+        crate::non_owned_reads::is_taken_piece_of_a_temporary(
+            value,
+            annotation,
+            &|expr| {
+                let span = expr.span();
+                self.expr_types.get(&(span.start, span.end)).cloned()
+            },
+            &|name| self.local_fn_names.contains(name) || self.imported_fn_names.contains(name),
+        )
     }
 
     /// Every binding the expression names, as declarations. For the transfer record only.

@@ -1039,11 +1039,12 @@ fn assert_no_owner(transfers: &FunctionTransfers, member: &str) {
     assert_eq!(class.anchor, ReleaseAnchor::NoOwner, "{class:#?}");
 }
 
-/// (High) A class with no owner at all is recorded as `NoOwner`: the allocation, if any,
-/// belongs to code this function cannot see, so nothing here may release it. Never a founder,
-/// never a guess. A piece of a temporary (`make().rows`):
+/// (High) A string, array or map field of a temporary that a `let` keeps is TAKEN, not copied
+/// (`ReadVerdict::Take`): the binding is the owner of the field, a founder that releases it.
+/// This binding was `NoOwner` before the take existed (C7 slice 2, item 6: the pin
+/// `a_piece_of_a_temporary_is_recorded_as_no_owner` moved here).
 #[test]
-fn a_piece_of_a_temporary_is_recorded_as_no_owner() {
+fn a_field_taken_out_of_a_temporary_is_owned_by_its_binding() {
     let source = format!(
         "{BUCKET}function make() -> Bucket {{
   let bucket: Bucket = {{ rows: [9] }}
@@ -1054,7 +1055,12 @@ function underTest() -> int {{
   return cell.count()
 }}"
     );
-    assert_no_owner(&transfers_of(&source, "underTest"), "cell");
+    let transfers = transfers_of(&source, "underTest");
+    let class = transfers.class_of("cell").expect("`cell` is in a class");
+    assert!(
+        matches!(&class.anchor, ReleaseAnchor::Founder { codegen_name, .. } if codegen_name == "cell"),
+        "{class:#?}"
+    );
 }
 
 /// (High) `NoOwner` for a loop cell of a temporary (`for (row in make())`).

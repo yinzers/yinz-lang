@@ -84,6 +84,58 @@ pub enum ReadVerdict {
     Take,
 }
 
+/// True when a `let` (under `annotation`) or an assignment (`None`) of `value` takes a piece of a
+/// temporary: `value` is a chain of field reads off the result of a call of a Yinz function and
+/// names a string, array or map, and the annotation, if any, is that same type. THE one answer the
+/// `Take` verdict (`NonOwnedReads`) and the checker's binding event (the binding owns what it
+/// takes, `check::binding_event_origin`) both read. `type_of` is the type oracle and `is_user_fn`
+/// says a name is a function a call can reach.
+pub(crate) fn is_taken_piece_of_a_temporary(
+    value: &Expr,
+    annotation: Option<&ynz_ast::nodes::Type>,
+    type_of: &dyn Fn(&Expr) -> Option<Type>,
+    is_user_fn: &dyn Fn(&str) -> bool,
+) -> bool {
+    let annotation_keeps_the_type = match annotation {
+        None => true,
+        Some(ynz_ast::nodes::Type::Generic { name, .. }) => name == "array" || name == "map",
+        Some(ynz_ast::nodes::Type::Named(name, _)) => name == "string",
+        Some(_) => false,
+    };
+    if !annotation_keeps_the_type
+        || !matches!(
+            type_of(value),
+            Some(Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. })
+        )
+    {
+        return false;
+    }
+    let mut current = value;
+    let mut fields = 0;
+    while let Expr::FieldAccess { receiver, .. } = current {
+        current = receiver;
+        fields += 1;
+    }
+    fields > 0
+        && match current {
+            Expr::Call(call) => {
+                matches!(&call.callee, Expr::Ident(name, _) if is_user_fn(name))
+            }
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                // A user function of a built-in's name does not shadow it unless the receiver is
+                // a shape or a `dynamic` value (`is_fresh_string`).
+                let reaches_function = matches!(
+                    type_of(receiver),
+                    Some(Type::Shape { .. } | Type::Dynamic { .. })
+                );
+                is_user_fn(method) && reaches_function
+            }
+            _ => false,
+        }
+}
+
 /// The verdict of every judged non-owned read, by the `(span.start, span.end)` of the expression
 /// that reads the place (for a loop variable, the iterated expression).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -446,34 +498,19 @@ impl<'a> ReadTracker<'a> {
         }
     }
 
-    /// True when `value` is a chain of field reads off a call's result and names a string, array
-    /// or map: the one piece of a temporary a binding takes without a copy.
-    fn takes_a_piece_of_a_temporary(&self, value: &Expr) -> bool {
-        if !matches!(
-            self.type_of(value),
-            Some(Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. })
-        ) {
-            return false;
-        }
-        let mut current = value;
-        let mut fields = 0;
-        while let Expr::FieldAccess { receiver, .. } = current {
-            current = receiver;
-            fields += 1;
-        }
-        fields > 0
-            && match current {
-                Expr::Call(call) => matches!(&call.callee, Expr::Ident(name, _)
-                    if self.ownership.is_local_fn(name) || self.imported_fn_names.contains(name.as_str())),
-                Expr::MethodCall {
-                    receiver, method, ..
-                } => {
-                    (self.ownership.is_local_fn(method)
-                        || self.imported_fn_names.contains(method.as_str()))
-                        && !self.is_builtin_method(receiver, method)
-                }
-                _ => false,
-            }
+    /// True when `value` bound under `annotation` takes a piece of a temporary
+    /// (`is_taken_piece_of_a_temporary`, the one answer the checker's binding event reads too).
+    fn takes_a_piece_of_a_temporary(
+        &self,
+        value: &Expr,
+        annotation: Option<&ynz_ast::nodes::Type>,
+    ) -> bool {
+        is_taken_piece_of_a_temporary(
+            value,
+            annotation,
+            &|expr| self.type_of(expr).cloned(),
+            &|name| self.ownership.is_local_fn(name) || self.imported_fn_names.contains(name),
+        )
     }
 
     /// True when `method` names a built-in on `receiver`: a user function of that name does not
@@ -634,16 +671,7 @@ impl<'a> ReadTracker<'a> {
         };
         // The binding outlives the temporary a piece is read from: it takes the piece (a string,
         // array or map field), or copies it.
-        if self.takes_a_piece_of_a_temporary(value)
-            && match annotation {
-                None => true,
-                Some(ynz_ast::nodes::Type::Generic { name, .. }) => {
-                    name == "array" || name == "map"
-                }
-                Some(ynz_ast::nodes::Type::Named(name, _)) => name == "string",
-                Some(_) => false,
-            }
-        {
+        if self.takes_a_piece_of_a_temporary(value, annotation) {
             self.reads.verdicts.insert(value_span, ReadVerdict::Take);
             return;
         }

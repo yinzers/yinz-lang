@@ -260,15 +260,17 @@ impl Walk<'_> {
     /// True when a `let` or `return` of a place read of this type copies it (or takes it) before
     /// the temporary behind the place dies.
     fn copy_covers(&self, ty: Option<&Type>) -> bool {
-        matches!(
-            ty,
+        match ty {
             Some(
                 Type::String
-                    | Type::BuiltinArray { .. }
-                    | Type::BuiltinMap { .. }
-                    | Type::Shape { .. }
-            )
-        )
+                | Type::BuiltinArray { .. }
+                | Type::BuiltinMap { .. }
+                | Type::Shape { .. },
+            ) => true,
+            // A value that owns no heap (an `int`, a `boolean`) cannot share a temporary's cells.
+            Some(ty) => matches!(heap_class_of(ty, &self.facts.tables), HeapClass::NoHeap),
+            None => false,
+        }
     }
 
     /// True when `expr` reads a place (a field, an element, a built-in method's result) instead of

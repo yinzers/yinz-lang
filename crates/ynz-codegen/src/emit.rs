@@ -20669,6 +20669,10 @@ fn lower_expr_node<'ctx>(
         Expr::FieldAccess {
             receiver, field, ..
         } => {
+            let span = expr.span();
+            if cg.typed.non_owned_reads.is_take(span.start, span.end) {
+                return lower_taken_field(cg, receiver, field);
+            }
             // M4 P5: type-attached constants (int.max, number.epsilon, etc.)
             if let Expr::Ident(type_name_str, _) = receiver.as_ref() {
                 if type_attached_const_type(type_name_str, field).is_some() {
@@ -24103,6 +24107,39 @@ fn lower_field_access<'ctx>(
     load(cg, field_ptr, &field_ty, field_name)
 }
 
+/// A string, array or map field of a temporary that a `let` or assignment keeps
+/// (`ReadVerdict::Take`, `IMP-ownership.md` "Non-owned reads"): the binding takes the field's
+/// pointer and no copy is made, as Rust moves a field out of a temporary and drops the rest.
+/// The field is nulled in the temporary, so its statement-end release (`release_fn` accepts a
+/// null string, array or map) skips it, and the value is marked moved so the store seam keeps it.
+/// A state-machine function releases no temporary (C8), so nothing there needs the null.
+///
+/// O(1) time.
+fn lower_taken_field<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    receiver: &Expr,
+    field_name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let (field_ptr, field_ty) = field_gep(cg, receiver, field_name)?;
+    let taken = load(cg, field_ptr, &field_ty, field_name)?;
+    if !taken.is_pointer_value() {
+        return Err(format!(
+            "internal: the taken field `{field_name}` is not a pointer value"
+        ));
+    }
+    if cg.sm_frame_ptr.is_none() {
+        cg.builder
+            .build_store(field_ptr, cg.ptr().const_null())
+            .map_err(|err| format!("null the taken field `{field_name}`: {err}"))?;
+    }
+    if is_string_like(&cg.resolve_type(&field_ty)) {
+        cg.owned_string_values.insert(taken.as_value_ref() as usize);
+    } else {
+        cg.moved_cell_values.insert(taken.as_value_ref() as usize);
+    }
+    Ok(taken)
+}
+
 /// Get a GEP pointer to a field inside a shape value (for reads AND writes).
 fn field_gep<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -26452,11 +26489,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// statement, keep the value in the temporary's slot, so the statement's end releases it. A
     /// value no open statement names (a state-machine function, a form typeck did not record) is
     /// left alone: a leak, never a double free.
-    fn bind_temporary(
-        &self,
-        expr: &Expr,
-        value: BasicValueEnum<'ctx>,
-    ) -> Result<(), String> {
+    fn bind_temporary(&self, expr: &Expr, value: BasicValueEnum<'ctx>) -> Result<(), String> {
         if !value.is_pointer_value() {
             return Ok(());
         }
