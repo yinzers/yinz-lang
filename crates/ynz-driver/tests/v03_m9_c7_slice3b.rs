@@ -1,0 +1,136 @@
+//! v0.3-M9 C7 slice 3b: the pieces that finish C7 (`IMP-ownership.md` "Scope-exit release on the
+//! plain path"): a nested shape moves out of a temporary, holders of an untraceable `maybe` /
+//! union of a channel own a counted reference, a reassigned binding reads consistently, an
+//! errors-capable local releases its old result at a reassignment, and writes through a place a
+//! `let` views are guarded under ASan.
+//!
+//! Each case runs at both optimization levels. The counters say every allocation was freed (the
+//! LEAK side) and AddressSanitizer with `free_fill_byte=0` says nothing was freed early or twice
+//! (the SAFETY side). All are High tier: a wrong release is a use-after-free, a double free or a
+//! leak, silent at exit 0.
+
+mod support;
+
+use support::{
+    assert_asan_clean, assert_heap_balanced, assert_strings_balanced, at_both_optimization_levels,
+    run_balanced,
+};
+
+/// What a case checks the counters of.
+#[derive(Clone, Copy)]
+enum Balance {
+    Heap,
+    HeapAndStrings,
+    Strings,
+}
+
+fn check(label: &str, program: &str, expected: &str, balance: Balance) {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced(label, program, expected, no_optimize);
+        match balance {
+            Balance::Heap => assert_heap_balanced(label, &counters, no_optimize),
+            Balance::HeapAndStrings => {
+                assert_heap_balanced(label, &counters, no_optimize);
+                assert_strings_balanced(label, &counters, no_optimize);
+            }
+            Balance::Strings => assert_strings_balanced(label, &counters, no_optimize),
+        }
+        assert_asan_clean(label, program, expected, no_optimize);
+    });
+}
+
+/// `case!(name, PROGRAM, "stdout", Balance::X, "the bug it catches (High)")`.
+macro_rules! case {
+    ($case:ident, $program:expr, $expected:literal, $balance:expr, $bug:literal) => {
+        #[doc = $bug]
+        #[test]
+        fn $case() {
+            check(stringify!($case), $program, $expected, $balance);
+        }
+    };
+}
+
+// ── Item 1: a nested shape moves out of a temporary ─────────────────────────────────────────
+
+const TAKE_NESTED_SHAPE: &str = "
+shape Tag {
+  name: string
+  id: int
+}
+shape Wrap {
+  inner: Tag
+  label: string
+}
+function make(index: int) -> Wrap {
+  let tag: Tag = { name: `t${index}`, id: index }
+  return { inner: tag, label: `l${index}` }
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  let kept: Tag = { name: `k`, id: 7 }
+  for (index in range(0, 100)) {
+    let taken: Tag = make(index).inner
+    kept = make(index + 1).inner
+    total = total + taken.id + kept.id
+  }
+  print(total)
+}
+";
+
+#[test]
+fn a_nested_shape_taken_from_a_temporary_is_not_copied_and_balances() {
+    // Bug (cost, Golden Rule 8; High: a wrong take is a double free): `let taken = make(i).inner`
+    // deep-copies the nested shape's strings where Rust moves it. 200 calls build 2 strings and one
+    // cell each; the `let` and the reassignment must add no string and no cell.
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("take_nested", TAKE_NESTED_SHAPE, "10000\n", no_optimize);
+        assert_eq!(
+            (counters.alloc, counters.free),
+            (200, 200),
+            "no_optimize={no_optimize}: one cell per `make` call, none per take: {counters:?}"
+        );
+        assert_eq!(
+            (counters.string_alloc, counters.string_free),
+            (401, 401),
+            "no_optimize={no_optimize}: two strings per `make` call and the literal `k`: {counters:?}"
+        );
+        assert_asan_clean("take_nested", TAKE_NESTED_SHAPE, "10000\n", no_optimize);
+    });
+}
+
+const TAKE_A_NESTED_SHAPE_OF_A_NESTED_SHAPE: &str = "
+shape Leaf {
+  name: string
+  numbers: array<int>
+}
+shape Branch {
+  leaf: Leaf
+  label: string
+}
+shape Trunk {
+  branch: Branch
+  note: string
+}
+function grow(index: int) -> Trunk {
+  let leaf: Leaf = { name: `leaf${index}`, numbers: [index, 1] }
+  let branch: Branch = { leaf: leaf, label: `branch${index}` }
+  return { branch: branch, note: `note${index}` }
+}
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (index in range(0, 50)) {
+    let branch: Branch = grow(index).branch
+    let leaf: Leaf = grow(index).branch.leaf
+    total = total + branch.leaf.numbers.count() + leaf.name.count() + branch.label.count()
+  }
+  print(total)
+}
+";
+
+case!(
+    a_nested_shape_two_levels_deep_taken_from_a_temporary_balances,
+    TAKE_A_NESTED_SHAPE_OF_A_NESTED_SHAPE,
+    "780\n",
+    Balance::HeapAndStrings,
+    "taking a nested shape (and one of its own nested shapes) out of a temporary frees the emptied cell twice, or leaves the temporary's release reading the taken cell (High)"
+);
