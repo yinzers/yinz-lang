@@ -1,11 +1,9 @@
 //! v0.3-M9 C6 (parked entry 70): a `number` stored in an `array` or a `map` lives IN the
 //! container's cell, 16 bytes of decimal128, as it does in a Rust `Vec<Decimal>`.
 //!
-//! Before, the cell held 8 bytes of POINTER bits into the frame that produced the number: an
-//! `array<number>` returned from its producer, read in a spawned task after the spawner moved on,
-//! or filled in a loop body read garbage (the loop variable's storage is reused every turn).
-//! Each program below builds the container in one frame, clobbers the stack, and reads it in
-//! another; every one is compared byte for byte at -O0 and -O2 and run under AddressSanitizer
+//! A cell that held a pointer into the frame that produced the number would read garbage once that
+//! frame returned or its loop body reused the slot. Each program below builds the container in one
+//! frame, clobbers the stack, and reads it in another; every one is compared byte for byte at -O0 and -O2 and run under AddressSanitizer
 //! with freed memory filled with zero.
 //! High tier: data integrity (a container reading a dead frame).
 
@@ -101,7 +99,7 @@ fn map_of_numbers_returned_from_its_producer() {
          table.set(1, amount)\n  table.set(2, doubled)\n  return table\n}\n",
         "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let table = make(amount)\n  \
          let scratch = clobber(5)\n  let fallback: number = 0.0\n  \
-         print(`${table.get(1).or(fallback)} ${table.get(2).or(fallback)} ${scratch}`)\n",
+         print(`${table[1].or(fallback)} ${table[2].or(fallback)} ${scratch}`)\n",
     );
     assert_prints(&source, "2.5 5.00 54\n");
 }
@@ -247,7 +245,7 @@ fn assert_spawned_tasks_read_their_numbers(suspending_callee: bool) {
 #[test]
 fn spawned_cpu_tasks_read_the_numbers_of_a_finished_spawner() {
     // Bug caught: the task's copy of an `array<number>` still pointing into the spawner's
-    // dead frame (parked entry 70's original shape). Tier: High.
+    // dead frame (the spawn case of a cell pointing into a dead frame). Tier: High.
     assert_spawned_tasks_read_their_numbers(false);
 }
 
@@ -363,14 +361,14 @@ fn union_variant_holding_a_number_survives_container_return_and_spawn() {
 fn map_keyed_by_numbers_returned_from_its_producer() {
     // Bug caught: a `number` key held as 8 bytes of pointer bits into the producer's frame, so
     // after `keyed` returns `entry.key` reads the dead frame (garbage at -O0) and `get(2.5)`
-    // compares addresses and always misses (red in 7a3d305, before the keys went inline).
+    // compares addresses and always misses.
     // Tier: High.
     let source = program(
         "function keyed() -> map<number, string> {\n  let table: map<number, string> = {}\n  \
          let price: number = 2.5\n  table.set(price, `two and a half`)\n  return table\n}\n",
         "  let table = keyed()\n  let scratch = clobber(3)\n  for (entry in table) {\n    \
          print(entry.key)\n  }\n  let probe: number = 2.50\n  \
-         print(table.get(probe).or(`missing`))\n  print(scratch)\n",
+         print(table[probe].or(`missing`))\n  print(scratch)\n",
     );
     assert_prints(&source, "2.5\ntwo and a half\n36\n");
 }
@@ -390,9 +388,9 @@ fn number_key_is_found_by_a_computed_equal_value_of_another_scale() {
         "  let table: map<number, string> = {}\n  let stored: number = 1.0\n  \
          table.set(stored, `one`)\n  let half: number = 0.5\n  let scale: number = 1.00\n  \
          let computed: number = half + half * scale\n  \
-         print(table.get(computed).or(`missing`))\n  print(table.has(computed))\n  \
+         print(table[computed].or(`missing`))\n  print(table.has(computed))\n  \
          print(table[computed].or(`missing`))\n  let other: number = 1.5\n  \
-         print(table.has(other))\n  print(table.get(other).or(`missing`))\n",
+         print(table.has(other))\n  print(table[other].or(`missing`))\n",
     );
     assert_prints(&source, "one\ntrue\none\nfalse\nmissing\n");
 }
@@ -409,7 +407,7 @@ fn number_key_equal_in_value_overwrites_and_keeps_the_stored_key() {
          print(table.count())\n  for (entry in table) {\n    print(`${entry.key} ${entry.value}`)\n  }\n  \
          let zero: number = 0.0\n  let half: number = 0.5\n  let also_zero: number = half - half * 1.0\n  \
          table.set(zero, `zero`)\n  table.set(also_zero, `still zero`)\n  \
-         print(table.count())\n  print(table.get(also_zero).or(`missing`))\n",
+         print(table.count())\n  print(table[also_zero].or(`missing`))\n",
     );
     assert_prints(&source, "1\n1.0 third\n2\nstill zero\n");
 }
@@ -424,9 +422,9 @@ fn number_keys_survive_growth_past_several_rehashes() {
         "  let table: map<number, int> = {}\n  let step: number = 0.5\n  let key: number = 0.0\n  \
          for (round in range(0, 200)) {\n    table.set(key, round)\n    key = key + step\n  }\n  \
          let probe: number = 0.00\n  let total = 0\n  let missing = 0\n  \
-         for (round in range(0, 200)) {\n    total = total + table.get(probe).or(0 - 1)\n    \
+         for (round in range(0, 200)) {\n    total = total + table[probe].or(0 - 1)\n    \
          probe = probe + 0.50\n  }\n  let beyond: number = 100.00\n  \
-         print(`${table.count()} ${total} ${table.get(beyond).or(0 - 1)}`)\n  \
+         print(`${table.count()} ${total} ${table[beyond].or(0 - 1)}`)\n  \
          let key_total: number = 0.0\n  let value_total = 0\n  for (entry in table) {\n    \
          key_total = key_total + entry.key\n    value_total = value_total + entry.value\n  }\n  \
          print(`${key_total} ${value_total}`)\n  print(missing)\n",
@@ -447,7 +445,8 @@ fn copy_of_a_number_keyed_map_is_independent_of_a_later_set() {
          let replacement: array<int> = [7, 7, 7]\n  table.set(probe, replacement)\n  \
          let extra: number = 3.5\n  table.set(extra, [4, 4, 4, 4])\n  let absent: array<int> = []\n  \
          print(`${copy.count()} ${table.count()}`)\n  \
-         print(`${copy.get(probe).or(absent).count()} ${table.get(probe).or(absent).count()}`)\n  \
+         let copied_row = copy[probe].or(absent)\n  let table_row = table[probe].or(absent)\n  \
+         print(`${copied_row.count()} ${table_row.count()}`)\n  \
          print(copy.has(extra))\n  for (entry in copy) {\n    print(`${entry.key} ${entry.value.count()}`)\n  }\n",
     );
     assert_prints(&source, "2 3\n1 3\nfalse\n1.5 1\n2.5 2\n");
@@ -461,7 +460,7 @@ fn number_keyed_map_literal_and_channel_round_trip() {
         "  let literal: map<number, string> = {1.5: `a`, 2.5: `b`}\n  let probe: number = 2.50\n  \
          let line: channel<map<number, string>> = channel<map<number, string>>(2)\n  \
          line.send(literal.copy())\n  let empty: map<number, string> = {}\n  \
-         let got = line.receive()\n  let received = got.or(empty)\n  print(received.get(probe).or(`missing`))\n  \
+         let got = line.receive()\n  let received = got.or(empty)\n  print(received[probe].or(`missing`))\n  \
          for (entry in received) {\n    print(entry.key)\n  }\n",
     );
     assert_prints(&source, "b\n1.5\n2.5\n");
@@ -481,7 +480,7 @@ fn spawned_number_keys_program(suspending_callee: bool) -> String {
         "function show(table: map<number, string>) -> nothing {{\n{wait_for_the_spawner}  \
          let probe: number = 5.000\n  let key_total: number = 0.0\n  let names = ``\n  \
          for (entry in table) {{\n    key_total = key_total + entry.key\n    names = `${{names}}${{entry.value}} `\n  }}\n  \
-         print(`${{table.get(probe).or(`missing`)}} ${{names}}${{key_total}}`)\n}}\n\n\
+         print(`${{table[probe].or(`missing`)}} ${{names}}${{key_total}}`)\n}}\n\n\
          function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \
          let table: map<number, string> = {{}}\n  table.set(amount, `two`)\n  \
          table.set(doubled, `four`)\n  \

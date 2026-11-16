@@ -3,7 +3,7 @@
 //! `v03_m9_c6_release_per_type.rs`).
 //!
 //! Entry 71: a `background` task is handed a union argument. A union has no owned copy, so the
-//! spawn path has to give the task its own slot or refuse the spawn. Every case spawns from a
+//! spawn gives the task a slot of its own, filled by value. Every case spawns from a
 //! function that has returned, and then clobbers the stack, before the task reads: the task must
 //! still see the variant and the string the spawner held at the spawn.
 //! High tier: data integrity (a task reading the spawner's dead frame).

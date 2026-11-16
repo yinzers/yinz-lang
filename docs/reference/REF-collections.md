@@ -318,6 +318,8 @@ scores["alice"]              // sugar for scores.get("alice") → maybe<number>
 scores["alice"] = 75         // sugar for scores.set("alice", 75)
 ```
 
+**A `number` key matches by value.** `1.0` and `1.00` are the same key, as `1.0 == 1.00` is `true`; setting one when the other is present replaces the value and keeps the key as first stored. `.contains` on an `array<number>` compares by value the same way.
+
 **Bulk update with `.update({...})`:**
 
 ```
