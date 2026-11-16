@@ -9292,21 +9292,6 @@ impl<'b> Checker<'b> {
         }
     }
 
-    /// Walk an `AstType` tree and record every referenced user-defined name
-    /// (shape, options, generic shape) in `self.referenced_names`.
-    ///
-    /// This is the non-diagnostic-emitting companion to `ast_type_to_type`. It
-    /// exists so the unused-import pass can see names used only in type-annotation
-    /// positions (shape fields, const type annotations, generic type arguments)
-    /// without triggering spurious "T is not a known type" diagnostics for bare
-    /// type-parameter names inside generic shapes.
-    ///
-    /// `type_params` is the set of type-parameter names in the enclosing generic
-    /// context (e.g. `{"T", "U"}` for `shape Box<T, U>`). Names in this set are
-    /// skipped — they are local placeholders, not imported symbols.
-    ///
-    /// Time: O(n)  Space: O(n)  where n = nodes in the AST type tree (recursion
-    /// depth bounds the stack; generic args recurse).
     /// Refuse every map key in a shape declaration's written type (a field, or a union alias's
     /// variants) that `check_map_key_type` refuses. The check pass never resolves a shape's types
     /// through `ast_type_to_type`, so without this walk a `map<sensitive string, V>` field
@@ -9357,6 +9342,21 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// Walk an `AstType` tree and record every referenced user-defined name
+    /// (shape, options, generic shape) in `self.referenced_names`.
+    ///
+    /// This is the non-diagnostic-emitting companion to `ast_type_to_type`. It
+    /// exists so the unused-import pass can see names used only in type-annotation
+    /// positions (shape fields, const type annotations, generic type arguments)
+    /// without triggering spurious "T is not a known type" diagnostics for bare
+    /// type-parameter names inside generic shapes.
+    ///
+    /// `type_params` is the set of type-parameter names in the enclosing generic
+    /// context (e.g. `{"T", "U"}` for `shape Box<T, U>`). Names in this set are
+    /// skipped — they are local placeholders, not imported symbols.
+    ///
+    /// Time: O(n)  Space: O(n)  where n = nodes in the AST type tree (recursion
+    /// depth bounds the stack; generic args recurse).
     fn collect_referenced_names_in_ast_type(
         &mut self,
         ast_ty: &AstType,

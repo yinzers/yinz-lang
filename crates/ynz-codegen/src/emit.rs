@@ -26082,8 +26082,9 @@ type StoredRelease<'ctx> = Option<(PointerValue<'ctx>, bool)>;
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// True when `expr` is a call of a function written in Yinz (this module's or an imported
-    /// one): typeck's `string_ownership::is_user_call`, over `TypedModule::callable_fns`. Such a call returns an owned value: a `maybe`'s shape or number payload
-    /// is a heap cell the return made and its string a clone it made.
+    /// one): typeck's `string_ownership::is_user_call`, over `TypedModule::callable_fns`. Such a
+    /// call returns an owned value: a `maybe`'s shape or number payload is a heap cell the return
+    /// made and its string a clone it made.
     ///
     /// O(1) time.
     fn is_user_call(&self, expr: &Expr) -> bool {
