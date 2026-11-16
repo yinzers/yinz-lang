@@ -25340,16 +25340,13 @@ fn release_step(ty: &Type) -> ReleaseStep {
         },
         Type::BuiltinFixed { elem, size } => match (release_step(elem), size) {
             (ReleaseStep::Nothing, _) => ReleaseStep::Nothing,
-            (ReleaseStep::String | ReleaseStep::Shape { .. }, Some(size)) => ReleaseStep::Fixed {
+            (ReleaseStep::Unsupported(reason), _) => ReleaseStep::Unsupported(reason),
+            (_, Some(size)) => ReleaseStep::Fixed {
                 elem: elem.as_ref().clone(),
                 size: *size as u64,
             },
-            (ReleaseStep::String | ReleaseStep::Shape { .. }, None) => ReleaseStep::Unsupported(
+            (_, None) => ReleaseStep::Unsupported(
                 "the length of this `fixed` list is not known here, so its cells cannot be walked",
-            ),
-            _ => ReleaseStep::Unsupported(
-                "a `fixed` list of heap items other than strings and shapes has no copy, so \
-                 nothing allocates them for a release to free",
             ),
         },
         Type::Shape { name } => ReleaseStep::Shape { name: name.clone() },
@@ -25375,12 +25372,30 @@ fn release_step(ty: &Type) -> ReleaseStep {
     }
 }
 
+/// How the value a release function is called on sits where it lives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReleaseForm {
+    /// The value itself: a shape's bytes inline, a union slot, a `maybe` envelope whose cell is
+    /// someone else's.
+    Value,
+    /// The value sits in a heap cell of its own, which the release frees after the contents.
+    Cell,
+    /// What a local binding holds (`store_binding`): a `maybe` envelope in an entry-block slot,
+    /// whose shape and number payloads sit in entry-block slots too (never a heap cell) and whose
+    /// array and map payloads the binding owns; a union VIEW of a slot the binding owns.
+    Local,
+}
+
 /// Where a released value is stored: an array or map cell holds a shape's bytes inline, but a
 /// shape's own field holds a nested shape as a pointer to a heap cell.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReleaseHome {
     Element,
     Field,
+    /// A cell of a `fixed` list: an i64 holding the item's pointer. As `Field`, except a union
+    /// item is the pointer to the VIEW the list was given (`value_to_stable_bits` stores a
+    /// union's view, not a slot).
+    FixedCell,
 }
 
 /// What a container walk or a field release calls on one stored value: the release function and
@@ -25497,13 +25512,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 ReleaseHome::Element => Ok(self
                     .release_fn(&ty, false)?
                     .map(|glue| (as_pointer(glue), true))),
-                ReleaseHome::Field => Ok(self
+                ReleaseHome::Field | ReleaseHome::FixedCell => Ok(self
                     .release_fn(&ty, true)?
                     .map(|glue| (as_pointer(glue), false))),
             },
             // A stored `maybe` is a pointer to a heap envelope cell.
             ReleaseStep::Maybe { .. } => Ok(self
                 .release_fn(&ty, true)?
+                .map(|glue| (as_pointer(glue), false))),
+            ReleaseStep::Union { .. } if home == ReleaseHome::FixedCell => Ok(self
+                .local_release_fn(&ty)?
                 .map(|glue| (as_pointer(glue), false))),
             ReleaseStep::Union { variants } => {
                 if self.envelope_union_variants(&ty).is_some() {
@@ -25606,18 +25624,52 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         ty: &Type,
         owns_cell: bool,
     ) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let form = if owns_cell {
+            ReleaseForm::Cell
+        } else {
+            ReleaseForm::Value
+        };
+        self.release_form_fn(ty, form)
+    }
+
+    /// The release of a value that a LOCAL slot holds (`ReleaseForm::Local`): a `maybe` envelope
+    /// or a union view the binding owns, as `store_binding` built them. Any other type releases
+    /// as `release_fn(ty, false)` does. The release `emit_slot_release` and the assignment
+    /// release call.
+    ///
+    /// Time: as `release_fn`  Space: O(1)
+    fn local_release_fn(&self, ty: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
+        self.release_form_fn(ty, ReleaseForm::Local)
+    }
+
+    /// `release_fn` and `local_release_fn`: the one emitter of the per-type release function, one
+    /// function per type and form. A form that says nothing for the type (a `Cell` of a string,
+    /// a `Local` of an array) is the type's `Value` form, so no two forms emit one body twice.
+    fn release_form_fn(
+        &self,
+        ty: &Type,
+        form: ReleaseForm,
+    ) -> Result<Option<FunctionValue<'ctx>>, String> {
         let resolved = self.resolve_type(ty);
         let step = release_step(&resolved);
-        let owns_cell = owns_cell
+        let owns_cell = form == ReleaseForm::Cell
             && (matches!(
                 step,
                 ReleaseStep::Shape { .. } | ReleaseStep::Maybe { .. } | ReleaseStep::Fixed { .. }
             ) || (matches!(step, ReleaseStep::Union { .. })
                 && self.envelope_union_variants(&resolved).is_some()));
+        let local = form == ReleaseForm::Local
+            && matches!(step, ReleaseStep::Maybe { .. } | ReleaseStep::Union { .. });
         let name = format!(
             "ynz_release_{}{}",
             mangle_type(&resolved),
-            if owns_cell { "_cell" } else { "" }
+            if owns_cell {
+                "_cell"
+            } else if local {
+                "_local"
+            } else {
+                ""
+            }
         );
         match &step {
             ReleaseStep::Nothing => return Ok(None),
@@ -25650,7 +25702,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get_nth_param(0)
             .ok_or("release: missing value parameter")?
             .into_pointer_value();
-        self.emit_release_body(release, &step, &resolved, value, &name)?;
+        self.emit_release_body(release, &step, &resolved, local, value, &name)?;
         if owns_cell {
             let size = self.release_cell_size(&step)?;
             self.builder
@@ -25698,6 +25750,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         function: FunctionValue<'ctx>,
         step: &ReleaseStep,
         ty: &Type,
+        local: bool,
         value: PointerValue<'ctx>,
         site: &str,
     ) -> Result<(), String> {
@@ -25765,10 +25818,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 }
             }
             ReleaseStep::Maybe { inner } => {
-                self.emit_maybe_payload_release(function, value, inner, site)?
+                self.emit_maybe_payload_release(function, value, inner, local, site)?
             }
             ReleaseStep::Union { variants } => {
-                if self.envelope_union_variants(ty).is_some() {
+                if self.envelope_union_variants(ty).is_some() && !local {
                     self.emit_union_slot_release(function, value, variants, site)?;
                 } else {
                     self.emit_union_view_release(function, value, variants, site)?;
@@ -25809,7 +25862,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .and_then(|block| block.get_parent())
             .ok_or_else(|| format!("{site}: no function to walk the cells in"))?;
         let glue = self
-            .stored_release(elem, ReleaseHome::Field)?
+            .stored_release(elem, ReleaseHome::FixedCell)?
             .ok_or_else(|| format!("{site}: the items of this `fixed` list own nothing"))?;
         let counter = self
             .builder
@@ -25864,15 +25917,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
-    /// Release what a `maybe<inner>` envelope's payload owns when it is present: a string, the
-    /// heap cell of a shape (its contents and the cell), or the 16-byte cell of a `number`.
-    /// Anything else in a payload is not allocated by a copy of the envelope, so it is not freed
-    /// here (an array or map payload is the producer's, `MaybeCellClone` refuses to copy one).
+    /// Release what a `maybe<inner>` envelope's payload owns when it is present. In the stored
+    /// forms: a string, the heap cell of a shape (its contents and the cell), or the 16-byte cell
+    /// of a `number`; anything else in a payload is not allocated by a copy of the envelope, so it
+    /// is not freed here (an array or map payload is the producer's, `MaybeCellClone` refuses to
+    /// copy one). In the `local` form (a binding's envelope, `ReleaseForm::Local`): a string, the
+    /// contents of a shape whose bytes sit in an entry-block slot of the binding's own (no cell
+    /// to free), nothing for a `number` (its 16 bytes are an entry-block slot too), and the array
+    /// or map the binding copied (`copy_maybe_container_payload`).
     fn emit_maybe_payload_release(
         &self,
         function: FunctionValue<'ctx>,
         envelope: PointerValue<'ctx>,
         inner: &Type,
+        local: bool,
         site: &str,
     ) -> Result<(), String> {
         let inner = self.resolve_type(inner);
@@ -25884,9 +25942,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .as_pointer_value(),
             ),
             ReleaseStep::Shape { .. } => self
-                .release_fn(&inner, true)?
+                .release_fn(&inner, !local)?
                 .map(|glue| glue.as_global_value().as_pointer_value()),
-            _ if matches!(inner, Type::Number { precision } if precision <= 34) => Some(
+            ReleaseStep::Array { .. } | ReleaseStep::Map { .. } if local => self
+                .release_fn(&inner, false)?
+                .map(|glue| glue.as_global_value().as_pointer_value()),
+            _ if !local && matches!(inner, Type::Number { precision } if precision <= 34) => Some(
                 self.rt
                     .ynz_number_cell_free
                     .as_global_value()
@@ -25982,8 +26043,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
-    /// Release the variant a plain (no shape variant) union VIEW `{tag, data}` holds; a null view
-    /// is `none`. The data word is the value's bits: a string, array or map pointer is owned.
+    /// Release the variant a union VIEW `{tag, data}` holds; a null view is `none`. The data word
+    /// is the value's bits: a string, array or map pointer is owned. An envelope union's view (a
+    /// local binding's, `ReleaseForm::Local`) may name a shape variant: its data word is the
+    /// address of the shape's bytes in the binding's slot (the fields are released, no cell is
+    /// freed), or, in a recursive (boxed) union, the box cell (its contents and the cell).
     fn emit_union_view_release(
         &self,
         function: FunctionValue<'ctx>,
@@ -26003,10 +26067,22 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder.position_at_end(present_bb);
         let tag = self.union_tag_bits(view, site)?;
         let payload = self.union_payload_ptr(view, site)?;
+        let boxed = match self.envelope_union_variants(&Type::Union {
+            variants: variants.to_vec(),
+        }) {
+            Some(envelope_variants) => Some(self.union_layout(&envelope_variants)?.boxed),
+            None => None,
+        };
         let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
         let mut bodies: Vec<(BasicBlock<'ctx>, PointerValue<'ctx>)> = Vec::new();
         for (index, variant) in variants.iter().enumerate() {
-            if let Some((glue, _)) = self.stored_release(variant, ReleaseHome::Field)? {
+            let release = match (self.resolve_type(variant), boxed) {
+                (Type::Shape { name }, Some(boxed)) => self
+                    .release_fn(&Type::Shape { name }, boxed)?
+                    .map(|glue| (glue.as_global_value().as_pointer_value(), boxed)),
+                (other, _) => self.stored_release(&other, ReleaseHome::Field)?,
+            };
+            if let Some((glue, _)) = release {
                 let block = self
                     .ctx
                     .append_basic_block(function, &format!("view_variant{index}"));
@@ -26141,13 +26217,13 @@ fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
         | ReleaseKind::Channel
         | ReleaseKind::TaskHandle
         | ReleaseKind::Shape
-        | ReleaseKind::NestedShape => true,
-        // SLICE 3: a `maybe`, union view, `fixed` and errors-capable slot keep today's behaviour
-        // (no release). `dynamic` and a map entry never own a local slot.
-        ReleaseKind::Maybe
+        | ReleaseKind::NestedShape
+        | ReleaseKind::Maybe
         | ReleaseKind::Union
-        | ReleaseKind::Fixed
-        | ReleaseKind::ErrorsCapable
+        | ReleaseKind::Fixed => true,
+        // SLICE 3 (open): an errors-capable slot keeps today's behaviour (no release). `dynamic`
+        // and a map entry never own a local slot.
+        ReleaseKind::ErrorsCapable
         | ReleaseKind::Dynamic
         | ReleaseKind::MapEntry => false,
     }
@@ -26177,7 +26253,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             {
                 continue;
             }
-            let slot = *self.locals.get(name).ok_or_else(|| {
+            let slot = self.reload_slot(name).ok_or_else(|| {
                 format!(
                     "internal: the read at {}..{} takes a value out of `{name}`, which has no slot",
                     span.start, span.end
@@ -26242,6 +26318,28 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.builder.position_at_end(done_bb);
                 snapshot
             }
+            Type::Maybe { inner } => self.snapshot_old_maybe(old, live, inner, name)?,
+            Type::Union { variants } => self.snapshot_old_union(old, live, variants, name)?,
+            Type::BuiltinFixed { size: Some(size), .. } => {
+                let snapshot = self.alloca_in_entry_llvm(
+                    self.i64().array_type(*size as u32),
+                    &format!("{name}_old_cells"),
+                )?;
+                let copy_bb = self.append_block(&format!("{name}_old_cells_copy"));
+                let done_bb = self.append_block(&format!("{name}_old_cells_done"));
+                self.builder
+                    .build_conditional_branch(live, copy_bb, done_bb)
+                    .map_err(|err| format!("assign fixed snapshot branch {name}: {err}"))?;
+                self.builder.position_at_end(copy_bb);
+                self.builder
+                    .build_memcpy(snapshot, 8, old, 8, self.i64().const_int(*size as u64 * 8, false))
+                    .map_err(|err| format!("assign fixed snapshot copy {name}: {err}"))?;
+                self.builder
+                    .build_unconditional_branch(done_bb)
+                    .map_err(|err| format!("assign fixed snapshot join {name}: {err}"))?;
+                self.builder.position_at_end(done_bb);
+                snapshot
+            }
             _ => old,
         };
         Ok(Some(ReplacedValue {
@@ -26252,10 +26350,202 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }))
     }
 
+    /// A copy of the inline storage of a local `maybe` the assignment replaces: the envelope's
+    /// two words and, for a shape payload, the payload's bytes (the new value's copy reuses both
+    /// entry-block slots when the assignment sits in a loop). Written inside the `live` branch;
+    /// the release that reads it is behind the same `live` flag.
+    ///
+    /// O(1) time to emit; one envelope and one shape-sized copy at run time.
+    fn snapshot_old_maybe(
+        &self,
+        old: PointerValue<'ctx>,
+        live: inkwell::values::IntValue<'ctx>,
+        inner: &Type,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let snapshot = self.alloca_in_entry_llvm(self.maybe_type(), &format!("{name}_old_env"))?;
+        let payload_shape = match self.resolve_type(inner) {
+            Type::Shape { name: shape_name } => Some(shape_name),
+            _ => None,
+        };
+        let payload_snapshot = match &payload_shape {
+            Some(shape_name) => {
+                let struct_ty = self.shape_types.get(shape_name).ok_or_else(|| {
+                    format!("assign release: LLVM type for `{shape_name}` missing")
+                })?;
+                Some(self.alloca_in_entry_llvm(struct_ty, &format!("{name}_old_payload"))?)
+            }
+            None => None,
+        };
+        let copy_bb = self.append_block(&format!("{name}_old_env_copy"));
+        let done_bb = self.append_block(&format!("{name}_old_env_done"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, done_bb)
+            .map_err(|err| format!("assign maybe snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let (flag, bits) = self.load_maybe_env_pair(old, &format!("{name}_old"))?;
+        let flag_slot = self
+            .builder
+            .build_struct_gep(self.maybe_type(), snapshot, 0, &format!("{name}_old_flag"))
+            .map_err(|err| format!("assign maybe snapshot flag gep {name}: {err}"))?;
+        self.builder
+            .build_store(flag_slot, flag)
+            .map_err(|err| format!("assign maybe snapshot flag {name}: {err}"))?;
+        let bits_slot = self
+            .builder
+            .build_struct_gep(self.maybe_type(), snapshot, 1, &format!("{name}_old_bits"))
+            .map_err(|err| format!("assign maybe snapshot bits gep {name}: {err}"))?;
+        self.builder
+            .build_store(bits_slot, bits)
+            .map_err(|err| format!("assign maybe snapshot bits {name}: {err}"))?;
+        if let (Some(shape_name), Some(payload_snapshot)) = (&payload_shape, payload_snapshot) {
+            let has = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    flag,
+                    self.i64().const_zero(),
+                    &format!("{name}_old_has"),
+                )
+                .map_err(|err| format!("assign maybe snapshot has {name}: {err}"))?;
+            let payload_bb = self.append_block(&format!("{name}_old_payload_copy"));
+            self.builder
+                .build_conditional_branch(has, payload_bb, done_bb)
+                .map_err(|err| format!("assign maybe snapshot payload branch {name}: {err}"))?;
+            self.builder.position_at_end(payload_bb);
+            let source = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), &format!("{name}_old_payload_src"))
+                .map_err(|err| format!("assign maybe snapshot payload cast {name}: {err}"))?;
+            let size = self.shape_abi_size_const(shape_name, "assign release")?;
+            self.builder
+                .build_memcpy(payload_snapshot, 1, source, 1, size)
+                .map_err(|err| format!("assign maybe snapshot payload copy {name}: {err}"))?;
+            let repointed = self
+                .builder
+                .build_ptr_to_int(payload_snapshot, self.i64(), &format!("{name}_old_repoint"))
+                .map_err(|err| format!("assign maybe snapshot repoint {name}: {err}"))?;
+            self.builder
+                .build_store(bits_slot, repointed)
+                .map_err(|err| format!("assign maybe snapshot repoint store {name}: {err}"))?;
+        }
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("assign maybe snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(snapshot)
+    }
+
+    /// A copy of the union view a local holds, for the assignment that replaces it: the view's
+    /// two words and, for a shape variant that sits inline in the binding's slot (an unboxed
+    /// envelope union), the slot's payload bytes. The slot is reused by the new value's copy.
+    ///
+    /// O(1) time to emit; one view and one payload-sized copy at run time.
+    fn snapshot_old_union(
+        &self,
+        old: PointerValue<'ctx>,
+        live: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let view_ty = self.union_envelope_type();
+        let snapshot = self.alloca_in_entry_llvm(view_ty, &format!("{name}_old_view"))?;
+        let inline_payload = match self.envelope_union_variants(&Type::Union {
+            variants: variants.to_vec(),
+        }) {
+            Some(envelope_variants) => {
+                let layout = self.union_layout(&envelope_variants)?;
+                if layout.boxed {
+                    None
+                } else {
+                    Some(layout)
+                }
+            }
+            None => None,
+        };
+        let payload_snapshot = match &inline_payload {
+            Some(layout) => Some(self.alloca_in_entry_llvm(
+                self.ctx.i8_type().array_type(layout.payload_size as u32),
+                &format!("{name}_old_union_payload"),
+            )?),
+            None => None,
+        };
+        let copy_bb = self.append_block(&format!("{name}_old_view_copy"));
+        let done_bb = self.append_block(&format!("{name}_old_view_done"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, done_bb)
+            .map_err(|err| format!("assign union snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let tag = self.union_tag_bits(old, &format!("{name}_old"))?;
+        let data = self.union_data_bits(old, &format!("{name}_old"))?;
+        let tag_slot = self
+            .builder
+            .build_struct_gep(view_ty, snapshot, 0, &format!("{name}_old_tag"))
+            .map_err(|err| format!("assign union snapshot tag gep {name}: {err}"))?;
+        self.builder
+            .build_store(tag_slot, tag)
+            .map_err(|err| format!("assign union snapshot tag {name}: {err}"))?;
+        let data_slot = self
+            .builder
+            .build_struct_gep(view_ty, snapshot, 1, &format!("{name}_old_data"))
+            .map_err(|err| format!("assign union snapshot data gep {name}: {err}"))?;
+        self.builder
+            .build_store(data_slot, data)
+            .map_err(|err| format!("assign union snapshot data {name}: {err}"))?;
+        if let (Some(layout), Some(payload_snapshot)) = (&inline_payload, payload_snapshot) {
+            let mut is_shape = self.ctx.bool_type().const_zero();
+            for (index, _) in &layout.shape_variants {
+                let is_this = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        self.i64().const_int(*index, false),
+                        &format!("{name}_old_is_shape{index}"),
+                    )
+                    .map_err(|err| format!("assign union snapshot compare {name}: {err}"))?;
+                is_shape = self
+                    .builder
+                    .build_or(is_shape, is_this, &format!("{name}_old_is_shape"))
+                    .map_err(|err| format!("assign union snapshot or {name}: {err}"))?;
+            }
+            let payload_bb = self.append_block(&format!("{name}_old_union_payload_copy"));
+            self.builder
+                .build_conditional_branch(is_shape, payload_bb, done_bb)
+                .map_err(|err| format!("assign union snapshot payload branch {name}: {err}"))?;
+            self.builder.position_at_end(payload_bb);
+            let source = self
+                .builder
+                .build_int_to_ptr(data, self.ptr(), &format!("{name}_old_union_src"))
+                .map_err(|err| format!("assign union snapshot payload cast {name}: {err}"))?;
+            self.builder
+                .build_memcpy(
+                    payload_snapshot,
+                    1,
+                    source,
+                    1,
+                    self.i64().const_int(layout.payload_size, false),
+                )
+                .map_err(|err| format!("assign union snapshot payload copy {name}: {err}"))?;
+            let repointed = self
+                .builder
+                .build_ptr_to_int(payload_snapshot, self.i64(), &format!("{name}_old_union_repoint"))
+                .map_err(|err| format!("assign union snapshot repoint {name}: {err}"))?;
+            self.builder
+                .build_store(data_slot, repointed)
+                .map_err(|err| format!("assign union snapshot repoint store {name}: {err}"))?;
+        }
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("assign union snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(snapshot)
+    }
+
     /// Release the value `begin_assign_release` found in the slot, if it was live, after the new
     /// value is stored.
     fn finish_assign_release(&self, replaced: &ReplacedValue<'ctx>) -> Result<(), String> {
-        let Some(glue) = self.release_fn(&replaced.ty, false)? else {
+        let Some(glue) = self.local_release_fn(&replaced.ty)? else {
             return Ok(());
         };
         let name = replaced.name.as_str();
@@ -26354,6 +26644,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 | (ReleaseKind::Channel, ReleaseStep::Channel)
                 | (ReleaseKind::TaskHandle, ReleaseStep::Handle)
                 | (ReleaseKind::Shape | ReleaseKind::NestedShape, ReleaseStep::Shape { .. })
+                | (ReleaseKind::Maybe, ReleaseStep::Maybe { .. })
+                // A binding declared as a plain union holds the plain value it was given (its
+                // `local_types` entry is that value's type), released by that type.
+                | (ReleaseKind::Union, _)
+                | (ReleaseKind::Fixed, ReleaseStep::Fixed { .. })
         );
         if !kind_matches_type {
             return Err(format!(
@@ -26383,9 +26678,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 continue;
             };
             let name = entry.codegen_name.as_str();
-            let slot = *self
-                .locals
-                .get(name)
+            // An `is` arm re-points a narrowed union binding at its variant payload; the release
+            // reads the binding's own (outer) slot, which holds the view.
+            let slot = self
+                .reload_slot(name)
                 .ok_or_else(|| format!("internal: release of `{name}` at {site}: no slot"))?;
             self.emit_slot_release(slot, &ty, only_if_live, name, site)?;
         }
@@ -26407,7 +26703,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         name: &str,
         site: &str,
     ) -> Result<(), String> {
-        let Some(glue) = self.release_fn(ty, false)? else {
+        let Some(glue) = self.local_release_fn(ty)? else {
             return Ok(());
         };
         let value = self
