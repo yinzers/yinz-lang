@@ -688,3 +688,32 @@ case!(
     Balance::Heap,
     "`cell = owner.rows` where `cell` outlives `owner`: releasing `owner` at its block end leaves `cell` dangling, releasing nothing leaks both (High)"
 );
+
+const LOOP_EARLY_RETURN_MAP: &str = "
+function first(table: map<string, array<int>>) -> int {
+  for (entry in table) {
+    table.set(`other`, [9])
+    return entry.value.count()
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let total: int = 0
+  while (i < 20) {
+    let table: map<string, array<int>> = { `a`: [1, 2] }
+    total = total + first(table)
+    i = i + 1
+  }
+  print(total)
+}
+";
+
+case!(
+    a_return_inside_a_map_loop_releases_the_entrys_copy,
+    LOOP_EARLY_RETURN_MAP,
+    "40\n",
+    Balance::HeapAndStrings,
+    "`return` in a map loop whose body writes the map: the entry's key and value copies are released only at the iteration end (High)"
+);

@@ -2207,6 +2207,10 @@ struct Cg<'ctx, 'g> {
     // `lower_expr` stores a temporary's value into its slot where it is built, and the statement's
     // end, a `return` and an auto-propagation release every live slot through `emit_slot_release`.
     temporary_frames: Vec<Vec<TemporarySlot<'ctx>>>,
+    /// The copies the plain `for` loops around the code being lowered made for their variables, outermost
+    /// first: a `return` or an auto-propagation inside the body leaves the iteration before its end
+    /// releases them, so it releases them itself (`Cg::release_open_loop_copies`).
+    open_loop_copies: Vec<(BasicValueEnum<'ctx>, Type)>,
     // C1f round 2: the heap values (a shape, union or `maybe` that may own boxes) the expression
     // that produced them says a store takes by MOVE (typeck's `TypedModule::heap_moves`), keyed by
     // the LLVM value: the pointer an identifier read loads (a fresh `load` per read), a literal's
@@ -7470,6 +7474,7 @@ fn plain_cg<'ctx, 'g>(
         arc_pending_release: Vec::new(),
         owned_string_values: std::collections::HashSet::new(),
         temporary_frames: Vec::new(),
+        open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
@@ -7901,6 +7906,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         arc_pending_release: Vec::new(),
         owned_string_values: std::collections::HashSet::new(),
         temporary_frames: Vec::new(),
+        open_loop_copies: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
@@ -18082,7 +18088,12 @@ fn lower_stmt_for<'ctx>(
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
 
+        let open_copies = cg.open_loop_copies.len();
+        if owned_elem.copied {
+            cg.open_loop_copies.push((owned_elem.release_value(), elem.clone()));
+        }
         lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         if !is_block_terminated(cg) {
             if owned_elem.copied {
@@ -18159,7 +18170,12 @@ fn lower_stmt_for<'ctx>(
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
 
+        let open_copies = cg.open_loop_copies.len();
+        if owned_elem.copied {
+            cg.open_loop_copies.push((owned_elem.release_value(), elem.clone()));
+        }
         lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         if !is_block_terminated(cg) {
             if owned_elem.copied {
@@ -18281,7 +18297,15 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.insert(var.to_string(), entry_var_slot);
 
+        let open_copies = cg.open_loop_copies.len();
+        if let Some(key) = owned_entry.key {
+            cg.open_loop_copies.push((key, key_ty.clone()));
+        }
+        if let Some(value) = owned_entry.value {
+            cg.open_loop_copies.push((value, val_ty.clone()));
+        }
         lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         cg.locals.remove(var);
 
@@ -26510,6 +26534,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
+    /// Release the copy every plain `for` loop around this point made for its variable, innermost
+    /// first: a `return` or an auto-propagation inside a body leaves the iteration before its end
+    /// releases the copy (`open_loop_copies`). The copy is an SSA value of the loop body, which
+    /// dominates everything the body lowers. One call of the release helper per copy, as the
+    /// iteration end makes (`release_owned_read`).
+    ///
+    /// O(open loops) to emit.
+    fn release_open_loop_copies(&self) -> Result<(), String> {
+        for (value, ty) in self.open_loop_copies.iter().rev() {
+            release_owned_read(self, *value, ty, "loop_copy_early_exit")?;
+        }
+        Ok(())
+    }
+
     /// The release at the end of `block`.
     fn release_at_block_end(&self, block: &ynz_ast::nodes::Block) -> Result<(), String> {
         if self.sm_frame_ptr.is_some() {
@@ -26534,6 +26572,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return Ok(());
         }
         self.release_open_temporaries("return_temporary")?;
+        self.release_open_loop_copies()?;
         let entries = self.typed.release_plan.return_edge(span).ok_or_else(|| {
             format!(
                 "internal: the release plan has no return edge for the `return` at {}..{}",
@@ -26549,6 +26588,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             return Ok(());
         }
         self.release_open_temporaries("propagation_temporary")?;
+        self.release_open_loop_copies()?;
         let entries = self
             .typed
             .release_plan
