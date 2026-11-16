@@ -9321,7 +9321,11 @@ impl<'b> Checker<'b> {
                 if name == "map" {
                     if let Some(key_ast) = args.first() {
                         // A shape's type parameter resolves to `Error` here and is skipped by
-                        // `check_map_key_type`, as a `K` is checked where an instance binds it.
+                        // `check_map_key_type`. Nothing checks a `K` where an instance binds it
+                        // either: `shape Box<K> { m: map<K, int> }` lets `Box<sensitive string>`
+                        // compile as a field or parameter type. No program can build such a
+                        // value: a generic shape literal is refused, and a generic function that
+                        // builds the map reaches codegen's loud internal error (parked).
                         let key = self.shape_table.resolve_ast_type(key_ast);
                         self.check_map_key_type(&key, span);
                     }
