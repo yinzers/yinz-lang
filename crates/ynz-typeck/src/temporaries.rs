@@ -206,7 +206,15 @@ impl Walk<'_> {
                 ..
             } => {
                 self.value(receiver, Use::Borrowed, key, false);
-                self.value(index, Use::Borrowed, key, false);
+                // `table[key] = value` stores the key in the map, which owns it from then on
+                // (`collection_store_positions` says the same of `table.set(key, value)`); an
+                // array or `fixed` index is an `int`.
+                let index_usage = if matches!(self.type_of(receiver), Some(Type::BuiltinMap { .. })) {
+                    Use::Taken
+                } else {
+                    Use::Borrowed
+                };
+                self.value(index, index_usage, key, false);
                 self.value(value, Use::Taken, key, false);
             }
             Stmt::If { cond, body, .. } => {

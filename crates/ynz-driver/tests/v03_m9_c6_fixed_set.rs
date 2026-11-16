@@ -92,13 +92,16 @@ fixed_set_case!(
     2
 );
 // Items that are not strings or shapes: the cell holds a pointer the list owns, so the write
-// frees what it replaces through the same dispatch (`stored_release`).
+// frees what it replaces through the same dispatch (`stored_release`). The frees are the
+// replaced item plus the `fallback` the fixture reads with `.or(fallback)`, which is released at
+// scope exit now that an alias class with no escape releases each of its owners; the items the
+// list still holds (a `fixed` list is slice 3's kind) stay unreleased.
 fixed_set_case!(
     fixed_array_set_and_index_assign,
     "v0_3_m9_c6_fixed_set_array.ynz",
     "3\n1\n",
     10,
-    4,
+    6,
     0,
     0
 );
@@ -107,7 +110,7 @@ fixed_set_case!(
     "v0_3_m9_c6_fixed_set_map.ynz",
     "2\n1\n",
     20,
-    5,
+    10,
     4,
     1
 );
