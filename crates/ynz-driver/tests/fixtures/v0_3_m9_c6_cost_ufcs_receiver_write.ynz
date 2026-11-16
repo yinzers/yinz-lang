@@ -1,23 +1,33 @@
-// v0.3-M9 C6 cost fixture: the receiver of a UFCS call is read from a list another argument of the
-// same call lends and overwrites, so the receiver is copied once for the call and released after.
-// Written as the plain call `total(receiver, others)` (typeck takes a UFCS receiver as argument 0):
-// the dotted form needs a method chain, and a `let` for the receiver would move the copy to the `let`.
-// Allocations: the build of the no-write twin (6), the overwriting literal's array (2) and the one
-// receiver copy's array (2). Releases: the replaced element's array (2) and the copy's (2).
+// v0.3-M9 C6 cost fixture: the receiver of a dotted UFCS call is the field read `world.bucket`,
+// and another argument of the same call lends `world.owners` and overwrites an element, so typeck
+// judges the root `world` written during the call and the receiver is copied once for the call
+// and released after it. A field read followed by one call is no method chain, and the receiver
+// needs no `let` (a `let` would move the copy to the `let`).
+// The compiler rejects a lend of `world` itself beside `world.bucket` ("part of `world`, and both
+// are passed"), so the copy is owed for the lend of a sibling field: the price of tracking
+// writes per root, not per field. The array element `owners[0]` is a different place from the
+// receiver, so the output cannot show a wrong read; the count pins the copy.
+// Allocations: the build of the no-write twin (7), the overwriting literal's `rows` array (2) and
+// the one receiver copy's `rows` array (2) = 11. Releases: the replaced element's `rows` array (2)
+// and the copy's (2) = 4.
 
 shape Bucket {
   rows: array<int>
   id: int
 }
 
-function total(share bucket: Bucket, lend others: array<Bucket>) -> int {
-  others.set(0, { rows: [7], id: 2 })
-  return bucket.rows.count()
+shape World {
+  bucket: Bucket
+  owners: array<Bucket>
+}
+
+function total(share bucket: Bucket, lend owners: array<Bucket>) -> int {
+  owners.set(0, { rows: [7], id: 2 })
+  return bucket.rows.count() + owners.count() - 1
 }
 
 function entrypoint() -> nothing {
-  let first: Bucket = { rows: [1, 2], id: 1 }
-  let buckets: array<Bucket> = [first]
-  let fallback: Bucket = { rows: [], id: 0 }
-  print(total(buckets[0].or(fallback), buckets))
+  let first: Bucket = { rows: [4], id: 1 }
+  let world: World = { bucket: { rows: [1, 2, 3], id: 1 }, owners: [first] }
+  print(world.bucket.total(world.owners))
 }

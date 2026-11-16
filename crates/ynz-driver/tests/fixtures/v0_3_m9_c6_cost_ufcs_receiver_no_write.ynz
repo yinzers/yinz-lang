@@ -1,22 +1,27 @@
-// v0.3-M9 C6 cost fixture: the receiver of a UFCS call to a user function (typeck takes it as
-// argument 0) reads a place the call writes nothing through, so it is passed as it is. Written as
-// the plain call `total(receiver)`, not `receiver.total()`: the dotted form needs the chain
-// `buckets[0].or(fallback).total()`, and a `let` for the receiver would copy it (+2 allocations).
-// Allocations: `first`'s array (2), the list of one `Bucket` (2) and the fallback's empty array
-// (2); the call copies no receiver.
+// v0.3-M9 C6 cost fixture: the receiver of a dotted UFCS call to a user function (typeck takes it
+// as argument 0) is the field read `world.bucket`, and no argument of the call writes `world`
+// (the other argument is `share`), so the receiver is passed as it is. A field read followed by
+// one call is no method chain, and the receiver needs no `let` (a `let` would copy it).
+// Allocations: `world`'s nested `bucket` (1 for the box, 2 for its `rows` array: header and
+// buffer), `first`'s `rows` array (2) and the list of one `Bucket` (2) = 7. The call copies no
+// receiver, and nothing is released before the program ends.
 
 shape Bucket {
   rows: array<int>
   id: int
 }
 
-function total(share bucket: Bucket) -> int {
-  return bucket.rows.count()
+shape World {
+  bucket: Bucket
+  owners: array<Bucket>
+}
+
+function total(share bucket: Bucket, share owners: array<Bucket>) -> int {
+  return bucket.rows.count() + owners.count() - 1
 }
 
 function entrypoint() -> nothing {
-  let first: Bucket = { rows: [1, 2], id: 1 }
-  let buckets: array<Bucket> = [first]
-  let fallback: Bucket = { rows: [], id: 0 }
-  print(total(buckets[0].or(fallback)))
+  let first: Bucket = { rows: [4], id: 1 }
+  let world: World = { bucket: { rows: [1, 2, 3], id: 1 }, owners: [first] }
+  print(world.bucket.total(world.owners))
 }

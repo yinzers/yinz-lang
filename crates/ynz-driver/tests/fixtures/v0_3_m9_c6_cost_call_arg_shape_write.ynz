@@ -1,0 +1,24 @@
+// v0.3-M9 C6 cost fixture: the `share` argument of a plain call is read from a list another
+// argument of the same call lends and overwrites, so it is copied once for the call and released
+// after it. This is the call-argument site that `v0_3_m9_c6_cost_arg_lend_alias.ynz` pins on
+// arrays, here on a shape. The dotted UFCS receiver has its own pair,
+// `v0_3_m9_c6_cost_ufcs_receiver_write.ynz`.
+// Allocations: the build of the no-write twin (6), the overwriting literal's array (2) and the one
+// receiver copy's array (2). Releases: the replaced element's array (2) and the copy's (2).
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function total(share bucket: Bucket, lend others: array<Bucket>) -> int {
+  others.set(0, { rows: [7], id: 2 })
+  return bucket.rows.count()
+}
+
+function entrypoint() -> nothing {
+  let first: Bucket = { rows: [1, 2], id: 1 }
+  let buckets: array<Bucket> = [first]
+  let fallback: Bucket = { rows: [], id: 0 }
+  print(total(buckets[0].or(fallback), buckets))
+}

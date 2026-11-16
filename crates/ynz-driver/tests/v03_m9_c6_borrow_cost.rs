@@ -166,20 +166,36 @@ string_cost_case!(
     "a union loop variable copied per iteration (its string variant cloned) although the body never writes the list (cost, Rule 8)"
 );
 cost_case!(
-    a_ufcs_receiver_nobody_writes_is_not_copied,
+    a_ufcs_receiver_field_nobody_writes_is_not_copied,
     "v0_3_m9_c6_cost_ufcs_receiver_no_write.ynz",
+    "3\n",
+    7,
+    0,
+    "a dotted UFCS receiver (`world.bucket.total(world.owners)`) copied although no argument of the call writes the world (cost, Rule 8)"
+);
+cost_case!(
+    a_ufcs_receiver_field_whose_root_is_lent_is_copied_once_and_released,
+    "v0_3_m9_c6_cost_ufcs_receiver_write.ynz",
+    "3\n",
+    11,
+    4,
+    "a dotted UFCS receiver (`world.bucket.total(world.owners)`) read after another argument's `lend` of its root overwrote an element, or a copy never released (High)"
+);
+cost_case!(
+    a_shape_list_element_argument_nobody_writes_is_not_copied,
+    "v0_3_m9_c6_cost_call_arg_shape_no_write.ynz",
     "2\n",
     6,
     0,
-    "a UFCS receiver copied although no argument of the call writes its list (cost, Rule 8)"
+    "a plain-call `share` argument copied although no argument of the call writes its list (cost, Rule 8)"
 );
 cost_case!(
-    a_ufcs_receiver_read_from_a_lent_list_is_copied_once_and_released,
-    "v0_3_m9_c6_cost_ufcs_receiver_write.ynz",
+    a_shape_list_element_argument_read_from_a_lent_list_is_copied_once_and_released,
+    "v0_3_m9_c6_cost_call_arg_shape_write.ynz",
     "2\n",
     10,
     4,
-    "a UFCS receiver that reads an element another argument's `lend` overwrites, read after it was freed (High)"
+    "a plain-call `share` argument that reads an element another argument's `lend` overwrites, read after it was freed (High)"
 );
 cost_case!(
     a_reassignment_from_a_field_nobody_writes_copies_nothing,

@@ -54,6 +54,11 @@ borrow_case!(
     "a-1\n"
 );
 borrow_case!(
+    ufcs_receiver_field_overwrite,
+    "v0_3_m9_c6_cost_ufcs_receiver_write.ynz",
+    "3\n"
+);
+borrow_case!(
     let_field_then_assign,
     "v0_3_m9_c6_borrow_let_field_then_assign.ynz",
     "3\n10\n"
