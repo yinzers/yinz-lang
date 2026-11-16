@@ -122,7 +122,7 @@ release_case!(
     "v0_3_m9_c3c_field_self_assign.ynz",
     "x-1\n",
     2,
-    1,
+    2,
     "`tag.name = tag.name` releases the old string and only then copies it, reading freed bytes (High)"
 );
 

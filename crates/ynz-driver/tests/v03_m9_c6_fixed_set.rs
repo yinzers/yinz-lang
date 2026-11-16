@@ -87,7 +87,7 @@ fixed_set_case!(
     3,
     1,
     6,
-    1
+    2
 );
 // Items that are not strings or shapes: the cell holds a pointer the list owns, so the write
 // frees what it replaces through the same dispatch (`stored_release`).
@@ -114,7 +114,7 @@ fixed_set_case!(
     "v0_3_m9_c6_fixed_set_maybe.ynz",
     "2\n",
     6,
-    2,
+    4,
     8,
-    2
+    4
 );

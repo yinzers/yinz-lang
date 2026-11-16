@@ -10657,9 +10657,9 @@ fn m5_p3_e8_gate_visibility_arrays() {
     );
     assert_eq!(
         (alloc, free),
-        (2, 0),
-        "1 array<int> (cap 8, no growth on .add(4)) = header+buffer, held to \
-         process exit; alloc={alloc} free={free}"
+        (2, 2),
+        "1 array<int> (cap 8, no growth on .add(4)) = header+buffer, released at the scope end \
+         (C7); alloc={alloc} free={free}"
     );
 }
 
@@ -10678,8 +10678,8 @@ fn m5_p3_e8_gate_visibility_maps() {
     );
     assert_eq!(
         (alloc, free),
-        (5, 0),
-        "1 map<int,Part> (cap 16, 4 keys, no growth) = 5 buffers, shape values \
+        (5, 5),
+        "1 map<int,Part> (cap 16, 4 keys, no growth) = 5 buffers released at the scope end (C7), shape values \
          inline (0 heap cells); alloc={alloc} free={free}"
     );
 }
@@ -10695,7 +10695,7 @@ fn m5_p3_e8_parity_gate() {
     //   +5  one map<int,Part> (5 buffers)        — never-drop
     //   +0  3 map shape-value sets (1 overwrite) — INLINE since the P3 cut
     //   +4  shape-field persists (1 lit + 3 assigns) — FRAGO 011 exact-count
-    //   free=0 (nothing balanced fires: no bg, no waits, no growth)
+    //   free=3 re-assign cells, plus 7 at the scope end (C7 slice 1): the array's 2 and the map's 5
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_e8_parity_gate.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "40\n2\n2\n");
@@ -10707,9 +10707,9 @@ fn m5_p3_e8_parity_gate() {
     );
     assert_eq!(
         (alloc, free),
-        (11, 3),
+        (11, 10),
         "E8 parity accounting drifted: expected alloc=11 (2 array + 5 map + 4 \
-         persist cells) / free=3 (each of the 3 field re-assigns frees the cell it replaces, v0.3-M9 C3c). A higher alloc = a per-element/per-iteration \
+         persist cells) / free=10 (each of the 3 field re-assigns frees the cell it replaces, v0.3-M9 C3c: 3; the array and the map are released at the scope end, C7 slice 1: 2 + 5). A higher alloc = a per-element/per-iteration \
          allocation regression or a NEW persist site; free>0 with equal delta = \
          a drop story landed (update the accounting + the step-4 verdict); any \
          other drift = investigate before touching this pin. alloc={alloc} \

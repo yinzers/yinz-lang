@@ -5,7 +5,10 @@
 //! (Golden Rule 8), so each pair below pins the count both ways: no write, no copy; a write, one
 //! copy. `alloc` and `free` are the runtime's counted allocations (`array` header and buffer are
 //! two each); the copy of a loop item or an argument is released after its iteration or call, the
-//! one of a `let` is held until C7's scope exit.
+//! one of a `let` is released at its scope exit (C7 slice 1), so the frees pinned below include the
+//! program's own locals and only the allocation count pins the copy cost. A `let` copy of a place
+//! stays unreleased until slice 2 reads `non_owned_reads` into the plan, so such a case frees less
+//! than it allocates.
 //!
 //! Approval condition of the non-owned-read design: EVERY site typeck judges has a no-write case
 //! pinned at zero extra copies: plain and state-machine loop, map-entry loop, union loop variable,
@@ -46,7 +49,7 @@ cost_case!(
     "v0_3_m9_c6_cost_loop_no_write.ynz",
     "1\n1\n",
     6,
-    0,
+    6,
     "a loop variable copied per iteration although the body never writes the array (cost, Rule 8)"
 );
 cost_case!(
@@ -54,7 +57,7 @@ cost_case!(
     "v0_3_m9_c6_cost_loop_write.ynz",
     "1\n1\n",
     14,
-    8,
+    14,
     "a loop variable left pointing at an item the body frees, or a per-iteration copy that is never released (High)"
 );
 cost_case!(
@@ -62,7 +65,7 @@ cost_case!(
     "v0_3_m9_c6_cost_arg_no_alias.ynz",
     "3\n",
     8,
-    0,
+    8,
     "a `share` argument copied although no argument of the call writes its collection (cost, Rule 8)"
 );
 cost_case!(
@@ -70,7 +73,7 @@ cost_case!(
     "v0_3_m9_c6_cost_arg_lend_alias.ynz",
     "3\n",
     10,
-    4,
+    10,
     "a `share` argument that reads an item another argument's `lend` overwrites, read after it was freed (High)"
 );
 cost_case!(
@@ -78,7 +81,7 @@ cost_case!(
     "v0_3_m9_c6_cost_let_no_write.ynz",
     "3\n",
     2,
-    0,
+    2,
     "a `let` of a field copied although the field is never written (cost, Rule 8)"
 );
 cost_case!(
@@ -86,7 +89,7 @@ cost_case!(
     "v0_3_m9_c6_cost_let_write.ynz",
     "3\n",
     6,
-    2,
+    4,
     "a `let` of a field left pointing at the array the field assignment frees (High)"
 );
 cost_case!(
@@ -94,7 +97,7 @@ cost_case!(
     "v0_3_m9_c6_cost_return_once.ynz",
     "3\n",
     4,
-    0,
+    4,
     "a call result copied again where the callee already returned an owned copy (cost, Rule 8)"
 );
 cost_case!(
@@ -153,16 +156,16 @@ string_cost_case!(
     a_map_loop_whose_body_writes_nothing_copies_no_entry,
     "v0_3_m9_c6_cost_map_loop_no_write.ynz",
     "2\n1\n",
-    (9, 0),
-    (2, 0),
+    (9, 9),
+    (2, 2),
     "a map-entry loop variable cloned per iteration (its array value and its string key) although the body never writes the map (cost, Rule 8)"
 );
 string_cost_case!(
     a_union_loop_whose_body_writes_nothing_copies_no_item,
     "v0_3_m9_c6_cost_union_loop_no_write.ynz",
     "big-1\n",
-    (2, 0),
-    (2, 0),
+    (2, 2),
+    (2, 2),
     "a union loop variable copied per iteration (its string variant cloned) although the body never writes the list (cost, Rule 8)"
 );
 cost_case!(
@@ -186,7 +189,7 @@ cost_case!(
     "v0_3_m9_c6_cost_call_arg_shape_no_write.ynz",
     "2\n",
     6,
-    0,
+    6,
     "a plain-call `share` argument copied although no argument of the call writes its list (cost, Rule 8)"
 );
 cost_case!(
@@ -194,7 +197,7 @@ cost_case!(
     "v0_3_m9_c6_cost_call_arg_shape_write.ynz",
     "2\n",
     10,
-    4,
+    10,
     "a plain-call `share` argument that reads an element another argument's `lend` overwrites, read after it was freed (High)"
 );
 cost_case!(
@@ -202,7 +205,7 @@ cost_case!(
     "v0_3_m9_c6_cost_assign_no_write.ynz",
     "3\n",
     4,
-    0,
+    2,
     "a reassignment copied although the field is never written (cost, Rule 8)"
 );
 cost_case!(
@@ -210,7 +213,7 @@ cost_case!(
     "v0_3_m9_c6_cost_maybe_array_let_no_write.ynz",
     "3\n",
     6,
-    0,
+    4,
     "a `let` of a `maybe<array>` and of its `.or` copying the payload array although the list is never written (cost, Rule 8)"
 );
 cost_case!(
@@ -218,7 +221,7 @@ cost_case!(
     "v0_3_m9_c6_cost_maybe_map_let_no_write.ynz",
     "1\n",
     12,
-    0,
+    7,
     "a `let` of a `maybe<map>` and of its `.or` copying the payload map although the list is never written (cost, Rule 8)"
 );
 cost_case!(

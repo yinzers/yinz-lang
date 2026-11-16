@@ -2,8 +2,7 @@
 // released. The store copies a borrowed string, so `tag.name = tag.name` must copy the bytes and
 // only then free the original.
 // Heap strings: `name` 1 (fresh, moved into the literal); the assignment copies it 1 and releases
-// the original: 2 allocated, 1 released. The copy stays with the shape until the scope-exit pass
-// (C7).
+// the original, and the shape is released at the scope end (C7): 2 allocated, 2 released.
 // Expected output: the name, unchanged.
 
 shape Tag {
