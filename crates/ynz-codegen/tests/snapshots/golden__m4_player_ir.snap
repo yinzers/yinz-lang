@@ -57,11 +57,12 @@ ov_panic:                                         ; preds = %entry
   unreachable
 }
 
-; Function Attrs: nofree nounwind
-define void @consume(ptr nocapture readonly %0) local_unnamed_addr #0 {
+define void @consume(ptr nocapture readonly %0) local_unnamed_addr {
 entry:
   %name2 = load ptr, ptr %0, align 8
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %name2)
+  %"ynz_release_shape:Player_stored.i" = load ptr, ptr %0, align 8
+  tail call void @ynz_string_release(ptr %"ynz_release_shape:Player_stored.i")
   ret void
 }
 
@@ -73,8 +74,16 @@ heal.exit:
   %puts.i = tail call i32 @puts(ptr nonnull dereferenceable(1) %field_str_str), !noalias !0
   %int_str = tail call ptr @ynz_int_to_string(i64 120)
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
-  tail call void @ynz_string_release(ptr %int_str)
+  %temporary0_is_live.not = icmp eq ptr %int_str, null
+  br i1 %temporary0_is_live.not, label %statement_end_released_temporary0, label %statement_end_release_temporary0
+
+statement_end_release_temporary0:                 ; preds = %heal.exit
+  tail call void @ynz_string_release(ptr nonnull %int_str)
+  br label %statement_end_released_temporary0
+
+statement_end_released_temporary0:                ; preds = %statement_end_release_temporary0, %heal.exit
   %puts.i8 = tail call i32 @puts(ptr nonnull dereferenceable(1) %field_str_str)
+  tail call void @ynz_string_release(ptr %field_str_str)
   tail call void @ynz_rt_shutdown()
   ret i32 0
 }
