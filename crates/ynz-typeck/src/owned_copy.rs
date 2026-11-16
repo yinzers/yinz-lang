@@ -33,7 +33,7 @@
 //! (`non_owned_reads`) owns nothing. `ynz-codegen`'s release table frees exactly what the copy
 //! allocates, and a parity test holds the two tables together.
 
-use crate::types::{type_name, Type};
+use crate::types::{is_bignum, type_name, Type};
 
 /// How to produce an owned, independent copy of a value of some type — or why one cannot
 /// exist. Exhaustive over `Type` via [`owned_copy_plan`], which has no `_` arm, so a new
@@ -261,17 +261,9 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
              set of bytes that copying could mean here.",
         )),
 
-        // Bignum (`precision > 34`). Unreachable from source today — the parser turns a
-        // wider-than-34 precision away with its own message — but classified honestly rather
-        // than left to alias, since the moment it ships the alias would be silent.
-        Type::Number { .. } => OwnedCopy::Refused(CopyRefusal::new(
-            " with more than 34 digits of precision",
-            "Use a plain `number`, which carries 34 digits: `let total: number = 12.5`. \
-             Copying works on those.",
-            "Numbers wider than that are still being designed and are not ready in this \
-             version, so nothing here knows yet how their digits are stored — a copy could \
-             not be made honestly.",
-        )),
+        // Bignum (`precision > 34`): a pointer to heap decimal text, copied and released exactly like a
+        // `string` (`is_owned_text`). Immutable text, so a fresh copy of the bytes is a full copy.
+        Type::Number { .. } => OwnedCopy::StringClone,
 
         // The WHAT-INSTEAD here cannot point at "the value you meant" the way the other
         // refusals can — when a function hands back `nothing` there IS no such value to name.
@@ -492,9 +484,15 @@ pub fn copy_is_independent(ty: &Type) -> bool {
 pub fn copied_at_return(ty: &Type) -> bool {
     match ty {
         Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+        Type::Number { .. } => is_bignum(ty),
         Type::Shape { name } => !name.is_empty(),
         Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
-        Type::ErrorsCapable { inner } => copied_at_return(inner),
+        // An `errors` result owns what its `return` allocated: the inner value's copy, and for a
+        // `maybe` the envelope cell the return always makes (`maybe_to_heap_cell`), whatever its
+        // payload, so the caller's binding owns the cell and releases it.
+        Type::ErrorsCapable { inner } => {
+            copied_at_return(inner) || matches!(inner.as_ref(), Type::Maybe { .. })
+        }
         Type::BuiltinChannel { .. } => true,
         // A `maybe` return copies its payload itself (the `Type::Maybe` arm of the return, `maybe_payload_stable_bits`):
         // a string clone, a shape or number cell or a channel reference, unless the value moves. An array or map payload is the caller's copy to make.

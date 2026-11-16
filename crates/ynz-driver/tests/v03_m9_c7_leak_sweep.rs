@@ -1,0 +1,215 @@
+//! v0.3-M9 C7 leak sweep: build EVERY fixture, run it with the alloc and string counters, and
+//! classify each leaking one as plain-path or state-machine-only.
+//!
+//! The release plan's measure is `frees == allocations`. This sweep is the list of where that
+//! still fails, so a producer fix can be checked against the whole corpus and the next agent
+//! can see what is left. It is `#[ignore]` (it builds ~950 programs and, until C8 lands, is red
+//! by design); it is a report, not a gate.
+//!
+//! Re-run (writes the report, prints a summary):
+//!
+//! ```text
+//! cargo test -p ynz-driver --test v03_m9_c7_leak_sweep -- --ignored --nocapture
+//! ```
+//!
+//! The report goes to `$YNZ_LEAK_SWEEP_OUT` (default `<workspace>/target/leak_sweep.tsv`), one
+//! line per leaking fixture:
+//! `class <TAB> fixture <TAB> concurrency-keywords <TAB> alloc/free <TAB> strings alloc/free`
+//!
+//! Classes:
+//! - `plain`: the emitted IR has no `ynz_sm_*_resume` function, so only the plain-path release
+//!   (C7) can have produced the leak.
+//! - `state-machine`: the IR has at least one `ynz_sm_*_resume` function. State-machine
+//!   functions release nothing yet (C8), so these are C8's inputs. A state-machine fixture can
+//!   ALSO hold a plain-path leak; the report cannot tell, so `plain` is a lower bound and the
+//!   `state-machine` list is where to look for a plain leak that needs reproducing alone.
+//! - `no-build` / `no-run`: the fixture did not compile (an expected-error fixture) or the
+//!   program exited without writing its counters; these are listed apart, never counted as
+//!   balanced.
+//!
+//! `$YNZ_LEAK_SWEEP_FILTER`, when set, keeps only the fixtures whose name contains it.
+
+mod support;
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+/// The words that make a fixture "concurrency" for the sweep's grouping: a fixture without any is
+/// a plain program, whatever else it does.
+const CONCURRENCY_KEYWORDS: [&str; 5] = ["background", "wait", "channel", "errors", "fails"];
+
+struct Outcome {
+    class: &'static str,
+    fixture: String,
+    keywords: String,
+    heap: (u64, u64),
+    strings: (u64, u64),
+}
+
+/// All the text of a fixture (a project directory's files joined), for the keyword scan.
+fn fixture_source(fixture: &str) -> String {
+    let path = support::fixture_path(fixture);
+    if !path.is_dir() {
+        return std::fs::read_to_string(&path).unwrap_or_default();
+    }
+    let mut text = String::new();
+    let mut pending = vec![path];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                pending.push(entry_path);
+            } else if let Ok(contents) = std::fs::read_to_string(&entry_path) {
+                text.push_str(&contents);
+            }
+        }
+    }
+    text
+}
+
+fn keywords_in(source: &str) -> String {
+    let words: std::collections::HashSet<&str> = source
+        .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+        .collect();
+    let found: Vec<&str> = CONCURRENCY_KEYWORDS
+        .iter()
+        .copied()
+        .filter(|keyword| words.contains(keyword))
+        .collect();
+    if found.is_empty() {
+        "-".to_string()
+    } else {
+        found.join(",")
+    }
+}
+
+/// Build and run one fixture (optimized). `Err(class)` when it cannot be measured.
+fn measure(fixture: &str) -> Result<Outcome, &'static str> {
+    let built =
+        std::panic::catch_unwind(|| support::build(fixture, false)).map_err(|_| "no-build")?;
+    let ir = std::fs::read_to_string(&built.ir).unwrap_or_default();
+    let has_state_machine = ir.lines().any(|line| {
+        line.starts_with("define ") && line.contains("@ynz_sm_") && line.contains("_resume(")
+    });
+    let (_, counters) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        support::run_counted(&built)
+    }))
+    .map_err(|_| "no-run")?;
+    Ok(Outcome {
+        class: if has_state_machine {
+            "state-machine"
+        } else {
+            "plain"
+        },
+        fixture: fixture.to_string(),
+        keywords: keywords_in(&fixture_source(fixture)),
+        heap: (counters.alloc, counters.free),
+        strings: (counters.string_alloc, counters.string_free),
+    })
+}
+
+#[test]
+#[ignore = "a report over every fixture (~950 builds); run on demand with --ignored"]
+fn sweep_every_fixture_for_leaks_and_classify_them() {
+    let filter = std::env::var("YNZ_LEAK_SWEEP_FILTER").unwrap_or_default();
+    let fixtures_dir = support::fixture_path("");
+    let mut names: Vec<String> = std::fs::read_dir(&fixtures_dir)
+        .expect("read the fixtures directory")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(filter.as_str()))
+        .collect();
+    names.sort();
+
+    let cursor = AtomicUsize::new(0);
+    let leaks: Mutex<Vec<Outcome>> = Mutex::new(Vec::new());
+    let unmeasured: Mutex<Vec<(String, &'static str)>> = Mutex::new(Vec::new());
+    let balanced = AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .min(4);
+    // A worker claims the next fixture as it frees up: per-fixture cost varies widely.
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let position = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(fixture) = names.get(position) else {
+                    break;
+                };
+                match measure(fixture) {
+                    Ok(outcome)
+                        if outcome.heap.0 != outcome.heap.1
+                            || outcome.strings.0 != outcome.strings.1 =>
+                    {
+                        leaks.lock().expect("leaks mutex").push(outcome);
+                    }
+                    Ok(_) => {
+                        balanced.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(class) => unmeasured
+                        .lock()
+                        .expect("unmeasured mutex")
+                        .push((fixture.clone(), class)),
+                }
+            });
+        }
+    });
+
+    let mut leaks = leaks.into_inner().expect("leaks mutex");
+    leaks.sort_by(|left, right| (left.class, &left.fixture).cmp(&(right.class, &right.fixture)));
+    let mut unmeasured = unmeasured.into_inner().expect("unmeasured mutex");
+    unmeasured.sort();
+
+    let mut report = String::new();
+    for outcome in &leaks {
+        report.push_str(&format!(
+            "{}\t{}\t{}\t{}/{}\t{}/{}\n",
+            outcome.class,
+            outcome.fixture,
+            outcome.keywords,
+            outcome.heap.0,
+            outcome.heap.1,
+            outcome.strings.0,
+            outcome.strings.1
+        ));
+    }
+    for (fixture, class) in &unmeasured {
+        report.push_str(&format!("{class}\t{fixture}\n"));
+    }
+    let out_path = std::env::var("YNZ_LEAK_SWEEP_OUT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/leak_sweep.tsv")
+        });
+    std::fs::write(&out_path, &report).expect("write the sweep report");
+
+    let count_of = |class: &str, plain_source: bool| {
+        leaks
+            .iter()
+            .filter(|outcome| outcome.class == class && (outcome.keywords == "-") == plain_source)
+            .count()
+    };
+    println!(
+        "swept {} fixtures: {} balanced, {} leaking, {} unmeasured (report: {})",
+        names.len(),
+        balanced.load(Ordering::Relaxed),
+        leaks.len(),
+        unmeasured.len(),
+        out_path.display()
+    );
+    println!(
+        "leaking, no concurrency keyword: plain {}, state-machine {}",
+        count_of("plain", true),
+        count_of("state-machine", true)
+    );
+    println!(
+        "leaking, with a concurrency keyword: plain {}, state-machine {}",
+        count_of("plain", false),
+        count_of("state-machine", false)
+    );
+}

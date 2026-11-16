@@ -38,7 +38,7 @@ use ynz_ast::nodes::{Expr, FunctionDecl, Item, MatchPatternKind, Module, Postfix
 use crate::binding_names::{decl_key, BindingNames, DeclKey};
 use crate::effective_ownership::EffectiveOwnershipReport;
 use crate::non_owned_reads::{NonOwnedReads, ReadTracker};
-use crate::types::Type;
+use crate::types::{is_bignum, is_owned_text, Type};
 
 /// The record: the `(span.start, span.end)` of every string-typed expression a store takes by
 /// move.
@@ -169,7 +169,10 @@ impl Recorder<'_> {
         // The `let`s declared directly in this block die here.
         let mut direct = HashSet::new();
         for stmt in stmts {
-            if let Stmt::Let { name, name_span, .. } = stmt {
+            if let Stmt::Let {
+                name, name_span, ..
+            } = stmt
+            {
                 direct.insert(decl_key(name_span, name));
             }
         }
@@ -359,7 +362,7 @@ impl Recorder<'_> {
     }
 
     fn walk(&mut self, expr: &Expr, counts: &HashMap<DeclKey, usize>, after: &HashSet<DeclKey>) {
-        if matches!(self.type_of(expr), Some(Type::String)) {
+        if self.type_of(expr).is_some_and(is_owned_text) {
             let last_use = self.let_decl_of(expr).filter(|declaration| {
                 counts.get(declaration) == Some(&1) && !after.contains(declaration)
             });
@@ -501,7 +504,9 @@ pub(crate) fn is_fresh_string_expr(
             }
             match type_of(receiver) {
                 Some(Type::String) => FRESH_STRING_METHODS.contains(&method.as_str()),
-                Some(Type::Int | Type::Float | Type::Number { .. }) => method == "toString",
+                Some(Type::Int | Type::Float | Type::Number { .. } | Type::Options { .. }) => {
+                    method == "toString"
+                }
                 _ => false,
             }
         }
@@ -512,6 +517,8 @@ pub(crate) fn is_fresh_string_expr(
             op: PostfixOpKind::Copy,
             ..
         } => true,
+        // Arithmetic on a bignum builds a fresh heap decimal string (`ynz_bignum_add` and kin).
+        Expr::BinOp { .. } | Expr::UnaryOp { .. } => type_of(expr).is_some_and(is_bignum),
         Expr::Wait(inner, _) => is_fresh_string_expr(inner, expr_types, callable_fns),
         _ => false,
     }
