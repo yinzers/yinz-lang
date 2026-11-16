@@ -3,8 +3,12 @@
 //!
 //! The release plan's measure is `frees == allocations`. This sweep is the list of where that
 //! still fails, so a producer fix can be checked against the whole corpus and the next agent
-//! can see what is left. It is `#[ignore]` (it builds ~950 programs and, until C8 lands, is red
-//! by design); it is a report, not a gate.
+//! can see what is left. It is `#[ignore]` because it builds ~950 programs (about 90 s on 4
+//! cores): a dedicated-lane test, not a pre-push one.
+//!
+//! It asserts the one thing C7 owns: a `plain`-class fixture leaks only if it is listed in
+//! `KNOWN_PLAIN_LEAKS` with its reason, and every listed one still leaks (a fixed leak must leave
+//! the list). State-machine leaks are C8's input and are reported, not asserted.
 //!
 //! Re-run (writes the report, prints a summary):
 //!
@@ -38,6 +42,13 @@ use std::sync::Mutex;
 /// The words that make a fixture "concurrency" for the sweep's grouping: a fixture without any is
 /// a plain program, whatever else it does.
 const CONCURRENCY_KEYWORDS: [&str; 5] = ["background", "wait", "channel", "errors", "fails"];
+
+/// The `plain`-class fixtures that leak today, each with the producer that is not fixed. Found by
+/// this sweep in C7 test review r2; the entry leaves the list in the change that fixes it.
+const KNOWN_PLAIN_LEAKS: [(&str, &str); 1] = [(
+    "m5_p3_sweep_mapentry_bg_escape.ynz",
+    "a `MapEntry` loop variable passed as a `background` argument: 8 allocations, 7 frees",
+)];
 
 struct Outcome {
     class: &'static str,
@@ -212,4 +223,23 @@ fn sweep_every_fixture_for_leaks_and_classify_them() {
         count_of("plain", false),
         count_of("state-machine", false)
     );
+
+    // Bug caught (High: leak): a producer on the plain path that no fixture of the corpus
+    // exercises the counters of, or one that is fixed while its entry stays listed.
+    let mut plain_leaks: Vec<&str> = leaks
+        .iter()
+        .filter(|outcome| outcome.class == "plain")
+        .map(|outcome| outcome.fixture.as_str())
+        .collect();
+    plain_leaks.sort_unstable();
+    let mut listed: Vec<&str> = KNOWN_PLAIN_LEAKS.iter().map(|(name, _)| *name).collect();
+    listed.sort_unstable();
+    if filter.is_empty() {
+        assert_eq!(
+            plain_leaks, listed,
+            "the plain-path leaks of the corpus differ from KNOWN_PLAIN_LEAKS: a fixture on the \
+             left only is a new plain-path leak to fix; one on the right only is fixed, so remove \
+             it from the list"
+        );
+    }
 }
