@@ -151,3 +151,41 @@ fn every_form_of_a_returned_maybe_union_is_released() {
         );
     });
 }
+
+// ── Probe: a `maybe` a UFCS call gives ───────────────────────────────────────────────────────
+
+const MAYBE_GIVEN_BY_UFCS: &str = "
+shape Basket {
+  size: int
+}
+shape Tag {
+  name: string
+}
+function firstTag(share list: array<Tag>) -> maybe<Tag> {
+  let found = list.get(0)
+  return found
+}
+function eatTag(share basket: Basket, give found: maybe<Tag>) -> int {
+  return found.or({name: `z`}).name.count()
+}
+function entrypoint() -> nothing {
+  let tags: array<Tag> = [{name: `nn`}]
+  let current: maybe<Tag> = tags.get(0)
+  let basket: Basket = { size: 1 }
+  let copied: int = basket.eatTag(current.copy())
+  let returned: int = basket.eatTag(firstTag(tags))
+  print(copied + returned)
+}
+";
+
+/// A `.copy()` of a `maybe`, or a function's `maybe` result, at the `give` position of a UFCS call
+/// (`list.eatTag(x)`) is handed over once, like the plain call `eatTag(x)` (High).
+#[test]
+fn a_fresh_maybe_given_through_a_ufcs_call_is_handed_over_once() {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("c7_fold_ufcs_give", MAYBE_GIVEN_BY_UFCS, "4\n", no_optimize);
+        assert_heap_balanced("c7_fold_ufcs_give", &counters, no_optimize);
+        assert_strings_balanced("c7_fold_ufcs_give", &counters, no_optimize);
+        assert_asan_clean("c7_fold_ufcs_give", MAYBE_GIVEN_BY_UFCS, "4\n", no_optimize);
+    });
+}

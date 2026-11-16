@@ -24605,8 +24605,16 @@ fn lower_ufcs_call<'ctx>(
         recv_val
     };
     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
-    for arg in extra_args.iter() {
-        let arg_val = lower_call_argument(cg, arg, &mut copies)?;
+    for (extra_index, arg) in extra_args.iter().enumerate() {
+        let mut arg_val = lower_call_argument(cg, arg, &mut copies)?;
+        // The receiver is parameter 0, so the extra arguments start at parameter 1. A `maybe` at a
+        // `give` position is handed over as a plain call's is (`own_given_maybe`).
+        if matches!(
+            cg.plain_callee_param_ownership(method, extra_index + 1),
+            Some(Some(OwnershipModifier::Give))
+        ) {
+            arg_val = own_given_maybe(cg, arg, arg_val)?;
+        }
         args.push(arg_val.into());
     }
 
