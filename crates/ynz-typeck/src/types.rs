@@ -228,17 +228,6 @@ pub fn type_name(t: &Type) -> String {
     }
 }
 
-/// True when a value of this type is passed by copy (no heap reference, no aliasing).
-///
-/// Trivially-copyable types — `int`, `float`, `boolean`, `number` — fit in a machine
-/// register and are copied bit-for-bit when passed to a function. A copy cannot alias the
-/// caller's value, so a callee that "writes" a copied scalar parameter never affects the
-/// caller. Every other type (`shape`, `array`, `map`, `maybe`, union, `dynamic`, strings,
-/// etc.) is a heap reference: passing it shares the underlying object, so a `lend`/`give`
-/// write through it IS observable at the call site.
-///
-/// The auto-parallelization independence analysis uses this to decide whether a call
-/// argument is a potential aliased write: only heap-typed, non-`share` arguments can be.
 /// The widest `number<N>` that is a decimal128 value (an i128, no heap). A `number` wider than this is a
 /// bignum: a pointer to heap decimal text, released like a `string`.
 pub const DECIMAL128_MAX_PRECISION: u32 = 34;
@@ -256,6 +245,17 @@ pub fn is_bignum(ty: &Type) -> bool {
     matches!(ty, Type::Number { precision } if *precision > DECIMAL128_MAX_PRECISION)
 }
 
+/// True when a value of this type is passed by copy (no heap reference, no aliasing).
+///
+/// Trivially-copyable types — `int`, `float`, `boolean`, `number` — fit in a machine
+/// register and are copied bit-for-bit when passed to a function. A copy cannot alias the
+/// caller's value, so a callee that "writes" a copied scalar parameter never affects the
+/// caller. Every other type (`shape`, `array`, `map`, `maybe`, union, `dynamic`, strings,
+/// etc.) is a heap reference: passing it shares the underlying object, so a `lend`/`give`
+/// write through it IS observable at the call site.
+///
+/// The auto-parallelization independence analysis uses this to decide whether a call
+/// argument is a potential aliased write: only heap-typed, non-`share` arguments can be.
 pub fn is_trivially_copyable(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Float | Type::Bool)
         // N ≤ 34: decimal128, an i128 value — trivially copyable. N > 34: bignum, a pointer

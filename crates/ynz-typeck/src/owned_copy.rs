@@ -499,7 +499,7 @@ pub fn copied_at_return(ty: &Type) -> bool {
         Type::Maybe { inner } => match inner.as_ref() {
             Type::BuiltinChannel { .. } | Type::String => true,
             Type::Shape { name } => !name.is_empty(),
-            Type::Number { precision } => *precision <= 34,
+            Type::Number { precision } => *precision <= crate::types::DECIMAL128_MAX_PRECISION,
             // A `maybe` of a union with a shape variant returns the union's slot by value, its payload a
             // deep copy unless the value moves (the `Type::Maybe` return of an envelope union).
             union @ Type::Union { .. } => crate::check::is_envelope_union(union),
