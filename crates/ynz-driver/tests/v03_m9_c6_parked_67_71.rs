@@ -208,3 +208,72 @@ union_spawn_cases!(
     Callee::StateMachine,
     Argument::ShapeIntoUnion
 );
+
+/// Parked entry 69: a deep copy (`union_deepen_fn`) and a release (`release_fn`) that walk a
+/// self-referential union run over the data. A chain of `CHAIN_LENGTH` nodes is handed to a task
+/// in a `for` loop and read by the spawner afterwards, so each spawn copies the whole chain and
+/// the task releases it.
+const CHAIN_LENGTH: usize = 500;
+
+fn chain_loop_program(suspending_callee: bool, tasks: usize) -> String {
+    let callee_wait = if suspending_callee {
+        "  wait sleep(1)\n"
+    } else {
+        ""
+    };
+    format!(
+        "shape End {{\n  flag: boolean\n}}\nshape Node {{\n  value: int\n  next: Node | End\n}}\n\n\
+         function build(length: int) -> Node {{\n  let stop: End = {{ flag: true }}\n  \
+         let head: Node = {{ value: 0, next: stop }}\n  let round = 1\n  \
+         while (round < length) {{\n    let node: Node = {{ value: round, next: head }}\n    \
+         head = node\n    round = round + 1\n  }}\n  return head\n}}\n\n\
+         function show(chain: Node) -> nothing {{\n{callee_wait}  print(777)\n}}\n\n\
+         function launch() -> nothing {{\n  let head = build({CHAIN_LENGTH})\n  \
+         for (round in range(0, {tasks})) {{\n    background show(head)\n  }}\n  \
+         print(head.value)\n}}\n\nfunction entrypoint() -> nothing {{\n  launch()\n  \
+         wait sleep(300)\n}}\n"
+    )
+}
+
+fn assert_chain_spawns_balance(suspending_callee: bool, no_optimize: bool) {
+    let counts = |tasks: usize| {
+        let source = chain_loop_program(suspending_callee, tasks);
+        let built = build_source(&source, "c6 recursive chain spawn", no_optimize);
+        let (output, counters) = run_counted(&built);
+        assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
+        assert_eq!(output.stdout.matches("777\n").count(), tasks, "{source}");
+        let run = run_asan_binary(&build_asan(&built));
+        assert!(
+            !run.stderr.contains("AddressSanitizer"),
+            "AddressSanitizer reported an error:\n{}",
+            run.stderr
+        );
+        (counters.alloc, counters.free)
+    };
+    let (alloc_one, free_one) = counts(1);
+    let (alloc_four, free_four) = counts(4);
+    assert!(
+        alloc_four - alloc_one >= 3 * CHAIN_LENGTH as u64,
+        "three more spawns copied less than three chains: {alloc_one} -> {alloc_four} cells"
+    );
+    assert_eq!(
+        alloc_four - alloc_one,
+        free_four - free_one,
+        "three more spawns of a {CHAIN_LENGTH}-node chain must free every cell they allocate"
+    );
+}
+
+#[test]
+fn recursive_chain_spawn_in_a_loop_balances_cpu_callee() {
+    // Bug caught: the recursive copy or release of a self-referential union misses a box per node,
+    // or frees one twice. Tier: High (data integrity).
+    assert_chain_spawns_balance(false, false);
+    assert_chain_spawns_balance(false, true);
+}
+
+#[test]
+fn recursive_chain_spawn_in_a_loop_balances_state_machine_callee() {
+    // Bug caught: as above, through the state-machine retire ladder. Tier: High.
+    assert_chain_spawns_balance(true, false);
+    assert_chain_spawns_balance(true, true);
+}
