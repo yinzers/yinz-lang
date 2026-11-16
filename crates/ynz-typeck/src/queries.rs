@@ -267,6 +267,7 @@ fn check_query_cycle_initial(
             string_moves: Default::default(),
             heap_moves: Default::default(),
             non_owned_reads: Default::default(),
+            temporaries: Default::default(),
         },
         mono_table: crate::generics::MonomorphizationTable {
             entries: std::collections::BTreeMap::new(),

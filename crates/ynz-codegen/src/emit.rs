@@ -2201,6 +2201,12 @@ struct Cg<'ctx, 'g> {
     // by move (typeck's `TypedModule::string_moves`), keyed by the LLVM value. Written by
     // `lower_expr` and read by `own_string_for_store`; a string absent from it is copied.
     owned_string_values: std::collections::HashSet<usize>,
+    // C7 slice 2: the temporaries of the statements being lowered, innermost statement last. A
+    // statement opens a frame (`open_temporaries`) holding one entry-block slot per temporary
+    // typeck recorded for it (`TypedModule::temporaries`), set to null at the statement's start;
+    // `lower_expr` stores a temporary's value into its slot where it is built, and the statement's
+    // end, a `return` and an auto-propagation release every live slot through `emit_slot_release`.
+    temporary_frames: Vec<Vec<TemporarySlot<'ctx>>>,
     // C1f round 2: the heap values (a shape, union or `maybe` that may own boxes) the expression
     // that produced them says a store takes by MOVE (typeck's `TypedModule::heap_moves`), keyed by
     // the LLVM value: the pointer an identifier read loads (a fresh `load` per read), a literal's
@@ -7463,6 +7469,7 @@ fn plain_cg<'ctx, 'g>(
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
         owned_string_values: std::collections::HashSet::new(),
+        temporary_frames: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
@@ -7893,6 +7900,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
         owned_string_values: std::collections::HashSet::new(),
+        temporary_frames: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
@@ -17151,7 +17159,19 @@ fn lower_soa_construction<'ctx>(
     Ok(arr.into())
 }
 
+/// Lower one statement, then release the temporaries typeck recorded for it (`open_temporaries`,
+/// `close_temporaries`): a fresh value no binding holds dies where its statement ends. A `while`
+/// condition's temporaries die after the condition, not after the loop (`lower_stmt_while`).
+///
+/// O(1) time here.
 fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
+    let span = ynz_typeck::release_plan::stmt_span(stmt);
+    let opened = cg.open_temporaries(span)?;
+    lower_stmt_body(cg, stmt)?;
+    cg.close_temporaries(opened)
+}
+
+fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
     match stmt {
         Stmt::Expr(expr) => {
             lower_expr(cg, expr)?;
@@ -17793,7 +17813,10 @@ fn lower_stmt_while<'ctx>(
         .map_err(|e| format!("{e}"))?;
 
     cg.builder.position_at_end(header_bb);
+    let cond_span = cond.span();
+    let opened = cg.open_temporaries((cond_span.start, cond_span.end))?;
     let cond_val = lower_expr(cg, cond)?.into_int_value();
+    cg.close_temporaries(opened)?;
     cg.builder
         .build_conditional_branch(cond_val, body_bb, exit_bb)
         .map_err(|e| format!("{e}"))?;
@@ -19361,6 +19384,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         let val = lower_expr_node(cg, expr)?;
         remember_movable_string(cg, expr, val)?;
         remember_moved_cells(cg, expr, val);
+        cg.bind_temporary(expr, val)?;
         return Ok(val);
     };
     let outer = cg.coercion_inner.replace(key);
@@ -20164,7 +20188,6 @@ fn lower_expr_node<'ctx>(
                     let ty = cg.expr_type(&call.args[0]);
                     let val = lower_expr(cg, &call.args[0])?;
                     lower_print(cg, val, &ty)?;
-                    release_printed_fresh_string(cg, &call.args[0], val, &ty)?;
                     Ok(cg.i32().const_int(0, false).into())
                 }
                 // M8 P4: `sensitive(value)` — identity at the ABI level (string ptr passes through).
@@ -26015,6 +26038,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 // at the identifier read of a value handed over, `Cg::take_string_slots` where the store seam takes
 // a string at its last use.
 
+/// One temporary of a statement: the entry-block slot that holds the value it builds (null until it
+/// is built) and the type its release is called with (`Cg::open_temporaries`).
+struct TemporarySlot<'ctx> {
+    /// The span of the expression that builds the temporary (`TypedModule::temporaries`).
+    span: (usize, usize),
+    slot: PointerValue<'ctx>,
+    ty: Type,
+}
+
 /// The value an assignment replaces (`Cg::begin_assign_release`).
 struct ReplacedValue<'ctx> {
     /// The slot held a value (not null: nothing took it).
@@ -26260,10 +26292,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// THE emitter of a scope exit on the plain path: for each entry of `entries` whose fate
-    /// releases (`plain_release_of`), load the binding's slot, skip a null one when the fate is
-    /// `ReleaseIfLive`, and call the type's release (`release_fn`). A shape local's slot holds the
-    /// address of its entry-block region, so its release does not free a cell (`owns_cell` false).
-    /// Emits nothing in a state-machine function (C8).
+    /// releases (`plain_release_of`), release the binding's slot (`emit_slot_release`). A shape
+    /// local's slot holds the address of its entry-block region, so its release does not free a
+    /// cell (`owns_cell` false). Emits nothing in a state-machine function (C8).
     ///
     /// O(entries) time to emit; at run time O(heap each entry owns).
     fn emit_release_edge(
@@ -26283,38 +26314,165 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .locals
                 .get(name)
                 .ok_or_else(|| format!("internal: release of `{name}` at {site}: no slot"))?;
-            let Some(glue) = self.release_fn(&ty, false)? else {
-                continue;
-            };
-            let value = self
+            self.emit_slot_release(slot, &ty, only_if_live, name, site)?;
+        }
+        Ok(())
+    }
+
+    /// THE one release of a slot: load the pointer `slot` holds, skip a null one when
+    /// `only_if_live`, and call the type's release (`release_fn`). A binding's scope exit
+    /// (`emit_release_edge`) and a temporary's statement end (`release_temporaries`) both come
+    /// here, so nothing else decides how a slot's value is freed. `name` and `site` only name the
+    /// emitted blocks.
+    ///
+    /// O(1) time to emit; at run time O(heap the value owns).
+    fn emit_slot_release(
+        &self,
+        slot: PointerValue<'ctx>,
+        ty: &Type,
+        only_if_live: bool,
+        name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let Some(glue) = self.release_fn(ty, false)? else {
+            return Ok(());
+        };
+        let value = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_release_value"))
+            .map_err(|err| format!("release load {name}: {err}"))?
+            .into_pointer_value();
+        let after = if only_if_live {
+            let release_bb = self.append_block(&format!("{site}_release_{name}"));
+            let after_bb = self.append_block(&format!("{site}_released_{name}"));
+            let live = self
                 .builder
-                .build_load(self.ptr(), slot, &format!("{name}_release_value"))
-                .map_err(|err| format!("release load {name}: {err}"))?
-                .into_pointer_value();
-            let after = if only_if_live {
-                let release_bb = self.append_block(&format!("{site}_release_{name}"));
-                let after_bb = self.append_block(&format!("{site}_released_{name}"));
-                let live = self
-                    .builder
-                    .build_is_not_null(value, &format!("{name}_is_live"))
-                    .map_err(|err| format!("release null check {name}: {err}"))?;
-                self.builder
-                    .build_conditional_branch(live, release_bb, after_bb)
-                    .map_err(|err| format!("release branch {name}: {err}"))?;
-                self.builder.position_at_end(release_bb);
-                Some(after_bb)
-            } else {
-                None
-            };
+                .build_is_not_null(value, &format!("{name}_is_live"))
+                .map_err(|err| format!("release null check {name}: {err}"))?;
             self.builder
-                .build_call(glue, &[value.into()], "")
-                .map_err(|err| format!("release call {name}: {err}"))?;
-            if let Some(after_bb) = after {
-                self.builder
-                    .build_unconditional_branch(after_bb)
-                    .map_err(|err| format!("release join {name}: {err}"))?;
-                self.builder.position_at_end(after_bb);
-            }
+                .build_conditional_branch(live, release_bb, after_bb)
+                .map_err(|err| format!("release branch {name}: {err}"))?;
+            self.builder.position_at_end(release_bb);
+            Some(after_bb)
+        } else {
+            None
+        };
+        self.builder
+            .build_call(glue, &[value.into()], "")
+            .map_err(|err| format!("release call {name}: {err}"))?;
+        if let Some(after_bb) = after {
+            self.builder
+                .build_unconditional_branch(after_bb)
+                .map_err(|err| format!("release join {name}: {err}"))?;
+            self.builder.position_at_end(after_bb);
+        }
+        Ok(())
+    }
+
+    /// A statement is about to run: open a frame of the temporaries typeck recorded for the
+    /// release point `key` (`TypedModule::temporaries`), one entry-block slot each, set to null
+    /// here so a temporary built on one path only (or not yet built) releases nothing. Returns
+    /// whether a frame was opened, for `close_temporaries`. A state-machine function releases no
+    /// temporary (C8).
+    ///
+    /// O(t) time for t temporaries of the statement.
+    fn open_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
+        if self.sm_frame_ptr.is_some() {
+            return Ok(false);
+        }
+        let spans = self.typed.temporaries.released_at(key.0, key.1).to_vec();
+        if spans.is_empty() {
+            return Ok(false);
+        }
+        let mut frame = Vec::with_capacity(spans.len());
+        for span in spans {
+            let ty = self.typed.expr_types.get(&span).cloned().ok_or_else(|| {
+                format!(
+                    "internal: the temporary at {}..{} has no recorded type",
+                    span.0, span.1
+                )
+            })?;
+            let ty = self.resolve_type(&ty);
+            let slot = self.alloca_in_entry_llvm(self.ptr(), "temporary")?;
+            self.builder
+                .build_store(slot, self.ptr().const_null())
+                .map_err(|err| format!("null a temporary slot: {err}"))?;
+            frame.push(TemporarySlot { span, slot, ty });
+        }
+        self.temporary_frames.push(frame);
+        Ok(true)
+    }
+
+    /// The statement `open_temporaries` opened a frame for is done: release its temporaries when
+    /// control reaches here, and drop the frame. Nothing is emitted after a `return` (it released
+    /// the frame itself).
+    fn close_temporaries(&mut self, opened: bool) -> Result<(), String> {
+        if !opened {
+            return Ok(());
+        }
+        let frame = self.temporary_frames.pop().ok_or_else(|| {
+            "internal: a statement closed a temporary frame nobody opened".to_string()
+        })?;
+        if is_block_terminated(self) {
+            return Ok(());
+        }
+        self.release_temporary_frame(&frame, "statement_end")
+    }
+
+    /// Release every live temporary of every open statement, innermost first: what a `return` and
+    /// an auto-propagation do before the scope entries, since the statements they leave never
+    /// reach their own end.
+    fn release_open_temporaries(&self, site: &str) -> Result<(), String> {
+        for frame in self.temporary_frames.iter().rev() {
+            self.release_temporary_frame(frame, site)?;
+        }
+        Ok(())
+    }
+
+    /// The release of one statement's temporaries, last built first: each slot's value if it is
+    /// non-null.
+    fn release_temporary_frame(
+        &self,
+        frame: &[TemporarySlot<'ctx>],
+        site: &str,
+    ) -> Result<(), String> {
+        for (index, temporary) in frame.iter().enumerate().rev() {
+            self.emit_slot_release(
+                temporary.slot,
+                &temporary.ty,
+                true,
+                &format!("temporary{index}"),
+                site,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// `expr` has just been lowered to `value`: when typeck recorded it as a temporary of an open
+    /// statement, keep the value in the temporary's slot, so the statement's end releases it. A
+    /// value no open statement names (a state-machine function, a form typeck did not record) is
+    /// left alone: a leak, never a double free.
+    fn bind_temporary(
+        &self,
+        expr: &Expr,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        if !value.is_pointer_value() {
+            return Ok(());
+        }
+        let span = expr.span();
+        let key = (span.start, span.end);
+        let slot = self
+            .temporary_frames
+            .iter()
+            .rev()
+            .flat_map(|frame| frame.iter())
+            .find(|temporary| temporary.span == key)
+            .map(|temporary| temporary.slot);
+        if let Some(slot) = slot {
+            self.builder
+                .build_store(slot, value.into_pointer_value())
+                .map_err(|err| format!("store a temporary: {err}"))?;
         }
         Ok(())
     }
@@ -26342,6 +26500,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if self.sm_frame_ptr.is_some() {
             return Ok(());
         }
+        self.release_open_temporaries("return_temporary")?;
         let entries = self.typed.release_plan.return_edge(span).ok_or_else(|| {
             format!(
                 "internal: the release plan has no return edge for the `return` at {}..{}",
@@ -26356,6 +26515,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if self.sm_frame_ptr.is_some() {
             return Ok(());
         }
+        self.release_open_temporaries("propagation_temporary")?;
         let entries = self
             .typed
             .release_plan
@@ -26386,33 +26546,6 @@ fn lower_block_stmts<'ctx>(
     }
     if !is_block_terminated(cg) {
         cg.release_at_block_end(block)?;
-    }
-    Ok(())
-}
-
-/// `print` only reads its argument, so a string it was handed that nothing else holds (a fresh
-/// string, never a binding: typeck's `string_moves`, remembered by `lower_expr`) is released once
-/// printed. This is a special case of the `NoOwner` temporaries class (a fresh value no binding holds),
-/// released here because C2's `leak_string_loop` ends with `print(total.toString())`. Slice 2
-/// replaces it with the general release at the end of the statement that made the temporary and
-/// DELETES this function. Plain functions only.
-///
-/// O(1) time at the call site.
-fn release_printed_fresh_string<'ctx>(
-    cg: &Cg<'ctx, '_>,
-    argument: &Expr,
-    value: BasicValueEnum<'ctx>,
-    ty: &Type,
-) -> Result<(), String> {
-    let fresh = cg.sm_frame_ptr.is_none()
-        && !matches!(argument, Expr::Ident(..))
-        && is_string_like(&cg.resolve_type(ty))
-        && value.is_pointer_value()
-        && cg
-            .owned_string_values
-            .contains(&(value.as_value_ref() as usize));
-    if fresh {
-        release_owned_read(cg, value, ty, "print_fresh_string")?;
     }
     Ok(())
 }

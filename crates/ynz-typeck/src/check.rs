@@ -714,6 +714,32 @@ fn record_string_moves_of(
     )
 }
 
+/// The record of the temporaries of `module` (`crate::temporaries`), for the finished check.
+/// `local_fns` and `imported_fns` are every Yinz function a call can reach.
+#[allow(clippy::too_many_arguments)]
+fn record_temporaries_of(
+    module: &Module,
+    expr_types: &HashMap<(usize, usize), Type>,
+    union_coercions: &HashMap<(usize, usize), UnionCoercion>,
+    local_fns: &HashSet<String>,
+    imported_fns: &HashSet<String>,
+    sig_table: &SignatureTable,
+    tables: crate::release_plan::TypeTables<'_>,
+) -> crate::temporaries::Temporaries {
+    let callable: HashSet<String> = local_fns.union(imported_fns).cloned().collect();
+    let signatures = &sig_table.fns;
+    crate::temporaries::record_temporaries(
+        module,
+        &crate::temporaries::TemporaryFacts {
+            expr_types,
+            union_coercions,
+            callable_fns: &callable,
+            signatures,
+            tables,
+        },
+    )
+}
+
 /// The names of the functions `module` defines — the local half of the call-graph boundary
 /// `provenance` reads (an imported name is the other half).
 fn local_fn_names(module: &Module) -> HashSet<String> {
@@ -923,6 +949,9 @@ pub struct TypedModule {
     /// judged a VIEW of its place or a MUST-COPY, by the span of the expression (`crate::non_owned_reads`).
     /// Codegen copies every read the record does not call a view, unless the store moves it.
     pub non_owned_reads: crate::non_owned_reads::NonOwnedReads,
+    /// C7 slice 2: the fresh heap values no binding holds, each with the statement-end release point
+    /// it dies at (`crate::temporaries`). Codegen releases them there and decides nothing.
+    pub temporaries: crate::temporaries::Temporaries,
     /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
     /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
@@ -973,6 +1002,7 @@ impl TypedModule {
             string_moves: self.string_moves.clone(),
             heap_moves: self.heap_moves.clone(),
             non_owned_reads: self.non_owned_reads.clone(),
+            temporaries: self.temporaries.clone(),
         })
     }
 }
@@ -1079,6 +1109,18 @@ pub fn check(
     let release_plan = checker
         .release
         .finish(&binding_names, &transfers, &string_moves);
+    let temporaries = record_temporaries_of(
+        module,
+        &checker.expr_types,
+        &checker.union_coercions,
+        &checker.local_fn_names,
+        checker.imported_fn_names,
+        checker.sig_table,
+        crate::release_plan::TypeTables {
+            shapes: checker.shape_table,
+            generic_shapes: checker.generic_shape_table,
+        },
+    );
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1095,6 +1137,7 @@ pub fn check(
         string_moves,
         heap_moves: checker.heap_moves,
         non_owned_reads,
+        temporaries,
     };
     (
         typed,
@@ -1197,6 +1240,18 @@ pub fn check_with_kernel_mode(
     let release_plan = checker
         .release
         .finish(&binding_names, &transfers, &string_moves);
+    let temporaries = record_temporaries_of(
+        module,
+        &checker.expr_types,
+        &checker.union_coercions,
+        &checker.local_fn_names,
+        checker.imported_fn_names,
+        checker.sig_table,
+        crate::release_plan::TypeTables {
+            shapes: checker.shape_table,
+            generic_shapes: checker.generic_shape_table,
+        },
+    );
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1213,6 +1268,7 @@ pub fn check_with_kernel_mode(
         string_moves,
         heap_moves: checker.heap_moves,
         non_owned_reads,
+        temporaries,
     };
     (typed, checker.mono_table, checker.diags)
 }

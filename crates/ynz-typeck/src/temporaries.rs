@@ -132,6 +132,8 @@ enum Use {
 pub struct TemporaryFacts<'a> {
     /// The type of every expression.
     pub expr_types: &'a HashMap<Span, Type>,
+    /// Every value that flows into a union slot: the envelope takes it, so it is not a temporary.
+    pub union_coercions: &'a HashMap<Span, crate::check::UnionCoercion>,
     /// Every Yinz function a call can reach, local and imported.
     pub callable_fns: &'a HashSet<String>,
     /// The signature of every function the checker knows (the declared ownership of each
@@ -318,6 +320,10 @@ impl Walk<'_> {
     /// map or flat shape) that nobody else holds.
     fn is_temporary(&self, expr: &Expr) -> bool {
         if !self.builds_a_value(expr) {
+            return false;
+        }
+        // A value that enters a union slot is wrapped by the envelope, which takes it.
+        if self.facts.union_coercions.contains_key(&span_of(expr)) {
             return false;
         }
         let Some(ty) = self.type_of(expr) else {

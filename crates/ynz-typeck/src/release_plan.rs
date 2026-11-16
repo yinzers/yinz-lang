@@ -459,7 +459,7 @@ fn span_of(span: &SourceSpan) -> Span {
     (span.start, span.end)
 }
 
-pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
+pub fn stmt_span(stmt: &Stmt) -> Span {
     match stmt {
         Stmt::Expr(expr) => span_of(expr.span()),
         Stmt::Let { span, .. }
