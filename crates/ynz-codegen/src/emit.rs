@@ -3990,9 +3990,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // already sits in a slot of the caller's (`take`). A stored form keeps the view.
         let final_bits = if !heap && !take && !moved {
             match self.envelope_union_variants(&self.resolve_type(inner_ty)) {
-                Some(variants) => {
-                    self.maybe_union_payload_copy(flag, bits, &variants, site)?
-                }
+                Some(variants) => self.maybe_union_payload_copy(flag, bits, &variants, site)?,
                 None => final_bits,
             }
         } else {

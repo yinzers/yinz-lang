@@ -327,9 +327,7 @@ struct FunctionState {
 /// as a fresh value when the piece is of a temporary no name reaches, and a take of a call result
 /// that is a piece of its arguments (a generic callee) stays a piece joined to them.
 fn resolved_event(reads: &NonOwnedReads, event: Option<ValueSpan>) -> bool {
-    event.is_some_and(|(start, end)| {
-        reads.verdict(start, end) == Some(ReadVerdict::MustCopy)
-    })
+    event.is_some_and(|(start, end)| reads.verdict(start, end) == Some(ReadVerdict::MustCopy))
 }
 
 /// Union-find over binding positions.
@@ -498,11 +496,11 @@ impl TransferRecorder {
             second: second_position,
             event,
         };
-        if !function
-            .joins
-            .iter()
-            .any(|seen| seen.first == pending.first && seen.second == pending.second && seen.event == pending.event)
-        {
+        if !function.joins.iter().any(|seen| {
+            seen.first == pending.first
+                && seen.second == pending.second
+                && seen.event == pending.event
+        }) {
             function.joins.push(pending);
         }
     }
@@ -538,17 +536,17 @@ impl TransferRecorder {
         };
         let declared_name = |decl: &DeclKey| Some(decl.2.clone());
         match build_function(function, &declared_name, &NonOwnedReads::default()) {
-            Ok(transfers) => transfers
-                .classes
-                .iter()
-                .flat_map(|class| {
-                    class
-                        .members
-                        .iter()
-                        .enumerate()
-                        .map(|(index, member)| (member.decl.clone(), class.facts_of_member(index)))
-                })
-                .collect(),
+            Ok(transfers) => {
+                transfers
+                    .classes
+                    .iter()
+                    .flat_map(|class| {
+                        class.members.iter().enumerate().map(|(index, member)| {
+                            (member.decl.clone(), class.facts_of_member(index))
+                        })
+                    })
+                    .collect()
+            }
             Err(message) => {
                 self.internal_errors.push(message);
                 HashMap::new()

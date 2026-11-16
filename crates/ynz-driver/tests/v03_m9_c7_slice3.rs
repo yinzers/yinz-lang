@@ -338,9 +338,7 @@ case!(
 /// array.
 fn soa_program() -> String {
     let items: Vec<String> = (0..70)
-        .map(|item| {
-            format!("{{ x: {item}, y: 1, label: `l${{round}}-{item}`, extra: [{item}] }}")
-        })
+        .map(|item| format!("{{ x: {item}, y: 1, label: `l${{round}}-{item}`, extra: [{item}] }}"))
         .collect();
     format!(
         "shape Part {{\n  x: int\n  y: int\n  label: string\n  extra: array<int>\n}}\n\n\

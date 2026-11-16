@@ -922,7 +922,8 @@ fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
 /// no class is left without a static founder (this was the reproducer of `NoStaticFounder`).
 #[test]
 fn a_maybe_channel_an_imported_function_returns_is_an_owner_in_a_class_of_its_own() {
-    let library = "export function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
+    let library =
+        "export function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
   return chans.first()
 }\n";
     let main = "import { firstChan } from `lib`
@@ -975,7 +976,10 @@ function entrypoint() -> nothing {
     let output = run_with_library(library, main);
     for function in ["viaImport", "viaLocal"] {
         let transfers = record_of(&output, function);
-        assert!(!transfers.same_class("held", "local"), "{function}: {transfers:#?}");
+        assert!(
+            !transfers.same_class("held", "local"),
+            "{function}: {transfers:#?}"
+        );
         assert_eq!(founder_name(&transfers, "held"), "held");
         assert_eq!(founder_name(&transfers, "local"), "local");
     }
@@ -1241,7 +1245,9 @@ fn a_builtin_methods_result_reaches_its_heap_arguments() {
     // `found` is returned, so typeck judges `cache.first().or(fallback)` a copy: `found` owns a value
     // of its own and joins nothing.
     assert!(!transfers.same_class("found", "fallback"), "{transfers:#?}");
-    assert!(transfers.class_of("found").is_some_and(|class| class.members[0].copy_owner));
+    assert!(transfers
+        .class_of("found")
+        .is_some_and(|class| class.members[0].copy_owner));
 
     let concat_source = "function both() -> array<array<int>> {
   let left: array<array<int>> = [[1]]

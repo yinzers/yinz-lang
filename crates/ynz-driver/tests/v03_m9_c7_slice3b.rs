@@ -417,7 +417,10 @@ fn typeck_refuses_every_way_a_map_entry_outlives_its_iteration() {
     assert!(text.contains("is not supported yet"), "send: {text}");
     let (built, text) = build_result(&entry_escape("let copied = entry.copy()"), "copy");
     assert!(!built, "a copy of an entry must not compile:\n{text}");
-    assert!(text.contains("cannot make a separate `MapEntry"), "copy: {text}");
+    assert!(
+        text.contains("cannot make a separate `MapEntry"),
+        "copy: {text}"
+    );
 }
 
 // ── Item 3: a write to a place a `let` would view makes the `let` a copy ────────────────────

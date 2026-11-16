@@ -868,7 +868,11 @@ fn a_channel_handed_back_by_a_function_is_held_by_a_counted_reference() {
         let shares = ir.matches("call ptr @ynz_channel_share(").count();
         // One per function that hands back a channel it does not move; the optimizer may inline a function into
         // its callers and so repeat a call.
-        let expected_ok = if no_optimize { shares == 2 } else { shares >= 2 };
+        let expected_ok = if no_optimize {
+            shares == 2
+        } else {
+            shares >= 2
+        };
         assert!(
             expected_ok,
             "no_optimize={no_optimize}: one `ynz_channel_share` for each of the two functions that \
