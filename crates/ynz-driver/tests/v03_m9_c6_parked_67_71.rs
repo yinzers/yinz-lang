@@ -10,7 +10,10 @@
 
 mod support;
 
-use support::{build_asan, build_source, run_asan_binary, run_counted};
+use support::{
+    at_both_optimization_levels, build_asan, build_source, concurrently, run_asan_binary,
+    run_counted,
+};
 
 /// What the callee does while the spawner moves on, which decides the spawn arm.
 #[derive(Clone, Copy)]
@@ -183,9 +186,13 @@ fn counted_union_loop_run(suspending_callee: bool, tasks: usize) -> (u64, u64, u
 fn cpu_callee_releases_its_union_slot_in_a_spawn_loop() {
     // Bug caught: the task's union slot (a cell, and a string the slot owns) freed by nobody, so
     // a spawn in a loop grows the heap. Tier: High.
-    let (alloc_one, free_one, string_alloc_one, string_free_one) = counted_union_loop_run(false, 1);
-    let (alloc_four, free_four, string_alloc_four, string_free_four) =
-        counted_union_loop_run(false, 4);
+    let (
+        (alloc_one, free_one, string_alloc_one, string_free_one),
+        (alloc_four, free_four, string_alloc_four, string_free_four),
+    ) = concurrently(
+        || counted_union_loop_run(false, 1),
+        || counted_union_loop_run(false, 4),
+    );
     assert!(
         string_alloc_four > string_alloc_one,
         "three more spawns copied no string: the slot was not persisted by value"
@@ -241,25 +248,28 @@ fn assert_chain_spawns_balance(suspending_callee: bool, no_optimize: bool) {
         let built = build_source(&source, "c6 recursive chain spawn", no_optimize);
         let (output, counters) = run_counted(&built);
         assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
-        assert_eq!(output.stdout.matches("777\n").count(), tasks, "{source}");
+        assert_eq!(
+            output.stdout.matches("777\n").count(),
+            tasks,
+            "no_optimize={no_optimize}\n{source}"
+        );
         let run = run_asan_binary(&build_asan(&built));
         assert!(
             !run.stderr.contains("AddressSanitizer"),
-            "AddressSanitizer reported an error:\n{}",
+            "AddressSanitizer reported an error (no_optimize={no_optimize}):\n{}",
             run.stderr
         );
         (counters.alloc, counters.free)
     };
-    let (alloc_one, free_one) = counts(1);
-    let (alloc_four, free_four) = counts(4);
+    let ((alloc_one, free_one), (alloc_four, free_four)) = concurrently(|| counts(1), || counts(4));
     assert!(
         alloc_four - alloc_one >= 3 * CHAIN_LENGTH as u64,
-        "three more spawns copied less than three chains: {alloc_one} -> {alloc_four} cells"
+        "no_optimize={no_optimize}: three more spawns copied less than three chains: {alloc_one} -> {alloc_four} cells"
     );
     assert_eq!(
         alloc_four - alloc_one,
         free_four - free_one,
-        "three more spawns of a {CHAIN_LENGTH}-node chain must free every cell they allocate"
+        "no_optimize={no_optimize}: three more spawns of a {CHAIN_LENGTH}-node chain must free every cell they allocate"
     );
 }
 
@@ -267,13 +277,11 @@ fn assert_chain_spawns_balance(suspending_callee: bool, no_optimize: bool) {
 fn recursive_chain_spawn_in_a_loop_balances_cpu_callee() {
     // Bug caught: the recursive copy or release of a self-referential union misses a box per node,
     // or frees one twice. Tier: High (data integrity).
-    assert_chain_spawns_balance(false, false);
-    assert_chain_spawns_balance(false, true);
+    at_both_optimization_levels(|no_optimize| assert_chain_spawns_balance(false, no_optimize));
 }
 
 #[test]
 fn recursive_chain_spawn_in_a_loop_balances_state_machine_callee() {
     // Bug caught: as above, through the state-machine retire ladder. Tier: High.
-    assert_chain_spawns_balance(true, false);
-    assert_chain_spawns_balance(true, true);
+    at_both_optimization_levels(|no_optimize| assert_chain_spawns_balance(true, no_optimize));
 }

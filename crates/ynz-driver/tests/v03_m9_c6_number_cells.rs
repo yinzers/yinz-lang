@@ -11,7 +11,10 @@
 
 mod support;
 
-use support::{build_asan, build_source, run_asan_binary, run_counted};
+use support::{
+    at_both_optimization_levels, build_asan, build_source, concurrently, run_asan_binary,
+    run_counted,
+};
 
 /// A function that overwrites the stack the producing functions just left.
 const CLOBBER: &str = "function clobber(seed: int) -> int {\n  let plusOne = seed + 1\n  \
@@ -20,7 +23,7 @@ const CLOBBER: &str = "function clobber(seed: int) -> int {\n  let plusOne = see
 
 /// The same program must print `expected` at -O0 and -O2, plainly and under ASan.
 fn assert_prints(source: &str, expected: &str) {
-    for no_optimize in [false, true] {
+    at_both_optimization_levels(|no_optimize| {
         let built = build_source(source, "c6 number cells", no_optimize);
         let (output, _) = run_counted(&built);
         assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
@@ -38,7 +41,7 @@ fn assert_prints(source: &str, expected: &str) {
             run.stdout, expected,
             "under ASan, no_optimize={no_optimize}"
         );
-    }
+    });
 }
 
 fn program(functions: &str, entrypoint_body: &str) -> String {
@@ -211,7 +214,7 @@ fn spawned_numbers_program(suspending_callee: bool) -> String {
 
 fn assert_spawned_tasks_read_their_numbers(suspending_callee: bool) {
     let source = spawned_numbers_program(suspending_callee);
-    for no_optimize in [false, true] {
+    at_both_optimization_levels(|no_optimize| {
         let built = build_source(&source, "c6 number spawn", no_optimize);
         let (output, _) = run_counted(&built);
         assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
@@ -229,7 +232,7 @@ fn assert_spawned_tasks_read_their_numbers(suspending_callee: bool) {
         let run = run_asan_binary(&build_asan(&built));
         assert!(
             !run.stderr.contains("AddressSanitizer"),
-            "AddressSanitizer reported an error:\n{}",
+            "AddressSanitizer reported an error (no_optimize={no_optimize}):\n{}",
             run.stderr
         );
         assert_eq!(
@@ -238,7 +241,7 @@ fn assert_spawned_tasks_read_their_numbers(suspending_callee: bool) {
             "{}",
             run.stdout
         );
-    }
+    });
 }
 
 #[test]
@@ -279,8 +282,7 @@ fn spawns_of_an_array_of_numbers_in_a_loop_balance() {
         );
         (counters.alloc, counters.free)
     };
-    let (alloc_one, free_one) = counts(1);
-    let (alloc_four, free_four) = counts(4);
+    let ((alloc_one, free_one), (alloc_four, free_four)) = concurrently(|| counts(1), || counts(4));
     assert!(alloc_four > alloc_one, "three more spawns copied nothing");
     assert_eq!(alloc_four - alloc_one, free_four - free_one);
 }
@@ -304,8 +306,7 @@ fn storing_numbers_allocates_nothing_per_element() {
         assert_eq!(output.stdout, format!("{count}\n"));
         counters.alloc
     };
-    let few = allocations(10);
-    let many = allocations(1000);
+    let (few, many) = concurrently(|| allocations(10), || allocations(1000));
     assert!(
         many - few <= 8,
         "1000 numbers allocated {many} cells against {few} for 10: a cell per element"
@@ -338,7 +339,7 @@ fn union_variant_holding_a_number_survives_container_return_and_spawn() {
          let fallback: Thing = spare\n  let one = items[1].or(fallback)\n  \
          print(`${describe(one)} ${describe(single)} ${scratch}`)\n  wait sleep(400)\n",
     );
-    for no_optimize in [false, true] {
+    at_both_optimization_levels(|no_optimize| {
         let built = build_source(&source, "c6 union number", no_optimize);
         let (output, _) = run_counted(&built);
         assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
@@ -351,19 +352,19 @@ fn union_variant_holding_a_number_survives_container_return_and_spawn() {
         let run = run_asan_binary(&build_asan(&built));
         assert!(
             !run.stderr.contains("AddressSanitizer"),
-            "AddressSanitizer reported an error:\n{}",
+            "AddressSanitizer reported an error (no_optimize={no_optimize}):\n{}",
             run.stderr
         );
         assert!(run.stdout.contains("3.00 3.00 54\n") && run.stdout.contains("task 3.00\n"));
-    }
+    });
 }
 
 #[test]
 fn map_keyed_by_numbers_returned_from_its_producer() {
-    // RED until the map holds decimal keys inline (parked 70, routed to a builder): a `number`
-    // key is still 8 bytes of pointer bits into the producer's frame, so after `keyed` returns
-    // `entry.key` reads the dead frame (garbage at -O0) and `get(2.5)` compares addresses and
-    // always misses. Tier: High.
+    // Bug caught: a `number` key held as 8 bytes of pointer bits into the producer's frame, so
+    // after `keyed` returns `entry.key` reads the dead frame (garbage at -O0) and `get(2.5)`
+    // compares addresses and always misses (red in 7a3d305, before the keys went inline).
+    // Tier: High.
     let source = program(
         "function keyed() -> map<number, string> {\n  let table: map<number, string> = {}\n  \
          let price: number = 2.5\n  table.set(price, `two and a half`)\n  return table\n}\n",
@@ -505,7 +506,7 @@ fn assert_spawned_tasks_read_their_number_keys(suspending_callee: bool) {
             "{stdout}"
         );
     };
-    for no_optimize in [false, true] {
+    at_both_optimization_levels(|no_optimize| {
         let built = build_source(&source, "c6 number key spawn", no_optimize);
         let (output, _) = run_counted(&built);
         assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
@@ -513,11 +514,11 @@ fn assert_spawned_tasks_read_their_number_keys(suspending_callee: bool) {
         let run = run_asan_binary(&build_asan(&built));
         assert!(
             !run.stderr.contains("AddressSanitizer"),
-            "AddressSanitizer reported an error:\n{}",
+            "AddressSanitizer reported an error (no_optimize={no_optimize}):\n{}",
             run.stderr
         );
         expected_lines(&run.stdout);
-    }
+    });
 }
 
 #[test]
@@ -560,8 +561,7 @@ fn spawns_of_a_number_keyed_map_in_a_loop_balance() {
         );
         (counters.alloc, counters.free)
     };
-    let (alloc_one, free_one) = counts(1);
-    let (alloc_four, free_four) = counts(4);
+    let ((alloc_one, free_one), (alloc_four, free_four)) = concurrently(|| counts(1), || counts(4));
     assert!(alloc_four > alloc_one, "three more spawns copied nothing");
     assert_eq!(alloc_four - alloc_one, free_four - free_one);
 }

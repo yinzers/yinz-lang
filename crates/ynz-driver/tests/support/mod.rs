@@ -438,3 +438,29 @@ pub fn assert_asan_clean_and_prints(fixture_name: &str, no_optimize: bool, expec
         run.stderr
     );
 }
+
+/// Run two independent checks at once and return both results. Each call builds into its own temp
+/// directory and runs its own process (module header), so two checks share nothing; running them
+/// in turn made one test as slow as their sum (`.claude/rules/test-parallelism.md`). A panic in
+/// either is re-raised with its own message once both have finished.
+pub fn concurrently<A: Send, B: Send>(
+    first: impl FnOnce() -> A + Send,
+    second: impl FnOnce() -> B + Send,
+) -> (A, B) {
+    std::thread::scope(|scope| {
+        let first_handle = scope.spawn(first);
+        let second_handle = scope.spawn(second);
+        let second_result = second_handle.join();
+        let first_result = first_handle.join();
+        match (first_result, second_result) {
+            (Ok(first_value), Ok(second_value)) => (first_value, second_value),
+            (Err(payload), _) | (_, Err(payload)) => std::panic::resume_unwind(payload),
+        }
+    })
+}
+
+/// Run `check(no_optimize)` at -O2 and at -O0 at once. `check` puts `no_optimize` in its own
+/// failure messages, so a failure names its level.
+pub fn at_both_optimization_levels(check: impl Fn(bool) + Sync) {
+    concurrently(|| check(false), || check(true));
+}
