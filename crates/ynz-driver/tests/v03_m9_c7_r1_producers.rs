@@ -242,3 +242,36 @@ function entrypoint() -> nothing {
 fn a_string_character_read_frees_the_string_it_built() {
     assert_strings_balanced_and_clean("c7r1_string_get", STRING_CHARACTER_READS, "8\n");
 }
+
+// ── Group 4: a shape with a `maybe` field owns the field's envelope cell ────────────────────
+
+const SHAPE_WITH_A_MAYBE_FIELD: &str = "
+shape Part {
+  qty: int
+}
+shape Holder {
+  found: maybe<Part>
+}
+shape Slot {
+  count: maybe<int>
+}
+function entrypoint() -> nothing {
+  let parts: array<Part> = [{qty: 1}, {qty: 2}]
+  let current: maybe<Part> = parts.get(0)
+  let missing: maybe<Part> = parts.get(9)
+  let holder: Holder = { found: missing.copy() }
+  holder.found = current.copy()
+  let rows: array<Holder> = [{ found: current.copy() }, { found: current.copy() }]
+  let slot: Slot = { count: none }
+  print(rows.count() + holder.found.or({qty: 0}).qty)
+}
+";
+
+/// Bug (High: leak): `shape_class` classed a shape whose only heap is a `maybe` field of a
+/// heap-free payload `NoHeap`, but a `maybe` field is a pointer to a heap envelope cell
+/// (`store_field`), so no release was planned for the shape: `let slot: Slot = { count: none }`
+/// was 2 allocs / 0 frees.
+#[test]
+fn a_shape_with_a_maybe_field_releases_the_fields_envelope_cell() {
+    assert_heap_balanced_and_clean("c7r1_maybe_field", SHAPE_WITH_A_MAYBE_FIELD, "3\n");
+}

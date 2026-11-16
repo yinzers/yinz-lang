@@ -253,13 +253,19 @@ fn shape_class(fields: &[Type], tables: &TypeTables<'_>, visiting: &mut Vec<Stri
     {
         return HeapClass::Heap(ReleaseKind::NestedShape);
     }
+    // A `maybe` field is a pointer to a heap envelope cell whatever it holds (`store_field`,
+    // `maybe_to_heap_cell`), so a shape with one owns heap even when the payload owns none.
+    let has_a_maybe_field = fields
+        .iter()
+        .any(|field| matches!(field, Type::Maybe { .. }));
     let classes: Vec<HeapClass> = fields
         .iter()
         .map(|field| classify(field, tables, visiting))
         .collect();
-    if classes
-        .iter()
-        .any(|class| matches!(class, HeapClass::Heap(_)))
+    if has_a_maybe_field
+        || classes
+            .iter()
+            .any(|class| matches!(class, HeapClass::Heap(_)))
     {
         HeapClass::Heap(ReleaseKind::Shape)
     } else if classes.contains(&HeapClass::TypeParameter) {
