@@ -369,6 +369,20 @@ The crossing set reads only the kinds with a frame home across a suspension (`Re
 
 Replacing a stored value frees the one it replaces (`set`, index assignment, a field assignment, a `fixed` `set` or index assignment, a map `set` over a present key, whose handed-in key copy is freed too). `emit_errors_capable_release`'s ok payload and a plain union view release through the same `stored_release`: one dispatch decides what a stored value's release is. The `background` task ladder releases a task's own value with this helper (`BG_ARG_KIND_RELEASE_GLUE`, the descriptor's `size` is the glue's address); a channel's element drop glue is the same function. A callee with any `give` parameter keeps the flat free for the positions it may move a value out of: its `give` positions, and every position of an unknown callee. A position a plain or a suspending callee declares without `give` is borrowed, so the task's copy of it (a string, array or map) is released whole by the ladder (`a_borrowed_string_given_to_a_suspending_callee_is_released_once`). A `give` position keeps its own rule (deferred, see "Non-owned reads"). Calling the helper at scope exits is C7 (plain locals) and C8 (suspension frames).
 
+### The transfer rule at an exit edge
+
+One rule decides, at every exit edge on the plain path and in a resume function, whether a binding's value is released there: **the holder that owns the value at that edge releases it, and no other holder does.** The release plan's fates (above) are this rule written per binding. Its only inputs are the checker's consumed state and the transfer record's escapes, so codegen decides nothing of its own.
+
+| What happened to the value before the edge | At this edge | Owner from then on |
+|---|---|---|
+| given (a `give` position of any call form), sent on a channel, or stored into a place, on every path | not released: `Omitted(Moved)`; the read that handed it over nulled the binding's slot | the callee, the receiver (the channel's element drop glue), or the place |
+| given, sent or stored on some paths only, or the binding is reassigned | released if live: `ReleaseIfLive` is "release if the slot is non-null", so a path that moved it releases nothing and a path that kept it releases once | whoever holds it on the path taken |
+| passed to a `give` parameter | the callee releases it at the callee's own scope exits; the caller omits it. A `background` task owns what is given to it (the spawn ladder frees nothing at a position the worker releases itself) | the callee, or the task |
+| returned | not released: `Omitted(Returned)` | the caller; a `return` copies what does not move (`copied_at_return`) |
+| kept, never moved | released: `Release` | this scope |
+
+A read of a moved value is refused at compile time (`Consumed`, `ConsumedBySend`, `ConsumedByStore`), so a nulled slot is never read again. A callee never releases a value it only borrows (`share`, `lend` and bare parameters stay the caller's). That is why a value is freed exactly once, with no drop flag beyond the null check. A task dropped while Pending applies the same rule to the list of the statement it is parked at ("A task dropped while Pending (C8 slice 6)" below). Pinned by `v03_m9_release_safety` and `v03_m9_c7_*`.
+
 ### Scope-exit release on the plain path (C7)
 
 A plain (non-suspending) function releases its heap locals at every exit edge of `TypedModule::release_plan`, through ONE emitter, `Cg::emit_release_edge` (`ynz-codegen/src/emit.rs`), which calls `Cg::release_fn` (the C6 helper) for each entry whose fate releases. A state-machine resume function releases through the same emitter for the frame-backed kinds only, see "Scope-exit release in a resume function (C8 slice 2)" below.

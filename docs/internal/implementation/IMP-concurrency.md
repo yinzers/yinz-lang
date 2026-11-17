@@ -221,6 +221,16 @@ The IDE warns on large copies so developers can restructure if needed.
 
 ---
 
+## Scope Exit and `background` Tasks — What Is Released and When a Task Stops
+
+Every function, a `background` task's included, releases its heap locals at every exit edge by ownership. The one rule for what is released there, the transfer rule at an exit edge, lives in [`IMP-ownership.md`](IMP-ownership.md) "The transfer rule at an exit edge"; this section states only what it means across a `background` boundary.
+
+- **A value given, sent or stored is not released by the giver.** A `give` argument of a `background` call is owned by the task, and the task releases it at its own scope exits (or the spawn ladder does, at a position the worker does not release). A value sent on a channel belongs to the receiver from the `send`; the channel's element drop glue frees one nobody received. A value given on only some paths is released by the paths that kept it.
+- **A channel binding's reference is released at its scope exit.** The spawner's reference and each task's reference are counted holders of one channel; a release says a holder left, never which end it was ("Channel Close" below).
+- **A `background` task handle leaving scope stops its task.** The handle local's release is `ynz_handle_free`, which aborts the task at its next suspension point: a task parked in `wait` does not resume, and what it would have done afterwards never runs. There is no detach and no join rule. A task that must finish keeps its handle live until then (`handle.receive()`). The frame, the argument copies and an unreceived result are each freed exactly once. [`IMP-no-function-coloring.md`](IMP-no-function-coloring.md) "Task Cancellation" owns the semantics, and `examples/pirates-roster/entrypoint.ynz` shows it running.
+- **A fire-and-forget `background f()` has no handle**, so nothing leaves a scope: it runs to its end, or until `entrypoint` returns and the runtime stops every task still running at its next suspension point.
+- **A CPU task cannot be stopped.** It has no suspension point, so a handle dropped over a running CPU task lets it finish and keeps its argument context until it ends ([`IMP-no-function-coloring.md`](IMP-no-function-coloring.md) "Task Cancellation", the CPU-bound edge case).
+
 ## Error Cancellation — Best-Effort with Result Discard
 
 **Decision**: When an error occurs during concurrent operations:
