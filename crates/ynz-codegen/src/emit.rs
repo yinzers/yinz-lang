@@ -30532,13 +30532,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             ty if plain_word(ty) => (resolved.clone(), false),
             Type::Maybe { .. } => (resolved.clone(), true),
             // The ok word of an errors result is the payload as a stored value: a string, array or
-            // map word, a `maybe`'s counted cell, or a bignum's text. An errors result of a `maybe` of
-            // a union has no arm: the `_` arm declines it, so it is not released (IMP-ownership.md).
+            // map word, a `maybe`'s counted cell, or a bignum's text. A result that is or holds an
+            // envelope union never reaches this match: `handle_union_variants` took it above.
             Type::ErrorsCapable { inner }
                 if plain_word(inner)
                     || matches!(&**inner, Type::Number { precision } if *precision > 34)
-                    || matches!(&**inner, Type::Maybe { inner: payload }
-                        if self.envelope_union_variants(payload).is_none()) =>
+                    || matches!(&**inner, Type::Maybe { .. }) =>
             {
                 (resolved.clone(), false)
             }
