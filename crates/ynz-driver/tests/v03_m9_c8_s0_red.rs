@@ -149,7 +149,7 @@ green_fixture!(
     "producer P1 (frame locals): `kept`, `extra`, `inner`, `mine` of a suspending callee leak (30 allocations, 6 frees)"
 );
 
-balanced_fixture!(
+green_fixture!(
     c2_spawn_drop_ladder_balances,
     "v0_3_m9_c2_spawn_drop_ladder.ynz",
     "producers P1 + P8 (worker locals, drop ladder beside the worker's own `give` release): 17 allocations, 9 frees"
@@ -319,19 +319,19 @@ green_fixture!(
     "producer P7 (unions in a suspending function): the `Thing errors` local `held` that crosses a `wait` leaks its slot and string"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p8_spawn_ladder_array_argument,
     "bg_arg_container_add_gives_row.ynz",
     "producer P8 (spawn ladder, suspending spawner): an array argument copy and the spawner's own locals leak"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p8_spawn_ladder_channel_send_array,
     "bg_arg_channel_send_array.ynz",
     "producer P8 (spawn ladder, suspending spawner): a sent array argument leaks beside a channel"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p8_spawn_ladder_array_shape_give,
     "m5_p3_sweep_bg_array_shape_give_wait.ynz",
     "producer P8 (spawn ladder, suspending spawner): a given array and a shape argument leak"

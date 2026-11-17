@@ -23252,7 +23252,6 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         sole_holder,
         Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
     ) && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
-        && cg.sm_frame_ptr.is_none()
         && cg.plain_releases_type(&resolved)
     {
         release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
