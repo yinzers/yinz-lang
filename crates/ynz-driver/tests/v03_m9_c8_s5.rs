@@ -171,3 +171,13 @@ fn a_union_parameter_of_a_spawned_task_owns_one_copy_and_frees_it() {
         }
     }
 }
+
+/// Bug caught (High: leak): the callee of a spawned task releases the fields of a flat shape it
+/// takes at a `give` position and nulls its frame slot, so the ladder, which read the cell's
+/// pointer from that slot, never freed the 128-byte cell (4 allocations, 3 frees). The descriptor
+/// now carries the cell's own pointer (`BG_ARG_KIND_OWNED_CELL`).
+#[test]
+fn a_shape_given_to_a_spawned_suspending_task_has_its_cell_freed_by_the_ladder() {
+    assert_fixture_balanced("v0_3_m6_ufcs_background.ynz", "Mon\ndone\n");
+    assert_fixture_balanced("v0_3_m6_ufcs_background_multifield.ynz", "Mon\n42\ndone\n");
+}

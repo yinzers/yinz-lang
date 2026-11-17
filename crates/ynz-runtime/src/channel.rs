@@ -1759,6 +1759,7 @@ mod tests {
                 byte_offset,
                 kind: BG_ARG_KIND_HEAP_ARRAY,
                 size: 0,
+                cell: 0,
             });
         }
         unsafe extern "C-unwind" fn never_polled(_frame: *mut u8, _waker: *mut u8) -> i32 {
@@ -1785,6 +1786,10 @@ mod tests {
         let (descs, fut) = plant_array_ladders(&[payload_bits]);
         (*descs).kind = kind;
         (*descs).size = size;
+        if kind == ynz_abi::BG_ARG_KIND_OWNED_CELL {
+            // The ladder reads the cell from the descriptor, not the slot (the callee nulls it).
+            (*descs).cell = payload_bits as u64;
+        }
         (descs, fut)
     }
 
@@ -1867,6 +1872,15 @@ mod tests {
                 } else if kind == BG_ARG_KIND_RELEASED {
                     // A cell whose ownership already left the task — whoever holds it
                     // now (here: this test) frees it; the ladder must not.
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        16,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == ynz_abi::BG_ARG_KIND_OWNED_CELL {
+                    // A 16-byte counted cell the descriptor names; the ladder frees it with `size`.
                     (
                         crate::ynz_alloc(16) as i64,
                         16,

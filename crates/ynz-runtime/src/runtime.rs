@@ -175,7 +175,7 @@ impl Drop for PendingBlockingGuard {
 // zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
 use ynz_abi::{
     bg_arg_kind_is_releasable_payload, BG_ARG_KIND_ARC_SHAPE, BG_ARG_KIND_HEAP_ARRAY,
-    BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASED, BG_ARG_KIND_RELEASE_GLUE,
+    BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_OWNED_CELL, BG_ARG_KIND_RELEASED, BG_ARG_KIND_RELEASE_GLUE,
     BG_ARG_KIND_SHARED_CHANNEL, FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE,
     SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
     SPIKE_HANDLE_SLOT_BYTES,
@@ -858,6 +858,8 @@ impl Future for SyncStateFnFuture {
 ///   kind: u64         — one of `ynz_abi::BG_ARG_KIND_*` (the free protocol for the slot)
 ///   size: u64         — byte count passed to ynz_free for `BG_ARG_KIND_HEAP_SHAPE` (ignored
 ///                       by the other kinds)
+///   cell: u64         — the cell's own pointer for `BG_ARG_KIND_OWNED_CELL` (freed with
+///                       `ynz_free(cell, size)`, the frame slot is not read); 0 for every other kind
 ///
 /// `kind` is written by codegen at spawn time and may be REWRITTEN by the runtime to
 /// `BG_ARG_KIND_RELEASED` while the task runs — see [`release_ladder_payload`].
@@ -866,6 +868,7 @@ pub struct BgArgDropEntry {
     pub byte_offset: u64,
     pub kind: u64,
     pub size: u64,
+    pub cell: u64,
 }
 
 /// The identity of the state-machine drive whose `poll` is running on the current thread —
@@ -1124,7 +1127,11 @@ impl Drop for SpawnStateFnFuture {
                 for desc in descs {
                     // Read the i64 bit-pattern from the frame slot, cast to pointer.
                     let slot = self.frame_ptr.add(desc.byte_offset as usize) as *const i64;
-                    let bits = *slot;
+                    let bits = if desc.kind == BG_ARG_KIND_OWNED_CELL {
+                        desc.cell as i64
+                    } else {
+                        *slot
+                    };
                     if bits == 0 {
                         // Defensive: a descriptor is only emitted for a slot that WAS
                         // heap-copied (both `give` and `copy` of a heap arg copy — see D8),
@@ -1171,6 +1178,11 @@ impl Drop for SpawnStateFnFuture {
                             // every exit path including cancellation. Never rewritten to
                             // RELEASED (`bg_arg_kind_is_releasable_payload` is false for it).
                             crate::arc::ynz_arc_free(heap_ptr, desc.size as usize);
+                        }
+                        BG_ARG_KIND_OWNED_CELL => {
+                            // A cell the ladder allocated, whose fields the callee released: the
+                            // descriptor holds the pointer because the callee nulled the frame slot.
+                            crate::ynz_free(heap_ptr, desc.size as usize);
                         }
                         BG_ARG_KIND_RELEASE_GLUE => {
                             // v0.3-M9 C3c/C6: the value is released by the glue codegen emitted for
@@ -1237,7 +1249,7 @@ impl Drop for SpawnStateFnFuture {
             }
 
             // 4. Free the arg-drop descriptor array (ynz_alloc'd by codegen at spawn time).
-            //    24 bytes per entry (3 × u64); freed after all arg-copies are already released.
+            //    32 bytes per entry (4 × u64); freed after all arg-copies are already released.
             if !self.arg_drop_ptr.is_null() && self.arg_drop_count > 0 {
                 let desc_bytes = self.arg_drop_count * std::mem::size_of::<BgArgDropEntry>();
                 crate::ynz_free(self.arg_drop_ptr as *mut u8, desc_bytes);

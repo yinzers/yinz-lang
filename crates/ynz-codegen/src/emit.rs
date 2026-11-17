@@ -22870,6 +22870,12 @@ enum BgArgFreeKind {
     /// function named here, `Cg::release_fn`): it frees the value's items, entries and fields and
     /// the value itself. CPU arm: called after the call; SM ladder: `BG_ARG_KIND_RELEASE_GLUE`.
     ReleaseGlue { glue_name: String },
+    /// v0.3-M9 C8 slice 5: a shape cell the spawn allocated for a SUSPENDING callee that takes it at a
+    /// `give` position. The callee releases the shape's fields and nulls its frame slot, so the ladder
+    /// cannot find the cell there: the descriptor carries the cell's own pointer
+    /// (`BG_ARG_KIND_OWNED_CELL`) and frees it with `ynz_free(cell, byte_size)`. Never reaches the CPU arm
+    /// (a plain callee keeps `HeapShape`, its closure frees the cell from the context).
+    OwnedCell { byte_size: u64 },
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -23411,6 +23417,12 @@ fn emit_bg_arg_frees<'ctx>(
                 cg_builder
                     .build_call(glue, &[release_ptr.into()], "")
                     .map_err(|e| format!("bg release call: {e}"))?;
+            }
+            BgArgFreeKind::OwnedCell { .. } => {
+                return Err(
+                    "internal: an owned-cell free kind belongs to a suspending callee, which the CPU arm never spawns"
+                        .to_string(),
+                );
             }
             // v0.3-M8 Phase 5 Auto-Arc: release the task's counted reference to the shared
             // block (the CPU-arm twin of the SM ladder's `BG_ARG_KIND_ARC_SHAPE` arm).
@@ -23977,11 +23989,12 @@ fn lower_sm_background_spawn<'ctx>(
 
     // Step 5: build the arg-drop descriptor array for SpawnStateFnFuture::drop.
     //
-    // Each BgArgDropEntry has three i64 fields (24 bytes total):
+    // Each BgArgDropEntry has four i64 fields (32 bytes total):
     //   byte_offset: u64 — byte offset in the frame to the i64 slot holding the heap pointer
     //   kind: u64        — ynz_abi::BG_ARG_KIND_* (HEAP_SHAPE → ynz_free, HEAP_ARRAY →
     //                      ynz_array_drop, SHARED_CHANNEL → ynz_channel_free)
     //   size: u64        — byte count for ynz_free (HEAP_SHAPE); 0 for the other kinds
+    //   cell: u64        — the cell's own pointer (OWNED_CELL: the callee nulls its frame slot); 0 otherwise
     //
     // Build the descriptor list only for args that were actually heap-copied; skip None.
     // If no args need freeing, pass null pointer + count=0 (no allocation needed).
@@ -24024,6 +24037,10 @@ fn lower_sm_background_spawn<'ctx>(
                 let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, 0_u64))
             }
+            BgArgFreeKind::OwnedCell { byte_size } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, *byte_size))
+            }
             BgArgFreeKind::None => None,
         })
         .collect();
@@ -24036,8 +24053,8 @@ fn lower_sm_background_spawn<'ctx>(
             .const_null();
         (null_ptr.into(), cg.ctx.i64_type().const_int(0, false))
     } else {
-        // Allocate the descriptor array: heap_args.len() entries × 24 bytes each.
-        let desc_entry_size: u64 = 24; // 3 × u64
+        // Allocate the descriptor array: heap_args.len() entries × 32 bytes each.
+        let desc_entry_size: u64 = 32; // 4 × u64
         let desc_total = desc_entry_size * heap_args.len() as u64;
         let desc_total_val = cg.ctx.i64_type().const_int(desc_total, false);
         let desc_ptr = cg
@@ -24083,6 +24100,7 @@ fn lower_sm_background_spawn<'ctx>(
                 BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
                 BgArgFreeKind::ArcShape { .. } => ynz_abi::BG_ARG_KIND_ARC_SHAPE,
                 BgArgFreeKind::ReleaseGlue { .. } => ynz_abi::BG_ARG_KIND_RELEASE_GLUE,
+                BgArgFreeKind::OwnedCell { .. } => ynz_abi::BG_ARG_KIND_OWNED_CELL,
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -24124,6 +24142,25 @@ fn lower_sm_background_spawn<'ctx>(
             cg.builder
                 .build_store(off2, size_value)
                 .map_err(|e| format!("desc store 2: {e}"))?;
+
+            // field 3: the cell's own pointer for an owned cell, 0 for every kind that reads its slot.
+            let off3 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base + 24, false)],
+                        "desc_off3",
+                    )
+                    .map_err(|e| format!("desc gep 3: {e}"))?
+            };
+            let cell_value = match &free_kinds[*slot_idx] {
+                BgArgFreeKind::OwnedCell { .. } => arg_vals_i64[*slot_idx],
+                _ => i64_ty.const_zero(),
+            };
+            cg.builder
+                .build_store(off3, cell_value)
+                .map_err(|e| format!("desc store 3: {e}"))?;
         }
 
         (
@@ -30124,7 +30161,14 @@ fn release_glue_free_kind<'ctx>(
             if let Some(Some(OwnershipModifier::Give)) =
                 cg.suspending_callee_param_ownership(callee, arg_index)
             {
-                return Ok(cg.free_kind_of_a_given_argument(kind, ty));
+                // The callee releases a flat shape's fields and nulls its frame slot, so the ladder
+                // frees the cell it allocated through the descriptor, not through the slot.
+                return Ok(match cg.free_kind_of_a_given_argument(kind, ty) {
+                    BgArgFreeKind::HeapShape { byte_size } => {
+                        BgArgFreeKind::OwnedCell { byte_size }
+                    }
+                    other => other,
+                });
             }
             if cg.callee_takes_a_given_parameter(callee) {
                 return Ok(kind);
