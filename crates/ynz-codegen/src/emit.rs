@@ -23102,6 +23102,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                 .builder
                 .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
                 .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
+            copy_map_entry_halves(cg, cell_ptr, ty)?;
             return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
         }
         // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg ALWAYS
@@ -23406,6 +23407,68 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         release_owned_read(cg, val, &resolved, "bg_fresh_original")?;
     }
     Ok(copied)
+}
+
+/// Give the 16-byte cell of a spawned `MapEntry` argument (`value_to_stable_bits`) its own copy of
+/// every half that points into the map: a string key, a string value, an array or map value. The
+/// cell holds the map's own pointers for those, and the spawner's scope exit releases the map while
+/// the task still reads the entry, so a task would read freed memory (C7's release made the sharing
+/// unsound). Each copy is the one owned-copy operation every other spawn argument goes through
+/// (`emit_owned_copy`), released by the entry's ladder glue (`bg_mapentry_release_fn`). A shape,
+/// `maybe` or decimal half is already a copy `value_to_stable_bits` made; an int, float, boolean or
+/// options half is the value itself.
+///
+/// One to two copies per spawned entry, as Rust's `clone` on a moved-in `(String, String)`.
+///
+/// Time: O(1) here, O(n) at run time in the copied value  Space: O(1)
+fn copy_map_entry_halves<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    cell: PointerValue<'ctx>,
+    entry_ty: &Type,
+) -> Result<(), String> {
+    let Type::MapEntry { key, val } = cg.resolve_type(entry_ty) else {
+        return Err("internal: a MapEntry spawn argument has no MapEntry type".to_string());
+    };
+    let entry_struct = cg
+        .ctx
+        .struct_type(&[cg.i64().into(), cg.i64().into()], false);
+    for (index, half_ty) in [(0u32, key), (1u32, val)] {
+        let half_ty = cg.resolve_type(&half_ty);
+        let shares_the_maps_pointer = is_string_like(&half_ty)
+            || matches!(half_ty, Type::BuiltinArray { .. } | Type::BuiltinMap { .. });
+        if !shares_the_maps_pointer {
+            continue;
+        }
+        let slot = cg
+            .builder
+            .build_struct_gep(entry_struct, cell, index, "bg_mapentry_half_slot")
+            .map_err(|e| format!("bg mapentry half gep: {e}"))?;
+        let bits = cg
+            .builder
+            .build_load(cg.i64(), slot, "bg_mapentry_half_bits")
+            .map_err(|e| format!("bg mapentry half load: {e}"))?
+            .into_int_value();
+        let original = cg
+            .builder
+            .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_half_ptr")
+            .map_err(|e| format!("bg mapentry half inttoptr: {e}"))?;
+        let (copy, _) = emit_owned_copy(
+            cg,
+            None,
+            original.into(),
+            &half_ty,
+            CopyMode::SpawnArg,
+            "bg_mapentry_half",
+        )?;
+        let copy_bits = cg
+            .builder
+            .build_ptr_to_int(copy.into_pointer_value(), cg.i64(), "bg_mapentry_half_copy")
+            .map_err(|e| format!("bg mapentry half copy bits: {e}"))?;
+        cg.builder
+            .build_store(slot, copy_bits)
+            .map_err(|e| format!("bg mapentry half store: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Emit the free calls for heap-copied `background` args inside the closure body.
@@ -30231,6 +30294,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     "",
                 )
                 .map_err(|err| format!("bg mapentry release key cell: {err}"))?;
+        } else if is_string_like(&key_ty) {
+            // The key is the spawn's own copy (`copy_map_entry_halves`).
+            let key_string = half_pointer(0, "key")?;
+            self.builder
+                .build_call(self.rt.ynz_string_release, &[key_string.into()], "")
+                .map_err(|err| format!("bg mapentry release key string: {err}"))?;
         }
         match &value_ty {
             Type::Shape { .. } | Type::Maybe { .. } => {
@@ -30239,6 +30308,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     self.builder
                         .build_call(glue, &[value_cell.into()], "")
                         .map_err(|err| format!("bg mapentry release value: {err}"))?;
+                }
+            }
+            // A string, array or map value is the spawn's own copy (`copy_map_entry_halves`).
+            held if is_string_like(held)
+                || matches!(held, Type::BuiltinArray { .. } | Type::BuiltinMap { .. }) =>
+            {
+                if let Some(glue) = self.release_fn(held, false)? {
+                    let value_heap = half_pointer(1, "value")?;
+                    self.builder
+                        .build_call(glue, &[value_heap.into()], "")
+                        .map_err(|err| format!("bg mapentry release value heap: {err}"))?;
                 }
             }
             decimal if self.is_inline_decimal(decimal) => {

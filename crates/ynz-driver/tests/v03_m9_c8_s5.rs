@@ -679,3 +679,78 @@ function entrypoint() -> nothing {{
         }
     }
 }
+
+/// Bug caught (High: use after free; C7 caused it, its release frees the spawner's map at scope exit):
+/// a spawned `MapEntry` shared the map's own key and value pointers (a string key, a string or array
+/// value) instead of copying them, so a task still reading the entry after its spawner returned read
+/// freed memory. The spawn copies the halves through the owned-copy operation and the ladder releases
+/// the copies. A suspending task and a plain one, string and array values.
+#[test]
+fn a_spawned_map_entry_owns_a_copy_of_its_key_and_value() {
+    let cases = [
+        (
+            "string_value",
+            "map<string, string>",
+            "`value${2}`",
+            "print(entry.value)",
+            "key1\nvalue2\n",
+        ),
+        (
+            "array_value",
+            "map<string, array<int>>",
+            "[7, 8, 9]",
+            "print(entry.value.count().toString())",
+            "key1\n3\n",
+        ),
+    ];
+    for (name, map_type, value, read_value, expected) in cases {
+        for suspending_task in [false, true] {
+            let pause = if suspending_task {
+                "wait sleep(150)"
+            } else {
+                "sleepBlocking(150)"
+            };
+            let source = format!(
+                "function reader(entry: MapEntry<string, {value_type}>) -> nothing {{
+  {pause}
+  print(entry.key)
+  {read_value}
+}}
+
+function launch() -> nothing {{
+  let table: {map_type} = {{}}
+  table.set(`key${{1}}`, {value})
+  for (entry in table) {{
+    background reader(entry)
+  }}
+}}
+
+function entrypoint() -> nothing {{
+  launch()
+  sleepBlocking(400)
+}}
+",
+                value_type = map_type
+                    .trim_start_matches("map<string, ")
+                    .trim_end_matches('>'),
+            );
+            // The array-valued map ends in `>>`, which the trim above leaves one `>` short.
+            let source = if name == "array_value" {
+                source.replace(
+                    "MapEntry<string, array<int>",
+                    "MapEntry<string, array<int> >",
+                )
+            } else {
+                source
+            };
+            assert_source_balanced(
+                &format!(
+                    "map_entry_copy_{name}_{}",
+                    if suspending_task { "sm" } else { "plain" }
+                ),
+                &source,
+                expected,
+            );
+        }
+    }
+}
