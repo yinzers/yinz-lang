@@ -47,6 +47,7 @@ pub mod effective_ownership;
 pub mod errors_fields;
 pub mod exports;
 pub mod false_sharing;
+pub mod fixed_length;
 pub mod generics;
 pub mod heap_moves;
 pub mod independence;
@@ -72,7 +73,6 @@ pub mod temporaries;
 pub mod transfer_record;
 pub mod type_at_offset;
 pub mod type_variant_sampler;
-pub mod fixed_length;
 pub mod types;
 
 pub use check::{

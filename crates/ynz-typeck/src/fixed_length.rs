@@ -350,12 +350,10 @@ mod tests {
         calls.insert((10, 15), call("entrypoint", "total", vec![sized(3)]));
         calls.insert((20, 25), call("entrypoint", "total", vec![sized(3)]));
         let versions = close_instances(&calls, &parameters(&[("total", &["xs"])]));
-        let expected: BTreeSet<InstanceKey> = [
-            version("total", &[Some(2)]),
-            version("total", &[Some(3)]),
-        ]
-        .into_iter()
-        .collect();
+        let expected: BTreeSet<InstanceKey> =
+            [version("total", &[Some(2)]), version("total", &[Some(3)])]
+                .into_iter()
+                .collect();
         assert_eq!(versions, expected);
     }
 
@@ -367,10 +365,7 @@ mod tests {
         let mut calls = FixedCalls::new();
         calls.insert((0, 5), call("entrypoint", "twice", vec![sized(3)]));
         calls.insert((10, 15), call("entrypoint", "twice", vec![sized(4)]));
-        calls.insert(
-            (20, 25),
-            call("twice", "pick", vec![of("xs"), of("xs")]),
-        );
+        calls.insert((20, 25), call("twice", "pick", vec![of("xs"), of("xs")]));
         let versions = close_instances(
             &calls,
             &parameters(&[("twice", &["xs"]), ("pick", &["xs", "ys"])]),
@@ -408,10 +403,8 @@ mod tests {
         calls.insert((0, 1), call("entrypoint", "ping", vec![sized(2)]));
         calls.insert((2, 3), call("ping", "pong", vec![of("xs")]));
         calls.insert((4, 5), call("pong", "ping", vec![of("ys")]));
-        let versions = close_instances(
-            &calls,
-            &parameters(&[("ping", &["xs"]), ("pong", &["ys"])]),
-        );
+        let versions =
+            close_instances(&calls, &parameters(&[("ping", &["xs"]), ("pong", &["ys"])]));
         assert_eq!(versions.len(), 2);
     }
 
@@ -442,10 +435,8 @@ mod tests {
     fn a_call_in_an_unreached_specialised_function_asks_for_nothing() {
         let mut calls = FixedCalls::new();
         calls.insert((0, 1), call("dead", "pick", vec![of("xs")]));
-        let versions = close_instances(
-            &calls,
-            &parameters(&[("dead", &["xs"]), ("pick", &["ys"])]),
-        );
+        let versions =
+            close_instances(&calls, &parameters(&[("dead", &["xs"]), ("pick", &["ys"])]));
         assert!(versions.is_empty());
     }
 

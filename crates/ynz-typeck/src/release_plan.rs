@@ -1121,7 +1121,15 @@ fn scope_fate_of(
         HeapClass::Heap(kind) => kind,
     };
     // The items of an unsized `fixed` cannot be counted: a leak, never a wrong free (`OmitReason::UnsizedFixed`).
-    if kind == ReleaseKind::Fixed && matches!(entry.held, Type::BuiltinFixed { size: crate::types::FixedLength::Unknown, .. }) {
+    if kind == ReleaseKind::Fixed
+        && matches!(
+            entry.held,
+            Type::BuiltinFixed {
+                size: crate::types::FixedLength::Unknown,
+                ..
+            }
+        )
+    {
         return Ok(Fate::Omitted(OmitReason::UnsizedFixed));
     }
     let reassigned = function.reassigned.contains(&entry.decl);

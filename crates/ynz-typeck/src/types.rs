@@ -112,10 +112,7 @@ pub enum Type {
 
     /// Stack-allocated fixed-size list: `fixed<T>` in source, `fixed<T, N>` in a signature.
     /// `size` says how many items the list holds, as far as the compiler knows (`FixedLength`).
-    BuiltinFixed {
-        elem: Box<Type>,
-        size: FixedLength,
-    },
+    BuiltinFixed { elem: Box<Type>, size: FixedLength },
 
     /// Built-in optional type: `maybe<T>` in source.
     /// Distinct from `Type::Generic` because `.value` has special flow-sensitive
@@ -629,7 +626,10 @@ mod type_name_with_length_tests {
             type_name_with_length(&list(FixedLength::Known(4))),
             "fixed<int, 4>"
         );
-        assert_eq!(type_name_with_length(&list(FixedLength::Unknown)), "fixed<int>");
+        assert_eq!(
+            type_name_with_length(&list(FixedLength::Unknown)),
+            "fixed<int>"
+        );
         assert_eq!(
             type_name_with_length(&list(FixedLength::OfParam {
                 parameter: "xs".to_string()

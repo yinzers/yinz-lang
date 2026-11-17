@@ -8,8 +8,8 @@
 mod support;
 
 use support::{
-    assert_asan_clean_and_prints, assert_fixture_balanced_and_asan_clean as assert_fixture_balanced,
-    at_both_optimization_levels,
+    assert_asan_clean_and_prints,
+    assert_fixture_balanced_and_asan_clean as assert_fixture_balanced, at_both_optimization_levels,
 };
 
 // Bug: a returned `fixed<int>` reads count 0 and `none` for every item (High: data integrity of a
@@ -83,5 +83,8 @@ fn a_fixed_a_suspending_function_returns_keeps_its_count_and_items() {
 // Bug: the same for a `fixed<Part>` of heap-owning shapes: wrong count, and the items leaked.
 #[test]
 fn a_fixed_of_shapes_a_suspending_function_returns_is_read_and_released() {
-    assert_fixture_balanced("v0_3_m9_c1h_fixed_shape_return_suspending.ynz", "2\nA\nbb\n");
+    assert_fixture_balanced(
+        "v0_3_m9_c1h_fixed_shape_return_suspending.ynz",
+        "2\nA\nbb\n",
+    );
 }
