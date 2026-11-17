@@ -94,3 +94,13 @@ fn fixed_fields_of_every_item_kind_and_a_hidden_default_work() {
 fn a_fixed_field_survives_the_struct_of_arrays_layout() {
     assert_fixture_balanced_and_asan_clean("v0_3_m9_c1h_fixed_field_soa.ynz", "4970\n7\n");
 }
+
+// Bug: two inline shapes that differ only in a list's length got the same synthetic name (the
+// length was left out of it), so the second one's type was lost (High: data integrity of a layout).
+#[test]
+fn inline_shapes_with_different_list_lengths_are_different_types() {
+    assert_fixture_balanced_and_asan_clean(
+        "v0_3_m9_c1h_fixed_field_inline_shape.ynz",
+        "2\n3\n5\n9\nP\n",
+    );
+}

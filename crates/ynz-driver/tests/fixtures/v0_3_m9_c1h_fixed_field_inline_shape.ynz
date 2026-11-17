@@ -1,0 +1,21 @@
+// v0.3-M9 C1h: an inline shape (`{ ... }` written at the use site) holds a `fixed<T, N>` field by
+// value, exactly as a named shape does. Two inline shapes that differ only in a list's length are
+// different types.
+// Before: the two inline shapes below got one name (the length was left out of it), and the program
+// stopped the compiler with an internal error.
+// Expected output: the count of each list, the sum of the counts, then the last item and the label.
+
+function total(share first: { trail: fixed<int, 2> }, share second: { trail: fixed<int, 3> }) -> int {
+  return first.trail.count() + second.trail.count()
+}
+
+function entrypoint() -> nothing {
+  let first: { trail: fixed<int, 2> } = { trail: [1, 2] }
+  let second: { trail: fixed<int, 3> } = { trail: [4, 5, 6] }
+  print(first.trail.count())
+  print(second.trail.count())
+  print(total(first, second))
+  let labelled: { label: string, trail: fixed<int, 3> } = { label: `p`.toUpperCase(), trail: [7, 8, 9] }
+  print(labelled.trail[2].or(-1))
+  print(labelled.label)
+}

@@ -106,3 +106,28 @@ fn a_length_is_allowed_on_the_whole_type_of_a_field_and_nowhere_deeper() {
         assert_eq!(refused.len(), 1, "{nested}: {:#?}", errors(&output));
     }
 }
+
+// Bug: a field of an inline shape written `fixed<T>` (no length) was accepted and read count 0:
+// the field rules covered only named shapes (High: data integrity).
+#[test]
+fn an_inline_shape_field_without_a_length_is_refused_like_a_named_one() {
+    for written in [
+        "function entrypoint() -> nothing {\n\
+           let point: { trail: fixed<int> } = { trail: [4, 5, 6] }\n\
+           print(point.trail.count())\n\
+         }",
+        "function show(share point: { trail: fixed<int> }) -> nothing { print(1) }\n\
+         function entrypoint() -> nothing { print(2) }",
+        "function make() -> { trail: fixed<int> } { return { trail: [1] } }\n\
+         function entrypoint() -> nothing { print(2) }",
+        "shape Holder { inner: { trail: fixed<int> } }\n\
+         function entrypoint() -> nothing { print(2) }",
+    ] {
+        let output = check(written);
+        let refused = errors(&output)
+            .into_iter()
+            .filter(|diagnostic| diagnostic.kind == Some(DiagnosticKind::FixedFieldLengthMissing))
+            .count();
+        assert_eq!(refused, 1, "{written}\n{:#?}", errors(&output));
+    }
+}
