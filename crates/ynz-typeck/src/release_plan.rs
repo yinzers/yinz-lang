@@ -50,8 +50,8 @@
 //! * The release owners (bindings with a releasing fate at some edge) feed the ONE crossing-set
 //!   producer: a release is a read at its edge, see [`ReleaseReads`]. Only a kind with a frame
 //!   home across a suspension ([`ReleaseKind::has_frame_backing`]: a pointer in a frame slot, or
-//!   bytes in a frame region) is read: an errors-capable value has none yet (C8 slice 4b), so
-//!   reading it would reject programs that compile now. A local whose only crossing is its own
+//!   bytes in a frame region) is read; an errors-capable local has one (two frame
+//!   slots, a region for a union result: C8 slice 4b). A local whose only crossing is its own
 //!   release read is `CrossingNames::release_only`, which the guards that reject a read after a
 //!   `wait` skip. A kind widens that one predicate together with its frame home.
 
@@ -115,7 +115,7 @@ impl ReleaseKind {
     /// True when a binding of this kind has a frame home that survives every suspension: a pointer
     /// in a frame slot (string, array, map, channel, task handle) or bytes in a frame region (shape,
     /// nested shape, union, `maybe`, `fixed` list). The crossing set reads only these kinds (see the
-    /// module docs); an errors-capable value is not one yet (C8 slice 4b).
+    /// module docs); an errors-capable local is one since C8 slice 4b.
     pub fn has_frame_backing(&self) -> bool {
         matches!(
             self,

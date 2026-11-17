@@ -28226,9 +28226,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // A resume function releases exactly the kinds that keep their bytes across a suspension
         // (`ReleaseKind::has_frame_backing`), the kinds the crossing set reads: a string, array,
         // map, channel and handle are a pointer in a frame slot, a shape, nested shape, union,
-        // `maybe` and `fixed` list live in a frame region. An errors-capable value has none yet
-        // (C8 slice 4b): it is a leak here, never an early free. A type-parameter value never
-        // reaches a resume function: a generic function is never a state machine.
+        // `maybe` and `fixed` list live in a frame region, and an errors-capable local keeps its two words
+        // in frame slots. A type-parameter value never reaches a resume function: a generic function
+        // is never a state machine.
         if self.sm_frame_ptr.is_some() && !kind.has_frame_backing() {
             return false;
         }
