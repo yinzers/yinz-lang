@@ -2811,14 +2811,14 @@ why_template = "A `fixed` list without a written length is compiled once for eac
 kind_name = "FixedReturnLengthsDiffer"
 what_template = "`{function}` returns lists of different lengths: {lengths}."
 what_instead_template = "Make every `return` in `{function}` give a list with the same number of items, such as {first}."
-why_template = "A list comes back from a function by value, so its size is part of the function's type: one function returns one length. With {lengths} the caller could not know how many items to read."
+why_template = "A list comes back from a function with its items inside it, so its size is part of what the function gives back: one function returns one length. With {lengths} the caller could not know how many items to read."
 
 # `{function}`, `{reason}` says why it cannot be worked out, `{element}` the element type.
 [[diagnostic_template]]
 kind_name = "FixedReturnLengthUnknown"
 what_template = "The number of items `{function}` returns cannot be worked out: {reason}."
 what_instead_template = "Write the length in the return type of `{function}`, such as `fixed<{element}, 4>`, and make every `return` give that many items."
-why_template = "A list comes back from a function by value, so its size has to be known when the program is compiled. The compiler reads it from the `return` statements; where it cannot, the signature has to say it."
+why_template = "A list comes back from a function with its items inside it, so its size has to be known when the program is compiled. The compiler reads it from the `return` statements; where it cannot, the signature has to say it."
 
 # `{shape}` the shape, `{field}` the field, `{written}` the field's type as written, `{element}` the
 # element type, `{suggested}` the same type with a length.
