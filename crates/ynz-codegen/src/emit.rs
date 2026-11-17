@@ -21157,6 +21157,10 @@ fn lower_stmt_return<'ctx>(
                             let env_ptr = val.into_pointer_value();
                             let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "sm_ret_maybe")?;
                             let moved = cg.is_moved_cells(env_ptr);
+                            // A `maybe` a Yinz function returned or a string `get` built owns its payload:
+                            // the return passes it on, as the plain return does, instead of orphaning it.
+                            let takes_a_fresh_payload =
+                                cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr);
                             let stable_bits = cg.maybe_payload_stable_bits(
                                 flag,
                                 bits,
@@ -21164,7 +21168,7 @@ fn lower_stmt_return<'ctx>(
                                 "sm_ret_maybe",
                                 true,
                                 moved,
-                                false,
+                                takes_a_fresh_payload,
                             )?;
                             state_machine::store_return_value_errors(
                                 cg.ctx,
@@ -21713,15 +21717,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 }
 
 /// A `maybe` a Yinz function returned, or a string `get` built, owns its payload: a later persist
-/// takes it (`Cg::fresh_payload_maybes`). A state-machine function releases nothing yet (C8), so it
-/// keeps copying.
+/// takes it (`Cg::fresh_payload_maybes`), in a resume function as in a plain one.
 fn remember_fresh_payload_maybe<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     expr: &Expr,
     val: BasicValueEnum<'ctx>,
 ) {
     if val.is_pointer_value()
-        && cg.sm_frame_ptr.is_none()
         && (cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr))
         && matches!(
             cg.resolve_type(&cg.expr_type(expr)),
@@ -22191,7 +22193,6 @@ fn store_binding_of_read_into<'ctx>(
             matches!(inner, Type::String | Type::Shape { .. }) || cg.is_inline_decimal(&inner);
         if owns_payload
             && val.is_pointer_value()
-            && cg.sm_frame_ptr.is_none()
             && (cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr))
         {
             let owned = cg.maybe_to_owned_taking(val.into_pointer_value(), &inner, name)?;

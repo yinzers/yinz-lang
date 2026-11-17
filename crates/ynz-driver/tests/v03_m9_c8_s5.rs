@@ -823,3 +823,81 @@ borrowed_string_cases! {
     a_borrowed_string_given_to_a_suspending_callee_is_released_once: true, "", "2ABCDEFGHIJ\n";
     a_borrowed_string_read_again_after_a_suspending_spawn_is_released_once: true, "print(label)", "ABCDEFGHIJ\n2ABCDEFGHIJ\n";
 }
+
+/// A program whose `entrypoint` is a resume function (it waits) that binds `pick()`, a `maybe` of
+/// `element_type` a plain function returned, and runs `body` over it.
+fn resume_function_maybe_program(element_type: &str, element_value: &str, body: &str) -> String {
+    format!(
+        "shape Big {{
+  label: string
+  count: int
+}}
+
+function pick() -> maybe<{element_type}> {{
+  let source: array<{element_type}> = [{element_value}]
+  return source.get(0)
+}}
+
+function eat(give held: maybe<{element_type}>) -> nothing {{
+  wait sleep(1)
+  print(held.exists())
+}}
+
+function forward(give held: maybe<{element_type}>) -> nothing {{
+  background eat(held)
+}}
+
+function viaWait() -> maybe<{element_type}> {{
+  wait sleep(1)
+  return pick()
+}}
+
+function entrypoint() -> nothing {{
+{body}
+}}
+"
+    )
+}
+
+/// Bug caught: pre-existing (a C7 guard no C8 slice lifted), found by the C8 round-3 review: a
+/// resume function that bound a `maybe` of a string, flat shape or decimal a plain function returned
+/// copied the payload and released nothing of the call result (`store_binding_of_read_into` and
+/// `remember_fresh_payload_maybe` took it only outside a resume function), so each such binding
+/// leaked one payload; a `return` of it from a resume function did the same. Tier Medium. One program
+/// per element kind and use of the binding: read, given to a plain function, forwarded to a task by a
+/// plain function and spawned by a suspending one, returned through a wait.
+macro_rules! resume_function_maybe_cases {
+    ($($name:ident: $element_type:literal, $element_value:literal, $body:expr, $expected:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = resume_function_maybe_program($element_type, $element_value, $body);
+                assert_source_balanced(stringify!($name), &source, $expected);
+            }
+        )+
+    };
+}
+
+const READ_THEN_WAIT: &str = "  let found = pick()
+  print(found.exists())
+  wait sleep(1)";
+const GIVE_TO_PLAIN: &str = "  let found = pick()
+  forward(found)
+  wait sleep(300)";
+const SPAWN_FROM_SUSPENDING: &str = "  let found = pick()
+  background eat(found)
+  wait sleep(300)";
+const RETURN_THROUGH_WAIT: &str = "  let found = viaWait()
+  print(found.exists())";
+
+resume_function_maybe_cases! {
+    a_resume_function_binding_a_returned_maybe_string_frees_the_call_result: "string", "`kept`.toUpperCase()", READ_THEN_WAIT, "true\n";
+    a_resume_function_binding_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", READ_THEN_WAIT, "true\n";
+    a_resume_function_binding_a_returned_maybe_decimal_frees_the_call_result: "number<20> ", "2.5", READ_THEN_WAIT, "true\n";
+    a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once: "string", "`kept`.toUpperCase()", GIVE_TO_PLAIN, "true\n";
+    a_resume_function_giving_a_returned_maybe_shape_to_a_plain_function_frees_it_once: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", GIVE_TO_PLAIN, "true\n";
+    a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result: "string", "`kept`.toUpperCase()", SPAWN_FROM_SUSPENDING, "true\n";
+    a_suspending_spawner_of_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", SPAWN_FROM_SUSPENDING, "true\n";
+    a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on: "string", "`kept`.toUpperCase()", RETURN_THROUGH_WAIT, "true\n";
+    a_resume_function_returning_a_returned_maybe_shape_passes_its_payload_on: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", RETURN_THROUGH_WAIT, "true\n";
+}
