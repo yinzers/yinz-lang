@@ -2965,6 +2965,16 @@ impl<'b> Checker<'b> {
 
         // Indexed iteration so that `background` inference can look at stmts[i+1..].
         for (i, stmt) in stmts.iter().enumerate() {
+            // A function that suspends may park in this statement: record what a task dropped there
+            // still owns (the scope as it is before the statement runs). A function that never
+            // suspends records nothing (C8 slice 6).
+            if self.current_fn_suspends {
+                self.record_exit(
+                    EdgeKind::Suspension,
+                    crate::release_plan::stmt_source_span(stmt),
+                    Vec::new(),
+                );
+            }
             // Apply any early-return narrowing facts from previous `if (!x.exists()) { return }`.
             for name in &early_return_narrowed {
                 self.maybe_non_none.insert(name.clone());
@@ -5644,7 +5654,9 @@ impl<'b> Checker<'b> {
         let innermost = self.scope.innermost_frame();
         let frames: Vec<usize> = match kind {
             EdgeKind::BlockEnd => vec![innermost],
-            EdgeKind::Return | EdgeKind::Propagation => (0..=innermost).rev().collect(),
+            EdgeKind::Return | EdgeKind::Propagation | EdgeKind::Suspension => {
+                (0..=innermost).rev().collect()
+            }
         };
         let mut entries: Vec<RawEntry> = Vec::new();
         for frame_index in frames {

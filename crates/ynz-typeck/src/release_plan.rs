@@ -15,6 +15,7 @@
 //! | end of a block (a function body, an `if` body, a loop body per iteration, a match arm) | the `Block` span | the block's own frame, last declared first |
 //! | a `return` | the `Stmt::Return` span | every open frame, innermost first |
 //! | errors auto-propagation | the span of the identifier read that fires it | every open frame, innermost first |
+//! | a statement of a function that suspends (C8 slice 6) | the statement span | every open frame, innermost first, as the live scope shows it at the START of the statement: what a task dropped while parked in that statement still owns |
 //!
 //! A binding whose type holds no heap (`int`, `boolean`, `options`, ...) is not listed.
 //!
@@ -225,6 +226,9 @@ pub enum EdgeKind {
     BlockEnd,
     Return,
     Propagation,
+    /// A statement of a function that suspends: what a task dropped while parked in it owns
+    /// (`Cg` drop entry, C8 slice 6). Never a scope exit; the list is judged like a `return`'s.
+    Suspension,
 }
 
 /// Whether a binding was given away on the path to an edge.
@@ -573,8 +577,13 @@ fn span_of(span: &SourceSpan) -> Span {
 }
 
 pub fn stmt_span(stmt: &Stmt) -> Span {
+    span_of(stmt_source_span(stmt))
+}
+
+/// The source span of `stmt`.
+pub fn stmt_source_span(stmt: &Stmt) -> &SourceSpan {
     match stmt {
-        Stmt::Expr(expr) => span_of(expr.span()),
+        Stmt::Expr(expr) => expr.span(),
         Stmt::Let { span, .. }
         | Stmt::Assign { span, .. }
         | Stmt::If { span, .. }
@@ -583,7 +592,7 @@ pub fn stmt_span(stmt: &Stmt) -> Span {
         | Stmt::For { span, .. }
         | Stmt::Return { span, .. }
         | Stmt::FieldAssign { span, .. }
-        | Stmt::IndexAssign { span, .. } => span_of(span),
+        | Stmt::IndexAssign { span, .. } => span,
     }
 }
 
@@ -1005,11 +1014,18 @@ fn resolve_function(
             }
             fates.push((entry.decl.clone(), fate));
         }
+        // A suspension edge adds no read: every owner it lists is released at a later exit edge too
+        // (a binding with a releasing fate here is neither moved nor returned yet), so it is already
+        // read after the suspension.
         if !owners.is_empty() {
             let target = match edge.kind {
                 EdgeKind::BlockEnd => &mut reads.block_end,
                 EdgeKind::Return => &mut reads.return_edge,
                 EdgeKind::Propagation => &mut reads.propagation_edge,
+                EdgeKind::Suspension => {
+                    edges.push((edge.kind, edge.span, fates));
+                    continue;
+                }
             };
             target.insert(edge.span, owners);
         }
@@ -1032,11 +1048,51 @@ fn ambiguous_user_names(function: &FunctionExits) -> HashSet<&str> {
 
 /// THE fate rule. One function, read by the early and the final pass alike.
 ///
+/// A suspension edge lists the scope as it is at the START of its statement, so a value the statement
+/// itself hands over (a read inside it that is a move site of the binding's class) is still owned in
+/// the scope it shows. Whether that read ran before the task parked is not known here: such a
+/// binding is `ReleaseIfLive`, and the move site nulls its slot where the read runs, so the drop
+/// entry releases it only if the park came first (C8 slice 6).
+///
 /// A binding's fate depends on what happened to ITS OWN value: whether a read naming it handed it
 /// over (`MemberFacts::moved_directly`; the live scope's consumed state is per alias class, so it
 /// also reports a give of any joined owner) and whether the returned value is, or may point into,
 /// it (`MemberFacts::aliases` against the edge's returned holders).
 fn fate_of(
+    function: &FunctionExits,
+    edge: &RawEdge,
+    entry: &RawEntry,
+    facts_of: &dyn Fn(&DeclKey) -> Option<MemberFacts>,
+    moves_by_binding: Option<&HashMap<DeclKey, Vec<Span>>>,
+) -> Result<Fate, String> {
+    let fate = scope_fate_of(function, edge, entry, facts_of, moves_by_binding)?;
+    if let (EdgeKind::Suspension, Fate::Release(kind)) = (edge.kind, fate) {
+        if founder_moved_inside(function, edge.span, &entry.decl, facts_of) {
+            return Ok(Fate::ReleaseIfLive(kind));
+        }
+    }
+    Ok(fate)
+}
+
+/// True when a read inside `span` is a move site of the class `decl` founds: it hands the class over.
+///
+/// O(move sites).
+fn founder_moved_inside(
+    function: &FunctionExits,
+    span: Span,
+    decl: &DeclKey,
+    facts_of: &dyn Fn(&DeclKey) -> Option<MemberFacts>,
+) -> bool {
+    function.move_sites.iter().any(|site| {
+        encloses(span, site.span)
+            && matches!(
+                facts_of(&site.named).map(|facts| facts.anchor),
+                Some(ReleaseAnchor::Founder { decl: founder, .. }) if founder == *decl
+            )
+    })
+}
+
+fn scope_fate_of(
     function: &FunctionExits,
     edge: &RawEdge,
     entry: &RawEntry,
@@ -1155,6 +1211,7 @@ pub struct ReleasePlan {
     block_end: HashMap<Span, Vec<ReleaseEntry>>,
     return_edge: HashMap<Span, Vec<ReleaseEntry>>,
     propagation_edge: HashMap<Span, Vec<ReleaseEntry>>,
+    suspension_edge: HashMap<Span, Vec<ReleaseEntry>>,
     move_sites: HashMap<Span, Vec<MoveSite>>,
     assign_releases: HashMap<Span, AssignRelease>,
     reads_user: HashMap<String, ReleaseReads>,
@@ -1183,6 +1240,13 @@ impl ReleasePlan {
     /// The list for the auto-propagation fired by the identifier read at `span`.
     pub fn propagation_edge(&self, span: &SourceSpan) -> Option<&[ReleaseEntry]> {
         self.propagation_edge.get(&span_of(span)).map(Vec::as_slice)
+    }
+
+    /// The list for a task dropped while parked in the statement at `span` (a statement of a
+    /// function that suspends): the bindings it still owns, as the scope shows them at the start of
+    /// the statement, with every founder a read inside the statement moves marked `ReleaseIfLive`.
+    pub fn suspension_edge(&self, span: &SourceSpan) -> Option<&[ReleaseEntry]> {
+        self.suspension_edge.get(&span_of(span)).map(Vec::as_slice)
     }
 
     /// The release the assignment at `span` makes of the value it replaces; `None` when its
@@ -1310,6 +1374,7 @@ impl ReleasePlan {
                 EdgeKind::BlockEnd => &mut self.block_end,
                 EdgeKind::Return => &mut self.return_edge,
                 EdgeKind::Propagation => &mut self.propagation_edge,
+                EdgeKind::Suspension => &mut self.suspension_edge,
             };
             table.insert(*span, list);
             self.facts.push(EdgeFacts {
@@ -1518,6 +1583,8 @@ impl ReleasePlan {
                     )
                 } else {
                     entry.fate == Fate::Release(kind)
+                        || (edge.kind == EdgeKind::Suspension
+                            && entry.fate == Fate::ReleaseIfLive(kind))
                 };
                 if !ok {
                     violations.push(format!(

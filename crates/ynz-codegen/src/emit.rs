@@ -9193,7 +9193,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             frame_param,
             f.body.span.start,
             0,
-            None,
+            &[],
         )?;
         cg_resume.builder.position_at_end(resume_block);
     }
@@ -10238,37 +10238,45 @@ enum DropChild {
     Boxed { offset: u64 },
 }
 
-/// The blocks that enclose source offset `offset`, outermost first, each with the start of the
-/// statement of that block the offset lies in (C8 slice 6 spike).
+/// The innermost statement of `block` (nested blocks included) whose span holds source offset
+/// `offset`: the statement a task parked at that offset is in.
 ///
 /// O(depth * statements) time.
-fn drop_scope_chain<'a>(
-    block: &'a ynz_ast::nodes::Block,
-    offset: usize,
-    chain: &mut Vec<(&'a ynz_ast::nodes::Block, usize)>,
-) {
+fn innermost_statement(block: &ynz_ast::nodes::Block, offset: usize) -> Option<&Stmt> {
     for stmt in &block.stmts {
         let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
         if start <= offset && offset <= end {
-            chain.push((block, start));
             for nested in ynz_typeck::release_plan::nested_blocks(stmt) {
                 if nested.span.start <= offset && offset <= nested.span.end {
-                    drop_scope_chain(nested, offset, chain);
+                    if let Some(inner) = innermost_statement(nested, offset) {
+                        return Some(inner);
+                    }
                 }
             }
-            return;
+            return Some(stmt);
         }
     }
+    None
 }
 
 /// Emit the drop entry of continuation state `state`, the state a task parked at source offset
-/// `offset` resumes in (C8 slice 6 spike). A dropped task presents the bitwise complement of its
-/// resume point; the block built here, reached through the drop dispatch, reloads the frame's
-/// slots as the continuation state does, releases the open statements' temporaries and every
-/// binding of the enclosing blocks declared before the statement, each behind a null check, then
-/// drops the awaited callee's frame and returns. Nothing runs on the normal path.
+/// `offset` resumes in (C8 slice 6). A dropped task re-enters its resume function with the bitwise
+/// complement of its `resume_point`; the resume switch sends that value to the block built here
+/// (the drop dispatch). The block
 ///
-/// O(open scopes) time and code per suspension point.
+/// 1. reloads the frame's slots as the continuation state does,
+/// 2. releases the temporaries of the open statements (`release_open_temporaries`),
+/// 3. releases what the parked statement's suspension edge lists
+///    (`ReleasePlan::suspension_edge`: typeck's list for exactly this state, each release behind a
+///    null check because the statement may have taken a value before it parked),
+/// 4. drops the callee frames the state awaits, each by its own resume function the same way, and
+/// 5. returns Ready.
+///
+/// It never releases every non-null slot: a borrowed parameter and a view are non-null slots the
+/// task does not own, and an embedded callee frame keeps the slots of its previous call.
+/// Nothing runs on the normal path.
+///
+/// O(open scopes + callee frames) time and code per suspension point.
 #[allow(clippy::too_many_arguments)]
 fn register_drop_state<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
@@ -10278,40 +10286,47 @@ fn register_drop_state<'ctx, 'g>(
     frame_ptr: PointerValue<'ctx>,
     offset: usize,
     state: usize,
-    child: Option<(DropChild, FunctionValue<'ctx>)>,
+    children: &[(DropChild, FunctionValue<'ctx>)],
 ) -> Result<(), String> {
     let ctx = cg.ctx;
     let saved = cg
         .builder
         .get_insert_block()
         .ok_or("drop state: no insert block")?;
+    let parked_in = if state == 0 {
+        f.body.stmts.first()
+    } else {
+        innermost_statement(&f.body, offset)
+    }
+    .ok_or_else(|| {
+        format!(
+            "internal: `{}` suspends at offset {offset} outside every statement of its body",
+            f.name
+        )
+    })?;
+    let entries = cg
+        .typed
+        .release_plan
+        .suspension_edge(ynz_typeck::release_plan::stmt_source_span(parked_in))
+        .ok_or_else(|| {
+            format!(
+                "internal: the release plan has no suspension edge for the statement of `{}` at \
+                 offset {offset}",
+                f.name
+            )
+        })?;
     let drop_bb = ctx.append_basic_block(cg.current_fn, &format!("sm_drop_s{state}"));
     cg.builder.position_at_end(drop_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, state != 0, true)?;
     cg.release_open_temporaries("drop_temporary")?;
-    let mut chain = Vec::new();
-    if state == 0 {
-        chain.push((&f.body, f.body.span.start));
-    } else {
-        drop_scope_chain(&f.body, offset, &mut chain);
-    }
-    for (block, statement_start) in chain.iter().rev() {
-        if let Some(entries) = cg.typed.release_plan.block_end(&block.span) {
-            let live: Vec<ynz_typeck::release_plan::ReleaseEntry> = entries
-                .iter()
-                .filter(|entry| entry.decl.0 < *statement_start)
-                .cloned()
-                .collect();
-            cg.emit_release_edge_with(&live, "drop", true)?;
-        }
-    }
-    if let Some((which, child_resume)) = child {
+    cg.emit_release_edge_with(entries, "drop", true)?;
+    for (which, child_resume) in children {
         let child_frame = match which {
             DropChild::Embedded { offset } => state_machine::child_frame_ptr(
                 ctx,
                 &cg.builder,
                 frame_ptr,
-                offset,
+                *offset,
                 "drop_child_frame",
             )?,
             DropChild::Boxed { offset } => {
@@ -10321,7 +10336,7 @@ fn register_drop_state<'ctx, 'g>(
                         .build_gep(
                             ctx.i8_type(),
                             frame_ptr,
-                            &[ctx.i64_type().const_int(offset, false)],
+                            &[ctx.i64_type().const_int(*offset, false)],
                             "drop_rec_slot",
                         )
                         .map_err(|e| format!("drop rec slot gep: {e}"))?
@@ -10346,7 +10361,7 @@ fn register_drop_state<'ctx, 'g>(
             .map_err(|e| format!("drop child rp store: {e}"))?;
         cg.builder
             .build_call(
-                child_resume,
+                *child_resume,
                 &[
                     child_frame.into(),
                     ctx.ptr_type(AddressSpace::default()).const_null().into(),
@@ -16971,12 +16986,12 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         parent_frame,
         call_expr.span().start,
         continuation_state,
-        Some((
+        &[(
             DropChild::Embedded {
                 offset: child_offset,
             },
             child_resume_fn,
-        )),
+        )],
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
@@ -17395,7 +17410,9 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         .frame_layouts
         .get(&f.name)
         .and_then(|layout| layout.recursion_slot)
-        .map(|offset| (DropChild::Boxed { offset }, child_resume_fn));
+        .map(|offset| (DropChild::Boxed { offset }, child_resume_fn))
+        .into_iter()
+        .collect::<Vec<_>>();
     register_drop_state(
         cg,
         f,
@@ -17404,7 +17421,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         parent_frame,
         call_offset,
         continuation_state,
-        boxed_child,
+        boxed_child.as_slice(),
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
@@ -18467,7 +18484,7 @@ fn emit_wait_point<'ctx, 'g>(
         frame_ptr,
         inner.span().start,
         continuation_state,
-        None,
+        &[],
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
@@ -29438,20 +29455,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.emit_release_edge_with(entries, site, false)
     }
 
-    /// `emit_release_edge`, with every release null-checked when `force_live`: a dropped task
-    /// (C8 slice 6) may be parked in a statement that already moved a value, so a fate that
-    /// says "not moved" is not enough there.
+    /// `emit_release_edge`, with every release null-checked when `null_checked`: a task dropped
+    /// (C8 slice 6) may be parked in a statement that already took a value, so a fate that says
+    /// "not moved" is not enough there.
     fn emit_release_edge_with(
         &self,
         entries: &[ynz_typeck::release_plan::ReleaseEntry],
         site: &str,
-        force_live: bool,
+        null_checked: bool,
     ) -> Result<(), String> {
         for entry in entries {
             let Some((ty, only_if_live)) = self.plain_release_of(entry)? else {
                 continue;
             };
-            let only_if_live = only_if_live || force_live;
+            let only_if_live = only_if_live || null_checked;
             let name = entry.codegen_name.as_str();
             // An `is` arm re-points a narrowed union binding at its variant payload; the release
             // reads the binding's own (outer) slot, which holds the view.
