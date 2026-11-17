@@ -259,6 +259,19 @@ pub fn type_name(t: &Type) -> String {
     }
 }
 
+/// `type_name`, but a `fixed` list of known length shows it (`fixed<int, 4>`): what a function
+/// signature says, so hover and completion show the length a caller must pass (C1h, #433). Only the
+/// whole type is read; a `fixed` inside another type keeps `type_name`'s form. O(size of the type).
+pub fn type_name_with_length(ty: &Type) -> String {
+    match ty {
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } => format!("fixed<{}, {count}>", type_name(elem)),
+        other => type_name(other),
+    }
+}
+
 /// The widest `number<N>` that is a decimal128 value (an i128, no heap). A `number` wider than this is a
 /// bignum: a pointer to heap decimal text, released like a `string`.
 pub const DECIMAL128_MAX_PRECISION: u32 = 34;
@@ -595,6 +608,33 @@ mod channel_elem_tests {
             !channel_elem_supported(&Type::Number { precision: 40 }),
             "bignum `number` (precision > 34) must stay rejected per the \
              channel-element-heap-upgrade deferral"
+        );
+    }
+}
+
+#[cfg(test)]
+mod type_name_with_length_tests {
+    use super::*;
+
+    // Bug: hover and completion showed `fixed<int>` for a parameter written `fixed<int, 4>`, so a
+    // caller could not see the length the function requires (signature display, Low tier: one
+    // named reason, the signature is the only place a caller learns a required length).
+    #[test]
+    fn a_known_length_is_shown_and_an_unknown_one_is_not() {
+        let list = |size| Type::BuiltinFixed {
+            elem: Box::new(Type::Int),
+            size,
+        };
+        assert_eq!(
+            type_name_with_length(&list(FixedLength::Known(4))),
+            "fixed<int, 4>"
+        );
+        assert_eq!(type_name_with_length(&list(FixedLength::Unknown)), "fixed<int>");
+        assert_eq!(
+            type_name_with_length(&list(FixedLength::OfParam {
+                parameter: "xs".to_string()
+            })),
+            "fixed<int>"
         );
     }
 }

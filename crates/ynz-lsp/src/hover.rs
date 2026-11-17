@@ -8,7 +8,7 @@ use ynz_typeck::ast_offset::identifier_use_site_at_offset;
 use ynz_typeck::options_table::OptionsEntry;
 use ynz_typeck::shapes::ShapeTable;
 use ynz_typeck::type_at_offset::type_of_name_at_offset;
-use ynz_typeck::types::type_name;
+use ynz_typeck::types::{type_name, type_name_with_length};
 
 use crate::{capabilities::PositionEncoding, position::LineTable};
 
@@ -206,14 +206,14 @@ fn user_symbol_hover(
         let param_str = sig
             .params
             .iter()
-            .map(|(pname, ptype)| format!("{pname}: {}", type_name(ptype)))
+            .map(|(pname, ptype)| format!("{pname}: {}", type_name_with_length(ptype)))
             .collect::<Vec<_>>()
             .join(", ");
         let sig_body = format!(
             "## `function {}({})`\n\nReturns: `{}`",
             token_name,
             param_str,
-            type_name(&sig.ret)
+            type_name_with_length(&sig.ret)
         );
 
         // Prepend doc comment if the parsed module is available.

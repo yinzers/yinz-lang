@@ -10,7 +10,7 @@ export function sum(share nums: fixed<int, 4>) -> int {
 }
 
 export function max(share nums: fixed<int, 4>) -> int {
-  let biggest = nums[0]
+  let biggest = nums[0].or(0)
   for (n in nums) {
     if (n > biggest) {
       biggest = n

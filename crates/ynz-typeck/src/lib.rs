@@ -123,4 +123,4 @@ pub use symbol_lookup::{
     rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,
 };
 pub use type_at_offset::type_of_expression_at_offset;
-pub use types::{is_trivially_copyable, FixedLength, Type};
+pub use types::{is_trivially_copyable, type_name_with_length, FixedLength, Type};
