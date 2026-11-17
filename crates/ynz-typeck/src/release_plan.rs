@@ -113,20 +113,6 @@ pub enum ReleaseKind {
 }
 
 impl ReleaseKind {
-    /// `has_frame_backing` for a binding that holds `held`: a `maybe` of an envelope union keeps
-    /// its payload slot on the resume stack (`union_to_owned`), which no frame region backs yet, so
-    /// it is no owner the crossing set reads and codegen leaves it unreleased in a resume function.
-    /// THE one predicate: the release reads and `Cg::releases_in_instance` both call it.
-    pub fn has_frame_backing_for(&self, held: &Type) -> bool {
-        if !self.has_frame_backing() {
-            return false;
-        }
-        !matches!(
-            (self, held),
-            (ReleaseKind::Maybe, Type::Maybe { inner }) if is_envelope_union(inner)
-        )
-    }
-
     /// True when a binding of this kind has a frame slot that survives every suspension today. The
     /// crossing set reads only these kinds (see the module docs). A flat shape is not one: a shape
     /// local that crosses a `wait` inside an `is` arm of a state-machine match reads freed frame
@@ -1008,9 +994,7 @@ fn resolve_function(
             // skipped on purpose, not dropped by accident: it is a frame-backed kind, which no
             // guard rejects on its own, and codegen's unique names still read it.
             if let Fate::Release(kind) | Fate::ReleaseIfLive(kind) = fate {
-                if kind.has_frame_backing_for(&entry.held)
-                    && !ambiguous.contains(entry.decl.2.as_str())
-                {
+                if kind.has_frame_backing() && !ambiguous.contains(entry.decl.2.as_str()) {
                     owners.push(name_of(&entry.decl));
                 }
             }

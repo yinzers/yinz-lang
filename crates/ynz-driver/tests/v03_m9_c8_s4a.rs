@@ -541,3 +541,41 @@ function entrypoint() -> nothing {{
     );
     assert_balanced("union_param_given", &source, "6\n");
 }
+
+/// Bug it catches: a `maybe` of an envelope union kept its union in a slot of the resume stack, so
+/// a local of that type was no owner a resume function released (the union's string leaked), and a
+/// release or read after a `wait` would have read a dead stack. The union now lives in the local's
+/// frame region; covers a bind from an element read, a reassignment, a bind from a suspending
+/// call's result, and the release after the `wait` (a read after it is refused, as for every `maybe`).
+#[test]
+fn maybe_of_a_union_local_crossing_a_wait_is_released_and_reassigned() {
+    let source = format!(
+        "{THINGS}
+function slowFetch(share things: array<Thing>, index: int) -> maybe<Thing> {{
+  wait sleep(1)
+  let found = things.get(index)
+  return found
+}}
+
+function entrypoint() -> nothing {{
+  let things: array<Thing> = []
+  let tiny: Tiny = {{ flag: true }}
+  things.add(tiny)
+  let big: Big = {{ label: `ab`.toUpperCase(), count: 3 }}
+  things.add(big)
+  let found: maybe<Thing> = things.get(0)
+  found = things.get(1)
+  if (found.exists()) {{
+    print(describe(found.value))
+  }}
+  let later: maybe<Thing> = wait slowFetch(things, 1)
+  if (later.exists()) {{
+    print(describe(later.value))
+  }}
+  wait sleep(1)
+  print(`done`)
+}}
+"
+    );
+    assert_balanced("maybe_union_local", &source, "big AB\nbig AB\ndone\n");
+}

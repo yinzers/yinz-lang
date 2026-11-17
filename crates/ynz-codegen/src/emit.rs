@@ -4047,13 +4047,25 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // releases, so the payload is copied into a slot of the binding's own, deep like every union
         // copy (`union_to_owned`). A moved source hands its slot over, and a value a call returned
         // already sits in a slot of the caller's (`take`). A stored form keeps the view.
-        let final_bits = if !heap && !take && !moved {
-            match self.envelope_union_variants(&self.resolve_type(inner_ty)) {
-                Some(variants) => self.maybe_union_payload_copy(flag, bits, &variants, site)?,
+        // A binding homed in a frame region (`maybe_payload_dest`) keeps the union in the region
+        // behind its envelope whatever the source: a value a call returned sits in a slot that dies
+        // with the call's frame or the resume invocation's stack (`maybe_union_payload_into`).
+        let final_bits = match self.envelope_union_variants(&self.resolve_type(inner_ty)) {
+            Some(variants) if !heap => match self.maybe_payload_dest.get() {
+                Some(region) => self.maybe_union_payload_into(
+                    flag,
+                    bits,
+                    &variants,
+                    region,
+                    !take && !moved,
+                    site,
+                )?,
+                None if !take && !moved => {
+                    self.maybe_union_payload_copy(flag, bits, &variants, site)?
+                }
                 None => final_bits,
-            }
-        } else {
-            final_bits
+            },
+            _ => final_bits,
         };
 
         let dst_flag_gep = self
@@ -4074,6 +4086,89 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.free_minted_maybe_cell(src_env, site)?;
         }
         Ok(owned_env)
+    }
+
+    /// `maybe_union_payload_copy` for a `maybe` homed in a frame region: when `flag` is set the
+    /// union `bits` view names is persisted into the union slot behind the view in the region
+    /// (`region` is the payload address: the 16-byte view, then the slot), deep when `deep` and
+    /// otherwise taking what it owns, and the bits are the region's view. Nothing is allocated, and
+    /// a later resume reads the same bytes back, which a per-site view does not survive.
+    ///
+    /// Time: O(1) to emit; the copy it emits is as `union_persist_into`  Space: O(1)
+    fn maybe_union_payload_into(
+        &self,
+        flag: inkwell::values::IntValue<'ctx>,
+        bits: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        region: PointerValue<'ctx>,
+        deep: bool,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let has = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_has_union_region"),
+            )
+            .map_err(|err| format!("{site}: maybe union flag compare: {err}"))?;
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_union_region_copy"));
+        let cont_bb = self.append_block(&format!("{site}_union_region_cont"));
+        self.builder
+            .build_conditional_branch(has, copy_bb, cont_bb)
+            .map_err(|err| format!("{site}: maybe union branch: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let source = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_union_region_src"))
+            .map_err(|err| format!("{site}: maybe union view cast: {err}"))?;
+        // SAFETY: `maybe_region_payload_bytes` reserved the view and the slot behind the envelope.
+        let slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.ctx.i8_type(),
+                    region,
+                    &[self.i64().const_int(16, false)],
+                    &format!("{site}_union_region_slot"),
+                )
+                .map_err(|err| format!("{site}: maybe union slot gep: {err}"))?
+        };
+        self.union_persist_into_core(
+            source,
+            slot,
+            variants,
+            self.union_has_nothing(variants),
+            deep,
+            &format!("{site}_union_region"),
+        )?;
+        let view =
+            self.union_slot_to_value_as(slot, variants, false, &format!("{site}_union_region"))?;
+        self.builder
+            .build_memcpy(region, 8, view, 8, self.i64().const_int(16, false))
+            .map_err(|err| format!("{site}: maybe union view into the region: {err}"))?;
+        let region_bits = self
+            .builder
+            .build_ptr_to_int(region, self.i64(), &format!("{site}_union_region_bits"))
+            .map_err(|err| format!("{site}: maybe union region bits: {err}"))?;
+        let copy_end_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|err| format!("{site}: maybe union join: {err}"))?;
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.i64(), &format!("{site}_union_region_phi"))
+            .map_err(|err| format!("{site}: maybe union phi: {err}"))?;
+        phi.add_incoming(&[(&region_bits, copy_end_bb), (&bits, pre_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
     }
 
     /// The bits of a `maybe` of the envelope union `variants` after its payload is copied into a
@@ -13443,16 +13538,17 @@ fn union_frame_slots(variants: &[Type], sizes: &HashMap<String, u64>) -> usize {
 }
 
 /// The bytes a frame region holds behind the 16-byte envelope of a crossing `maybe<inner>` local:
-/// a shape payload's bytes, a decimal128 payload's 16, nothing for a payload that is a value or a
-/// heap pointer. `None` for a payload that needs a slot of its own on the resume stack (an
-/// envelope union, `maybe_union_payload_copy`), which no region backs: that local keeps the heap
-/// cell its argument escape promotes it to (`store_binding`) and is not released in a resume
-/// function (`ReleaseKind::has_frame_backing_for`).
+/// a shape payload's bytes, a decimal128 payload's 16, an envelope union's 16-byte view and its
+/// slot, nothing for a payload that is a value or a heap pointer. `None` only for a union the
+/// frame layout did not size (a compiler bug, reported where the local is wired).
 ///
 /// Time: O(1)  Space: O(1)
 fn maybe_region_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> Option<u64> {
     match inner {
-        Type::Union { .. } if ynz_typeck::check::is_envelope_union(inner) => None,
+        // The 16-byte view of the union, then its slot (`Cg::maybe_union_payload_into`).
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(inner) => sizes
+            .get(&crate::shape_types::union_key(variants))
+            .map(|slot_bytes| 16 + slot_bytes),
         Type::Shape { name } => sizes.get(name).copied(),
         Type::Number { precision } if *precision <= 34 => Some(DECIMAL_CELL_SIZE),
         _ => Some(0),
@@ -28048,12 +28144,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if !plain_releases_kind(kind) {
             return false;
         }
-        // A resume function releases exactly the kinds that have a frame slot across a suspension
-        // (`ReleaseKind::has_frame_backing`), the kinds the crossing set reads. A union, an
-        // errors-capable value, a shape, a nested shape, a `maybe`, a `fixed` and a type-parameter
-        // value are C8 slice 4's (inline-aggregate frame regions): until then each is a leak here,
-        // never an early free, because nothing keeps its bytes alive across a `wait`.
-        if self.sm_frame_ptr.is_some() && !kind.has_frame_backing_for(&self.resolve_type(held)) {
+        // A resume function releases exactly the kinds that keep their bytes across a suspension
+        // (`ReleaseKind::has_frame_backing`), the kinds the crossing set reads: a string, array,
+        // map, channel and handle are a pointer in a frame slot, a shape, nested shape, union,
+        // `maybe` and `fixed` list live in a frame region. An errors-capable value has none yet
+        // (C8 slice 4b): it is a leak here, never an early free. A type-parameter value never
+        // reaches a resume function: a generic function is never a state machine.
+        if self.sm_frame_ptr.is_some() && !kind.has_frame_backing() {
             return false;
         }
         kind != ynz_typeck::release_plan::ReleaseKind::TypeParameter
@@ -28269,6 +28366,46 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder
                 .build_store(bits_slot, repointed)
                 .map_err(|err| format!("assign maybe snapshot repoint store {name}: {err}"))?;
+        }
+        // An envelope union payload sits in the local's region as a view and a slot, both of which
+        // the new value's copy overwrites: snapshot the view and the slot's inline payload too.
+        if let Some(variants) = self.envelope_union_variants(&self.resolve_type(inner)) {
+            let has = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    flag,
+                    self.i64().const_zero(),
+                    &format!("{name}_old_has_union"),
+                )
+                .map_err(|err| format!("assign maybe snapshot has {name}: {err}"))?;
+            let union_bb = self.append_block(&format!("{name}_old_union_snapshot"));
+            let after_bb = self.append_block(&format!("{name}_old_union_snapshotted"));
+            self.builder
+                .build_conditional_branch(has, union_bb, after_bb)
+                .map_err(|err| format!("assign maybe union snapshot branch {name}: {err}"))?;
+            self.builder.position_at_end(union_bb);
+            let view = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), &format!("{name}_old_union_view"))
+                .map_err(|err| format!("assign maybe union view cast {name}: {err}"))?;
+            let snapshot_view = self.snapshot_old_union(
+                view,
+                self.ctx.bool_type().const_int(1, false),
+                &variants,
+                &format!("{name}_old_maybe"),
+            )?;
+            let repointed = self
+                .builder
+                .build_ptr_to_int(snapshot_view, self.i64(), &format!("{name}_old_union_bits"))
+                .map_err(|err| format!("assign maybe union repoint {name}: {err}"))?;
+            self.builder
+                .build_store(bits_slot, repointed)
+                .map_err(|err| format!("assign maybe union repoint store {name}: {err}"))?;
+            self.builder
+                .build_unconditional_branch(after_bb)
+                .map_err(|err| format!("assign maybe union snapshot join {name}: {err}"))?;
+            self.builder.position_at_end(after_bb);
         }
         self.builder
             .build_unconditional_branch(done_bb)
