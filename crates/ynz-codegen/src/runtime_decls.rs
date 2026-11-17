@@ -304,6 +304,9 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx: *mut u8) → i32
     //   Poll the boxed Sleep future. Returns 0 (Ready, box freed) or 1 (Pending).
     pub ynz_rt_async_sleep_poll: FunctionValue<'ctx>,
+    // ynz_rt_async_sleep_free(handle_ptr: *mut u8)
+    //   Free a still-parked Sleep box (a task dropped mid-wait; its frame's drop state calls it).
+    pub ynz_rt_async_sleep_free: FunctionValue<'ctx>,
     // ynz_rt_run_entrypoint(resume_fn, frame_ptr, frame_size) → i32
     //   Program-entry state-machine driver — the tokio::main-equivalent for Yinz.
     //   Called ONLY by the codegen-emitted main wrapper and non-entry wrappers;
@@ -942,6 +945,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_rt_async_sleep_poll",
                 // (handle_ptr: *mut u8, waker_ctx: *mut u8) -> i32  (0=Ready, 1=Pending)
                 i32.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_rt_async_sleep_free: declare_fn(
+                module,
+                "ynz_rt_async_sleep_free",
+                // (handle_ptr: *mut u8) -> void
+                void.fn_type(&[ptr.into()], false),
             ),
             ynz_rt_run_entrypoint: declare_fn(
                 module,

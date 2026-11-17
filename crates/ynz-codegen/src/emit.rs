@@ -9195,6 +9195,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             0,
             &[],
             &[],
+            false,
         )?;
         cg_resume.builder.position_at_end(resume_block);
     }
@@ -10330,6 +10331,39 @@ fn frame_backed_drop_entries(
     Ok(kept)
 }
 
+/// Free the `Sleep` box this frame parked in a `wait sleep` and null the handle slot, so the one free
+/// of the box is its own frame's: the runtime's drop of the task frees the handle of the root frame
+/// and of the recursion chain only, and finds null there after the drop entry ran. The slot is
+/// null-checked because a drop entry also runs for a frame that has not parked yet.
+///
+/// O(1) time and code.
+fn free_parked_sleep_handle<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let handle = state_machine::load_sleep_handle(cg.ctx, &cg.builder, frame_ptr)?;
+    let free_bb = cg.append_block("drop_sleep_free");
+    let after_bb = cg.append_block("drop_sleep_done");
+    let is_parked = cg
+        .builder
+        .build_is_not_null(handle, "drop_sleep_is_parked")
+        .map_err(|e| format!("drop sleep null check: {e}"))?;
+    cg.builder
+        .build_conditional_branch(is_parked, free_bb, after_bb)
+        .map_err(|e| format!("drop sleep branch: {e}"))?;
+    cg.builder.position_at_end(free_bb);
+    cg.builder
+        .build_call(cg.rt.ynz_rt_async_sleep_free, &[handle.into()], "")
+        .map_err(|e| format!("drop sleep free: {e}"))?;
+    let null_handle = cg.ptr().const_null();
+    state_machine::store_sleep_handle(cg.ctx, &cg.builder, frame_ptr, null_handle)?;
+    cg.builder
+        .build_unconditional_branch(after_bb)
+        .map_err(|e| format!("drop sleep join: {e}"))?;
+    cg.builder.position_at_end(after_bb);
+    Ok(())
+}
+
 /// Emit the drop entry of continuation state `state`, the state a task parked at source offset
 /// `offset` resumes in (C8 slice 6). A dropped task re-enters its resume function with the bitwise
 /// complement of its `resume_point`; the resume switch sends that value to the block built here
@@ -10337,6 +10371,8 @@ fn frame_backed_drop_entries(
 ///
 /// 1. reloads the frame's slots as the continuation state does,
 /// 2. releases the temporaries of the open statements (`release_open_temporaries`),
+/// 0. frees this frame's own `Sleep` box when the state is a `wait sleep` (`parked_in_sleep`: the
+///    one free of that box, so no runtime ladder frees it again),
 /// 3. releases what the parked statement's suspension edge lists
 ///    (`ReleasePlan::suspension_edge`: typeck's list for exactly this state, each release behind a
 ///    null check because the statement may have taken a value before it parked),
@@ -10359,6 +10395,7 @@ fn register_drop_state<'ctx, 'g>(
     state: usize,
     children: &[DropMember<'ctx>],
     cpu_members: &[CpuDropMember],
+    parked_in_sleep: bool,
 ) -> Result<(), String> {
     let ctx = cg.ctx;
     let saved = cg
@@ -10389,6 +10426,9 @@ fn register_drop_state<'ctx, 'g>(
         })?;
     let drop_bb = ctx.append_basic_block(cg.current_fn, &format!("sm_drop_s{state}"));
     cg.builder.position_at_end(drop_bb);
+    if parked_in_sleep {
+        free_parked_sleep_handle(cg, frame_ptr)?;
+    }
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, state != 0, true)?;
     cg.release_open_temporaries("drop_temporary")?;
     let entries = frame_backed_drop_entries(cg, param_names, entries, &f.name)?;
@@ -16064,6 +16104,7 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
             poll_state_idx,
             &[],
             &cpu_members,
+            false,
         )?;
     }
 
@@ -16399,6 +16440,7 @@ fn emit_independent_group_poll<'ctx, 'g>(
         continuation_state,
         &group_drop_children,
         &[],
+        false,
     )?;
 
     // --- Step 3 — first-poll pass: poll ALL children before deciding to yield ---
@@ -16938,6 +16980,7 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
             poll_state_idx,
             &io_drop_members,
             &cpu_drop,
+            false,
         )?;
     }
     state_machine::store_resume_point(ctx, &cg.builder, frame_ptr, poll_state_idx as u64)?;
@@ -17334,6 +17377,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
             returned_value: None,
         }],
         &[],
+        false,
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
@@ -17769,6 +17813,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         continuation_state,
         boxed_child.as_slice(),
         &[],
+        false,
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
@@ -18406,6 +18451,7 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         continuation_state,
         &[],
         &[],
+        false,
     )?;
 
     // suspend: save the continuation state, yield Pending (the runtime registered the
@@ -18844,6 +18890,7 @@ fn emit_wait_point<'ctx, 'g>(
         continuation_state,
         &[],
         &[],
+        true,
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
@@ -19185,6 +19232,7 @@ fn emit_sm_loop_back_edge<'ctx, 'g>(
         continuation_state,
         &[],
         &[],
+        false,
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;

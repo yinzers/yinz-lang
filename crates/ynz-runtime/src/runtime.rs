@@ -1123,7 +1123,8 @@ impl Drop for SpawnStateFnFuture {
                 *resume_point = !*resume_point;
                 (self.resume_fn)(self.frame_ptr, std::ptr::null_mut());
             }
-            // 1. Free the sleep handle in the root frame (if a sleep is live mid-wait).
+            // 1. Free the sleep handle in the root frame (null after the drop entry ran: the wait-sleep
+            //    drop block frees its own frame's box; set only for a frame the entry did not run on).
             // SAFETY: FRAME_OFFSET_SLEEP_HANDLE=8 is within every valid frame header (32 bytes).
             let handle_slot =
                 self.frame_ptr.add(FRAME_OFFSET_SLEEP_HANDLE as usize) as *const *mut u8;
@@ -1530,6 +1531,22 @@ pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx:
             1 // Return Pending on panic so the frame is not corrupted.
         }
     }
+}
+
+/// Free the `Sleep` box of a `wait sleep` that is still parked: the drop state of the frame that
+/// parked in it calls this when its task is dropped, then nulls its handle slot, so the one free
+/// of each frame's box is its own frame's. `ynz_rt_async_sleep_poll` frees the box itself once the
+/// sleep is Ready; a box this frees was never polled to Ready.
+///
+/// Time: O(1)  Space: O(1)
+///
+/// # Safety
+/// `handle_ptr` must be a non-null pointer returned by `ynz_rt_async_sleep_create` that
+/// `ynz_rt_async_sleep_poll` has not consumed and that nothing has freed.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_rt_async_sleep_free(handle_ptr: *mut u8) {
+    // SAFETY: the caller's contract; the inverse of the `Box::into_raw` in create.
+    drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
 }
 
 /// Run the program's entry state machine to completion — the `#[tokio::main]`-equivalent

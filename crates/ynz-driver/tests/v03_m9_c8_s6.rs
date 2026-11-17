@@ -940,3 +940,58 @@ function entrypoint() -> nothing {
 ";
     balanced_and_asan_clean("c8s6_return_suspending_in_loop", in_a_loop, "5\nparent\n");
 }
+
+/// Bug caught: pre-existing, found by the C8 round-2 review; a task dropped while its EMBEDDED child
+/// is parked in `wait sleep` leaked the child's Tokio `Sleep` box (120 bytes, invisible to the alloc
+/// counters, so LeakSanitizer is the check): the runtime's drop freed the sleep handle of the root
+/// frame and of the recursion chain only. Tier Medium. Each frame's own wait-sleep drop state now
+/// frees its handle once, so the same run also pins that the root frame and a recursion child (whose
+/// handles the runtime used to free) are freed exactly once, not twice.
+const EMBEDDED_CHILD_SLEEP: &str = "
+function inner() -> nothing {
+  wait sleep(5000)
+}
+
+function worker() -> nothing {
+  inner()
+}
+";
+
+const ROOT_SLEEP: &str = "
+function worker() -> nothing {
+  wait sleep(5000)
+}
+";
+
+const RECURSION_CHILD_SLEEP: &str = "
+function worker(depth: int) -> nothing {
+  if (depth > 0) {
+    worker(depth - 1)
+  }
+  wait sleep(5000)
+}
+";
+
+#[test]
+fn a_task_dropped_while_a_frame_sleeps_frees_that_frames_sleep_box_once() {
+    for (name, worker, spawn) in [
+        ("embedded_child", EMBEDDED_CHILD_SLEEP, "worker()"),
+        ("root", ROOT_SLEEP, "worker()"),
+        ("recursion_child", RECURSION_CHILD_SLEEP, "worker(2)"),
+    ] {
+        let source = format!(
+            "{worker}
+function entrypoint() -> nothing {{
+  background {spawn}
+  wait sleep(100)
+  print(`parent`)
+}}
+"
+        );
+        support::assert_source_asan_and_leaks_clean(
+            &format!("c8s6_sleep_{name}"),
+            &source,
+            "parent\n",
+        );
+    }
+}
