@@ -18161,12 +18161,14 @@ fn emit_conduit_stmt<'ctx, 'g>(
         // later suspension need the EC-crossing-local registration, mirroring the
         // let-suspending-call arms.
         // A `number` a handle delivers sits in the handle's own buffer (`extract_completion`,
-        // `RET_KIND_VALUE_NUMBER` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word. A `maybe`
+        // `RET_KIND_VALUE_NUMBER` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word. A bignum
+        // is not one of those: its ok word is the text the task allocated, handed over whole
+        // (`RET_KIND_EC_WORD`), so the binding releases it like any call result. A `maybe`
         // arrives in a counted cell the binding owns (`RET_KIND_VALUE_MAYBE` copies the envelope into one;
         // a `maybe<T> errors` result already is one), released like any call result.
         if matches!(op, ConduitOp::HandleRecv) {
             if let Type::ErrorsCapable { inner } = cg.resolve_type(&cg.expr_type(inner)) {
-                if matches!(*inner, Type::Number { .. }) {
+                if matches!(*inner, Type::Number { precision } if precision <= 34) {
                     cg.ec_borrowed_ok.insert(name.to_string());
                 }
             }

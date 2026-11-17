@@ -1265,3 +1265,34 @@ function entrypoint() -> nothing {{
         balanced_and_asan_clean(&format!("c8s6_failed_union_{name}"), &source, expected);
     }
 }
+
+/// Bug caught: a leak found by the C8 round-3 review: a handle receive of a `number<40> errors`
+/// result marked the binding's ok word as the handle's own (`ec_borrowed_ok`, right for a `number`
+/// the handle copies into its buffer), but a bignum's ok word is the text the task allocated and the
+/// handle hands over (`RET_KIND_EC_WORD`), so the binding's scope exit freed none of it. Tier Medium.
+/// Received and checked, received and read with `or`.
+#[test]
+fn a_received_bignum_errors_result_is_released_with_its_binding() {
+    for (name, read) in [
+        ("failed", "print(got.failed())"),
+        ("or", "let fallback: number<40> = 0.5\n  print(got.or(fallback))"),
+    ] {
+        let source = format!(
+            "function make() -> number<40> errors {{
+  wait sleep(1)
+  let made: number<40> = 1.5
+  return made
+}}
+
+function entrypoint() -> nothing {{
+  let pending = background make()
+  wait sleep(20)
+  let got = pending.receive()
+  {read}
+}}
+"
+        );
+        let expected = if name == "failed" { "false\n" } else { "1.5\n" };
+        balanced_and_asan_clean(&format!("c8s6_received_bignum_{name}"), &source, expected);
+    }
+}
