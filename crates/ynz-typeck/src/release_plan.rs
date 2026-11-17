@@ -49,12 +49,11 @@
 //!   own heap is not listed.
 //! * The release owners (bindings with a releasing fate at some edge) feed the ONE crossing-set
 //!   producer: a release is a read at its edge, see [`ReleaseReads`]. Only a kind with a frame
-//!   slot across a suspension ([`ReleaseKind::has_frame_backing`]) is read today: the others
-//!   cannot cross a `wait` yet (Check 2/2b), so reading them would reject programs that compile
-//!   now. A flat shape is left out too: a shape local that crosses a `wait` inside an `is` arm of a
-//!   state-machine match reads freed frame bytes (tested: `v0_3_m9_union_narrow_sm_host`, optimized).
-//!   Releasing such a kind inside a state machine is C6's change, made together with the
-//!   frame backing, by widening that one predicate.
+//!   home across a suspension ([`ReleaseKind::has_frame_backing`]: a pointer in a frame slot, or
+//!   bytes in a frame region) is read: an errors-capable value has none yet (C8 slice 4b), so
+//!   reading it would reject programs that compile now. A local whose only crossing is its own
+//!   release read is `CrossingNames::release_only`, which the guards that reject a read after a
+//!   `wait` skip. A kind widens that one predicate together with its frame home.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -113,10 +112,10 @@ pub enum ReleaseKind {
 }
 
 impl ReleaseKind {
-    /// True when a binding of this kind has a frame slot that survives every suspension today. The
-    /// crossing set reads only these kinds (see the module docs). A flat shape is not one: a shape
-    /// local that crosses a `wait` inside an `is` arm of a state-machine match reads freed frame
-    /// bytes (`v0_3_m9_union_narrow_sm_host`, optimized).
+    /// True when a binding of this kind has a frame home that survives every suspension: a pointer
+    /// in a frame slot (string, array, map, channel, task handle) or bytes in a frame region (shape,
+    /// nested shape, union, `maybe`, `fixed` list). The crossing set reads only these kinds (see the
+    /// module docs); an errors-capable value is not one yet (C8 slice 4b).
     pub fn has_frame_backing(&self) -> bool {
         matches!(
             self,
