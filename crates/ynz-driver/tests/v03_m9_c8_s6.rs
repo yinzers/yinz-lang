@@ -877,3 +877,67 @@ function entrypoint() -> nothing {
 ";
     balanced_and_asan_clean("c8s6_return_suspending_call_parked", program, "parent\n");
 }
+
+/// Bug caught (High: a free of a never-written slot, or a compile-time internal error): a
+/// `return suspendingCall()` nested in an `if` (or in an `if` inside a loop) was not a suspension
+/// to typeck's crossing scan, which only enters a branch whose body suspends. The open locals got
+/// no frame slot: the resumed return released stack slots it never wrote (bad free / SEGV at -O0),
+/// and since the drop entry refuses a binding with no frame slot, the program failed to compile.
+/// Each program completes one call and drops a second task parked in the nested return.
+#[test]
+fn a_return_of_a_suspending_call_nested_in_a_branch_releases_the_open_locals() {
+    let in_a_branch = "
+function inner(n: int) -> int {
+  wait sleep(n)
+  return n
+}
+
+function worker(n: int) -> int {
+  let keep: array<int> = [1, 2]
+  let label: string = `k`.toUpperCase()
+  if (n > 0) {
+    return inner(n)
+  }
+  print(`${keep.count()} ${label}`)
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let done = worker(5)
+  print(`${done}`)
+  background worker(500)
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_return_suspending_in_branch", in_a_branch, "5\nparent\n");
+
+    let in_a_loop = "
+function inner(n: int) -> int {
+  wait sleep(n)
+  return n
+}
+
+function worker(n: int) -> int {
+  let keep: array<int> = [1, 2]
+  let i = 0
+  while (i < 3) {
+    let local: string = `x`.toUpperCase()
+    if (i == 1) {
+      return inner(n)
+    }
+    i = i + 1
+  }
+  return keep.count()
+}
+
+function entrypoint() -> nothing {
+  let done = worker(5)
+  print(`${done}`)
+  background worker(500)
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_return_suspending_in_loop", in_a_loop, "5\nparent\n");
+}

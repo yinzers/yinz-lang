@@ -11913,6 +11913,12 @@ fn block_contains_inferred_suspension(
             value: Expr::Call(c),
             ..
         } => is_suspending_call(c, suspending),
+        // `return suspendingCall()` suspends before the return's scope-exit release runs, so a
+        // branch holding one suspends: the crossing scan must enter it to see that release read.
+        Stmt::Return {
+            value: Some(Expr::Call(c)),
+            ..
+        } => is_suspending_call(c, suspending),
         // v0.3-M4: a suspending conduit-method statement (`ch.send(v)` / `let x = ch.receive()`).
         Stmt::Expr(e) | Stmt::Let { value: e, .. } if expr_is_conduit_suspend(e, expr_types) => {
             true
