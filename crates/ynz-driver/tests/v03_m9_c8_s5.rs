@@ -901,3 +901,65 @@ resume_function_maybe_cases! {
     a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on: "string", "`kept`.toUpperCase()", RETURN_THROUGH_WAIT, "true\n";
     a_resume_function_returning_a_returned_maybe_shape_passes_its_payload_on: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", RETURN_THROUGH_WAIT, "true\n";
 }
+
+/// A launcher that is itself a resume function (it waits first) spawns `eat` with the `maybe` of
+/// `element_type` a plain function returned: the spawned copy and the consumed call result are each
+/// freed once, for a `give` or a borrowed parameter and a plain or a suspending callee.
+fn suspending_launcher_program(element_type: &str, element_value: &str, given: bool, suspending: bool) -> String {
+    format!(
+        "shape Big {{
+  label: string
+  count: int
+}}
+
+function pick() -> maybe<{element_type}> {{
+  let source: array<{element_type}> = [{element_value}]
+  return source.get(0)
+}}
+
+function eat({give}held: maybe<{element_type}>) -> nothing {{
+  {pause}
+  print(held.exists())
+}}
+
+function launch() -> nothing {{
+  wait sleep(1)
+  let found = pick()
+  background eat(found)
+}}
+
+function entrypoint() -> nothing {{
+  launch()
+  wait sleep(300)
+}}
+",
+        give = if given { "give " } else { "" },
+        pause = if suspending { "wait sleep(1)" } else { "" },
+    )
+}
+
+/// Bug caught: found by the C8 round-3 security review; the same producer as the resume-function
+/// cases above: a launcher that waits before it binds and spawns a returned `maybe` leaked the call
+/// result (13 bytes for a string, 141 for a shape). Tier Medium. Element kind, `give` or borrowed
+/// parameter, plain or suspending callee.
+macro_rules! suspending_launcher_cases {
+    ($($name:ident: $element_type:literal, $element_value:literal, $given:literal, $suspending:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = suspending_launcher_program(
+                    $element_type, $element_value, $given, $suspending,
+                );
+                assert_source_balanced(stringify!($name), &source, "true\n");
+            }
+        )+
+    };
+}
+
+suspending_launcher_cases! {
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy: "string", "`kept`.toUpperCase()", true, false;
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy: "string", "`kept`.toUpperCase()", false, true;
+    a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_given_suspending_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", true, true;
+    a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_borrowed_plain_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", false, false;
+    a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy: "number<20> ", "2.5", true, true;
+}
