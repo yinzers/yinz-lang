@@ -257,3 +257,78 @@ fn a_handle_form_spawn_releases_the_consumed_original_once() {
         );
     }
 }
+
+/// Bug caught (High: leak): a fresh shape (a call result or a literal) a `background` call takes is
+/// re-homed by a copy, and `Expr::Background` suppresses its statement-end temporary, so the original's
+/// string had no releaser (`c3c_field_assign`: 3 strings allocated, 2 freed). Plain and suspending
+/// callee, plain and suspending spawner.
+#[test]
+fn a_fresh_shape_a_spawn_copies_has_its_original_released() {
+    for suspending_callee in [false, true] {
+        for suspending_spawner in [false, true] {
+            for fresh in ["makeTag(1)", "{ name: `lit${2}`, id: 2 }"] {
+                let source = format!(
+                    "shape Tag {{
+  name: string
+  id: int
+}}
+
+function makeTag(count: int) -> Tag {{
+  let tag: Tag = {{ name: `tag-${{count}}`, id: 1 }}
+  tag.name = `renamed`
+  return tag
+}}
+
+function show(tag: Tag) -> nothing {{
+  {pause}
+  print(tag.id.toString())
+}}
+
+function launch() -> nothing {{
+  background show({fresh})
+  {hold}
+}}
+
+function entrypoint() -> nothing {{
+  launch()
+  wait sleep(150)
+}}
+",
+                    pause = if suspending_callee {
+                        "wait sleep(1)"
+                    } else {
+                        "let ready: int = 1"
+                    },
+                    hold = if suspending_spawner {
+                        "wait sleep(1)"
+                    } else {
+                        "let ready: int = 1"
+                    },
+                );
+                let expected = if fresh == "makeTag(1)" { "1\n" } else { "2\n" };
+                assert_source_balanced(
+                    &format!(
+                        "fresh_shape_spawn_{}_{}_{}",
+                        if suspending_callee {
+                            "smcallee"
+                        } else {
+                            "plaincallee"
+                        },
+                        if suspending_spawner {
+                            "smspawner"
+                        } else {
+                            "plainspawner"
+                        },
+                        if fresh == "makeTag(1)" {
+                            "call"
+                        } else {
+                            "literal"
+                        },
+                    ),
+                    &source,
+                    expected,
+                );
+            }
+        }
+    }
+}

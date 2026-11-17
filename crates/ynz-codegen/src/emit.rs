@@ -23261,6 +23261,16 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         && cg.plain_releases_type(&resolved)
     {
         release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
+    } else if matches!(
+        sole_holder,
+        Some(ynz_typeck::check::SoleHolder::FreshTemporary)
+    ) && matches!(resolved, Type::Shape { .. })
+        && cg.plain_releases_type(&resolved)
+    {
+        // A fresh shape (a call result, a literal) is re-homed by a copy (`ShapeMemcpy` has no
+        // transfer, it sits on the spawner's frame), and `Expr::Background` suppresses its
+        // statement-end temporary: nobody else releases the original's fields.
+        release_owned_read(cg, val, &resolved, "bg_fresh_original")?;
     }
     Ok(copied)
 }

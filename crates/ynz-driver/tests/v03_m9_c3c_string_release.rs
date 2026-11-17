@@ -113,7 +113,7 @@ release_case!(
     "v0_3_m9_c3c_field_assign.ynz",
     "renamed\n",
     3,
-    2,
+    3,
     "`tag.name = ...` stores over a string field without freeing it, so every assignment leaks the old bytes (High)"
 );
 
