@@ -1215,6 +1215,7 @@ fn check_one_pass(
     let fixed_instances = fixed_instances_of(
         std::mem::take(&mut checker.fixed_calls),
         checker.sig_table,
+        &checker.possibly_cpu_promoted,
     );
     let typed = TypedModule {
         module: module.clone(),
@@ -1387,14 +1388,29 @@ pub fn check_with_kernel_mode(
 /// The specialised versions the program needs: the recorded calls closed over the length
 /// parameters of every function in `sig_table` (`crate::fixed_length::close_instances`).
 /// O(calls + versions).
-fn fixed_instances_of(calls: FixedCalls, sig_table: &SignatureTable) -> FixedInstances {
+///
+/// A function that suspends, or that auto-parallel promotion may turn into a task host
+/// (`once_only`), is compiled once, as it always was: it is a state machine named after the
+/// function, and its length parameters read as unknown. It has no per-length versions, and a call
+/// to it records none. (A suspending function cannot be handed a `fixed` argument anyway: the
+/// list would die across the suspension, which typeck refuses.)
+fn fixed_instances_of(
+    calls: FixedCalls,
+    sig_table: &SignatureTable,
+    once_only: &HashSet<String>,
+) -> FixedInstances {
     let length_parameters: std::collections::BTreeMap<String, Vec<String>> = sig_table
         .fns
         .iter()
+        .filter(|(name, signature)| !signature.suspends && !once_only.contains(*name))
         .filter_map(|(name, signature)| {
             let parameters = length_parameters(&signature.params);
             (!parameters.is_empty()).then(|| (name.clone(), parameters))
         })
+        .collect();
+    let calls: FixedCalls = calls
+        .into_iter()
+        .filter(|(_, call)| length_parameters.contains_key(&call.callee))
         .collect();
     let instances = close_instances(&calls, &length_parameters);
     FixedInstances {

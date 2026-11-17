@@ -1408,14 +1408,41 @@ fn build_module<'ctx, 'g>(
     // Pass 1 — forward-declare every non-generic function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => declare_function(
-                ctx,
-                module,
-                f,
-                shape_table,
-                &shape_types,
-                effective_ownership,
-            )?,
+            // A function with `fixed<T>` length parameters is declared once per specialised
+            // version typeck found (`FixedInstances`), under that version's symbol; any other
+            // function once under its own name.
+            Item::Function(f) if f.generics.is_empty() => {
+                if typed.fixed_instances.length_parameters.contains_key(&f.name) {
+                    for version in typed
+                        .fixed_instances
+                        .instances
+                        .iter()
+                        .filter(|version| version.function == f.name)
+                    {
+                        declare_function(
+                            ctx,
+                            module,
+                            typed,
+                            f,
+                            shape_table,
+                            &shape_types,
+                            effective_ownership,
+                            Some(version),
+                        )?;
+                    }
+                } else {
+                    declare_function(
+                        ctx,
+                        module,
+                        typed,
+                        f,
+                        shape_table,
+                        &shape_types,
+                        effective_ownership,
+                        None,
+                    )?;
+                }
+            }
             Item::Function(_)
             | Item::ShapeDecl(_)
             | Item::OptionsDecl(_)
@@ -1483,28 +1510,47 @@ fn build_module<'ctx, 'g>(
     // Pass 2 — emit non-generic function bodies.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => lower_function(
-                ctx,
-                module,
-                &rt,
-                &globals,
-                typed,
-                f,
-                shape_table,
-                &shape_types,
-                &shape_abi_sizes,
-                &shape_field_abi,
-                &options_table,
-                &wait_cache,
-                suspend_set,
-                base_suspends,
-                frame_layouts,
-                imported_fns,
-                sig_table,
-                no_auto_parallel,
-                m3d_spike,
-                layout,
-            )?,
+            Item::Function(f) if f.generics.is_empty() => {
+                // One body per specialised version of a function with `fixed<T>` length
+                // parameters (the same list Pass 1 declared), one body otherwise.
+                let versions: Vec<Option<&ynz_typeck::fixed_length::InstanceKey>> =
+                    if typed.fixed_instances.length_parameters.contains_key(&f.name) {
+                        typed
+                            .fixed_instances
+                            .instances
+                            .iter()
+                            .filter(|version| version.function == f.name)
+                            .map(Some)
+                            .collect()
+                    } else {
+                        vec![None]
+                    };
+                for version in versions {
+                    lower_function(
+                        ctx,
+                        module,
+                        &rt,
+                        &globals,
+                        typed,
+                        f,
+                        shape_table,
+                        &shape_types,
+                        &shape_abi_sizes,
+                        &shape_field_abi,
+                        &options_table,
+                        &wait_cache,
+                        suspend_set,
+                        base_suspends,
+                        frame_layouts,
+                        imported_fns,
+                        sig_table,
+                        no_auto_parallel,
+                        m3d_spike,
+                        layout,
+                        version,
+                    )?;
+                }
+            }
             Item::Function(_)
             | Item::ShapeDecl(_)
             | Item::OptionsDecl(_)
@@ -1875,14 +1921,18 @@ fn llvm_param_types<'ctx>(
 /// - effective `Unknown` → NO attributes. The analysis cannot prove read-only, so
 ///   any claim would be hope, not knowledge — degrade to conservative.
 /// - declared `give` → no attributes (callee owns the data, may mutate or free).
+#[allow(clippy::too_many_arguments)]
 fn declare_function<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
+    typed: &TypedModule,
     f: &FunctionDecl,
     shape_table: &ShapeTable,
     shape_types: &ShapeLlvmTypes<'ctx>,
     effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
+    version: Option<&ynz_typeck::fixed_length::InstanceKey>,
 ) -> Result<(), String> {
+    let lengths = version_lengths(typed, f, version);
     let params = llvm_param_types(ctx, f, shape_table);
     let fn_ty = if f.name == "entrypoint" {
         ctx.i32_type().fn_type(&params, false)
@@ -1897,17 +1947,20 @@ fn declare_function<'ctx>(
         // The return ABI comes from the ONE authoritative mapping (`abi_return_type`,
         // shared with the imported-fn and mono declaration sites) — v0.3-M7 R9:
         // number/maybe/shape return BY VALUE, never a pointer to a callee alloca.
-        let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+        let ret_ty = substitute_lengths(&declared_return_type(typed, shape_table, f), &lengths);
         match abi_return_type(ctx, shape_types, &ret_ty)? {
             None => ctx.void_type().fn_type(&params, false),
             Some(t) => t.fn_type(&params, false),
         }
     };
     // `entrypoint` is the Yinz name; the C ABI entry point must be `main` for the linker.
+    let version_symbol = version.map(|version| {
+        ynz_typeck::fixed_length::instance_symbol(&version.function, &version.lengths)
+    });
     let llvm_name = if f.name == "entrypoint" {
         "main"
     } else {
-        &f.name
+        version_symbol.as_deref().unwrap_or(&f.name)
     };
     let fn_val = module.add_function(llvm_name, fn_ty, None);
 
@@ -2004,6 +2057,72 @@ fn ec_result_type<'ctx>(
     }
 }
 
+/// The return type a function is declared and lowered with: the length typeck worked out from its
+/// `return` statements when its type is a `fixed` without a written length, else the type as
+/// written. THE one reader (C1h, #433). A length that is a parameter's placeholder is still
+/// symbolic here (`substitute_lengths` makes it a number per version). O(size of the type).
+fn declared_return_type(typed: &TypedModule, shape_table: &ShapeTable, f: &FunctionDecl) -> Type {
+    match typed.inferred_return_types.get(&f.name) {
+        Some(worked_out) => worked_out.clone(),
+        None => ast_type_to_typeck_type(&f.return_type, shape_table),
+    }
+}
+
+/// The type parameter `index` of `f` is declared with: the signature table's for a `fixed` (it
+/// carries the parameter's length placeholder), else the type as written. O(size of the type).
+fn declared_param_type(
+    sig_table: &SignatureTable,
+    shape_table: &ShapeTable,
+    f: &FunctionDecl,
+    index: usize,
+) -> Type {
+    match sig_table
+        .fns
+        .get(&f.name)
+        .and_then(|signature| signature.params.get(index))
+    {
+        Some((_, signature_type @ Type::BuiltinFixed { .. })) => signature_type.clone(),
+        _ => ast_type_to_typeck_type(&f.params[index].ty, shape_table),
+    }
+}
+
+/// The lengths of the specialised version `version` of `f`, by parameter name: what its length
+/// placeholders stand for. Empty for a function compiled once. O(length parameters).
+fn version_lengths(
+    typed: &TypedModule,
+    f: &FunctionDecl,
+    version: Option<&ynz_typeck::fixed_length::InstanceKey>,
+) -> HashMap<String, Option<usize>> {
+    let Some(version) = version else {
+        return HashMap::new();
+    };
+    typed
+        .fixed_instances
+        .parameters_of(&f.name)
+        .iter()
+        .cloned()
+        .zip(version.lengths.iter().copied())
+        .collect()
+}
+
+/// `ty` with a `fixed` list's length placeholder replaced by the length of the version being
+/// built. Only a type that IS a `fixed` can hold one. O(1).
+fn substitute_lengths(ty: &Type, lengths: &HashMap<String, Option<usize>>) -> Type {
+    match ty {
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::OfParam { parameter },
+        } => Type::BuiltinFixed {
+            elem: elem.clone(),
+            size: match lengths.get(parameter) {
+                Some(Some(count)) => FixedLength::Known(*count),
+                Some(None) | None => FixedLength::Unknown,
+            },
+        },
+        other => other.clone(),
+    }
+}
+
 /// The ONE C-ABI return-type mapping for user functions (v0.3-M7 Phase 3, R9/FRAGO 005).
 ///
 /// Consumed by ALL THREE declaration sites — local `declare_function`, the imported-fn
@@ -2027,12 +2146,10 @@ fn ec_result_type<'ctx>(
 ///   fields are already counted heap cells (`store_field`), so the shallow copy is
 ///   complete.
 ///
-/// Everything heap-backed (string, array, map, sensitive, bignum) keeps the `ptr`
-/// return. `fixed<T>` and union returns also keep `ptr`: fixed returns are broken at
-/// BOTH tiers today (pre-existing size-loss bug, not an O0-reliant class) and union
-/// read-back after a call is loudly blocked (the documented union KNOWN-HOLE posture)
-/// — neither is silently-wrong-under-optimization, and both are surfaced findings,
-/// not ride-along fixes.
+/// - `fixed<T>` of known length (C1h, #433) → its cells `[N x i64]` by value, the cost of
+///   returning Rust's `[T; N]`.
+///
+/// Everything heap-backed (string, array, map, sensitive, bignum) keeps the `ptr` return.
 ///
 /// Returns `Ok(None)` for `Nothing` (void).
 fn abi_return_type<'ctx>(
@@ -2078,6 +2195,13 @@ fn abi_return_type<'ctx>(
             let layout = shape_types.union_layout(variants)?;
             Some(shape_types.union_slot_llvm(ctx, &layout).into())
         }
+        // C1h (#433): a `fixed` list of known length comes back BY VALUE as its cells, the cost of
+        // returning Rust's `[T; N]`. The cells are the list's whole storage, so nothing the caller
+        // reads lives in the callee's frame (before, the caller read a pointer into it).
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } => Some(ctx.i64_type().array_type(fixed_cell_words(elem, *count)).into()),
         _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
     })
 }
@@ -2193,6 +2317,14 @@ struct Cg<'ctx, 'g> {
     // M5 P4a: type-param substitution for the current monomorphized instance.
     // Empty for non-generic functions.
     type_subst: HashMap<String, Type>,
+    // v0.3-M9 C1h (#433): the lengths of the specialised version being lowered, by the name of
+    // the `fixed<T>` parameter each is the length of. Empty for a function compiled once. A
+    // parameter not in the map (a function compiled once) reads as a list of unknown length.
+    length_subst: HashMap<String, Option<usize>>,
+    // The same lengths in the order of the function's length parameters
+    // (`FixedInstances::length_parameters`): what `FixedInstances::instance_of_call` resolves a
+    // call's lengths against. Empty for a function compiled once.
+    instance_lengths: Vec<Option<usize>>,
     // M6: options table for variant tag lookup.
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     // M7 P4a: true when the current function declared `-> T errors`.
@@ -2530,6 +2662,42 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.ctx.ptr_type(AddressSpace::default())
     }
 
+    /// The symbol of the specialised version the call at `call_span` runs, when typeck recorded
+    /// one (the callee has `fixed<T>` length parameters): the version for the lengths the call
+    /// passes, seen from inside the version being lowered. `None` for any other call. An
+    /// undeclared version is an internal error, never a guess. O(lengths).
+    fn fixed_version_symbol(&self, call_span: (usize, usize)) -> Result<Option<String>, String> {
+        let Some(version) = self
+            .typed
+            .fixed_instances
+            .instance_of_call(call_span, &self.instance_lengths)
+        else {
+            return Ok(None);
+        };
+        let symbol = ynz_typeck::fixed_length::instance_symbol(&version.function, &version.lengths);
+        if self.module.get_function(&symbol).is_none() {
+            return Err(format!(
+                "internal compiler error: the call at bytes {}..{} runs `{symbol}`, but typeck \
+                 listed no such version. This is a compiler bug.",
+                call_span.0, call_span.1
+            ));
+        }
+        Ok(Some(symbol))
+    }
+
+    /// The length of a `fixed` list in the version being lowered: a parameter's placeholder
+    /// becomes the length that version was built for (`length_subst`), or unknown when the
+    /// function is compiled once. THE one place codegen reads a placeholder. O(1).
+    fn resolve_fixed_length(&self, length: &FixedLength) -> FixedLength {
+        match length {
+            FixedLength::OfParam { parameter } => match self.length_subst.get(parameter) {
+                Some(Some(count)) => FixedLength::Known(*count),
+                Some(None) | None => FixedLength::Unknown,
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Apply the current type-param substitution to `ty`, returning a concrete type.
     fn resolve_type(&self, ty: &Type) -> Type {
         match ty {
@@ -2547,7 +2715,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             },
             Type::BuiltinFixed { elem, size } => Type::BuiltinFixed {
                 elem: Box::new(self.resolve_type(elem)),
-                size: size.clone(),
+                size: self.resolve_fixed_length(size),
             },
             Type::Maybe { inner } => Type::Maybe {
                 inner: Box::new(self.resolve_type(inner)),
@@ -4556,6 +4724,19 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.builder
                     .build_store(slot, sv)
                     .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            // C1h (#433): a `fixed` list returned by value lands in a CALLER-owned slot; the slot is
+            // the list (its address is what every list value is).
+            Type::BuiltinFixed {
+                ref elem,
+                size: FixedLength::Known(count),
+            } => {
+                let cells = self.i64().array_type(fixed_cell_words(elem, count));
+                let slot = self.alloca_in_entry_llvm(cells, &format!("{site}_fixed_ret"))?;
+                self.builder
+                    .build_store(slot, val.into_array_value())
+                    .map_err(|e| format!("{site} fixed ret store: {e}"))?;
                 Ok(slot.into())
             }
             // C1f (#423): the returned slot lands in a CALLER-owned slot, and the value is a view
@@ -7728,6 +7909,7 @@ fn lower_function<'ctx, 'g>(
     no_auto_parallel: bool,
     m3d_spike: bool,
     layout: &'g ynz_typeck::soa::LayoutDecisions,
+    version: Option<&ynz_typeck::fixed_length::InstanceKey>,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -7758,16 +7940,21 @@ fn lower_function<'ctx, 'g>(
         );
     }
 
+    // The symbol Pass 1 declared: the specialised version's (`name<3>`), or the function's own.
+    let version_symbol = version.map(|version| {
+        ynz_typeck::fixed_length::instance_symbol(&version.function, &version.lengths)
+    });
     let llvm_name = if f.name == "entrypoint" {
         "main"
     } else {
-        f.name.as_str()
+        version_symbol.as_deref().unwrap_or(f.name.as_str())
     };
     let fn_val = module
         .get_function(llvm_name)
-        .ok_or_else(|| format!("function `{}` was not forward-declared", f.name))?;
+        .ok_or_else(|| format!("function `{llvm_name}` was not forward-declared"))?;
 
-    let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+    let lengths = version_lengths(typed, f, version);
+    let ret_ty = substitute_lengths(&declared_return_type(typed, shape_table, f), &lengths);
     let is_main = f.name == "entrypoint";
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
     let is_errors_capable = f.errors_capable;
@@ -7796,6 +7983,8 @@ fn lower_function<'ctx, 'g>(
         sig_table,
         m3d_spike,
     );
+    cg.length_subst = lengths;
+    cg.instance_lengths = version.map(|version| version.lengths.clone()).unwrap_or_default();
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
@@ -7837,7 +8026,8 @@ fn lower_function<'ctx, 'g>(
         let llvm_param = fn_val
             .get_nth_param(i as u32)
             .ok_or_else(|| format!("missing LLVM param {} for `{}`", i, f.name))?;
-        let param_ty = ast_type_to_typeck_type(&param.ty, shape_table);
+        let declared = declared_param_type(sig_table, shape_table, f, i);
+        let param_ty = cg.resolve_type(&declared);
         materialize_param(&mut cg, &param.name, llvm_param, &param_ty)?;
     }
 
@@ -8091,6 +8281,8 @@ fn plain_cg<'ctx, 'g>(
         soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
+        length_subst: HashMap::new(),
+        instance_lengths: Vec::new(),
         options_table,
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
@@ -8545,6 +8737,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
+        length_subst: HashMap::new(),
+        instance_lengths: Vec::new(),
         options_table,
         // is_errors_capable = false inside the resume fn: the SM return path handles
         // errors-capable results explicitly (stores {i64,i64} in return slot). Keeping
@@ -14238,6 +14432,13 @@ fn maybe_region_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> Opt
         Type::Number { precision } if *precision <= 34 => Some(DECIMAL_CELL_SIZE),
         _ => Some(0),
     }
+}
+
+/// The 8-byte words of a `fixed<elem>` list of `count` cells (`fixed_region_bytes` / 8): the LLVM
+/// `[words x i64]` a list is returned as. A list is never longer than `u32::MAX` cells
+/// (`MAX_FIXED_LENGTH`).
+fn fixed_cell_words(elem: &Type, count: usize) -> u32 {
+    (fixed_region_bytes(elem, count) / 8) as u32
 }
 
 /// The bytes of a `fixed<elem>` list of `count` cells: 16 per decimal128 cell, 8 otherwise (the
@@ -21498,6 +21699,20 @@ fn lower_stmt_return<'ctx>(
                         .map_err(|err| format!("ret union load: {err}"))?;
                     build_return_after_release(cg, edge, Some(&returned), "ret union")?;
                 }
+                // C1h (#433): a `fixed` list returns its cells BY VALUE. The list's items move
+                // with it: the release at this edge skips the returned list (the plan's returned
+                // holders), so the caller owns each item.
+                Type::BuiltinFixed {
+                    ref elem,
+                    size: FixedLength::Known(count),
+                } => {
+                    let cells = cg.i64().array_type(fixed_cell_words(elem, count));
+                    let loaded = cg
+                        .builder
+                        .build_load(cells, val.into_pointer_value(), "ret_fixed_val")
+                        .map_err(|e| format!("ret fixed load: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&loaded), "ret fixed")?;
+                }
                 Type::Shape { ref name } if !name.is_empty() => {
                     let ptr_v = val.into_pointer_value();
                     let struct_ty = cg
@@ -23058,7 +23273,11 @@ fn lower_expr_node<'ctx>(
                     // function under the original exported name, not the local alias.
                     // Then a generic call: the instance the type checker recorded for this
                     // call site, or an internal error (no guess).
-                    let effective_name = if cg.module.get_function(name).is_some() {
+                    let effective_name = if let Some(symbol) =
+                        cg.fixed_version_symbol((call.span.start, call.span.end))?
+                    {
+                        symbol
+                    } else if cg.module.get_function(name).is_some() {
                         name.to_string()
                     } else if let Some(orig) = cg
                         .imported_fns
@@ -23167,6 +23386,7 @@ fn lower_expr_node<'ctx>(
         Expr::MethodCall {
             receiver,
             method,
+            method_span,
             args,
             ..
         } => {
@@ -23175,7 +23395,15 @@ fn lower_expr_node<'ctx>(
             match &recv_ty {
                 Type::Shape { name } => {
                     let name = name.clone();
-                    let raw = lower_ufcs_call(cg, receiver, recv_val, &name, method, args)?;
+                    let raw = lower_ufcs_call(
+                        cg,
+                        receiver,
+                        recv_val,
+                        &name,
+                        method,
+                        method_span,
+                        args,
+                    )?;
                     // v0.3-M7 R9: a UFCS call is the same C-ABI invocation as the
                     // direct-call arm — by-value number/maybe/shape results wrap into
                     // a caller-owned slot here too (one reception discipline).
@@ -26814,12 +27042,17 @@ fn lower_ufcs_call<'ctx>(
     recv_val: BasicValueEnum<'ctx>,
     _shape_name: &str,
     method: &str,
+    method_span: &ynz_diagnostics::SourceSpan,
     extra_args: &[Expr],
 ) -> Result<BasicValueEnum<'ctx>, String> {
+    // A callee with `fixed<T>` length parameters runs the version typeck recorded for this call.
+    let symbol = cg
+        .fixed_version_symbol((method_span.start, method_span.end))?
+        .unwrap_or_else(|| method.to_string());
     let fn_val = cg
         .module
-        .get_function(method)
-        .ok_or_else(|| format!("codegen UFCS: function `{}` not found in module", method))?;
+        .get_function(&symbol)
+        .ok_or_else(|| format!("codegen UFCS: function `{symbol}` not found in module"))?;
 
     // The receiver is the call's first argument: a copy typeck judged necessary is made here.
     let mut copies: CallCopies<'ctx> = Vec::new();
