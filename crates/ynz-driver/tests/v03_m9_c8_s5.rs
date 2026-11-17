@@ -525,3 +525,38 @@ function entrypoint() -> nothing {
 ";
     assert_source_balanced("errors_temporary_suspending", source, "4\n2\n1\n4\n");
 }
+
+/// Bug caught (High: leak; C7 leftover): a `.copy()` of a type parameter `T` no binding holds, in
+/// an instance whose `T` is a `maybe`, mints an envelope cell that `open_temporaries` did not
+/// release (the filter listed string, array, map and shape instances only): `burn(found)` of a
+/// `maybe<string>` allocated 6 heap cells and freed 4. A union or channel `T` cannot reach it: its
+/// `.copy()` is refused before codegen (parked in the report).
+#[test]
+fn a_type_parameter_copy_instantiated_as_a_maybe_is_released() {
+    let source = "shape Row {
+  name: string
+}
+
+function burn<T>(share value: T) -> nothing {
+  let items: array<T> = []
+  value.copy()
+  items.get(0).or(value.copy())
+  print(1)
+}
+
+function entrypoint() -> nothing {
+  let n = 4
+  let names: array<string> = [`a ${n}`]
+  let found: maybe<string> = names.get(0)
+  burn(found)
+  let numbers: array<int> = [n]
+  let number: maybe<int> = numbers.get(0)
+  burn(number)
+  let rows: array<Row> = [{ name: `b ${n}` }]
+  let row: maybe<Row> = rows.get(0)
+  burn(row)
+  print(2)
+}
+";
+    assert_source_balanced("type_parameter_copy_maybe", source, "1\n1\n1\n2\n");
+}

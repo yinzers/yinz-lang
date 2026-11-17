@@ -29371,22 +29371,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // release as a temporary (a leak, never a double free).
             let declared_as_type_parameter = matches!(ty, Type::TypeParam { .. });
             let ty = self.resolve_type(&ty);
+            // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which; for a
+            // `T` it says the temporary is a `.copy()`, and this instance says `T` is a `maybe`).
+            let minted_maybe_copy = self.typed.temporaries.is_minted_maybe_copy(span.0, span.1)
+                || (declared_as_type_parameter
+                    && self
+                        .typed
+                        .temporaries
+                        .is_type_parameter_copy(span.0, span.1)
+                    && matches!(
+                        ynz_typeck::owned_copy::owned_copy_plan(&ty),
+                        ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone
+                    ));
             if declared_as_type_parameter
                 && !(self.releases_in_instance(
                     ynz_typeck::release_plan::ReleaseKind::TypeParameter,
                     &ty,
-                ) && matches!(
-                    release_step(&ty),
-                    ReleaseStep::String
-                        | ReleaseStep::Array { .. }
-                        | ReleaseStep::Map { .. }
-                        | ReleaseStep::Shape { .. }
-                ))
+                ) && (minted_maybe_copy
+                    || matches!(
+                        release_step(&ty),
+                        ReleaseStep::String
+                            | ReleaseStep::Array { .. }
+                            | ReleaseStep::Map { .. }
+                            | ReleaseStep::Shape { .. }
+                    )))
             {
                 continue;
             }
-            // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which).
-            let minted_maybe_copy = self.typed.temporaries.is_minted_maybe_copy(span.0, span.1);
             let mut form = if minted_maybe_copy {
                 ReleaseForm::Cell
             } else {

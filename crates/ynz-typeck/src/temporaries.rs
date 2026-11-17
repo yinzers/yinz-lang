@@ -94,6 +94,9 @@ pub struct Temporaries {
     /// The temporaries that are an explicit `.copy()` of a `maybe`: each owns a heap envelope cell
     /// of its own (`OwnedCopy::MaybeCellClone`), which its release frees after the payload.
     minted_maybe_copies: HashSet<Span>,
+    /// Spans of explicit `.copy()` temporaries whose type is a type parameter `T` (a generic body is
+    /// checked once): an instance whose `T` is a `maybe` mints an envelope cell for it.
+    type_parameter_copies: HashSet<Span>,
     /// The arguments of a call of a Yinz function that build a shape or `maybe` value no
     /// binding holds and that are not temporaries: one at a `give` position (the callee owns it), or a
     /// shape that owns no heap. The bytes of such a value sit where the expression built them, which a callee that
@@ -113,6 +116,11 @@ impl Temporaries {
     /// (`Cg::open_temporaries`).
     pub fn is_minted_maybe_copy(&self, start: usize, end: usize) -> bool {
         self.minted_maybe_copies.contains(&(start, end))
+    }
+
+    /// True when the temporary at `start..end` is an explicit `.copy()` typed as a type parameter `T`.
+    pub fn is_type_parameter_copy(&self, start: usize, end: usize) -> bool {
+        self.type_parameter_copies.contains(&(start, end))
     }
 
     /// True when the expression at `start..end` is an argument of a call of a Yinz function that
@@ -294,6 +302,15 @@ impl Walk<'_> {
                 self.out.released_at.entry(key).or_default().push(span);
                 if self.is_maybe_copy(expr) {
                     self.out.minted_maybe_copies.insert(span);
+                } else if matches!(
+                    expr,
+                    Expr::PostfixOp {
+                        op: PostfixOpKind::Copy,
+                        ..
+                    }
+                ) && matches!(self.type_of(expr), Some(Type::TypeParam { .. }))
+                {
+                    self.out.type_parameter_copies.insert(span);
                 }
             }
         }
