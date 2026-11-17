@@ -441,3 +441,37 @@ function entrypoint() -> nothing {
 ";
     assert_source_balanced("handle_receive_number", source, "2.5\n3.5\ndone\n");
 }
+
+/// Bug caught (High: leak, found by the slice 6 spike): a suspending `entrypoint` that waits after
+/// `background worker(rows)` leaked its array (2 allocations) even when the worker finished: the
+/// spawn copied the consumed binding and only a plain spawner released the original. `give` and
+/// inferred-give positions, binding read after the spawn or not.
+#[test]
+fn a_suspending_spawner_releases_the_array_a_spawn_consumed() {
+    for (name, parameter, after_spawn) in [
+        ("given", "give rows", ""),
+        ("inferred", "rows", ""),
+        ("used_after", "rows", "  print(rows.count().toString())\n"),
+    ] {
+        let source = format!(
+            "function worker({parameter}: array<int>) -> nothing {{
+  wait sleep(5)
+  print(rows.count().toString())
+}}
+
+function entrypoint() -> nothing {{
+  let rows: array<int> = [10, 20, 30]
+  background worker(rows)
+{after_spawn}  wait sleep(100)
+  print(`parent`)
+}}
+"
+        );
+        let expected = if after_spawn.is_empty() {
+            "3\nparent\n"
+        } else {
+            "3\n3\nparent\n"
+        };
+        assert_source_balanced(&format!("sm_spawner_array_{name}"), &source, expected);
+    }
+}
