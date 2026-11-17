@@ -44,20 +44,25 @@ sm_s1:                                            ; preds = %sm_entry
   %is_ready = icmp eq i32 %poll, 0
   br i1 %is_ready, label %sm_post_wait, label %common.ret
 
-common.ret:                                       ; preds = %sm_suspend, %sm_s1, %sm_entry, %sm_post_wait
-  %common.ret.op = phi i32 [ 0, %sm_post_wait ], [ 0, %sm_entry ], [ 1, %sm_s1 ], [ 1, %sm_suspend ]
+common.ret.sink.split:                            ; preds = %sm_post_wait, %sm_suspend
+  %.sink = phi i32 [ 1, %sm_suspend ], [ 2147483647, %sm_post_wait ]
+  %common.ret.op.ph = phi i32 [ 1, %sm_suspend ], [ 0, %sm_post_wait ]
+  store i32 %.sink, ptr %0, align 4
+  br label %common.ret
+
+common.ret:                                       ; preds = %common.ret.sink.split, %sm_entry, %sm_s1
+  %common.ret.op = phi i32 [ 1, %sm_s1 ], [ 0, %sm_entry ], [ %common.ret.op.ph, %common.ret.sink.split ]
   ret i32 %common.ret.op
 
 sm_post_wait:                                     ; preds = %sm_s1, %sm_s0
   %h_slot_wr2 = getelementptr i8, ptr %0, i64 8
   tail call void @llvm.memset.p0.i64(ptr noundef nonnull align 8 dereferenceable(16) %h_slot_wr2, i8 0, i64 16, i1 false)
-  br label %common.ret
+  br label %common.ret.sink.split
 
 sm_suspend:                                       ; preds = %sm_s0
   %h_slot_wr = getelementptr i8, ptr %0, i64 8
   store ptr %sleep_handle, ptr %h_slot_wr, align 8
-  store i32 1, ptr %0, align 4
-  br label %common.ret
+  br label %common.ret.sink.split
 }
 
 define i32 @main() local_unnamed_addr {

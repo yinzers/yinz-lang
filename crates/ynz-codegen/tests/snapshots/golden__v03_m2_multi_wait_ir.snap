@@ -56,8 +56,14 @@ sm_s2:                                            ; preds = %sm_entry
   %is_ready12 = icmp eq i32 %poll11, 0
   br i1 %is_ready12, label %sm_post_wait5, label %common.ret
 
-common.ret:                                       ; preds = %sm_suspend, %sm_s1, %sm_suspend6, %sm_s2, %sm_entry, %sm_post_wait5
-  %common.ret.op = phi i32 [ 0, %sm_post_wait5 ], [ 0, %sm_entry ], [ 1, %sm_s2 ], [ 1, %sm_suspend6 ], [ 1, %sm_s1 ], [ 1, %sm_suspend ]
+common.ret.sink.split:                            ; preds = %sm_post_wait5, %sm_suspend6, %sm_suspend
+  %.sink = phi i32 [ 1, %sm_suspend ], [ 2, %sm_suspend6 ], [ 2147483647, %sm_post_wait5 ]
+  %common.ret.op.ph = phi i32 [ 1, %sm_suspend ], [ 1, %sm_suspend6 ], [ 0, %sm_post_wait5 ]
+  store i32 %.sink, ptr %0, align 4
+  br label %common.ret
+
+common.ret:                                       ; preds = %common.ret.sink.split, %sm_entry, %sm_s1, %sm_s2
+  %common.ret.op = phi i32 [ 1, %sm_s2 ], [ 1, %sm_s1 ], [ 0, %sm_entry ], [ %common.ret.op.ph, %common.ret.sink.split ]
   ret i32 %common.ret.op
 
 sm_post_wait:                                     ; preds = %sm_s1, %sm_s0
@@ -71,18 +77,16 @@ sm_post_wait:                                     ; preds = %sm_s1, %sm_s0
 sm_suspend:                                       ; preds = %sm_s0
   %h_slot_wr = getelementptr i8, ptr %0, i64 8
   store ptr %sleep_handle, ptr %h_slot_wr, align 8
-  store i32 1, ptr %0, align 4
-  br label %common.ret
+  br label %common.ret.sink.split
 
 sm_post_wait5:                                    ; preds = %sm_s2, %sm_post_wait
   %h_slot_wr13 = getelementptr i8, ptr %0, i64 8
   tail call void @llvm.memset.p0.i64(ptr noundef nonnull align 8 dereferenceable(16) %h_slot_wr13, i8 0, i64 16, i1 false)
-  br label %common.ret
+  br label %common.ret.sink.split
 
 sm_suspend6:                                      ; preds = %sm_post_wait
   store ptr %sleep_handle3, ptr %h_slot_wr2, align 8
-  store i32 2, ptr %0, align 4
-  br label %common.ret
+  br label %common.ret.sink.split
 }
 
 define void @chain() local_unnamed_addr {

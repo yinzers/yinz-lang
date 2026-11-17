@@ -37,20 +37,26 @@ sm_entry:
 
 sm_s0:                                            ; preds = %sm_entry
   %b_slot = getelementptr i8, ptr %0, i64 32
-  %b2 = load i64, ptr %b_slot, align 8
-  %2 = and i64 %b2, 1
-  %i_to_b3.not = icmp eq i64 %2, 0
-  br i1 %i_to_b3.not, label %sm_if_merge, label %sm_if_then
+  %b5 = load i64, ptr %b_slot, align 8
+  %2 = and i64 %b5, 1
+  %i_to_b6.not = icmp eq i64 %2, 0
+  br i1 %i_to_b6.not, label %sm_if_merge, label %sm_if_then
 
 sm_s1:                                            ; preds = %sm_entry
   %h_slot = getelementptr i8, ptr %0, i64 8
-  %sleep_handle8 = load ptr, ptr %h_slot, align 8
-  %poll = tail call i32 @ynz_rt_async_sleep_poll(ptr %sleep_handle8, ptr %1)
+  %sleep_handle14 = load ptr, ptr %h_slot, align 8
+  %poll = tail call i32 @ynz_rt_async_sleep_poll(ptr %sleep_handle14, ptr %1)
   %is_ready = icmp eq i32 %poll, 0
   br i1 %is_ready, label %sm_post_wait, label %common.ret
 
-common.ret:                                       ; preds = %sm_suspend, %sm_s1, %sm_entry, %sm_if_merge
-  %common.ret.op = phi i32 [ 0, %sm_if_merge ], [ 0, %sm_entry ], [ 1, %sm_s1 ], [ 1, %sm_suspend ]
+common.ret.sink.split:                            ; preds = %sm_if_merge, %sm_suspend
+  %.sink = phi i32 [ 1, %sm_suspend ], [ 2147483647, %sm_if_merge ]
+  %common.ret.op.ph = phi i32 [ 1, %sm_suspend ], [ 0, %sm_if_merge ]
+  store i32 %.sink, ptr %0, align 4
+  br label %common.ret
+
+common.ret:                                       ; preds = %common.ret.sink.split, %sm_entry, %sm_s1
+  %common.ret.op = phi i32 [ 1, %sm_s1 ], [ 0, %sm_entry ], [ %common.ret.op.ph, %common.ret.sink.split ]
   ret i32 %common.ret.op
 
 sm_if_then:                                       ; preds = %sm_s0
@@ -62,18 +68,17 @@ sm_if_then:                                       ; preds = %sm_s0
 sm_if_merge:                                      ; preds = %sm_post_wait, %sm_s0
   %ret_slot_ptr = getelementptr i8, ptr %0, i64 16
   store i64 0, ptr %ret_slot_ptr, align 8
-  br label %common.ret
+  br label %common.ret.sink.split
 
 sm_post_wait:                                     ; preds = %sm_s1, %sm_if_then
-  %h_slot_wr9 = getelementptr i8, ptr %0, i64 8
-  store ptr null, ptr %h_slot_wr9, align 8
+  %h_slot_wr15 = getelementptr i8, ptr %0, i64 8
+  store ptr null, ptr %h_slot_wr15, align 8
   br label %sm_if_merge
 
 sm_suspend:                                       ; preds = %sm_if_then
   %h_slot_wr = getelementptr i8, ptr %0, i64 8
   store ptr %sleep_handle, ptr %h_slot_wr, align 8
-  store i32 1, ptr %0, align 4
-  br label %common.ret
+  br label %common.ret.sink.split
 }
 
 define void @maybeWait(i1 %0) local_unnamed_addr {
