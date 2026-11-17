@@ -905,7 +905,12 @@ resume_function_maybe_cases! {
 /// A launcher that is itself a resume function (it waits first) spawns `eat` with the `maybe` of
 /// `element_type` a plain function returned: the spawned copy and the consumed call result are each
 /// freed once, for a `give` or a borrowed parameter and a plain or a suspending callee.
-fn suspending_launcher_program(element_type: &str, element_value: &str, given: bool, suspending: bool) -> String {
+fn suspending_launcher_program(
+    element_type: &str,
+    element_value: &str,
+    given: bool,
+    suspending: bool,
+) -> String {
     format!(
         "shape Big {{
   label: string

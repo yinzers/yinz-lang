@@ -18721,13 +18721,8 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                 if let Some((variants, maybe)) = cg.handle_union_variants(&result) {
                     let err = err_phi.as_basic_value().into_int_value();
                     let cell_bits = ok_phi.as_basic_value().into_int_value();
-                    let standard = cg.ec_region_to_standard(
-                        err,
-                        cell_bits,
-                        &variants,
-                        maybe,
-                        "hrecv_union",
-                    )?;
+                    let standard =
+                        cg.ec_region_to_standard(err, cell_bits, &variants, maybe, "hrecv_union")?;
                     let slot_size = cg.union_layout(&variants)?.slot_size;
                     let free_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_free_cell");
                     let after_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_done");

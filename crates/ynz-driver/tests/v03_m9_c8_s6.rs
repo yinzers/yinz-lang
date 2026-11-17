@@ -1275,7 +1275,10 @@ function entrypoint() -> nothing {{
 fn a_received_bignum_errors_result_is_released_with_its_binding() {
     for (name, read) in [
         ("failed", "print(got.failed())"),
-        ("or", "let fallback: number<40> = 0.5\n  print(got.or(fallback))"),
+        (
+            "or",
+            "let fallback: number<40> = 0.5\n  print(got.or(fallback))",
+        ),
     ] {
         let source = format!(
             "function make() -> number<40> errors {{
