@@ -415,9 +415,6 @@ A state-machine resume function releases through the one emitter, `Cg::emit_rele
 - **The spawn ladder and a worker's own release.** A suspending worker releases the frame-backed kinds of its `give` parameters at its scope exits, so the ladder frees nothing at such a position (`suspending_callee_param_ownership`, `free_kind_of_a_given_argument`); other positions keep their kind. A task dropped while Pending releases its frame through the drop entry ("A task dropped while Pending (C8 slice 6)" below); the rest of the ladder is "The spawn ladder (C8 slice 5)" below.
 - **The error path of a narrowed re-read** (`.failed()` checked or propagated before) cannot run and has no plan edge: it releases temporaries and loop copies only (`release_at_narrowed_error_path`).
 
-**Left for the later C8 slices (#385).** After slice 2 a resume function releases the frame-backed kinds (above); each item below is a leak on that path, never an early or double free:
-- *Registry (slice 7).* `background-handle-cancel-injection` and the `background-handle-not-waited` lint retire there.
-
 
 ### Copies held across a `wait` (C8 slice 3)
 

@@ -51,8 +51,8 @@
 //! the task's next yield point — i.e. the child's next suspension — whereupon the embedded
 //! `SpawnStateFnFuture::Drop` runs the full cleanup ladder (sleep handle, arg-copies incl.
 //! shared-channel refs, recursion chain, frame). The handle then releases its own conduit
-//! reference and the R8 buffer, each exactly once. Source-level automatic drop insertion
-//! awaits the language-wide scope-drop mechanism (recorded deferral — see the plan).
+//! reference and the R8 buffer, each exactly once. Codegen calls it when a handle binding
+//! leaves its scope (v0.3-M9 C8, card #385), so a handle leaving scope stops its task.
 
 use std::future::Future;
 use std::pin::Pin;

@@ -7,18 +7,22 @@
 // also had to redesign (it shares `bg_arg_is_provably_safe` with the statement
 // form, but is a genuinely distinct call site — a regression here could slip
 // past every statement-form fixture in this suite). The handle is legally
-// never-received here (the never-received pattern is already covered/legal per
-// `v0_3_m7_fr23_..._never_received.ynz`-style fixtures elsewhere), so `spawner`
-// returns immediately after the spawn statement exactly like every OTHER fr23
-// fixture — the same "materialize, return, let `stomp()` reuse the freed
-// stack slot, then give the task time to run" race every prior fr23 fixture
-// exercises.
+// never-received here, so `spawner` returns immediately after the spawn
+// statement and `h` leaves scope there. That release STOPS the task (v0.3-M9 C8,
+// card #385: a handle leaving scope aborts its task at the next suspension), and
+// `haul` is still in its first `wait sleep(150)` when `spawner` returns — so
+// the task is stopped before it prints. The fixture still runs the same
+// "materialize, return, let `stomp()` reuse the freed stack slot" sequence every
+// prior fr23 fixture exercises; the stopped task's argument copy is released by
+// the abort path instead of being read.
 //
 // `bg_arg_is_provably_safe` does not distinguish handle-form from statement-
 // form callers — a `StructLit` falls through the trailing wildcard to `Give`
 // regardless of which of the two admission call sites consults it.
 //
-// Correct output must contain: `haul: 111/222`.
+// Correct output: two `stomp: ...` lines and `main done`; NO `haul:` line (the
+// task was stopped when its handle left `spawner`'s scope). Keep the handle live
+// (`h.receive()` before `spawner` returns) to make `haul: 111/222` print.
 
 shape Cargo {
   weight: int
