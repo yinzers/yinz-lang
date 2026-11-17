@@ -386,3 +386,26 @@ fn a_maybe_a_handle_delivers_is_not_freed_by_its_binding_because_the_handle_owns
     // it as a heap cell was a double free (ASan sweep, before the borrowed ok word was recorded).
     assert_fixture_balanced("v0_3_m8_p4_handle_maybe_return.ynz", "7\ndone\n");
 }
+
+#[test]
+fn a_narrowed_read_of_an_errors_local_that_crosses_only_through_its_release_still_builds() {
+    // Bug: the narrowed read re-pointed `locals` at an alloca made in the read's own branch, and
+    // the reload after a later `wait` wrote into it: LLVM "Instruction does not dominate all
+    // uses" (examples/pirates-roster, found by `examples_basics_runs_end_to_end`).
+    let source = "
+function battingAverage(hits: int, atBats: int) -> int errors {
+  return (hits * 1000) / atBats
+}
+
+function entrypoint() -> nothing {
+  const average = battingAverage(50, 200)
+  if (average.failed()) {
+    print(`failed`)
+  }
+  print(average.toString())
+  wait sleep(1)
+  print(`end`)
+}
+";
+    assert_source_balanced("narrowed_read_release_only", source, "250\nend\n");
+}

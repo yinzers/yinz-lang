@@ -21872,10 +21872,15 @@ fn lower_expr_node<'ctx>(
                             .map_err(|e| format!("sm nap extract val: {e}"))?
                             .into_int_value();
                         let success_val = cg.i64_bits_to(success_bits, &ty)?;
-                        cg.errors_capable_locals.remove(name.as_str());
-                        let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
-                        store(cg, success_val, &ty, new_slot)?;
-                        cg.locals.insert(name.to_string(), new_slot);
+                        // A crossing local keeps its entry-block slot: every resume reloads the frame words
+                        // into it, and a narrowed slot made in this branch does not dominate the states
+                        // after a `wait`. Each read extracts the success word again.
+                        if !cg.sm_crossing_errors_capable_set.contains(name.as_str()) {
+                            cg.errors_capable_locals.remove(name.as_str());
+                            let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
+                            store(cg, success_val, &ty, new_slot)?;
+                            cg.locals.insert(name.to_string(), new_slot);
+                        }
                         return Ok(success_val);
                     }
 
