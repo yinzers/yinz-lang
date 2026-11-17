@@ -106,7 +106,7 @@ impl<'a> LengthUses<'a> {
 
 /// Do the items of a `fixed` list of `elem` own heap a release must free? `number` of up to 34
 /// digits is stored inline, like the scalars.
-fn items_own_heap(elem: &Type) -> bool {
+pub(crate) fn items_own_heap(elem: &Type) -> bool {
     !matches!(
         elem,
         Type::Int

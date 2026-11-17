@@ -214,3 +214,50 @@ fn a_function_built_once_that_never_asks_for_the_length_is_not_refused() {
         assert_eq!(task_function_refusals(source), 0, "{source}");
     }
 }
+
+// Bug: a received `fixed<string>` task result, bound to a local released after a later `wait`, was
+// released from cells in a dead resume-function stack frame (stack-use-after-return); it must be
+// refused with a diagnostic instead (High: data integrity).
+#[test]
+fn a_received_fixed_of_strings_cannot_cross_a_later_wait() {
+    let output = check(
+        "function names() -> fixed<string> {\n\
+           wait sleep(1)\n\
+           let rows: fixed<string> = [`a`, `b`]\n\
+           return rows\n\
+         }\n\
+         function entrypoint() -> nothing {\n\
+           let task = background names()\n\
+           wait sleep(20)\n\
+           let received = task.receive()\n\
+           wait sleep(1)\n\
+         }",
+    );
+    let refusals = errors(&output);
+    assert_eq!(refusals.len(), 1, "{refusals:#?}");
+    assert!(
+        refusals[0].what.contains("cannot yet cross a `wait`"),
+        "{:#?}",
+        refusals[0]
+    );
+}
+
+// A received list of plain values owns nothing to release, so a later `wait` after its last use
+// stays allowed.
+#[test]
+fn a_received_fixed_of_ints_may_be_followed_by_a_wait() {
+    let output = check(
+        "function numbers() -> fixed<int> {\n\
+           wait sleep(1)\n\
+           let list: fixed<int> = [1, 2]\n\
+           return list\n\
+         }\n\
+         function entrypoint() -> nothing {\n\
+           let task = background numbers()\n\
+           wait sleep(20)\n\
+           let received = task.receive()\n\
+           wait sleep(1)\n\
+         }",
+    );
+    assert!(errors(&output).is_empty(), "{:#?}", errors(&output));
+}

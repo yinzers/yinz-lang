@@ -2504,17 +2504,24 @@ impl<'b> Checker<'b> {
             // additionally check the iterator's element type via find_for_loop_var_type_in_stmts.
             // Any unsupported type in any source triggers the guard.
             for crossing_name in &crossings {
-                // A local that crosses only through its release is not read after a `wait`: nothing
-                // here would be rejected for it (`CrossingNames::release_only`).
-                if release_only.contains(crossing_name.as_str()) {
-                    continue;
-                }
                 // RHS expression type (catches let-binding inferred types).
                 let rhs_ty = find_crossing_local_typeck_type_in_map(
                     &f.body.stmts,
                     crossing_name.as_str(),
                     &self.expr_types,
                 );
+                // A local that crosses only through its release is not read after a `wait`: nothing
+                // here would be rejected for it (`CrossingNames::release_only`). The exception is a
+                // received `fixed` result whose items own heap (`is_errors_of_fixed_with_heap_items`): its release
+                // walks cells that sit in the resume function's stack, so the release itself reads a
+                // dead frame.
+                if release_only.contains(crossing_name.as_str())
+                    && !rhs_ty
+                        .as_ref()
+                        .is_some_and(is_errors_of_fixed_with_heap_items)
+                {
+                    continue;
+                }
                 // Annotation type, resolved through union aliases (catches explicit annotations).
                 let ann_ty =
                     find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
@@ -2541,6 +2548,7 @@ impl<'b> Checker<'b> {
                                     | Type::BuiltinFixed { .. }
                                     | Type::Range { .. }
                             ) || is_errors_maybe_of_envelope_union(ty)
+                                || is_errors_of_fixed(ty)
                         })
                     })
                     .cloned();
@@ -2594,6 +2602,20 @@ impl<'b> Checker<'b> {
                              suspends the function the stack frame is freed, and the crossing-local \
                              frame slot holds a dangling pointer on the next resume. Iterating \
                              that dangling range produces zero iterations (silent wrong output). \
+                             See design/concurrency.md 'UnsupportedCrossingLocalType'.",
+                        ),
+                        Type::ErrorsCapable { inner }
+                            if matches!(inner.as_ref(), Type::BuiltinFixed { .. }) =>
+                        (
+                            format!(
+                                "Read what you need from `{crossing_name}` and finish with it \
+                                 before the `wait`: move the `wait` before the `receive()` that \
+                                 binds it, or bind the result where no later `wait` follows."
+                            ),
+                            "A `fixed` list a task returns is received into the stack of the \
+                             function that received it, and no frame region holds those cells \
+                             across a `wait`. When the `wait` suspends the function its stack frame \
+                             is freed, so releasing the list afterwards would read a dead frame. \
                              See design/concurrency.md 'UnsupportedCrossingLocalType'.",
                         ),
                         Type::ErrorsCapable { .. } => (
@@ -12053,6 +12075,28 @@ fn union_coercion_for(slot_ty: &Type, value_ty: &Type) -> Option<UnionCoercion> 
         slot: slot_ty.clone(),
         tag,
     })
+}
+
+/// Is `candidate` the result of receiving a background task that returned a `fixed` list
+/// (`fixed<T, N> errors`)? Codegen copies the cells into a block on the receiving resume
+/// function's stack, which no frame region holds across a `wait` (C1h, #433). O(1).
+fn is_errors_of_fixed(candidate: &Type) -> bool {
+    matches!(
+        candidate,
+        Type::ErrorsCapable { inner } if matches!(inner.as_ref(), Type::BuiltinFixed { .. })
+    )
+}
+
+/// `is_errors_of_fixed` for a list whose items own heap, which a release must free: a list of
+/// plain values has nothing to release, so a local that crosses only through its release is safe.
+fn is_errors_of_fixed_with_heap_items(candidate: &Type) -> bool {
+    match candidate {
+        Type::ErrorsCapable { inner } => match inner.as_ref() {
+            Type::BuiltinFixed { elem, .. } => crate::fixed_length_use::items_own_heap(elem),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// An `errors` result whose success value is a `maybe` of an envelope union
