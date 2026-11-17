@@ -13293,6 +13293,9 @@ enum TemporaryRegionKind {
     Bytes(u64),
     /// A union slot of these variants (`union_persist_into_core`).
     Union(Vec<Type>),
+    /// A `maybe` of an envelope union with these variants: the 16-byte envelope, then the 16-byte view
+    /// and the union slot behind it (`Cg::maybe_union_payload_into`).
+    MaybeUnion(Vec<Type>),
 }
 
 /// The frame home of a temporary of type `ty` (already resolved; `minted_maybe_copy` is typeck's
@@ -13312,9 +13315,19 @@ fn temporary_home(
         }
         Type::Maybe { .. } if minted_maybe_copy => TemporaryHome::Pointer,
         Type::Maybe { inner } => match inner.as_ref() {
-            // A view of a slot someone else owns, or a counted channel reference: no frame bytes.
+            // A counted channel reference: no frame bytes.
             Type::BuiltinChannel { .. } => TemporaryHome::Skip,
-            inner if ynz_typeck::check::is_envelope_union(inner) => TemporaryHome::Skip,
+            // The union a call returned sits in a slot that dies with the resume invocation: it is
+            // moved into a slot of the region behind the envelope.
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(inner.as_ref()) => {
+                match maybe_region_payload_bytes(inner, sizes) {
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::MaybeUnion(variants.clone()),
+                        maybe_frame_slots(payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
+            }
             _ => TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0)),
         },
         Type::Shape { name } => match sizes.get(name) {
@@ -29260,12 +29273,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let size = match ty {
             Type::Shape { name } => self.shape_abi_size_const(name, "stage_value_in_frame")?,
             Type::Maybe { .. } => self.i64().const_int(MAYBE_ENVELOPE_BYTES, false),
-            Type::BuiltinFixed {
-                elem,
-                size: Some(count),
-            } => self
-                .i64()
-                .const_int(fixed_region_bytes(elem, *count), false),
             other => {
                 return Err(format!(
                     "internal: a `{}` argument has no staging region",
@@ -29537,6 +29544,47 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         self.i64().const_int(*bytes, false),
                     )
                     .map_err(|err| format!("{site}: move the temporary into its region: {err}"))?;
+                region_ptr.into()
+            }
+            TemporaryRegionKind::MaybeUnion(variants) => {
+                // The envelope is the call's result (`take`: it owns its payload): the union its view
+                // names moves into the slot behind the region's envelope, and the envelope names the
+                // region's view of it.
+                let flag_gep = self
+                    .builder
+                    .build_struct_gep(self.maybe_type(), source, 0, &format!("{site}_src_flag"))
+                    .map_err(|err| format!("{site}: maybe flag gep: {err}"))?;
+                let flag = self
+                    .builder
+                    .build_load(self.i64(), flag_gep, &format!("{site}_flag"))
+                    .map_err(|err| format!("{site}: maybe flag load: {err}"))?
+                    .into_int_value();
+                let bits_gep = self
+                    .builder
+                    .build_struct_gep(self.maybe_type(), source, 1, &format!("{site}_src_bits"))
+                    .map_err(|err| format!("{site}: maybe bits gep: {err}"))?;
+                let bits = self
+                    .builder
+                    .build_load(self.i64(), bits_gep, &format!("{site}_bits"))
+                    .map_err(|err| format!("{site}: maybe bits load: {err}"))?
+                    .into_int_value();
+                let payload = self.maybe_region_payload_ptr(region_ptr, &site)?;
+                let region_bits =
+                    self.maybe_union_payload_into(flag, bits, variants, payload, false, &site)?;
+                for (index, word) in [(0u32, flag), (1u32, region_bits)] {
+                    let gep = self
+                        .builder
+                        .build_struct_gep(
+                            self.maybe_type(),
+                            region_ptr,
+                            index,
+                            &format!("{site}_word"),
+                        )
+                        .map_err(|err| format!("{site}: region word gep: {err}"))?;
+                    self.builder
+                        .build_store(gep, word)
+                        .map_err(|err| format!("{site}: region word store: {err}"))?;
+                }
                 region_ptr.into()
             }
             TemporaryRegionKind::Union(variants) => {

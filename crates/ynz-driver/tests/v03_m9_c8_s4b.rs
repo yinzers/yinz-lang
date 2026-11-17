@@ -341,3 +341,41 @@ fn an_unsized_fixed_of_shapes_returned_by_a_function_compiles_and_runs_clean() {
 fn an_unsized_fixed_of_shapes_given_to_a_function_compiles_and_runs_clean() {
     assert_fixture_runs_clean("v0_3_m9_c8_s4b_unsized_fixed_shape_param.ynz", "1\n");
 }
+
+#[test]
+fn a_maybe_of_a_union_temporary_of_a_suspending_statement_is_released() {
+    let source = "
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function find(share things: array<Thing>, index: int) -> maybe<Thing> {
+  let found = things.get(index)
+  return found
+}
+
+function later(present: boolean) -> int {
+  wait sleep(1)
+  if (present) {
+    return 1
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let things: array<Thing> = []
+  let big: Big = { label: `kept`, count: 1 }
+  things.add(big)
+  let hit: int = wait later(find(things, 0).exists())
+  let miss: int = wait later(find(things, 5).exists())
+  print(hit)
+  print(miss)
+}
+";
+    assert_source_balanced("maybe_union_temporary", source, "1\n0\n");
+}
