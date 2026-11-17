@@ -12481,22 +12481,7 @@ fn load_sm_return_value_typed<'ctx>(
         return Ok(result.into());
     }
 
-    // Look up the callee's declared return type — check local items first, then
-    // imported functions for cross-module callees.
-    let callee_ret_ty = cg
-        .typed
-        .module
-        .items
-        .iter()
-        .find_map(|item| {
-            if let ynz_ast::nodes::Item::Function(f) = item {
-                if f.name == callee_name {
-                    return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
-                }
-            }
-            None
-        })
-        .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()));
+    let callee_ret_ty = sm_callee_return_type(cg, callee_name);
 
     match callee_ret_ty {
         Some(Type::Float) => {
@@ -12601,6 +12586,26 @@ fn load_sm_return_value_typed<'ctx>(
             Ok(ret_i64.into())
         }
     }
+}
+
+/// The declared return type of the suspending callee `callee_name`: local items first, then imported
+/// functions for cross-module callees. `None` for a callee neither knows.
+///
+/// O(items) time.
+fn sm_callee_return_type(cg: &Cg<'_, '_>, callee_name: &str) -> Option<Type> {
+    cg.typed
+        .module
+        .items
+        .iter()
+        .find_map(|item| {
+            if let ynz_ast::nodes::Item::Function(f) = item {
+                if f.name == callee_name {
+                    return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
+                }
+            }
+            None
+        })
+        .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()))
 }
 
 /// Extract the callee function name from a `Expr::Call(c)` expression, returning `None`
@@ -13032,13 +13037,12 @@ fn bind_sm_result_and_flush_value<'ctx>(
                 cg.maybe_env_dest.set(Some(region));
                 cg.maybe_payload_dest
                     .set(Some(cg.maybe_region_payload_ptr(region, name)?));
-                // A string, container or value payload comes out of a callee or a channel as the
+                // A string, container, shape or value payload comes out of a callee or a channel as the
                 // binding's own (a copy of it would be an allocation the program does not make
-                // today); a shape or decimal payload is copied into the region.
-                let take = !matches!(
-                    cg.resolve_type(&inner),
-                    Type::Shape { .. } | Type::Number { .. }
-                ) || ynz_typeck::types::is_bignum(&cg.resolve_type(&inner));
+                // today, and would orphan the cell and the strings the callee made); a decimal payload
+                // is copied into the region.
+                let take = !matches!(cg.resolve_type(&inner), Type::Number { .. })
+                    || ynz_typeck::types::is_bignum(&cg.resolve_type(&inner));
                 let owned = cg.maybe_to_owned_dest(envelope, &inner, name, false, take);
                 cg.maybe_env_dest.set(None);
                 cg.maybe_payload_dest.set(None);
@@ -13199,6 +13203,17 @@ fn bind_sm_result_and_flush_value<'ctx>(
                     .map_err(|e| format!("copy-on-bind insert ok {name}: {e}"))?
                     .into_struct_value();
                 return_val = new_sv.into();
+            }
+        }
+        // A `maybe` a suspending callee returned carries its shape or number payload in a heap cell the
+        // return made (`maybe_payload_stable_bits` with `heap`): the binding TAKES it, as a plain call's
+        // result is taken (`maybe_to_owned_taking`), so the binding's release frees each allocation once.
+        if let inkwell::values::BasicValueEnum::PointerValue(envelope) = return_val {
+            if let Some(Type::Maybe { inner }) = sm_callee_return_type(cg, callee_name) {
+                if cg.envelope_union_variants(&inner).is_none() {
+                    let owned = cg.maybe_to_owned_taking(envelope, &inner, name)?;
+                    return_val = owned.into();
+                }
             }
         }
         let alloca = bind_sm_return_value(cg, name, return_val)?;
