@@ -304,9 +304,18 @@ fn a_written_length_is_checked_against_each_list_passed_or_returned_at_its_bound
     for (label, source, expected) in rows {
         let output = check(&source);
         let mismatches = refusals_of(&source, DiagnosticKind::FixedLengthMismatch);
-        assert_eq!(mismatches, expected, "{label}\n{source}\n{:#?}", errors(&output));
+        assert_eq!(
+            mismatches,
+            expected,
+            "{label}\n{source}\n{:#?}",
+            errors(&output)
+        );
         if expected == 0 {
-            assert!(errors(&output).is_empty(), "{label}: {:#?}", errors(&output));
+            assert!(
+                errors(&output).is_empty(),
+                "{label}: {:#?}",
+                errors(&output)
+            );
         }
     }
 }
@@ -381,7 +390,11 @@ fn an_unusable_written_length_is_refused_by_kind_and_the_limits_are_accepted() {
     for (source, expected) in rows {
         let output = check(&source);
         match expected {
-            None => assert!(errors(&output).is_empty(), "{source}\n{:#?}", errors(&output)),
+            None => assert!(
+                errors(&output).is_empty(),
+                "{source}\n{:#?}",
+                errors(&output)
+            ),
             Some(kind) => assert_eq!(
                 refusals_of(&source, kind.clone()),
                 1,
