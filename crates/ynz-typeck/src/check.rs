@@ -1217,6 +1217,13 @@ fn check_one_pass(
         checker.sig_table,
         &checker.possibly_cpu_promoted,
     );
+    for refusal in unsized_lengths_of_once_only_functions(
+        module,
+        checker.sig_table,
+        &checker.possibly_cpu_promoted,
+    ) {
+        checker.diags.push(refusal);
+    }
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1385,7 +1392,80 @@ pub fn check_with_kernel_mode(
     (typed, checker.mono_table, checker.diags)
 }
 
+/// Why a function is built once, as a state machine named after the function, so it cannot have a
+/// version per length (`None` when it can): it pauses at a `wait`, or auto-parallel promotion may
+/// run it as a task of its own (`once_only`). THE one answer, read by `fixed_instances_of` (which
+/// gives such a function no versions) and by the refusal of an unsized `fixed` parameter on one.
+/// O(1).
+fn why_built_once(
+    name: &str,
+    signature: &crate::signatures::FunctionSig,
+    once_only: &HashSet<String>,
+) -> Option<&'static str> {
+    if signature.suspends {
+        Some("pauses at a `wait`")
+    } else if once_only.contains(name) {
+        Some("may be run as a task of its own")
+    } else {
+        None
+    }
+}
+
+/// `FixedLengthMissingInTaskFunction` for every `fixed<T>` parameter without a written length of a
+/// function that is built once (`why_built_once`): such a function has no versions, so the length
+/// has to be in its signature. O(parameters of the functions).
+fn unsized_lengths_of_once_only_functions(
+    module: &Module,
+    sig_table: &SignatureTable,
+    once_only: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    let mut refused = Vec::new();
+    for item in &module.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        let Some(signature) = sig_table.fns.get(&function.name) else {
+            continue;
+        };
+        let Some(reason) = why_built_once(&function.name, signature, once_only) else {
+            continue;
+        };
+        for parameter in &function.params {
+            let AstType::Generic { name, args, span, .. } = &parameter.ty else {
+                continue;
+            };
+            if name != "fixed" {
+                continue;
+            }
+            let written = crate::fixed_length::read_fixed_arguments(args);
+            if written.length != crate::fixed_length::WrittenLength::Absent {
+                continue;
+            }
+            let element = written
+                .element
+                .map(render_ast_type)
+                .unwrap_or_else(|| "int".to_string());
+            let written_text = render_ast_type(&parameter.ty);
+            let suggested = format!("fixed<{element}, 4>");
+            let slots = [
+                ("function", function.name.as_str()),
+                ("parameter", parameter.name.as_str()),
+                ("written", written_text.as_str()),
+                ("suggested", suggested.as_str()),
+                ("reason", reason),
+            ];
+            refused.push(registry_diag(
+                span.clone(),
+                DiagnosticKind::FixedLengthMissingInTaskFunction,
+                &slots,
+            ));
+        }
+    }
+    refused
+}
+
 /// The specialised versions the program needs: the recorded calls closed over the length
+
 /// parameters of every function in `sig_table` (`crate::fixed_length::close_instances`).
 /// O(calls + versions).
 ///
@@ -1395,6 +1475,7 @@ pub fn check_with_kernel_mode(
 /// to it records none. (A suspending function cannot be handed a `fixed` argument anyway: the
 /// list would die across the suspension, which typeck refuses.)
 fn fixed_instances_of(
+
     calls: FixedCalls,
     sig_table: &SignatureTable,
     once_only: &HashSet<String>,
@@ -1402,7 +1483,7 @@ fn fixed_instances_of(
     let length_parameters: std::collections::BTreeMap<String, Vec<String>> = sig_table
         .fns
         .iter()
-        .filter(|(name, signature)| !signature.suspends && !once_only.contains(*name))
+        .filter(|(name, signature)| why_built_once(name, signature, once_only).is_none())
         .filter_map(|(name, signature)| {
             let parameters = length_parameters(&signature.params);
             (!parameters.is_empty()).then(|| (name.clone(), parameters))

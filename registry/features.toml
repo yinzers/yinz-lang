@@ -2827,3 +2827,12 @@ kind_name = "FixedFieldLengthMissing"
 what_template = "The field `{field}` of `{shape}` is written `{written}`, which does not say how many items it holds."
 what_instead_template = "Write the length in the field's type, as in `{field}: {suggested}`, using the number of items every `{shape}` holds. If that number changes from one `{shape}` to the next, hold the items in an `array<{element}>` field instead."
 why_template = "A shape keeps a `fixed` list inside its own bytes, so the size of the list is part of the size of the shape, and both have to be known when the program is compiled. A field written without a length has no size, so the compiler cannot lay the shape out or copy it."
+
+# `{function}` the function, `{parameter}` its parameter, `{written}` the parameter's type as written,
+# `{suggested}` the same type with a length, `{reason}` why the function is built once (`pauses at a
+# `wait`` or `may be run as a task of its own`).
+[[diagnostic_template]]
+kind_name = "FixedLengthMissingInTaskFunction"
+what_template = "`{function}` takes `{parameter}` as `{written}`, which has no length, and `{function}` {reason}."
+what_instead_template = "Write the length of `{parameter}`, as in `{parameter}: {suggested}`, using the number of items the callers pass."
+why_template = "A `fixed` parameter without a length makes the compiler build one copy of the function for each length its callers pass. A function that {reason} is built only once, so it needs one length, written in its signature."

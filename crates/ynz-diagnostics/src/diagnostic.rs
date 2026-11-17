@@ -101,6 +101,10 @@ pub enum DiagnosticKind {
     /// A shape field written `fixed<T>` without a length: the shape holds the list inside itself,
     /// so its size must be known. v0.3-M9 C1h.
     FixedFieldLengthMissing,
+    /// A function that pauses at a `wait`, or that may run as a task of its own, takes a `fixed<T>`
+    /// parameter without a length: such a function is built once, so it needs the length written.
+    /// v0.3-M9 C1h.
+    FixedLengthMissingInTaskFunction,
     MapKeyNotStorable,
     /// A `background` call passes a union to a parameter the generic callee declares as a bare
     /// type parameter: the task has no slot to copy the union into. v0.3-M9 C6.
@@ -193,6 +197,9 @@ impl DiagnosticKind {
             DiagnosticKind::FixedReturnLengthsDiffer => "FixedReturnLengthsDiffer",
             DiagnosticKind::FixedReturnLengthUnknown => "FixedReturnLengthUnknown",
             DiagnosticKind::FixedFieldLengthMissing => "FixedFieldLengthMissing",
+            DiagnosticKind::FixedLengthMissingInTaskFunction => {
+                "FixedLengthMissingInTaskFunction"
+            }
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "BackgroundUnionToGenericParameter"
             }
@@ -240,6 +247,7 @@ impl DiagnosticKind {
         "FixedReturnLengthsDiffer",
         "FixedReturnLengthUnknown",
         "FixedFieldLengthMissing",
+        "FixedLengthMissingInTaskFunction",
         "BackgroundUnionToGenericParameter",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
@@ -290,6 +298,7 @@ impl DiagnosticKind {
             DiagnosticKind::FixedReturnLengthsDiffer => "different lengths".to_string(),
             DiagnosticKind::FixedReturnLengthUnknown => "length not known".to_string(),
             DiagnosticKind::FixedFieldLengthMissing => "write the length".to_string(),
+            DiagnosticKind::FixedLengthMissingInTaskFunction => "write the length".to_string(),
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "declare the union type".to_string()
             }

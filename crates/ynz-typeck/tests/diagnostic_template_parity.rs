@@ -1535,3 +1535,64 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
          function entrypoint() -> nothing { print(1) }",
     );
 }
+
+#[test]
+fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    // WHY: a function that waits, or may run as a task of its own, is built once, so an unsized
+    // `fixed` parameter has no length for it (before: an internal compiler error). Both reasons
+    // render from the registry, and the suggestion (write the length) compiles.
+    assert_rendered(
+        DiagnosticKind::FixedLengthMissingInTaskFunction,
+        "function slowTotal(share xs: fixed<int>) -> int {\n\
+           wait sleep(1)\n\
+           return xs.count()\n\
+         }\n\
+         function entrypoint() -> nothing {\n\
+           let total = wait slowTotal([1, 2, 3])\n\
+           print(total)\n\
+         }",
+        &[
+            ("function", "slowTotal"),
+            ("parameter", "xs"),
+            ("written", "fixed<int>"),
+            ("suggested", "fixed<int, 4>"),
+            ("reason", "pauses at a `wait`"),
+        ],
+    );
+    assert_rendered(
+        DiagnosticKind::FixedLengthMissingInTaskFunction,
+        "function heavy(share seed: int) -> int {\n\
+           let sum: int = 0\n\
+           for (i in range(0, 3000000)) {\n\
+             sum = sum + (i * seed) % 7\n\
+           }\n\
+           return sum\n\
+         }\n\
+         function host(share xs: fixed<int>) -> int {\n\
+           let first = heavy(1)\n\
+           let second = heavy(2)\n\
+           return first + second + xs.count()\n\
+         }\n\
+         function entrypoint() -> nothing {\n\
+           let three: fixed<int> = [1, 2, 3]\n\
+           print(host(three))\n\
+         }",
+        &[
+            ("function", "host"),
+            ("parameter", "xs"),
+            ("written", "fixed<int>"),
+            ("suggested", "fixed<int, 4>"),
+            ("reason", "may be run as a task of its own"),
+        ],
+    );
+    assert_compiles(
+        "function slowTotal(share xs: fixed<int, 3>) -> int {\n\
+           wait sleep(1)\n\
+           return xs.count()\n\
+         }\n\
+         function entrypoint() -> nothing {\n\
+           let total = wait slowTotal([1, 2, 3])\n\
+           print(total)\n\
+         }",
+    );
+}
