@@ -6836,8 +6836,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // self-contained for an int, bool, float or string key (i64 bits or a stable heap
                 // string pointer: the memcpy above owns it); a decimal key's bits are the address
                 // of the loop's per-site key buffer, which the next iteration overwrites, so it is
-                // copied into a heap cell of its own below (leaked with the value sub-cell, the
-                // accounted persist-cell class).
+                // copied into a heap cell of its own below (a spawn argument frees it with the entry cell,
+                // `bg_mapentry_release_fn`).
                 if self.is_inline_decimal(&self.resolve_type(entry_key_ty)) {
                     let kslot = self
                         .builder
@@ -22955,9 +22955,8 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         // with the spawner's frame (sweep probe: the task read the ADVANCED slot — 2/20 vs
         // expected 1/10). Route through the ONE stable-bits choke point
         // (`value_to_stable_bits` — no bg-side marshalling twin); the free ladder reuses
-        // `HeapShape` for the 16-byte entry cell (`ynz_free` ignores its size arg today). The
-        // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011 accounted
-        // persist-cell class, deferred to the drop story.
+        // `HeapShape` for the 16-byte entry cell until `release_glue_free_kind` upgrades it to
+        // `bg_mapentry_release_fn`, which also frees the deep-copied key and value sub-cells.
         Some(ynz_typeck::owned_copy::SpawnRehoming::StabilizeLoopView) => {
             let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
             let cell_ptr = cg
@@ -29874,6 +29873,108 @@ fn reject_union_argument_without_slot(
     ))
 }
 
+impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// The module function `void(ptr cell)` that releases the cell `value_to_stable_bits` makes of
+    /// a `MapEntry` `background` argument: the key half when it is a decimal's own cell, the
+    /// value half when it is a shape's cell, a `maybe`'s cell or a decimal's cell (each a copy the
+    /// spawn made, because the loop's per-site buffer the original points into is rewritten by
+    /// the next iteration), and the 16-byte `{key, value}` cell itself. Every other half is the
+    /// map's own bits (an int, a string pointer, a collection the map still holds) and is left
+    /// alone, as the copy left it. `None` is never returned: the cell is always freed.
+    ///
+    /// One function per key and value type. Time: O(1) to emit and to run  Space: O(1)
+    fn bg_mapentry_release_fn(
+        &self,
+        key_ty: &Type,
+        value_ty: &Type,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let key_ty = self.resolve_type(key_ty);
+        let value_ty = self.resolve_type(value_ty);
+        let name = format!(
+            "ynz_release_bg_mapentry_{}_{}",
+            mangle_type(&key_ty),
+            mangle_type(&value_ty)
+        );
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let cell = release
+            .get_nth_param(0)
+            .ok_or("bg mapentry release: missing cell parameter")?
+            .into_pointer_value();
+        let entry_ty = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let decimal_cell_size = self.i64().const_int(16, false);
+        let half_pointer = |index: u32, label: &str| -> Result<PointerValue<'ctx>, String> {
+            let slot = self
+                .builder
+                .build_struct_gep(entry_ty, cell, index, &format!("{label}_slot"))
+                .map_err(|err| format!("bg mapentry release gep {label}: {err}"))?;
+            let bits = self
+                .builder
+                .build_load(self.i64(), slot, &format!("{label}_bits"))
+                .map_err(|err| format!("bg mapentry release load {label}: {err}"))?
+                .into_int_value();
+            self.builder
+                .build_int_to_ptr(bits, self.ptr(), &format!("{label}_ptr"))
+                .map_err(|err| format!("bg mapentry release inttoptr {label}: {err}"))
+        };
+        if self.is_inline_decimal(&key_ty) {
+            let key_cell = half_pointer(0, "key")?;
+            self.builder
+                .build_call(
+                    self.rt.ynz_free,
+                    &[key_cell.into(), decimal_cell_size.into()],
+                    "",
+                )
+                .map_err(|err| format!("bg mapentry release key cell: {err}"))?;
+        }
+        match &value_ty {
+            Type::Shape { .. } | Type::Maybe { .. } => {
+                if let Some(glue) = self.release_fn(&value_ty, true)? {
+                    let value_cell = half_pointer(1, "value")?;
+                    self.builder
+                        .build_call(glue, &[value_cell.into()], "")
+                        .map_err(|err| format!("bg mapentry release value: {err}"))?;
+                }
+            }
+            decimal if self.is_inline_decimal(decimal) => {
+                let value_cell = half_pointer(1, "value")?;
+                self.builder
+                    .build_call(
+                        self.rt.ynz_free,
+                        &[value_cell.into(), decimal_cell_size.into()],
+                        "",
+                    )
+                    .map_err(|err| format!("bg mapentry release value cell: {err}"))?;
+            }
+            _ => {}
+        }
+        self.builder
+            .build_call(
+                self.rt.ynz_free,
+                &[cell.into(), decimal_cell_size.into()],
+                "",
+            )
+            .map_err(|err| format!("bg mapentry release cell: {err}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("bg mapentry release return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(release)
+    }
+}
 /// The task's own slot for an envelope-union `background` argument of a CPU callee: a heap cell
 /// holding the union persisted by value (a copy of what it owns, as a stored union does), plus
 /// the free kind the closure uses after the call.
@@ -29937,6 +30038,18 @@ fn release_glue_free_kind<'ctx>(
     callee: &str,
     arg_index: usize,
 ) -> Result<BgArgFreeKind, String> {
+    // A `MapEntry` is never an owner of a slot, so no callee releases or moves one on, whatever the
+    // parameter's modifier: the task's copy is the ladder's, entry cell and halves alike.
+    if let Type::MapEntry {
+        key: entry_key,
+        val: entry_value,
+    } = cg.resolve_type(ty)
+    {
+        let glue = cg.bg_mapentry_release_fn(&entry_key, &entry_value)?;
+        return Ok(BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        });
+    }
     match cg.plain_callee_param_ownership(callee, arg_index) {
         Some(Some(OwnershipModifier::Give)) => {
             return Ok(cg.free_kind_of_a_given_argument(kind, ty));

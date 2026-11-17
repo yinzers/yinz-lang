@@ -378,7 +378,7 @@ balanced_program!(
 
 // ── plain-path leaks the sweep does not list ────────────────────────────────────────────────
 
-balanced_fixture!(
+green_fixture!(
     plain_mapentry_loop_variable_spawn_escape,
     "m5_p3_sweep_mapentry_bg_escape.ynz",
     "plain producer: a `MapEntry` loop variable passed to `background` gets a deep copy the spawn drop ladder never frees (8 allocations, 7 frees)"

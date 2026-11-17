@@ -400,7 +400,6 @@ A plain (non-suspending) function releases its heap locals at every exit edge of
 - *`is` on a non-shape variant* (`is string =>`) does not parse or resolve (`check_is_arm_pattern` names shape variants only), so a heap-variant union is held, passed, returned, stored and released but its payload cannot be read back yet (#418).
 - *A generic temporary that an instance makes a `maybe`, a union or a channel* (`value.copy()` in a body whose `T` is such a type, no binding holding it) is not released: the temporary's instance release covers a string, array, map or shape `T` only (`Cg::open_temporaries`), so it leaks and is never freed twice. A generic `give` parameter or local of any `T` is released per instance (`Release(TypeParameter)`).
 - *Heap-variant unions as container elements or map values* (`array<string | array<int>>`) cannot be written: a union type does not parse inside a type argument.
-- *A decimal key and a decimal value sub-cell of a spawned `MapEntry` leak* (the accounted persist-cell class of FRAGO 011; the key half is now copied, `value_to_stable_bits`). TRIGGER: the drop story for spawn arguments.
 
 Pinned by `v03_m9_release_safety` (ASan, both optimization levels, counters) and `v03_m9_c7_*`.
 
