@@ -420,3 +420,25 @@ function entrypoint() -> nothing {
 ";
     assert_balanced("fixed_reassigned", source, "2\ndone\n");
 }
+
+/// Bug it catches: `let badge: Badge = makePirate().badge` takes the nested shape out of a
+/// temporary; the binding is a crossing local, released in the resume function after the `wait`.
+/// The take and the temporary's own release (or the local's region) both freed the nested cell
+/// (`free(): double free detected`, at both optimization levels).
+#[test]
+fn nested_shape_taken_out_of_a_temporary_into_a_crossing_local_is_released_once() {
+    let source = format!(
+        "{PIRATE}
+function makePirate() -> Pirate {{
+  return {{ badge: {{ label: `ab`.toUpperCase() }}, rank: 2 }}
+}}
+
+function entrypoint() -> nothing {{
+  let badge: Badge = makePirate().badge
+  wait sleep(1)
+  print(badge.label)
+}}
+"
+    );
+    assert_balanced("nested_take", &source, "AB\n");
+}

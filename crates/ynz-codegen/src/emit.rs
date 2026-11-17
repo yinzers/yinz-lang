@@ -3902,17 +3902,29 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_memcpy(owned, 1, src, 1, size)
             .map_err(|e| format!("shape_bytes_to_owned memcpy: {e}"))?;
         self.deepen_unless_moved(src, owned, shape_name)?;
-        // A nested shape a `let` took out of a temporary (`lower_taken_field`): its bytes and
-        // everything they own are the binding's now, so only the emptied cell goes.
+        self.free_taken_shape_cell(src, size)?;
+        Ok(owned)
+    }
+
+    /// A nested shape a `let` took out of a temporary (`lower_taken_field`): its bytes and
+    /// everything they own are the binding's now, so only the emptied cell `src` goes. Nothing
+    /// is emitted for any other source.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn free_taken_shape_cell(
+        &self,
+        src: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<(), String> {
         if self
             .taken_shape_cells
             .contains(&(src.as_value_ref() as usize))
         {
             self.builder
                 .build_call(self.rt.ynz_free, &[src.into(), size.into()], "")
-                .map_err(|err| format!("shape_bytes_to_owned free the taken cell: {err}"))?;
+                .map_err(|err| format!("free the taken shape cell: {err}"))?;
         }
-        Ok(owned)
+        Ok(())
     }
 
     /// Get-side ownership (v0.3-M5 P2 fix-loop): copy a `{i64 flag, i64 bits}`
@@ -6482,6 +6494,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_memcpy(dest, 1, src, 1, size)
             .map_err(|err| format!("embed slot memcpy {site}: {err}"))?;
         self.deepen_unless_moved(src, dest, shape_name)?;
+        self.free_taken_shape_cell(src, size)?;
         Ok(())
     }
 
@@ -18413,6 +18426,7 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
                     // The copy owns what it owns, as every shape binding does (`shape_bytes_to_owned`):
                     // a value read from another binding clones its boxes, a fresh one hands them over.
                     cg.deepen_unless_moved(src_ptr, dest_ptr, &shape_name)?;
+                    cg.free_taken_shape_cell(src_ptr, size_i64)?;
                     true
                 } else {
                     false
@@ -25738,7 +25752,7 @@ fn lower_field_access<'ctx>(
 /// pointer and no copy is made, as Rust moves a field out of a temporary and drops the rest.
 /// The field is nulled in the temporary, so its statement-end release (`release_fn` accepts a
 /// null string, array or map) skips it, and the value is marked moved so the store seam keeps it.
-/// A state-machine function releases no temporary (C8), so nothing there needs the null.
+/// A resume function releases its temporaries too (C8), so it nulls the field as a plain one does.
 ///
 /// O(1) time.
 fn lower_taken_field<'ctx>(
@@ -25753,27 +25767,24 @@ fn lower_taken_field<'ctx>(
             "internal: the taken field `{field_name}` is not a pointer value"
         ));
     }
-    if cg.sm_frame_ptr.is_none() {
-        if let Type::Shape { name } = cg.resolve_type(&field_ty) {
-            if !cg.typed.non_owned_reads.takes_nested_shape(&name) {
-                return Err(format!(
-                    "internal: the take of nested shape `{name}` nulls a cell its release does not \
-                     check for null"
-                ));
-            }
+    if let Type::Shape { name } = cg.resolve_type(&field_ty) {
+        if !cg.typed.non_owned_reads.takes_nested_shape(&name) {
+            return Err(format!(
+                "internal: the take of nested shape `{name}` nulls a cell its release does not \
+                 check for null"
+            ));
         }
-        cg.builder
-            .build_store(field_ptr, cg.ptr().const_null())
-            .map_err(|err| format!("null the taken field `{field_name}`: {err}"))?;
     }
+    cg.builder
+        .build_store(field_ptr, cg.ptr().const_null())
+        .map_err(|err| format!("null the taken field `{field_name}`: {err}"))?;
     if is_string_like(&cg.resolve_type(&field_ty)) {
         cg.owned_string_values.insert(taken.as_value_ref() as usize);
     } else {
         cg.moved_cell_values.insert(taken.as_value_ref() as usize);
         // A nested shape is a heap cell: the binding copies its bytes (strings and cells stay,
-        // nothing deepens) and frees the emptied cell (`shape_bytes_to_owned`). A state-machine
-        // function nulls nothing and releases no temporary, so it frees nothing either.
-        if cg.sm_frame_ptr.is_none() && matches!(cg.resolve_type(&field_ty), Type::Shape { .. }) {
+        // nothing deepens) and frees the emptied cell (`shape_bytes_to_owned`).
+        if matches!(cg.resolve_type(&field_ty), Type::Shape { .. }) {
             cg.taken_shape_cells.insert(taken.as_value_ref() as usize);
         }
     }
