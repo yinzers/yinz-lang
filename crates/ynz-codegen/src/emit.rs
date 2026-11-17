@@ -24100,6 +24100,11 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         && cg.plain_releases_type(&resolved)
     {
         release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
+    } else if let Some(form) = bg_maybe_original_release_form(cg, arg, sole_holder, &resolved) {
+        // A `maybe` the task got a copy of (a counted envelope cell, `MaybeCellClone`): the original
+        // is a binding the spawn consumed (released as its scope exit would, `Local`); nothing else
+        // releases it.
+        release_maybe_original(cg, val, &resolved, form)?;
     } else if matches!(
         sole_holder,
         Some(ynz_typeck::check::SoleHolder::FreshTemporary)
@@ -24112,6 +24117,52 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         release_owned_read(cg, val, &resolved, "bg_fresh_original")?;
     }
     Ok(copied)
+}
+
+/// The form in which the original of a `maybe` `background` argument is released once the task
+/// holds a copy of it, or `None` when this spawn does not own the original: a binding the spawn
+/// consumes is released as its scope exit would (`Local`). A fresh call result is not this spawn's:
+/// it is a statement-end temporary, which releases it (releasing it here frees it twice), and an
+/// argument the caller still holds is the caller's.
+///
+/// Time: O(1)  Space: O(1)
+fn bg_maybe_original_release_form(
+    cg: &Cg<'_, '_>,
+    arg: &ynz_ast::nodes::Expr,
+    sole_holder: Option<ynz_typeck::check::SoleHolder>,
+    resolved: &Type,
+) -> Option<ReleaseForm> {
+    if !matches!(resolved, Type::Maybe { .. }) {
+        return None;
+    }
+    match sole_holder {
+        Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
+            if matches!(arg, ynz_ast::nodes::Expr::Ident(..)) =>
+        {
+            Some(ReleaseForm::Local)
+        }
+        _ => None,
+    }
+}
+
+/// Release the original `maybe` envelope `value` of a `background` argument in `form`
+/// (`bg_maybe_original_release_form`), through the one per-type release function every scope exit
+/// and temporary uses.
+///
+/// O(n) time in the heap the value owns; O(1) space.
+fn release_maybe_original<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    value: BasicValueEnum<'ctx>,
+    ty: &Type,
+    form: ReleaseForm,
+) -> Result<(), String> {
+    let Some(glue) = cg.release_form_fn(ty, form)? else {
+        return Ok(());
+    };
+    cg.builder
+        .build_call(glue, &[value.into_pointer_value().into()], "")
+        .map_err(|err| format!("release the original of a background maybe: {err}"))?;
+    Ok(())
 }
 
 /// Give the 16-byte cell of a spawned `MapEntry` argument (`value_to_stable_bits`) its own copy of
@@ -31398,6 +31449,9 @@ fn release_glue_free_kind<'ctx>(
                 // frees the cell it allocated through the descriptor, not through the slot.
                 return Ok(match cg.free_kind_of_a_given_argument(kind, ty) {
                     BgArgFreeKind::HeapShape { byte_size } => {
+                        BgArgFreeKind::OwnedCell { byte_size }
+                    }
+                    BgArgFreeKind::HeapMaybeEnv { byte_size } => {
                         BgArgFreeKind::OwnedCell { byte_size }
                     }
                     other => other,

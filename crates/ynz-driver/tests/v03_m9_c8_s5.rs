@@ -694,3 +694,81 @@ function entrypoint() -> nothing {{
         }
     }
 }
+
+/// A program whose `launch` spawns `eat` with a `maybe<element>` parameter (`give` when `given`,
+/// suspending when `suspending`). `spawn` is the spawn statement over `found`, a binding of what
+/// `pick()` returned; `after_spawn` reads `found` again when the spawn must copy it.
+fn maybe_spawn_program(
+    element_type: &str,
+    element_value: &str,
+    suspending: bool,
+    given: bool,
+    spawn: &str,
+    after_spawn: &str,
+) -> String {
+    format!(
+        "shape Big {{
+  label: string
+  count: int
+}}
+
+function eat({give}held: maybe<{element_type}>) -> nothing {{
+  {pause}
+  print(held.exists())
+}}
+
+function pick() -> maybe<{element_type}> {{
+  let source: array<{element_type}> = [{element_value}]
+  return source.get(0)
+}}
+
+function launch() -> nothing {{
+  let found = pick()
+  {spawn}
+  {after_spawn}
+}}
+
+function entrypoint() -> nothing {{
+  launch()
+  wait sleep(300)
+}}
+",
+        give = if given { "give " } else { "" },
+        pause = if suspending { "wait sleep(1)" } else { "" },
+    )
+}
+
+/// Bug caught: pre-existing, a leak found by the C8 round-2 review: `prepare_bg_arg_for_ctx` released
+/// the consumed original of a `background` argument after its copy only for an array, a map and a
+/// shape, so a `maybe` handed to a task left its original unreleased (and a `maybe` of a shape
+/// given to a `give` parameter left the payload cell its copy minted). Tier Medium. One program per
+/// element kind and callee kind, for an argument the spawn consumes, one it gives to a `give`
+/// parameter, one the caller reads again (the task takes a copy), and a fresh call result.
+macro_rules! maybe_spawn_cases {
+    ($($name:ident: $element_type:literal, $element_value:literal, $suspending:literal, $given:literal, $spawn:literal, $after_spawn:literal, $expected:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = maybe_spawn_program(
+                    $element_type, $element_value, $suspending, $given, $spawn, $after_spawn,
+                );
+                assert_source_balanced(stringify!($name), &source, $expected);
+            }
+        )+
+    };
+}
+
+maybe_spawn_cases! {
+    a_consumed_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(found)", "", "true\n";
+    a_consumed_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, false, "background eat(found)", "", "true\n";
+    a_given_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, true, "background eat(found)", "", "true\n";
+    a_given_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, true, "background eat(found)", "", "true\n";
+    a_copied_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_copied_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_fresh_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
+    a_consumed_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "", "true\n";
+    a_consumed_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, false, "background eat(found)", "", "true\n";
+    a_copied_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_copied_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_fresh_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
+}
