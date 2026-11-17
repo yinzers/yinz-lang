@@ -112,7 +112,8 @@ pub const HANDLE_RET_KIND_EC_HEAP_PTR: i64 = 5;
 /// (`-> maybe<T> errors` needs no twin: its ok-word is already a heap cell the resume fn
 /// promotes at the return, `EC_WORD` reads it as-is.)
 pub const HANDLE_RET_KIND_VALUE_MAYBE: i64 = 6;
-/// `-> T` or `-> T errors` where `T` is an envelope union (C8): the return slot holds the ADDRESS of
+/// `-> T` or `-> T errors` where `T` is an envelope union (C8), or a plain `-> fixed<T, N>` (C1h, the
+/// list's cells being the region): the return slot holds the ADDRESS of
 /// the union's region inside the child's own frame (`{0, region}` / `{err, region}`), which is freed
 /// right after the completion is read. The spawn site therefore passes the runtime a MOVE glue
 /// (`void(slot, *err, *ok)`, `ynz_rt_spawn_handle`'s `result_move`) that moves the slot out into one

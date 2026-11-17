@@ -1431,7 +1431,10 @@ fn unsized_lengths_of_once_only_functions(
             continue;
         };
         for parameter in &function.params {
-            let AstType::Generic { name, args, span, .. } = &parameter.ty else {
+            let AstType::Generic {
+                name, args, span, ..
+            } = &parameter.ty
+            else {
                 continue;
             };
             if name != "fixed" {
@@ -1475,7 +1478,6 @@ fn unsized_lengths_of_once_only_functions(
 /// to it records none. (A suspending function cannot be handed a `fixed` argument anyway: the
 /// list would die across the suspension, which typeck refuses.)
 fn fixed_instances_of(
-
     calls: FixedCalls,
     sig_table: &SignatureTable,
     once_only: &HashSet<String>,
@@ -4354,7 +4356,7 @@ impl<'b> Checker<'b> {
             // `Type::Error` so later uses of the handle do not cascade.
             return Type::Error;
         };
-        let Some((suspends, ret, params)) = self
+        let Some((suspends, signature_ret, params)) = self
             .sig_table
             .fns
             .get(&callee_name)
@@ -4391,6 +4393,8 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
+        // The length typeck worked out for a `fixed` return written without one.
+        let ret = self.seeded_return_type(&callee_name, &signature_ret);
         let result = match &ret {
             Type::ErrorsCapable { inner } => inner.clone(),
             other => Box::new(other.clone()),

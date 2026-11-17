@@ -1537,7 +1537,8 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
 }
 
 #[test]
-fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_suggestion_compiles()
+{
     // WHY: a function that waits, or may run as a task of its own, is built once, so an unsized
     // `fixed` parameter has no length for it (before: an internal compiler error). Both reasons
     // render from the registry, and the suggestion (write the length) compiles.

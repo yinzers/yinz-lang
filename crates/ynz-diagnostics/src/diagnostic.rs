@@ -197,9 +197,7 @@ impl DiagnosticKind {
             DiagnosticKind::FixedReturnLengthsDiffer => "FixedReturnLengthsDiffer",
             DiagnosticKind::FixedReturnLengthUnknown => "FixedReturnLengthUnknown",
             DiagnosticKind::FixedFieldLengthMissing => "FixedFieldLengthMissing",
-            DiagnosticKind::FixedLengthMissingInTaskFunction => {
-                "FixedLengthMissingInTaskFunction"
-            }
+            DiagnosticKind::FixedLengthMissingInTaskFunction => "FixedLengthMissingInTaskFunction",
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "BackgroundUnionToGenericParameter"
             }

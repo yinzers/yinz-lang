@@ -18303,13 +18303,7 @@ fn lower_let_background_handle<'ctx>(
     };
     // Completion-extraction kind from the callee's declared return type (the ynz-abi
     // HANDLE_RET_KIND_* contract shared with ynz-runtime's HandleStateFnFuture).
-    let sig_ret = cg
-        .sig_table
-        .fns
-        .get(&callee_name)
-        .map(|s| s.ret.clone())
-        .or_else(|| cg.imported_fns.get(&callee_name).map(|s| s.ret.clone()))
-        .ok_or_else(|| format!("handle spawn: signature for `{callee_name}` not found"))?;
+    let sig_ret = cg.callee_result_type(&callee_name)?;
     // Heap-pointer words (`array<T>` / `map<K, V>`) get their own kinds so the runtime can
     // release a returned pointer from the child's spawn-arg drop ladder — a child that
     // returns one of its own heap-cloned arguments hands ownership to the parent, and the
@@ -18330,6 +18324,9 @@ fn lower_let_background_handle<'ctx>(
     let ret_kind = match &sig_ret {
         // A union rides a cell the spawn wrapper moves it into (`handle_union_move_fn`).
         ret if cg.handle_union_variants(ret).is_some() => ynz_abi::HANDLE_RET_KIND_UNION,
+        // A `fixed` list rides the same moved cell: its cells live in the task's frame, which dies
+        // right after the completion is read.
+        ret if cg.handle_fixed_result(ret).is_some() => ynz_abi::HANDLE_RET_KIND_UNION,
         Type::ErrorsCapable { inner } => match inner.as_ref() {
             Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_EC_NUMBER,
             t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_EC_HEAP_PTR,
@@ -19067,6 +19064,68 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                     return Ok(standard.into());
                 }
             }
+            // A `fixed` result arrives as the cell the spawn wrapper moved it into: copy the cells
+            // (and with them the items they point at) into a block of this frame the binding owns,
+            // then free the cell's shell. The standard pair's ok word is the block's address.
+            let mut received_ok = ok_phi.as_basic_value().into_int_value();
+            if let Type::BackgroundHandle { result, .. } = cg.expr_type(receiver) {
+                if let Some((elem, count)) = cg.handle_fixed_result(&result) {
+                    let cell_bits = received_ok;
+                    let bytes = count as u64 * cg.fixed_cell_bytes(&elem);
+                    let block = cg.alloca_in_entry_llvm(
+                        cg.fixed_block_type(&elem, count as u32),
+                        "hrecv_fixed_block",
+                    )?;
+                    let copy_bb = ctx.append_basic_block(cg.current_fn, "hrecv_fixed_copy");
+                    let after_bb = ctx.append_basic_block(cg.current_fn, "hrecv_fixed_done");
+                    let before_bb = cg
+                        .builder
+                        .get_insert_block()
+                        .ok_or("hrecv fixed: no insert block")?;
+                    let has_cell = cg
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            cell_bits,
+                            i64t.const_zero(),
+                            "hrecv_fixed_has_cell",
+                        )
+                        .map_err(|e| format!("hrecv fixed cell cmp: {e}"))?;
+                    cg.builder
+                        .build_conditional_branch(has_cell, copy_bb, after_bb)
+                        .map_err(|e| format!("hrecv fixed cell branch: {e}"))?;
+                    cg.builder.position_at_end(copy_bb);
+                    let cell = cg
+                        .builder
+                        .build_int_to_ptr(cell_bits, cg.ptr(), "hrecv_fixed_cell")
+                        .map_err(|e| format!("hrecv fixed cell ptr: {e}"))?;
+                    cg.builder
+                        .build_memcpy(block, 8, cell, 8, i64t.const_int(bytes, false))
+                        .map_err(|e| format!("hrecv fixed copy: {e}"))?;
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_free,
+                            &[cell.into(), i64t.const_int(bytes, false).into()],
+                            "",
+                        )
+                        .map_err(|e| format!("hrecv fixed cell free: {e}"))?;
+                    let block_bits = cg
+                        .builder
+                        .build_ptr_to_int(block, i64t, "hrecv_fixed_block_bits")
+                        .map_err(|e| format!("hrecv fixed block bits: {e}"))?;
+                    cg.builder
+                        .build_unconditional_branch(after_bb)
+                        .map_err(|e| format!("hrecv fixed join: {e}"))?;
+                    cg.builder.position_at_end(after_bb);
+                    let ok_after = cg
+                        .builder
+                        .build_phi(i64t, "hrecv_fixed_ok")
+                        .map_err(|e| format!("hrecv fixed ok phi: {e}"))?;
+                    ok_after
+                        .add_incoming(&[(&block_bits, copy_bb), (&i64t.const_zero(), before_bb)]);
+                    received_ok = ok_after.as_basic_value().into_int_value();
+                }
+            }
             let st = ctx.struct_type(&[i64t.into(), i64t.into()], false);
             let mut r = st.const_zero();
             r = cg
@@ -19081,12 +19140,7 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                 .into_struct_value();
             r = cg
                 .builder
-                .build_insert_value(
-                    r,
-                    ok_phi.as_basic_value().into_int_value(),
-                    1,
-                    "hrecv_ec_ok",
-                )
+                .build_insert_value(r, received_ok, 1, "hrecv_ec_ok")
                 .map_err(|e| format!("conduit hrecv ok insert: {e}"))?
                 .into_struct_value();
             Ok(r.into())
@@ -25628,13 +25682,7 @@ fn lower_sm_background_spawn<'ctx>(
                 .const_null()
                 .into(),
         };
-        let callee_return = cg
-            .sig_table
-            .fns
-            .get(callee_name)
-            .map(|sig| sig.ret.clone())
-            .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()))
-            .ok_or_else(|| format!("handle spawn: signature for `{callee_name}` not found"))?;
+        let callee_return = cg.callee_result_type(callee_name)?;
         let result_release_val: inkwell::values::BasicMetadataValueEnum =
             match cg.handle_result_release_fn(&callee_return)? {
                 Some(glue) => glue.as_global_value().as_pointer_value().into(),
@@ -29635,7 +29683,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let view_form = self.envelope_union_variants(&inner_resolved).is_some()
             || matches!(&inner_resolved, Type::Maybe { inner: maybe_inner }
                 if self.envelope_union_variants(&self.resolve_type(maybe_inner)).is_some());
-        let payload_release = if view_form {
+        // A `fixed` payload's ok word is the address of the list's cells (a block of the frame that
+        // received it): release the items in place, through the pointer.
+        let payload_release = if self.is_stored_fixed_field(&inner_resolved) {
+            self.release_fn(&inner_resolved, false)?
+                .map(|glue| (glue.as_global_value().as_pointer_value(), false))
+        } else if view_form {
             self.release_form_fn(&inner_resolved, ReleaseForm::Local)?
                 .map(|glue| (glue.as_global_value().as_pointer_value(), false))
         } else {
@@ -30761,7 +30814,120 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.ec_success_union(&success)
     }
 
+    /// The type a call of the function `callee` returns, as its callers read it: the length typeck
+    /// worked out for a `fixed` return written without one, else the signature's (an imported
+    /// function writes its length: `FixedLengthMissingInExport`). O(1).
+    fn callee_result_type(&self, callee: &str) -> Result<Type, String> {
+        if let Some(worked_out) = self.typed.inferred_return_types.get(callee) {
+            return Ok(worked_out.clone());
+        }
+        self.sig_table
+            .fns
+            .get(callee)
+            .map(|signature| signature.ret.clone())
+            .or_else(|| {
+                self.imported_fns
+                    .get(callee)
+                    .map(|signature| signature.ret.clone())
+            })
+            .ok_or_else(|| format!("handle spawn: signature for `{callee}` not found"))
+    }
+
+    /// The element type and length of a background task's result when it is a plain `fixed` list
+    /// of known length, `None` for any other result. Such a result rides the moved cell a union
+    /// result rides (`HANDLE_RET_KIND_UNION`). O(1).
+    fn handle_fixed_result(&self, ret: &Type) -> Option<(Type, usize)> {
+        match self.resolve_type(ret) {
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } => Some((self.resolve_type(&elem), count)),
+            _ => None,
+        }
+    }
+
+    /// The bytes of the cell a background task's union or `fixed` result is moved into. O(v).
+    fn handle_cell_bytes(&self, ret: &Type) -> Result<u64, String> {
+        if let Some((elem, count)) = self.handle_fixed_result(ret) {
+            return Ok(count as u64 * self.fixed_cell_bytes(&elem));
+        }
+        let (variants, _) = self.handle_union_variants(ret).ok_or(
+            "internal: a handle cell for a result that is neither a union nor a fixed list",
+        )?;
+        Ok(self.union_layout(&variants)?.slot_size)
+    }
+
+    /// `handle_result_release_fn` for a `fixed` result nobody received: the completion's `ok` is the
+    /// cell the result was moved into; release the items its cells point at (a string, or a
+    /// shape's heap cell), then free the cell. Time: O(1) to emit  Space: O(1)
+    fn handle_fixed_release_fn(&self, ret: &Type) -> Result<FunctionValue<'ctx>, String> {
+        let resolved = self.resolve_type(ret);
+        let bytes = self.handle_cell_bytes(&resolved)?;
+        let name = format!("ynz_handle_result_release_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx
+                .void_type()
+                .fn_type(&[self.i64().into(), self.i64().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let items = self.release_fn(&resolved, false)?;
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        let release_bb = self.ctx.append_basic_block(release, "release");
+        let done_bb = self.ctx.append_basic_block(release, "done");
+        self.builder.position_at_end(entry);
+        let ok_bits = release
+            .get_nth_param(1)
+            .ok_or("handle fixed release: missing ok")?
+            .into_int_value();
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                ok_bits,
+                self.i64().const_zero(),
+                "completion_present",
+            )
+            .map_err(|err| format!("handle fixed release cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, release_bb, done_bb)
+            .map_err(|err| format!("handle fixed release branch: {err}"))?;
+        self.builder.position_at_end(release_bb);
+        let cell = self
+            .builder
+            .build_int_to_ptr(ok_bits, self.ptr(), "completion_cell")
+            .map_err(|err| format!("handle fixed release cell: {err}"))?;
+        if let Some(glue) = items {
+            self.builder
+                .build_call(glue, &[cell.into()], "")
+                .map_err(|err| format!("handle fixed release items: {err}"))?;
+        }
+        self.builder
+            .build_call(
+                self.rt.ynz_free,
+                &[cell.into(), self.i64().const_int(bytes, false).into()],
+                "",
+            )
+            .map_err(|err| format!("handle fixed release free: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("handle fixed release join: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("handle fixed release return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(release)
+    }
+
     /// The function `void(ptr slot, ptr err_out, ptr ok_out)` that moves a union result out of the
+
     /// finished child's return slot into one cell of its own (`HANDLE_RET_KIND_UNION`): the
     /// slot holds the address of the union's region in the child's frame, which dies right after
     /// the completion is read. The cell is the completion's `ok`; a failed task has none (0). It is
@@ -30772,10 +30938,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// One function per result type. Time: O(1) to emit; O(slot size) at run time  Space: O(1)
     fn handle_union_move_fn(&self, ret: &Type) -> Result<FunctionValue<'ctx>, String> {
         let resolved = self.resolve_type(ret);
-        let (variants, _) = self
-            .handle_union_variants(&resolved)
-            .ok_or("internal: a union handle move for a result that is not a union")?;
-        let slot_size = self.union_layout(&variants)?.slot_size;
+        let slot_size = self.handle_cell_bytes(&resolved)?;
         let name = format!("ynz_handle_move_{}", mangle_type(&resolved));
         if let Some(existing) = self.module.get_function(&name) {
             return Ok(existing);
@@ -30981,6 +31144,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let resolved = self.resolve_type(ret);
         if self.handle_union_variants(&resolved).is_some() {
             return self.handle_union_release_fn(&resolved);
+        }
+        if self.handle_fixed_result(&resolved).is_some() {
+            return Ok(Some(self.handle_fixed_release_fn(&resolved)?));
         }
         let plain_word = |ty: &Type| {
             matches!(
