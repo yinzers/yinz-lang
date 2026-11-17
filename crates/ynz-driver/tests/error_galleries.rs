@@ -691,17 +691,17 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
     // union reaching a slot that expects one of its variants (return, argument, annotated
     // `let`, shape field), a union match that leaves a non-shape variant unhandled, and (C1g) an
     // argument of another type than its type parameter was made to stand for, (C1e) a hidden
-    // field whose default is not its declared type, and (C5a) a store that hands a value over
-    // and a later read of it. One trigger each; the count plus a key phrase per class keeps one
-    // from regressing into a
-    // generic message.
+    // field whose default is not its declared type, (C5a) a store that hands a value over and a
+    // later read of it, and (C6) a map key no slot holds (three forms) and a union given to a
+    // generic task parameter. One trigger each; the count plus a key phrase per class keeps one
+    // from regressing into a generic message.
     let (stderr, code) = compile_gallery(&gallery("v0_3_m9_errors.ynz"));
     assert_ne!(code, 0, "v0_3_m9 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert_eq!(
-        error_count, 8,
-        "v0_3_m9 gallery must produce exactly 8 errors, one per trigger; got \
+        error_count, 12,
+        "v0_3_m9 gallery must produce exactly 12 errors, one per trigger; got \
          {error_count}.\nstderr:\n{stderr}"
     );
 
@@ -727,6 +727,19 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
         (
             "store that hands a value over (C5a)",
             "`moved` was stored in `box` and cannot be used here",
+        ),
+        ("shape map key (C6)", "A `map` cannot be keyed by `Plain`"),
+        (
+            "wide number map key (C6)",
+            "A `map` cannot be keyed by `number<50>`",
+        ),
+        (
+            "sensitive string map key (C7)",
+            "A `map` cannot be keyed by `sensitive string`",
+        ),
+        (
+            "union given to a generic task parameter (C6)",
+            "Cannot give the union `Plain | Special` to `eat`'s generic parameter `held`",
         ),
     ] {
         assert!(

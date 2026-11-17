@@ -1,4 +1,4 @@
-// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C1e hidden defaults, C5a store hands over)
+// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C1e hidden defaults, C5a store hands over, C6 map keys and a union given to a generic task)
 //
 // Every block below intentionally triggers a diagnostic added or extended in v0.3-M9.
 // Run `ynz build v0_3_m9_errors.ynz` to see all diagnostics.
@@ -50,6 +50,10 @@ function sameKind<T>(share first: T, share second: T) -> T {
   return second
 }
 
+function eat<T>(held: T) -> nothing {
+  print(`ate`)
+}
+
 function entrypoint() -> nothing {
   let special: Special = { label: `cheesesteak` }
   let order: Order = special.copy()
@@ -84,4 +88,25 @@ function entrypoint() -> nothing {
   let box: array<array<int>> = []
   box.add(moved)
   print(moved.count().toString())
+
+  // WHY: MapKeyNotStorable (shape) — a map keeps each key in one slot of 8 or 16 bytes, and a
+  // shape holds several fields, so an equal `Plain` would be looked up at another address and
+  // miss. Key the map by a field and keep the shape as the value.
+  let byPlain: map<Plain, int> = {}
+  print(byPlain.count().toString())
+
+  // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — it is kept outside the 16-byte
+  // slot, so only its address would be the key.
+  let byPrice: map<number<50>, int> = {}
+  print(byPrice.count().toString())
+
+  // WHY: MapKeyNotStorable (`sensitive string`) — a map would free the secret as an ordinary
+  // string and compare keys in a way whose timing leaks. Keep the secret as the value.
+  let bySecret: map<sensitive string, int> = {}
+  print(bySecret.count().toString())
+
+  // WHY: BackgroundUnionToGenericParameter — a task copies a union argument into a slot of its
+  // own, which only exists when the callee declares the union type; `eat`'s `held` is a bare `T`.
+  let given: Order = special.copy()
+  background eat(given)
 }
