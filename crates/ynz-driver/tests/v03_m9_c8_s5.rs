@@ -784,7 +784,8 @@ maybe_spawn_cases! {
 /// for the task, and the ladder's flat free (kept for every position of such a callee) freed nothing
 /// of a string, so the task's copy leaked (10 bytes). Tier Medium. One program per ownership: the
 /// spawner never reads the string again, reads it after the spawn (still its own, copied once), and
-/// the callee suspends.
+/// the callee suspends. Only the two suspending programs fail without the fix; the plain-callee ones
+/// pin the path that already released the copy.
 macro_rules! borrowed_string_cases {
     ($($name:ident: $suspending:literal, $after_spawn:literal, $expected:literal;)+) => {
         $(
