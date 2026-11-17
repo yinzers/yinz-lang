@@ -8711,7 +8711,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             inner: Box::new(inner),
         }
     } else {
-        ast_type_to_typeck_type(&f.return_type, shape_table)
+        declared_return_type(typed, shape_table, f)
     };
 
     // frame_ptr_for_resume is not available until Part 2 — we'll thread it through
@@ -9463,7 +9463,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Read the typed return value from the return slot at offset 16.
     // The resume function stored the typed value there (instead of the old i32-truncation
     // into frame[0] which was the i32-truncation defect fixed in Phase 7).
-    let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+    let ret_ty = declared_return_type(typed, shape_table, f);
     let is_errors_capable = f.errors_capable;
 
     // Free the frame before constructing the return value — the frame slots were already
@@ -9754,6 +9754,40 @@ fn lower_function_with_waits<'ctx, 'g>(
                 builder
                     .build_return(Some(&slot_value))
                     .map_err(|err| format!("wrapper union ret: {err}"))?;
+            }
+            // C1h (#433): a `fixed` list of known length: the resume fn copied its cells into the
+            // frame's `Return` region and put the region's address in the return slot. Load the
+            // cells BY VALUE (per `abi_return_type`) before the frame is freed.
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } => {
+                let cells_ty = ctx.i64_type().array_type(fixed_cell_words(elem, *count));
+                let region_bits = state_machine::load_return_value_i64(
+                    ctx,
+                    &builder,
+                    frame_ptr,
+                    "ret_fixed_bits",
+                )?;
+                let region = builder
+                    .build_int_to_ptr(
+                        region_bits,
+                        ctx.ptr_type(AddressSpace::default()),
+                        "ret_fixed_region",
+                    )
+                    .map_err(|err| format!("wrapper fixed region cast: {err}"))?;
+                let cells = builder
+                    .build_load(cells_ty, region, "ret_fixed_cells")
+                    .map_err(|err| format!("wrapper fixed load: {err}"))?;
+                cells
+                    .as_instruction_value()
+                    .ok_or("wrapper fixed load: no instruction value")?
+                    .set_alignment(8)
+                    .map_err(|err| format!("wrapper fixed load alignment: {err}"))?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder
+                    .build_return(Some(&cells))
+                    .map_err(|err| format!("wrapper fixed ret: {err}"))?;
             }
             // A `maybe` of an envelope union: the slot rides the `Return` region like a union's.
             Type::Maybe { inner } if ynz_typeck::check::is_envelope_union(inner) => {
@@ -13280,6 +13314,33 @@ fn load_sm_return_value_typed<'ctx>(
             let view = cg.union_slot_to_value_as(slot, &variants, true, tag)?;
             Ok(cg.maybe_pair_over_view(view, tag)?.into())
         }
+        // C1h (#433): a callee returning a `fixed` of known length wrote its cells into the callee
+        // frame's `Return` region and put the region's address in the return slot. Copy the cells
+        // into a CALLER-owned list now (a heap-boxed child frame is freed right after this read);
+        // the list's address is the value.
+        Some(Type::BuiltinFixed {
+            ref elem,
+            size: FixedLength::Known(count),
+        }) => {
+            let cells_ty = cg.i64().array_type(fixed_cell_words(elem, count));
+            let region_bits =
+                state_machine::load_return_value_i64(ctx, &cg.builder, frame_ptr, tag)?;
+            let region = cg
+                .builder
+                .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_fixed_region"))
+                .map_err(|err| format!("sm fixed region cast: {err}"))?;
+            let list = cg.alloca_in_entry_llvm(cells_ty, &format!("{tag}_fixed"))?;
+            cg.builder
+                .build_memcpy(
+                    list,
+                    8,
+                    region,
+                    8,
+                    cg.i64().const_int(fixed_region_bytes(elem, count), false),
+                )
+                .map_err(|err| format!("sm fixed list copy: {err}"))?;
+            Ok(list.into())
+        }
         Some(Type::Maybe { .. }) => {
             // v0.3-M7 R9: a maybe-returning callee's resume fn stores the envelope's
             // (flag, bits) VALUE pair in the return slot (+0/+8, the errors pair
@@ -13329,7 +13390,7 @@ fn sm_callee_return_type(cg: &Cg<'_, '_>, callee_name: &str) -> Option<Type> {
         .find_map(|item| {
             if let ynz_ast::nodes::Item::Function(f) = item {
                 if f.name == callee_name {
-                    return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
+                    return Some(declared_return_type(cg.typed, cg.shape_table, f));
                 }
             }
             None
@@ -21345,6 +21406,44 @@ fn lower_stmt_return<'ctx>(
                                 frame_ptr,
                                 flag,
                                 stable_bits,
+                            )?;
+                        }
+                        // C1h (#433): a `fixed` list of known length is copied, cells and all, into
+                        // the `Return` region this function's frame reserves for it; the return slot
+                        // carries the region's address. The wrapper, or the state machine that
+                        // called this one, copies the cells out before the frame is freed. The
+                        // list's items move with it (the release at this edge skips the returned
+                        // list), so the caller owns each item.
+                        Type::BuiltinFixed {
+                            ref elem,
+                            size: FixedLength::Known(count),
+                        } => {
+                            let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
+                            let region = state_machine::frame_region_ptr(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_offset,
+                                "sm_fixed_ret_region",
+                            )?;
+                            cg.builder
+                                .build_memcpy(
+                                    region,
+                                    8,
+                                    val.into_pointer_value(),
+                                    8,
+                                    cg.i64().const_int(fixed_region_bytes(elem, *count), false),
+                                )
+                                .map_err(|err| format!("sm fixed ret copy: {err}"))?;
+                            let region_bits = cg
+                                .builder
+                                .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_fixed_ret_bits")
+                                .map_err(|err| format!("sm fixed ret ptr_to_int: {err}"))?;
+                            state_machine::store_return_value_i64(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_bits,
                             )?;
                         }
                         // C1f (#423): an envelope union is written, payload inline, into the union
@@ -36217,6 +36316,18 @@ pub fn union_region_roles(
         };
         if let Some(size) = return_slot_size(&ast_type_to_typeck_type(returned, shape_table))? {
             function_roles.push((UnionRegionRole::Return, size));
+        }
+        // C1h (#433): a returned `fixed` list of known length rides the `Return` region as well
+        // (the cells, then the slack the region's 8-byte alignment needs).
+        if let Some(Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        }) = typed.inferred_return_types.get(&function.name)
+        {
+            function_roles.push((
+                UnionRegionRole::Return,
+                fixed_region_bytes(elem, *count) + state_machine::FRAME_SHAPE_REGION_SLACK_BYTES,
+            ));
         }
         for (index, param) in function.params.iter().enumerate() {
             if let Some(size) = slot_size(&ast_type_to_typeck_type(&param.ty, shape_table))? {

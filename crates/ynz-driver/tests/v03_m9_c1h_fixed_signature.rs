@@ -65,3 +65,23 @@ fn a_fixed_of_shapes_returned_by_a_function_is_released() {
 fn a_fixed_of_shapes_given_to_a_function_is_released() {
     assert_fixture_balanced("v0_3_m9_c8_s4b_unsized_fixed_shape_param.ynz", "1\n");
 }
+
+// Bug: a SUSPENDING function's returned `fixed<int>` read count 0 and `none` for every item (the
+// state-machine path returned a pointer into the resume function's dead stack frame; High: data
+// integrity of a value that leaves its function).
+#[test]
+fn a_fixed_a_suspending_function_returns_keeps_its_count_and_items() {
+    at_both_optimization_levels(|no_optimize| {
+        assert_asan_clean_and_prints(
+            "v0_3_m9_c1h_fixed_return_suspending.ynz",
+            no_optimize,
+            "3\n10\n30\n",
+        );
+    });
+}
+
+// Bug: the same for a `fixed<Part>` of heap-owning shapes: wrong count, and the items leaked.
+#[test]
+fn a_fixed_of_shapes_a_suspending_function_returns_is_read_and_released() {
+    assert_fixture_balanced("v0_3_m9_c1h_fixed_shape_return_suspending.ynz", "2\nA\nbb\n");
+}

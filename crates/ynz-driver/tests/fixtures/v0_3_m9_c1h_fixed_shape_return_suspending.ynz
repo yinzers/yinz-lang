@@ -1,0 +1,26 @@
+// v0.3-M9 C1h: a SUSPENDING function returns a `fixed<Part>` of shapes that own a string; the
+// caller reads the count and the names and the list releases its items at scope exit.
+// Before: count 0, the items leaked.
+// Expected output: the count, then both names.
+
+shape Part {
+  name: string
+}
+
+function makeParts() -> fixed<Part> {
+  wait sleep(1)
+  let first: Part = { name: `a`.toUpperCase() }
+  let second: Part = { name: `bb` }
+  let parts: fixed<Part> = [first, second]
+  return parts
+}
+
+function entrypoint() -> nothing {
+  let parts = makeParts()
+  let nobody: Part = { name: `none` }
+  let firstPart: Part = parts[0].or(nobody)
+  let secondPart: Part = parts[1].or(nobody)
+  print(parts.count())
+  print(firstPart.name)
+  print(secondPart.name)
+}

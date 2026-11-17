@@ -43,24 +43,7 @@ const CONCURRENCY_KEYWORDS: [&str; 5] = ["background", "wait", "channel", "error
 
 /// The `plain`-class fixtures that leak today, each with the producer that is not fixed. The entry
 /// leaves the list in the change that fixes it.
-const KNOWN_PLAIN_LEAKS: [(&str, &str); 4] = [
-    (
-        "v0_3_m9_c8_s4b_unsized_fixed_string_return.ynz",
-        "the unsized `fixed` signature bug: a `fixed<string>` a function returns has no size, so its items are not released (`OmitReason::UnsizedFixed`)",
-    ),
-    (
-        "v0_3_m9_c8_s4b_unsized_fixed_string_param.ynz",
-        "the unsized `fixed` signature bug: a `fixed<string>` `give` parameter has no size, so its items are not released (`OmitReason::UnsizedFixed`)",
-    ),
-    (
-        "v0_3_m9_c8_s4b_unsized_fixed_shape_return.ynz",
-        "the unsized `fixed` signature bug: a `fixed<Part>` a function returns has no size, so its items are not released (`OmitReason::UnsizedFixed`)",
-    ),
-    (
-        "v0_3_m9_c8_s4b_unsized_fixed_shape_param.ynz",
-        "the unsized `fixed` signature bug: a `fixed<Part>` `give` parameter has no size, so its items are not released (`OmitReason::UnsizedFixed`)",
-    ),
-];
+const KNOWN_PLAIN_LEAKS: [(&str, &str); 0] = [];
 
 struct Outcome {
     class: &'static str,

@@ -1,0 +1,18 @@
+// v0.3-M9 C1h: a SUSPENDING function (it waits) returns a `fixed<int>`; the caller reads the count
+// and the items. The list comes back by value through the suspension frame, not as a pointer
+// into the resume function's dead stack frame.
+// Before: the caller read count 0 and `none` for every item.
+// Expected output: the count, the first item and the last item.
+
+function makeInts() -> fixed<int> {
+  wait sleep(1)
+  let numbers: fixed<int> = [10, 20, 30]
+  return numbers
+}
+
+function entrypoint() -> nothing {
+  let numbers = makeInts()
+  print(numbers.count())
+  print(numbers[0].or(-1))
+  print(numbers[2].or(-1))
+}
