@@ -1453,6 +1453,26 @@ fn fixed_length_not_allowed_here_diag(
     registry_diag(span, DiagnosticKind::FixedLengthNotAllowedHere, &slots)
 }
 
+/// `FixedFieldLengthMissing`: a shape field written `fixed<T>` with no length. `written` is the
+/// field's type as written, `element` the element type.
+fn fixed_field_length_missing_diag(
+    span: SourceSpan,
+    shape: &str,
+    field: &str,
+    written: &str,
+    element: &str,
+) -> Diagnostic {
+    let suggested = format!("fixed<{element}, 4>");
+    let slots = [
+        ("shape", shape),
+        ("field", field),
+        ("written", written),
+        ("element", element),
+        ("suggested", suggested.as_str()),
+    ];
+    registry_diag(span, DiagnosticKind::FixedFieldLengthMissing, &slots)
+}
+
 /// `FixedLengthMismatch`: an argument or a `return` whose length is not the length the signature
 /// wrote. `what_is` is the whole first sentence, `alternative` the way out.
 fn fixed_length_mismatch_diag(
@@ -1846,7 +1866,7 @@ impl<'b> Checker<'b> {
                     let type_params: HashSet<String> =
                         s.generics.iter().map(|g| g.name.clone()).collect();
                     for field in &s.fields {
-                        self.report_lengths_in_shape_field(&field.ty);
+                        self.check_shape_field_type(&s.name, &field.name, &field.ty);
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
                         // A hidden field with a default had its type checked, map keys
                         // included, by `check_hidden_field_defaults` below.

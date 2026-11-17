@@ -1502,3 +1502,36 @@ fn fixed_return_length_unknown_is_rendered_from_the_registry() {
         ],
     );
 }
+
+#[test]
+fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    // WHY: a shape keeps a `fixed` list inside itself, so a field written `fixed<int>` has no size;
+    // the refusal's text must come from the registry, and both ways out (write the length, or hold
+    // the items in an `array`) must compile.
+    assert_rendered(
+        DiagnosticKind::FixedFieldLengthMissing,
+        "shape Bag {\n\
+           items: fixed<int>\n\
+         }\n\
+         function entrypoint() -> nothing { print(1) }",
+        &[
+            ("shape", "Bag"),
+            ("field", "items"),
+            ("written", "fixed<int>"),
+            ("element", "int"),
+            ("suggested", "fixed<int, 4>"),
+        ],
+    );
+    assert_compiles(
+        "shape Bag {\n\
+           items: fixed<int, 4>\n\
+         }\n\
+         function entrypoint() -> nothing { print(1) }",
+    );
+    assert_compiles(
+        "shape Bag {\n\
+           items: array<int>\n\
+         }\n\
+         function entrypoint() -> nothing { print(1) }",
+    );
+}

@@ -94,6 +94,9 @@ pub enum DiagnosticKind {
     /// A function whose returned list length cannot be worked out from its `return` statements.
     /// v0.3-M9 C1h.
     FixedReturnLengthUnknown,
+    /// A shape field written `fixed<T>` without a length: the shape holds the list inside itself,
+    /// so its size must be known. v0.3-M9 C1h.
+    FixedFieldLengthMissing,
     MapKeyNotStorable,
     /// A `background` call passes a union to a parameter the generic callee declares as a bare
     /// type parameter: the task has no slot to copy the union into. v0.3-M9 C6.
@@ -177,6 +180,7 @@ impl DiagnosticKind {
             DiagnosticKind::FixedLengthMissingInExport => "FixedLengthMissingInExport",
             DiagnosticKind::FixedReturnLengthsDiffer => "FixedReturnLengthsDiffer",
             DiagnosticKind::FixedReturnLengthUnknown => "FixedReturnLengthUnknown",
+            DiagnosticKind::FixedFieldLengthMissing => "FixedFieldLengthMissing",
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "BackgroundUnionToGenericParameter"
             }
@@ -223,6 +227,7 @@ impl DiagnosticKind {
         "FixedLengthMissingInExport",
         "FixedReturnLengthsDiffer",
         "FixedReturnLengthUnknown",
+        "FixedFieldLengthMissing",
         "BackgroundUnionToGenericParameter",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
@@ -272,6 +277,7 @@ impl DiagnosticKind {
             DiagnosticKind::FixedLengthMissingInExport => "write the length".to_string(),
             DiagnosticKind::FixedReturnLengthsDiffer => "different lengths".to_string(),
             DiagnosticKind::FixedReturnLengthUnknown => "length not known".to_string(),
+            DiagnosticKind::FixedFieldLengthMissing => "write the length".to_string(),
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "declare the union type".to_string()
             }

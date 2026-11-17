@@ -2781,13 +2781,13 @@ what_template = "`{written}` does not give a usable length: {problem}."
 what_instead_template = "{alternative}."
 why_template = "A `fixed` list is laid out when the program is compiled, so its length has to be a whole number written in the source, such as `4`, no larger than {limit}. A name, or a value worked out while the program runs, cannot be one."
 
-# `{written}` is the type as written, `{place}` says where (`on a local variable`, `on a shape
-# field`, `inside another type`, or `on `array`, which takes none`), `{alternative}` the way out.
+# `{written}` is the type as written, `{place}` says where (`on a local variable`, `inside another
+# type`, or `on `array`, which takes none`), `{alternative}` the way out.
 [[diagnostic_template]]
 kind_name = "FixedLengthNotAllowedHere"
 what_template = "`{written}` writes a length {place}."
 what_instead_template = "{alternative}."
-why_template = "Only the type of a function parameter or return value can write a length: the compiler checks every call and every `return` against it. Anywhere else the length of a `fixed` list comes from the list that is built, such as `[1, 2, 3]`, so a length written there would have nothing to check, and no other type takes one."
+why_template = "Only the whole type of a function parameter, a return value or a shape field can write a length: the compiler checks every call, every `return` and every list stored in a field against it. Anywhere else the length of a `fixed` list comes from the list that is built, such as `[1, 2, 3]`, so a length written there would have nothing to check, and no other type takes one."
 
 # `{what_is}` is the whole first sentence (an argument or a `return` with another length, or one
 # whose length the compiler cannot tell), `{alternative}` the way out, `{element}` and `{expected}`
@@ -2819,3 +2819,11 @@ kind_name = "FixedReturnLengthUnknown"
 what_template = "The number of items `{function}` returns cannot be worked out: {reason}."
 what_instead_template = "Write the length in the return type of `{function}`, such as `fixed<{element}, 4>`, and make every `return` give that many items."
 why_template = "A list comes back from a function by value, so its size has to be known when the program is compiled. The compiler reads it from the `return` statements; where it cannot, the signature has to say it."
+
+# `{shape}` the shape, `{field}` the field, `{written}` the field's type as written, `{element}` the
+# element type, `{suggested}` the same type with a length.
+[[diagnostic_template]]
+kind_name = "FixedFieldLengthMissing"
+what_template = "The field `{field}` of `{shape}` is written `{written}`, which does not say how many items it holds."
+what_instead_template = "Write the length in the field's type, as in `{field}: {suggested}`, using the number of items every `{shape}` holds. If that number changes from one `{shape}` to the next, hold the items in an `array<{element}>` field instead."
+why_template = "A shape keeps a `fixed` list inside its own bytes, so the size of the list is part of the size of the shape, and both have to be known when the program is compiled. A field written without a length has no size, so the compiler cannot lay the shape out or copy it."

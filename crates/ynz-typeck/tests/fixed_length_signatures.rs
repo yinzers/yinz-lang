@@ -84,3 +84,25 @@ fn functions_that_only_return_each_other_have_no_length_to_work_out() {
         .collect();
     assert_eq!(unknown.len(), 2, "{:#?}", errors(&output));
 }
+
+// Bug: the field rule let a length through anywhere inside a field's type (`maybe<fixed<int, 2>>`,
+// `array<fixed<int, 2>>`), where nothing stores the list by value, or refused the whole field type
+// that is allowed.
+#[test]
+fn a_length_is_allowed_on_the_whole_type_of_a_field_and_nowhere_deeper() {
+    let whole = check(
+        "shape Bag { items: fixed<int, 3> }\n\
+         function entrypoint() -> nothing { print(1) }",
+    );
+    assert!(errors(&whole).is_empty(), "{:#?}", errors(&whole));
+    for nested in ["maybe<fixed<int, 2>>", "array<fixed<int, 2>>"] {
+        let output = check(&format!(
+            "shape Bag {{ items: {nested} }}\nfunction entrypoint() -> nothing {{ print(1) }}"
+        ));
+        let refused: Vec<_> = errors(&output)
+            .into_iter()
+            .filter(|diagnostic| diagnostic.kind == Some(DiagnosticKind::FixedLengthNotAllowedHere))
+            .collect();
+        assert_eq!(refused.len(), 1, "{nested}: {:#?}", errors(&output));
+    }
+}

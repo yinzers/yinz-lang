@@ -13,13 +13,13 @@ use ynz_ast::nodes::{FunctionDecl, Type as AstType};
 use ynz_diagnostics::SourceSpan;
 
 use super::{
-    fixed_length_mismatch_diag, fixed_length_missing_in_export_diag,
+    fixed_field_length_missing_diag, fixed_length_mismatch_diag, fixed_length_missing_in_export_diag,
     fixed_length_not_allowed_here_diag, fixed_length_not_usable_diag,
     fixed_return_length_unknown_diag, fixed_return_lengths_differ_diag, render_ast_type, Checker,
 };
 use crate::fixed_length::{
-    apply_length_bindings, fixed_type, length_parameters, read_fixed_arguments, FixedCall,
-    WrittenLength, MAX_FIXED_LENGTH,
+    apply_length_bindings, fixed_type, length_parameters, read_fixed_arguments, FixedArguments,
+    FixedCall, WrittenLength, MAX_FIXED_LENGTH,
 };
 use crate::types::{type_name, FixedLength, Type};
 
@@ -81,6 +81,51 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// The problems with the arguments of a written `fixed<…>` that make it unusable anywhere: an
+    /// argument after the length, a length past the largest, a length that is not a whole number.
+    /// O(arguments).
+    pub(super) fn report_unusable_fixed_arguments(
+        &mut self,
+        written: &FixedArguments<'_>,
+        written_text: &str,
+        element_text: &str,
+        span: &SourceSpan,
+    ) {
+        for _surplus in &written.surplus {
+            self.diags.push(fixed_length_not_usable_diag(
+                span.clone(),
+                written_text,
+                "`fixed` takes an element type and a length, and no more",
+                &format!(
+                    "Write the element type and, if you want one, a length: `fixed<{element_text}, 4>`. To keep values of different types together, declare a shape with a named field for each"
+                ),
+            ));
+        }
+        match &written.length {
+            WrittenLength::Absent | WrittenLength::Number(_) => {}
+            WrittenLength::TooLarge { value, .. } => {
+                self.diags.push(fixed_length_not_usable_diag(
+                    span.clone(),
+                    written_text,
+                    &format!(
+                        "{value} is more than the {MAX_FIXED_LENGTH} items a `fixed` list can hold"
+                    ),
+                    &format!("Use an `array<{element_text}>`, which has no fixed length"),
+                ));
+            }
+            WrittenLength::NotANumber(argument) => {
+                self.diags.push(fixed_length_not_usable_diag(
+                    span.clone(),
+                    written_text,
+                    &format!("`{}` is not a whole number", render_ast_type(argument)),
+                    &format!(
+                        "Write a whole number, such as `fixed<{element_text}, 4>`, or leave the length out: `fixed<{element_text}>`. To keep values of different types together, declare a shape with a named field for each"
+                    ),
+                ));
+            }
+        }
+    }
+
     /// A written `fixed<…>`: the element, the length, and a diagnostic for every problem with
     /// either. `whole` is the type as written (for the messages); `at_signature_top` is true when
     /// it is the whole type of a parameter or return value. O(size of the arguments).
@@ -104,16 +149,7 @@ impl<'b> Checker<'b> {
             Some(element_ast) => render_ast_type(element_ast),
             None => "int".to_string(),
         };
-        for _surplus in &written.surplus {
-            self.diags.push(fixed_length_not_usable_diag(
-                span.clone(),
-                &written_text,
-                "`fixed` takes an element type and a length, and no more",
-                &format!(
-                    "Write the element type and, if you want one, a length: `fixed<{element_text}, 4>`. To keep values of different types together, declare a shape with a named field for each"
-                ),
-            ));
-        }
+        self.report_unusable_fixed_arguments(&written, &written_text, &element_text, span);
         match &written.length {
             WrittenLength::Absent => {}
             WrittenLength::Number(_) => {
@@ -136,26 +172,7 @@ impl<'b> Checker<'b> {
                     ));
                 }
             }
-            WrittenLength::TooLarge { value, .. } => {
-                self.diags.push(fixed_length_not_usable_diag(
-                    span.clone(),
-                    &written_text,
-                    &format!(
-                        "{value} is more than the {MAX_FIXED_LENGTH} items a `fixed` list can hold"
-                    ),
-                    &format!("Use an `array<{element_text}>`, which has no fixed length"),
-                ));
-            }
-            WrittenLength::NotANumber(argument) => {
-                self.diags.push(fixed_length_not_usable_diag(
-                    span.clone(),
-                    &written_text,
-                    &format!("`{}` is not a whole number", render_ast_type(argument)),
-                    &format!(
-                        "Write a whole number, such as `fixed<{element_text}, 4>`, or leave the length out: `fixed<{element_text}>`. To keep values of different types together, declare a shape with a named field for each"
-                    ),
-                ));
-            }
+            WrittenLength::TooLarge { .. } | WrittenLength::NotANumber(_) => {}
         }
         fixed_type(element, &written.length)
     }
@@ -191,10 +208,46 @@ impl<'b> Checker<'b> {
         ));
     }
 
-    /// A length written anywhere in the type of a shape field: refused (the length of a list in a
-    /// field comes from the list built for it, and `fixed<T, N>` is only for function parameter
-    /// and return types). Walks the whole written type. O(size of the type).
-    pub(super) fn report_lengths_in_shape_field(&mut self, ast_ty: &AstType) {
+    /// The type of the field `field` of `shape`: `fixed<T, N>` is allowed as the whole type (the
+    /// shape holds the list inside itself, so its length is part of the shape's size), and a
+    /// `fixed<T>` without a length cannot be laid out. A length written anywhere deeper in the type
+    /// is refused. O(size of the type).
+    pub(super) fn check_shape_field_type(&mut self, shape: &str, field: &str, ast_ty: &AstType) {
+        let AstType::Generic {
+            name, args, span, ..
+        } = ast_ty
+        else {
+            self.report_lengths_in_nested_field_type(ast_ty);
+            return;
+        };
+        if name != "fixed" {
+            self.report_lengths_in_nested_field_type(ast_ty);
+            return;
+        }
+        let written = read_fixed_arguments(args);
+        let written_text = render_ast_type(ast_ty);
+        let element_text = written
+            .element
+            .map(render_ast_type)
+            .unwrap_or_else(|| "int".to_string());
+        self.report_unusable_fixed_arguments(&written, &written_text, &element_text, span);
+        if written.length == WrittenLength::Absent {
+            self.diags.push(fixed_field_length_missing_diag(
+                span.clone(),
+                shape,
+                field,
+                &written_text,
+                &element_text,
+            ));
+        }
+        if let Some(element) = written.element {
+            self.report_lengths_in_nested_field_type(element);
+        }
+    }
+
+    /// A length written inside the type of a shape field, where none is allowed (everything but
+    /// the whole field type). Walks the whole written type. O(size of the type).
+    fn report_lengths_in_nested_field_type(&mut self, ast_ty: &AstType) {
         match ast_ty {
             AstType::Generic {
                 name, args, span, ..
@@ -208,29 +261,32 @@ impl<'b> Checker<'b> {
                         self.diags.push(fixed_length_not_allowed_here_diag(
                             span.clone(),
                             &render_ast_type(ast_ty),
-                            "on a shape field",
-                            &format!("Hold the items in an `array<{element_text}>` field instead"),
+                            "inside another type",
+                            &format!(
+                                "Write the length on the whole type of the field, or leave it out: `fixed<{element_text}>`"
+                            ),
                         ));
                     } else {
                         self.report_length_on_other_generic(ast_ty, name, args, span);
                     }
                 }
                 for argument in args {
-                    self.report_lengths_in_shape_field(argument);
+                    self.report_lengths_in_nested_field_type(argument);
                 }
             }
             AstType::Maybe { inner, .. } | AstType::ErrorCapable { inner, .. } => {
-                self.report_lengths_in_shape_field(inner);
+                self.report_lengths_in_nested_field_type(inner);
             }
-            AstType::Sensitive(inner) => self.report_lengths_in_shape_field(inner),
+            AstType::Sensitive(inner) => self.report_lengths_in_nested_field_type(inner),
             AstType::Union { variants, .. } => {
                 for variant in variants {
-                    self.report_lengths_in_shape_field(variant);
+                    self.report_lengths_in_nested_field_type(variant);
                 }
             }
             AstType::AnonShape { fields, .. } => {
+                let anonymous_shape = render_ast_type(ast_ty);
                 for field in fields {
-                    self.report_lengths_in_shape_field(&field.ty);
+                    self.check_shape_field_type(&anonymous_shape, &field.name, &field.ty);
                 }
             }
             _ => {}
