@@ -1114,6 +1114,23 @@ impl<'a> Parser<'a> {
                 Token::Comma => {
                     self.advance();
                 }
+                // `fixed<T, N>`: a whole number in the argument list is a length. Whether this
+                // generic may take one is typeck's call (`fixed` only), so every generic parses it.
+                Token::IntLit(length) if *length >= 0 => {
+                    let value = *length as u64;
+                    let span = self.current_span();
+                    self.advance();
+                    args.push(Type::Length { value, span });
+                    if !matches!(self.peek(), Token::Gt | Token::GtGt | Token::Comma) {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected `,` or `>` after the length in a generic type argument list.",
+                            "Close the list with `>`: `fixed<int, 4>`.",
+                            "Generic type arguments are comma-separated and the list ends with `>`.",
+                        ));
+                        break;
+                    }
+                }
                 _ => {
                     args.push(self.parse_type_with_depth(depth + 1));
                     if !matches!(self.peek(), Token::Gt | Token::GtGt | Token::Comma) {

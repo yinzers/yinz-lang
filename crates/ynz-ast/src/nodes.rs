@@ -769,6 +769,13 @@ pub enum Type {
         fields: Vec<FieldDecl>,
         span: SourceSpan,
     },
+
+    // ── v0.3-M9 C1h: `fixed<T, N>` in signatures ────────────────────────────
+
+    /// The length argument of `fixed<T, N>`: the whole number written in place of a type
+    /// argument (`4` in `fixed<int, 4>`). Only `fixed`'s second argument may be one; typeck
+    /// reports it anywhere else. Like Rust's `[T; N]`, the length is a compile-time constant.
+    Length { value: u64, span: SourceSpan },
 }
 
 // ── M4 shape declarations ────────────────────────────────────────────────────

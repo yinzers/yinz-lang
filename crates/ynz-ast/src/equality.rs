@@ -377,6 +377,10 @@ fn normalize_type(ty: Type) -> Type {
             fields: fields.into_iter().map(normalize_field_decl).collect(),
             span: zero_span(),
         },
+        Type::Length { value, .. } => Type::Length {
+            value,
+            span: zero_span(),
+        },
     }
 }
 

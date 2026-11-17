@@ -9118,6 +9118,9 @@ impl<'b> Checker<'b> {
                 ).with_kind(ynz_diagnostics::DiagnosticKind::NotDefined));
                 Type::Error
             }
+            // A length is only meaningful as the second argument of `fixed<T, N>`, which the
+            // `fixed` arm below reads; anywhere else it is not a type.
+            AstType::Length { .. } => Type::Error,
             AstType::Range { .. } => Type::Error,
             AstType::SelfType { span } => match &self.current_shape {
                 Some(name) => Type::Shape { name: name.clone() },
@@ -9356,6 +9359,7 @@ impl<'b> Checker<'b> {
             | AstType::Float
             | AstType::Number { .. }
             | AstType::Bool
+            | AstType::Length { .. }
             | AstType::Error
             | AstType::Range { .. }
             | AstType::SelfType { .. }
@@ -9392,6 +9396,7 @@ impl<'b> Checker<'b> {
             | AstType::Float
             | AstType::Number { .. }
             | AstType::Bool
+            | AstType::Length { .. }
             | AstType::Error
             | AstType::Range { .. }
             | AstType::SelfType { .. } => {}

@@ -343,6 +343,7 @@ fn ident_in_expr(expr: &Expr, offset: usize) -> Option<(String, SourceSpan)> {
 
 fn ident_in_ast_type(ty: &AstType, offset: usize) -> Option<(String, SourceSpan)> {
     match ty {
+        AstType::Length { .. } => None,
         AstType::Named(name, span) => {
             if span_contains(span, offset) {
                 Some((name.clone(), span.clone()))

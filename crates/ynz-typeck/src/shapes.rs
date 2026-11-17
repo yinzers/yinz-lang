@@ -146,6 +146,8 @@ impl ShapeTable {
             AstType::AnonShape { fields, .. } => Type::Shape {
                 name: canonical_anon_name(fields),
             },
+            // A length is only meaningful as the second argument of `fixed<T, N>`.
+            AstType::Length { .. } => Type::Error,
             // `dynamic Contract` resolves to Type::Dynamic carrying the contract name.
             // This is sufficient for the call-site coerce check in check.rs
             // (shape.follows.contains(contract)) and for the vtable global lookup
