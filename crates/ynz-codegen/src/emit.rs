@@ -36463,10 +36463,17 @@ pub fn union_region_roles(
         }
         // C1h (#433): a returned `fixed` list of known length rides the `Return` region as well
         // (the cells, then the slack the region's 8-byte alignment needs).
-        if let Some(Type::BuiltinFixed {
+        // The length is the one typeck worked out for a return type written without one, else the
+        // one the signature writes.
+        let returned_list = typed
+            .inferred_return_types
+            .get(&function.name)
+            .cloned()
+            .unwrap_or_else(|| ast_type_to_typeck_type(returned, shape_table));
+        if let Type::BuiltinFixed {
             elem,
             size: FixedLength::Known(count),
-        }) = typed.inferred_return_types.get(&function.name)
+        } = &returned_list
         {
             function_roles.push((
                 UnionRegionRole::Return,

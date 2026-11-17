@@ -1,0 +1,18 @@
+// v0.3-M9 C1h: a SUSPENDING function writes the length of the `fixed` list it returns
+// (`-> fixed<int, 2>`), and the caller reads the count and the items.
+// Before: the frame layout reserved the list's return region only for a return type written
+// WITHOUT a length, so this stopped the compiler ("the frame layout reserves no union region for
+// Return").
+// Expected output: the count, then the last item.
+
+function buildSized() -> fixed<int, 2> {
+  wait sleep(1)
+  let xs: fixed<int> = [5, 6]
+  return xs
+}
+
+function entrypoint() -> nothing {
+  let list = wait buildSized()
+  print(list.count())
+  print(list[1].or(-1))
+}

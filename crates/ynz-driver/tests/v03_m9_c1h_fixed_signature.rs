@@ -88,3 +88,17 @@ fn a_fixed_of_shapes_a_suspending_function_returns_is_read_and_released() {
         "2\nA\nbb\n",
     );
 }
+
+// Bug: a suspending function that WROTE the length of its returned `fixed` got no return region in
+// its frame (only an inferred length did), so the compiler stopped with an internal error (High:
+// data integrity of a value that leaves its function).
+#[test]
+fn a_fixed_a_suspending_function_returns_with_a_written_length_is_read() {
+    at_both_optimization_levels(|no_optimize| {
+        assert_asan_clean_and_prints(
+            "v0_3_m9_c1h_fixed_return_sized_suspending.ynz",
+            no_optimize,
+            "2\n6\n",
+        );
+    });
+}
