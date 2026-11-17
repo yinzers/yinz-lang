@@ -28259,10 +28259,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         slot: PointerValue<'ctx>,
     ) -> Result<Option<ReplacedValue<'ctx>>, String> {
         let name = assign.codegen_name.as_str();
-        // An errors-capable local is bound once (a read re-points its slot at the success value),
-        // so a reassignment leaves the old result to leak rather than release through that slot.
+        // An errors-capable local is released through its original slot (a read re-points its slot at
+        // the success value). A plain function releases the old result in `assign_errors_capable`;
+        // a resume function snapshots the old words here and releases them after the store, and the
+        // statement's flush carries the new words to the frame.
         if assign.kind == ynz_typeck::release_plan::ReleaseKind::ErrorsCapable {
-            return Ok(None);
+            if self.sm_frame_ptr.is_none() {
+                return Ok(None);
+            }
+            return self.begin_assign_release_errors_capable(assign);
         }
         if !self.releases_in_instance(assign.kind, &assign.held)
             || self.soa_bindings.contains_key(name)
@@ -28338,6 +28343,51 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             live,
             held,
             ty: resolved,
+            name: name.to_string(),
+        }))
+    }
+
+    /// `begin_assign_release` for an errors-capable local of a resume function: the old result's two
+    /// words, copied before the new result takes the binding's slot. `None` for a local with no original
+    /// slot (a binding the emitter does not release).
+    ///
+    /// O(1) time to emit; one 16-byte copy at run time.
+    fn begin_assign_release_errors_capable(
+        &self,
+        assign: &ynz_typeck::release_plan::AssignRelease,
+    ) -> Result<Option<ReplacedValue<'ctx>>, String> {
+        let name = assign.codegen_name.as_str();
+        let Some(original) = self.ec_original_slots.get(name).copied() else {
+            return Ok(None);
+        };
+        let result_ty = errors_result_type(self.ctx);
+        let old = self
+            .builder
+            .build_load(self.ptr(), original, &format!("{name}_old_result"))
+            .map_err(|err| format!("assign ec old load {name}: {err}"))?
+            .into_pointer_value();
+        let live = self
+            .builder
+            .build_is_not_null(old, &format!("{name}_old_result_live"))
+            .map_err(|err| format!("assign ec old null check {name}: {err}"))?;
+        let snapshot = self.alloca_in_entry_llvm(result_ty, &format!("{name}_old_result_words"))?;
+        let copy_bb = self.append_block(&format!("{name}_old_result_copy"));
+        let copied_bb = self.append_block(&format!("{name}_old_result_copied"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, copied_bb)
+            .map_err(|err| format!("assign ec snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        self.builder
+            .build_memcpy(snapshot, 8, old, 8, self.i64().const_int(16, false))
+            .map_err(|err| format!("assign ec snapshot copy {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(copied_bb)
+            .map_err(|err| format!("assign ec snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(copied_bb);
+        Ok(Some(ReplacedValue {
+            live,
+            held: snapshot,
+            ty: self.resolve_type(&assign.held),
             name: name.to_string(),
         }))
     }

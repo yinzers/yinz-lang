@@ -153,3 +153,121 @@ function entrypoint() -> nothing {{
     );
     assert_source_balanced("maybe_shape_return_crossing", &source, "true\nafter\n");
 }
+
+/// Callees every errors-path test below shares: a suspending `string errors` that succeeds or
+/// fails on request (`__testFallibleAsync` fails when given `true`).
+const FALLIBLE_CALLEES: &str = "
+function fetchName(fail: boolean) -> string errors {
+  let status = wait __testFallibleAsync(fail)
+  return `name${status}`
+}
+";
+
+#[test]
+fn an_auto_propagation_in_a_resume_function_releases_the_open_locals() {
+    for (fail, expected) in [("false", "ok\n"), ("true", "failed\n")] {
+        let source = format!(
+            "{FALLIBLE_CALLEES}
+function work(fail: boolean) -> int errors {{
+  let rows: array<int> = [1, 2]
+  let label = `ab`.toUpperCase()
+  wait sleep(1)
+  let name = fetchName(fail)
+  let shown = name.toUpperCase()
+  return rows.count() + shown.count()
+}}
+
+function entrypoint() -> nothing {{
+  let result = work({fail})
+  if (result.failed()) {{
+    print(`failed`)
+  }}
+  if (result.failed() == false) {{
+    print(`ok`)
+  }}
+}}
+"
+        );
+        assert_source_balanced(&format!("propagation_{fail}"), &source, expected);
+    }
+}
+
+#[test]
+fn a_narrowed_re_read_of_an_errors_local_in_a_resume_function_releases_what_it_owns() {
+    for (fail, expected) in [("false", "NAME42\nNAME42\n"), ("true", "failed\n")] {
+        let source = format!(
+            "{FALLIBLE_CALLEES}
+function entrypoint() -> nothing {{
+  let tag = `t`.toUpperCase()
+  let name = fetchName({fail})
+  wait sleep(1)
+  if (name.failed()) {{
+    print(`failed`)
+    return
+  }}
+  print(name.toUpperCase())
+  print(name.toUpperCase())
+}}
+"
+        );
+        assert_source_balanced(&format!("narrowed_{fail}"), &source, expected);
+    }
+}
+
+#[test]
+fn a_crossing_errors_local_whose_string_is_taken_is_released_once() {
+    let source = format!(
+        "{FALLIBLE_CALLEES}
+function entrypoint() -> nothing {{
+  let name = fetchName(false)
+  wait sleep(1)
+  let kept = name.or(`fallback`)
+  wait sleep(1)
+  print(kept)
+}}
+"
+    );
+    assert_source_balanced("crossing_taken", &source, "name42\n");
+}
+
+#[test]
+fn a_reassigned_errors_local_in_a_resume_function_releases_its_old_value() {
+    let source = format!(
+        "{FALLIBLE_CALLEES}
+function plainName() -> string errors {{
+  return `plain`.toUpperCase()
+}}
+
+function entrypoint() -> nothing {{
+  let name = fetchName(false)
+  name = plainName()
+  wait sleep(1)
+  print(name.or(`fallback`))
+}}
+"
+    );
+    assert_source_balanced("reassigned", &source, "PLAIN\n");
+}
+
+#[test]
+fn an_errors_local_reassigned_in_a_loop_across_waits_releases_each_old_value() {
+    let source = format!(
+        "{FALLIBLE_CALLEES}
+function plainName() -> string errors {{
+  return `plain`.toUpperCase()
+}}
+
+function entrypoint() -> nothing {{
+  let name = fetchName(false)
+  let pass = 0
+  while (pass < 3) {{
+    name = plainName()
+    wait sleep(1)
+    pass = pass + 1
+  }}
+  print(name.or(`fallback`))
+}}
+"
+    );
+    assert_source_balanced("reassigned_in_loop", &source, "PLAIN\n");
+}
