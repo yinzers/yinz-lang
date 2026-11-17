@@ -31717,7 +31717,14 @@ fn release_glue_free_kind<'ctx>(
                     other => other,
                 });
             }
-            if cg.callee_takes_a_given_parameter(callee) {
+            // A position of a suspending callee that is KNOWN not to be `give` is borrowed: the callee
+            // neither releases nor moves it on, so the value the task holds is the ladder's to release
+            // whole, as for a plain callee. Only an unknown callee keeps the flat free.
+            let known_borrowed = matches!(
+                cg.suspending_callee_param_ownership(callee, arg_index),
+                Some(_)
+            );
+            if !known_borrowed && cg.callee_takes_a_given_parameter(callee) {
                 return Ok(kind);
             }
         }

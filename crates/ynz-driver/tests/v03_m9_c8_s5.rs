@@ -778,3 +778,48 @@ maybe_spawn_cases! {
     a_given_maybe_decimal_given_to_a_suspending_task_is_released_once: "number<20> ", "2.5", true, true, "background eat(found)", "", "true\n";
     a_consumed_maybe_decimal_given_to_a_suspending_task_is_released_once: "number<20> ", "2.5", true, false, "background eat(found)", "", "true\n";
 }
+
+/// Bug caught: pre-existing, a leak found by the C8 round-2 review: a string passed at a BORROWED
+/// position of a callee that has a `give` parameter elsewhere (`worker(give rows, label)`) was copied
+/// for the task, and the ladder's flat free (kept for every position of such a callee) freed nothing
+/// of a string, so the task's copy leaked (10 bytes). Tier Medium. One program per ownership: the
+/// spawner never reads the string again, reads it after the spawn (still its own, copied once), and
+/// the callee suspends.
+macro_rules! borrowed_string_cases {
+    ($($name:ident: $suspending:literal, $after_spawn:literal, $expected:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = format!(
+                    "function worker(give rows: array<int>, label: string) -> nothing {{
+  {pause}
+  print(`${{rows.count()}}${{label}}`)
+}}
+
+function launch() -> nothing {{
+  let rows: array<int> = [1, 2]
+  let label = `abcdefghij`.toUpperCase()
+  background worker(rows, label)
+  {after_spawn}
+}}
+
+function entrypoint() -> nothing {{
+  launch()
+  wait sleep(300)
+}}
+",
+                    pause = if $suspending { "wait sleep(1)" } else { "" },
+                    after_spawn = $after_spawn,
+                );
+                assert_source_balanced(stringify!($name), &source, $expected);
+            }
+        )+
+    };
+}
+
+borrowed_string_cases! {
+    a_borrowed_string_the_spawner_never_reads_again_is_released_once: false, "", "2ABCDEFGHIJ\n";
+    a_borrowed_string_the_spawner_reads_again_is_copied_and_released_once: false, "print(label)", "ABCDEFGHIJ\n2ABCDEFGHIJ\n";
+    a_borrowed_string_given_to_a_suspending_callee_is_released_once: true, "", "2ABCDEFGHIJ\n";
+    a_borrowed_string_read_again_after_a_suspending_spawn_is_released_once: true, "print(label)", "ABCDEFGHIJ\n2ABCDEFGHIJ\n";
+}
