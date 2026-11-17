@@ -269,6 +269,71 @@ fn refusals_of(source: &str, kind: DiagnosticKind) -> usize {
         .count()
 }
 
+// Bug: the export refusal was pinned for a returned list only, so an exported `fixed` PARAMETER
+// without its length (which a module checked alone cannot size) could compile unnoticed. The rows
+// are the refusals the Chief Architect's ruling lists, each a complete program with the number of
+// refusals of its kind: (a) an exported unsized parameter, (b) an exported unsized return, both at
+// once, (c) a non-exported function whose returns differ in length; the last two rows are the
+// programs that stay accepted (a sized export, an unsized function that is not exported).
+#[test]
+fn an_exported_function_must_write_the_length_of_each_fixed_it_takes_or_returns() {
+    let rows: [(&str, DiagnosticKind, usize); 6] = [
+        (
+            "export function total(share xs: fixed<int>) -> int { return xs.count() }\n\
+             function entrypoint() -> nothing { print(1) }",
+            DiagnosticKind::FixedLengthMissingInExport,
+            1,
+        ),
+        (
+            "export function make() -> fixed<int> {\n\
+               let xs: fixed<int> = [1, 2]\n\
+               return xs\n\
+             }\n\
+             function entrypoint() -> nothing { print(1) }",
+            DiagnosticKind::FixedLengthMissingInExport,
+            1,
+        ),
+        (
+            "export function same(share xs: fixed<int>) -> fixed<int> { return xs }\n\
+             function entrypoint() -> nothing { print(1) }",
+            DiagnosticKind::FixedLengthMissingInExport,
+            2,
+        ),
+        (
+            "function pick(share flag: boolean) -> fixed<int> {\n\
+               let two: fixed<int> = [1, 2]\n\
+               let one: fixed<int> = [1]\n\
+               if (flag) {\n\
+                 return two\n\
+               }\n\
+               return one\n\
+             }\n\
+             function entrypoint() -> nothing { print(pick(true).count()) }",
+            DiagnosticKind::FixedReturnLengthsDiffer,
+            1,
+        ),
+        (
+            "export function total(share xs: fixed<int, 3>) -> fixed<int, 3> { return xs }\n\
+             function entrypoint() -> nothing { print(1) }",
+            DiagnosticKind::FixedLengthMissingInExport,
+            0,
+        ),
+        (
+            "function total(share xs: fixed<int>) -> fixed<int> { return xs }\n\
+             function entrypoint() -> nothing { print(1) }",
+            DiagnosticKind::FixedLengthMissingInExport,
+            0,
+        ),
+    ];
+    for (source, kind, expected) in rows {
+        assert_eq!(
+            refusals_of(source, kind.clone()),
+            expected,
+            "{kind:?}: {source}"
+        );
+    }
+}
+
 // Bug: a written length was compared with the list passed or returned only on the cases the
 // first tests tried, so a list one item too short or too long (or an empty one against a length
 // of 0) reached codegen, which reads exactly N cells (High: data integrity; the off-by-one and
