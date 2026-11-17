@@ -1,9 +1,6 @@
 // v0.3-M9 C8 (card #385): a task handle leaving its scope STOPS its task.
 //
-// These two tests began as the v0.3-M8 Phase 7 pins of the re-deferral (a handle leaving its
-// block did not cancel the child; no `ynz_handle_free` call was emitted). C8 lands the
-// scope-exit release for suspension frames, so the pins are rewritten into the behaviour they
-// guarded: the child's completion line never prints, and the handle's release is what stops it.
+// The child's completion line never prints, and the handle's release is what stops it.
 //
 // The fixture binds `h = background worker()` inside an `if` block of a suspending
 // `entrypoint`; the block exits while the child is still in its first sleep. The release at the
@@ -13,8 +10,6 @@
 //
 // Both tests run the fixture compiled (`ynz build`, not `ynz run`) at one optimization level
 // each, so a scope-exit release that only one level emits is caught. Plan: card #385, plan #17.
-// C8 slice 2 built the release (the tests were planned RED before it). C8 slice 7 retired the
-// old "task keeps running" registry deferral and its Tier 3 lint.
 //
 // One named test per level, no fixture loop (`.claude/rules/test-parallelism.md`).
 

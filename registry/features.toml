@@ -1200,10 +1200,10 @@ triggers = "`channel<Player>()` - a channel construction whose element type is a
 [[deferred_language_feature]]
 name = "channel-auto-close-on-last-producer"
 substitute = "Call `wire.close()` yourself when a producer is done sending — one line per producer, and the consumer's `receive()` returns `none` once the buffer drains. Closing twice is a safe no-op, so every producer may close."
-why = "Auto-close — the channel closing itself when the last binding that can send goes out of scope — requires three things the compiler does not have: a per-binding producer/consumer role analysis, the scope-exit drop-insertion pass (no local is released at scope end today), and a runtime refcount split into producer vs holder counts. Shipping explicit close() first costs one line per producer and is correct today; shipping auto-close first would be a refcount redesign with a dead-on-arrival trigger until the drop pass lands. Cost to add later: medium — the role analysis, one producer counter decremented from the drop ladder, and a compose rule with explicit close() (close-once semantics make that trivial)."
+why = "Auto-close — the channel closing itself when the last binding that can send goes out of scope — requires two things the compiler does not have: a per-binding producer/consumer role analysis and a runtime refcount split into producer vs holder counts (the scope-exit release pass exists, but it cannot tell a producer's release from a consumer's). Shipping explicit close() first costs one line per producer and is correct today. Cost to add later: medium — the role analysis, one producer counter decremented from the drop ladder, and a compose rule with explicit close() (close-once semantics make that trivial)."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "The general scope-exit drop pass shipping (Track 3 / the drop-story milestone), AND a real workload where forgetting close() produced a hang in practice — the explicit form is the teaching-correct default until the compiler can prove the producer set."
+triggers = "A real workload where forgetting close() produced a hang in practice — the explicit form is the teaching-correct default until the compiler can prove the producer set."
 
 # --- Handle-side close (IMP-concurrency.md "The gap that decision leaves") ---
 [[deferred_language_feature]]

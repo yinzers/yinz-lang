@@ -3,8 +3,7 @@
 // The handle `h` is bound inside a block that exits while the child is still mid-work. The
 // scope-exit release of the block calls `ynz_handle_free`, which stops the child at its next
 // suspension: `child: after first sleep` and `child: done` are lost, the parent's three lines
-// are not (`v03_m8_handle_scope_pin.rs`). Before C8 a suspending function released nothing, so
-// the child ran to completion here.
+// are not (`v03_m8_handle_scope_pin.rs`).
 function worker() -> int errors {
   wait sleep(20)
   print(`child: after first sleep`)
