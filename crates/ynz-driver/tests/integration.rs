@@ -11014,9 +11014,9 @@ fn m5_p5_bg_copy_alloc_gap_pin() {
     // prepare_bg_arg_for_ctx transfers ownership to the task instead of
     // re-cloning. Regression signature: the `.copy()` intermediate leaks and
     // the gap grows to 6 (alloc=11/free=5 observed pre-fix — the E8
-    // clone→drop-imbalance zero-tolerance class). Baseline gap = 2 (C8 slice 2: the
-    // state-machine host releases its locals; the 2 left are the spawn-site clone of a
-    // given array, whose original nobody releases, a spawn-ladder producer).
+    // clone→drop-imbalance zero-tolerance class). Baseline gap = 0 (C8 slice 5: the
+    // state-machine host releases its locals and the spawn releases the given array's original
+    // after its clone).
     let (alloc, free) = ynz_run_with_alloc_counter("m5_p3_sweep_bg_array_shape_give_wait.ynz");
     assert!(
         alloc > 0,
@@ -11024,10 +11024,10 @@ fn m5_p5_bg_copy_alloc_gap_pin() {
     );
     assert_eq!(
         alloc - free,
-        2,
-        "bg-arg copy alloc gap drifted: expected alloc-free == 2 (the given array's spawn-site \
-         original); gap 4 = the spawn-path re-clone leak returned \
-         (seg-4 4b regression); alloc={alloc} free={free}"
+        0,
+        "bg-arg copy alloc gap drifted: expected alloc-free == 0 (the given array's spawn-site \
+         original is released after its clone); a positive gap = the spawn-path re-clone leak \
+         returned (seg-4 4b regression); alloc={alloc} free={free}"
     );
 }
 
@@ -11088,8 +11088,8 @@ fn bg_arg_channel_send_receiver_reads_intact_array_after_task_retired() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_channel_send_array.ynz",
         "3\n10\n30\n",
-        2,
-        "2 = the spawner's `rows` literal (the sent clone held by the receiver's `got` is now released)",
+        0,
+        "0 = the spawner's `rows` literal is released after the spawn copy (C8 slice 5) and the sent clone held by the receiver's `got` is released",
     );
 }
 
@@ -11104,8 +11104,8 @@ fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_channel_send_array_never_drained.ynz",
         "never drained\n",
-        2,
-        "2 = the sent clone held by the never-torn-down channel (C8 slice 2 releases the spawner's `rows` literal)",
+        0,
+        "0 = the spawner's `rows` literal is released after the spawn copy (C8 slice 5) and the sent clone is freed by the channel's teardown glue when the spawner's channel local leaves scope",
     );
 }
 
@@ -11181,8 +11181,8 @@ fn bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_handle_send_array.ynz",
         "307\n",
-        2,
-        "2 = the spawner's `rows` literal (the forwarded clone held by sink's `got` is now released)",
+        0,
+        "0 = the spawner's `rows` literal is released after the spawn copy (C8 slice 5) and the forwarded clone held by sink's `got` is released",
     );
 }
 
@@ -11211,10 +11211,8 @@ fn bg_arg_two_arrays_send_one_releases_only_the_sent_slot() {
     assert_bg_arg_handoff_fixture(
         "bg_arg_two_arrays_send_one.ynz",
         "2\n7\n3\n10\n",
-        4,
-        "2 = the spawner's `rows` literal, 2 = the spawner's `scratch` literal (the receiver's `got` is now \
-         released by its `maybe` local; the `scratch` clone is freed by the ladder at retire — it was \
-         never handed off)",
+        0,
+        "0 = the spawner's `rows` and `scratch` literals are released after the spawn copies (C8 slice 5), the receiver's `got` is released by its `maybe` local and the `scratch` clone is freed by the ladder at retire (it was never handed off)",
     );
 }
 
@@ -11320,9 +11318,9 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
         // local at its scope exit (2 allocations); `rows` is nulled at `bucket.add(rows)` and the
         // ladder frees nothing at the `give` position. C7 slice 2b, 12 -> 8: the task's `mine` is a
         // copy owner and is released too. C8 slice 2, 8 -> 2: the state-machine
-        // entrypoint releases its own locals. What is still held is one parent array (2 counted
-        // allocations), a spawn-ladder producer. ASan is clean at both optimization levels (measured).
-        free + 2,
+        // entrypoint releases its own locals. C8 slice 5, 2 -> 0: the spawn releases the parent's
+        // consumed `rows` after its copy. ASan is clean at both optimization levels (measured).
+        free,
         "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
          being freed — check it is not the parent's container or its items, which is the \
          use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \
