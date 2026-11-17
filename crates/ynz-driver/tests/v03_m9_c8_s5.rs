@@ -181,3 +181,79 @@ fn a_shape_given_to_a_spawned_suspending_task_has_its_cell_freed_by_the_ladder()
     assert_fixture_balanced("v0_3_m6_ufcs_background.ynz", "Mon\ndone\n");
     assert_fixture_balanced("v0_3_m6_ufcs_background_multifield.ynz", "Mon\n42\ndone\n");
 }
+
+/// The handle-form spawn `let task = background work(value)` of a consumed binding, in a plain
+/// spawner (it holds the thread with `sleepBlocking` until the task is done) and in a suspending
+/// one. `value_type` and `value_literal` build the argument; the callee `give`s it and suspends.
+fn handle_form_program(
+    suspending_spawner: bool,
+    shape_preamble: &str,
+    value_type: &str,
+    value_literal: &str,
+    callee_body: &str,
+) -> String {
+    let (spawner_signature, wait_for_task, entry_call) = if suspending_spawner {
+        ("function entrypoint() -> nothing", "  wait sleep(150)", "")
+    } else {
+        (
+            "function launch() -> nothing",
+            "  sleepBlocking(150)",
+            "function entrypoint() -> nothing {\n  launch()\n}\n",
+        )
+    };
+    format!(
+        "{shape_preamble}
+function work(give value: {value_type}) -> nothing {{
+  wait sleep(20)
+{callee_body}
+}}
+
+{spawner_signature} {{
+  let value: {value_type} = {value_literal}
+  let task = background work(value)
+{wait_for_task}
+  print(`done`)
+}}
+{entry_call}"
+    )
+}
+
+/// Bug caught: pre-existing; handle-form spawn leaked the consumed original; tier Medium. The
+/// task got a copy and nothing released the binding the spawn consumed (a shape with a string:
+/// 2 strings allocated, 1 freed; an array of strings likewise), on the plain path and in a
+/// suspending spawner. The original is freed exactly once: counters balance and ASan is clean.
+#[test]
+fn a_handle_form_spawn_releases_the_consumed_original_once() {
+    let shape = "shape Barge {
+  name: string
+  tonnage: int
+}
+";
+    for suspending_spawner in [false, true] {
+        let path = if suspending_spawner { "sm" } else { "plain" };
+        let shape_program = handle_form_program(
+            suspending_spawner,
+            shape,
+            "Barge",
+            "{ name: `Mon${1}`, tonnage: 7 }",
+            "  print(value.name)",
+        );
+        assert_source_balanced(
+            &format!("handle_form_shape_{path}"),
+            &shape_program,
+            "Mon1\ndone\n",
+        );
+        let array_program = handle_form_program(
+            suspending_spawner,
+            "",
+            "array<string>",
+            "[`a${1}`, `b${2}`]",
+            "  print(value.count().toString())",
+        );
+        assert_source_balanced(
+            &format!("handle_form_array_{path}"),
+            &array_program,
+            "2\ndone\n",
+        );
+    }
+}
