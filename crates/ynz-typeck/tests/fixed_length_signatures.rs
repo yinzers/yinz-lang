@@ -261,3 +261,133 @@ fn a_received_fixed_of_ints_may_be_followed_by_a_wait() {
     );
     assert!(errors(&output).is_empty(), "{:#?}", errors(&output));
 }
+
+fn refusals_of(source: &str, kind: DiagnosticKind) -> usize {
+    errors(&check(source))
+        .into_iter()
+        .filter(|diagnostic| diagnostic.kind == Some(kind.clone()))
+        .count()
+}
+
+// Bug: a written length was compared with the list passed or returned only on the cases the
+// first tests tried, so a list one item too short or too long (or an empty one against a length
+// of 0) reached codegen, which reads exactly N cells (High: data integrity; the off-by-one and
+// empty cases are the boundary). Each row is a complete program and the number of
+// `FixedLengthMismatch` refusals it gets.
+#[test]
+fn a_written_length_is_checked_against_each_list_passed_or_returned_at_its_boundaries() {
+    let call = |written: &str, passed: &str| {
+        format!(
+            "function total(share xs: fixed<int, {written}>) -> int {{ return xs.count() }}\n\
+             function entrypoint() -> nothing {{\n  let xs: fixed<int> = {passed}\n  print(total(xs))\n}}"
+        )
+    };
+    let returning = |written: &str, returned: &str| {
+        format!(
+            "function make() -> fixed<int, {written}> {{\n  let xs: fixed<int> = {returned}\n  return xs\n}}\n\
+             function entrypoint() -> nothing {{ print(make().count()) }}"
+        )
+    };
+    let rows: Vec<(String, String, usize)> = vec![
+        ("call, exact".into(), call("3", "[1, 2, 3]"), 0),
+        ("call, one short".into(), call("3", "[1, 2]"), 1),
+        ("call, one over".into(), call("3", "[1, 2, 3, 4]"), 1),
+        ("call, empty into 3".into(), call("3", "[]"), 1),
+        ("call, empty into 0".into(), call("0", "[]"), 0),
+        ("call, one into 0".into(), call("0", "[1]"), 1),
+        ("return, exact".into(), returning("3", "[1, 2, 3]"), 0),
+        ("return, one short".into(), returning("3", "[1, 2]"), 1),
+        ("return, one over".into(), returning("3", "[1, 2, 3, 4]"), 1),
+        ("return, empty into 0".into(), returning("0", "[]"), 0),
+        ("return, one into 0".into(), returning("0", "[1]"), 1),
+    ];
+    for (label, source, expected) in rows {
+        let output = check(&source);
+        let mismatches = refusals_of(&source, DiagnosticKind::FixedLengthMismatch);
+        assert_eq!(mismatches, expected, "{label}\n{source}\n{:#?}", errors(&output));
+        if expected == 0 {
+            assert!(errors(&output).is_empty(), "{label}: {:#?}", errors(&output));
+        }
+    }
+}
+
+// Bug: the shape-field rules said the compiler checks "every list stored in a field" against the
+// field's written length, but a list of another length stored in `fixed<int, 3>` field was
+// accepted: two items were padded with a zero and a fourth item was dropped, silently (High: data
+// integrity of a value stored in a shape).
+#[test]
+fn a_list_of_another_length_is_refused_where_it_is_stored_in_a_sized_field() {
+    let storing = |stored: &str| {
+        format!(
+            "shape Bag {{\n  items: fixed<int, 3>\n}}\n\
+             function entrypoint() -> nothing {{\n  let source: fixed<int> = {stored}\n  let bag: Bag = {{ items: source }}\n  print(bag.items.count())\n}}"
+        )
+    };
+    let literal = "shape Bag {\n  items: fixed<int, 3>\n}\n\
+                   function entrypoint() -> nothing {\n  let bag: Bag = { items: [1, 2] }\n  print(bag.items.count())\n}";
+    let rows = [
+        ("variable, exact", storing("[1, 2, 3]"), 0),
+        ("variable, one short", storing("[1, 2]"), 1),
+        ("variable, one over", storing("[1, 2, 3, 4]"), 1),
+        ("literal, one short", literal.to_string(), 1),
+    ];
+    for (label, source, expected) in rows {
+        let refused = errors(&check(&source))
+            .into_iter()
+            .filter(|diagnostic| diagnostic.kind == Some(DiagnosticKind::FixedLengthMismatch))
+            .count();
+        assert_eq!(refused, expected, "{label}\n{source}");
+    }
+}
+
+// Bug: a length written where the checker cannot use it (too large, a second argument, on a type
+// that takes none, inside another type) was silently dropped or stopped the compiler later
+// (High: validator of untrusted input). The largest length and zero are accepted; each refusal
+// names the right kind, once.
+#[test]
+fn an_unusable_written_length_is_refused_by_kind_and_the_limits_are_accepted() {
+    let parameter = |written: &str| {
+        format!(
+            "function total(share xs: {written}) -> int {{ return 1 }}\n\
+             function entrypoint() -> nothing {{ print(1) }}"
+        )
+    };
+    let rows: Vec<(String, Option<DiagnosticKind>)> = vec![
+        (parameter("fixed<int, 0>"), None),
+        (parameter("fixed<int, 4294967295>"), None),
+        (
+            parameter("fixed<int, 4294967296>"),
+            Some(DiagnosticKind::FixedLengthNotUsable),
+        ),
+        (
+            parameter("fixed<int, 3, 4>"),
+            Some(DiagnosticKind::FixedLengthNotUsable),
+        ),
+        (
+            parameter("array<int, 4>"),
+            Some(DiagnosticKind::FixedLengthNotAllowedHere),
+        ),
+        (
+            parameter("maybe<fixed<int, 3>>"),
+            Some(DiagnosticKind::FixedLengthNotAllowedHere),
+        ),
+        (
+            "function make() -> maybe<fixed<int, 3>> { return none }\n\
+             function entrypoint() -> nothing { print(1) }"
+                .to_string(),
+            Some(DiagnosticKind::FixedLengthNotAllowedHere),
+        ),
+    ];
+    for (source, expected) in rows {
+        let output = check(&source);
+        match expected {
+            None => assert!(errors(&output).is_empty(), "{source}\n{:#?}", errors(&output)),
+            Some(kind) => assert_eq!(
+                refusals_of(&source, kind.clone()),
+                1,
+                "{source}\n{kind:?}\n{:#?}",
+                errors(&output)
+            ),
+        }
+    }
+}
