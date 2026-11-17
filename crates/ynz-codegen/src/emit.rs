@@ -1412,23 +1412,23 @@ fn build_module<'ctx, 'g>(
             // A function with `fixed<T>` length parameters is declared once per specialised
             // version typeck found (`FixedInstances`), under that version's symbol; any other
             // function once under its own name.
-            Item::Function(f) if f.generics.is_empty() => {
+            Item::Function(function) if function.generics.is_empty() => {
                 if typed
                     .fixed_instances
                     .length_parameters
-                    .contains_key(&f.name)
+                    .contains_key(&function.name)
                 {
                     for version in typed
                         .fixed_instances
                         .instances
                         .iter()
-                        .filter(|version| version.function == f.name)
+                        .filter(|version| version.function == function.name)
                     {
                         declare_function(
                             ctx,
                             module,
                             typed,
-                            f,
+                            function,
                             shape_table,
                             &shape_types,
                             effective_ownership,
@@ -1440,7 +1440,7 @@ fn build_module<'ctx, 'g>(
                         ctx,
                         module,
                         typed,
-                        f,
+                        function,
                         shape_table,
                         &shape_types,
                         effective_ownership,
@@ -1515,19 +1515,19 @@ fn build_module<'ctx, 'g>(
     // Pass 2 — emit non-generic function bodies.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => {
+            Item::Function(function) if function.generics.is_empty() => {
                 // One body per specialised version of a function with `fixed<T>` length
                 // parameters (the same list Pass 1 declared), one body otherwise.
                 let versions: Vec<Option<&ynz_typeck::fixed_length::InstanceKey>> = if typed
                     .fixed_instances
                     .length_parameters
-                    .contains_key(&f.name)
+                    .contains_key(&function.name)
                 {
                     typed
                         .fixed_instances
                         .instances
                         .iter()
-                        .filter(|version| version.function == f.name)
+                        .filter(|version| version.function == function.name)
                         .map(Some)
                         .collect()
                 } else {
@@ -1540,7 +1540,7 @@ fn build_module<'ctx, 'g>(
                         &rt,
                         &globals,
                         typed,
-                        f,
+                        function,
                         shape_table,
                         &shape_types,
                         &shape_abi_sizes,
@@ -2069,36 +2069,40 @@ fn ec_result_type<'ctx>(
 /// `return` statements when its type is a `fixed` without a written length, else the type as
 /// written. THE one reader (C1h, #433). A length that is a parameter's placeholder is still
 /// symbolic here (`substitute_lengths` makes it a number per version). O(size of the type).
-fn declared_return_type(typed: &TypedModule, shape_table: &ShapeTable, f: &FunctionDecl) -> Type {
-    match typed.inferred_return_types.get(&f.name) {
+fn declared_return_type(
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+    function: &FunctionDecl,
+) -> Type {
+    match typed.inferred_return_types.get(&function.name) {
         Some(worked_out) => worked_out.clone(),
-        None => ast_type_to_typeck_type(&f.return_type, shape_table),
+        None => ast_type_to_typeck_type(&function.return_type, shape_table),
     }
 }
 
-/// The type parameter `index` of `f` is declared with: the signature table's for a `fixed` (it
+/// The type parameter `index` of `function` is declared with: the signature table's for a `fixed` (it
 /// carries the parameter's length placeholder), else the type as written. O(size of the type).
 fn declared_param_type(
     sig_table: &SignatureTable,
     shape_table: &ShapeTable,
-    f: &FunctionDecl,
+    function: &FunctionDecl,
     index: usize,
 ) -> Type {
     match sig_table
         .fns
-        .get(&f.name)
+        .get(&function.name)
         .and_then(|signature| signature.params.get(index))
     {
         Some((_, signature_type @ Type::BuiltinFixed { .. })) => signature_type.clone(),
-        _ => ast_type_to_typeck_type(&f.params[index].ty, shape_table),
+        _ => ast_type_to_typeck_type(&function.params[index].ty, shape_table),
     }
 }
 
-/// The lengths of the specialised version `version` of `f`, by parameter name: what its length
+/// The lengths of the specialised version `version` of `function`, by parameter name: what its length
 /// placeholders stand for. Empty for a function compiled once. O(length parameters).
 fn version_lengths(
     typed: &TypedModule,
-    f: &FunctionDecl,
+    function: &FunctionDecl,
     version: Option<&ynz_typeck::fixed_length::InstanceKey>,
 ) -> HashMap<String, Option<usize>> {
     let Some(version) = version else {
@@ -2106,7 +2110,7 @@ fn version_lengths(
     };
     typed
         .fixed_instances
-        .parameters_of(&f.name)
+        .parameters_of(&function.name)
         .iter()
         .cloned()
         .zip(version.lengths.iter().copied())
@@ -4748,7 +4752,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 let slot = self.alloca_in_entry_llvm(cells, &format!("{site}_fixed_ret"))?;
                 self.builder
                     .build_store(slot, val.into_array_value())
-                    .map_err(|e| format!("{site} fixed ret store: {e}"))?;
+                    .map_err(|err| format!("{site} fixed ret store: {err}"))?;
                 Ok(slot.into())
             }
             // C1f (#423): the returned slot lands in a CALLER-owned slot, and the value is a view
@@ -12751,13 +12755,13 @@ fn lower_sm_for<'ctx, 'g>(
     // compile-time constant; pointer comes from a frame-backed crossing local.
     if let Type::BuiltinFixed { elem, size } = &iter_ty {
         let elem = elem.as_ref().clone();
-        let n = match size {
-            FixedLength::Known(n) => *n as u64,
+        let item_count = match size {
+            FixedLength::Known(item_count) => *item_count as u64,
             FixedLength::Unknown | FixedLength::OfParam { .. } => {
                 return Err("SM for-loop: fixed array with unknown size".to_string())
             }
         };
-        let size_val = cg.i64().const_int(n, false);
+        let size_val = cg.i64().const_int(item_count, false);
 
         let zero = cg.i64().const_zero();
         cg.builder
@@ -19107,37 +19111,37 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                             i64t.const_zero(),
                             "hrecv_fixed_has_cell",
                         )
-                        .map_err(|e| format!("hrecv fixed cell cmp: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed cell cmp: {err}"))?;
                     cg.builder
                         .build_conditional_branch(has_cell, copy_bb, after_bb)
-                        .map_err(|e| format!("hrecv fixed cell branch: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed cell branch: {err}"))?;
                     cg.builder.position_at_end(copy_bb);
                     let cell = cg
                         .builder
                         .build_int_to_ptr(cell_bits, cg.ptr(), "hrecv_fixed_cell")
-                        .map_err(|e| format!("hrecv fixed cell ptr: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed cell ptr: {err}"))?;
                     cg.builder
                         .build_memcpy(block, 8, cell, 8, i64t.const_int(bytes, false))
-                        .map_err(|e| format!("hrecv fixed copy: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed copy: {err}"))?;
                     cg.builder
                         .build_call(
                             cg.rt.ynz_free,
                             &[cell.into(), i64t.const_int(bytes, false).into()],
                             "",
                         )
-                        .map_err(|e| format!("hrecv fixed cell free: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed cell free: {err}"))?;
                     let block_bits = cg
                         .builder
                         .build_ptr_to_int(block, i64t, "hrecv_fixed_block_bits")
-                        .map_err(|e| format!("hrecv fixed block bits: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed block bits: {err}"))?;
                     cg.builder
                         .build_unconditional_branch(after_bb)
-                        .map_err(|e| format!("hrecv fixed join: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed join: {err}"))?;
                     cg.builder.position_at_end(after_bb);
                     let ok_after = cg
                         .builder
                         .build_phi(i64t, "hrecv_fixed_ok")
-                        .map_err(|e| format!("hrecv fixed ok phi: {e}"))?;
+                        .map_err(|err| format!("hrecv fixed ok phi: {err}"))?;
                     ok_after
                         .add_incoming(&[(&block_bits, copy_bb), (&i64t.const_zero(), before_bb)]);
                     received_ok = ok_after.as_basic_value().into_int_value();
@@ -20715,13 +20719,13 @@ fn lower_stmt_for<'ctx>(
     // Identical to BuiltinArray but uses compile-time size + direct GEP instead of runtime calls.
     if let Type::BuiltinFixed { elem, size } = &iter_ty {
         let elem = elem.as_ref().clone();
-        let n = match size {
-            FixedLength::Known(n) => *n as u64,
+        let item_count = match size {
+            FixedLength::Known(item_count) => *item_count as u64,
             FixedLength::Unknown | FixedLength::OfParam { .. } => {
                 return Err("codegen: cannot iterate fixed array with unknown size".to_string())
             }
         };
-        let size_val = cg.i64().const_int(n, false);
+        let size_val = cg.i64().const_int(item_count, false);
         let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
 
         let i_slot = cg
@@ -21963,7 +21967,7 @@ fn lower_stmt_return<'ctx>(
                     let loaded = cg
                         .builder
                         .build_load(cells, val.into_pointer_value(), "ret_fixed_val")
-                        .map_err(|e| format!("ret fixed load: {e}"))?;
+                        .map_err(|err| format!("ret fixed load: {err}"))?;
                     build_return_after_release(cg, edge, Some(&loaded), "ret fixed")?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {
@@ -23711,8 +23715,15 @@ fn lower_expr_node<'ctx>(
                 }
                 Type::BuiltinFixed { elem, size } => {
                     let elem = elem.as_ref().clone();
-                    let sz = size.known();
-                    lower_fixed_method(cg, recv_val.into_pointer_value(), &elem, sz, method, args)
+                    let known_length = size.known();
+                    lower_fixed_method(
+                        cg,
+                        recv_val.into_pointer_value(),
+                        &elem,
+                        known_length,
+                        method,
+                        args,
+                    )
                 }
                 Type::Maybe { inner } => {
                     let inner = inner.as_ref().clone();
@@ -23852,8 +23863,8 @@ fn lower_expr_node<'ctx>(
             let arr_ty = cg.resolve_type(&cg.expr_type(expr));
             match &arr_ty {
                 Type::BuiltinFixed { elem, size } => {
-                    let n = size.known().unwrap_or(elements.len()) as u32;
-                    let arr_t = cg.fixed_block_type(elem, n.max(1));
+                    let item_count = size.known().unwrap_or(elements.len()) as u32;
+                    let arr_t = cg.fixed_block_type(elem, item_count.max(1));
                     let slot = cg
                         .builder
                         .build_alloca(arr_t, "fixed_arr")
@@ -23956,13 +23967,13 @@ fn lower_expr_node<'ctx>(
                 }
                 Type::BuiltinFixed { elem, size } => {
                     let fixed_elem_ty = elem.as_ref().clone();
-                    let n = size.known().unwrap_or(0) as u64;
+                    let item_count = size.known().unwrap_or(0) as u64;
                     let maybe_slot = cg
                         .builder
                         .build_alloca(cg.maybe_type(), "fixed_get")
                         .map_err(|e| format!("{e}"))?;
 
-                    let in_bounds = if n > 0 {
+                    let in_bounds = if item_count > 0 {
                         let idx_ext = cg
                             .builder
                             .build_int_z_extend_or_bit_cast(idx, cg.i64(), "ie")
@@ -23971,7 +23982,7 @@ fn lower_expr_node<'ctx>(
                             .build_int_compare(
                                 IntPredicate::ULT,
                                 idx_ext,
-                                cg.i64().const_int(n, false),
+                                cg.i64().const_int(item_count, false),
                                 "in_bounds",
                             )
                             .map_err(|e| format!("{e}"))?
@@ -27964,14 +27975,14 @@ fn emit_owned_copy<'ctx>(
                     "{site}: owned_copy_plan classified a non-fixed as FixedMemcpy"
                 ));
             };
-            let n = size.known().ok_or_else(|| {
+            let item_count = size.known().ok_or_else(|| {
                 format!(
                     "{site}: the length of this `fixed` list is not known here, so its copy \
                      cannot be sized — this is a compiler bug"
                 )
             })? as u64;
-            let bytes = n * cg.fixed_cell_bytes(fixed_elem);
-            let cells_ty = cg.fixed_block_type(fixed_elem, n as u32);
+            let bytes = item_count * cg.fixed_cell_bytes(fixed_elem);
+            let cells_ty = cg.fixed_block_type(fixed_elem, item_count as u32);
             let dst = match mode {
                 CopyMode::Body => cg
                     .builder
@@ -28003,7 +28014,7 @@ fn emit_owned_copy<'ctx>(
             if let Type::BuiltinFixed { elem, .. } = &resolved {
                 let elem = cg.resolve_type(elem);
                 if is_string_like(&elem) || matches!(elem, Type::Shape { .. }) {
-                    emit_fixed_item_cells_copy(cg, dst, n, &elem, site)?;
+                    emit_fixed_item_cells_copy(cg, dst, item_count, &elem, site)?;
                 }
             }
             let free = match mode {
