@@ -102,3 +102,29 @@ fn a_fixed_a_suspending_function_returns_with_a_written_length_is_read() {
         );
     });
 }
+
+// Bug: a `background` task that returns a `fixed` list handed its parent the address of the list in
+// the task's freed frame: `receive()` read count 0 (High: data integrity of a value that leaves its
+// task).
+#[test]
+fn a_fixed_a_background_task_returns_is_received_with_its_items() {
+    at_both_optimization_levels(|no_optimize| {
+        assert_asan_clean_and_prints(
+            "v0_3_m9_c1h_fixed_handle_ints.ynz",
+            no_optimize,
+            "3\n30\n2\n6\n",
+        );
+    });
+}
+
+// Bug: the strings of a received `fixed<string>` result were never released.
+#[test]
+fn a_fixed_of_strings_a_task_returns_is_received_and_released() {
+    assert_fixture_balanced("v0_3_m9_c1h_fixed_handle_strings.ynz", "2\nB\n");
+}
+
+// Bug: the strings of a `fixed<string>` result nobody received were never released.
+#[test]
+fn an_unreceived_fixed_of_strings_a_task_returns_is_released() {
+    assert_fixture_balanced("v0_3_m9_c1h_fixed_handle_unreceived.ynz", "done\n");
+}

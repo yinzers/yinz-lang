@@ -1,0 +1,33 @@
+// v0.3-M9 C1h: a background task returns a `fixed` list (one with its length inferred, one with it
+// written), and the parent receives it.
+// Before: the parent read count 0 (the handle handed back the address of the list in the task's
+// freed frame), and a returned list with a written length stopped the compiler.
+// Expected output: the count and last item of each list.
+
+function build() -> fixed<int> {
+  wait sleep(1)
+  let numbers: fixed<int> = [10, 20, 30]
+  return numbers
+}
+
+function buildSized() -> fixed<int, 2> {
+  wait sleep(1)
+  let numbers: fixed<int> = [5, 6]
+  return numbers
+}
+
+function entrypoint() -> nothing {
+  let first = background build()
+  let second = background buildSized()
+  wait sleep(20)
+  let got = first.receive()
+  let none3: fixed<int> = [0, 0, 0]
+  let list = got.or(none3)
+  print(list.count())
+  print(list[2].or(-1))
+  let gotSecond = second.receive()
+  let none2: fixed<int> = [0, 0]
+  let listSecond = gotSecond.or(none2)
+  print(listSecond.count())
+  print(listSecond[1].or(-1))
+}
