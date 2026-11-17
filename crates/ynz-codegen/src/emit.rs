@@ -21347,6 +21347,9 @@ fn lower_stmt_return<'ctx>(
         Some(expr) => {
             let mut val = lower_expr(cg, expr)?;
             val = own_returned_value(cg, expr, val, "return_str")?;
+            let returned_ty = cg.expr_type(expr);
+            let declared_ty = cg.current_fn_ret_ty.clone();
+            (val, _) = convert_to_declared_success_number(cg, val, returned_ty, &declared_ty)?;
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -21783,10 +21786,11 @@ fn own_string_for_store<'ctx>(
     Ok(copied)
 }
 
-/// An `errors` function declared `-> number<N> errors` with N > 34 (`declared_success` is the
-/// `number<N>`) packs a bignum (an owned text) in its ok word, whatever width the returned value was typed at: a literal or an expression of 34
-/// digits or fewer is a decimal128 cell (typeck keeps the literal's own width under an `errors`
-/// return), and packing that cell as the ok word reads a decimal as text, then frees it as a string.
+/// A function declared `-> number<N>` or `-> number<N> errors` with N > 34 (`declared_success` is
+/// the `number<N>`) returns a bignum, an owned text (in an errors function it rides the ok word),
+/// whatever width the returned value was typed at: a literal or an expression of 34 digits or fewer
+/// is a decimal128 cell (typeck keeps a literal's own width under an `errors` return, and a narrower
+/// local is narrower), and handing that cell over reads a decimal as text, then frees it as a string.
 /// This converts such a value to the declared bignum, the one conversion `coerce_to_bignum_pair`
 /// uses, and returns the value and its type unchanged for every other pair.
 ///

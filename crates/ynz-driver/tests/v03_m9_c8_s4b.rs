@@ -383,3 +383,40 @@ function entrypoint() -> nothing {{
         );
     }
 }
+
+/// Bug caught: pre-existing, found with item 1; the crash appears only on the plan branch (C7's
+/// release makes it an invalid free): a plain `-> number<40>` returned a narrower value (a
+/// `number<20>` local, a `number<20>` sum) as the decimal128 cell it was, which the caller then read
+/// and freed as bignum text (wrong value, `free(): invalid pointer`). Tier Medium. The function is
+/// plain; its caller is plain or suspending. (A bare suspending `-> number<40>` does not compile
+/// today, "SM wrapper-return has no arm", a separate bug.)
+#[test]
+fn a_plain_number_40_return_of_a_narrower_value_is_converted_to_the_declared_type() {
+    for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
+        let source = format!(
+            "function narrowed() -> number<40> {{
+  let small: number<20> = 1.25
+  return small
+}}
+
+function summed() -> number<40> {{
+  let small: number<20> = 1.25
+  return small + small
+}}
+
+function entrypoint() -> nothing {{
+  {wait_line}
+  let first = narrowed()
+  print(first)
+  let second = summed()
+  print(second)
+}}
+"
+        );
+        assert_source_balanced(
+            &format!("plain_number_40_return_{suspending}"),
+            &source,
+            "1.25\n2.50\n",
+        );
+    }
+}
