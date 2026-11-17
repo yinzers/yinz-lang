@@ -332,3 +332,112 @@ function entrypoint() -> nothing {{
         }
     }
 }
+
+/// Bug caught (High: leak): `h.receive()` of a `maybe<T>` or `maybe<T> errors` task result left the
+/// received binding's payload (a string, a shape's cell) and, for an errors result, the 16-byte
+/// envelope cell with no owner: the binding was treated as borrowing a handle buffer. A plain
+/// `maybe<T>` now arrives in a counted cell copied from the return slot, so the binding owns
+/// every maybe it receives; a `number` still sits in the handle's buffer.
+#[test]
+fn a_maybe_received_from_a_handle_is_owned_by_its_binding() {
+    let shape = "shape Part {
+  name: string
+  qty: int
+}
+";
+    let cases = [
+        ("maybe<string>", "items.get(0)", "print(m.value)", "s1\n"),
+        (
+            "maybe<string> errors",
+            "items.get(0)",
+            "print(m.value)",
+            "s1\n",
+        ),
+        ("maybe<Part>", "parts.get(0)", "print(m.value.name)", "p1\n"),
+        (
+            "maybe<Part> errors",
+            "parts.get(0)",
+            "print(m.value.name)",
+            "p1\n",
+        ),
+        (
+            "maybe<int>",
+            "[1].get(0)",
+            "print(m.value.toString())",
+            "1\n",
+        ),
+        (
+            "maybe<int> errors",
+            "[1].get(0)",
+            "print(m.value.toString())",
+            "1\n",
+        ),
+    ];
+    for (index, (return_type, returned, read, printed)) in cases.into_iter().enumerate() {
+        let source = format!(
+            "{shape}
+function pick() -> {return_type} {{
+  wait sleep(5)
+  let items: array<string> = [`s${{1}}`]
+  let parts: array<Part> = [{{ name: `p${{1}}`, qty: 3 }}]
+  return {returned}
+}}
+
+function consume() -> nothing errors {{
+  let h = background pick()
+  let m = h.receive()
+  if (m.exists()) {{
+    {read}
+  }}
+  print(`done`)
+}}
+
+function entrypoint() -> nothing {{
+  let r = consume()
+  if (r.failed()) {{
+    print(`failed`)
+  }}
+}}
+"
+        );
+        assert_source_balanced(
+            &format!("handle_receive_maybe_{index}"),
+            &source,
+            &format!("{printed}done\n"),
+        );
+    }
+}
+
+/// A `number` received from a handle sits in the handle's own buffer: the binding frees nothing of
+/// it, and the program still balances (no double free of the buffer).
+#[test]
+fn a_number_received_from_a_handle_is_not_freed_by_its_binding() {
+    let source = "function pick() -> number<20> {
+  wait sleep(5)
+  return 2.5
+}
+
+function pickFail() -> number<20> errors {
+  wait sleep(5)
+  return 3.5
+}
+
+function consume() -> nothing errors {
+  let h = background pick()
+  let m = h.receive()
+  print(m)
+  let g = background pickFail()
+  let n = g.receive()
+  print(n)
+  print(`done`)
+}
+
+function entrypoint() -> nothing {
+  let r = consume()
+  if (r.failed()) {
+    print(`failed`)
+  }
+}
+";
+    assert_source_balanced("handle_receive_number", source, "2.5\n3.5\ndone\n");
+}

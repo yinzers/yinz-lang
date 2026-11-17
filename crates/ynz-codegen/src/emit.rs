@@ -2495,7 +2495,7 @@ struct Cg<'ctx, 'g> {
     // word: where the store seam takes it, this word is nulled, so the result's release skips it.
     string_take_ec_words: HashMap<usize, (PointerValue<'ctx>, Option<usize>)>,
     // v0.3-M9 C8 slice 4b: errors-capable locals whose ok word is BORROWED from a handle (`h.receive()` of a
-    // `maybe<T>` or `number`: the completion's 16-byte buffer belongs to the handle, which frees it when it
+    // `number` (not a `maybe`, which arrives in an owned cell): the completion's 16-byte buffer belongs to the handle, which frees it when it
     // drops). The scope exit drops only their error object, never the ok word.
     ec_borrowed_ok: HashSet<String>,
 }
@@ -17384,11 +17384,13 @@ fn emit_conduit_stmt<'ctx, 'g>(
         // EC results (send's `nothing errors`, handle-receive's `T errors`) that cross a
         // later suspension need the EC-crossing-local registration, mirroring the
         // let-suspending-call arms.
-        // A `maybe` or `number` a handle delivers sits in the handle's own buffer (`extract_completion`,
-        // `RET_KIND_VALUE_MAYBE` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word.
+        // A `number` a handle delivers sits in the handle's own buffer (`extract_completion`,
+        // `RET_KIND_VALUE_NUMBER` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word. A `maybe`
+        // arrives in a counted cell the binding owns (`RET_KIND_VALUE_MAYBE` copies the envelope into one;
+        // a `maybe<T> errors` result already is one), released like any call result.
         if matches!(op, ConduitOp::HandleRecv) {
             if let Type::ErrorsCapable { inner } = cg.resolve_type(&cg.expr_type(inner)) {
-                if matches!(*inner, Type::Maybe { .. } | Type::Number { .. }) {
+                if matches!(*inner, Type::Number { .. }) {
                     cg.ec_borrowed_ok.insert(name.to_string());
                 }
             }

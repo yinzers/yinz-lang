@@ -255,15 +255,24 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
             }
             (err, ok)
         }
-        RET_KIND_VALUE_NUMBER | RET_KIND_VALUE_MAYBE => {
-            // The return slot itself holds a 16-byte aggregate — the decimal128, or (v0.3-M8
-            // Phase 4) a plain `maybe<T>`'s `{flag, bits}` envelope pair — copy it out before
-            // the frame is freed; the parent reads the handle-owned buffer through `ok`.
+        RET_KIND_VALUE_NUMBER => {
+            // The return slot itself holds the 16-byte decimal128 — copy it out before the frame
+            // is freed; the parent reads the handle-owned buffer through `ok`.
             let mut buf = Box::new([0u8; 16]);
             std::ptr::copy_nonoverlapping(slot as *const u8, buf.as_mut_ptr(), 16);
             let ok = buf.as_ptr() as i64;
             *lock_or_recover(&shared.ok_buf) = Some(buf);
             (0, ok)
+        }
+        RET_KIND_VALUE_MAYBE => {
+            // The return slot holds a plain `maybe<T>`'s `{flag, bits}` envelope pair inline. The
+            // parent OWNS what it receives (it releases the envelope cell and the payload it holds
+            // at its scope exit, as it does a `-> maybe<T> errors` result, whose ok word is a heap
+            // cell the callee made): a counted cell of its own, copied before the frame is freed
+            // (C8 slice 5; a handle-owned buffer left the payload with no owner).
+            let cell = crate::ynz_alloc(16);
+            std::ptr::copy_nonoverlapping(slot as *const u8, cell, 16);
+            (0, cell as i64)
         }
         // RET_KIND_VALUE_WORD / RET_KIND_VALUE_HEAP_PTR and any future kind default: the
         // slot's first word is the self-contained value (int/bool/float bits, heap-stable
