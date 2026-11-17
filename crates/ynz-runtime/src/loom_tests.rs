@@ -373,6 +373,7 @@ unsafe fn plant_shared_channel_ladder(chan: *mut u8) -> SpawnStateFnFuture {
         byte_offset: SLOT,
         kind: BG_ARG_KIND_SHARED_CHANNEL,
         size: 0,
+        cell: 0,
     });
     SpawnStateFnFuture::new(never_polled, frame, frame_size as i64, -1, descs, 1)
 }
@@ -678,11 +679,13 @@ unsafe fn plant_channel_and_cell_ladder(
         byte_offset: CHAN_SLOT,
         kind: BG_ARG_KIND_SHARED_CHANNEL,
         size: 0,
+        cell: 0,
     });
     descs.add(1).write(BgArgDropEntry {
         byte_offset: CELL_SLOT,
         kind: ynz_abi::BG_ARG_KIND_HEAP_SHAPE,
         size: 16,
+        cell: 0,
     });
     (
         SpawnStateFnFuture::new(never_polled, frame, frame_size as i64, -1, descs, 2),

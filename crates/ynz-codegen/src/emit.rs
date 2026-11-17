@@ -2499,7 +2499,7 @@ struct Cg<'ctx, 'g> {
     // word: where the store seam takes it, this word is nulled, so the result's release skips it.
     string_take_ec_words: HashMap<usize, (PointerValue<'ctx>, Option<usize>)>,
     // v0.3-M9 C8 slice 4b: errors-capable locals whose ok word is BORROWED from a handle (`h.receive()` of a
-    // `maybe<T>` or `number`: the completion's 16-byte buffer belongs to the handle, which frees it when it
+    // `number` (not a `maybe`, which arrives in an owned cell): the completion's 16-byte buffer belongs to the handle, which frees it when it
     // drops). The scope exit drops only their error object, never the ok word.
     ec_borrowed_ok: HashSet<String>,
 }
@@ -6307,6 +6307,68 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_pointer_value())
     }
 
+    /// The two words of the 16-byte pair at `pair`: an errors-capable result's `{err, ok}`, or a
+    /// `maybe`'s `{flag, bits}` (both are two i64 words).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn load_errors_pair(
+        &self,
+        pair: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let mut words = Vec::with_capacity(2);
+        for index in 0..2u32 {
+            let gep = self
+                .builder
+                .build_struct_gep(
+                    self.maybe_type(),
+                    pair,
+                    index,
+                    &format!("{site}_word{index}"),
+                )
+                .map_err(|err| format!("{site}: pair word gep: {err}"))?;
+            words.push(
+                self.builder
+                    .build_load(self.i64(), gep, &format!("{site}_word{index}_value"))
+                    .map_err(|err| format!("{site}: pair word load: {err}"))?
+                    .into_int_value(),
+            );
+        }
+        Ok((words[0], words[1]))
+    }
+
+    /// Store the two words of a 16-byte pair at `pair` (the twin of `load_errors_pair`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn store_errors_pair(
+        &self,
+        pair: PointerValue<'ctx>,
+        first: inkwell::values::IntValue<'ctx>,
+        second: inkwell::values::IntValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        for (index, word) in [(0u32, first), (1u32, second)] {
+            let gep = self
+                .builder
+                .build_struct_gep(
+                    self.maybe_type(),
+                    pair,
+                    index,
+                    &format!("{site}_out{index}"),
+                )
+                .map_err(|err| format!("{site}: pair word gep: {err}"))?;
+            self.builder
+                .build_store(gep, word)
+                .map_err(|err| format!("{site}: pair word store: {err}"))?;
+        }
+        Ok(())
+    }
     /// The frame region pointer of the frame-embedded shape crossing local `name`, computed once
     /// in `sm_entry` (it dominates every state).
     /// Where the payload of a `maybe` homed in `region` goes: 16 bytes in, the first 16-aligned
@@ -6840,8 +6902,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // self-contained for an int, bool, float or string key (i64 bits or a stable heap
                 // string pointer: the memcpy above owns it); a decimal key's bits are the address
                 // of the loop's per-site key buffer, which the next iteration overwrites, so it is
-                // copied into a heap cell of its own below (leaked with the value sub-cell, the
-                // accounted persist-cell class).
+                // copied into a heap cell of its own below (a spawn argument frees it with the entry cell,
+                // `bg_mapentry_release_fn`).
                 if self.is_inline_decimal(&self.resolve_type(entry_key_ty)) {
                     let kslot = self
                         .builder
@@ -13476,6 +13538,12 @@ enum TemporaryRegionKind {
     /// A `maybe` of an envelope union with these variants: the 16-byte envelope, then the 16-byte view
     /// and the union slot behind it (`Cg::maybe_union_payload_into`).
     MaybeUnion(Vec<Type>),
+    /// An errors-capable result whose success type is an envelope union: the 16-byte `{err, ok}` pair,
+    /// then the 16-byte view and the union slot, `ok` naming the view (`Cg::maybe_union_payload_into`).
+    ErrorsUnion(Vec<Type>),
+    /// An errors-capable result whose success type is a `maybe` of an envelope union: the pair, the 16-byte
+    /// `maybe` pair `ok` names, then the view and the slot behind it.
+    ErrorsMaybeUnion(Vec<Type>),
 }
 
 /// The frame home of a temporary of type `ty` (already resolved; `minted_maybe_copy` is typeck's
@@ -13494,6 +13562,42 @@ fn temporary_home(
             TemporaryHome::Pointer
         }
         Type::Maybe { .. } if minted_maybe_copy => TemporaryHome::Pointer,
+        // An errors-capable call result is a `{err, ok}` pair (two words) that dies with the resume
+        // invocation: its 16 bytes move into a region, whose address the slot holds. An ok word that is a
+        // plain word the pair owns (a string, array, map or shape cell, a `maybe` cell, a scalar, a bignum)
+        // needs nothing behind the pair. A union rides the pair as a view of a slot, and a `maybe` of one as
+        // a stack `maybe` pair over that view: the region holds those behind the pair, so a release after a
+        // `wait` reads bytes that are still there. A decimal128 `number` owns nothing to release (its ok
+        // word points into staging) and keeps no home.
+        Type::ErrorsCapable { inner } => match inner.as_ref() {
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(inner.as_ref()) => {
+                match maybe_region_payload_bytes(inner, sizes) {
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::ErrorsUnion(variants.clone()),
+                        maybe_frame_slots(payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
+            }
+            Type::Maybe { inner: payload } if matches!(payload.as_ref(), Type::Union { variants: _ } if ynz_typeck::check::is_envelope_union(payload.as_ref())) =>
+            {
+                let Type::Union { variants } = payload.as_ref() else {
+                    return TemporaryHome::Skip;
+                };
+                match maybe_region_payload_bytes(payload, sizes) {
+                    // The pair, the `maybe` pair over the view (16 bytes), then the view and the slot.
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::ErrorsMaybeUnion(variants.clone()),
+                        maybe_frame_slots(16 + payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
+            }
+            plain if errors_result_has_plain_ok_word(plain) => {
+                TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0))
+            }
+            _ => TemporaryHome::Skip,
+        },
         Type::Maybe { inner } => match inner.as_ref() {
             // A counted channel reference: no frame bytes.
             Type::BuiltinChannel { .. } => TemporaryHome::Skip,
@@ -13535,6 +13639,33 @@ fn temporary_home(
             }
         }
         _ => TemporaryHome::Skip,
+    }
+}
+
+/// Is the ok word of an errors-capable result of inner type `inner` a plain word its pair owns, so the
+/// 16-byte pair moves into a frame region as it is (`temporary_home`)?
+///
+/// Time: O(1)  Space: O(1)
+fn errors_result_has_plain_ok_word(inner: &Type) -> bool {
+    match inner {
+        Type::String
+        | Type::BuiltinArray { .. }
+        | Type::BuiltinMap { .. }
+        | Type::Shape { .. }
+        | Type::Nothing
+        | Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Options { .. } => true,
+        // A bignum is a heap pointer released like a string; a decimal128 `number` owns nothing.
+        Type::Number { .. } => ynz_typeck::types::is_bignum(inner),
+        Type::Maybe { inner: payload } => {
+            matches!(
+                payload.as_ref(),
+                Type::String | Type::Int | Type::Float | Type::Bool | Type::Shape { .. }
+            )
+        }
+        _ => false,
     }
 }
 
@@ -17567,11 +17698,13 @@ fn emit_conduit_stmt<'ctx, 'g>(
         // EC results (send's `nothing errors`, handle-receive's `T errors`) that cross a
         // later suspension need the EC-crossing-local registration, mirroring the
         // let-suspending-call arms.
-        // A `maybe` or `number` a handle delivers sits in the handle's own buffer (`extract_completion`,
-        // `RET_KIND_VALUE_MAYBE` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word.
+        // A `number` a handle delivers sits in the handle's own buffer (`extract_completion`,
+        // `RET_KIND_VALUE_NUMBER` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word. A `maybe`
+        // arrives in a counted cell the binding owns (`RET_KIND_VALUE_MAYBE` copies the envelope into one;
+        // a `maybe<T> errors` result already is one), released like any call result.
         if matches!(op, ConduitOp::HandleRecv) {
             if let Type::ErrorsCapable { inner } = cg.resolve_type(&cg.expr_type(inner)) {
-                if matches!(*inner, Type::Maybe { .. } | Type::Number { .. }) {
+                if matches!(*inner, Type::Number { .. }) {
                     cg.ec_borrowed_ok.insert(name.to_string());
                 }
             }
@@ -23054,6 +23187,12 @@ enum BgArgFreeKind {
     /// function named here, `Cg::release_fn`): it frees the value's items, entries and fields and
     /// the value itself. CPU arm: called after the call; SM ladder: `BG_ARG_KIND_RELEASE_GLUE`.
     ReleaseGlue { glue_name: String },
+    /// v0.3-M9 C8 slice 5: a shape cell the spawn allocated for a SUSPENDING callee that takes it at a
+    /// `give` position. The callee releases the shape's fields and nulls its frame slot, so the ladder
+    /// cannot find the cell there: the descriptor carries the cell's own pointer
+    /// (`BG_ARG_KIND_OWNED_CELL`) and frees it with `ynz_free(cell, byte_size)`. Never reaches the CPU arm
+    /// (a plain callee keeps `HeapShape`, its closure frees the cell from the context).
+    OwnedCell { byte_size: u64 },
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -23139,15 +23278,15 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         // with the spawner's frame (sweep probe: the task read the ADVANCED slot — 2/20 vs
         // expected 1/10). Route through the ONE stable-bits choke point
         // (`value_to_stable_bits` — no bg-side marshalling twin); the free ladder reuses
-        // `HeapShape` for the 16-byte entry cell (`ynz_free` ignores its size arg today). The
-        // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011 accounted
-        // persist-cell class, deferred to the drop story.
+        // `HeapShape` for the 16-byte entry cell until `release_glue_free_kind` upgrades it to
+        // `bg_mapentry_release_fn`, which also frees the deep-copied key and value sub-cells.
         Some(ynz_typeck::owned_copy::SpawnRehoming::StabilizeLoopView) => {
             let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
             let cell_ptr = cg
                 .builder
                 .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
                 .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
+            copy_map_entry_halves(cg, cell_ptr, ty)?;
             return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
         }
         // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg ALWAYS
@@ -23437,12 +23576,83 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         sole_holder,
         Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
     ) && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
-        && cg.sm_frame_ptr.is_none()
         && cg.plain_releases_type(&resolved)
     {
         release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
+    } else if matches!(
+        sole_holder,
+        Some(ynz_typeck::check::SoleHolder::FreshTemporary)
+    ) && matches!(resolved, Type::Shape { .. })
+        && cg.plain_releases_type(&resolved)
+    {
+        // A fresh shape (a call result, a literal) is re-homed by a copy (`ShapeMemcpy` has no
+        // transfer, it sits on the spawner's frame), and `Expr::Background` suppresses its
+        // statement-end temporary: nobody else releases the original's fields.
+        release_owned_read(cg, val, &resolved, "bg_fresh_original")?;
     }
     Ok(copied)
+}
+
+/// Give the 16-byte cell of a spawned `MapEntry` argument (`value_to_stable_bits`) its own copy of
+/// every half that points into the map: a string key, a string value, an array or map value. The
+/// cell holds the map's own pointers for those, and the spawner's scope exit releases the map while
+/// the task still reads the entry, so a task would read freed memory (C7's release made the sharing
+/// unsound). Each copy is the one owned-copy operation every other spawn argument goes through
+/// (`emit_owned_copy`), released by the entry's ladder glue (`bg_mapentry_release_fn`). A shape,
+/// `maybe` or decimal half is already a copy `value_to_stable_bits` made; an int, float, boolean or
+/// options half is the value itself.
+///
+/// One to two copies per spawned entry, as Rust's `clone` on a moved-in `(String, String)`.
+///
+/// Time: O(1) here, O(n) at run time in the copied value  Space: O(1)
+fn copy_map_entry_halves<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    cell: PointerValue<'ctx>,
+    entry_ty: &Type,
+) -> Result<(), String> {
+    let Type::MapEntry { key, val } = cg.resolve_type(entry_ty) else {
+        return Err("internal: a MapEntry spawn argument has no MapEntry type".to_string());
+    };
+    let entry_struct = cg
+        .ctx
+        .struct_type(&[cg.i64().into(), cg.i64().into()], false);
+    for (index, half_ty) in [(0u32, key), (1u32, val)] {
+        let half_ty = cg.resolve_type(&half_ty);
+        let shares_the_maps_pointer = is_string_like(&half_ty)
+            || matches!(half_ty, Type::BuiltinArray { .. } | Type::BuiltinMap { .. });
+        if !shares_the_maps_pointer {
+            continue;
+        }
+        let slot = cg
+            .builder
+            .build_struct_gep(entry_struct, cell, index, "bg_mapentry_half_slot")
+            .map_err(|e| format!("bg mapentry half gep: {e}"))?;
+        let bits = cg
+            .builder
+            .build_load(cg.i64(), slot, "bg_mapentry_half_bits")
+            .map_err(|e| format!("bg mapentry half load: {e}"))?
+            .into_int_value();
+        let original = cg
+            .builder
+            .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_half_ptr")
+            .map_err(|e| format!("bg mapentry half inttoptr: {e}"))?;
+        let (copy, _) = emit_owned_copy(
+            cg,
+            None,
+            original.into(),
+            &half_ty,
+            CopyMode::SpawnArg,
+            "bg_mapentry_half",
+        )?;
+        let copy_bits = cg
+            .builder
+            .build_ptr_to_int(copy.into_pointer_value(), cg.i64(), "bg_mapentry_half_copy")
+            .map_err(|e| format!("bg mapentry half copy bits: {e}"))?;
+        cg.builder
+            .build_store(slot, copy_bits)
+            .map_err(|e| format!("bg mapentry half store: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Emit the free calls for heap-copied `background` args inside the closure body.
@@ -23597,6 +23807,12 @@ fn emit_bg_arg_frees<'ctx>(
                 cg_builder
                     .build_call(glue, &[release_ptr.into()], "")
                     .map_err(|e| format!("bg release call: {e}"))?;
+            }
+            BgArgFreeKind::OwnedCell { .. } => {
+                return Err(
+                    "internal: an owned-cell free kind belongs to a suspending callee, which the CPU arm never spawns"
+                        .to_string(),
+                );
             }
             // v0.3-M8 Phase 5 Auto-Arc: release the task's counted reference to the shared
             // block (the CPU-arm twin of the SM ladder's `BG_ARG_KIND_ARC_SHAPE` arm).
@@ -23807,6 +24023,7 @@ fn lower_expr_background<'ctx>(
             .callee_param_type(&callee_name, arg_index)
             .filter(|param_ty| cg.envelope_union_variants(param_ty).is_some())
         {
+            mark_union_spawn_argument_moved(cg, arg, val.into_pointer_value());
             let (cell_bits, kind) =
                 bg_union_arg_cell(cg, val.into_pointer_value(), &union_ty, &callee_name)?;
             arg_vals_i64.push(cell_bits);
@@ -24075,9 +24292,20 @@ fn lower_sm_background_spawn<'ctx>(
             .callee_param_type(callee_name, arg_index)
             .and_then(|param_ty| cg.envelope_union_variants(&param_ty))
         {
+            mark_union_spawn_argument_moved(cg, arg, val.into_pointer_value());
             pending_union_args.push((arg_index, val.into_pointer_value(), variants));
             arg_vals_i64.push(cg.i64().const_zero());
-            free_kinds.push(BgArgFreeKind::None);
+            let union_ty = cg
+                .callee_param_type(callee_name, arg_index)
+                .ok_or_else(|| {
+                    "internal: a union spawn argument has no parameter type".to_string()
+                })?;
+            free_kinds.push(sm_union_arg_free_kind(
+                cg,
+                &union_ty,
+                callee_name,
+                arg_index,
+            )?);
             continue;
         }
         reject_union_argument_without_slot(cg, &ty, callee_name, arg_index)?;
@@ -24151,11 +24379,12 @@ fn lower_sm_background_spawn<'ctx>(
 
     // Step 5: build the arg-drop descriptor array for SpawnStateFnFuture::drop.
     //
-    // Each BgArgDropEntry has three i64 fields (24 bytes total):
+    // Each BgArgDropEntry has four i64 fields (32 bytes total):
     //   byte_offset: u64 — byte offset in the frame to the i64 slot holding the heap pointer
     //   kind: u64        — ynz_abi::BG_ARG_KIND_* (HEAP_SHAPE → ynz_free, HEAP_ARRAY →
     //                      ynz_array_drop, SHARED_CHANNEL → ynz_channel_free)
     //   size: u64        — byte count for ynz_free (HEAP_SHAPE); 0 for the other kinds
+    //   cell: u64        — the cell's own pointer (OWNED_CELL: the callee nulls its frame slot); 0 otherwise
     //
     // Build the descriptor list only for args that were actually heap-copied; skip None.
     // If no args need freeing, pass null pointer + count=0 (no allocation needed).
@@ -24198,6 +24427,10 @@ fn lower_sm_background_spawn<'ctx>(
                 let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, 0_u64))
             }
+            BgArgFreeKind::OwnedCell { byte_size } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, *byte_size))
+            }
             BgArgFreeKind::None => None,
         })
         .collect();
@@ -24210,8 +24443,8 @@ fn lower_sm_background_spawn<'ctx>(
             .const_null();
         (null_ptr.into(), cg.ctx.i64_type().const_int(0, false))
     } else {
-        // Allocate the descriptor array: heap_args.len() entries × 24 bytes each.
-        let desc_entry_size: u64 = 24; // 3 × u64
+        // Allocate the descriptor array: heap_args.len() entries × 32 bytes each.
+        let desc_entry_size: u64 = 32; // 4 × u64
         let desc_total = desc_entry_size * heap_args.len() as u64;
         let desc_total_val = cg.ctx.i64_type().const_int(desc_total, false);
         let desc_ptr = cg
@@ -24257,6 +24490,7 @@ fn lower_sm_background_spawn<'ctx>(
                 BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
                 BgArgFreeKind::ArcShape { .. } => ynz_abi::BG_ARG_KIND_ARC_SHAPE,
                 BgArgFreeKind::ReleaseGlue { .. } => ynz_abi::BG_ARG_KIND_RELEASE_GLUE,
+                BgArgFreeKind::OwnedCell { .. } => ynz_abi::BG_ARG_KIND_OWNED_CELL,
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -24298,6 +24532,25 @@ fn lower_sm_background_spawn<'ctx>(
             cg.builder
                 .build_store(off2, size_value)
                 .map_err(|e| format!("desc store 2: {e}"))?;
+
+            // field 3: the cell's own pointer for an owned cell, 0 for every kind that reads its slot.
+            let off3 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base + 24, false)],
+                        "desc_off3",
+                    )
+                    .map_err(|e| format!("desc gep 3: {e}"))?
+            };
+            let cell_value = match &free_kinds[*slot_idx] {
+                BgArgFreeKind::OwnedCell { .. } => arg_vals_i64[*slot_idx],
+                _ => i64_ty.const_zero(),
+            };
+            cg.builder
+                .build_store(off3, cell_value)
+                .map_err(|e| format!("desc store 3: {e}"))?;
         }
 
         (
@@ -29476,22 +29729,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // release as a temporary (a leak, never a double free).
             let declared_as_type_parameter = matches!(ty, Type::TypeParam { .. });
             let ty = self.resolve_type(&ty);
+            // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which; for a
+            // `T` it says the temporary is a `.copy()`, and this instance says `T` is a `maybe`).
+            let minted_maybe_copy = self.typed.temporaries.is_minted_maybe_copy(span.0, span.1)
+                || (declared_as_type_parameter
+                    && self
+                        .typed
+                        .temporaries
+                        .is_type_parameter_copy(span.0, span.1)
+                    && matches!(
+                        ynz_typeck::owned_copy::owned_copy_plan(&ty),
+                        ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone
+                    ));
             if declared_as_type_parameter
                 && !(self.releases_in_instance(
                     ynz_typeck::release_plan::ReleaseKind::TypeParameter,
                     &ty,
-                ) && matches!(
-                    release_step(&ty),
-                    ReleaseStep::String
-                        | ReleaseStep::Array { .. }
-                        | ReleaseStep::Map { .. }
-                        | ReleaseStep::Shape { .. }
-                ))
+                ) && (minted_maybe_copy
+                    || matches!(
+                        release_step(&ty),
+                        ReleaseStep::String
+                            | ReleaseStep::Array { .. }
+                            | ReleaseStep::Map { .. }
+                            | ReleaseStep::Shape { .. }
+                    )))
             {
                 continue;
             }
-            // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which).
-            let minted_maybe_copy = self.typed.temporaries.is_minted_maybe_copy(span.0, span.1);
             let mut form = if minted_maybe_copy {
                 ReleaseForm::Cell
             } else {
@@ -29886,6 +30150,98 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 }
                 region_ptr.into()
             }
+            TemporaryRegionKind::ErrorsUnion(variants) => {
+                // The pair is the call's result: the union its `ok` view names (only when the call
+                // succeeded) moves into the slot behind the region's view, and `ok` names the view.
+                let (err, ok) = self.load_errors_pair(source, &site)?;
+                let succeeded = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err,
+                        self.i64().const_zero(),
+                        &format!("{site}_ec_succeeded"),
+                    )
+                    .map_err(|err| format!("{site}: errors flag compare: {err}"))?;
+                let flag = self
+                    .builder
+                    .build_int_z_extend(succeeded, self.i64(), &format!("{site}_ec_flag"))
+                    .map_err(|err| format!("{site}: errors flag extend: {err}"))?;
+                let payload = self.maybe_region_payload_ptr(region_ptr, &site)?;
+                let region_ok =
+                    self.maybe_union_payload_into(flag, ok, variants, payload, false, &site)?;
+                self.store_errors_pair(region_ptr, err, region_ok, &site)?;
+                region_ptr.into()
+            }
+            TemporaryRegionKind::ErrorsMaybeUnion(variants) => {
+                // The pair's `ok` names a stack `maybe` pair over a union view. On success that pair
+                // moves behind the region's own pair, its union into the slot behind a view of the
+                // region, and `ok` names the region's `maybe` pair.
+                let (err, ok) = self.load_errors_pair(source, &site)?;
+                let succeeded = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err,
+                        self.i64().const_zero(),
+                        &format!("{site}_ec_succeeded"),
+                    )
+                    .map_err(|err| format!("{site}: errors flag compare: {err}"))?;
+                let pre_bb = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+                let held_bb = self.append_block(&format!("{site}_ec_maybe_held"));
+                let cont_bb = self.append_block(&format!("{site}_ec_maybe_cont"));
+                self.builder
+                    .build_conditional_branch(succeeded, held_bb, cont_bb)
+                    .map_err(|err| format!("{site}: errors maybe branch: {err}"))?;
+                self.builder.position_at_end(held_bb);
+                let source_maybe = self
+                    .builder
+                    .build_int_to_ptr(ok, self.ptr(), &format!("{site}_ec_maybe_src"))
+                    .map_err(|err| format!("{site}: errors maybe cast: {err}"))?;
+                let (flag, bits) = self.load_errors_pair(source_maybe, &format!("{site}_maybe"))?;
+                // SAFETY: `temporary_home` reserved the pair, the `maybe` pair, the view and the slot.
+                let region_maybe = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            self.ctx.i8_type(),
+                            region_ptr,
+                            &[self.i64().const_int(16, false)],
+                            &format!("{site}_ec_maybe_pair"),
+                        )
+                        .map_err(|err| format!("{site}: errors maybe pair gep: {err}"))?
+                };
+                let payload = self.maybe_region_payload_ptr(region_maybe, &site)?;
+                let region_bits =
+                    self.maybe_union_payload_into(flag, bits, variants, payload, false, &site)?;
+                self.store_errors_pair(region_maybe, flag, region_bits, &format!("{site}_maybe"))?;
+                let region_maybe_bits = self
+                    .builder
+                    .build_ptr_to_int(region_maybe, self.i64(), &format!("{site}_ec_maybe_bits"))
+                    .map_err(|err| format!("{site}: errors maybe pair bits: {err}"))?;
+                let held_end_bb = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+                self.builder
+                    .build_unconditional_branch(cont_bb)
+                    .map_err(|err| format!("{site}: errors maybe join: {err}"))?;
+                self.builder.position_at_end(cont_bb);
+                let phi = self
+                    .builder
+                    .build_phi(self.i64(), &format!("{site}_ec_maybe_phi"))
+                    .map_err(|err| format!("{site}: errors maybe phi: {err}"))?;
+                phi.add_incoming(&[(&region_maybe_bits, held_end_bb), (&ok, pre_bb)]);
+                self.store_errors_pair(
+                    region_ptr,
+                    err,
+                    phi.as_basic_value().into_int_value(),
+                    &site,
+                )?;
+                region_ptr.into()
+            }
             TemporaryRegionKind::Union(variants) => {
                 // The region takes what the value owns (`deep` false): the value is a fresh envelope
                 // or a call's result, which nothing else releases.
@@ -30071,6 +30427,175 @@ fn reject_union_argument_without_slot(
     ))
 }
 
+impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// The module function `void(ptr cell)` that releases the cell `value_to_stable_bits` makes of
+    /// a `MapEntry` `background` argument: the key half when it is a decimal's own cell, the
+    /// value half when it is a shape's cell, a `maybe`'s cell or a decimal's cell (each a copy the
+    /// spawn made, because the loop's per-site buffer the original points into is rewritten by
+    /// the next iteration), and the 16-byte `{key, value}` cell itself. Every other half is the
+    /// map's own bits (an int, a string pointer, a collection the map still holds) and is left
+    /// alone, as the copy left it. `None` is never returned: the cell is always freed.
+    ///
+    /// One function per key and value type. Time: O(1) to emit and to run  Space: O(1)
+    fn bg_mapentry_release_fn(
+        &self,
+        key_ty: &Type,
+        value_ty: &Type,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let key_ty = self.resolve_type(key_ty);
+        let value_ty = self.resolve_type(value_ty);
+        let name = format!(
+            "ynz_release_bg_mapentry_{}_{}",
+            mangle_type(&key_ty),
+            mangle_type(&value_ty)
+        );
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let cell = release
+            .get_nth_param(0)
+            .ok_or("bg mapentry release: missing cell parameter")?
+            .into_pointer_value();
+        let entry_ty = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let decimal_cell_size = self.i64().const_int(16, false);
+        let half_pointer = |index: u32, label: &str| -> Result<PointerValue<'ctx>, String> {
+            let slot = self
+                .builder
+                .build_struct_gep(entry_ty, cell, index, &format!("{label}_slot"))
+                .map_err(|err| format!("bg mapentry release gep {label}: {err}"))?;
+            let bits = self
+                .builder
+                .build_load(self.i64(), slot, &format!("{label}_bits"))
+                .map_err(|err| format!("bg mapentry release load {label}: {err}"))?
+                .into_int_value();
+            self.builder
+                .build_int_to_ptr(bits, self.ptr(), &format!("{label}_ptr"))
+                .map_err(|err| format!("bg mapentry release inttoptr {label}: {err}"))
+        };
+        if self.is_inline_decimal(&key_ty) {
+            let key_cell = half_pointer(0, "key")?;
+            self.builder
+                .build_call(
+                    self.rt.ynz_free,
+                    &[key_cell.into(), decimal_cell_size.into()],
+                    "",
+                )
+                .map_err(|err| format!("bg mapentry release key cell: {err}"))?;
+        } else if is_string_like(&key_ty) {
+            // The key is the spawn's own copy (`copy_map_entry_halves`).
+            let key_string = half_pointer(0, "key")?;
+            self.builder
+                .build_call(self.rt.ynz_string_release, &[key_string.into()], "")
+                .map_err(|err| format!("bg mapentry release key string: {err}"))?;
+        }
+        match &value_ty {
+            Type::Shape { .. } | Type::Maybe { .. } => {
+                if let Some(glue) = self.release_fn(&value_ty, true)? {
+                    let value_cell = half_pointer(1, "value")?;
+                    self.builder
+                        .build_call(glue, &[value_cell.into()], "")
+                        .map_err(|err| format!("bg mapentry release value: {err}"))?;
+                }
+            }
+            // A string, array or map value is the spawn's own copy (`copy_map_entry_halves`).
+            held if is_string_like(held)
+                || matches!(held, Type::BuiltinArray { .. } | Type::BuiltinMap { .. }) =>
+            {
+                if let Some(glue) = self.release_fn(held, false)? {
+                    let value_heap = half_pointer(1, "value")?;
+                    self.builder
+                        .build_call(glue, &[value_heap.into()], "")
+                        .map_err(|err| format!("bg mapentry release value heap: {err}"))?;
+                }
+            }
+            decimal if self.is_inline_decimal(decimal) => {
+                let value_cell = half_pointer(1, "value")?;
+                self.builder
+                    .build_call(
+                        self.rt.ynz_free,
+                        &[value_cell.into(), decimal_cell_size.into()],
+                        "",
+                    )
+                    .map_err(|err| format!("bg mapentry release value cell: {err}"))?;
+            }
+            _ => {}
+        }
+        self.builder
+            .build_call(
+                self.rt.ynz_free,
+                &[cell.into(), decimal_cell_size.into()],
+                "",
+            )
+            .map_err(|err| format!("bg mapentry release cell: {err}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("bg mapentry release return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(release)
+    }
+}
+
+/// Mark the view `view` of an envelope-union `background` argument as MOVED when this spawn is
+/// the argument's sole holder (`background_arg_sole_holder`: a binding the spawn consumes, or a
+/// temporary nobody names), so the task's slot takes the boxes the value owns instead of cloning
+/// them. The spawner releases neither (a consumed binding is `Omitted(Moved)` in the release
+/// plan, and a value that enters a union slot is no temporary), so a clone would leave the
+/// original with no owner (`plain_shape_into_union_parameter_spawn`). A value the spawner keeps
+/// (a field read, a binding used again) stays a deep copy, which the spawner's own scope exit
+/// and the task's ladder release once each.
+///
+/// Time: O(1)  Space: O(1)
+fn mark_union_spawn_argument_moved<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &ynz_ast::nodes::Expr,
+    view: PointerValue<'ctx>,
+) {
+    let span = arg.span();
+    if cg
+        .typed
+        .background_arg_sole_holder
+        .contains_key(&(span.start, span.end))
+    {
+        cg.moved_cell_values.insert(view.as_value_ref() as usize);
+    }
+}
+
+/// The ladder's free kind of an envelope-union argument of a SUSPENDING `background` callee: the
+/// union sits in the callee frame's `Param` region (`stage_union_arg`), so the entry releases what
+/// the slot owns and frees no cell. Nothing at a `give` position: the callee releases its own
+/// `give` parameter at its scope exits, and its move sites null the frame slot.
+///
+/// Time: O(1) to emit once per union type  Space: O(1)
+fn sm_union_arg_free_kind<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    union_ty: &Type,
+    callee: &str,
+    arg_index: usize,
+) -> Result<BgArgFreeKind, String> {
+    if let Some(Some(OwnershipModifier::Give)) =
+        cg.suspending_callee_param_ownership(callee, arg_index)
+    {
+        return Ok(BgArgFreeKind::None);
+    }
+    Ok(match cg.release_fn(union_ty, false)? {
+        Some(glue) => BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        },
+        None => BgArgFreeKind::None,
+    })
+}
 /// The task's own slot for an envelope-union `background` argument of a CPU callee: a heap cell
 /// holding the union persisted by value (a copy of what it owns, as a stored union does), plus
 /// the free kind the closure uses after the call.
@@ -30134,6 +30659,18 @@ fn release_glue_free_kind<'ctx>(
     callee: &str,
     arg_index: usize,
 ) -> Result<BgArgFreeKind, String> {
+    // A `MapEntry` is never an owner of a slot, so no callee releases or moves one on, whatever the
+    // parameter's modifier: the task's copy is the ladder's, entry cell and halves alike.
+    if let Type::MapEntry {
+        key: entry_key,
+        val: entry_value,
+    } = cg.resolve_type(ty)
+    {
+        let glue = cg.bg_mapentry_release_fn(&entry_key, &entry_value)?;
+        return Ok(BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        });
+    }
     match cg.plain_callee_param_ownership(callee, arg_index) {
         Some(Some(OwnershipModifier::Give)) => {
             return Ok(cg.free_kind_of_a_given_argument(kind, ty));
@@ -30147,7 +30684,14 @@ fn release_glue_free_kind<'ctx>(
             if let Some(Some(OwnershipModifier::Give)) =
                 cg.suspending_callee_param_ownership(callee, arg_index)
             {
-                return Ok(cg.free_kind_of_a_given_argument(kind, ty));
+                // The callee releases a flat shape's fields and nulls its frame slot, so the ladder
+                // frees the cell it allocated through the descriptor, not through the slot.
+                return Ok(match cg.free_kind_of_a_given_argument(kind, ty) {
+                    BgArgFreeKind::HeapShape { byte_size } => {
+                        BgArgFreeKind::OwnedCell { byte_size }
+                    }
+                    other => other,
+                });
             }
             if cg.callee_takes_a_given_parameter(callee) {
                 return Ok(kind);

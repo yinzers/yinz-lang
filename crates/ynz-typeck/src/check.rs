@@ -2799,15 +2799,17 @@ impl<'b> Checker<'b> {
         }
         // Half two of the sole-holder record: a plain binding this spawn CONSUMES. `Give`
         // alone is NOT that fact — `record_spawn_arg_ownership` reaches `Give` by three routes
-        // and only the statement-form ident routes consume anything. The `ident.is_none()`
+        // and only the ident routes consume anything. The `ident.is_none()`
         // default-deny route (FRAGO 022) records `Give` for any non-ident argument it cannot
         // prove safe while consuming NOTHING, so `background eat(b.items)` would otherwise
-        // claim the task is the sole holder of a map `b` still owns. `remaining.is_some()`
-        // identifies the one caller with the following statements in hand — the
-        // `check_stmts` statement form, which pushes every ident `Give` onto `gives` and
-        // consumes its alias class immediately after this returns. The handle form passes
-        // `None` and consumes nothing, so it is not a sole-holder route either.
-        if ident.is_some() && remaining.is_some() && matches!(label, BgOwnership::Give) {
+        // claim the task is the sole holder of a map `b` still owns. An ident `Give` consumes its binding
+        // on both statement forms: the `check_stmts` statement form (`remaining` in hand) pushes it
+        // onto `gives` and consumes its alias class right after this returns; the handle form and the
+        // backstop (`remaining` is `None`, so the liveness route cannot run) reach an ident `Give` only
+        // through the callee's declared `give` parameter, which the call check consumes (a later read is
+        // "already given away"). Leaving the handle form out left the consumed original with no
+        // releaser once the task took its copy (`a_handle_form_spawn_releases_the_consumed_original_once`).
+        if ident.is_some() && matches!(label, BgOwnership::Give) {
             self.bg_sole_holder
                 .entry(key)
                 .or_insert(SoleHolder::ConsumedBinding);

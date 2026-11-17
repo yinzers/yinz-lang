@@ -1,0 +1,15 @@
+// WHY: C8 slice 5 — a `MapEntry` of decimal key and value: the key's and the value's heap cells
+// the spawn made are freed with the entry cell.
+function readLater(entry: MapEntry<number<20>, number<20> >) -> nothing {
+  sleepBlocking(30)
+  print(entry.value)
+}
+
+function entrypoint() -> nothing {
+  let stock: map<number<20>, number<20> > = {}
+  stock.set(1.5, 2.5)
+  for (entry in stock) {
+    background readLater(entry)
+  }
+  wait sleep(300)
+}

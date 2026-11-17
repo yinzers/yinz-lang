@@ -107,8 +107,9 @@ pub const HANDLE_RET_KIND_VALUE_MAYBE: i64 = 6;
 //
 // `ynz-codegen` heap-clones every heap-typed `background` argument so it survives the
 // spawner's frame, and hands `ynz_rt_spawn` / `ynz_rt_spawn_handle` one descriptor per clone
-// (`ynz-runtime`'s `BgArgDropEntry { byte_offset, kind, size }`). The runtime's task-retire
-// drop ladder reads the pointer back out of the named frame slot and frees it by `kind`.
+// (`ynz-runtime`'s `BgArgDropEntry { byte_offset, kind, size, cell }`). The runtime's task-retire
+// drop ladder reads the pointer back out of the named frame slot and frees it by `kind`, except
+// for [`BG_ARG_KIND_OWNED_CELL`], which carries the pointer itself.
 // Shared here so the two sides cannot drift on the wire values.
 
 /// `ynz_alloc`'d cell (a shape copy, a decimal128 cell, a maybe envelope, a map-entry cell):
@@ -136,6 +137,12 @@ pub const BG_ARG_KIND_ARC_SHAPE: u64 = 4;
 /// the value's own allocation. One kind for every type whose release is more than one flat free,
 /// so a new heap type adds a glue function, never a wire value.
 pub const BG_ARG_KIND_RELEASE_GLUE: u64 = 5;
+/// A cell the ladder allocated whose CONTENTS the callee releases itself (the fields of a flat shape
+/// given to a suspending callee): the entry carries the cell's own pointer (`BgArgDropEntry::cell`),
+/// freed with `ynz_free(cell, size)`. The frame slot is not read: the callee nulls the slot of a
+/// parameter it releases, which would otherwise hide the cell from the ladder. Never a hand-off
+/// payload.
+pub const BG_ARG_KIND_OWNED_CELL: u64 = 6;
 
 /// Every `BG_ARG_KIND_*` value, for the runtime's per-kind alloc/free parity test that links
 /// [`bg_arg_kind_is_releasable_payload`] to the drop ladder's free match: a kind added here
@@ -147,6 +154,7 @@ pub const ALL_BG_ARG_KINDS: &[u64] = &[
     BG_ARG_KIND_RELEASED,
     BG_ARG_KIND_ARC_SHAPE,
     BG_ARG_KIND_RELEASE_GLUE,
+    BG_ARG_KIND_OWNED_CELL,
 ];
 
 /// Is a ladder slot of this kind a heap PAYLOAD the task can hand off (send into a channel,
