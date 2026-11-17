@@ -12,8 +12,8 @@
 mod support;
 
 use support::{
-    assert_asan_clean, assert_heap_balanced, assert_strings_balanced, at_both_optimization_levels,
-    run_balanced,
+    assert_asan_and_leaks_clean, assert_asan_clean, assert_heap_balanced, assert_strings_balanced,
+    at_both_optimization_levels, run_balanced,
 };
 
 /// What a case checks the counters of.
@@ -229,28 +229,6 @@ case!(
 
 // ── Item 2: a function hands back an owned channel reference ────────────────────────────────
 
-/// Run `program` under ASan with leak detection on. A channel is a counted `Arc` the runtime does
-/// not instrument, so a reference nobody gives back is a leak this run reports, and a reference
-/// given back twice is a free this run reports.
-fn assert_channels_balanced(label: &str, program: &str, expected: &str, no_optimize: bool) {
-    let built = support::build_source(program, label, no_optimize);
-    let sanitized = support::build_asan(&built);
-    let output = std::process::Command::new(&sanitized)
-        .env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0")
-        .output()
-        .expect("run the sanitized binary");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success() && !stderr.contains("Sanitizer"),
-        "{label} (no_optimize={no_optimize}): ASan or LeakSanitizer reported:\n{stderr}"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        expected,
-        "{label} (no_optimize={no_optimize})"
-    );
-}
-
 const CHANNELS_HANDED_BACK_AND_RELAYED: &str = "
 function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
   return chans.first()
@@ -289,7 +267,7 @@ fn a_returned_channel_or_maybe_channel_is_one_counted_reference_given_back_once(
     // Every reference now has one owner: the callee's return shares what it does not move, the
     // caller moves the result, and each holder gives its reference back at its scope exit.
     at_both_optimization_levels(|no_optimize| {
-        assert_channels_balanced(
+        assert_asan_and_leaks_clean(
             "channels_handed_back",
             CHANNELS_HANDED_BACK_AND_RELAYED,
             "20\n",

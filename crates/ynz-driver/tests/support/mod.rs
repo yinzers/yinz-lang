@@ -626,21 +626,26 @@ pub fn sweep_in_parallel<'items, Result: Send>(
     results
 }
 
-/// Build `source` (labelled `label`) at both optimization levels, run it under AddressSanitizer
-/// with LeakSanitizer on and check it exits 0, prints `expected` and reports nothing. For what
-/// the alloc counters cannot see: a box the Tokio runtime owns (a `Sleep`), an `Arc` a channel
-/// shares.
+/// Build `program`, run it under AddressSanitizer with LeakSanitizer on and check it exits 0,
+/// prints `expected` and reports nothing. For what the alloc counters cannot see: a box the Tokio
+/// runtime owns (a `Sleep`), a counted `Arc` a channel shares (a reference nobody gives back is a
+/// leak, one given back twice is a free).
+pub fn assert_asan_and_leaks_clean(label: &str, program: &str, expected: &str, no_optimize: bool) {
+    let built = build_source(program, label, no_optimize);
+    let mut command = Command::new(build_asan(&built));
+    command.env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0");
+    let run = run_with_watchdog(command);
+    assert!(
+        run.exit_code == 0 && !run.stderr.contains("Sanitizer"),
+        "{label} (no_optimize={no_optimize}): ASan or LeakSanitizer reported:\n{}",
+        run.stderr
+    );
+    assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
+}
+
+/// [`assert_asan_and_leaks_clean`] at both optimization levels.
 pub fn assert_source_asan_and_leaks_clean(label: &str, source: &str, expected: &str) {
     at_both_optimization_levels(|no_optimize| {
-        let built = build_source(source, label, no_optimize);
-        let mut command = Command::new(build_asan(&built));
-        command.env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0");
-        let run = run_with_watchdog(command);
-        assert!(
-            run.exit_code == 0 && !run.stderr.contains("Sanitizer"),
-            "{label} (no_optimize={no_optimize}): ASan or LeakSanitizer reported:\n{}",
-            run.stderr
-        );
-        assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
+        assert_asan_and_leaks_clean(label, source, expected, no_optimize);
     });
 }

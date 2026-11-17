@@ -9,8 +9,8 @@
 mod support;
 
 use support::{
-    assert_asan_clean, assert_heap_balanced, assert_strings_balanced, at_both_optimization_levels,
-    build_source, run_balanced,
+    assert_asan_and_leaks_clean, assert_asan_clean, assert_heap_balanced, assert_strings_balanced,
+    at_both_optimization_levels, build_source, run_balanced,
 };
 
 // ── Item 0: the nested-shape null check ─────────────────────────────────────────────────────
@@ -85,28 +85,6 @@ fn a_nested_shape_a_take_reads_is_released_behind_a_null_check_and_balances() {
 }
 
 // ── Slice 4: a union of heap variants carries a tag ─────────────────────────────────────────
-
-/// Run `program` under ASan with leak detection on. A channel is a counted `Arc` the runtime does
-/// not instrument, so a reference nobody gives back is a leak this run reports, and a reference
-/// given back twice is a free this run reports.
-fn assert_asan_and_leaks_clean(label: &str, program: &str, expected: &str, no_optimize: bool) {
-    let built = build_source(program, label, no_optimize);
-    let sanitized = support::build_asan(&built);
-    let output = std::process::Command::new(&sanitized)
-        .env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0")
-        .output()
-        .expect("run the sanitized binary");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success() && !stderr.contains("Sanitizer"),
-        "{label} (no_optimize={no_optimize}): ASan or LeakSanitizer reported:\n{stderr}"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        expected,
-        "{label} (no_optimize={no_optimize})"
-    );
-}
 
 const THE_REPRODUCER: &str = "
 function entrypoint() -> nothing {
