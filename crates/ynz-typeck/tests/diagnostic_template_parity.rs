@@ -1329,3 +1329,176 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
     ));
     assert_compiles(&program(generic, "holder"));
 }
+
+// ── v0.3-M9 C1h (#433): `fixed<T, N>` in signatures ─────────────────────────────────────────
+//
+// Each refusal is rendered from its registry template (the slots are the ones the emit site
+// fills), and the code its WHAT-INSTEAD names compiles (Golden Rule 11).
+
+#[test]
+fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    // WHY: `fixed<int, N>` names a length the compiler cannot read; the refusal's text must come
+    // from the registry, and both ways out (a whole number, no length) must compile.
+    assert_rendered(
+        DiagnosticKind::FixedLengthNotUsable,
+        "function total(share xs: fixed<int, N>) -> int { return 1 }\n\
+         function entrypoint() -> nothing { print(1) }",
+        &[
+            ("written", "fixed<int, N>"),
+            ("problem", "`N` is not a whole number"),
+            (
+                "alternative",
+                "Write a whole number, such as `fixed<int, 4>`, or leave the length out: \
+                 `fixed<int>`. To keep values of different types together, declare a shape with \
+                 a named field for each",
+            ),
+            ("limit", "4294967295"),
+        ],
+    );
+    assert_compiles(
+        "function total(share xs: fixed<int, 4>) -> int { return xs.count() }\n\
+         function again(share xs: fixed<int>) -> int { return xs.count() }\n\
+         function entrypoint() -> nothing {\n\
+           let xs: fixed<int> = [1, 2, 3, 4]\n\
+           print(total(xs))\n\
+           print(again(xs))\n\
+         }",
+    );
+}
+
+#[test]
+fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    assert_rendered(
+        DiagnosticKind::FixedLengthNotAllowedHere,
+        "function entrypoint() -> nothing {\n\
+           let xs: fixed<int, 3> = [1, 2, 3]\n\
+           print(xs.count())\n\
+         }",
+        &[
+            ("written", "fixed<int, 3>"),
+            ("place", "on a local variable"),
+            (
+                "alternative",
+                "Leave the length out: `fixed<int>`. The list you assign gives it its length",
+            ),
+        ],
+    );
+    assert_compiles(
+        "function entrypoint() -> nothing {\n\
+           let xs: fixed<int> = [1, 2, 3]\n\
+           print(xs.count())\n\
+         }",
+    );
+}
+
+#[test]
+fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    assert_rendered(
+        DiagnosticKind::FixedLengthMismatch,
+        "function total(share xs: fixed<int, 4>) -> int { return xs.count() }\n\
+         function entrypoint() -> nothing {\n\
+           let xs: fixed<int> = [1, 2, 3]\n\
+           print(total(xs))\n\
+         }",
+        &[
+            (
+                "what_is",
+                "`xs` holds 3 items, but `total` takes exactly 4 items for `xs`",
+            ),
+            (
+                "alternative",
+                "Pass a list of 4 items, or change `xs` to `fixed<int>` so `total` takes a list \
+                 of any length",
+            ),
+            ("element", "int"),
+            ("expected", "4"),
+        ],
+    );
+    assert_compiles(
+        "function total(share xs: fixed<int>) -> int { return xs.count() }\n\
+         function entrypoint() -> nothing {\n\
+           let xs: fixed<int> = [1, 2, 3]\n\
+           print(total(xs))\n\
+         }",
+    );
+}
+
+#[test]
+fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    assert_rendered(
+        DiagnosticKind::FixedLengthMissingInExport,
+        "export function make() -> fixed<int> {\n\
+           let xs: fixed<int> = [1, 2, 3, 4]\n\
+           return xs\n\
+         }\n\
+         function entrypoint() -> nothing { print(1) }",
+        &[
+            ("function", "make"),
+            ("part", "return type"),
+            ("written", "fixed<int>"),
+            ("suggested", "fixed<int, 4>"),
+        ],
+    );
+    assert_compiles(
+        "export function make() -> fixed<int, 4> {\n\
+           let xs: fixed<int> = [1, 2, 3, 4]\n\
+           return xs\n\
+         }\n\
+         function entrypoint() -> nothing { print(1) }",
+    );
+}
+
+#[test]
+fn fixed_return_lengths_differ_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    assert_rendered(
+        DiagnosticKind::FixedReturnLengthsDiffer,
+        "function pick(share flag: boolean) -> fixed<int> {\n\
+           let two: fixed<int> = [1, 2]\n\
+           let one: fixed<int> = [1]\n\
+           if (flag) {\n\
+             return two\n\
+           }\n\
+           return one\n\
+         }\n\
+         function entrypoint() -> nothing { print(pick(true).count()) }",
+        &[
+            ("function", "pick"),
+            ("lengths", "2 items and 1 item"),
+            ("first", "2 items"),
+        ],
+    );
+    assert_compiles(
+        "function pick(share flag: boolean) -> fixed<int> {\n\
+           let two: fixed<int> = [1, 2]\n\
+           let other: fixed<int> = [3, 4]\n\
+           if (flag) {\n\
+             return two\n\
+           }\n\
+           return other\n\
+         }\n\
+         function entrypoint() -> nothing { print(pick(true).count()) }",
+    );
+}
+
+#[test]
+fn fixed_return_length_unknown_is_rendered_from_the_registry() {
+    assert_rendered(
+        DiagnosticKind::FixedReturnLengthUnknown,
+        "function frozen() -> fixed<int> {\n\
+           let items: fixed<int> = [1, 2]\n\
+           let longer = items.append(3)\n\
+           return longer\n\
+         }\n\
+         function entrypoint() -> nothing { print(1) }",
+        &[
+            ("function", "frozen"),
+            (
+                "reason",
+                "a `return` gives a list whose length is not known, for example one that comes \
+                 from a shape field, from `filter`, or from a function whose own length cannot \
+                 be worked out",
+            ),
+            ("element", "int"),
+        ],
+    );
+}

@@ -25083,6 +25083,8 @@ fn lower_expr_background<'ctx>(
         .and_then(|sig| sig.original_name.as_deref())
     {
         orig.to_string()
+    } else if let Some(symbol) = cg.fixed_version_symbol((call.span.start, call.span.end))? {
+        symbol
     } else if cg.module.get_function(&callee_name).is_some() {
         callee_name.clone()
     } else {
