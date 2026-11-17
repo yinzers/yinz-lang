@@ -4,39 +4,11 @@
 
 mod support;
 
-use support::{at_both_optimization_levels, build, build_asan, run_asan_binary, run_counted};
-
-/// Build the fixture and run it; it must print `expected`, exit 0, free every heap allocation and
-/// every string, and run clean under AddressSanitizer.
-fn assert_fixture_balanced(fixture: &str, expected: &str) {
-    at_both_optimization_levels(|no_optimize| {
-        let built = build(fixture, no_optimize);
-        let (run, counters) = run_counted(&built);
-        assert_eq!(
-            run.exit_code, 0,
-            "{fixture} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
-            run.stderr
-        );
-        assert_eq!(
-            run.stdout, expected,
-            "{fixture} (no_optimize={no_optimize})"
-        );
-        assert_eq!(
-            counters.free, counters.alloc,
-            "{fixture} (no_optimize={no_optimize}): every heap allocation must be freed: {counters:?}"
-        );
-        assert_eq!(
-            counters.string_free, counters.string_alloc,
-            "{fixture} (no_optimize={no_optimize}): every string must be freed: {counters:?}"
-        );
-        let sanitized = run_asan_binary(&build_asan(&built));
-        assert!(
-            !sanitized.stderr.contains("AddressSanitizer") && sanitized.exit_code == 0,
-            "{fixture} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
-            sanitized.stderr
-        );
-    });
-}
+use support::{
+    assert_built_asan_clean, assert_fixture_balanced_and_asan_clean as assert_fixture_balanced,
+    assert_source_balanced_and_asan_clean as assert_source_balanced, at_both_optimization_levels,
+    build, run_counted,
+};
 
 #[test]
 fn a_plain_maybe_union_errors_hit_releases_its_view() {
@@ -60,35 +32,6 @@ fn a_plain_errors_local_of_every_inner_type_is_released_with_its_own_form() {
         "v0_3_m9_c8_s4b_errors_inner_types_plain.ynz",
         &"false\n".repeat(9),
     );
-}
-
-/// Build and run `source` the way the fixture helper does: exit 0, `expected` printed, nothing
-/// leaked, clean under AddressSanitizer.
-fn assert_source_balanced(label: &str, source: &str, expected: &str) {
-    at_both_optimization_levels(|no_optimize| {
-        let built = support::build_source(source, label, no_optimize);
-        let (run, counters) = run_counted(&built);
-        assert_eq!(
-            run.exit_code, 0,
-            "{label} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
-            run.stderr
-        );
-        assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
-        assert_eq!(
-            counters.free, counters.alloc,
-            "{label} (no_optimize={no_optimize}): every heap allocation must be freed: {counters:?}"
-        );
-        assert_eq!(
-            counters.string_free, counters.string_alloc,
-            "{label} (no_optimize={no_optimize}): every string must be freed: {counters:?}"
-        );
-        let sanitized = run_asan_binary(&build_asan(&built));
-        assert!(
-            !sanitized.stderr.contains("AddressSanitizer") && sanitized.exit_code == 0,
-            "{label} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
-            sanitized.stderr
-        );
-    });
 }
 
 const SUSPENDING_MAYBE_CALLEES: &str = "
@@ -310,12 +253,7 @@ fn assert_fixture_runs_clean(fixture: &str, expected: &str) {
             run.stdout, expected,
             "{fixture} (no_optimize={no_optimize})"
         );
-        let sanitized = run_asan_binary(&build_asan(&built));
-        assert!(
-            !sanitized.stderr.contains("AddressSanitizer") && sanitized.exit_code == 0,
-            "{fixture} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
-            sanitized.stderr
-        );
+        assert_built_asan_clean(fixture, &built, no_optimize);
     });
 }
 

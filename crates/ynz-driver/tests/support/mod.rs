@@ -522,6 +522,59 @@ pub fn assert_asan_clean(label: &str, program: &str, expected: &str, no_optimize
     assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
 }
 
+/// Run `built` and check it exits 0, prints `expected`, freed every heap allocation and every
+/// string, and is clean under AddressSanitizer. `label` names the program in a failure.
+pub fn assert_built_balanced_and_asan_clean(
+    label: &str,
+    built: &Built,
+    expected: &str,
+    no_optimize: bool,
+) {
+    let (run, counters) = run_counted(built);
+    assert_eq!(
+        run.exit_code, 0,
+        "{label} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
+    assert_eq!(
+        counters.free, counters.alloc,
+        "{label} (no_optimize={no_optimize}): every heap allocation must be freed: {counters:?}"
+    );
+    assert_eq!(
+        counters.string_free, counters.string_alloc,
+        "{label} (no_optimize={no_optimize}): every string must be freed: {counters:?}"
+    );
+    assert_built_asan_clean(label, built, no_optimize);
+}
+
+/// Run `built` under AddressSanitizer and check it exits 0 and reports nothing.
+pub fn assert_built_asan_clean(label: &str, built: &Built, no_optimize: bool) {
+    let sanitized = run_asan_binary(&build_asan(built));
+    assert!(
+        !sanitized.stderr.contains("AddressSanitizer") && sanitized.exit_code == 0,
+        "{label} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+        sanitized.stderr
+    );
+}
+
+/// Build the fixture at both optimization levels and run [`assert_built_balanced_and_asan_clean`].
+pub fn assert_fixture_balanced_and_asan_clean(fixture: &str, expected: &str) {
+    at_both_optimization_levels(|no_optimize| {
+        let built = build(fixture, no_optimize);
+        assert_built_balanced_and_asan_clean(fixture, &built, expected, no_optimize);
+    });
+}
+
+/// Build `source` (labelled `label`) at both optimization levels and run
+/// [`assert_built_balanced_and_asan_clean`].
+pub fn assert_source_balanced_and_asan_clean(label: &str, source: &str, expected: &str) {
+    at_both_optimization_levels(|no_optimize| {
+        let built = build_source(source, label, no_optimize);
+        assert_built_balanced_and_asan_clean(label, &built, expected, no_optimize);
+    });
+}
+
 /// The fixture names under `tests/fixtures` that contain `filter` (all of them when it is empty),
 /// sorted.
 pub fn fixture_names(filter: &str) -> Vec<String> {
