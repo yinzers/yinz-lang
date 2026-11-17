@@ -13210,7 +13210,7 @@ fn temporary_home(
 /// recorded at the release point of a statement the resume function routes through the SM walker
 /// (`stmt_needs_sm_walker_for`), at every nesting depth, one pointer slot plus the bytes of its
 /// region when its kind has one (`temporary_home`); plus the slots the copies a statement stages
-/// make (`copy_slot_count`, `union_stage_slot_count`). A temporary built in such a statement
+/// make (`copy_slot_count`, `staged_argument_slot_count`). A temporary built in such a statement
 /// must survive its `wait`, which an entry-block slot does not (a resume gets a fresh stack
 /// frame), so it lives in the heap frame after the crossing locals (`Cg::open_wait_temporaries`).
 /// The slots are an upper bound: a temporary whose kind the emitter holds no frame home for
@@ -13269,7 +13269,7 @@ fn wait_temporary_slot_count(
                         .sum();
                     temporaries
                         + copy_slot_count(stmt, typed)
-                        + union_stage_slot_count(stmt, typed, suspend_set)
+                        + staged_argument_slot_count(stmt, typed, suspend_set, sizes)
                 } else {
                     0
                 };
@@ -13284,15 +13284,24 @@ fn wait_temporary_slot_count(
     count_block(&f.body, typed, suspend_set, back_edge_yield, sizes)
 }
 
-/// The frame slots the envelope-union arguments a suspending statement stages need
-/// (`stage_suspending_call_arg_bits`): one per argument of a call to a suspending function inside
-/// the statement itself, not in a block nested in it, whose value is an envelope union (or is
-/// coerced into one). The slot keeps the pointer to the callee's `Param` region the statement's
-/// end releases. A `give` position is counted too and leaves its slot unused, which costs 8 bytes.
+/// The frame slots the arguments a suspending statement stages into a suspending callee need
+/// (`stage_suspending_call_arg_bits`), for the calls inside the statement itself, not in a block
+/// nested in it:
+///
+/// * an argument that is, or is coerced into, an envelope union takes one slot, which keeps the
+///   pointer to the callee's `Param` region the statement's end releases (a `give` position leaves
+///   it unused);
+/// * a shape value typeck records as a staged argument (`Temporaries::is_staged_shape_argument`)
+///   takes the region its bytes are held in (`Cg::stage_shape_in_frame`).
 ///
 /// O(expressions of the statement) time.
-fn union_stage_slot_count(stmt: &Stmt, typed: &TypedModule, suspend_set: &SuspendSet) -> usize {
-    let is_union_argument = |arg: &Expr| {
+fn staged_argument_slot_count(
+    stmt: &Stmt,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    sizes: &HashMap<String, u64>,
+) -> usize {
+    let argument_slots = |arg: &Expr| -> usize {
         let span = arg.span();
         let key = (span.start, span.end);
         let slot = typed
@@ -13300,20 +13309,28 @@ fn union_stage_slot_count(stmt: &Stmt, typed: &TypedModule, suspend_set: &Suspen
             .get(&key)
             .map(|coercion| &coercion.slot)
             .or_else(|| typed.expr_types.get(&key));
-        slot.is_some_and(ynz_typeck::check::is_envelope_union)
+        if slot.is_some_and(ynz_typeck::check::is_envelope_union) {
+            return 1;
+        }
+        match typed.expr_types.get(&key) {
+            Some(Type::Shape { name })
+                if typed.temporaries.is_staged_shape_argument(key.0, key.1) =>
+            {
+                shape_frame_slots(name, sizes)
+            }
+            _ => 0,
+        }
     };
     fn walk(
         expr: &Expr,
         suspend_set: &SuspendSet,
-        is_union_argument: &dyn Fn(&Expr) -> bool,
+        argument_slots: &dyn Fn(&Expr) -> usize,
     ) -> usize {
         let own = match expr {
             Expr::Call(call) => match &call.callee {
-                Expr::Ident(name, _) if is_suspending_member(suspend_set, name) => call
-                    .args
-                    .iter()
-                    .filter(|arg| is_union_argument(arg))
-                    .count(),
+                Expr::Ident(name, _) if is_suspending_member(suspend_set, name) => {
+                    call.args.iter().map(argument_slots).sum()
+                }
                 _ => 0,
             },
             // The UFCS form: the receiver is argument 0 of the callee.
@@ -13324,18 +13341,18 @@ fn union_stage_slot_count(stmt: &Stmt, typed: &TypedModule, suspend_set: &Suspen
                 ..
             } if is_suspending_member(suspend_set, method) => std::iter::once(receiver.as_ref())
                 .chain(args.iter())
-                .filter(|arg| is_union_argument(arg))
-                .count(),
+                .map(argument_slots)
+                .sum(),
             _ => 0,
         };
         own + ynz_typeck::string_ownership::children(expr)
             .into_iter()
-            .map(|inner| walk(inner, suspend_set, is_union_argument))
+            .map(|inner| walk(inner, suspend_set, argument_slots))
             .sum::<usize>()
     }
     ynz_typeck::release_plan::stmt_own_exprs(stmt)
         .into_iter()
-        .map(|expr| walk(expr, suspend_set, &is_union_argument))
+        .map(|expr| walk(expr, suspend_set, &argument_slots))
         .sum()
 }
 
@@ -16558,15 +16575,15 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 ///    crossing local: the composed frame is heap-resident and outlives the suspension,
 ///    and `flush_crossing_local_if_needed` (which runs after every non-wait statement)
 ///    keeps those slots current, so the child reads live bytes.
-/// 2. An ANONYMOUS aggregate literal (`wait crew({ ... })` — v0.3-M6 Phase 1c, same
-///    FRAGO 006/007 class): it has no LET name for the crossing classifier to anchor
-///    on, and its lowered value is a dying stack temp (`lower_struct_lit`), so staging
-///    its raw pointer bits reproduces the UAF for an UNNAMED temporary (fixture
-///    `v0_3_m6_anon_struct_arg_pure_call.ynz`: 4240380 vs 7). Route it through
-///    `value_to_stable_bits` — the ONE stable-bits marshalling point — so the staged
-///    bits point at a counted heap cell that survives the parent's suspension.
-///    Scope-minimal: `StructLit` only; other non-Ident temp forms stay recorded
-///    residuals (Phase 1c plan text).
+/// 2. A shape VALUE the argument expression just built (an anonymous literal such as
+///    `wait crew({ ... })`, or a call result): its lowered value is a pointer into this resume
+///    invocation's stack, which dies when the parent returns Pending, and the resumed child would
+///    dereference it (v0.3-M6 Phase 1c, FRAGO 006/007 class; fixture
+///    `v0_3_m6_anon_struct_arg_pure_call.ynz`: 4240380 vs 7). A shape that is a temporary of the
+///    statement (a `share` position, owning heap) is moved into its frame region by `lower_expr`
+///    (`Cg::bind_temporary`); any other (a `give` position, or a shape owning no heap) is moved
+///    into a frame region staged here (`Cg::stage_shape_in_frame`). Either way the staged bits point
+///    at frame bytes that outlive the parent's suspension and nothing is allocated.
 ///
 /// `param_ty` is the callee's declared type for this position (`Cg::callee_param_type`).
 ///
@@ -16622,46 +16639,21 @@ fn stage_suspending_call_arg_bits<'ctx>(
         cg.suspending_callee_param_ownership(callee_name, index),
         Some(Some(OwnershipModifier::Give))
     );
-    if matches!(arg, Expr::StructLit { .. }) {
-        // Exception 2 (doc above): anonymous aggregate — stage from a counted heap
-        // cell via the one stable-bits marshalling point, never the dying stack temp.
-        let arg_span = arg.span();
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        // A literal in a position the callee only reads is a temporary of the statement whose
-        // bytes `lower_expr` moved into a frame region: the region is stable across the
-        // callee's `wait`, owns the literal's boxes and is released when the statement ends, so
-        // the callee is staged the region itself and nothing is allocated.
-        if !callee_takes_it && cg.temporary_has_region((arg_span.start, arg_span.end)) {
-            return cg
-                .builder
-                .build_ptr_to_int(
-                    arg_val.into_pointer_value(),
-                    cg.i64(),
-                    "sm_arg_anon_region_bits",
-                )
-                .map_err(|err| format!("sm arg anon region bits: {err}"));
-        }
-        let Type::Shape { name: shape_name } = cg.resolve_type(&arg_ty) else {
-            return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
-        };
-        // No region (a `give` position records no temporary, so nothing releases the literal): the
-        // literal is fresh and nobody else holds it, so the cell TAKES its boxes instead of
-        // cloning them. The cell is the argument's only owner: a `give` callee frees it, any other
-        // position leaves it to the caller, which frees it when the statement ends.
-        let literal = arg_val.into_pointer_value();
-        cg.moved_cell_values.insert(literal.as_value_ref() as usize);
-        let cell = cg.shape_bytes_to_heap_cell(literal, &shape_name, "sm_arg_anon")?;
-        if !callee_takes_it {
-            cg.hold_copy_in_frame(cell, &arg_ty, ReleaseForm::Cell)?;
-        }
-        return cg
-            .builder
-            .build_ptr_to_int(cell, cg.i64(), "sm_arg_anon_bits")
-            .map_err(|err| format!("sm arg anon cell bits: {err}"));
-    }
     let arg_val = lower_expr(cg, arg)?;
     let arg_ty = cg.expr_type(arg);
+    // A shape the expression just built that no temporary covers (a `give` position, or a shape
+    // that owns no heap): its bytes sit in this resume invocation's stack, which the callee's
+    // `wait` outlives.
+    let built_span = arg.span();
+    if let Type::Shape { name: shape_name } = cg.resolve_type(&arg_ty) {
+        if cg
+            .typed
+            .temporaries
+            .is_staged_shape_argument(built_span.start, built_span.end)
+        {
+            return cg.stage_shape_in_frame(arg_val.into_pointer_value(), &shape_name);
+        }
+    }
     // An argument typeck judged a copy (`non_owned_reads`) is copied here. The callee suspends,
     // so the copy's pointer is held in a slot of the heap frame (`Cg::hold_copy_in_frame`), which
     // the statement's end releases.
@@ -28969,6 +28961,41 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(true)
     }
 
+    /// Move the bytes of the shape value `value` (an expression's result, which sits in this resume
+    /// invocation's stack) into a frame region of the statement, and return the region's address as
+    /// the frame slot bits a suspending callee is staged: the region outlives the callee's `wait`,
+    /// which the stack does not. The region's contents belong to the callee (`give`) or own no
+    /// heap, so no slot releases it. `wait_temporary_slot_count` reserved the region
+    /// (`staged_argument_slot_count`).
+    ///
+    /// Time: O(1) + one memcpy of the shape's bytes  Space: O(1)
+    fn stage_shape_in_frame(
+        &mut self,
+        value: PointerValue<'ctx>,
+        shape_name: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let frame_ptr = self
+            .sm_frame_ptr
+            .ok_or("internal: a shape was staged into a frame outside a resume function")?;
+        let size = self.shape_abi_size_const(shape_name, "stage_shape_in_frame")?;
+        let first =
+            self.take_wait_temporary_slots(shape_frame_slots(shape_name, &self.shape_abi_sizes))?;
+        let region = state_machine::shape_frame_region_ptr(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            state_machine::FRAME_OFFSET_LOCALS_START
+                + (first as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE,
+            "staged_shape",
+        )?;
+        self.builder
+            .build_memcpy(region, 1, value, 1, size)
+            .map_err(|err| format!("stage a shape into the frame: {err}"))?;
+        self.builder
+            .build_ptr_to_int(region, self.i64(), "staged_shape_bits")
+            .map_err(|err| format!("staged shape bits: {err}"))
+    }
+
     /// The next free frame slot for a temporary of a suspending statement. Running out is an
     /// internal error: `wait_temporary_slot_count` and the statements lowered disagree, and a slot
     /// past the reservation would be bytes of another local or a child frame.
@@ -29051,16 +29078,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     fn open_iteration_frame(&mut self) {
         self.temporary_frames.push(Vec::new());
         self.wait_frame_marks.push(self.temporary_frames.len());
-    }
-
-    /// True when the temporary built by the expression at `span` keeps its bytes in a frame region
-    /// (`bind_temporary` moved the value there).
-    fn temporary_has_region(&self, span: (usize, usize)) -> bool {
-        self.temporary_frames
-            .iter()
-            .rev()
-            .flat_map(|frame| frame.iter())
-            .any(|temporary| temporary.span == span && temporary.region.is_some())
     }
 
     /// The slot of the temporary built by the expression at `span` when it lives in a slot of the

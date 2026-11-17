@@ -94,6 +94,12 @@ pub struct Temporaries {
     /// The temporaries that are an explicit `.copy()` of a `maybe`: each owns a heap envelope cell
     /// of its own (`OwnedCopy::MaybeCellClone`), which its release frees after the payload.
     minted_maybe_copies: HashSet<Span>,
+    /// The arguments of a call of a Yinz function that build a shape value no binding holds and that
+    /// are not temporaries: one at a `give` position (the callee owns it), or one whose shape owns no
+    /// heap. The bytes of such a value sit where the expression built them, which a callee that
+    /// suspends cannot read after its own `wait`; codegen keeps them in a frame region while it
+    /// stages the argument (`Cg::stage_shape_in_frame`).
+    staged_shape_arguments: HashSet<Span>,
 }
 
 impl Temporaries {
@@ -107,6 +113,12 @@ impl Temporaries {
     /// (`Cg::open_temporaries`).
     pub fn is_minted_maybe_copy(&self, start: usize, end: usize) -> bool {
         self.minted_maybe_copies.contains(&(start, end))
+    }
+
+    /// True when the expression at `start..end` is an argument of a call of a Yinz function that
+    /// builds a shape value and is no temporary (a `give` position, or a shape that owns no heap).
+    pub fn is_staged_shape_argument(&self, start: usize, end: usize) -> bool {
+        self.staged_shape_arguments.contains(&(start, end))
     }
 
     /// True when the expression at `start..end` builds a temporary.
@@ -453,6 +465,24 @@ impl Walk<'_> {
         }
     }
 
+    /// An argument of a Yinz function that builds a shape value and that no temporary covers (it is
+    /// at a `give` position, or its shape owns no heap): recorded so codegen keeps its bytes in the
+    /// frame while a suspending callee runs (`Temporaries::is_staged_shape_argument`). A value that
+    /// enters a union slot is staged as a union, not as a shape.
+    ///
+    /// O(1) time.
+    fn staged_shape_argument(&mut self, arg: &Expr) {
+        let span = span_of(arg);
+        if self.out.temporaries.contains_key(&span)
+            || self.facts.union_coercions.contains_key(&span)
+            || !self.builds_a_value(arg)
+            || !matches!(self.type_of(arg), Some(Type::Shape { .. }))
+        {
+            return;
+        }
+        self.out.staged_shape_arguments.insert(span);
+    }
+
     /// An argument of a Yinz function that typeck coerces into a union parameter (`kind(`text`)`) is
     /// copied into an envelope the call mints; when the callee only reads it (anything but `give`) the
     /// envelope is a temporary of the statement: it owns the text it wrapped (a copy, or the fresh
@@ -506,6 +536,7 @@ impl Walk<'_> {
                     self.value(arg, usage, key, suppress);
                     if self.facts.callable_fns.contains(name) {
                         self.envelope_argument(arg, usage, key, suppress);
+                        self.staged_shape_argument(arg);
                     }
                 }
             }
@@ -517,6 +548,7 @@ impl Walk<'_> {
             } => {
                 if self.is_user_call(expr) {
                     self.value(receiver, self.argument_use(method, 0), key, suppress);
+                    self.staged_shape_argument(receiver);
                     for (index, arg) in args.iter().enumerate() {
                         self.value(arg, self.argument_use(method, index + 1), key, suppress);
                         self.envelope_argument(
@@ -525,6 +557,7 @@ impl Walk<'_> {
                             key,
                             suppress,
                         );
+                        self.staged_shape_argument(arg);
                     }
                     return;
                 }

@@ -442,3 +442,80 @@ function entrypoint() -> nothing {{
     );
     assert_balanced("nested_take", &source, "AB\n");
 }
+
+const STAGED_CREW: &str = "
+shape Crew {
+  name: string
+  size: int
+}
+
+shape Tiny {
+  flag: boolean
+}
+
+function makeCrew() -> Crew {
+  return { name: `ab`.toUpperCase(), size: 3 }
+}
+
+function makeTiny() -> Tiny {
+  return { flag: true }
+}
+
+function takeLater(give crew: Crew) -> int {
+  wait sleep(5)
+  return crew.size
+}
+
+function readTinyLater(share tiny: Tiny) -> int {
+  wait sleep(5)
+  if (tiny.flag) {
+    return 1
+  }
+  return 0
+}
+";
+
+/// Bug it catches: a call result given to a suspending callee was staged by pointer into the dead
+/// resume stack (probe: 4242055 instead of 3, both optimization levels, ASan silent).
+#[test]
+fn shape_call_result_given_to_a_suspending_callee_survives_the_callee_wait() {
+    let source = format!(
+        "{STAGED_CREW}
+function entrypoint() -> nothing {{
+  let size: int = wait takeLater(makeCrew())
+  print(size)
+}}
+"
+    );
+    assert_balanced("shape_given_call_result", &source, "3\n");
+}
+
+/// Bug it catches: an anonymous literal given to a suspending callee sat in a heap cell the
+/// callee never freed (1 allocation left over).
+#[test]
+fn shape_literal_given_to_a_suspending_callee_leaves_no_cell() {
+    let source = format!(
+        "{STAGED_CREW}
+function entrypoint() -> nothing {{
+  let size: int = wait takeLater({{ name: `cd`.toUpperCase(), size: 4 }})
+  print(size)
+}}
+"
+    );
+    assert_balanced("shape_given_literal", &source, "4\n");
+}
+
+/// Bug it catches: a call result of a shape that owns no heap is no temporary, so nothing kept
+/// its bytes either: the suspending callee read the dead resume stack (`share` position).
+#[test]
+fn heap_free_shape_call_result_survives_a_suspending_callee_wait() {
+    let source = format!(
+        "{STAGED_CREW}
+function entrypoint() -> nothing {{
+  let flag: int = wait readTinyLater(makeTiny())
+  print(flag)
+}}
+"
+    );
+    assert_balanced("shape_heap_free_call_result", &source, "1\n");
+}
