@@ -733,11 +733,11 @@ function second(give rows: array<int>) -> int {
 }
 
 function worker() -> nothing {
-  let a: array<int> = [1, 2, 3]
-  let b: array<int> = [4]
-  let x = first(a)
-  let y = second(b)
-  print(`${x + y}`)
+  let firstRows: array<int> = [1, 2, 3]
+  let secondRows: array<int> = [4]
+  let firstCount = first(firstRows)
+  let secondCount = second(secondRows)
+  print(`${firstCount + secondCount}`)
 }
 
 function entrypoint() -> nothing {
@@ -749,9 +749,9 @@ function entrypoint() -> nothing {
 
 /// The callee is called in a loop (its embedded frame reused) and parks on a later iteration.
 const GIVEN_TO_PARKED_CHILD_IN_A_LOOP: &str = "
-function inner(give rows: array<int>, ms: int) -> nothing {
+function inner(give rows: array<int>, sleepMilliseconds: int) -> nothing {
   let local: array<int> = [1]
-  wait sleep(ms)
+  wait sleep(sleepMilliseconds)
   print(`${rows.count()}`)
 }
 
@@ -773,15 +773,15 @@ function entrypoint() -> nothing {
 
 /// Recursion that gives a local to the next level, parked at the deepest one.
 const GIVEN_DOWN_A_PARKED_RECURSION: &str = "
-function down(n: int, give acc: array<int>) -> nothing {
-  if (n == 0) {
+function down(depth: int, give carried: array<int>) -> nothing {
+  if (depth == 0) {
     wait sleep(500)
-    print(`${acc.count()}`)
+    print(`${carried.count()}`)
     return
   }
-  let next: array<int> = [n]
-  down(n - 1, next)
-  print(`${acc.count()}`)
+  let next: array<int> = [depth]
+  down(depth - 1, next)
+  print(`${carried.count()}`)
 }
 
 function entrypoint() -> nothing {

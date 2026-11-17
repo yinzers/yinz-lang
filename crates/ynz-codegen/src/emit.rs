@@ -10299,7 +10299,9 @@ fn frame_backed_drop_entries(
     function_name: &str,
 ) -> Result<Vec<ynz_typeck::release_plan::ReleaseEntry>, String> {
     use ynz_typeck::release_plan::Fate;
-    let crossing = cg.sm_crossing_names.as_deref().unwrap_or(&[]);
+    let crossing = cg.sm_crossing_names.as_deref().ok_or_else(|| {
+        format!("internal: the drop entry of `{function_name}` has no crossing set")
+    })?;
     let is_frame_backed = |name: &str| {
         param_names.iter().any(|param| param == name)
             || crossing.iter().any(|local| local == name)
