@@ -23714,6 +23714,12 @@ enum BgArgFreeKind {
     /// (`BG_ARG_KIND_OWNED_CELL`) and frees it with `ynz_free(cell, byte_size)`. Never reaches the CPU arm
     /// (a plain callee keeps `HeapShape`, its closure frees the cell from the context).
     OwnedCell { byte_size: u64 },
+    /// v0.3-M9 C8: the cells a spawn minted for a `maybe` whose payload has a cell of its own (a
+    /// shape, a decimal), given to a SUSPENDING callee at a `give` position. The callee releases the
+    /// payload's contents and nulls its frame slot, so the ladder frees the envelope cell and the
+    /// payload cell through two `BG_ARG_KIND_OWNED_CELL` entries that carry the pointers themselves
+    /// (the payload cell's is read from the envelope at the spawn, null when the `maybe` is `none`).
+    OwnedMaybeCells { payload_size: u64 },
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -24380,7 +24386,7 @@ fn emit_bg_arg_frees<'ctx>(
                     .build_call(glue, &[release_ptr.into()], "")
                     .map_err(|e| format!("bg release call: {e}"))?;
             }
-            BgArgFreeKind::OwnedCell { .. } => {
+            BgArgFreeKind::OwnedCell { .. } | BgArgFreeKind::OwnedMaybeCells { .. } => {
                 return Err(
                     "internal: an owned-cell free kind belongs to a suspending callee, which the CPU arm never spawns"
                         .to_string(),
@@ -25003,8 +25009,32 @@ fn lower_sm_background_spawn<'ctx>(
                 let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, *byte_size))
             }
+            BgArgFreeKind::OwnedMaybeCells { .. } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, 16_u64))
+            }
             BgArgFreeKind::None => None,
         })
+        .collect();
+    // A `maybe` given to a suspending callee also frees the payload's own cell: a second entry for
+    // the same slot, after the others (`BgArgFreeKind::OwnedMaybeCells`).
+    let payload_entries: Vec<(usize, u64, u64, bool)> = free_kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(slot_idx, kind)| match kind {
+            BgArgFreeKind::OwnedMaybeCells { payload_size } => Some((
+                slot_idx,
+                state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8,
+                *payload_size,
+                true,
+            )),
+            _ => None,
+        })
+        .collect();
+    let heap_args: Vec<(usize, u64, u64, bool)> = heap_args
+        .into_iter()
+        .map(|(slot_idx, byte_offset, size)| (slot_idx, byte_offset, size, false))
+        .chain(payload_entries)
         .collect();
 
     let (arg_drop_ptr_val, arg_drop_count_val) = if heap_args.is_empty() {
@@ -25031,7 +25061,9 @@ fn lower_sm_background_spawn<'ctx>(
         // Fill each descriptor: { byte_offset: u64, kind: u64, size: u64 }.
         let i64_ty = cg.ctx.i64_type();
         let i8_ty = cg.ctx.i8_type();
-        for (entry_idx, (slot_idx, byte_offset, size)) in heap_args.iter().enumerate() {
+        for (entry_idx, (slot_idx, byte_offset, size, is_payload_cell)) in
+            heap_args.iter().enumerate()
+        {
             let entry_byte_base = entry_idx as u64 * desc_entry_size;
 
             // field 0: byte_offset
@@ -25062,7 +25094,9 @@ fn lower_sm_background_spawn<'ctx>(
                 BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
                 BgArgFreeKind::ArcShape { .. } => ynz_abi::BG_ARG_KIND_ARC_SHAPE,
                 BgArgFreeKind::ReleaseGlue { .. } => ynz_abi::BG_ARG_KIND_RELEASE_GLUE,
-                BgArgFreeKind::OwnedCell { .. } => ynz_abi::BG_ARG_KIND_OWNED_CELL,
+                BgArgFreeKind::OwnedCell { .. } | BgArgFreeKind::OwnedMaybeCells { .. } => {
+                    ynz_abi::BG_ARG_KIND_OWNED_CELL
+                }
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -25118,6 +25152,12 @@ fn lower_sm_background_spawn<'ctx>(
             };
             let cell_value = match &free_kinds[*slot_idx] {
                 BgArgFreeKind::OwnedCell { .. } => arg_vals_i64[*slot_idx],
+                BgArgFreeKind::OwnedMaybeCells { .. } if !*is_payload_cell => {
+                    arg_vals_i64[*slot_idx]
+                }
+                BgArgFreeKind::OwnedMaybeCells { .. } => {
+                    maybe_payload_cell_bits(cg, arg_vals_i64[*slot_idx])?
+                }
                 _ => i64_ty.const_zero(),
             };
             cg.builder
@@ -31306,6 +31346,108 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
         Ok(release)
     }
+
+    /// The size of the cell a `maybe`'s payload sits in when the spawn copy minted one besides the
+    /// envelope: a flat shape's ABI size, or a decimal's 16 bytes. `None` for a payload with no cell
+    /// of its own (a string, an array, a map) and for a type that is not a `maybe`.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn maybe_payload_cell_size(&self, maybe_ty: &Type) -> Option<u64> {
+        let Type::Maybe { inner } = self.resolve_type(maybe_ty) else {
+            return None;
+        };
+        match self.resolve_type(&inner) {
+            Type::Shape { name } if self.shape_table.layout_shape(&name).is_some() => {
+                self.shape_abi_sizes.get(&name).copied()
+            }
+            number if self.is_inline_decimal(&number) => Some(16),
+            _ => None,
+        }
+    }
+
+    /// The module function `void(ptr envelope)` that frees the two cells a `background` spawn minted
+    /// for a `maybe` argument (`MaybeCellClone`): the payload's own cell (a shape's, a decimal's;
+    /// only when the `maybe` holds one) and the 16-byte envelope cell, and NOTHING they hold. For a
+    /// callee that takes the `maybe` at a `give` position: it releases what the payload owns (a
+    /// shape's fields) at its scope exit, in the `Local` form, which has no cell to free, so the
+    /// cells are the ladder's. `None` when the payload has no cell of its own (a string, an array,
+    /// a map: the callee's release frees the payload whole and only the envelope remains, which
+    /// the flat free kind frees).
+    ///
+    /// One function per payload type. Time: O(1) to emit and to run  Space: O(1)
+    fn given_maybe_shell_release_fn(
+        &self,
+        maybe_ty: &Type,
+    ) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let Type::Maybe { inner } = self.resolve_type(maybe_ty) else {
+            return Ok(None);
+        };
+        let inner = self.resolve_type(&inner);
+        let Some(payload_cell_size) = self.maybe_payload_cell_size(maybe_ty) else {
+            return Ok(None);
+        };
+        let payload_size = self.i64().const_int(payload_cell_size, false);
+        let name = format!("ynz_release_given_maybe_shell_{}", mangle_type(&inner));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        let present_bb = self.ctx.append_basic_block(release, "payload_cell");
+        let envelope_bb = self.ctx.append_basic_block(release, "envelope_cell");
+        self.builder.position_at_end(entry);
+        let envelope = release
+            .get_nth_param(0)
+            .ok_or("given maybe shell release: missing envelope parameter")?
+            .into_pointer_value();
+        let (flag, bits) = self.load_maybe_env_pair(envelope, "given_maybe_shell")?;
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                "given_maybe_shell_present",
+            )
+            .map_err(|err| format!("given maybe shell present: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, present_bb, envelope_bb)
+            .map_err(|err| format!("given maybe shell branch: {err}"))?;
+        self.builder.position_at_end(present_bb);
+        let payload = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), "given_maybe_shell_payload")
+            .map_err(|err| format!("given maybe shell payload: {err}"))?;
+        self.builder
+            .build_call(self.rt.ynz_free, &[payload.into(), payload_size.into()], "")
+            .map_err(|err| format!("given maybe shell payload free: {err}"))?;
+        self.builder
+            .build_unconditional_branch(envelope_bb)
+            .map_err(|err| format!("given maybe shell join: {err}"))?;
+        self.builder.position_at_end(envelope_bb);
+        let envelope_size = self.release_cell_size(&ReleaseStep::Maybe {
+            inner: inner.clone(),
+        })?;
+        self.builder
+            .build_call(
+                self.rt.ynz_free,
+                &[envelope.into(), envelope_size.into()],
+                "",
+            )
+            .map_err(|err| format!("given maybe shell envelope free: {err}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("given maybe shell return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
 }
 
 /// Mark the view `view` of an envelope-union `background` argument as MOVED when this spawn is
@@ -31398,6 +31540,57 @@ fn bg_union_arg_cell<'ctx>(
     Ok((bits, kind))
 }
 
+/// The payload cell of the `maybe` envelope cell whose address is `envelope_bits`, as the bits of a
+/// pointer: the envelope's payload word when its flag says present, zero when it is `none` (a
+/// descriptor entry with a zero cell frees nothing). Read at the spawn, while the cell is intact.
+///
+/// Time: O(1)  Space: O(1)
+fn maybe_payload_cell_bits<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    envelope_bits: inkwell::values::IntValue<'ctx>,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let envelope = cg
+        .builder
+        .build_int_to_ptr(envelope_bits, cg.ptr(), "spawn_maybe_envelope")
+        .map_err(|err| format!("spawn maybe envelope: {err}"))?;
+    let (flag, bits) = cg.load_maybe_env_pair(envelope, "spawn_maybe_payload")?;
+    let present = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            flag,
+            cg.i64().const_zero(),
+            "spawn_maybe_present",
+        )
+        .map_err(|err| format!("spawn maybe present: {err}"))?;
+    Ok(cg
+        .builder
+        .build_select(present, bits, cg.i64().const_zero(), "spawn_maybe_cell")
+        .map_err(|err| format!("spawn maybe cell: {err}"))?
+        .into_int_value())
+}
+
+/// The free kind of a `maybe` the task's copy holds in cells of its own (`HeapMaybeEnv`) at a `give`
+/// position, when the payload has a cell besides the envelope: the callee releases the payload's
+/// contents at its scope exit, so the ladder frees the two cells and nothing in them
+/// (`Cg::given_maybe_shell_release_fn`). `None` for every other kind and type.
+///
+/// Time: O(1)  Space: O(1)
+fn given_maybe_shell_glue(
+    cg: &Cg<'_, '_>,
+    kind: &BgArgFreeKind,
+    ty: &Type,
+) -> Result<Option<BgArgFreeKind>, String> {
+    if !matches!(kind, BgArgFreeKind::HeapMaybeEnv { .. }) {
+        return Ok(None);
+    }
+    Ok(cg
+        .given_maybe_shell_release_fn(ty)?
+        .map(|glue| BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        }))
+}
+
 /// Upgrade the flat free kind of a `background` argument to the type's release glue, when the
 /// glue frees more than the flat free does and the task may free it deeply. A type whose release
 /// is not supported is an internal error, not a silent fall back to the flat free.
@@ -31434,6 +31627,9 @@ fn release_glue_free_kind<'ctx>(
     }
     match cg.plain_callee_param_ownership(callee, arg_index) {
         Some(Some(OwnershipModifier::Give)) => {
+            if let Some(glue) = given_maybe_shell_glue(cg, &kind, ty)? {
+                return Ok(glue);
+            }
             return Ok(cg.free_kind_of_a_given_argument(kind, ty));
         }
         Some(_) => {}
@@ -31445,6 +31641,11 @@ fn release_glue_free_kind<'ctx>(
             if let Some(Some(OwnershipModifier::Give)) =
                 cg.suspending_callee_param_ownership(callee, arg_index)
             {
+                if let (BgArgFreeKind::HeapMaybeEnv { .. }, Some(payload_size)) =
+                    (&kind, cg.maybe_payload_cell_size(ty))
+                {
+                    return Ok(BgArgFreeKind::OwnedMaybeCells { payload_size });
+                }
                 // The callee releases a flat shape's fields and nulls its frame slot, so the ladder
                 // frees the cell it allocated through the descriptor, not through the slot.
                 return Ok(match cg.free_kind_of_a_given_argument(kind, ty) {

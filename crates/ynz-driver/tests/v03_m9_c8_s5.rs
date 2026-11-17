@@ -771,4 +771,7 @@ maybe_spawn_cases! {
     a_copied_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
     a_copied_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
     a_fresh_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
+    a_given_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, true, "background eat(found)", "", "true\n";
+    a_given_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, true, "background eat(found)", "", "true\n";
+    a_fresh_maybe_shape_given_to_a_given_parameter_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, true, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
 }
