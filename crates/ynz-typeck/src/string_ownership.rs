@@ -572,7 +572,7 @@ fn collect_lets(stmts: &[Stmt], out: &mut HashSet<DeclKey>) {
 }
 
 /// The direct sub-expressions of `expr`.
-pub(crate) fn children(expr: &Expr) -> Vec<&Expr> {
+pub fn children(expr: &Expr) -> Vec<&Expr> {
     match expr {
         Expr::Ident(..)
         | Expr::StringLit(..)

@@ -611,6 +611,29 @@ pub fn nested_blocks(stmt: &Stmt) -> Vec<&Block> {
     }
 }
 
+/// The expressions `stmt` itself evaluates, not those of the blocks nested in it: the value of a
+/// `let`, `return` or assignment, the condition of an `if` or `while`, the scrutinee of a `match`,
+/// the iterable of a `for`.
+///
+/// O(1) time.
+pub fn stmt_own_exprs(stmt: &Stmt) -> Vec<&Expr> {
+    match stmt {
+        Stmt::Expr(expr) => vec![expr],
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => vec![value],
+        Stmt::Return { value, .. } => value.iter().collect(),
+        Stmt::FieldAssign { target, value, .. } => vec![target, value],
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => vec![receiver, index, value],
+        Stmt::If { cond, .. } | Stmt::While { cond, .. } => vec![cond],
+        Stmt::Match { scrutinee, .. } => vec![scrutinee],
+        Stmt::For { iter, .. } => vec![iter],
+    }
+}
+
 fn encloses(outer: Span, inner: Span) -> bool {
     outer.0 <= inner.0 && inner.1 <= outer.1
 }

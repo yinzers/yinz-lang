@@ -13254,7 +13254,9 @@ fn wait_temporary_slot_count(
                         .iter()
                         .map(|&span| temporary_slots(span, typed, sizes))
                         .sum();
-                    temporaries + copy_slot_count(stmt, typed) + union_stage_slot_count(stmt, typed)
+                    temporaries
+                        + copy_slot_count(stmt, typed)
+                        + union_stage_slot_count(stmt, typed, suspend_set)
                 } else {
                     0
                 };
@@ -13270,30 +13272,58 @@ fn wait_temporary_slot_count(
 }
 
 /// The frame slots the envelope-union arguments a suspending statement stages need
-/// (`stage_suspending_call_arg_bits`): one per value typeck coerces into an envelope union inside
-/// the statement itself, not in a block nested in it. The slot keeps the pointer to the callee's
-/// `Param` region the statement's end releases; a coercion that is no call argument leaves its
-/// slot unused, which costs 8 bytes.
+/// (`stage_suspending_call_arg_bits`): one per argument of a call to a suspending function inside
+/// the statement itself, not in a block nested in it, whose value is an envelope union (or is
+/// coerced into one). The slot keeps the pointer to the callee's `Param` region the statement's
+/// end releases. A `give` position is counted too and leaves its slot unused, which costs 8 bytes.
 ///
-/// O(coercions of the program) time.
-fn union_stage_slot_count(stmt: &Stmt, typed: &TypedModule) -> usize {
-    let nested: Vec<(usize, usize)> = ynz_typeck::release_plan::nested_blocks(stmt)
-        .into_iter()
-        .map(|block| (block.span.start, block.span.end))
-        .collect();
-    let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
-    typed
-        .union_coercions
-        .iter()
-        .filter(|&(&(from, to), coercion)| {
-            from >= start
-                && to <= end
-                && !nested
+/// O(expressions of the statement) time.
+fn union_stage_slot_count(stmt: &Stmt, typed: &TypedModule, suspend_set: &SuspendSet) -> usize {
+    let is_union_argument = |arg: &Expr| {
+        let span = arg.span();
+        let key = (span.start, span.end);
+        let slot = typed
+            .union_coercions
+            .get(&key)
+            .map(|coercion| &coercion.slot)
+            .or_else(|| typed.expr_types.get(&key));
+        slot.is_some_and(ynz_typeck::check::is_envelope_union)
+    };
+    fn walk(
+        expr: &Expr,
+        suspend_set: &SuspendSet,
+        is_union_argument: &dyn Fn(&Expr) -> bool,
+    ) -> usize {
+        let own = match expr {
+            Expr::Call(call) => match &call.callee {
+                Expr::Ident(name, _) if is_suspending_member(suspend_set, name) => call
+                    .args
                     .iter()
-                    .any(|&(inner_from, inner_to)| from >= inner_from && to <= inner_to)
-                && ynz_typeck::check::is_envelope_union(&coercion.slot)
-        })
-        .count()
+                    .filter(|arg| is_union_argument(arg))
+                    .count(),
+                _ => 0,
+            },
+            // The UFCS form: the receiver is argument 0 of the callee.
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } if is_suspending_member(suspend_set, method) => std::iter::once(receiver.as_ref())
+                .chain(args.iter())
+                .filter(|arg| is_union_argument(arg))
+                .count(),
+            _ => 0,
+        };
+        own + ynz_typeck::string_ownership::children(expr)
+            .into_iter()
+            .map(|inner| walk(inner, suspend_set, is_union_argument))
+            .sum::<usize>()
+    }
+    ynz_typeck::release_plan::stmt_own_exprs(stmt)
+        .into_iter()
+        .map(|expr| walk(expr, suspend_set, &is_union_argument))
+        .sum()
 }
 
 /// The frame slots the copies a suspending statement makes need (`Cg::hold_copy_in_frame`): one
