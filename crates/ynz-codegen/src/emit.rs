@@ -5676,6 +5676,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.deepen_shape_fields(copy, shape_name)
     }
 
+    /// Is `ty` a `fixed<T, N>` field whose cells hold pointers to items the shape owns (strings or
+    /// shapes), so a copy of the shape's bytes shares them and must copy each? O(1) time.
+    fn fixed_field_items_need_copy(&self, ty: &Type) -> bool {
+        match self.resolve_type(ty) {
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(_),
+            } => {
+                let elem = self.resolve_type(&elem);
+                is_string_like(&elem) || matches!(elem, Type::Shape { .. })
+            }
+            _ => false,
+        }
+    }
+
+    /// Is a field of type `ty` a `fixed<T, N>` list stored by value in the shape (its length is
+    /// known, so its cells are inline)? O(1) time.
+    fn is_stored_fixed_field(&self, ty: &Type) -> bool {
+        matches!(
+            self.resolve_type(ty),
+            Type::BuiltinFixed {
+                size: FixedLength::Known(_),
+                ..
+            }
+        )
+    }
+
     /// Does a field of type `ty` own heap a shape copy must copy (`deepen_shape_fields`)?
     ///
     /// Time: O(v) for a union's v variants  Space: O(v)
@@ -5683,6 +5710,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let ty = self.resolve_type(ty);
         self.envelope_union_variants(&ty).is_some()
             || is_string_like(&ty)
+            || self.fixed_field_items_need_copy(&ty)
             || matches!(
                 ty,
                 Type::BuiltinArray { .. }
@@ -5751,6 +5779,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.builder
                     .build_call(deepen_fn, &[field_slot.into()], "deepen_field")
                     .map_err(|err| format!("deepen_shape_fields call: {err}"))?;
+                continue;
+            }
+            // A `fixed<T, N>` field's cells sit inside the shape and were byte-copied with it: each
+            // cell's item gets a copy of its own.
+            if let Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } = &field_ty
+            {
+                let elem = self.resolve_type(elem);
+                emit_fixed_item_cells_copy(self, field_slot, *count as u64, &elem, &site)?;
                 continue;
             }
             let original = self
@@ -27368,6 +27407,11 @@ fn lower_field_access<'ctx>(
             .union_slot_to_value(field_ptr, &variants, field_name)?
             .into());
     }
+    // A `fixed<T, N>` field holds its cells inside the shape: the value is the address of the
+    // first cell, as a local list's value is the address of its block.
+    if cg.is_stored_fixed_field(&field_ty) {
+        return Ok(field_ptr.into());
+    }
     load(cg, field_ptr, &field_ty, field_name)
 }
 
@@ -27576,6 +27620,27 @@ fn lower_stmt_field_assign<'ctx>(
         return store_field(cg, val, &field_ty, field_ptr);
     };
     let old_slot = match cg.envelope_union_variants(&cg.resolve_type(&field_ty)) {
+        // A `fixed<T, N>` field: keep a copy of its cells (the items they point at are still the
+        // old list's, which the release below frees after the new list is stored).
+        None if cg.is_stored_fixed_field(&field_ty) => {
+            let Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } = cg.resolve_type(&field_ty)
+            else {
+                return Err("field assign: fixed field lost its length".to_string());
+            };
+            let block_ty = cg.fixed_block_type(&elem, count as u32);
+            let size = block_ty
+                .size_of()
+                .ok_or("field assign: fixed block size unavailable")?;
+            let saved = cg.alloca_in_entry_llvm(block_ty, "field_old_fixed")?;
+            cg.builder
+                .build_memcpy(saved, 8, field_ptr, 8, size)
+                .map_err(|err| format!("field assign save fixed: {err}"))?;
+            saved
+        }
+
         // An inline union slot: keep a copy of its bytes.
         Some(variants) => {
             let layout = cg.union_layout(&variants)?;
@@ -28812,8 +28877,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     ))
                 }
             }
+            // A `fixed<T, N>` field holds its cells inline: the release walks them in place.
+            ReleaseStep::Fixed { .. } if home == ReleaseHome::Field => Ok(self
+                .release_fn(&ty, false)?
+                .map(|glue| (as_pointer(glue), true))),
             ReleaseStep::Fixed { .. } => Err(format!(
-                "internal: cannot release a stored `{}`: a `fixed` list is not stored by pointer",
+                "internal: cannot release a stored `{}`: a `fixed` list is stored by value only in a shape field",
                 ynz_typeck::types::type_name(&ty)
             )),
             ReleaseStep::Unsupported(reason) => Err(format!(
@@ -35126,6 +35195,26 @@ fn store_field<'ctx>(
                 &variants,
                 "field_union",
             )?;
+        }
+        // A `fixed<T, N>` field holds its N cells inside the shape: the list's cells are copied in,
+        // and a `fixed<string>` / `fixed<Shape>` field then owns an item of its own per cell, unless
+        // the source is a value this store takes by move (`deepen_unless_moved` rule).
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } => {
+            let elem = cg.resolve_type(elem);
+            let count = *count as u64;
+            let bytes = count * cg.fixed_cell_bytes(&elem);
+            let source = val.into_pointer_value();
+            cg.builder
+                .build_memcpy(field_ptr, 8, source, 8, cg.i64().const_int(bytes, false))
+                .map_err(|err| format!("store_field fixed memcpy: {err}"))?;
+            if (is_string_like(&elem) || matches!(elem, Type::Shape { .. }))
+                && !cg.is_moved_cells(source)
+            {
+                emit_fixed_item_cells_copy(cg, field_ptr, count, &elem, "field_fixed")?;
+            }
         }
         Type::Number { precision } if *precision <= 34 => {
             // N ≤ 34: field stores i128 bits inline; val is ptr-to-i128.

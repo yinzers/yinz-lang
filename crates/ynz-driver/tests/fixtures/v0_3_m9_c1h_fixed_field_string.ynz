@@ -1,4 +1,4 @@
-// v0.3-M9 C1h: a shape holds a `fixed<string>` list in a field. The shape owns the list's strings:
+// v0.3-M9 C1h: a shape holds a `fixed<string, 2>` list in a field. The shape owns the list's strings:
 // the caller reads them, and every string is released when the shape leaves scope.
 // Before: the field held a pointer into the building function's dead stack frame with no length:
 // the strings were never released and a read went through freed stack.
@@ -6,7 +6,7 @@
 
 shape Roster {
   title: string
-  names: fixed<string>
+  names: fixed<string, 2>
 }
 
 function makeRoster() -> Roster {

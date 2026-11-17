@@ -323,6 +323,23 @@ impl<'a, 'ctx> ShapeTypeBuilder<'a, 'ctx> {
             // N > 34: bignum stored as a pointer to the heap decimal string.
             Type::Number { precision } if *precision <= 34 => self.ctx.i128_type().into(),
             Type::Number { .. } => ptr.into(),
+            // A `fixed<T, N>` field is stored BY VALUE: its N cells sit inside the shape, as a Rust
+            // `[T; N]` field does (8-byte cells; 16-byte for a decimal128 `number` item, as
+            // `Cg::fixed_block_type` lays out a local list). The length is in the type, never a field.
+            Type::BuiltinFixed {
+                elem,
+                size: ynz_typeck::FixedLength::Known(count),
+            } => {
+                let cells = u32::try_from(*count).map_err(|_| {
+                    format!("shape layout: a `fixed` field of {count} items is too long")
+                })?;
+                match **elem {
+                    Type::Number { precision } if precision <= 34 => {
+                        self.ctx.i128_type().array_type(cells).into()
+                    }
+                    _ => self.ctx.i64_type().array_type(cells).into(),
+                }
+            }
             Type::Union { variants } if ynz_typeck::check::is_envelope_union(ty) => {
                 let boxed = self.boxed_unions.contains(&union_key(variants));
                 if !boxed {

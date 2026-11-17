@@ -1,4 +1,4 @@
-// v0.3-M9 C1h: a shape holds a `fixed<int>` list in a field, and the shape leaves the function that
+// v0.3-M9 C1h: a shape holds a `fixed<int, 3>` list in a field, and the shape leaves the function that
 // built it. The caller reads the list's count and items.
 // Before: the field held a pointer into the building function's dead stack frame with no length:
 // `count()` printed 0 and every read was `none`.
@@ -6,7 +6,7 @@
 
 shape Bag {
   label: string
-  items: fixed<int>
+  items: fixed<int, 3>
 }
 
 function makeBag() -> Bag {
