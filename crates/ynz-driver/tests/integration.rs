@@ -11195,7 +11195,7 @@ fn bg_arg_handle_return_parent_reads_intact_array_after_child_retired() {
         "bg_arg_handle_return_array.ynz",
         "3\n4\n",
         2,
-        "2 = the returned clone, held by the `maybe` local `got` (C8 slice 2 releases the spawner's `rows`, `arr` and `fallback`; a `maybe` local is not released in a state machine yet)",
+        "2 = the returned clone, held by the `errors` local `got` (`receive` yields a `T errors` result; C8 slice 2 releases the spawner's `rows`, `arr` and `fallback`, and an errors-capable local is not released in a state machine until C8 slice 4b)",
     );
 }
 
@@ -11232,7 +11232,7 @@ fn bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op() {
         "bg_arg_handle_return_map.ynz",
         "2\n42\n",
         5,
-        "5 = the returned map (header, table, two entry cells, one grow), held by the `maybe` local `got` (C8 slice 2 releases `m` and `fallback`; a `maybe` local is not released in a state machine yet)",
+        "5 = the returned map (header, table, two entry cells, one grow), held by the `errors` local `got` (`receive` yields a `T errors` result; C8 slice 2 releases `m` and `fallback`, and an errors-capable local is not released in a state machine until C8 slice 4b)",
     );
 }
 

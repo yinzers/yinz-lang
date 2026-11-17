@@ -330,10 +330,11 @@ green_fixture!(
     "producer P7 (unions in a suspending function): a union envelope and the string it holds, built or wrapped in a resume function, leak"
 );
 
-balanced_fixture!(
+deferred_fixture!(
     producer_p7_union_crossing_binding,
     "v0_3_m9_union_crossing_binding.ynz",
-    "producer P7 (unions in a suspending function): a union binding that crosses a `wait` leaks its slot and string"
+    "producer P7 (unions in a suspending function): the `Thing errors` local `held` that crosses a `wait` leaks its slot and string",
+    "planned RED (C8 slice 4b): the leak left is the errors-capable local `held` (`slowBig(8)`); the union local and the staged argument are released since slice 4a (measured: the fixture without `held` balances)"
 );
 
 balanced_fixture!(
