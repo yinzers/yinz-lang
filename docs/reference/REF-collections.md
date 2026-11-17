@@ -59,6 +59,25 @@ rgb.add(50)
 // fixed<number> is size-locked. Use array<number> if it needs to grow.
 ```
 
+### `fixed<T>` and `fixed<T, N>` in function signatures
+
+A function can take and return a `fixed` list. Its length is a number the compiler knows, so passing or returning a list costs what passing or returning an array costs in Rust (`[T; N]`): the cells, nothing else.
+
+```
+function total(share nums: fixed<int>) -> int { ... }       // any length: one compiled version per length you pass
+function sum4(share nums: fixed<int, 4>) -> int { ... }     // exactly 4 items: any other length is a compile error
+function makeRow() -> fixed<int> {                          // the length is the one every `return` gives
+  let row: fixed<int> = [1, 2, 3]
+  return row
+}
+```
+
+- Write the length as a whole number, `fixed<int, 4>`, on the whole type of a **parameter or return value** only. A local (`let row: fixed<int> = [...]`) takes its length from the list on the right.
+- `fixed<int>` as a parameter works for lists of any length: the compiler builds one version of the function for each length the program passes.
+- `fixed<int>` as a return type takes the length of the lists the function returns. Every `return` must give the same length.
+- An `export function` must write the length of every `fixed` it takes or returns (`fixed<int, 4>`): another file sees only the signature.
+- A list returned from a function that waits (a suspending function) comes back the same way.
+
 You CAN replace existing elements — the size stays the same:
 
 ```

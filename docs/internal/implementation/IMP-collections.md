@@ -730,3 +730,15 @@ Companion length methods:
 - Adds a new concept jr devs must learn (and convert to/from strings).
 - Unicode complications surface immediately: is a `char` a code point? A grapheme? UTF-8 byte? Each answer wrong for some use case.
 - A 1-length string covers every place a "char" would be useful, without the conceptual baggage.
+
+## `fixed<T, N>` in function signatures (v0.3-M9 C1h)
+
+State in force; the history is in the commits (`git log --grep="fixed<T, N>"`).
+
+- **Cost rule (Golden Rule 8).** A length is a compile-time constant, never a runtime field and never a pointer-and-length pair: `fixed<T, N>` costs what Rust's `[T; N]` costs. Measured on the emitted machine code (`build(a, b, c, d) -> fixed<int, 4>` and `third(xs) -> int`): the same instructions as the Rust program (`mov` + four stores + `ret`; one `mov` + `ret`), no allocation. A `fixed<Shape>` list still keeps one heap cell per item (the existing item representation, unchanged by this work), which Rust's inline `[S; N]` does not.
+- **Type.** `Type::BuiltinFixed.size` is a `FixedLength`: `Known(n)`, `Unknown` (a shape field, the result of `filter`/`unique`/`limit`/`freeze`, `append`/`prepend`/`concat`), or `OfParam` (the length of an unsized `fixed<T>` parameter: the body is checked once with the placeholder).
+- **One reader of a written `fixed<…>`**: `crates/ynz-typeck/src/fixed_length.rs` (`read_fixed_arguments`). The checker's side (diagnostics, call binding, return-length work) is `check/fixed_lengths.rs`. A length may be written only as the whole type of a parameter or return value; elsewhere, and on any other generic, it is refused (`FixedLengthNotAllowedHere`).
+- **Return by value.** A `fixed` of known length comes back as `[N x i64]` (plain functions: `abi_return_type`; suspending functions: the cells ride the frame's `Return` region, copied out by the wrapper or the calling state machine). A function whose return type writes no length gets the length every `return` gives, worked out by re-running the body check until no function's length changes (`check`); disagreeing or unknown lengths are refused (`FixedReturnLengthsDiffer`, `FixedReturnLengthUnknown`).
+- **Per-length versions.** An unsized `fixed<T>` parameter makes the function compile once per length its callers pass (symbol `name<3>`). `fixed_length::close_instances` is the ONLY place the set of versions is worked out (`TypedModule::fixed_instances`); codegen declares, lowers and calls exactly those versions and works out no length itself (`Cg::fixed_version_symbol`, `Cg::resolve_fixed_length`). A function that suspends or may be promoted to a task host is compiled once, its length parameters unknown, as before.
+- **Exports** must write the length of every `fixed` they take or return (`FixedLengthMissingInExport`): an importer sees only the signature.
+- **Not built / parked.** `freeze`, `filter`, `unique`, `limit` build lists of runtime length and are not lowered in codegen. A list of unknown length (`Unknown`) read through a shape field reads `count` 0 as before.

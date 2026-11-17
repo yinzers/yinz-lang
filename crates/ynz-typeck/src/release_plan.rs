@@ -148,10 +148,10 @@ pub enum OmitReason {
     CallerOwns,
     /// A non-owner outlives every owner (`NoStaticFounder`): an imported `maybe<channel>` result; nothing releases it.
     NoStaticFounder,
-    /// A `fixed<T>` of heap-owning items whose size is unknown (`size: None`, the type a signature
-    /// gives): the plan cannot say how many items to release, so none is, and they leak. The sized
-    /// type of a local the literal built releases as any `fixed`. The unsized `fixed` signature bug
-    /// (a returned `fixed` reports `count` 0) is the producer; plan #17 may yet fix it.
+    /// A `fixed<T>` of heap-owning items whose length is unknown (`FixedLength::Unknown`: a shape
+    /// field, or the result of `filter`, `unique`, `limit`, `freeze`): the plan cannot say how many
+    /// items to release, so none is, and they leak. A signature's `fixed` always has a length
+    /// (card #433), so its items are released like any sized `fixed`.
     UnsizedFixed,
 }
 
