@@ -24952,6 +24952,22 @@ fn lower_sm_background_spawn<'ctx>(
                 .const_null()
                 .into(),
         };
+        let callee_return = cg
+            .sig_table
+            .fns
+            .get(callee_name)
+            .map(|sig| sig.ret.clone())
+            .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()))
+            .ok_or_else(|| format!("handle spawn: signature for `{callee_name}` not found"))?;
+        let result_release_val: inkwell::values::BasicMetadataValueEnum =
+            match cg.handle_result_release_fn(&callee_return)? {
+                Some(glue) => glue.as_global_value().as_pointer_value().into(),
+                None => cg
+                    .ctx
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .const_null()
+                    .into(),
+            };
         let handle = cg
             .builder
             .build_call(
@@ -24965,6 +24981,7 @@ fn lower_sm_background_spawn<'ctx>(
                     arg_drop_count_val.into(),
                     ret_kind_val.into(),
                     msg_chan_val,
+                    result_release_val,
                 ],
                 "sm_spawn_handle",
             )
@@ -29998,6 +30015,120 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder.position_at_end(after_bb);
         }
         Ok(())
+    }
+
+    /// The function `void(i64 err, i64 ok)` that releases the heap a completion of a background task
+    /// owns, when nobody received it (`ynz_rt_spawn_handle`'s `result_release`): the completion
+    /// `(err, ok)` is what the task returned through its handle's outbox, so the release is the
+    /// receiver's own: a string, array or map word; a `maybe`'s counted cell; an errors-capable
+    /// result's error object and, on success, its ok payload. `None` for a result that owns no heap,
+    /// and for a number (its ok word points into the handle's own buffer, freed with the handle).
+    ///
+    /// O(1) time to emit, once per return type.
+    fn handle_result_release_fn(&self, ret: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let resolved = self.resolve_type(ret);
+        let plain_word = |ty: &Type| {
+            matches!(
+                ty,
+                Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+            )
+        };
+        let (value_type, owns_cell) = match &resolved {
+            ty if plain_word(ty) => (resolved.clone(), false),
+            Type::Maybe { .. } => (resolved.clone(), true),
+            Type::ErrorsCapable { inner } if plain_word(inner) => (resolved.clone(), false),
+            Type::ErrorsCapable { inner }
+                if matches!(
+                    **inner,
+                    Type::Int | Type::Bool | Type::Float | Type::Nothing
+                ) =>
+            {
+                (resolved.clone(), false)
+            }
+            _ => return Ok(None),
+        };
+        let name = format!("ynz_handle_result_release_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let Some(glue) = self.release_fn(&value_type, owns_cell)? else {
+            return Ok(None);
+        };
+        let release = self.module.add_function(
+            &name,
+            self.ctx
+                .void_type()
+                .fn_type(&[self.i64().into(), self.i64().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let error_bits = release
+            .get_nth_param(0)
+            .ok_or("handle result release: missing err")?
+            .into_int_value();
+        let ok_bits = release
+            .get_nth_param(1)
+            .ok_or("handle result release: missing ok")?
+            .into_int_value();
+        if matches!(resolved, Type::ErrorsCapable { .. }) {
+            let companion = self
+                .builder
+                .build_alloca(errors_result_type(self.ctx), "completion")
+                .map_err(|e| format!("handle result companion: {e}"))?;
+            let mut result = errors_result_type(self.ctx).const_zero();
+            result = self
+                .builder
+                .build_insert_value(result, error_bits, 0, "completion_err")
+                .map_err(|e| format!("handle result err: {e}"))?
+                .into_struct_value();
+            result = self
+                .builder
+                .build_insert_value(result, ok_bits, 1, "completion_ok")
+                .map_err(|e| format!("handle result ok: {e}"))?
+                .into_struct_value();
+            self.builder
+                .build_store(companion, result)
+                .map_err(|e| format!("handle result store: {e}"))?;
+            self.builder
+                .build_call(glue, &[companion.into()], "")
+                .map_err(|e| format!("handle result release call: {e}"))?;
+        } else {
+            let release_bb = self.ctx.append_basic_block(release, "release");
+            let done_bb = self.ctx.append_basic_block(release, "done");
+            let present = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    ok_bits,
+                    self.i64().const_zero(),
+                    "completion_present",
+                )
+                .map_err(|e| format!("handle result cmp: {e}"))?;
+            self.builder
+                .build_conditional_branch(present, release_bb, done_bb)
+                .map_err(|e| format!("handle result branch: {e}"))?;
+            self.builder.position_at_end(release_bb);
+            let pointer = self
+                .builder
+                .build_int_to_ptr(ok_bits, self.ptr(), "completion_ptr")
+                .map_err(|e| format!("handle result inttoptr: {e}"))?;
+            self.builder
+                .build_call(glue, &[pointer.into()], "")
+                .map_err(|e| format!("handle result release call: {e}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|e| format!("handle result join: {e}"))?;
+            self.builder.position_at_end(done_bb);
+        }
+        self.builder
+            .build_return(None)
+            .map_err(|e| format!("handle result return: {e}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
     }
 
     /// Release the value of type `ty` (`callee_result_type`) a finished callee left in the return slot

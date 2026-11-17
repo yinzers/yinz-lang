@@ -510,3 +510,108 @@ function entrypoint() -> nothing {
 ";
     balanced_and_asan_clean("c8s6_for_back_edge", source, "parent\n");
 }
+
+// ── a task result nobody receives ────────────────────────────────────────────────────────────
+//
+// Bug each catches: a task that finished with a heap result nobody `.receive()`s leaves the result
+// in the handle's outbox (or drops it when the handle was freed before the task finished), and
+// nothing releases it. Tier: Medium. The task finishes before the parent exits, so its result is
+// parked; a second program frees the handle before the task finishes.
+
+/// `spawn_source(result_function)`: a parent that starts `make()` as a handle task and never
+/// receives it; the task has finished by the time the parent's block ends and frees the handle.
+fn unreceived_after_finish(result_function: &str) -> String {
+    format!(
+        "{result_function}
+
+function entrypoint() -> nothing {{
+  let pending = background make()
+  wait sleep(100)
+  print(`parent`)
+}}
+"
+    )
+}
+
+#[test]
+fn an_unreceived_string_result_is_released_with_the_handle() {
+    let source = unreceived_after_finish(
+        "function make() -> string {
+  wait sleep(1)
+  return `big`.toUpperCase()
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_string", &source, "parent\n");
+}
+
+#[test]
+fn an_unreceived_array_result_is_released_with_the_handle() {
+    let source = unreceived_after_finish(
+        "function make() -> array<string> {
+  wait sleep(1)
+  let items: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return items
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_array", &source, "parent\n");
+}
+
+#[test]
+fn an_unreceived_maybe_result_is_released_with_the_handle() {
+    let source = unreceived_after_finish(
+        "function make() -> maybe<string> {
+  wait sleep(1)
+  let items: array<string> = [`a`.toUpperCase()]
+  let found = items.get(0)
+  return found
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_maybe", &source, "parent\n");
+}
+
+#[test]
+fn an_unreceived_errors_result_is_released_with_the_handle() {
+    let source = unreceived_after_finish(
+        "function make() -> string errors {
+  wait sleep(1)
+  return `big`.toUpperCase()
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_errors", &source, "parent\n");
+}
+
+/// The handle is freed (block end) while the task is still running: the abort drops the parked
+/// task through its drop entry, and no completion is ever delivered.
+#[test]
+fn a_handle_freed_while_its_task_runs_aborts_it_and_leaks_nothing() {
+    let source = "
+function make() -> string {
+  wait sleep(100)
+  return `big`.toUpperCase()
+}
+
+function spawnAndLeave() -> nothing {
+  let pending = background make()
+  wait sleep(1)
+}
+
+function entrypoint() -> nothing {
+  spawnAndLeave()
+  wait sleep(300)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_result_after_free", source, "parent\n");
+}
+
+/// The task failed: the unreceived completion is an error object, not a payload.
+#[test]
+fn an_unreceived_error_result_is_released_with_the_handle() {
+    let source = unreceived_after_finish(
+        "function make() -> string errors {
+  let status = wait __testFallibleAsync(true)
+  return `name${status}`
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_error", &source, "parent\n");
+}

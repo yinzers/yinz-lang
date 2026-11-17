@@ -5413,6 +5413,7 @@ mod m6_pending_send_aba {
             0,
             2, // RET_KIND_VALUE_WORD
             chan,
+            std::ptr::null(),
         )
     }
 

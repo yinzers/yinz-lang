@@ -310,6 +310,7 @@ fn loom_orphan_purge_on_handle_free() {
             0,
             HANDLE_RET_KIND_VALUE_WORD,
             chan,
+            std::ptr::null(),
         );
         assert_eq!(
             strong_count(chan),

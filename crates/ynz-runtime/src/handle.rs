@@ -107,6 +107,11 @@ pub use ynz_abi::{
 /// State shared between the handle object (parent side) and the spawned child future:
 /// the R8 handle-owned ok-value buffer + the receive-waiter registry (P2-7).
 struct HandleShared {
+    /// Releases the heap a completion `(err, ok)` owns, per the callee's return type (codegen emits
+    /// the function at the spawn site); `None` when the result owns no heap. Run on a completion
+    /// nobody received: one left in the outbox when the handle is freed, or one the finished task
+    /// could not deliver because the handle was already gone (C8 slice 6).
+    result_release: Option<unsafe extern "C" fn(i64, i64)>,
     /// The 16-byte heap buffer holding a copied wide ok-value (`number` cases). `None` until
     /// the child completes with one; freed exactly once at handle drop via `Option::take`.
     ok_buf: Mutex<Option<Box<[u8; 16]>>>,
@@ -121,6 +126,16 @@ struct HandleShared {
 }
 
 impl HandleShared {
+    /// Release the heap of the completion `(err, ok)` that nobody will receive.
+    ///
+    /// # Safety
+    /// The pair must be a completion this handle's task produced and no receiver took.
+    unsafe fn release_completion(&self, err: i64, ok: i64) {
+        if let Some(release) = self.result_release {
+            release(err, ok);
+        }
+    }
+
     /// Wake every recorded receive-waiter (the completion just landed). Mirrors
     /// `YnzChannel::wake_recv_waiters` — the one shared discipline, not a bespoke ordering.
     /// O(n) wakes where n = suspended receivers (typically 0 or 1).
@@ -219,7 +234,11 @@ impl Future for HandleStateFnFuture {
                     // Capacity >= 1 and this is the sole sender in v0.3-M4, so try_send
                     // cannot observe Full; a dropped-receiver (handle already freed) makes
                     // delivery moot — either way, never a blocking call.
-                    let _ = tx.try_send((err, ok));
+                    if let Err(undelivered) = tx.try_send((err, ok)) {
+                        let (err, ok) = undelivered.into_inner();
+                        // SAFETY: the pair is this task's own completion, owned by nobody else.
+                        unsafe { this.shared.release_completion(err, ok) };
+                    }
                 }
                 // Completion delivered — drain the receive-waiter registry (P2-7), the
                 // producer-side half of register-before-poll: mpsc's native wake reaches
@@ -286,6 +305,8 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
 /// spawn-form key (R8).
 ///
 /// `ret_kind` — completion-extraction kind (see `RET_KIND_*`).
+/// `result_release` — releases the heap of a completion nobody received (`void(err, ok)`), or null
+///   when the callee's result owns none.
 /// `msg_chan` — the child's first `channel<T>` argument (the `.send()` conduit), or null.
 ///   The handle takes its OWN refcounted reference (the child's arg reference is separate,
 ///   released by the arg-drop machinery).
@@ -307,11 +328,21 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
     arg_drop_count: i64,
     ret_kind: i64,
     msg_chan: *mut u8,
+    result_release: *const u8,
 ) -> *mut u8 {
     // Bounded outbox (stdlib Rule 4): sized for the single completion delivery plus headroom
     // for the future child-side message-reply surface (the locked default capacity).
     let (outbox_tx, outbox_rx) = mpsc::channel::<(i64, i64)>(64);
     let shared = Arc::new(HandleShared {
+        // SAFETY: codegen passes null or the address of a `void(i64, i64)` function of its module.
+        result_release: if result_release.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(i64, i64),
+            >(result_release))
+        },
         ok_buf: Mutex::new(None),
         recv_waiters: Mutex::new(Vec::new()),
     });
@@ -474,6 +505,16 @@ pub unsafe extern "C" fn ynz_handle_free(handle_ptr: *mut u8) {
     // no in-flight send (or a double-cancel) is a safe no-op.
     purge_pending_sends(handle.msg_chan, handle.send_gen);
     ynz_channel_free(handle.msg_chan);
+    // A completion nobody received is the handle's to release: close the outbox first (a task
+    // finishing from now on finds it closed and releases its own result), then drain what was
+    // delivered before. The ok_buf a number result sits in is freed with `shared` below.
+    {
+        let mut outbox = lock_or_recover(&handle.outbox_rx);
+        outbox.close();
+        while let Ok((err, ok)) = outbox.try_recv() {
+            handle.shared.release_completion(err, ok);
+        }
+    }
     // ok_buf (if any) drops with `handle.shared` unless the child future still holds the
     // other Arc — then it drops when the aborted task retires. Either way exactly once,
     // via the Arc + Option ownership chain.
@@ -531,6 +572,7 @@ mod tests {
                 0,
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
             );
             // Drive the runtime so the spawned task completes.
             rt.block_on(async { tokio::task::yield_now().await });
@@ -575,6 +617,7 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
             );
             rt.block_on(async { tokio::task::yield_now().await });
             // Never receive; just free. Frame already freed by the task; buffer path empty.
@@ -624,6 +667,7 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 chan,
+                std::ptr::null(),
             );
             assert_eq!(ynz_handle_send_poll(h, 111, cx_ptr), CHANNEL_PENDING);
             assert_eq!(crate::channel::pending_send_count(chan), 1);
@@ -697,6 +741,7 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
             );
             rt.block_on(async { tokio::task::yield_now().await });
             ynz_handle_free(h); // aborts the parked child
@@ -781,6 +826,7 @@ mod tests {
                 0,
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
             );
             // The child is scheduled but NOT yet driven — the outbox is empty, so the
             // parent's first poll takes the Pending path (the registration under test).
@@ -855,6 +901,7 @@ mod tests {
                 0,
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
             );
             let probe = HandleOrderProbe {
                 shared: crate::sync::Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),

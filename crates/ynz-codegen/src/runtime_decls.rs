@@ -150,7 +150,7 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_channel_recv_poll(chan: ptr, out: ptr, waker_ctx: ptr) -> i32
     pub ynz_channel_recv_poll: FunctionValue<'ctx>,
     // ynz_rt_spawn_handle(resume_fn, frame_ptr, frame_size, rec_slot, arg_drop_ptr,
-    //                     arg_drop_count, ret_kind, msg_chan) -> ptr (the task handle)
+    //                     arg_drop_count, ret_kind, msg_chan, result_release) -> ptr (the task handle)
     pub ynz_rt_spawn_handle: FunctionValue<'ctx>,
     // ynz_handle_recv_poll(handle: ptr, err_out: ptr, ok_out: ptr, waker_ctx: ptr) -> i32
     pub ynz_handle_recv_poll: FunctionValue<'ctx>,
@@ -641,6 +641,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
                         ptr.into(),
                         i64.into(),
                         i64.into(),
+                        ptr.into(),
                         ptr.into(),
                     ],
                     false,
