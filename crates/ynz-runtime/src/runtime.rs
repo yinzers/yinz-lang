@@ -988,6 +988,9 @@ pub(crate) struct SpawnStateFnFuture {
     /// module via a thread-local while `poll` runs (so every frame token this task mints
     /// carries it), and used by `Drop`'s kind-2 arm to purge the task's suspended sends.
     pub(crate) task_gen: u64,
+    /// True once `poll` returned Ready: the function's own scope exits released its frame
+    /// locals, so `Drop` must not run the frame's drop entry (C8 slice 6 spike).
+    pub(crate) finished: bool,
 }
 
 impl SpawnStateFnFuture {
@@ -1012,6 +1015,8 @@ impl SpawnStateFnFuture {
             arg_drop_ptr: arg_drop_ptr as *mut BgArgDropEntry,
             arg_drop_count: arg_drop_count as usize,
             task_gen: crate::channel::next_caller_generation(),
+            // The stub resume functions of the unit tests have no drop entry.
+            finished: true,
         }
     }
 }
@@ -1103,6 +1108,19 @@ impl Drop for SpawnStateFnFuture {
             return;
         }
         unsafe {
+            // 0. A task retired before it finished (C8 slice 6 spike): run the frame's drop
+            //    entry. It releases the heap values the frame holds at its current suspension
+            //    point and, through the awaited callee's own drop entry, those of every nested
+            //    child frame. The entry is the resume function re-entered at the bitwise
+            //    complement of its resume point (codegen's drop dispatch is the default target
+            //    of the resume switch). It reads frame slots, so it runs before anything is
+            //    freed; the ladder below frees only what the function does not own (a borrowed
+            //    argument's clone).
+            if !self.finished {
+                let resume_point = self.frame_ptr as *mut i32;
+                *resume_point = !*resume_point;
+                (self.resume_fn)(self.frame_ptr, std::ptr::null_mut());
+            }
             // 1. Free the sleep handle in the root frame (if a sleep is live mid-wait).
             // SAFETY: FRAME_OFFSET_SLEEP_HANDLE=8 is within every valid frame header (32 bytes).
             let handle_slot =
@@ -1254,7 +1272,7 @@ impl Drop for SpawnStateFnFuture {
 impl Future for SpawnStateFnFuture {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker_ctx = cx as *mut Context<'_> as *mut u8;
         // Publish this task's identity for the duration of the resume-fn call: any
         // ynz_channel_send_poll the state machine reaches keys its suspended send by
@@ -1268,7 +1286,10 @@ impl Future for SpawnStateFnFuture {
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
         match result {
             // Ready — fire-and-forget; return value in frame slot 0 is intentionally ignored.
-            0 => Poll::Ready(()),
+            0 => {
+                self.finished = true;
+                Poll::Ready(())
+            }
             1 => Poll::Pending,
             _ => panic!(
                 "ynz runtime: state-machine resume_fn returned unexpected value {result} \
@@ -1335,6 +1356,7 @@ pub unsafe extern "C" fn ynz_rt_spawn(
         arg_drop_ptr: arg_drop_ptr as *mut BgArgDropEntry,
         arg_drop_count: arg_drop_count as usize,
         task_gen: crate::channel::next_caller_generation(),
+        finished: false,
     };
     let _ = spawn_on_runtime(future, "ynz_rt_spawn");
 }
