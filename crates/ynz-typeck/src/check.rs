@@ -1859,7 +1859,12 @@ impl<'b> Checker<'b> {
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
         self.check_stmts(&f.body.stmts);
-        self.record_exit(EdgeKind::BlockEnd, &f.body.span, Vec::new());
+        self.record_exit(
+            EdgeKind::BlockEnd,
+            &f.body.span,
+            f.body.span.end,
+            Vec::new(),
+        );
         self.scope.pop();
 
         // The release owners in the user's names, for the suspension guards below: the same
@@ -2640,7 +2645,12 @@ impl<'b> Checker<'b> {
             );
         }
         self.check_stmts(&f.body.stmts);
-        self.record_exit(EdgeKind::BlockEnd, &f.body.span, Vec::new());
+        self.record_exit(
+            EdgeKind::BlockEnd,
+            &f.body.span,
+            f.body.span.end,
+            Vec::new(),
+        );
         self.scope.pop();
 
         self.release.end_function(&self.transfers.current_facts());
@@ -2984,6 +2994,7 @@ impl<'b> Checker<'b> {
                 self.record_exit(
                     EdgeKind::Suspension,
                     crate::release_plan::stmt_source_span(stmt),
+                    group_reach_end(stmts, i),
                     Vec::new(),
                 );
             }
@@ -4562,7 +4573,7 @@ impl<'b> Checker<'b> {
     /// Close the arm `body` of the open branch point: an arm that always returns never reaches the
     /// join. O(size of `body`) for the return-path analysis.
     fn end_branch_arm(&mut self, body: &Block) {
-        self.record_exit(EdgeKind::BlockEnd, &body.span, Vec::new());
+        self.record_exit(EdgeKind::BlockEnd, &body.span, body.span.end, Vec::new());
         let returns = crate::return_paths::analyze_stmts(&body.stmts).all_paths_return;
         self.scope.end_arm(returns);
     }
@@ -4722,7 +4733,7 @@ impl<'b> Checker<'b> {
         // The release edge: every open frame leaves scope, minus whatever the returned value is
         // or reaches. After the value was inferred, so a give inside it is already consumed.
         let returned_holders = value.map_or_else(Vec::new, |expr| self.returned_holders_of(expr));
-        self.record_exit(EdgeKind::Return, span, returned_holders);
+        self.record_exit(EdgeKind::Return, span, span.end, returned_holders);
     }
 
     fn check_stmt_return_value(&mut self, value: Option<&Expr>, span: &SourceSpan) {
@@ -5662,7 +5673,13 @@ impl<'b> Checker<'b> {
     /// innermost frame; a `return` and an auto-propagation list every open frame, innermost first.
     /// Each frame lists its last declared binding first. `returned_classes` are the alias
     /// classes the returned value is or reaches. O(open entries).
-    fn record_exit(&mut self, kind: EdgeKind, span: &SourceSpan, returned_holders: Vec<DeclKey>) {
+    fn record_exit(
+        &mut self,
+        kind: EdgeKind,
+        span: &SourceSpan,
+        reach_end: usize,
+        returned_holders: Vec<DeclKey>,
+    ) {
         let innermost = self.scope.innermost_frame();
         let frames: Vec<usize> = match kind {
             EdgeKind::BlockEnd => vec![innermost],
@@ -5710,8 +5727,14 @@ impl<'b> Checker<'b> {
             }
         }
         let consumed_classes = self.scope.consumed_classes();
-        self.release
-            .note_exit(kind, span, consumed_classes, returned_holders, entries);
+        self.release.note_exit(
+            kind,
+            span,
+            reach_end,
+            consumed_classes,
+            returned_holders,
+            entries,
+        );
     }
 
     /// Record that a heap-valued `value` is taken by move: codegen takes its boxes without
@@ -5989,7 +6012,7 @@ impl<'b> Checker<'b> {
                         self.transfers.escape(&declaration, Escape::Returned);
                     }
                     let propagated: Vec<DeclKey> = self.declaration_of(name).into_iter().collect();
-                    self.record_exit(EdgeKind::Propagation, span, propagated);
+                    self.record_exit(EdgeKind::Propagation, span, span.end, propagated);
                     return inner;
                 }
                 // Outside an errors function: return the full ErrorsCapable type.
@@ -12648,6 +12671,37 @@ pub(crate) fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool 
 /// Does `stmt` contain a `return` at any nesting depth? An Auto-Arc group boundary: the
 /// caller-side transient is released by straight-line code after the last spawn, and an
 /// early exit between two spawns would skip that release (a leaked count, never a free-early).
+/// The end of the source range a task parked in `stmts[index]` may have run: the statement itself,
+/// and, when it is a call statement, the run of call statements after it. Codegen overlaps such a
+/// run as one group (independent I/O, CPU or fused) that parks once for all its members, so a read
+/// inside any of them may have handed a value over before the park
+/// (`ReleasePlan::suspension_edge`). O(run length) time.
+fn group_reach_end(stmts: &[Stmt], index: usize) -> usize {
+    let mut end = crate::release_plan::stmt_span(&stmts[index]).1;
+    if !stmt_is_call_statement(&stmts[index]) {
+        return end;
+    }
+    for next in &stmts[index + 1..] {
+        if !stmt_is_call_statement(next) {
+            break;
+        }
+        end = crate::release_plan::stmt_span(next).1;
+    }
+    end
+}
+
+/// True for `callee(args)` and `let name = callee(args)`: the statements a group is made of.
+fn stmt_is_call_statement(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Expr(Expr::Call(_))
+            | Stmt::Let {
+                value: Expr::Call(_),
+                ..
+            }
+    )
+}
+
 fn stmt_contains_return(stmt: &Stmt) -> bool {
     let block = |b: &Block| b.stmts.iter().any(stmt_contains_return);
     match stmt {

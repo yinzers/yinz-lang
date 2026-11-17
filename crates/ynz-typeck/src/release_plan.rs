@@ -470,6 +470,10 @@ pub struct RawEntry {
 struct RawEdge {
     kind: EdgeKind,
     span: Span,
+    /// The end of the source range a read counts as inside this edge's statement for a suspension
+    /// edge (the statement and the run of call statements after it that codegen may overlap with it
+    /// as one group); the edge's own `span.1` for every other edge.
+    reach_end: usize,
     consumed_classes: BTreeSet<u64>,
     /// For a `return`: the bindings the returned value is, or reaches, when it is not a fresh copy.
     returned_holders: Vec<DeclKey>,
@@ -796,6 +800,7 @@ impl ReleaseRecorder {
         &mut self,
         kind: EdgeKind,
         span: &SourceSpan,
+        reach_end: usize,
         consumed_classes: BTreeSet<u64>,
         returned_holders: Vec<DeclKey>,
         entries: Vec<RawEntry>,
@@ -816,6 +821,7 @@ impl ReleaseRecorder {
         function.edges.push(RawEdge {
             kind,
             span: key,
+            reach_end,
             consumed_classes,
             returned_holders,
             entries,
@@ -1067,7 +1073,12 @@ fn fate_of(
 ) -> Result<Fate, String> {
     let fate = scope_fate_of(function, edge, entry, facts_of, moves_by_binding)?;
     if let (EdgeKind::Suspension, Fate::Release(kind)) = (edge.kind, fate) {
-        if founder_moved_inside(function, edge.span, &entry.decl, facts_of) {
+        if founder_moved_inside(
+            function,
+            (edge.span.0, edge.reach_end),
+            &entry.decl,
+            facts_of,
+        ) {
             return Ok(Fate::ReleaseIfLive(kind));
         }
     }

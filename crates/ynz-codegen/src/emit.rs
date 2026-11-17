@@ -9194,6 +9194,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             f.body.span.start,
             0,
             &[],
+            &[],
         )?;
         cg_resume.builder.position_at_end(resume_block);
     }
@@ -10238,6 +10239,26 @@ enum DropChild {
     Boxed { offset: u64 },
 }
 
+/// One awaited callee of a drop state: its frame, its resume function (the entry that drops it) and,
+/// for a member of a group, the type of the value it hands back. A group member may have returned
+/// already, with its result still in its return slot because the group binds results only once every
+/// member is done: the drop state then releases that value instead of re-entering the member.
+struct DropMember<'ctx> {
+    child: DropChild,
+    resume: FunctionValue<'ctx>,
+    returned_value: Option<Type>,
+}
+
+/// One CPU member of a group, for a drop state: a task parked at the group's join still holds the
+/// member's join handle (the runtime detaches it with the frame) until the member is polled Ready,
+/// which nulls the handle slot and leaves the result in its result slot until the group binds
+/// it. A null handle therefore means "finished, result unclaimed": the drop state releases that value.
+struct CpuDropMember {
+    handle_offset: u64,
+    result_offset: u64,
+    result_type: Type,
+}
+
 /// The innermost statement of `block` (nested blocks included) whose span holds source offset
 /// `offset`: the statement a task parked at that offset is in.
 ///
@@ -10286,7 +10307,8 @@ fn register_drop_state<'ctx, 'g>(
     frame_ptr: PointerValue<'ctx>,
     offset: usize,
     state: usize,
-    children: &[(DropChild, FunctionValue<'ctx>)],
+    children: &[DropMember<'ctx>],
+    cpu_members: &[CpuDropMember],
 ) -> Result<(), String> {
     let ctx = cg.ctx;
     let saved = cg
@@ -10320,7 +10342,9 @@ fn register_drop_state<'ctx, 'g>(
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, state != 0, true)?;
     cg.release_open_temporaries("drop_temporary")?;
     cg.emit_release_edge_with(entries, "drop", true)?;
-    for (which, child_resume) in children {
+    for member in children {
+        let which = &member.child;
+        let child_resume = &member.resume;
         let child_frame = match which {
             DropChild::Embedded { offset } => state_machine::child_frame_ptr(
                 ctx,
@@ -10352,6 +10376,32 @@ fn register_drop_state<'ctx, 'g>(
             }
         };
         let resume_point = state_machine::load_resume_point(ctx, &cg.builder, child_frame)?;
+        let mut after_member = None;
+        if let Some(value_type) = &member.returned_value {
+            let returned_bb = cg.append_block("drop_member_returned");
+            let running_bb = cg.append_block("drop_member_running");
+            let joined_bb = cg.append_block("drop_member_done");
+            let has_returned = cg
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    resume_point,
+                    ctx.i32_type()
+                        .const_int(ynz_abi::FRAME_RESUME_POINT_RETURNED as u64, false),
+                    "drop_member_has_returned",
+                )
+                .map_err(|e| format!("drop member returned cmp: {e}"))?;
+            cg.builder
+                .build_conditional_branch(has_returned, returned_bb, running_bb)
+                .map_err(|e| format!("drop member branch: {e}"))?;
+            cg.builder.position_at_end(returned_bb);
+            cg.release_returned_value(child_frame, value_type)?;
+            cg.builder
+                .build_unconditional_branch(joined_bb)
+                .map_err(|e| format!("drop member returned join: {e}"))?;
+            cg.builder.position_at_end(running_bb);
+            after_member = Some(joined_bb);
+        }
         let complement = cg
             .builder
             .build_not(resume_point, "drop_child_rp")
@@ -10369,6 +10419,44 @@ fn register_drop_state<'ctx, 'g>(
                 "",
             )
             .map_err(|e| format!("drop child call: {e}"))?;
+        if let Some(joined_bb) = after_member {
+            cg.builder
+                .build_unconditional_branch(joined_bb)
+                .map_err(|e| format!("drop member running join: {e}"))?;
+            cg.builder.position_at_end(joined_bb);
+        }
+    }
+    for cpu_member in cpu_members {
+        let handle_slot = cpu_group_slot_ptr(cg, frame_ptr, cpu_member.handle_offset)?;
+        let handle = cg
+            .builder
+            .build_load(
+                ctx.ptr_type(AddressSpace::default()),
+                handle_slot,
+                "drop_cpu_handle",
+            )
+            .map_err(|e| format!("drop cpu handle load: {e}"))?
+            .into_pointer_value();
+        let finished_bb = cg.append_block("drop_cpu_finished");
+        let joined_bb = cg.append_block("drop_cpu_done");
+        let is_finished = cg
+            .builder
+            .build_is_null(handle, "drop_cpu_is_finished")
+            .map_err(|e| format!("drop cpu null check: {e}"))?;
+        cg.builder
+            .build_conditional_branch(is_finished, finished_bb, joined_bb)
+            .map_err(|e| format!("drop cpu branch: {e}"))?;
+        cg.builder.position_at_end(finished_bb);
+        let synthetic_frame = cpu_group_slot_ptr(
+            cg,
+            frame_ptr,
+            cpu_member.result_offset - ynz_abi::FRAME_OFFSET_RETURN_SLOT,
+        )?;
+        cg.release_returned_value(synthetic_frame, &cpu_member.result_type)?;
+        cg.builder
+            .build_unconditional_branch(joined_bb)
+            .map_err(|e| format!("drop cpu join: {e}"))?;
+        cg.builder.position_at_end(joined_bb);
     }
     cg.builder
         .build_return(Some(&ctx.i32_type().const_int(0, false)))
@@ -10376,6 +10464,102 @@ fn register_drop_state<'ctx, 'g>(
     cg.sm_drop_cases.push((!(state as u32), drop_bb));
     cg.builder.position_at_end(saved);
     Ok(())
+}
+
+/// The type of the heap value the suspending callee `callee_name` hands back through its return
+/// slot, when the group's drop state must release it (`DropMember::returned_value`): a string,
+/// array or map, or an errors-capable result of one of those or of a plain value. `None` for a
+/// result that owns no heap, and for a kind with no release of this shape yet.
+///
+/// O(1) time.
+fn callee_result_type(cg: &Cg<'_, '_>, callee_name: &str) -> Option<Type> {
+    let returned = sm_callee_return_type(cg, callee_name)?;
+    let plain = |ty: &Type| {
+        matches!(
+            ty,
+            Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+        )
+    };
+    if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
+        let inner_is_supported = plain(&returned)
+            || matches!(
+                returned,
+                Type::Int | Type::Bool | Type::Float | Type::Nothing
+            );
+        return inner_is_supported.then(|| Type::ErrorsCapable {
+            inner: Box::new(returned),
+        });
+    }
+    plain(&returned).then_some(returned)
+}
+
+/// The embedded sub-frame of the suspending callee `callee_name` in the frame of `f`, as the
+/// awaited child of a drop state.
+///
+/// O(children) time.
+fn embedded_drop_child<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    f: &FunctionDecl,
+    callee_name: &str,
+    resume_fn: FunctionValue<'ctx>,
+) -> Result<DropMember<'ctx>, String> {
+    let offset = cg
+        .frame_layouts
+        .get(&f.name)
+        .and_then(|layout| {
+            layout
+                .children
+                .iter()
+                .find(|(name, _)| name == callee_name)
+                .map(|(_, offset)| *offset)
+        })
+        .ok_or_else(|| {
+            format!(
+                "drop state: no child frame slot for `{callee_name}` in `{}`",
+                f.name
+            )
+        })?;
+    Ok(DropMember {
+        child: DropChild::Embedded { offset },
+        resume: resume_fn,
+        returned_value: None,
+    })
+}
+
+/// The address `offset` bytes into the frame at `frame_ptr` (a CPU handle or result slot).
+fn cpu_group_slot_ptr<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    frame_ptr: PointerValue<'ctx>,
+    offset: u64,
+) -> Result<PointerValue<'ctx>, String> {
+    // SAFETY: the offset is a handle or result slot the frame layout reserved for the group.
+    unsafe {
+        cg.builder.build_gep(
+            cg.ctx.i8_type(),
+            frame_ptr,
+            &[cg.ctx.i64_type().const_int(offset, false)],
+            "cpu_group_slot",
+        )
+    }
+    .map_err(|e| format!("cpu group slot gep: {e}"))
+}
+
+/// The CPU members of a group a drop state has to look at: those whose callee hands back a heap value.
+/// `slots` are the (handle, result) offsets of the group, in member order.
+///
+/// O(members) time.
+fn cpu_drop_members(cg: &Cg<'_, '_>, callees: &[&str], slots: &[(u64, u64)]) -> Vec<CpuDropMember> {
+    callees
+        .iter()
+        .zip(slots)
+        .filter_map(|(callee, (handle_offset, result_offset))| {
+            callee_result_type(cg, callee).map(|result_type| CpuDropMember {
+                handle_offset: *handle_offset,
+                result_offset: *result_offset,
+                result_type,
+            })
+        })
+        .collect()
 }
 
 /// Return Ready (0) from a resume function: mark the frame returned
@@ -10624,6 +10808,8 @@ fn lower_sm_block_stmts<'ctx, 'g>(
                 cg,
                 &cpu_stmts,
                 f,
+                param_names,
+                shape_table,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -10738,6 +10924,8 @@ fn lower_sm_block_stmts<'ctx, 'g>(
             emit_fused_group_spawn_poll(
                 cg,
                 f,
+                param_names,
+                shape_table,
                 &fused.members,
                 state_blocks,
                 pending_block,
@@ -11639,7 +11827,10 @@ fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
         // runs again (potentially suspending again). Each iteration is therefore a distinct
         // poll cycle: sequential by construction (the runtime never resumes the same task
         // twice concurrently), satisfying the "loop iterations sequential by default" design.
-        Stmt::While { cond, body, .. } => {
+        Stmt::While {
+            cond, body, span, ..
+        } => {
+            let loop_offset = span.start;
             let locals_snapshot = cg.locals.clone();
             cg.sm_scope_depth += 1;
 
@@ -11687,6 +11878,7 @@ fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
                     cg,
                     while_header_bb,
                     "sm while body->header branch",
+                    loop_offset,
                     state_blocks,
                     pending_block,
                     frame_ptr,
@@ -11730,7 +11922,11 @@ fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
         // resumes at the function level. Crossing OUTER locals (declared before the for-loop
         // and read after it, or read inside the body) DO get sm_entry allocas via P1.
         Stmt::For {
-            var, iter, body, ..
+            var,
+            iter,
+            body,
+            span,
+            ..
         } => {
             let locals_snapshot = cg.locals.clone();
             cg.sm_scope_depth += 1;
@@ -11739,6 +11935,7 @@ fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
                 var,
                 iter,
                 body,
+                span.start,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -11859,6 +12056,7 @@ fn lower_sm_for<'ctx, 'g>(
     var: &str,
     iter: &Expr,
     body: &ynz_ast::nodes::Block,
+    loop_offset: usize,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
     frame_ptr: PointerValue<'ctx>,
@@ -11994,6 +12192,7 @@ fn lower_sm_for<'ctx, 'g>(
                 cg,
                 header_bb,
                 "sm for range back-edge",
+                loop_offset,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -12169,6 +12368,7 @@ fn lower_sm_for<'ctx, 'g>(
                 cg,
                 header_bb,
                 "sm for array back",
+                loop_offset,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -12440,6 +12640,7 @@ fn lower_sm_for<'ctx, 'g>(
                 cg,
                 header_bb,
                 "sm for map back-edge",
+                loop_offset,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -15648,7 +15849,12 @@ fn emit_io_member_poll<'ctx, 'g>(
         .map_err(|e| format!("io member poll pend cont {callee_name}: {e}"))?;
 
     cg.builder.position_at_end(ready_bb);
-    state_machine::store_resume_point(ctx, &cg.builder, child_frame, 0x7FFF_FFFFu64)?;
+    state_machine::store_resume_point(
+        ctx,
+        &cg.builder,
+        child_frame,
+        ynz_abi::FRAME_RESUME_POINT_RETURNED as u64,
+    )?;
     cg.builder
         .build_unconditional_branch(after_bb)
         .map_err(|e| format!("io member poll ready cont {callee_name}: {e}"))?;
@@ -15662,6 +15868,8 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     stmts: &[&Stmt],
     f: &FunctionDecl,
+    param_names: &[String],
+    shape_table: &'g ShapeTable,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
     frame_ptr: PointerValue<'ctx>,
@@ -15783,6 +15991,27 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         .get(poll_state_idx)
         .copied()
         .ok_or_else(|| format!("spike: no poll state block at index {poll_state_idx}"))?;
+
+    {
+        let callees: Vec<&str> = children.iter().map(|child| child.callee.as_str()).collect();
+        let slots: Vec<(u64, u64)> = handle_offsets
+            .iter()
+            .copied()
+            .zip(result_offsets.iter().copied())
+            .collect();
+        let cpu_members = cpu_drop_members(cg, &callees, &slots);
+        register_drop_state(
+            cg,
+            f,
+            param_names,
+            shape_table,
+            frame_ptr,
+            ynz_typeck::release_plan::stmt_span(stmts[0]).0,
+            poll_state_idx,
+            &[],
+            &cpu_members,
+        )?;
+    }
 
     cg.builder.position_at_end(spawn_state);
 
@@ -16098,6 +16327,25 @@ fn emit_independent_group_poll<'ctx, 'g>(
     // Consumed N slots from state_blocks; only 1 is used. The rest (N-1) will be terminated
     // as unreachable by lower_sm_body's trailing loop.
     *current_state = continuation_state + stmts.len() - 1;
+    let group_drop_children = children
+        .iter()
+        .map(|child| {
+            let mut member = embedded_drop_child(cg, f, &child.callee_name, child.resume_fn)?;
+            member.returned_value = callee_result_type(cg, &child.callee_name);
+            Ok(member)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        parent_frame,
+        ynz_typeck::release_plan::stmt_span(stmts[0]).0,
+        continuation_state,
+        &group_drop_children,
+        &[],
+    )?;
 
     // --- Step 3 — first-poll pass: poll ALL children before deciding to yield ---
     //
@@ -16175,7 +16423,12 @@ fn emit_independent_group_poll<'ctx, 'g>(
         cg.builder.position_at_end(ready_bb);
         // Sentinel routes to sm_dead (default switch arm) on any subsequent re-poll,
         // preventing a null sleep_handle dereference after the handle was freed on Ready.
-        state_machine::store_resume_point(ctx, &cg.builder, child.child_frame, 0x7FFF_FFFFu64)?;
+        state_machine::store_resume_point(
+            ctx,
+            &cg.builder,
+            child.child_frame,
+            ynz_abi::FRAME_RESUME_POINT_RETURNED as u64,
+        )?;
         cg.builder
             .build_unconditional_branch(after_bb)
             .map_err(|e| format!("par ready cont {}: {e}", child.callee_name))?;
@@ -16434,6 +16687,8 @@ fn extract_call_and_args(stmt: &Stmt) -> Option<(String, &[Expr])> {
 fn emit_fused_group_spawn_poll<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     f: &FunctionDecl,
+    param_names: &[String],
+    shape_table: &'g ShapeTable,
     members: &[(usize, ynz_typeck::cpu_admission::FusedMemberClass)],
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
@@ -16600,6 +16855,37 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
     // poll of every member (CPU handle AND I/O sub-frame) registers the waker, exactly mirroring
     // `emit_cpu_group_spawn_join`'s "branch to poll_state immediately" discipline (skipping the
     // first poll here would leave wakers unregistered and hang the SM forever).
+    {
+        let io_drop_members = io_children
+            .iter()
+            .map(|child| {
+                let mut member = embedded_drop_child(cg, f, child.callee_name, child.resume_fn)?;
+                member.returned_value = callee_result_type(cg, child.callee_name);
+                Ok(member)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let callees: Vec<&str> = cpu_members
+            .iter()
+            .map(|member| member.callee.as_str())
+            .collect();
+        let slots: Vec<(u64, u64)> = handle_offsets
+            .iter()
+            .copied()
+            .zip(result_offsets.iter().copied())
+            .collect();
+        let cpu_drop = cpu_drop_members(cg, &callees, &slots);
+        register_drop_state(
+            cg,
+            f,
+            param_names,
+            shape_table,
+            frame_ptr,
+            ynz_typeck::release_plan::stmt_span(&f.body.stmts[members[0].0]).0,
+            poll_state_idx,
+            &io_drop_members,
+            &cpu_drop,
+        )?;
+    }
     state_machine::store_resume_point(ctx, &cg.builder, frame_ptr, poll_state_idx as u64)?;
     cg.builder
         .build_unconditional_branch(poll_state)
@@ -16986,12 +17272,14 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         parent_frame,
         call_expr.span().start,
         continuation_state,
-        &[(
-            DropChild::Embedded {
+        &[DropMember {
+            child: DropChild::Embedded {
                 offset: child_offset,
             },
-            child_resume_fn,
-        )],
+            resume: child_resume_fn,
+            returned_value: None,
+        }],
+        &[],
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
@@ -17410,7 +17698,11 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         .frame_layouts
         .get(&f.name)
         .and_then(|layout| layout.recursion_slot)
-        .map(|offset| (DropChild::Boxed { offset }, child_resume_fn))
+        .map(|offset| DropMember {
+            child: DropChild::Boxed { offset },
+            resume: child_resume_fn,
+            returned_value: None,
+        })
         .into_iter()
         .collect::<Vec<_>>();
     register_drop_state(
@@ -17422,6 +17714,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         call_offset,
         continuation_state,
         boxed_child.as_slice(),
+        &[],
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
@@ -18049,6 +18342,17 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         )
         .map_err(|e| format!("conduit first switch: {e}"))?;
     *current_state = continuation_state;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        frame_ptr,
+        receiver.span().start,
+        continuation_state,
+        &[],
+        &[],
+    )?;
 
     // suspend: save the continuation state, yield Pending (the runtime registered the
     // forwarded waker; the task is re-driven when the endpoint makes progress).
@@ -18485,6 +18789,7 @@ fn emit_wait_point<'ctx, 'g>(
         inner.span().start,
         continuation_state,
         &[],
+        &[],
     )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
@@ -18754,6 +19059,7 @@ fn emit_sm_loop_back_edge<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     header_bb: inkwell::basic_block::BasicBlock<'ctx>,
     err_label: &str,
+    loop_offset: usize,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
     frame_ptr: PointerValue<'ctx>,
@@ -18815,6 +19121,17 @@ fn emit_sm_loop_back_edge<'ctx, 'g>(
     // Continuation state: fresh resume-fn invocation — reload params + crossing locals
     // (the same reload every wait continuation performs), then re-enter at the header.
     *current_state = continuation_state;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        frame_ptr,
+        loop_offset,
+        continuation_state,
+        &[],
+        &[],
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
     cg.builder
@@ -29681,6 +29998,64 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder.position_at_end(after_bb);
         }
         Ok(())
+    }
+
+    /// Release the value of type `ty` (`callee_result_type`) a finished callee left in the return slot
+    /// of the frame `child_frame`, behind a null check: a group's drop state, when a member returned
+    /// before the group joined.
+    ///
+    /// O(1) time to emit; at run time O(heap the value owns).
+    fn release_returned_value(
+        &self,
+        child_frame: PointerValue<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        let holder = self.alloca_in_entry_llvm(self.ptr(), "returned_value_slot")?;
+        if matches!(ty, Type::ErrorsCapable { .. }) {
+            let (error_bits, ok_bits) =
+                state_machine::load_return_value_errors(self.ctx, &self.builder, child_frame)?;
+            let companion =
+                self.alloca_in_entry_llvm(errors_result_type(self.ctx), "returned_result")?;
+            let mut result = errors_result_type(self.ctx).const_zero();
+            result = self
+                .builder
+                .build_insert_value(result, error_bits, 0, "returned_err")
+                .map_err(|e| format!("returned result err: {e}"))?
+                .into_struct_value();
+            result = self
+                .builder
+                .build_insert_value(result, ok_bits, 1, "returned_ok")
+                .map_err(|e| format!("returned result ok: {e}"))?
+                .into_struct_value();
+            self.builder
+                .build_store(companion, result)
+                .map_err(|e| format!("returned result store: {e}"))?;
+            self.builder
+                .build_store(holder, companion)
+                .map_err(|e| format!("returned result holder: {e}"))?;
+        } else {
+            let bits = state_machine::load_return_value_i64(
+                self.ctx,
+                &self.builder,
+                child_frame,
+                "returned_bits",
+            )?;
+            let pointer = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), "returned_ptr")
+                .map_err(|e| format!("returned value inttoptr: {e}"))?;
+            self.builder
+                .build_store(holder, pointer)
+                .map_err(|e| format!("returned value holder: {e}"))?;
+        }
+        self.emit_slot_release(
+            holder,
+            ty,
+            ReleaseForm::Local,
+            true,
+            "returned_value",
+            "drop_returned",
+        )
     }
 
     /// THE one release of a slot: load the pointer `slot` holds, skip a null one when
