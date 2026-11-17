@@ -1193,8 +1193,10 @@ union_handle_cases! {
     an_unreceived_union_errors_result_is_released_with_the_handle: "Thing errors", NEVER_RECEIVE, "parent\n";
 }
 
-/// The embedded call keeps the frame-region form: a union a suspending callee returns to a plain
-/// call site is read from the callee's region before its frame is freed, as before.
+/// Bug caught: the union-through-a-handle fix moving the embedded return into a cell too (a regression
+/// the cell tests above would not see); tier High. The embedded call keeps the frame-region form: a
+/// union a suspending callee returns to a plain call site is read from the callee's region before its
+/// frame is freed, as before.
 #[test]
 fn a_union_an_embedded_suspending_call_returns_is_unchanged() {
     let source = "shape Tiny {
@@ -1227,8 +1229,9 @@ function entrypoint() -> nothing {
     balanced_and_asan_clean("c8s6_embedded_union", source, "ABC\n");
 }
 
-/// The failing `-> Thing errors` task: no cell exists (the move glue leaves `ok` 0), the error
-/// object is received or released, and nothing is freed twice.
+/// Bug caught: the union-through-a-handle move freeing or reading a cell the failing path never made
+/// (a double free); tier High. The failing `-> Thing errors` task: no cell exists (the move glue
+/// leaves `ok` 0), the error object is received or released, and nothing is freed twice.
 #[test]
 fn a_failed_union_errors_task_delivers_its_error_and_no_cell() {
     for (name, receive, expected) in [
