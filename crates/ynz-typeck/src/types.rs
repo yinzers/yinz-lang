@@ -561,3 +561,17 @@ mod channel_elem_tests {
         );
     }
 }
+
+/// SPIKE: read the literal length out of `fixed<T, N>`'s type arguments (the parser carries
+/// `N` as a `Named("N")` argument). `None` for `fixed<T>`.
+pub fn fixed_length_argument(args: &[ynz_ast::nodes::Type]) -> Option<usize> {
+    match args.get(1) {
+        Some(ynz_ast::nodes::Type::Named(text, _)) => text.parse::<usize>().ok(),
+        _ => None,
+    }
+}
+
+/// SPIKE: true for the literal-length argument of `fixed<T, N>`.
+pub fn is_length_literal(arg: &ynz_ast::nodes::Type) -> bool {
+    matches!(arg, ynz_ast::nodes::Type::Named(text, _) if text.chars().all(|ch| ch.is_ascii_digit()))
+}

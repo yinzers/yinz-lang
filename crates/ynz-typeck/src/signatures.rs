@@ -441,17 +441,20 @@ fn resolve_sig_type_with_params(
             inner: Box::new(resolve(inner)),
         },
         AstType::Generic { name, args, .. } => {
-            let mut resolved_args: Vec<Type> = args.iter().map(resolve).collect();
+            let mut resolved_args: Vec<Type> = args.iter().filter(|a| !crate::types::is_length_literal(a)).map(resolve).collect();
             // The built-in containers are their own types; `Generic` is a user-declared
             // generic shape. The arguments of a call have the built-in types.
             match (name.as_str(), resolved_args.len()) {
                 ("array", 1) => Type::BuiltinArray {
                     elem: Box::new(resolved_args.remove(0)),
                 },
-                ("fixed", 1) => Type::BuiltinFixed {
-                    elem: Box::new(resolved_args.remove(0)),
-                    size: None,
-                },
+                ("fixed", 1) => {
+                    let size = crate::types::fixed_length_argument(args);
+                    Type::BuiltinFixed {
+                        elem: Box::new(resolved_args.remove(0)),
+                        size,
+                    }
+                }
                 ("channel", 1) => Type::BuiltinChannel {
                     elem: Box::new(resolved_args.remove(0)),
                 },

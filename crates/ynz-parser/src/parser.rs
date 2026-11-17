@@ -1114,6 +1114,14 @@ impl<'a> Parser<'a> {
                 Token::Comma => {
                     self.advance();
                 }
+                // SPIKE: a literal length argument (`fixed<int, 3>`) is carried as a
+                // `Named("3")` type argument; the typeck resolvers read it back as the size.
+                Token::IntLit(length) => {
+                    let length = *length;
+                    let length_span = self.current_span();
+                    self.advance();
+                    args.push(Type::Named(length.to_string(), length_span));
+                }
                 _ => {
                     args.push(self.parse_type_with_depth(depth + 1));
                     if !matches!(self.peek(), Token::Gt | Token::GtGt | Token::Comma) {

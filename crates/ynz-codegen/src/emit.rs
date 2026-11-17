@@ -2052,6 +2052,13 @@ fn abi_return_type<'ctx>(
             let layout = shape_types.union_layout(variants)?;
             Some(shape_types.union_slot_llvm(ctx, &layout).into())
         }
+        // SPIKE: a sized `fixed` comes back BY VALUE as its cells (`[N x i64]`), so the caller
+        // owns the storage; an unsized one has no length to size the aggregate with.
+        Type::BuiltinFixed { elem, size: Some(count) } => Some(
+            ctx.i64_type()
+                .array_type((fixed_region_bytes(elem, *count) / 8) as u32)
+                .into(),
+        ),
         Type::Maybe { .. } => Some(
             ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
                 .into(),
@@ -4568,6 +4575,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|e| format!("{e}"))?;
                 self.builder
                     .build_store(slot, sv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            Type::BuiltinFixed { ref elem, size: Some(count) } => {
+                let cells = self.i64().array_type((fixed_region_bytes(elem, count) / 8) as u32);
+                let slot = self
+                    .builder
+                    .build_alloca(cells, &format!("{site}_fixed_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                self.builder
+                    .build_store(slot, val.into_array_value())
                     .map_err(|e| format!("{e}"))?;
                 Ok(slot.into())
             }
@@ -20572,6 +20590,16 @@ fn lower_stmt_return<'ctx>(
                         .build_load(slot_ty, scratch, "union_ret_value")
                         .map_err(|err| format!("ret union load: {err}"))?;
                     build_return_after_release(cg, edge, Some(&returned), "ret union")?;
+                }
+                Type::BuiltinFixed { ref elem, size: Some(count) } => {
+                    let cells = cg
+                        .i64()
+                        .array_type((fixed_region_bytes(elem, count) / 8) as u32);
+                    let loaded = cg
+                        .builder
+                        .build_load(cells, val.into_pointer_value(), "ret_fixed_val")
+                        .map_err(|e| format!("ret fixed load: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&loaded), "ret fixed")?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {
                     let ptr_v = val.into_pointer_value();

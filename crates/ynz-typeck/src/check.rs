@@ -9168,7 +9168,7 @@ impl<'b> Checker<'b> {
                     return Type::Error;
                 }
                 let resolved_args: Vec<Type> =
-                    args.iter().map(|a| self.ast_type_to_type(a)).collect();
+                    args.iter().filter(|a| !crate::types::is_length_literal(a)).map(|a| self.ast_type_to_type(a)).collect();
                 // The arms below fill a missing argument with `Error`. Report it here: callers
                 // skip their checks on a type holding an `Error` as already reported (`channel`
                 // reports its own count).
@@ -9188,7 +9188,8 @@ impl<'b> Checker<'b> {
                         }
                     }
                     "fixed" => {
-                        if resolved_args.len() > 1 {
+                        let spike_size = crate::types::fixed_length_argument(args);
+                        if spike_size.is_none() && resolved_args.len() > 1 {
                             self.diags.push(Diagnostic::error(
                                 span.clone(),
                                 "`fixed<T>` takes one type argument. Yinz doesn't have tuple types.",
@@ -9199,7 +9200,7 @@ impl<'b> Checker<'b> {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed {
                             elem: Box::new(elem),
-                            size: None,
+                            size: spike_size,
                         }
                     }
                     "map" => {

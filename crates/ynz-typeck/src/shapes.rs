@@ -160,7 +160,7 @@ impl ShapeTable {
             // Generic instantiation: P3a handles user-defined generics; P3b handles built-ins.
             AstType::Generic { name, args, .. } => {
                 let resolved_args: Vec<Type> =
-                    args.iter().map(|a| self.resolve_ast_type(a)).collect();
+                    args.iter().filter(|a| !crate::types::is_length_literal(a)).map(|a| self.resolve_ast_type(a)).collect();
                 match name.as_str() {
                     "array" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
@@ -169,10 +169,11 @@ impl ShapeTable {
                         }
                     }
                     "fixed" => {
+                        let size = crate::types::fixed_length_argument(args);
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed {
                             elem: Box::new(elem),
-                            size: None,
+                            size,
                         }
                     }
                     "map" => {
