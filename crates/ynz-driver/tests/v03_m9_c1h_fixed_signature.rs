@@ -139,3 +139,22 @@ fn a_fixed_a_suspending_function_returns_is_released_after_a_later_wait() {
         "A\n",
     );
 }
+
+// Bug: a WRITTEN length (`fixed<int, 4>`, `fixed<string, 2>`, a parameter of `fixed<int, 0>`, an
+// exported function) was only compiled in diagnostic tests, never run: a returned list of strings
+// that leaked, or an empty list read as one cell, would not have been caught (High: data
+// integrity of a value that crosses a call; empty is the boundary).
+#[test]
+fn a_written_length_is_read_returned_and_released() {
+    assert_fixture_balanced("v0_3_m9_c1h_fixed_written_lengths.ynz", "10\n2\nbo\n3\n0\n");
+}
+
+// Bug: a function returning `fixed<int, 0>` loaded and stored a zero-sized `[0 x i64]` through a
+// pointer to a one-cell stack slot; AddressSanitizer reports it as an underflow of that slot
+// (High: memory safety at the empty boundary; the ASan-clean exit check covers the whole feature).
+#[test]
+fn a_fixed_of_zero_items_a_function_returns_is_asan_clean() {
+    at_both_optimization_levels(|no_optimize| {
+        assert_asan_clean_and_prints("v0_3_m9_c1h_fixed_return_zero.ynz", no_optimize, "0\n");
+    });
+}
