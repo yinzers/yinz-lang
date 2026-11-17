@@ -324,7 +324,7 @@ balanced_fixture!(
     "producer P6 (errors in a suspending function): an auto-propagation edge and an errors-capable local release nothing in a resume function"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p7_union_in_suspending_function,
     "v0_3_m9_union_wrap_arg.ynz",
     "producer P7 (unions in a suspending function): a union envelope and the string it holds, built or wrapped in a resume function, leak"

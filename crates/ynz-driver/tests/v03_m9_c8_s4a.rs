@@ -69,7 +69,6 @@ function entrypoint() -> nothing {{
 }
 
 #[test]
-#[ignore = "planned RED (C8 S4a step 3): a temporary of a suspending statement has no frame region yet"]
 fn shape_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{CREW}
@@ -117,7 +116,6 @@ function entrypoint() -> nothing {{
 }
 
 #[test]
-#[ignore = "planned RED (C8 S4a step 3): a temporary of a suspending statement has no frame region yet"]
 fn nested_shape_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{PIRATE}
@@ -162,7 +160,6 @@ function entrypoint() -> nothing {{
 }
 
 #[test]
-#[ignore = "planned RED (C8 S4a step 3): a temporary of a suspending statement has no frame region yet"]
 fn maybe_of_a_string_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{NAMES}
@@ -203,7 +200,6 @@ function entrypoint() -> nothing {{
 }
 
 #[test]
-#[ignore = "planned RED (C8 S4a step 3): a temporary of a suspending statement has no frame region yet"]
 fn fixed_of_strings_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{LISTS}
@@ -267,7 +263,6 @@ function entrypoint() -> nothing {{
 }
 
 #[test]
-#[ignore = "planned RED (C8 S4a step 3): a temporary of a suspending statement has no frame region yet"]
 fn union_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{THINGS}
@@ -285,7 +280,6 @@ function entrypoint() -> nothing {{
 /// optimization levels, and no sanitizer sees it). Planned red for the temporaries step; the fix is
 /// the same frame region a temporary of a suspending statement gets.
 #[test]
-#[ignore = "planned RED (C8 S4a, temporaries of a suspending statement): a call result staged into a suspending callee points into the dead resume stack"]
 fn shape_call_result_staged_into_a_suspending_callee_survives_the_callee_wait() {
     let source = "
 shape Crew {

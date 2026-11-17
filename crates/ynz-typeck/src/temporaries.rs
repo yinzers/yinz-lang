@@ -15,8 +15,8 @@
 //!   owned value, `copied_at_return`, so this holds for an imported one too), an array, map or
 //!   shape literal, a fresh string (`string_ownership::is_fresh_string_expr`) or an explicit
 //!   `.copy()`;
-//! * the value owns heap the plain emitter releases: a string, array, map or flat shape, or a
-//!   value of a type parameter (judged per instance by codegen); and
+//! * the value owns heap the plain emitter releases: a string, array, map, shape, `fixed` list,
+//!   `maybe` or union, or a value of a type parameter (judged per instance by codegen); and
 //! * nothing takes it: a `let`, an assignment, a `return`, a store, a `give` argument, a
 //!   `background` argument or an element of a literal owns the value from then on, so it is not
 //!   a temporary. Every other position only reads it (an operand, an interpolated part, a
@@ -426,6 +426,7 @@ impl Walk<'_> {
                         | ReleaseKind::Map
                         | ReleaseKind::Shape
                         | ReleaseKind::NestedShape
+                        | ReleaseKind::Fixed
                         | ReleaseKind::Union
                         | ReleaseKind::ErrorsCapable
                 )

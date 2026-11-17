@@ -421,6 +421,7 @@ pub fn build_frame_layouts_with_unions(
                 typed,
                 suspend_set,
                 typed.back_edge_yield_admitted.contains(&f.name),
+                shape_abi_sizes,
             );
             let n_locals = f.params.len() + crossing_slots + wait_temporary_slots;
             // own_base (start of own-local slots) is pushed past the CPU-slot reserve so
@@ -885,6 +886,7 @@ fn compute_frame_size(
                         typed,
                         suspend_set,
                         typed.back_edge_yield_admitted.contains(&f.name),
+                        shape_abi_sizes,
                     );
                     return Some((
                         f.params.len() + crossing_slots + wait_temporary_slots,
@@ -8248,7 +8250,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes);
     // The frame slots of the temporaries of suspending statements follow the crossing locals.
     let wait_temporary_base = crossing_slot_base + crossing_total_slots;
-    let wait_temporary_slots = wait_temporary_slot_count(f, typed, suspend_set, back_edge_yield);
+    let wait_temporary_slots =
+        wait_temporary_slot_count(f, typed, suspend_set, back_edge_yield, shape_abi_sizes);
     let n_locals = if spike_active_here {
         n_params + spike_slot_reserve + crossing_total_slots + wait_temporary_slots
     } else {
@@ -13116,13 +13119,89 @@ fn crossing_local_total_slots(
         .sum()
 }
 
-/// The frame slots the temporaries of `f`'s suspending statements need: one per temporary typeck
+/// Where the value of a temporary of a suspending statement lives while the statement runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TemporaryHome {
+    /// The temporary is a pointer to heap that stays put across a suspension (a string, an array, a
+    /// map, the envelope cell of a minted `maybe` copy): one frame slot holds the pointer.
+    Pointer,
+    /// The temporary's bytes are held in a frame region behind its pointer slot, because the value
+    /// the expression builds sits in this resume invocation's stack (a call result, a literal): a
+    /// shape, a `fixed` list, a `maybe` envelope or an envelope union.
+    Region(TemporaryRegionKind, usize),
+    /// No frame home yet: the kind leaks, as a temporary of an unsupported kind does on the plain
+    /// path (never a double free).
+    Skip,
+}
+
+/// What a temporary's frame region holds, and so how a value is moved into it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TemporaryRegionKind {
+    /// `n` bytes copied as they are: a shape, a `fixed` list's cells, a `maybe`'s 16-byte envelope.
+    Bytes(u64),
+    /// A union slot of these variants (`union_persist_into_core`).
+    Union(Vec<Type>),
+}
+
+/// The frame home of a temporary of type `ty` (already resolved; `minted_maybe_copy` is typeck's
+/// word that it is an explicit `.copy()` of a `maybe`). The ONE answer behind the frame layout
+/// (`wait_temporary_slot_count`) and the statement that opens its frame (`Cg::open_temporary_frame`),
+/// so a frame and its lowering agree on every slot.
+///
+/// Time: O(1)  Space: O(variants) for a union
+fn temporary_home(
+    ty: &Type,
+    minted_maybe_copy: bool,
+    sizes: &HashMap<String, u64>,
+) -> TemporaryHome {
+    match ty {
+        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => {
+            TemporaryHome::Pointer
+        }
+        Type::Maybe { .. } if minted_maybe_copy => TemporaryHome::Pointer,
+        Type::Maybe { inner } => match inner.as_ref() {
+            // A view of a slot someone else owns, or a counted channel reference: no frame bytes.
+            Type::BuiltinChannel { .. } => TemporaryHome::Skip,
+            inner if ynz_typeck::check::is_envelope_union(inner) => TemporaryHome::Skip,
+            _ => TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0)),
+        },
+        Type::Shape { name } => match sizes.get(name) {
+            Some(&bytes) => TemporaryHome::Region(
+                TemporaryRegionKind::Bytes(bytes),
+                shape_frame_slots(name, sizes),
+            ),
+            None => TemporaryHome::Skip,
+        },
+        Type::BuiltinFixed {
+            elem,
+            size: Some(count),
+        } => {
+            let bytes = fixed_region_bytes(elem, *count);
+            TemporaryHome::Region(TemporaryRegionKind::Bytes(bytes), fixed_frame_slots(bytes))
+        }
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(ty) => {
+            if sizes.contains_key(&crate::shape_types::union_key(variants)) {
+                TemporaryHome::Region(
+                    TemporaryRegionKind::Union(variants.clone()),
+                    union_frame_slots(variants, sizes),
+                )
+            } else {
+                TemporaryHome::Skip
+            }
+        }
+        _ => TemporaryHome::Skip,
+    }
+}
+
+/// The frame slots the temporaries of `f`'s suspending statements need: per temporary typeck
 /// recorded at the release point of a statement the resume function routes through the SM walker
-/// (`stmt_needs_sm_walker_for`), at every nesting depth. A temporary built in such a statement
+/// (`stmt_needs_sm_walker_for`), at every nesting depth, one pointer slot plus the bytes of its
+/// region when its kind has one (`temporary_home`); plus the slots the copies a statement stages
+/// make (`copy_slot_count`, `union_stage_slot_count`). A temporary built in such a statement
 /// must survive its `wait`, which an entry-block slot does not (a resume gets a fresh stack
 /// frame), so it lives in the heap frame after the crossing locals (`Cg::open_wait_temporaries`).
-/// The slots are an upper bound: a temporary whose type the emitter releases no slot kind of
-/// (`open_temporaries` skips it) leaves its slot unused, which costs 8 bytes and nothing else.
+/// The slots are an upper bound: a temporary whose kind the emitter holds no frame home for
+/// (`TemporaryHome::Skip`) leaves its slot unused, which costs 8 bytes and nothing else.
 ///
 /// O(statements) time.
 fn wait_temporary_slot_count(
@@ -13130,12 +13209,33 @@ fn wait_temporary_slot_count(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
     back_edge_yield: bool,
+    sizes: &HashMap<String, u64>,
 ) -> usize {
+    fn temporary_slots(
+        span: (usize, usize),
+        typed: &TypedModule,
+        sizes: &HashMap<String, u64>,
+    ) -> usize {
+        let Some(plain) = typed.expr_types.get(&span) else {
+            return 1;
+        };
+        // An argument coerced into a union parameter: the temporary is the envelope the call mints.
+        let ty = typed
+            .union_coercions
+            .get(&span)
+            .map_or(plain, |coercion| &coercion.slot);
+        let minted = typed.temporaries.is_minted_maybe_copy(span.0, span.1);
+        match temporary_home(ty, minted, sizes) {
+            TemporaryHome::Region(_, region_slots) => 1 + region_slots,
+            TemporaryHome::Pointer | TemporaryHome::Skip => 1,
+        }
+    }
     fn count_block(
         block: &ynz_ast::nodes::Block,
         typed: &TypedModule,
         suspend_set: &SuspendSet,
         back_edge_yield: bool,
+        sizes: &HashMap<String, u64>,
     ) -> usize {
         block
             .stmts
@@ -13148,19 +13248,52 @@ fn wait_temporary_slot_count(
                     stmt,
                 ) {
                     let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
-                    typed.temporaries.released_at(start, end).len() + copy_slot_count(stmt, typed)
+                    let temporaries: usize = typed
+                        .temporaries
+                        .released_at(start, end)
+                        .iter()
+                        .map(|&span| temporary_slots(span, typed, sizes))
+                        .sum();
+                    temporaries + copy_slot_count(stmt, typed) + union_stage_slot_count(stmt, typed)
                 } else {
                     0
                 };
                 let nested: usize = ynz_typeck::release_plan::nested_blocks(stmt)
                     .into_iter()
-                    .map(|inner| count_block(inner, typed, suspend_set, back_edge_yield))
+                    .map(|inner| count_block(inner, typed, suspend_set, back_edge_yield, sizes))
                     .sum();
                 own + nested
             })
             .sum()
     }
-    count_block(&f.body, typed, suspend_set, back_edge_yield)
+    count_block(&f.body, typed, suspend_set, back_edge_yield, sizes)
+}
+
+/// The frame slots the envelope-union arguments a suspending statement stages need
+/// (`stage_suspending_call_arg_bits`): one per value typeck coerces into an envelope union inside
+/// the statement itself, not in a block nested in it. The slot keeps the pointer to the callee's
+/// `Param` region the statement's end releases; a coercion that is no call argument leaves its
+/// slot unused, which costs 8 bytes.
+///
+/// O(coercions of the program) time.
+fn union_stage_slot_count(stmt: &Stmt, typed: &TypedModule) -> usize {
+    let nested: Vec<(usize, usize)> = ynz_typeck::release_plan::nested_blocks(stmt)
+        .into_iter()
+        .map(|block| (block.span.start, block.span.end))
+        .collect();
+    let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
+    typed
+        .union_coercions
+        .iter()
+        .filter(|&(&(from, to), coercion)| {
+            from >= start
+                && to <= end
+                && !nested
+                    .iter()
+                    .any(|&(inner_from, inner_to)| from >= inner_from && to <= inner_to)
+                && ynz_typeck::check::is_envelope_union(&coercion.slot)
+        })
+        .count()
 }
 
 /// The frame slots the copies a suspending statement makes need (`Cg::hold_copy_in_frame`): one
@@ -16449,16 +16582,30 @@ fn stage_suspending_call_arg_bits<'ctx>(
     if matches!(arg, Expr::StructLit { .. }) {
         // Exception 2 (doc above): anonymous aggregate — stage from a counted heap
         // cell via the one stable-bits marshalling point, never the dying stack temp.
+        let arg_span = arg.span();
         let arg_val = lower_expr(cg, arg)?;
         let arg_ty = cg.expr_type(arg);
+        // A literal in a position the callee only reads is a temporary of the statement whose
+        // bytes `lower_expr` moved into a frame region: the region is stable across the
+        // callee's `wait`, owns the literal's boxes and is released when the statement ends, so
+        // the callee is staged the region itself and nothing is allocated.
+        if !callee_takes_it && cg.temporary_has_region((arg_span.start, arg_span.end)) {
+            return cg
+                .builder
+                .build_ptr_to_int(
+                    arg_val.into_pointer_value(),
+                    cg.i64(),
+                    "sm_arg_anon_region_bits",
+                )
+                .map_err(|err| format!("sm arg anon region bits: {err}"));
+        }
         let Type::Shape { name: shape_name } = cg.resolve_type(&arg_ty) else {
             return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
         };
-        // The literal is fresh and nobody else holds it, so the cell TAKES its boxes instead of
-        // cloning them (the literal's own strings were never released: a statement temporary
-        // of a shape has no frame slot until C8 slice 4, and that release must then skip this
-        // literal). The cell is the argument's only owner: a `share` or bare position leaves it
-        // to the caller, which frees it when the statement ends, after the call completed.
+        // No region (a `give` position records no temporary, so nothing releases the literal): the
+        // literal is fresh and nobody else holds it, so the cell TAKES its boxes instead of
+        // cloning them. The cell is the argument's only owner: a `give` callee frees it, any other
+        // position leaves it to the caller, which frees it when the statement ends.
         let literal = arg_val.into_pointer_value();
         cg.moved_cell_values.insert(literal.as_value_ref() as usize);
         let cell = cg.shape_bytes_to_heap_cell(literal, &shape_name, "sm_arg_anon")?;
@@ -16514,13 +16661,25 @@ fn stage_suspending_call_arg_bits<'ctx>(
         .as_ref()
         .and_then(|param_ty| cg.envelope_union_variants(param_ty))
     {
-        return cg.stage_union_arg(
+        let staged = cg.stage_union_arg(
             arg_val.into_pointer_value(),
             &variants,
             callee_name,
             index,
             callee_frame,
-        );
+        )?;
+        // The `Param` region owns what the staging persisted into it: a clone of a shape variant's
+        // boxes, a copy of a string variant (`union_persist_into` copies what it does not take by
+        // move). A `give` callee releases its parameter; in every other case the statement's end
+        // releases the region after the callee completed, from a slot of the heap frame.
+        if !callee_takes_it {
+            let region = cg
+                .builder
+                .build_int_to_ptr(staged, cg.ptr(), "staged_union_region")
+                .map_err(|err| format!("staged union region pointer: {err}"))?;
+            cg.hold_copy_in_frame(region, &Type::Union { variants }, ReleaseForm::Value)?;
+        }
+        return Ok(staged);
     }
     cg.to_i64_bits(arg_val, &arg_ty)
 }
@@ -20422,7 +20581,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         remember_moved_cells(cg, expr, val);
         remember_fresh_payload_maybe(cg, expr, val);
         remember_box_cell_view(cg, expr, val);
-        cg.bind_temporary(expr, val)?;
+        let val = cg.bind_temporary(expr, val)?;
         return Ok(val);
     };
     let outer = cg.coercion_inner.replace(key);
@@ -20457,7 +20616,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     if wrapped_value_moves && view.is_pointer_value() {
         cg.moved_cell_values.insert(view.as_value_ref() as usize);
     }
-    cg.bind_temporary(expr, view)?;
+    let view = cg.bind_temporary(expr, view)?;
     Ok(view)
 }
 
@@ -26893,14 +27052,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         callee: &str,
         index: usize,
     ) -> Option<Option<OwnershipModifier>> {
+        if !self.suspend_set.contains(callee) {
+            return None;
+        }
         let signature = self
             .sig_table
             .fns
             .get(callee)
             .or_else(|| self.imported_fns.get(callee))?;
-        if !signature.suspends {
-            return None;
-        }
+
         signature.param_ownerships.get(index).cloned()
     }
 
@@ -27761,6 +27921,17 @@ struct TemporarySlot<'ctx> {
     ty: Type,
     /// How the value in the slot sits: the form its release is called with.
     form: ReleaseForm,
+    /// The frame region behind the slot when the temporary's bytes live in the heap frame (a
+    /// suspending statement's shape, `fixed` list, `maybe` envelope or union): `bind_temporary` moves
+    /// the value in and points the slot at it.
+    region: Option<TemporaryRegion>,
+}
+
+/// The frame region of a temporary of a suspending statement.
+struct TemporaryRegion {
+    /// The frame slot index the region starts at (the slot after the temporary's pointer slot).
+    first_slot: usize,
+    kind: TemporaryRegionKind,
 }
 
 /// The value an assignment replaces (`Cg::begin_assign_release`).
@@ -28631,10 +28802,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// A state-machine function opens frames the same way, for the statements it lowers through
     /// `lower_stmt`. Those never contain a suspension (`stmt_needs_sm_walker` routes a statement
     /// with a `wait`, a suspending call or a conduit suspension to `lower_sm_stmt_with_wait`, which
-    /// opens no frame), so a slot is built, read and released inside one resume invocation and
-    /// an entry-block `alloca` is enough: no temporary needs a frame slot, and neither the frame
-    /// layout nor the crossing set changes. A wait-bearing statement's temporaries are never
-    /// built into a slot (`bind_temporary` finds no frame) and leak: a later slice's producer.
+    /// opens its frame with `open_wait_temporaries`), so a slot is built, read and released inside
+    /// one resume invocation and an entry-block `alloca` is enough.
     ///
     /// O(t) time for t temporaries of the statement.
     fn open_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
@@ -28642,12 +28811,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// `open_temporaries` for a statement the resume function routes through the SM walker (it
-    /// contains a `wait`, a suspending call or a conduit suspension): each temporary lives in a
-    /// slot of the heap frame (after the crossing locals; `wait_temporary_slot_count` reserved
-    /// it), because an entry-block `alloca` does not survive the resume. Only a string, array or
-    /// map is given one (`ReleaseKind::has_frame_backing`): the pointer is stable across a
-    /// suspension. A flat shape, a `maybe`, a union or a `fixed` temporary has no frame bytes yet
-    /// (slice 4) and leaks, as a temporary of a plain statement of an unsupported kind does.
+    /// contains a `wait`, a suspending call or a conduit suspension): each temporary lives in the
+    /// heap frame (after the crossing locals; `wait_temporary_slot_count` reserved it), because an
+    /// entry-block `alloca` does not survive the resume. A string, array or map is a pointer in one
+    /// slot; a shape, `fixed` list, `maybe` envelope or union is moved into a frame region behind
+    /// its slot (`temporary_home`, `bind_temporary`). A kind with no frame home leaks, as a temporary
+    /// of an unsupported kind does on the plain path.
     ///
     /// O(t) time for t temporaries of the statement.
     fn open_wait_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
@@ -28697,22 +28866,45 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             {
                 continue;
             }
-            if frame_backed
-                && !matches!(
-                    release_step(&ty),
-                    ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
-                )
-            {
-                continue;
-            }
             // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which).
-            let form = if self.typed.temporaries.is_minted_maybe_copy(span.0, span.1) {
+            let minted_maybe_copy = self.typed.temporaries.is_minted_maybe_copy(span.0, span.1);
+            let mut form = if minted_maybe_copy {
                 ReleaseForm::Cell
             } else {
                 self.temporary_release_form(&ty)
             };
+            // A temporary of a suspending statement lives in the heap frame: a pointer to heap that
+            // stays put, or a region of bytes the value is moved into (`temporary_home`).
+            let home = if !frame_backed {
+                TemporaryHome::Pointer
+            } else if matches!(
+                release_step(&ty),
+                ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+            ) {
+                TemporaryHome::Pointer
+            } else {
+                temporary_home(&ty, minted_maybe_copy, &self.shape_abi_sizes)
+            };
+            if home == TemporaryHome::Skip {
+                continue;
+            }
+            let mut region = None;
             let (slot, frame_slot) = if frame_backed {
-                let index = self.next_wait_temporary_slot()?;
+                let region_slots = match &home {
+                    TemporaryHome::Region(_, slots) => *slots,
+                    _ => 0,
+                };
+                let index = self.take_wait_temporary_slots(1 + region_slots)?;
+                if let TemporaryHome::Region(kind, _) = home {
+                    // A union region holds a slot: its release is the slot form.
+                    if matches!(kind, TemporaryRegionKind::Union(_)) {
+                        form = ReleaseForm::Value;
+                    }
+                    region = Some(TemporaryRegion {
+                        first_slot: index + 1,
+                        kind,
+                    });
+                }
                 (self.frame_slot_ptr_in_entry(index)?, Some(index))
             } else {
                 (self.alloca_in_entry_llvm(self.ptr(), "temporary")?, None)
@@ -28726,6 +28918,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 frame_slot,
                 ty,
                 form,
+                region,
             });
         }
         self.temporary_frames.push(frame);
@@ -28739,16 +28932,23 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// internal error: `wait_temporary_slot_count` and the statements lowered disagree, and a slot
     /// past the reservation would be bytes of another local or a child frame.
     fn next_wait_temporary_slot(&mut self) -> Result<usize, String> {
-        if self.sm_wait_temporary_next >= self.sm_wait_temporary_end {
+        self.take_wait_temporary_slots(1)
+    }
+
+    /// The first of `count` contiguous free frame slots for a temporary of a suspending statement:
+    /// its pointer slot and the region behind it (`temporary_home`). Running out is an internal
+    /// error, as for `next_wait_temporary_slot`.
+    fn take_wait_temporary_slots(&mut self, count: usize) -> Result<usize, String> {
+        if self.sm_wait_temporary_next + count > self.sm_wait_temporary_end {
             return Err(format!(
                 "internal: the frame of `{}` reserves {} slot(s) for temporaries of suspending \
-                 statements and a statement needs another",
+                 statements and a statement needs {count} more",
                 self.current_fn.get_name().to_string_lossy(),
                 self.sm_wait_temporary_end - self.sm_wait_temporary_base
             ));
         }
         let index = self.sm_wait_temporary_next;
-        self.sm_wait_temporary_next += 1;
+        self.sm_wait_temporary_next += count;
         Ok(index)
     }
 
@@ -28812,6 +29012,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.wait_frame_marks.push(self.temporary_frames.len());
     }
 
+    /// True when the temporary built by the expression at `span` keeps its bytes in a frame region
+    /// (`bind_temporary` moved the value there).
+    fn temporary_has_region(&self, span: (usize, usize)) -> bool {
+        self.temporary_frames
+            .iter()
+            .rev()
+            .flat_map(|frame| frame.iter())
+            .any(|temporary| temporary.span == span && temporary.region.is_some())
+    }
+
     /// The slot of the temporary built by the expression at `span` when it lives in a slot of the
     /// heap frame (a suspending statement's temporary): what survives a `wait` and can be read back
     /// after a resume. `None` for a value no open frame names, or one in an entry-block slot.
@@ -28857,6 +29067,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             frame_slot: Some(index),
             ty: ty.clone(),
             form,
+            region: None,
         });
         Ok(true)
     }
@@ -28916,25 +29127,84 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// statement, keep the value in the temporary's slot, so the statement's end releases it. A
     /// value no open statement names (a state-machine function, a form typeck did not record) is
     /// left alone: a leak, never a double free.
-    fn bind_temporary(&self, expr: &Expr, value: BasicValueEnum<'ctx>) -> Result<(), String> {
+    ///
+    /// A temporary of a suspending statement whose value sits in this resume invocation's stack (a
+    /// shape, a `fixed` list, a `maybe` envelope, a union) is moved into the frame region behind its
+    /// slot, and the slot names the region: the bytes survive the `wait`, and every later reader of
+    /// the expression (a field read, an argument staged into a suspending callee) reads the region
+    /// too. The value it returns is that region (a view of it for a union), or `value` itself.
+    ///
+    /// Time: O(1) + one memcpy of the region's bytes  Space: O(1)
+    fn bind_temporary(
+        &self,
+        expr: &Expr,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if !value.is_pointer_value() {
-            return Ok(());
+            return Ok(value);
         }
         let span = expr.span();
         let key = (span.start, span.end);
-        let slot = self
+        let Some(temporary) = self
             .temporary_frames
             .iter()
             .rev()
             .flat_map(|frame| frame.iter())
             .find(|temporary| temporary.span == key)
-            .map(|temporary| temporary.slot);
-        if let Some(slot) = slot {
+        else {
+            return Ok(value);
+        };
+        let Some(region) = &temporary.region else {
             self.builder
-                .build_store(slot, value.into_pointer_value())
+                .build_store(temporary.slot, value.into_pointer_value())
                 .map_err(|err| format!("store a temporary: {err}"))?;
-        }
-        Ok(())
+            return Ok(value);
+        };
+        let frame_ptr = self
+            .sm_frame_ptr
+            .ok_or("internal: a frame region temporary outside a resume function")?;
+        let site = format!("temporary_{}_{}", key.0, key.1);
+        let region_ptr = state_machine::shape_frame_region_ptr(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            state_machine::FRAME_OFFSET_LOCALS_START
+                + (region.first_slot as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE,
+            &site,
+        )?;
+        let source = value.into_pointer_value();
+        let held: BasicValueEnum<'ctx> = match &region.kind {
+            TemporaryRegionKind::Bytes(bytes) => {
+                self.builder
+                    .build_memcpy(
+                        region_ptr,
+                        1,
+                        source,
+                        1,
+                        self.i64().const_int(*bytes, false),
+                    )
+                    .map_err(|err| format!("{site}: move the temporary into its region: {err}"))?;
+                region_ptr.into()
+            }
+            TemporaryRegionKind::Union(variants) => {
+                // The region takes what the value owns (`deep` false): the value is a fresh envelope
+                // or a call's result, which nothing else releases.
+                self.union_persist_into_core(
+                    source,
+                    region_ptr,
+                    variants,
+                    self.union_has_nothing(variants),
+                    false,
+                    &site,
+                )?;
+                self.union_slot_to_value(region_ptr, variants, &site)?
+                    .into()
+            }
+        };
+        self.builder
+            .build_store(temporary.slot, region_ptr)
+            .map_err(|err| format!("{site}: point the temporary at its region: {err}"))?;
+        Ok(held)
     }
 
     /// Release the copy every plain `for` loop around this point made for its variable, innermost
