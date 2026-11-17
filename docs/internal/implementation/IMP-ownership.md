@@ -416,7 +416,6 @@ A state-machine resume function releases through the one emitter, `Cg::emit_rele
 
 **Left for the later C8 slices (#385).** After slice 2 a resume function releases the frame-backed kinds (above); each item below is a leak on that path, never an early or double free:
 - *A task dropped while Pending (slice 6)* releases none of the locals in its frame.
-- *Registry (slice 7).* `background-handle-cancel-injection` and the `background-handle-not-waited` lint retire there.
 
 
 ### Copies held across a `wait` (C8 slice 3)
