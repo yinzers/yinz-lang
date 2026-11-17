@@ -560,3 +560,122 @@ function entrypoint() -> nothing {
 ";
     assert_source_balanced("type_parameter_copy_maybe", source, "1\n1\n1\n2\n");
 }
+
+/// Bug caught (High: leak; C7 left it for a suspending statement): the statement-end temporary of an
+/// errors-capable call result no binding holds, one program per inner type, with the consumer a plain
+/// function (the plain path) and a suspending one (a frame region, since the pair and the view of a
+/// union die with the resume invocation). The release picks its form from the one errors-capable
+/// release the locals use, for a string, a decimal `number`, a bignum, a union and a `maybe` of one.
+#[test]
+fn an_unbound_errors_temporary_is_released_for_every_inner_type() {
+    let preamble = "shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+";
+    // (name, producer functions, fallback setup, the unbound temporary as an argument, parameter type)
+    let cases = [
+        (
+            "string",
+            "function produce(n: int) -> string errors {
+  return `abc${n}`
+}",
+            "let fallback: string = `x`",
+            "produce(1).or(fallback)",
+            "string",
+        ),
+        (
+            "decimal",
+            "function produce(n: int) -> number<20> errors {
+  let made: number<20> = 2.5
+  return made
+}",
+            "let fallback: number<20> = 0.5",
+            "produce(1).or(fallback)",
+            "number<20>",
+        ),
+        (
+            "bignum",
+            "function produce(n: int) -> number<40> errors {
+  let made: number<40> = 2.5
+  return made
+}",
+            "let fallback: number<40> = 0.5",
+            "produce(1).or(fallback)",
+            "number<40>",
+        ),
+        (
+            "union",
+            "function produce(n: int) -> Thing errors {
+  let big: Big = { label: `l${n}`, count: n }
+  return big
+}",
+            "let spare: Big = { label: `spare`, count: 0 }
+  let fallback: Thing = spare",
+            "produce(1).or(fallback)",
+            "Thing",
+        ),
+        (
+            "maybe_union",
+            "function produce(n: int) -> maybe<Thing> errors {
+  let things: array<Thing> = []
+  let big: Big = { label: `l${n}`, count: n }
+  things.add(big)
+  let found = things.get(0)
+  return found
+}",
+            "let fallback: maybe<Thing> = none",
+            "produce(1).or(fallback)",
+            "maybe<Thing>",
+        ),
+    ];
+    for (name, producer, fallback, argument, parameter) in cases {
+        for suspending in [false, true] {
+            let (consumer, call) = if suspending {
+                (
+                    format!(
+                        "function consume(value: {parameter}) -> int {{
+  wait sleep(1)
+  return 1
+}}"
+                    ),
+                    format!("let result = wait consume({argument})"),
+                )
+            } else {
+                (
+                    format!(
+                        "function consume(value: {parameter}) -> int {{
+  return 1
+}}"
+                    ),
+                    format!("let result = consume({argument})"),
+                )
+            };
+            let source = format!(
+                "{preamble}
+{producer}
+
+{consumer}
+
+function entrypoint() -> nothing {{
+  {fallback}
+  {call}
+  print(result.toString())
+}}
+"
+            );
+            assert_source_balanced(
+                &format!(
+                    "errors_temporary_{name}_{}",
+                    if suspending { "suspending" } else { "plain" }
+                ),
+                &source,
+                "1\n",
+            );
+        }
+    }
+}

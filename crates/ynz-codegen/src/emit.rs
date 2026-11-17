@@ -6303,6 +6303,68 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_pointer_value())
     }
 
+    /// The two words of the 16-byte pair at `pair`: an errors-capable result's `{err, ok}`, or a
+    /// `maybe`'s `{flag, bits}` (both are two i64 words).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn load_errors_pair(
+        &self,
+        pair: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let mut words = Vec::with_capacity(2);
+        for index in 0..2u32 {
+            let gep = self
+                .builder
+                .build_struct_gep(
+                    self.maybe_type(),
+                    pair,
+                    index,
+                    &format!("{site}_word{index}"),
+                )
+                .map_err(|err| format!("{site}: pair word gep: {err}"))?;
+            words.push(
+                self.builder
+                    .build_load(self.i64(), gep, &format!("{site}_word{index}_value"))
+                    .map_err(|err| format!("{site}: pair word load: {err}"))?
+                    .into_int_value(),
+            );
+        }
+        Ok((words[0], words[1]))
+    }
+
+    /// Store the two words of a 16-byte pair at `pair` (the twin of `load_errors_pair`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn store_errors_pair(
+        &self,
+        pair: PointerValue<'ctx>,
+        first: inkwell::values::IntValue<'ctx>,
+        second: inkwell::values::IntValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        for (index, word) in [(0u32, first), (1u32, second)] {
+            let gep = self
+                .builder
+                .build_struct_gep(
+                    self.maybe_type(),
+                    pair,
+                    index,
+                    &format!("{site}_out{index}"),
+                )
+                .map_err(|err| format!("{site}: pair word gep: {err}"))?;
+            self.builder
+                .build_store(gep, word)
+                .map_err(|err| format!("{site}: pair word store: {err}"))?;
+        }
+        Ok(())
+    }
     /// The frame region pointer of the frame-embedded shape crossing local `name`, computed once
     /// in `sm_entry` (it dominates every state).
     /// Where the payload of a `maybe` homed in `region` goes: 16 bytes in, the first 16-aligned
@@ -13302,6 +13364,12 @@ enum TemporaryRegionKind {
     /// A `maybe` of an envelope union with these variants: the 16-byte envelope, then the 16-byte view
     /// and the union slot behind it (`Cg::maybe_union_payload_into`).
     MaybeUnion(Vec<Type>),
+    /// An errors-capable result whose success type is an envelope union: the 16-byte `{err, ok}` pair,
+    /// then the 16-byte view and the union slot, `ok` naming the view (`Cg::maybe_union_payload_into`).
+    ErrorsUnion(Vec<Type>),
+    /// An errors-capable result whose success type is a `maybe` of an envelope union: the pair, the 16-byte
+    /// `maybe` pair `ok` names, then the view and the slot behind it.
+    ErrorsMaybeUnion(Vec<Type>),
 }
 
 /// The frame home of a temporary of type `ty` (already resolved; `minted_maybe_copy` is typeck's
@@ -13321,13 +13389,41 @@ fn temporary_home(
         }
         Type::Maybe { .. } if minted_maybe_copy => TemporaryHome::Pointer,
         // An errors-capable call result is a `{err, ok}` pair (two words) that dies with the resume
-        // invocation: its 16 bytes move into a region, whose address the slot holds. Only the inner types
-        // whose ok word is a plain word the pair owns (a string, array, map or shape cell, a `maybe` cell, a
-        // scalar) qualify; a `number` (its ok word points into staging) and a union (its pair rides a view)
-        // keep no home and leak.
-        Type::ErrorsCapable { inner } if errors_result_has_plain_ok_word(inner) => {
-            TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0))
-        }
+        // invocation: its 16 bytes move into a region, whose address the slot holds. An ok word that is a
+        // plain word the pair owns (a string, array, map or shape cell, a `maybe` cell, a scalar, a bignum)
+        // needs nothing behind the pair. A union rides the pair as a view of a slot, and a `maybe` of one as
+        // a stack `maybe` pair over that view: the region holds those behind the pair, so a release after a
+        // `wait` reads bytes that are still there. A decimal128 `number` owns nothing to release (its ok
+        // word points into staging) and keeps no home.
+        Type::ErrorsCapable { inner } => match inner.as_ref() {
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(inner.as_ref()) => {
+                match maybe_region_payload_bytes(inner, sizes) {
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::ErrorsUnion(variants.clone()),
+                        maybe_frame_slots(payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
+            }
+            Type::Maybe { inner: payload } if matches!(payload.as_ref(), Type::Union { variants: _ } if ynz_typeck::check::is_envelope_union(payload.as_ref())) =>
+            {
+                let Type::Union { variants } = payload.as_ref() else {
+                    return TemporaryHome::Skip;
+                };
+                match maybe_region_payload_bytes(payload, sizes) {
+                    // The pair, the `maybe` pair over the view (16 bytes), then the view and the slot.
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::ErrorsMaybeUnion(variants.clone()),
+                        maybe_frame_slots(16 + payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
+            }
+            plain if errors_result_has_plain_ok_word(plain) => {
+                TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0))
+            }
+            _ => TemporaryHome::Skip,
+        },
         Type::Maybe { inner } => match inner.as_ref() {
             // A counted channel reference: no frame bytes.
             Type::BuiltinChannel { .. } => TemporaryHome::Skip,
@@ -13387,6 +13483,8 @@ fn errors_result_has_plain_ok_word(inner: &Type) -> bool {
         | Type::Float
         | Type::Bool
         | Type::Options { .. } => true,
+        // A bignum is a heap pointer released like a string; a decimal128 `number` owns nothing.
+        Type::Number { .. } => ynz_typeck::types::is_bignum(inner),
         Type::Maybe { inner: payload } => {
             matches!(
                 payload.as_ref(),
@@ -29790,6 +29888,98 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .build_store(gep, word)
                         .map_err(|err| format!("{site}: region word store: {err}"))?;
                 }
+                region_ptr.into()
+            }
+            TemporaryRegionKind::ErrorsUnion(variants) => {
+                // The pair is the call's result: the union its `ok` view names (only when the call
+                // succeeded) moves into the slot behind the region's view, and `ok` names the view.
+                let (err, ok) = self.load_errors_pair(source, &site)?;
+                let succeeded = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err,
+                        self.i64().const_zero(),
+                        &format!("{site}_ec_succeeded"),
+                    )
+                    .map_err(|err| format!("{site}: errors flag compare: {err}"))?;
+                let flag = self
+                    .builder
+                    .build_int_z_extend(succeeded, self.i64(), &format!("{site}_ec_flag"))
+                    .map_err(|err| format!("{site}: errors flag extend: {err}"))?;
+                let payload = self.maybe_region_payload_ptr(region_ptr, &site)?;
+                let region_ok =
+                    self.maybe_union_payload_into(flag, ok, variants, payload, false, &site)?;
+                self.store_errors_pair(region_ptr, err, region_ok, &site)?;
+                region_ptr.into()
+            }
+            TemporaryRegionKind::ErrorsMaybeUnion(variants) => {
+                // The pair's `ok` names a stack `maybe` pair over a union view. On success that pair
+                // moves behind the region's own pair, its union into the slot behind a view of the
+                // region, and `ok` names the region's `maybe` pair.
+                let (err, ok) = self.load_errors_pair(source, &site)?;
+                let succeeded = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err,
+                        self.i64().const_zero(),
+                        &format!("{site}_ec_succeeded"),
+                    )
+                    .map_err(|err| format!("{site}: errors flag compare: {err}"))?;
+                let pre_bb = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+                let held_bb = self.append_block(&format!("{site}_ec_maybe_held"));
+                let cont_bb = self.append_block(&format!("{site}_ec_maybe_cont"));
+                self.builder
+                    .build_conditional_branch(succeeded, held_bb, cont_bb)
+                    .map_err(|err| format!("{site}: errors maybe branch: {err}"))?;
+                self.builder.position_at_end(held_bb);
+                let source_maybe = self
+                    .builder
+                    .build_int_to_ptr(ok, self.ptr(), &format!("{site}_ec_maybe_src"))
+                    .map_err(|err| format!("{site}: errors maybe cast: {err}"))?;
+                let (flag, bits) = self.load_errors_pair(source_maybe, &format!("{site}_maybe"))?;
+                // SAFETY: `temporary_home` reserved the pair, the `maybe` pair, the view and the slot.
+                let region_maybe = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            self.ctx.i8_type(),
+                            region_ptr,
+                            &[self.i64().const_int(16, false)],
+                            &format!("{site}_ec_maybe_pair"),
+                        )
+                        .map_err(|err| format!("{site}: errors maybe pair gep: {err}"))?
+                };
+                let payload = self.maybe_region_payload_ptr(region_maybe, &site)?;
+                let region_bits =
+                    self.maybe_union_payload_into(flag, bits, variants, payload, false, &site)?;
+                self.store_errors_pair(region_maybe, flag, region_bits, &format!("{site}_maybe"))?;
+                let region_maybe_bits = self
+                    .builder
+                    .build_ptr_to_int(region_maybe, self.i64(), &format!("{site}_ec_maybe_bits"))
+                    .map_err(|err| format!("{site}: errors maybe pair bits: {err}"))?;
+                let held_end_bb = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+                self.builder
+                    .build_unconditional_branch(cont_bb)
+                    .map_err(|err| format!("{site}: errors maybe join: {err}"))?;
+                self.builder.position_at_end(cont_bb);
+                let phi = self
+                    .builder
+                    .build_phi(self.i64(), &format!("{site}_ec_maybe_phi"))
+                    .map_err(|err| format!("{site}: errors maybe phi: {err}"))?;
+                phi.add_incoming(&[(&region_maybe_bits, held_end_bb), (&ok, pre_bb)]);
+                self.store_errors_pair(
+                    region_ptr,
+                    err,
+                    phi.as_basic_value().into_int_value(),
+                    &site,
+                )?;
                 region_ptr.into()
             }
             TemporaryRegionKind::Union(variants) => {
