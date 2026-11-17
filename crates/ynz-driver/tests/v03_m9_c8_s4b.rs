@@ -294,3 +294,50 @@ function entrypoint() -> nothing {
 ";
     assert_source_balanced("given_maybe_call_result", source, "4\n");
 }
+
+/// A fixture that must compile, run, print `expected` and be clean under AddressSanitizer at both
+/// optimization levels. It may leak: its leak is a known plain-path one (`KNOWN_PLAIN_LEAKS`).
+fn assert_fixture_runs_clean(fixture: &str, expected: &str) {
+    at_both_optimization_levels(|no_optimize| {
+        let built = build(fixture, no_optimize);
+        let (run, _counters) = run_counted(&built);
+        assert_eq!(
+            run.exit_code, 0,
+            "{fixture} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+            run.stderr
+        );
+        assert_eq!(
+            run.stdout, expected,
+            "{fixture} (no_optimize={no_optimize})"
+        );
+        let sanitized = run_asan_binary(&build_asan(&built));
+        assert!(
+            !sanitized.stderr.contains("AddressSanitizer") && sanitized.exit_code == 0,
+            "{fixture} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+            sanitized.stderr
+        );
+    });
+}
+
+/// A `fixed<T>` in a signature is unsized, so the release plan omits it (`UnsizedFixed`) and its
+/// items leak: the programs must still compile (a C7 regression made `plain_release_of` refuse
+/// them) and never free wrongly.
+#[test]
+fn an_unsized_fixed_string_returned_by_a_function_compiles_and_runs_clean() {
+    assert_fixture_runs_clean("v0_3_m9_c8_s4b_unsized_fixed_string_return.ynz", "built\n");
+}
+
+#[test]
+fn an_unsized_fixed_string_given_to_a_function_compiles_and_runs_clean() {
+    assert_fixture_runs_clean("v0_3_m9_c8_s4b_unsized_fixed_string_param.ynz", "1\n");
+}
+
+#[test]
+fn an_unsized_fixed_of_shapes_returned_by_a_function_compiles_and_runs_clean() {
+    assert_fixture_runs_clean("v0_3_m9_c8_s4b_unsized_fixed_shape_return.ynz", "built\n");
+}
+
+#[test]
+fn an_unsized_fixed_of_shapes_given_to_a_function_compiles_and_runs_clean() {
+    assert_fixture_runs_clean("v0_3_m9_c8_s4b_unsized_fixed_shape_param.ynz", "1\n");
+}

@@ -1,0 +1,16 @@
+// v0.3-M9 C8 slice 4b: a function returns a `fixed<string>`.
+// A `fixed<T>` in a signature has no size (`size: None`), so the release plan cannot say how many
+// items to release. Before: `ynz build` failed with `internal: the release plan lists `rows` as
+// Fixed, but its type is ...` (a C7 regression, `plain_release_of`). Correct behavior: the program
+// compiles, runs and is clean under AddressSanitizer at both optimization levels; the items leak
+// (`Omitted(UnsizedFixed)`, listed in KNOWN_PLAIN_LEAKS) and are never freed wrongly.
+
+function makeRows() -> fixed<string> {
+  let rows: fixed<string> = [`a`.toUpperCase(), `bb`]
+  return rows
+}
+
+function entrypoint() -> nothing {
+  let rows = makeRows()
+  print(`built`)
+}

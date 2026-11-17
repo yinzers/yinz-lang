@@ -147,6 +147,11 @@ pub enum OmitReason {
     CallerOwns,
     /// A non-owner outlives every owner (`NoStaticFounder`): an imported `maybe<channel>` result; nothing releases it.
     NoStaticFounder,
+    /// A `fixed<T>` of heap-owning items whose size is unknown (`size: None`, the type a signature
+    /// gives): the plan cannot say how many items to release, so none is, and they leak. The sized
+    /// type of a local the literal built releases as any `fixed`. The unsized `fixed` signature bug
+    /// (a returned `fixed` reports `count` 0) is the producer; plan #17 may yet fix it.
+    UnsizedFixed,
 }
 
 /// What happens to a binding at one exit edge.
@@ -1048,6 +1053,10 @@ fn fate_of(
         HeapClass::TypeParameter => ReleaseKind::TypeParameter,
         HeapClass::Heap(kind) => kind,
     };
+    // The items of an unsized `fixed` cannot be counted: a leak, never a wrong free (`OmitReason::UnsizedFixed`).
+    if kind == ReleaseKind::Fixed && matches!(entry.held, Type::BuiltinFixed { size: None, .. }) {
+        return Ok(Fate::Omitted(OmitReason::UnsizedFixed));
+    }
     let reassigned = function.reassigned.contains(&entry.decl);
     let Some(facts) = facts_of(&entry.decl) else {
         return Err(format!(
@@ -1448,6 +1457,14 @@ impl ReleasePlan {
                     HeapClass::TypeParameter => ReleaseKind::TypeParameter,
                     HeapClass::Heap(kind) => kind,
                 };
+                if entry.fate == Fate::Omitted(OmitReason::UnsizedFixed) {
+                    if kind != ReleaseKind::Fixed {
+                        violations.push(format!(
+                            "{place} is {kind:?} but omitted as an unsized `fixed`"
+                        ));
+                    }
+                    continue;
+                }
                 if kind == ReleaseKind::String {
                     let allowed = matches!(
                         entry.fate,
