@@ -94,12 +94,12 @@ pub struct Temporaries {
     /// The temporaries that are an explicit `.copy()` of a `maybe`: each owns a heap envelope cell
     /// of its own (`OwnedCopy::MaybeCellClone`), which its release frees after the payload.
     minted_maybe_copies: HashSet<Span>,
-    /// The arguments of a call of a Yinz function that build a shape value no binding holds and that
-    /// are not temporaries: one at a `give` position (the callee owns it), or one whose shape owns no
-    /// heap. The bytes of such a value sit where the expression built them, which a callee that
+    /// The arguments of a call of a Yinz function that build a shape or `maybe` value no
+    /// binding holds and that are not temporaries: one at a `give` position (the callee owns it), or a
+    /// shape that owns no heap. The bytes of such a value sit where the expression built them, which a callee that
     /// suspends cannot read after its own `wait`; codegen keeps them in a frame region while it
-    /// stages the argument (`Cg::stage_shape_in_frame`).
-    staged_shape_arguments: HashSet<Span>,
+    /// stages the argument (`Cg::stage_value_in_frame`).
+    staged_arguments: HashSet<Span>,
 }
 
 impl Temporaries {
@@ -116,9 +116,10 @@ impl Temporaries {
     }
 
     /// True when the expression at `start..end` is an argument of a call of a Yinz function that
-    /// builds a shape value and is no temporary (a `give` position, or a shape that owns no heap).
-    pub fn is_staged_shape_argument(&self, start: usize, end: usize) -> bool {
-        self.staged_shape_arguments.contains(&(start, end))
+    /// builds a shape or `maybe` value and is no temporary (a `give` position, or a
+    /// shape that owns no heap).
+    pub fn is_staged_argument(&self, start: usize, end: usize) -> bool {
+        self.staged_arguments.contains(&(start, end))
     }
 
     /// True when the expression at `start..end` builds a temporary.
@@ -465,22 +466,37 @@ impl Walk<'_> {
         }
     }
 
-    /// An argument of a Yinz function that builds a shape value and that no temporary covers (it is
-    /// at a `give` position, or its shape owns no heap): recorded so codegen keeps its bytes in the
-    /// frame while a suspending callee runs (`Temporaries::is_staged_shape_argument`). A value that
-    /// enters a union slot is staged as a union, not as a shape.
+    /// An argument of a Yinz function that builds a shape or `maybe` value and that no
+    /// temporary covers (it is at a `give` position, or its shape owns no heap): recorded so codegen
+    /// keeps its bytes in the frame while a suspending callee runs (`Temporaries::is_staged_argument`).
+    /// A value that enters a union slot is staged as a union, not as a shape. A `maybe` of an envelope
+    /// union has no frame home yet and is not staged.
     ///
     /// O(1) time.
-    fn staged_shape_argument(&mut self, arg: &Expr) {
+    fn staged_argument(&mut self, arg: &Expr) {
         let span = span_of(arg);
         if self.out.temporaries.contains_key(&span)
             || self.facts.union_coercions.contains_key(&span)
             || !self.builds_a_value(arg)
-            || !matches!(self.type_of(arg), Some(Type::Shape { .. }))
+            || !self
+                .type_of(arg)
+                .is_some_and(|ty| self.has_staging_region(ty))
         {
             return;
         }
-        self.out.staged_shape_arguments.insert(span);
+        self.out.staged_arguments.insert(span);
+    }
+
+    /// True for the kinds a staged argument keeps in a frame region: a shape and a `maybe` that is not
+    /// of an envelope union (a `fixed` call result has no known size: its signature type is unsized).
+    ///
+    /// O(1) time.
+    fn has_staging_region(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Shape { .. } => true,
+            Type::Maybe { inner } => !crate::check::is_envelope_union(inner),
+            _ => false,
+        }
     }
 
     /// An argument of a Yinz function that typeck coerces into a union parameter (`kind(`text`)`) is
@@ -536,7 +552,7 @@ impl Walk<'_> {
                     self.value(arg, usage, key, suppress);
                     if self.facts.callable_fns.contains(name) {
                         self.envelope_argument(arg, usage, key, suppress);
-                        self.staged_shape_argument(arg);
+                        self.staged_argument(arg);
                     }
                 }
             }
@@ -548,7 +564,7 @@ impl Walk<'_> {
             } => {
                 if self.is_user_call(expr) {
                     self.value(receiver, self.argument_use(method, 0), key, suppress);
-                    self.staged_shape_argument(receiver);
+                    self.staged_argument(receiver);
                     for (index, arg) in args.iter().enumerate() {
                         self.value(arg, self.argument_use(method, index + 1), key, suppress);
                         self.envelope_argument(
@@ -557,7 +573,7 @@ impl Walk<'_> {
                             key,
                             suppress,
                         );
-                        self.staged_shape_argument(arg);
+                        self.staged_argument(arg);
                     }
                     return;
                 }

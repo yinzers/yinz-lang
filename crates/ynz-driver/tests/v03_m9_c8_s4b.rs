@@ -271,3 +271,26 @@ function entrypoint() -> nothing {{
     );
     assert_source_balanced("reassigned_in_loop", &source, "PLAIN\n");
 }
+
+#[test]
+fn a_given_maybe_call_result_is_staged_in_the_frame_for_a_suspending_callee() {
+    let source = "
+function makeNote() -> maybe<string> {
+  let items: array<string> = [`note`.toUpperCase()]
+  let found = items.get(0)
+  return found
+}
+
+function consume(give note: maybe<string>) -> int {
+  wait sleep(1)
+  let text = note.or(`none`)
+  return text.count()
+}
+
+function entrypoint() -> nothing {
+  let size: int = wait consume(makeNote())
+  print(size)
+}
+";
+    assert_source_balanced("given_maybe_call_result", source, "4\n");
+}

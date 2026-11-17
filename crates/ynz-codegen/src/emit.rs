@@ -87,6 +87,9 @@ fn empty_wait_cache() -> &'static WaitCache {
 /// The byte size of a decimal128 `number` stored inline in an array or map cell.
 const DECIMAL_CELL_SIZE: u64 = 16;
 
+/// The bytes of a `maybe` envelope: its flag word and its payload bits.
+const MAYBE_ENVELOPE_BYTES: u64 = 16;
+
 static EMPTY_SUSPEND_SET: std::sync::OnceLock<SuspendSet> = std::sync::OnceLock::new();
 fn empty_suspend_set() -> &'static SuspendSet {
     EMPTY_SUSPEND_SET.get_or_init(SuspendSet::new)
@@ -13420,6 +13423,18 @@ fn wait_temporary_slot_count(
     count_block(&f.body, typed, suspend_set, back_edge_yield, sizes)
 }
 
+/// The frame slots the region of a staged argument of type `ty` takes (`Cg::stage_value_in_frame`):
+/// a shape's bytes, a `maybe`'s 16-byte envelope (its payload is a heap pointer already). Any other type stages nothing.
+///
+/// O(1) time.
+fn staged_region_slots(ty: &Type, sizes: &HashMap<String, u64>) -> usize {
+    match ty {
+        Type::Shape { name } => shape_frame_slots(name, sizes),
+        Type::Maybe { .. } => fixed_frame_slots(MAYBE_ENVELOPE_BYTES),
+        _ => 0,
+    }
+}
+
 /// The frame slots the arguments a suspending statement stages into a suspending callee need
 /// (`stage_suspending_call_arg_bits`), for the calls inside the statement itself, not in a block
 /// nested in it:
@@ -13427,8 +13442,9 @@ fn wait_temporary_slot_count(
 /// * an argument that is, or is coerced into, an envelope union takes one slot, which keeps the
 ///   pointer to the callee's `Param` region the statement's end releases (a `give` position leaves
 ///   it unused);
-/// * a shape value typeck records as a staged argument (`Temporaries::is_staged_shape_argument`)
-///   takes the region its bytes are held in (`Cg::stage_shape_in_frame`).
+//// * a shape or `maybe` value typeck records as a staged argument
+///   (`Temporaries::is_staged_argument`) takes the region its bytes are held in
+///   (`Cg::stage_value_in_frame`).
 ///
 /// O(expressions of the statement) time.
 fn staged_argument_slot_count(
@@ -13449,10 +13465,8 @@ fn staged_argument_slot_count(
             return 1;
         }
         match typed.expr_types.get(&key) {
-            Some(Type::Shape { name })
-                if typed.temporaries.is_staged_shape_argument(key.0, key.1) =>
-            {
-                shape_frame_slots(name, sizes)
+            Some(ty) if typed.temporaries.is_staged_argument(key.0, key.1) => {
+                staged_region_slots(ty, sizes)
             }
             _ => 0,
         }
@@ -16778,18 +16792,17 @@ fn stage_suspending_call_arg_bits<'ctx>(
     );
     let arg_val = lower_expr(cg, arg)?;
     let arg_ty = cg.expr_type(arg);
-    // A shape the expression just built that no temporary covers (a `give` position, or a shape
-    // that owns no heap): its bytes sit in this resume invocation's stack, which the callee's
-    // `wait` outlives.
+    // A shape or `maybe` the expression just built that no temporary covers (a `give`
+    // position, or a shape that owns no heap): its bytes sit in this resume invocation's stack,
+    // which the callee's `wait` outlives.
     let built_span = arg.span();
-    if let Type::Shape { name: shape_name } = cg.resolve_type(&arg_ty) {
-        if cg
-            .typed
-            .temporaries
-            .is_staged_shape_argument(built_span.start, built_span.end)
-        {
-            return cg.stage_shape_in_frame(arg_val.into_pointer_value(), &shape_name);
-        }
+    if cg
+        .typed
+        .temporaries
+        .is_staged_argument(built_span.start, built_span.end)
+    {
+        let resolved = cg.resolve_type(&arg_ty);
+        return cg.stage_value_in_frame(arg_val.into_pointer_value(), &resolved);
     }
     // An argument typeck judged a copy (`non_owned_reads`) is copied here. The callee suspends,
     // so the copy's pointer is held in a slot of the heap frame (`Cg::hold_copy_in_frame`), which
@@ -29227,25 +29240,41 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(true)
     }
 
-    /// Move the bytes of the shape value `value` (an expression's result, which sits in this resume
-    /// invocation's stack) into a frame region of the statement, and return the region's address as
-    /// the frame slot bits a suspending callee is staged: the region outlives the callee's `wait`,
-    /// which the stack does not. The region's contents belong to the callee (`give`) or own no
-    /// heap, so no slot releases it. `wait_temporary_slot_count` reserved the region
+    /// Move the bytes of the shape or `maybe` value `value` (an expression's result, which
+    /// sits in this resume invocation's stack) into a frame region of the statement, and return the
+    /// region's address as the frame slot bits a suspending callee is staged: the region outlives the
+    /// callee's `wait`, which the stack does not. A `maybe` moves its 16-byte envelope (the payload is
+    /// a heap pointer or a value already). The region's contents belong to the callee (`give`) or own
+    /// no heap, so no slot releases it. `wait_temporary_slot_count` reserved the region
     /// (`staged_argument_slot_count`).
     ///
-    /// Time: O(1) + one memcpy of the shape's bytes  Space: O(1)
-    fn stage_shape_in_frame(
+    /// Time: O(1) + one memcpy of the value's bytes  Space: O(1)
+    fn stage_value_in_frame(
         &mut self,
         value: PointerValue<'ctx>,
-        shape_name: &str,
+        ty: &Type,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let frame_ptr = self
             .sm_frame_ptr
-            .ok_or("internal: a shape was staged into a frame outside a resume function")?;
-        let size = self.shape_abi_size_const(shape_name, "stage_shape_in_frame")?;
+            .ok_or("internal: a value was staged into a frame outside a resume function")?;
+        let size = match ty {
+            Type::Shape { name } => self.shape_abi_size_const(name, "stage_value_in_frame")?,
+            Type::Maybe { .. } => self.i64().const_int(MAYBE_ENVELOPE_BYTES, false),
+            Type::BuiltinFixed {
+                elem,
+                size: Some(count),
+            } => self
+                .i64()
+                .const_int(fixed_region_bytes(elem, *count), false),
+            other => {
+                return Err(format!(
+                    "internal: a `{}` argument has no staging region",
+                    ynz_typeck::types::type_name(other)
+                ))
+            }
+        };
         let first =
-            self.take_wait_temporary_slots(shape_frame_slots(shape_name, &self.shape_abi_sizes))?;
+            self.take_wait_temporary_slots(staged_region_slots(ty, &self.shape_abi_sizes))?;
         let region = state_machine::shape_frame_region_ptr(
             self.ctx,
             &self.builder,
