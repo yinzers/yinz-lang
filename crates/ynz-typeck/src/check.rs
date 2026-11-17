@@ -1084,6 +1084,11 @@ pub fn check(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
+        possibly_cpu_promoted: crate::queries::possibly_cpu_promoted(
+            module,
+            sig_table,
+            imported_fn_names,
+        ),
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
@@ -1217,6 +1222,7 @@ pub fn check_with_kernel_mode(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
+        possibly_cpu_promoted: HashSet::new(),
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
@@ -1454,6 +1460,10 @@ struct Checker<'b> {
     /// (cross-module suspension propagation requires M8 binary package metadata and
     /// ships in M3).
     current_fn_suspends: bool,
+    /// The functions that may be state machines although they do not suspend: CPU-promotion
+    /// candidates and their callers (`queries::possibly_cpu_promoted`). Their statements record a
+    /// suspension edge too (C8 slice 6).
+    possibly_cpu_promoted: HashSet<String>,
 
     /// Inferred ownership modifier for each plain-ident argument at a `background` call site.
     ///
@@ -2968,7 +2978,9 @@ impl<'b> Checker<'b> {
             // A function that suspends may park in this statement: record what a task dropped there
             // still owns (the scope as it is before the statement runs). A function that never
             // suspends records nothing (C8 slice 6).
-            if self.current_fn_suspends {
+            if self.current_fn_suspends
+                || self.possibly_cpu_promoted.contains(&self.current_fn_name)
+            {
                 self.record_exit(
                     EdgeKind::Suspension,
                     crate::release_plan::stmt_source_span(stmt),

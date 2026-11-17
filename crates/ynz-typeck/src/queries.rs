@@ -936,6 +936,133 @@ pub fn soa_layout_lints(
     crate::soa::layout_lints(&decisions, &candidates)
 }
 
+/// The names of the functions that do real work (a loop or recursion, transitively): the
+/// worth-it proxy CPU candidacy reads.
+///
+/// O(F) time and space for F functions.
+fn does_real_work_names(sig_table: &SignatureTable) -> std::collections::HashSet<String> {
+    sig_table
+        .fns
+        .iter()
+        .filter(|(_, sig)| sig.does_real_work)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// The module's functions, sorted by name: the deterministic order candidacy is judged in.
+///
+/// O(F log F) time.
+fn sorted_function_decls(module: &Module) -> Vec<&ynz_ast::nodes::FunctionDecl> {
+    let mut fn_decls: Vec<&ynz_ast::nodes::FunctionDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+    fn_decls.sort_by(|a, b| a.name.cmp(&b.name));
+    fn_decls
+}
+
+/// THE producer of CPU-promotion candidates: the non-cyclic functions whose body holds a
+/// CPU-parallelizable group. `compute_cpu_promotions` rolls this set back to the functions whose
+/// CPU joins pass the suspension guards; the checker reads the unrolled set through
+/// [`possibly_cpu_promoted`] to know which functions may become state machines.
+///
+/// A function in a call cycle is never a candidate (mutual-suspension prevention: self-recursion
+/// is allowed by the spawn ABI, but a self-recursive call is never a CPU group member).
+/// `find_mutual_suspension_cycles` over the FULL call graph (not restricted to suspends) gives
+/// the mutually-recursive members. A `base_suspends` host (already a state machine for its OWN
+/// wait or suspending callee) is a candidate too when it hosts its own CPU group.
+///
+/// O(F · N · S²) time for F functions of N statements (one `walk_cpu_groups` descent each).
+pub(crate) fn cpu_promotion_candidates(
+    module: &Module,
+    sig_table: &SignatureTable,
+    imported_fns: &std::collections::HashMap<String, FunctionSig>,
+    base_suspends: &std::collections::HashSet<String>,
+    imported_fn_names: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let does_real_work = does_real_work_names(sig_table);
+    let all_fn_names: HashSet<String> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(f) => Some(f.name.clone()),
+            _ => None,
+        })
+        .collect();
+    let cyclic_members: HashSet<String> =
+        crate::may_block::find_mutual_suspension_cycles(module, imported_fn_names, &all_fn_names)
+            .into_iter()
+            .flat_map(|c| c.members)
+            .collect();
+    let mut candidates: HashSet<String> = HashSet::new();
+    for f in sorted_function_decls(module) {
+        if cyclic_members.contains(&f.name) {
+            continue;
+        }
+        let cpu_here = crate::independence::CpuCandidacy {
+            does_real_work: &does_real_work,
+            enclosing_fn: &f.name,
+        };
+        if function_has_cpu_group(
+            &f.body.stmts,
+            base_suspends,
+            sig_table,
+            imported_fns,
+            &cpu_here,
+        ) {
+            candidates.insert(f.name.clone());
+        }
+    }
+    candidates
+}
+
+/// The functions that MAY be state machines once CPU promotion has run: the candidates and every
+/// caller of one (`suspends_with_extra_seeds`), added to the functions that already suspend.
+/// The guard-probe rollback in `compute_cpu_promotions` only ever shrinks the candidate set, so
+/// the real promoted set and its closure lie inside this one. The checker records the release
+/// plan's suspension edges for these functions, and for no other that does not suspend.
+///
+/// O(F · N · S² + call graph) time.
+pub(crate) fn possibly_cpu_promoted(
+    module: &Module,
+    sig_table: &SignatureTable,
+    imported_fn_names: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let base_suspends: HashSet<String> = sig_table
+        .fns
+        .iter()
+        .filter(|(name, sig)| sig.suspends && !imported_fn_names.contains(*name))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let imported_suspending_names: HashSet<String> = imported_fn_names
+        .iter()
+        .filter(|name| sig_table.fns.get(*name).is_some_and(|sig| sig.suspends))
+        .cloned()
+        .collect();
+    let candidates = cpu_promotion_candidates(
+        module,
+        sig_table,
+        &sig_table.fns,
+        &base_suspends,
+        imported_fn_names,
+    );
+    if candidates.is_empty() {
+        return candidates;
+    }
+    crate::may_block::suspends_with_extra_seeds(
+        module,
+        imported_fn_names,
+        &imported_suspending_names,
+        &candidates,
+    )
+}
+
 /// Pure core of the CPU-promotion analysis (Decision Record item 8b/8c).
 ///
 /// 1. **Candidate identification** (bottom-up, deterministic): a non-cyclic function whose body
@@ -985,75 +1112,17 @@ pub(crate) fn compute_cpu_promotions(
         return HashSet::new();
     }
 
-    let does_real_work: HashSet<String> = sig_table
-        .fns
-        .iter()
-        .filter(|(_, sig)| sig.does_real_work)
-        .map(|(name, _)| name.clone())
-        .collect();
+    let does_real_work = does_real_work_names(sig_table);
+    let fn_decls = sorted_function_decls(module);
 
-    // Functions in call cycles are never promoted (mutual-suspension prevention;
-    // self-recursion is allowed by the spawn ABI but a self-recursive call is never a
-    // CPU group member, so a self-only-recursive function with no other CPU group is
-    // simply not a candidate). `find_mutual_suspension_cycles` over the FULL call
-    // graph (not restricted to suspends) gives the mutually-recursive members.
-    let all_fn_names: HashSet<String> = module
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Function(f) => Some(f.name.clone()),
-            _ => None,
-        })
-        .collect();
-    let cyclic_members: HashSet<String> =
-        crate::may_block::find_mutual_suspension_cycles(module, imported_fn_names, &all_fn_names)
-            .into_iter()
-            .flat_map(|c| c.members)
-            .collect();
-
-    // Step 1 — candidate identification, in deterministic (sorted) order.
-    let cpu = crate::independence::CpuCandidacy {
-        does_real_work: &does_real_work,
-        enclosing_fn: "", // set per-function below
-    };
-    let mut fn_decls: Vec<&ynz_ast::nodes::FunctionDecl> = module
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Function(f) => Some(f),
-            _ => None,
-        })
-        .collect();
-    fn_decls.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut candidates: HashSet<String> = HashSet::new();
-    for f in &fn_decls {
-        // A cyclic function is excluded (mutual-suspension prevention — see below). A
-        // `base_suspends` host (already a state machine for its OWN wait/suspending-callee
-        // reasons) is v0.3-M3g Phase 2's extension: it can STILL be a candidate when it hosts
-        // its own CPU group, because promoting it costs nothing extra at the typeck layer (it
-        // was already going to be a state machine) and the guard-probe below (E6) still checks
-        // its own CPU-join crossings before admitting it into `candidates`. This lift is LIVE
-        // at codegen: the v0.3-M3g Phase 3 admission flip removed the co-resident-suspension
-        // decline in BOTH of `admitted_cpu_group`'s arms (top-level and nested — see
-        // cpu_admission.rs), so a `base_suspends` host's admitted group DOES fire.
-        if cyclic_members.contains(&f.name) {
-            continue;
-        }
-        let cpu_here = crate::independence::CpuCandidacy {
-            does_real_work: cpu.does_real_work,
-            enclosing_fn: &f.name,
-        };
-        if function_has_cpu_group(
-            &f.body.stmts,
-            base_suspends,
-            sig_table,
-            imported_fns,
-            &cpu_here,
-        ) {
-            candidates.insert(f.name.clone());
-        }
-    }
+    // Step 1 — candidate identification (`cpu_promotion_candidates`, shared with the checker).
+    let mut candidates = cpu_promotion_candidates(
+        module,
+        sig_table,
+        imported_fns,
+        base_suspends,
+        imported_fn_names,
+    );
 
     // Steps 2 + 3 — transitive-SM closure + guard-probe rollback to fixpoint.
     let union_aliases = crate::check::collect_union_aliases(module, shape_table);
