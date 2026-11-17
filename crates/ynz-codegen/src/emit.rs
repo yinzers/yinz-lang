@@ -16696,6 +16696,13 @@ fn stage_suspending_call_arg_bits<'ctx>(
         .as_ref()
         .and_then(|param_ty| cg.envelope_union_variants(param_ty))
     {
+        // A `give` position hands the value over whole: the callee's `Param` region takes the boxes
+        // the argument owns (the binding it came from is moved), so a clone would orphan the
+        // original, which nothing releases.
+        if callee_takes_it {
+            cg.moved_cell_values
+                .insert(arg_val.into_pointer_value().as_value_ref() as usize);
+        }
         let staged = cg.stage_union_arg(
             arg_val.into_pointer_value(),
             &variants,

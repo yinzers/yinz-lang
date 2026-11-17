@@ -519,3 +519,25 @@ function entrypoint() -> nothing {{
     );
     assert_balanced("shape_heap_free_call_result", &source, "1\n");
 }
+
+/// Bug it catches: a shape given to a suspending callee's union parameter was persisted into the
+/// callee's `Param` region as a deep clone, while the binding it came from is moved and never
+/// released: the original's string leaked (2 strings allocated, 1 freed).
+#[test]
+fn shape_given_to_a_suspending_callees_union_parameter_is_released_once() {
+    let source = format!(
+        "{THINGS}
+function slowTake(give thing: Thing) -> int {{
+  wait sleep(1)
+  return describe(thing).count()
+}}
+
+function entrypoint() -> nothing {{
+  let big: Big = {{ label: `ab`.toUpperCase(), count: 3 }}
+  let length: int = wait slowTake(big)
+  print(length)
+}}
+"
+    );
+    assert_balanced("union_param_given", &source, "6\n");
+}
