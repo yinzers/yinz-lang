@@ -72,11 +72,27 @@ function makeRow() -> fixed<int> {                          // the length is the
 }
 ```
 
-- Write the length as a whole number, `fixed<int, 4>`, on the whole type of a **parameter or return value** only. A local (`let row: fixed<int> = [...]`) takes its length from the list on the right.
+- Write the length as a whole number, `fixed<int, 4>`, on the whole type of a **parameter, a return value or a shape field** only. A local (`let row: fixed<int> = [...]`) takes its length from the list on the right.
 - `fixed<int>` as a parameter works for lists of any length: the compiler builds one version of the function for each length the program passes.
 - `fixed<int>` as a return type takes the length of the lists the function returns. Every `return` must give the same length.
 - An `export function` must write the length of every `fixed` it takes or returns (`fixed<int, 4>`): another file sees only the signature.
-- A list returned from a function that waits (a suspending function) comes back the same way.
+- A list returned from a function that waits (a suspending function), or from a `background` task you `receive()`, comes back the same way.
+- A function that waits, or that the compiler may run as a task of its own, is built only once: if its body uses the length of a `fixed` parameter (`count`, a loop, an index, a `return`), write the length (`fixed<int, 4>`).
+
+#### A `fixed` list in a shape field
+
+A shape keeps a `fixed<T, N>` field inside its own bytes, as a Rust struct keeps a `[T; N]`:
+
+```
+shape Roster {
+  title: string
+  names: fixed<string, 2>
+}
+```
+
+- The length is required: `names: fixed<string>` is a compile error (the shape's size has to be known). Use `array<string>` for a list whose length varies.
+- This holds for a shape written inline (`{ trail: fixed<int, 3> }`) too, and a different length is a different type.
+- Reading the field in a `let` gives the binding its own copy when the binding is written; the shape's `.copy()` copies the list and its items.
 
 You CAN replace existing elements — the size stays the same:
 

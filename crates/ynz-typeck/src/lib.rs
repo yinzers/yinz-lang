@@ -48,6 +48,7 @@ pub mod errors_fields;
 pub mod exports;
 pub mod false_sharing;
 pub mod fixed_length;
+pub mod fixed_length_use;
 pub mod generics;
 pub mod heap_moves;
 pub mod independence;

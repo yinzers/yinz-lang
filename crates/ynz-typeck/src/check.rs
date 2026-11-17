@@ -1412,14 +1412,17 @@ fn why_built_once(
 }
 
 /// `FixedLengthMissingInTaskFunction` for every `fixed<T>` parameter without a written length of a
-/// function that is built once (`why_built_once`): such a function has no versions, so the length
-/// has to be in its signature. O(parameters of the functions).
+/// function that is built once (`why_built_once`) AND whose body needs that length
+/// (`LengthUses::needs_length`): such a function has no versions, so the length has to be in its
+/// signature. A function that only receives the list and never asks for its length keeps working.
+/// O(parameters of the functions and the bodies they hand the list to).
 fn unsized_lengths_of_once_only_functions(
     module: &Module,
     sig_table: &SignatureTable,
     once_only: &HashSet<String>,
 ) -> Vec<Diagnostic> {
     let mut refused = Vec::new();
+    let uses = crate::fixed_length_use::LengthUses::new(module, sig_table);
     for item in &module.items {
         let Item::Function(function) = item else {
             continue;
@@ -1430,7 +1433,7 @@ fn unsized_lengths_of_once_only_functions(
         let Some(reason) = why_built_once(&function.name, signature, once_only) else {
             continue;
         };
-        for parameter in &function.params {
+        for (index, parameter) in function.params.iter().enumerate() {
             let AstType::Generic {
                 name, args, span, ..
             } = &parameter.ty
@@ -1441,7 +1444,9 @@ fn unsized_lengths_of_once_only_functions(
                 continue;
             }
             let written = crate::fixed_length::read_fixed_arguments(args);
-            if written.length != crate::fixed_length::WrittenLength::Absent {
+            if written.length != crate::fixed_length::WrittenLength::Absent
+                || !uses.needs_length(&function.name, index)
+            {
                 continue;
             }
             let element = written

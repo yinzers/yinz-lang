@@ -790,7 +790,8 @@ fn corpus_byte_identical_across_mode_matrix() {
         let soa_lint_fixture = name == "m5_p4_soa_qualifying.ynz"
             || name == "m5_p5_soa_copy_wait_bg.ynz"
             || name == "v0_3_m9_c6_soa_scatter.ynz"
-            || name == "v0_3_m9_c6_borrow_soa_scatter_reader.ynz";
+            || name == "v0_3_m9_c6_borrow_soa_scatter_reader.ynz"
+            || name == "v0_3_m9_c1h_fixed_field_soa.ynz";
 
         // Baseline: the default mode users actually get (auto-parallel + optimized).
         let (base_out, base_err, base_code) = run_ynz_mode(path, false, false);

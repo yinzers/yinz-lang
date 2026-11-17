@@ -8,7 +8,7 @@
 /// `Ord` for the same reason as [`Type`]: it keys ordered containers.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FixedLength {
-    /// The compiler does not know it: a shape field typed `fixed<T>`, or the result of an
+    /// The compiler does not know it: the result of an
     /// operation that builds a list of runtime length (`filter`, `unique`, `limit`, `freeze`).
     Unknown,
     /// Known at compile time: a literal's item count, or the `N` of `fixed<T, N>`.

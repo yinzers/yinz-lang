@@ -131,3 +131,86 @@ fn an_inline_shape_field_without_a_length_is_refused_like_a_named_one() {
         assert_eq!(refused, 1, "{written}\n{:#?}", errors(&output));
     }
 }
+
+fn task_function_refusals(source: &str) -> usize {
+    errors(&check(source))
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.kind == Some(DiagnosticKind::FixedLengthMissingInTaskFunction)
+        })
+        .count()
+}
+
+// Bug: a function built once (it waits) that takes an unsized `fixed` has no length for the
+// parameter. The refusal must fire exactly where the body asks for the length, in each way it can
+// (High: data integrity; before the refusal each of these stopped the compiler with an internal
+// error or released with no count).
+#[test]
+fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
+    let waiting_with = |parameter: &str, body: &str, extra: &str| {
+        format!(
+            "{extra}\nfunction show({parameter}) -> int {{\n  wait sleep(1)\n{body}\n  return 1\n}}\n\
+             function entrypoint() -> nothing {{\n  let done = wait show([1, 2, 3])\n  print(done)\n}}"
+        )
+    };
+    let refused_bodies = [
+        ("reads count", "  let n = xs.count()"),
+        ("iterates", "  for (x in xs) {\n    print(x)\n  }"),
+        ("indexes", "  let first = xs[0].or(0)"),
+        ("calls get", "  let first = xs.get(0).or(0)"),
+        ("returns it", "  let back = xs"),
+    ];
+    for (branch, body) in refused_bodies {
+        let source = waiting_with("share xs: fixed<int>", body, "");
+        assert_eq!(task_function_refusals(&source), 1, "{branch}\n{source}");
+    }
+    // handed to a function that needs the length
+    let source = waiting_with(
+        "share xs: fixed<int>",
+        "  let n = inner(xs)",
+        "function inner(share xs: fixed<int>) -> int { return xs.count() }",
+    );
+    assert_eq!(
+        task_function_refusals(&source),
+        1,
+        "hands it to a callee that needs it\n{source}"
+    );
+    // owned, with items that must be released
+    let source = waiting_with("give xs: fixed<string>", "", "");
+    let source = source.replace("show([1, 2, 3])", "show([`a`, `b`])");
+    assert_eq!(
+        task_function_refusals(&source),
+        1,
+        "gives it away with heap items\n{source}"
+    );
+    // handed to a task: the task's copy is sized from the length here
+    let source = waiting_with(
+        "share xs: fixed<int>",
+        "  let task = background inner(xs)",
+        "function inner(share xs: fixed<int>) -> int {\n  wait sleep(1)\n  return 1\n}",
+    );
+    assert_eq!(
+        task_function_refusals(&source),
+        1,
+        "spawns a task with it\n{source}"
+    );
+}
+
+// Bug (the converse): the refusal fired on functions that only receive the list (the C6
+// spawn-copy guards pass a `fixed<string>` to a callee that waits and never reads it), which
+// compiled and ran correctly before.
+#[test]
+fn a_function_built_once_that_never_asks_for_the_length_is_not_refused() {
+    let sources = [
+        "function show(value: fixed<string>) -> nothing {\n  wait sleep(1)\n  print(777)\n}\n\
+         function entrypoint() -> nothing {\n  let value: fixed<string> = [`p`, `q`]\n  background show(value)\n  wait sleep(5)\n}",
+        "function inner(share xs: fixed<int>) -> int {\n  wait sleep(1)\n  return 1\n}\n\
+         function show(share xs: fixed<int>) -> int {\n  wait sleep(1)\n  return inner(xs)\n}\n\
+         function entrypoint() -> nothing {\n  let done = wait show([1, 2])\n  print(done)\n}",
+        "function show(give xs: fixed<int>) -> int {\n  wait sleep(1)\n  return 1\n}\n\
+         function entrypoint() -> nothing {\n  let done = wait show([1, 2])\n  print(done)\n}",
+    ];
+    for source in sources {
+        assert_eq!(task_function_refusals(source), 0, "{source}");
+    }
+}

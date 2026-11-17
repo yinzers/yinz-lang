@@ -2833,6 +2833,6 @@ why_template = "A shape keeps a `fixed` list inside its own bytes, so the size o
 # `wait`` or `may be run as a task of its own`).
 [[diagnostic_template]]
 kind_name = "FixedLengthMissingInTaskFunction"
-what_template = "`{function}` takes `{parameter}` as `{written}`, which has no length, and `{function}` {reason}."
+what_template = "`{function}` takes `{parameter}` as `{written}`, which has no length, but `{function}` {reason} and needs to know how many items `{parameter}` holds."
 what_instead_template = "Write the length of `{parameter}`, as in `{parameter}: {suggested}`, using the number of items the callers pass."
 why_template = "A `fixed` parameter without a length makes the compiler build one copy of the function for each length its callers pass. A function that {reason} is built only once, so it needs one length, written in its signature."
