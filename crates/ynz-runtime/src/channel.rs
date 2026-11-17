@@ -243,8 +243,7 @@ pub struct YnzChannel {
     /// `PendingSendEntry` removed at the two cancellation paths ([`purge_pending_sends`] and
     /// `channel_send_poll_guarded`'s insert-time stale-entry sweep — FRAGO 028: a removed
     /// entry's payload is unreachable to `Drop` and would leak otherwise). `None` for
-    /// element types with no runtime-owned heap payload: int/float/bool (value bits) AND
-    /// `string` (raw-malloc'd immortal bytes, invisible to the alloc counter — never freed).
+    /// element types with no runtime-owned heap payload: int/float/bool (value bits).
     ///
     /// Stored as an `Option` of a fn pointer, NOT a raw `*mut u8` field: `YnzChannel` is
     /// `Arc`-shared cross-thread relying on AUTO `Send`/`Sync`, which a raw-pointer field
@@ -312,7 +311,7 @@ impl YnzChannel {
 impl Drop for YnzChannel {
     fn drop(&mut self) {
         let Some(glue) = self.drop_glue else {
-            return; // primitive/string element types: nothing per-element to drop
+            return; // primitive element types: nothing per-element to drop
         };
         // `&mut self` is exclusive access: `get_mut` bypasses locking entirely, with the same
         // poison tolerance as `lock_or_recover` (which needs `&Mutex`, not owned access).

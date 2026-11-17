@@ -294,6 +294,10 @@ pub enum ChannelElemDrop {
     /// mints (`number_to_heap_cell`) and the RECEIVE frees — never the sender's own storage
     /// (fr12, `IMP-concurrency.md`). Glue: `ynz_number_cell_free`.
     NumberCell,
+    /// `string`: the payload is a counted string the channel owns from the send (a borrowed string
+    /// is copied by the send, a movable one is handed over: `own_string_for_store`) until a
+    /// receive takes it. Glue: `ynz_string_release`.
+    String,
 }
 
 impl ChannelElemDrop {
@@ -305,28 +309,31 @@ impl ChannelElemDrop {
     pub fn transfers_source(self) -> bool {
         match self {
             ChannelElemDrop::Array | ChannelElemDrop::Map => true,
-            ChannelElemDrop::NumberCell => false,
+            // A string is copied or moved by the send itself (`own_string_for_store`): the source
+            // binding keeps the ownership rules every string read has.
+            ChannelElemDrop::NumberCell | ChannelElemDrop::String => false,
         }
     }
 }
 
 /// THE classification of a channel element type into its drop kind (`None` = no
-/// runtime-owned payload: `int`/`float`/`bool` value bits, or `string`'s immortal bytes).
+/// runtime-owned payload: `int`/`float`/`bool` value bits).
 pub fn channel_elem_drop(elem: &Type) -> Option<ChannelElemDrop> {
     match elem {
         Type::BuiltinArray { .. } => Some(ChannelElemDrop::Array),
         Type::BuiltinMap { .. } => Some(ChannelElemDrop::Map),
+        Type::String => Some(ChannelElemDrop::String),
         Type::Number { precision } if *precision <= 34 => Some(ChannelElemDrop::NumberCell),
         _ => None,
     }
 }
 
 /// The element types `channel<T>()` admits — DERIVED from [`channel_elem_drop`] (glue-bearing
-/// kinds) plus the value-bit scalars and `string`, never a third hand-maintained list.
+/// kinds) plus the value-bit scalars, never a third hand-maintained list.
 /// `shape` elements and bignum `number` (precision > 34) stay rejected
 /// (`channel-element-heap-upgrade` in the feature registry).
 pub fn channel_elem_supported(elem: &Type) -> bool {
-    matches!(elem, Type::Int | Type::Float | Type::Bool | Type::String)
+    matches!(elem, Type::Int | Type::Float | Type::Bool)
         || channel_elem_drop(elem).is_some()
 }
 
