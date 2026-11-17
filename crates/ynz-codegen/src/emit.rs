@@ -23622,6 +23622,7 @@ fn lower_expr_background<'ctx>(
             .callee_param_type(&callee_name, arg_index)
             .filter(|param_ty| cg.envelope_union_variants(param_ty).is_some())
         {
+            mark_union_spawn_argument_moved(cg, arg, val.into_pointer_value());
             let (cell_bits, kind) =
                 bg_union_arg_cell(cg, val.into_pointer_value(), &union_ty, &callee_name)?;
             arg_vals_i64.push(cell_bits);
@@ -23890,9 +23891,20 @@ fn lower_sm_background_spawn<'ctx>(
             .callee_param_type(callee_name, arg_index)
             .and_then(|param_ty| cg.envelope_union_variants(&param_ty))
         {
+            mark_union_spawn_argument_moved(cg, arg, val.into_pointer_value());
             pending_union_args.push((arg_index, val.into_pointer_value(), variants));
             arg_vals_i64.push(cg.i64().const_zero());
-            free_kinds.push(BgArgFreeKind::None);
+            let union_ty = cg
+                .callee_param_type(callee_name, arg_index)
+                .ok_or_else(|| {
+                    "internal: a union spawn argument has no parameter type".to_string()
+                })?;
+            free_kinds.push(sm_union_arg_free_kind(
+                cg,
+                &union_ty,
+                callee_name,
+                arg_index,
+            )?);
             continue;
         }
         reject_union_argument_without_slot(cg, &ty, callee_name, arg_index)?;
@@ -29974,6 +29986,56 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
         Ok(release)
     }
+}
+
+/// Mark the view `view` of an envelope-union `background` argument as MOVED when this spawn is
+/// the argument's sole holder (`background_arg_sole_holder`: a binding the spawn consumes, or a
+/// temporary nobody names), so the task's slot takes the boxes the value owns instead of cloning
+/// them. The spawner releases neither (a consumed binding is `Omitted(Moved)` in the release
+/// plan, and a value that enters a union slot is no temporary), so a clone would leave the
+/// original with no owner (`plain_shape_into_union_parameter_spawn`). A value the spawner keeps
+/// (a field read, a binding used again) stays a deep copy, which the spawner's own scope exit
+/// and the task's ladder release once each.
+///
+/// Time: O(1)  Space: O(1)
+fn mark_union_spawn_argument_moved<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &ynz_ast::nodes::Expr,
+    view: PointerValue<'ctx>,
+) {
+    let span = arg.span();
+    if cg
+        .typed
+        .background_arg_sole_holder
+        .contains_key(&(span.start, span.end))
+    {
+        cg.moved_cell_values.insert(view.as_value_ref() as usize);
+    }
+}
+
+/// The ladder's free kind of an envelope-union argument of a SUSPENDING `background` callee: the
+/// union sits in the callee frame's `Param` region (`stage_union_arg`), so the entry releases what
+/// the slot owns and frees no cell. Nothing at a `give` position: the callee releases its own
+/// `give` parameter at its scope exits, and its move sites null the frame slot.
+///
+/// Time: O(1) to emit once per union type  Space: O(1)
+fn sm_union_arg_free_kind<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    union_ty: &Type,
+    callee: &str,
+    arg_index: usize,
+) -> Result<BgArgFreeKind, String> {
+    if let Some(Some(OwnershipModifier::Give)) =
+        cg.suspending_callee_param_ownership(callee, arg_index)
+    {
+        return Ok(BgArgFreeKind::None);
+    }
+    Ok(match cg.release_fn(union_ty, false)? {
+        Some(glue) => BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        },
+        None => BgArgFreeKind::None,
+    })
 }
 /// The task's own slot for an envelope-union `background` argument of a CPU callee: a heap cell
 /// holding the union persisted by value (a copy of what it owns, as a stored union does), plus

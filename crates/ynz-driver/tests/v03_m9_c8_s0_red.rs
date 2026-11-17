@@ -369,7 +369,7 @@ function entrypoint() -> nothing {
 }
 ";
 
-balanced_program!(
+green_program!(
     producer_p8_state_machine_union_spawn_string,
     SM_UNION_SPAWN,
     "777\n",
@@ -411,7 +411,7 @@ function entrypoint() -> nothing {
 }
 ";
 
-balanced_program!(
+green_program!(
     plain_shape_into_union_parameter_spawn,
     PLAIN_SHAPE_INTO_UNION_SPAWN,
     "777\n",
