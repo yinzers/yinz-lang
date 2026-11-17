@@ -5,19 +5,10 @@
 
 mod support;
 
-use support::{assert_asan_clean, assert_heap_balanced, at_both_optimization_levels, run_balanced};
-
-fn balanced_and_asan_clean(label: &str, program: &str, expected: &str) {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced(label, program, expected, no_optimize);
-        assert_heap_balanced(label, &counters, no_optimize);
-        assert_eq!(
-            counters.string_free, counters.string_alloc,
-            "{label}: {counters:?}"
-        );
-        assert_asan_clean(label, program, expected, no_optimize);
-    });
-}
+use support::{
+    assert_asan_clean, assert_source_balanced_and_asan_clean as balanced_and_asan_clean,
+    at_both_optimization_levels, run_balanced,
+};
 
 /// The same callee is called twice from the parked task. Its embedded sub-frame is NOT cleared
 /// between calls (only `resume_point` and `sleep_handle` are re-initialised), so after the first
@@ -129,7 +120,7 @@ fn a_local_given_away_before_the_wait_is_released_once() {
     balanced_and_asan_clean("c8s6_moved_before_wait", MOVED_BEFORE_WAIT, "parent\n");
 }
 
-/// The two red tests of `v03_m9_c8_s0_red`, under AddressSanitizer (their counters are pinned
+/// The two dropped-while-pending programs of `v03_m9_c8_s0`, under AddressSanitizer (their counters are pinned
 /// there).
 const DROPPED_AT_SHUTDOWN: &str = "
 function worker(give rows: array<int>) -> nothing {
@@ -166,9 +157,13 @@ function entrypoint() -> nothing {
 ";
 
 #[test]
-fn the_two_red_programs_are_asan_clean_and_balanced() {
-    balanced_and_asan_clean("c8s6_red_shutdown", DROPPED_AT_SHUTDOWN, "parent\n");
-    balanced_and_asan_clean("c8s6_red_nested", DROPPED_IN_NESTED_CHILD, "parent\n");
+fn a_task_dropped_at_shutdown_or_in_a_nested_child_is_asan_clean_and_balanced() {
+    balanced_and_asan_clean("c8s6_dropped_at_shutdown", DROPPED_AT_SHUTDOWN, "parent\n");
+    balanced_and_asan_clean(
+        "c8s6_dropped_in_nested_child",
+        DROPPED_IN_NESTED_CHILD,
+        "parent\n",
+    );
 }
 
 // ── one test per suspension site ────────────────────────────────────────────────────────────
