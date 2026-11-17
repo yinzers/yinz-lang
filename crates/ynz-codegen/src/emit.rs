@@ -15814,7 +15814,7 @@ fn emit_io_member_init<'ctx, 'g>(
 }
 
 /// Shared per-member I/O sub-frame poll step (v0.3-M3g Phase 3 should-fix extraction):
-/// idempotent — a Ready child's OWN `resume_point` is set to the sentinel `0x7FFF_FFFF` so a
+/// idempotent — a Ready child's OWN `resume_point` is set to `ynz_abi::FRAME_RESUME_POINT_RETURNED` so a
 /// later re-entry via that child's `sm_dead` block returns Ready with zero re-execution. Always
 /// recomputes the child frame pointer fresh: a GEP built in a predecessor block does not dominate
 /// a re-entry landing directly in the caller's poll block via the SM dispatch switch.
@@ -16407,7 +16407,7 @@ fn emit_independent_group_poll<'ctx, 'g>(
     // start its I/O and the operations would run sequentially instead of overlapping.
     //
     // After all polls:
-    //   - Any child that returned Ready gets the sentinel (0x7FFFFFFF) stored into its
+    //   - Any child that returned Ready gets `ynz_abi::FRAME_RESUME_POINT_RETURNED` stored into its
     //     resume_point, so re-poll passes route to sm_dead and return 0 safely.
     //   - If ANY child was Pending, we yield with resume_point = continuation_state.
     //   - If ALL were Ready, we jump directly to post_call_bb.
@@ -16710,7 +16710,7 @@ fn extract_call_and_args(stmt: &Stmt) -> Option<(String, &[Expr])> {
 /// **Idempotency**: re-polling an already-Ready member never double-binds its result. A Ready
 /// CPU handle's frame slot is nulled after its poll resolves Ready (mirrors
 /// `emit_cpu_group_spawn_join`'s null-check skip); a Ready I/O child's OWN `resume_point` is set
-/// to the sentinel `0x7FFF_FFFF` (mirrors `emit_independent_group_poll`'s sentinel — routes to
+/// to `ynz_abi::FRAME_RESUME_POINT_RETURNED` (mirrors `emit_independent_group_poll`'s sentinel — routes to
 /// that child's `sm_dead` block on any further poll, returning Ready with zero re-execution).
 ///
 /// **Binding**: results are read only after every member is Ready (`all_done_bb`) and bound
