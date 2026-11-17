@@ -13320,6 +13320,14 @@ fn temporary_home(
             TemporaryHome::Pointer
         }
         Type::Maybe { .. } if minted_maybe_copy => TemporaryHome::Pointer,
+        // An errors-capable call result is a `{err, ok}` pair (two words) that dies with the resume
+        // invocation: its 16 bytes move into a region, whose address the slot holds. Only the inner types
+        // whose ok word is a plain word the pair owns (a string, array, map or shape cell, a `maybe` cell, a
+        // scalar) qualify; a `number` (its ok word points into staging) and a union (its pair rides a view)
+        // keep no home and leak.
+        Type::ErrorsCapable { inner } if errors_result_has_plain_ok_word(inner) => {
+            TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0))
+        }
         Type::Maybe { inner } => match inner.as_ref() {
             // A counted channel reference: no frame bytes.
             Type::BuiltinChannel { .. } => TemporaryHome::Skip,
@@ -13361,6 +13369,31 @@ fn temporary_home(
             }
         }
         _ => TemporaryHome::Skip,
+    }
+}
+
+/// Is the ok word of an errors-capable result of inner type `inner` a plain word its pair owns, so the
+/// 16-byte pair moves into a frame region as it is (`temporary_home`)?
+///
+/// Time: O(1)  Space: O(1)
+fn errors_result_has_plain_ok_word(inner: &Type) -> bool {
+    match inner {
+        Type::String
+        | Type::BuiltinArray { .. }
+        | Type::BuiltinMap { .. }
+        | Type::Shape { .. }
+        | Type::Nothing
+        | Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Options { .. } => true,
+        Type::Maybe { inner: payload } => {
+            matches!(
+                payload.as_ref(),
+                Type::String | Type::Int | Type::Float | Type::Bool | Type::Shape { .. }
+            )
+        }
+        _ => false,
     }
 }
 

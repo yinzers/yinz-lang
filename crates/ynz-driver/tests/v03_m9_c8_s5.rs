@@ -475,3 +475,53 @@ function entrypoint() -> nothing {{
         assert_source_balanced(&format!("sm_spawner_array_{name}"), &source, expected);
     }
 }
+
+/// Bug caught (High: leak): an errors-capable call result no binding holds, in a statement that
+/// suspends, had no frame home and was never released (S4b leftover): `wait slow(label(1).or(..))`
+/// allocated 2 strings and freed 1. String, array, map and shape payloads, and a `nothing` one.
+#[test]
+fn an_unbound_errors_temporary_of_a_suspending_statement_is_released() {
+    let source = "shape Part {
+  name: string
+  qty: int
+}
+
+function label(n: int) -> string errors {
+  return `abc${n}`
+}
+
+function listing(n: int) -> array<string> errors {
+  return [`a${n}`, `b`]
+}
+
+function table(n: int) -> map<string, string> errors {
+  return { `k`: `v${n}` }
+}
+
+function part(n: int) -> Part errors {
+  let made: Part = { name: `p${n}`, qty: n }
+  return made
+}
+
+function slow(first: int) -> int {
+  wait sleep(1)
+  return first
+}
+
+function entrypoint() -> nothing {
+  let fallbackText: string = `x`
+  let fallbackList: array<string> = []
+  let fallbackTable: map<string, string> = {}
+  let fallbackPart: Part = { name: `f`, qty: 0 }
+  let first = wait slow(label(1).or(fallbackText).count())
+  let second = wait slow(listing(2).or(fallbackList).count())
+  let third = wait slow(table(3).or(fallbackTable).count())
+  let fourth = wait slow(part(4).or(fallbackPart).qty)
+  print(first.toString())
+  print(second.toString())
+  print(third.toString())
+  print(fourth.toString())
+}
+";
+    assert_source_balanced("errors_temporary_suspending", source, "4\n2\n1\n4\n");
+}
