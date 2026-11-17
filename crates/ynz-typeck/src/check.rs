@@ -1473,15 +1473,14 @@ fn unsized_lengths_of_once_only_functions(
 }
 
 /// The specialised versions the program needs: the recorded calls closed over the length
-
 /// parameters of every function in `sig_table` (`crate::fixed_length::close_instances`).
 /// O(calls + versions).
 ///
 /// A function that suspends, or that auto-parallel promotion may turn into a task host
 /// (`once_only`), is compiled once, as it always was: it is a state machine named after the
 /// function, and its length parameters read as unknown. It has no per-length versions, and a call
-/// to it records none. (A suspending function cannot be handed a `fixed` argument anyway: the
-/// list would die across the suspension, which typeck refuses.)
+/// to it records none. An unsized `fixed` parameter of one is refused when its body asks for the
+/// length (`unsized_lengths_of_once_only_functions`).
 fn fixed_instances_of(
     calls: FixedCalls,
     sig_table: &SignatureTable,

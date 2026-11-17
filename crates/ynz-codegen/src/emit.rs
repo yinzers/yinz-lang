@@ -30927,7 +30927,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// The function `void(ptr slot, ptr err_out, ptr ok_out)` that moves a union result out of the
-
     /// finished child's return slot into one cell of its own (`HANDLE_RET_KIND_UNION`): the
     /// slot holds the address of the union's region in the child's frame, which dies right after
     /// the completion is read. The cell is the completion's `ok`; a failed task has none (0). It is
