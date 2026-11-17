@@ -1040,3 +1040,52 @@ parameter_maybe_cases! {
     a_bare_maybe_shape_parameter_copy_leaves_the_caller_its_own: "", COPY_AND_KEEP, "  let found = pick()\n  eat(found)\n  print(found.exists())", "true\ntrue\ntrue\n";
     a_share_maybe_shape_parameter_copy_leaves_the_caller_its_own: "share ", COPY_AND_KEEP, "  let found = pick()\n  eat(found)\n  print(found.exists())", "true\ntrue\ntrue\n";
 }
+
+/// A program whose suspending `eat` takes the `maybe` of `element_type` it is given as an explicit
+/// `.copy()` of `pick()`'s result, and reads it after its own `wait`.
+fn copied_maybe_program(element_type: &str, element_value: &str, read: &str) -> String {
+    format!(
+        "shape Big {{
+  label: string
+  count: int
+}}
+
+function pick() -> maybe<{element_type}> {{
+  let source: array<{element_type}> = [{element_value}]
+  return source.get(0)
+}}
+
+function eat(give held: maybe<{element_type}>) -> nothing {{
+  wait sleep(1)
+{read}
+}}
+
+function entrypoint() -> nothing {{
+  eat(pick().copy())
+}}
+"
+    )
+}
+
+/// Bug caught: found by the C8 round-3 review's probe of what a suspending callee can be given at a
+/// `give` position that no call built: the only `maybe` that is not a call result is `none` or an
+/// explicit `.copy()`, and the `.copy()`'s two heap cells (the envelope, the shape's or decimal's
+/// payload) were never freed once the staged envelope pointed at them. Tier Medium. (No UAF: the
+/// envelope is staged into a frame region, and a `maybe` literal does not exist.)
+macro_rules! copied_maybe_cases {
+    ($($name:ident: $element_type:literal, $element_value:literal, $read:literal, $expected:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = copied_maybe_program($element_type, $element_value, $read);
+                assert_source_balanced(stringify!($name), &source, $expected);
+            }
+        )+
+    };
+}
+
+copied_maybe_cases! {
+    a_copied_maybe_shape_given_to_a_suspending_callee_frees_both_cells: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", "  let fallback: Big = { label: `x`, count: 0 }\n  print(held.or(fallback).label)", "KEPT\n";
+    a_copied_maybe_decimal_given_to_a_suspending_callee_frees_both_cells: "number<20> ", "2.5", "  print(held.or(1.5))", "2.5\n";
+    a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell: "string", "`kept`.toUpperCase()", "  print(held.or(`x`))", "KEPT\n";
+}

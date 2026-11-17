@@ -30998,6 +30998,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|err| format!("stage a shape into the frame: {err}"))?;
         if let Type::Maybe { inner } = ty {
             self.stage_maybe_payload(value, region, inner)?;
+            // The envelope cell an explicit `.copy()` minted is empty now (its flag and payload bits
+            // are in the region): give it back.
+            if self
+                .minted_maybe_copies
+                .contains(&(value.as_value_ref() as usize))
+            {
+                self.free_minted_maybe_cell(value, "staged_maybe")?;
+            }
         }
         self.builder
             .build_ptr_to_int(region, self.i64(), "staged_shape_bits")
@@ -31008,8 +31016,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// and point the staged envelope at it. The payload cell a call result owns (a flat shape's, a
     /// decimal's) is the caller's to free, and the callee releases a `give` parameter in its `Local`
     /// form, which frees what the payload owns and no cell. So the bytes move (the strings and cells
-    /// they own are the callee's now) and the emptied cell is freed here. A payload that sits in this
-    /// resume invocation's stack is copied the same way and left alone. A payload with no bytes of
+    /// they own are the callee's now) and the emptied cell is freed here (a call result's, or the one an explicit `.copy()`
+    /// minted). A payload that sits in this resume invocation's stack is copied the same way and left
+    /// alone. A payload with no bytes of
     /// its own (`staged_maybe_payload_bytes`) stays as the envelope has it.
     ///
     /// Time: O(1) + one memcpy of the payload's bytes  Space: O(1)
@@ -31064,9 +31073,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_memcpy(payload_home, 1, source, 1, size)
             .map_err(|err| format!("staged maybe payload copy: {err}"))?;
-        if self
-            .fresh_payload_maybes
-            .contains(&(value.as_value_ref() as usize))
+        let value_key = value.as_value_ref() as usize;
+        if self.fresh_payload_maybes.contains(&value_key)
+            || self.minted_maybe_copies.contains(&value_key)
         {
             if matches!(inner, Type::Shape { .. }) {
                 self.builder
