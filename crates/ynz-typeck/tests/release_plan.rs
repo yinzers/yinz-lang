@@ -1297,8 +1297,13 @@ fn with_reads_puts_a_propagation_read_after_its_statement_in_its_own_block() {
     );
     assert_eq!(
         read_names(&body.stmts),
-        vec!["inner".to_string(), "rows".to_string(), "inner".to_string()],
-        "the propagation edge's owners right after the `print`, then the block's own end"
+        vec![
+            "inner".to_string(),
+            "rows".to_string(),
+            "value".to_string(),
+            "inner".to_string()
+        ],
+        "the propagation edge's owners right after the `print` (not `value`, whose error it returns), then the block's own end, `value` (an errors-capable value has a frame home since C8 slice 4b) first"
     );
     assert_eq!(
         read_names(&rewritten),

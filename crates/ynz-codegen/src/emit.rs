@@ -2490,7 +2490,7 @@ struct Cg<'ctx, 'g> {
     string_take_slots: HashMap<usize, Vec<MoveSlot<'ctx>>>,
     // v0.3-M9 C7 slice 3: a string read off an errors-capable result at its last use is the result's ok
     // word: where the store seam takes it, this word is nulled, so the result's release skips it.
-    string_take_ec_words: HashMap<usize, PointerValue<'ctx>>,
+    string_take_ec_words: HashMap<usize, (PointerValue<'ctx>, Option<usize>)>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -5969,6 +5969,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         dst: PointerValue<'ctx>,
         variants: &[Type],
         maybe: bool,
+        deep: Option<bool>,
         site: &str,
     ) -> Result<(), String> {
         let present_bb = self.append_block(&format!("{site}_present"));
@@ -5991,13 +5992,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         } else {
             view
         };
-        self.union_persist_into_as(
-            view,
-            dst,
-            variants,
-            maybe || self.union_has_nothing(variants),
-            site,
-        )?;
+        let nullable = maybe || self.union_has_nothing(variants);
+        match deep {
+            Some(deep) => {
+                self.union_persist_into_core(view, dst, variants, nullable, deep, site)?
+            }
+            None => self.union_persist_into_as(view, dst, variants, nullable, site)?,
+        }
         self.builder
             .build_unconditional_branch(join_bb)
             .map_err(|err| format!("{site}: present->join: {err}"))?;
@@ -6024,7 +6025,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_store(scratch, slot_ty.const_zero())
             .map_err(|err| format!("{site}: zero the result slot: {err}"))?;
-        self.union_persist_if_ok(err, view, scratch, variants, maybe, site)?;
+        self.union_persist_if_ok(err, view, scratch, variants, maybe, None, site)?;
         let slot = self
             .builder
             .build_load(slot_ty, scratch, &format!("{site}_slot_value"))
@@ -6455,7 +6456,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .builder
             .build_int_to_ptr(ok_bits, self.ptr(), &format!("{site}_ok_view"))
             .map_err(|err| format!("{site}: ok view cast: {err}"))?;
-        self.union_persist_if_ok(err, view, crossing.region, &crossing.variants, false, &site)?;
+        self.union_persist_if_ok(
+            err,
+            view,
+            crossing.region,
+            &crossing.variants,
+            false,
+            Some(false),
+            &site,
+        )?;
         let region_ok = self.crossing_union_ok_word(name, err)?;
         let is_ok = self
             .builder
@@ -12721,6 +12730,23 @@ fn bind_sm_return_value<'ctx>(
 ///
 /// After this call the alloca is registered in `cg.locals` under `name`.
 fn bind_sm_result_and_flush<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    name: &str,
+    return_val: inkwell::values::BasicValueEnum<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    callee_name: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    let is_errors_capable_result = return_val.is_struct_value();
+    let alloca = bind_sm_result_and_flush_value(cg, name, return_val, frame_ptr, callee_name)?;
+    if is_errors_capable_result {
+        // The scope-exit release reads an errors-capable result through its original slot: a read
+        // re-points `locals` at the success value, so the release (and a take) must not use that.
+        cg.ec_original_slots.insert(name.to_string(), alloca);
+    }
+    Ok(alloca)
+}
+
+fn bind_sm_result_and_flush_value<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     name: &str,
     mut return_val: inkwell::values::BasicValueEnum<'ctx>,
@@ -19825,6 +19851,7 @@ fn lower_stmt_return<'ctx>(
                         region,
                         &variants,
                         maybe,
+                        None,
                         "sm_ec_union_ret",
                     )?;
                     let region_bits = cg
@@ -20830,8 +20857,9 @@ fn remember_movable_string<'ctx>(
                     .builder
                     .build_struct_gep(errors_result_type(cg.ctx), result, 1, "ec_take_ok")
                     .map_err(|err| format!("ec take ok gep: {err}"))?;
+                let frame_ok_word = cg.frame_slot_of(name).map(|first| first + 1);
                 cg.string_take_ec_words
-                    .insert(val.as_value_ref() as usize, ok_word);
+                    .insert(val.as_value_ref() as usize, (ok_word, frame_ok_word));
             }
         }
         // A binding read at its last use: the store seam nulls its slot if it takes the string.
@@ -27978,7 +28006,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // (`ec_union_result_to_standard`), not the slot a `Field` home would release in place, so the
         // view form is called on the pointer the ok word holds.
         let inner_resolved = self.resolve_type(inner);
-        let payload_release = if self.envelope_union_variants(&inner_resolved).is_some() {
+        // A `maybe` of an envelope union rides the result as the maybe pair over the union's view
+        // (`ec_standard_over_slot`), a stack pair and not a heap envelope cell, so it releases through
+        // the local form of the `maybe` (which reads the pair), never the cell form.
+        let view_form = self.envelope_union_variants(&inner_resolved).is_some()
+            || matches!(&inner_resolved, Type::Maybe { inner: maybe_inner }
+                if self.envelope_union_variants(&self.resolve_type(maybe_inner)).is_some());
+        let payload_release = if view_form {
             self.release_form_fn(&inner_resolved, ReleaseForm::Local)?
                 .map(|glue| (glue.as_global_value().as_pointer_value(), false))
         } else {
@@ -28040,6 +28074,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 struct MoveSlot<'ctx> {
     local: PointerValue<'ctx>,
     frame_slot: Option<usize>,
+    /// Further consecutive frame slots a move nulls with `frame_slot`: an errors-capable local keeps
+    /// its error word and its ok word in two (`Cg::frame_words_of`), and a take of either must leave
+    /// the next resume no stale word to release.
+    extra_frame_slots: usize,
     /// The moved flag of a region-homed local (`Cg::sm_region_flags`): a move sets it, so the
     /// next resume re-derives a null local instead of the region pointer.
     moved_flag: Option<usize>,
@@ -28185,6 +28223,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             slots.push(MoveSlot {
                 local: slot,
                 frame_slot: self.frame_slot_of(name),
+                extra_frame_slots: self.frame_words_of(name) - 1,
                 moved_flag: self.region_flag_of(name),
             });
         }
@@ -28620,6 +28659,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_store(slot.local, self.ptr().const_null())
                 .map_err(|err| format!("null a taken slot: {err}"))?;
             self.null_frame_slot(slot.frame_slot)?;
+            if let Some(first) = slot.frame_slot {
+                for offset in 1..=slot.extra_frame_slots {
+                    self.null_frame_slot(Some(first + offset))?;
+                }
+            }
             self.set_moved_flag(slot.moved_flag, 1)?;
         }
         Ok(())
@@ -28644,6 +28688,18 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .iter()
             .position(|crossing| crossing == name)?;
         self.sm_crossing_slot_indices.get(position).copied()
+    }
+
+    /// How many consecutive frame slots hold the value of `name` that a take must null: two for an
+    /// errors-capable crossing local (the error word, then the ok word), else one.
+    ///
+    /// O(1) time.
+    fn frame_words_of(&self, name: &str) -> usize {
+        if self.sm_crossing_errors_capable_set.contains(name) {
+            2
+        } else {
+            1
+        }
     }
 
     /// The moved-flag frame slot of the region-homed local `name` (`sm_region_flags`).
@@ -28705,13 +28761,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// The store seam took the string `value` instead of copying it: null the slots it was read
     /// from (`note_string_last_use`). Nothing for a string no binding held.
     fn take_string_slots(&self, value: BasicValueEnum<'ctx>) -> Result<(), String> {
-        if let Some(ok_word) = self
+        if let Some((ok_word, frame_ok_word)) = self
             .string_take_ec_words
             .get(&(value.as_value_ref() as usize))
         {
             self.builder
                 .build_store(*ok_word, self.i64().const_zero())
                 .map_err(|err| format!("null a taken ok word: {err}"))?;
+            self.null_frame_slot(*frame_ok_word)?;
         }
         match self.string_take_slots.get(&(value.as_value_ref() as usize)) {
             Some(slots) => self.null_slots(slots),
@@ -29450,6 +29507,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.null_slots(&[MoveSlot {
                     local: slot,
                     frame_slot: Some(frame_slot),
+                    extra_frame_slots: self.frame_words_of(name) - 1,
                     moved_flag: None,
                 }])?;
             } else if let (Some(flag), Some(slot)) =
@@ -29458,6 +29516,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.null_slots(&[MoveSlot {
                     local: slot,
                     frame_slot: None,
+                    extra_frame_slots: 0,
                     moved_flag: Some(flag),
                 }])?;
             }

@@ -129,6 +129,7 @@ impl ReleaseKind {
                 | ReleaseKind::NestedShape
                 | ReleaseKind::Maybe
                 | ReleaseKind::Fixed
+                | ReleaseKind::ErrorsCapable
         )
     }
 }

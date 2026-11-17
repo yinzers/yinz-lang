@@ -71,23 +71,6 @@ macro_rules! balanced_fixture {
     };
 }
 
-/// `deferred_fixture!(case, "fixture.ynz", "producer: what leaks", "why it waits")` is `balanced_fixture!` for a
-/// producer that belongs to a later slice than the one the red test was filed under: the same body, with its
-/// own `#[ignore]` reason.
-macro_rules! deferred_fixture {
-    ($case:ident, $fixture:literal, $bug:literal, $reason:literal) => {
-        #[doc = $bug]
-        #[test]
-        #[ignore = $reason]
-        fn $case() {
-            at_both_optimization_levels(|no_optimize| {
-                let built = build($fixture, no_optimize);
-                assert_run_balances(&built, $bug, None, no_optimize);
-            });
-        }
-    };
-}
-
 /// `balanced_program!(case, SOURCE, "stdout", "producer: what leaks")`: the generated program,
 /// built and run at both optimization levels, prints `stdout` and frees what it allocates.
 macro_rules! balanced_program {
@@ -318,7 +301,7 @@ green_fixture!(
     "producer P5 (CPU-group results): the arrays two spike-group members return into the host's result slots are never released"
 );
 
-balanced_fixture!(
+green_fixture!(
     producer_p6_errors_propagation_crossing_local,
     "v0_3_m3a_p1_ec_crossing_local_propagated_string.ynz",
     "producer P6 (errors in a suspending function): an auto-propagation edge and an errors-capable local release nothing in a resume function"
@@ -330,11 +313,10 @@ green_fixture!(
     "producer P7 (unions in a suspending function): a union envelope and the string it holds, built or wrapped in a resume function, leak"
 );
 
-deferred_fixture!(
+green_fixture!(
     producer_p7_union_crossing_binding,
     "v0_3_m9_union_crossing_binding.ynz",
-    "producer P7 (unions in a suspending function): the `Thing errors` local `held` that crosses a `wait` leaks its slot and string",
-    "planned RED (C8 slice 4b): the leak left is the errors-capable local `held` (`slowBig(8)`); the union local and the staged argument are released since slice 4a (measured: the fixture without `held` balances)"
+    "producer P7 (unions in a suspending function): the `Thing errors` local `held` that crosses a `wait` leaks its slot and string"
 );
 
 balanced_fixture!(
