@@ -21,6 +21,8 @@ declare ptr @ynz_rt_async_sleep_create(i64) local_unnamed_addr
 
 declare i32 @ynz_rt_async_sleep_poll(ptr, ptr) local_unnamed_addr
 
+declare void @ynz_rt_async_sleep_free(ptr) local_unnamed_addr
+
 declare i32 @ynz_rt_run_entrypoint(ptr, ptr, i64) local_unnamed_addr
 
 define noundef i32 @ynz_sm_entrypoint_resume(ptr nocapture %0, ptr %1) {
@@ -29,6 +31,7 @@ sm_entry:
   switch i32 %rp, label %common.ret [
     i32 0, label %sm_s0
     i32 1, label %sm_s1
+    i32 -2, label %sm_drop_s1
   ]
 
 sm_s0:                                            ; preds = %sm_entry
@@ -38,31 +41,38 @@ sm_s0:                                            ; preds = %sm_entry
   br i1 %first_is_ready, label %sm_post_wait, label %sm_suspend
 
 sm_s1:                                            ; preds = %sm_entry
-  %h_slot = getelementptr i8, ptr %0, i64 8
-  %sleep_handle1 = load ptr, ptr %h_slot, align 8
-  %poll = tail call i32 @ynz_rt_async_sleep_poll(ptr %sleep_handle1, ptr %1)
+  %h_slot3 = getelementptr i8, ptr %0, i64 8
+  %sleep_handle4 = load ptr, ptr %h_slot3, align 8
+  %poll = tail call i32 @ynz_rt_async_sleep_poll(ptr %sleep_handle4, ptr %1)
   %is_ready = icmp eq i32 %poll, 0
   br i1 %is_ready, label %sm_post_wait, label %common.ret
 
-common.ret.sink.split:                            ; preds = %sm_post_wait, %sm_suspend
-  %.sink = phi i32 [ 1, %sm_suspend ], [ 2147483647, %sm_post_wait ]
-  %common.ret.op.ph = phi i32 [ 1, %sm_suspend ], [ 0, %sm_post_wait ]
-  store i32 %.sink, ptr %0, align 4
-  br label %common.ret
-
-common.ret:                                       ; preds = %common.ret.sink.split, %sm_entry, %sm_s1
-  %common.ret.op = phi i32 [ 1, %sm_s1 ], [ 0, %sm_entry ], [ %common.ret.op.ph, %common.ret.sink.split ]
+common.ret:                                       ; preds = %sm_entry, %sm_drop_s1, %drop_sleep_free, %sm_suspend, %sm_s1, %sm_post_wait
+  %common.ret.op = phi i32 [ 0, %sm_post_wait ], [ 1, %sm_s1 ], [ 1, %sm_suspend ], [ 0, %drop_sleep_free ], [ 0, %sm_drop_s1 ], [ 0, %sm_entry ]
   ret i32 %common.ret.op
 
 sm_post_wait:                                     ; preds = %sm_s1, %sm_s0
-  %h_slot_wr2 = getelementptr i8, ptr %0, i64 8
-  tail call void @llvm.memset.p0.i64(ptr noundef nonnull align 8 dereferenceable(16) %h_slot_wr2, i8 0, i64 16, i1 false)
-  br label %common.ret.sink.split
+  %h_slot_wr5 = getelementptr i8, ptr %0, i64 8
+  tail call void @llvm.memset.p0.i64(ptr noundef nonnull align 8 dereferenceable(16) %h_slot_wr5, i8 0, i64 16, i1 false)
+  store i32 2147483647, ptr %0, align 4
+  br label %common.ret
 
 sm_suspend:                                       ; preds = %sm_s0
   %h_slot_wr = getelementptr i8, ptr %0, i64 8
   store ptr %sleep_handle, ptr %h_slot_wr, align 8
-  br label %common.ret.sink.split
+  store i32 1, ptr %0, align 4
+  br label %common.ret
+
+sm_drop_s1:                                       ; preds = %sm_entry
+  %h_slot = getelementptr i8, ptr %0, i64 8
+  %sleep_handle1 = load ptr, ptr %h_slot, align 8
+  %drop_sleep_is_parked.not = icmp eq ptr %sleep_handle1, null
+  br i1 %drop_sleep_is_parked.not, label %common.ret, label %drop_sleep_free
+
+drop_sleep_free:                                  ; preds = %sm_drop_s1
+  tail call void @ynz_rt_async_sleep_free(ptr nonnull %sleep_handle1)
+  store ptr null, ptr %h_slot, align 8
+  br label %common.ret
 }
 
 define i32 @main() local_unnamed_addr {
