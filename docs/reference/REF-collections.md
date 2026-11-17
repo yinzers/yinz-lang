@@ -61,27 +61,46 @@ rgb.add(50)
 
 ### `fixed<T>` and `fixed<T, N>` in function signatures
 
-A function can take and return a `fixed` list. Its length is a number the compiler knows, so passing or returning a list costs what passing or returning an array costs in Rust (`[T; N]`): the cells, nothing else.
+A function can take a `fixed` list and give one back. Write the number of items after the type to say exactly how many it holds, or leave the number out and the compiler works it out.
 
 ```
-function total(share nums: fixed<int>) -> int { ... }       // any length: one compiled version per length you pass
-function sum4(share nums: fixed<int, 4>) -> int { ... }     // exactly 4 items: any other length is a compile error
-function makeRow() -> fixed<int> {                          // the length is the one every `return` gives
+function total(share scores: fixed<int>) -> int {
+  let sum = 0
+  for (score in scores) {
+    sum = sum + score
+  }
+  return sum
+}
+
+function sumOfFour(share scores: fixed<int, 4>) -> int {
+  return total(scores)
+}
+
+function makeRow() -> fixed<int> {
   let row: fixed<int> = [1, 2, 3]
   return row
 }
 ```
 
-- Write the length as a whole number, `fixed<int, 4>`, on the whole type of a **parameter, a return value or a shape field** only. A local (`let row: fixed<int> = [...]`) takes its length from the list on the right.
-- `fixed<int>` as a parameter works for lists of any length: the compiler builds one version of the function for each length the program passes.
+- Write the length as a whole number, `fixed<int, 4>`, on the whole type of a **parameter, a return value or a shape field** only. A local (`let row: fixed<int> = [1, 2, 3]`) takes its length from the list on the right.
+- `fixed<int>` as a parameter takes a list of any length: `total` above works for three scores or thirty.
 - `fixed<int>` as a return type takes the length of the lists the function returns. Every `return` must give the same length.
-- An `export function` must write the length of every `fixed` it takes or returns (`fixed<int, 4>`): another file sees only the signature.
-- A list returned from a function that waits (a suspending function), or from a `background` task you `receive()`, comes back the same way.
-- A function that waits, or that the compiler may run as a task of its own, is built only once: if its body uses the length of a `fixed` parameter (`count`, a loop, an index, a `return`), write the length (`fixed<int, 4>`).
+- An `export function` must write the length of every `fixed` it takes or returns (`fixed<int, 4>`), because another file sees only the signature.
+- A list returned from a function that waits, or from a `background` task you `receive()`, comes back the same way.
+- A function that waits, or that the compiler may run as a task of its own, needs the length written (`fixed<int, 4>`) when its body asks for it (`count`, a loop, an index, a `return`).
+
+Passing a list of the wrong length is a compile error:
+
+```
+let scores: fixed<int> = [1, 2, 3]
+let result = sumOfFour(scores)
+// COMPILE ERROR: `scores` holds 3 items, but `sumOfFour` takes exactly 4 for `scores`.
+// Pass a list of 4 items, or change `scores` to `fixed<int>` so `sumOfFour` takes a list of any length.
+```
 
 #### A `fixed` list in a shape field
 
-A shape keeps a `fixed<T, N>` field inside its own bytes, as a Rust struct keeps a `[T; N]`:
+A shape keeps a `fixed<T, N>` field inside itself:
 
 ```
 shape Roster {
@@ -90,7 +109,7 @@ shape Roster {
 }
 ```
 
-- The length is required: `names: fixed<string>` is a compile error (the shape's size has to be known). Use `array<string>` for a list whose length varies.
+- The length is required: `names: fixed<string>` is a compile error, because the shape's size has to be known. Use `array<string>` for a list whose length varies.
 - This holds for a shape written inline (`{ trail: fixed<int, 3> }`) too, and a different length is a different type.
 - Reading the field in a `let` gives the binding its own copy when the binding is written; the shape's `.copy()` copies the list and its items.
 
