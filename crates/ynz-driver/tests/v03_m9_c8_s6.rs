@@ -392,7 +392,8 @@ fn a_promoted_host_parked_at_its_cpu_join_releases_its_frame() {
         assert_eq!(
             counters.alloc - counters.free,
             2,
-            "c8s6_cpu_join (no_optimize={no_optimize}): only the two running members' contexts \n             may stay allocated: {counters:?}"
+            "c8s6_cpu_join (no_optimize={no_optimize}): only the two running members' contexts \
+             may stay allocated: {counters:?}"
         );
         assert_asan_clean(
             "c8s6_cpu_join",
@@ -604,7 +605,10 @@ function entrypoint() -> nothing {
     balanced_and_asan_clean("c8s6_result_after_free", source, "parent\n");
 }
 
-/// The task failed: the unreceived completion is an error object, not a payload.
+/// The task failed: the unreceived completion is an error object, not a payload. Bug caught: the
+/// result release frees what a failed completion does not own, or frees the error object twice
+/// (ASan). The counters cannot see the error object (`ynz_error_new` uses raw `malloc`), so this
+/// test passes without the release; it guards the failing path against a wrong release only.
 #[test]
 fn an_unreceived_error_result_is_released_with_the_handle() {
     let source = unreceived_after_finish(

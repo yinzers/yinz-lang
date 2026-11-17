@@ -8,7 +8,7 @@
 //! one of a `let` is released at its scope exit (C7 slice 1), so the frees pinned below include the
 //! program's own locals and only the allocation count pins the copy cost. A `let` copy of a place
 //! is a copy owner (C7 slice 2b), released at its scope exit, so every case here frees what it
-//! allocates (a state-machine function releases nothing until C8).
+//! allocates (a state-machine function releases its own locals too, C8).
 //!
 //! Approval condition of the non-owned-read design: EVERY site typeck judges has a no-write case
 //! pinned at zero extra copies: plain and state-machine loop, map-entry loop, union loop variable,

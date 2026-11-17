@@ -1,19 +1,14 @@
-//! v0.3-M9 C8 slice 0: red tests for the suspension-frame release (card #385, plan #17).
+//! v0.3-M9 C8 slice 0: one leak test per producer of the suspension-frame release (card #385,
+//! plan #17). They were written red before the slices that fix their producers (the file name keeps
+//! that history) and are all green now; each asserts the balance the producer broke.
 //!
-//! C7 releases every heap local on the plain path. A state-machine function (one that suspends)
-//! releases nothing yet, and a task dropped while Pending never releases its frame. Each test
-//! here fails today for the producer its name gives; the slice that fixes the producer removes
-//! the `#[ignore]` and keeps the assertion byte-identical (the planned-RED ratchet of
-//! `frago002_c1_c2_planned_red.rs`). Run them all:
-//!
-//! ```text
-//! cargo test -p ynz-driver --test v03_m9_c8_s0_red -- --ignored
-//! ```
+//! C7 released every heap local on the plain path; C8 releases a state-machine function's frame
+//! (one that suspends) and the frame of a task dropped while Pending.
 //!
 //! Groups:
 //! - `c2_*`: the C2 frame-retirement fixtures (the caller's `free_frame` after Ready, the spawned
-//!   task's drop ladder). Their ASan guard passes today and must stay green; their balance is red.
-//! - `dropped_while_pending_*` (producer P9): a task retired before it finished leaks the locals in its frame
+//!   task's drop ladder). Their ASan guard and their balance both stay green.
+//! - `dropped_while_pending_*` (producer P9): a task retired before it finished must release the locals in its frame
 //!   (the card step 774 amendment).
 //! - `producer_*`: one leak test per producer of the C8 producer table (the report names them).
 //!   Each program or fixture is the smallest one that leaks for that producer alone, or the
@@ -87,7 +82,7 @@ macro_rules! green_fixture {
 
 // ── (a) C2 frame-retirement fixtures ────────────────────────────────────────────────────────
 
-/// ASan guard, green today and after C8: the caller's `free_frame` after Ready neither double
+/// ASan guard: the caller's `free_frame` after Ready neither double
 /// frees a frame-held local nor reads the freed return slot. C8's frame release must keep it so.
 #[test]
 fn c2_caller_free_frame_stays_asan_clean() {
@@ -100,7 +95,7 @@ fn c2_caller_free_frame_stays_asan_clean() {
     });
 }
 
-/// ASan guard, green today and after C8: the worker's own release of its `give` parameter and the
+/// ASan guard: the worker's own release of its `give` parameter and the
 /// spawn drop ladder never free the same clone.
 #[test]
 fn c2_spawn_drop_ladder_stays_asan_clean() {

@@ -6,9 +6,9 @@
 //! can see what is left. It is `#[ignore]` because it builds ~950 programs (about 3 to 5
 //! minutes on 4 cores): a dedicated-lane test, not a pre-push one.
 //!
-//! It asserts the one thing C7 owns: a `plain`-class fixture leaks only if it is listed in
+//! It asserts two things. C7: a `plain`-class fixture leaks only if it is listed in
 //! `KNOWN_PLAIN_LEAKS` with its reason, and every listed one still leaks (a fixed leak must leave
-//! the list). State-machine leaks are C8's input and are reported, not asserted.
+//! the list). C8 (card #385): no `state-machine`-class fixture leaks at all.
 //!
 //! Re-run (writes the report, prints a summary):
 //!
@@ -24,9 +24,9 @@
 //! - `plain`: the emitted IR has no `ynz_sm_*_resume` function, so only the plain-path release
 //!   (C7) can have produced the leak.
 //! - `state-machine`: the IR has at least one `ynz_sm_*_resume` function. State-machine
-//!   functions release nothing yet (C8), so these are C8's inputs. A state-machine fixture can
-//!   ALSO hold a plain-path leak; the report cannot tell, so `plain` is a lower bound and the
-//!   `state-machine` list is where to look for a plain leak that needs reproducing alone.
+//!   functions release their frames (C8), so none may leak. A state-machine fixture can
+//!   ALSO hold a plain-path leak; the report cannot tell, so `plain` is a lower bound; a
+//!   `state-machine` leak is reproduced alone to find which kind it is.
 //! - `no-build` / `no-run`: the fixture did not compile (an expected-error fixture) or the
 //!   program exited without writing its counters; these are listed apart, never counted as
 //!   balanced.
@@ -41,8 +41,8 @@ use std::path::PathBuf;
 /// a plain program, whatever else it does.
 const CONCURRENCY_KEYWORDS: [&str; 5] = ["background", "wait", "channel", "errors", "fails"];
 
-/// The `plain`-class fixtures that leak today, each with the producer that is not fixed. Found by
-/// this sweep in C7 test review r2; the entry leaves the list in the change that fixes it.
+/// The `plain`-class fixtures that leak today, each with the producer that is not fixed. The entry
+/// leaves the list in the change that fixes it.
 const KNOWN_PLAIN_LEAKS: [(&str, &str); 4] = [
     (
         "v0_3_m9_c8_s4b_unsized_fixed_string_return.ynz",
@@ -221,6 +221,27 @@ fn sweep_every_fixture_for_leaks_and_classify_them() {
             "the plain-path leaks of the corpus differ from KNOWN_PLAIN_LEAKS: a fixture on the \
              left only is a new plain-path leak to fix; one on the right only is fixed, so remove \
              it from the list"
+        );
+
+        // Bug caught (High: leak, card #385 exit test): a state-machine function or a dropped task
+        // whose frame release misses a heap value or a string. The corpus has no listed exception.
+        let state_machine_leaks: Vec<String> = leaks
+            .iter()
+            .filter(|outcome| outcome.class == "state-machine")
+            .map(|outcome| {
+                format!(
+                    "{} (heap {}/{}, strings {}/{})",
+                    outcome.fixture,
+                    outcome.heap.0,
+                    outcome.heap.1,
+                    outcome.strings.0,
+                    outcome.strings.1
+                )
+            })
+            .collect();
+        assert!(
+            state_machine_leaks.is_empty(),
+            "state-machine fixtures must not leak after C8; leaking: {state_machine_leaks:#?}"
         );
     }
 }

@@ -2,7 +2,7 @@
 // Heap strings: `tag.name` 1 (fresh, moved into the literal); `tag.name = `renamed`` copies the
 // literal 1 and releases the first name. The spawn copies the shape (the returned temporary still
 // holds its own `renamed`), cloning the name 1; the task's ladder releases the clone. The returned
-// temporary's `renamed` belongs to the scope-exit pass (C7). Total 3 allocated, 2 released.
+// temporary's `renamed` is released by the spawn after it copies the temporary (C8). Total 3 allocated, 3 released.
 // Expected output: the name.
 
 shape Tag {
