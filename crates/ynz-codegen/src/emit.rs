@@ -13895,6 +13895,23 @@ fn bind_sm_result_and_flush_value<'ctx>(
                     .map_err(|e| format!("bind_sm_result float store {name}: {e}"))?;
                 state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, as_i64)?;
             }
+            // A `fixed` list homed in a frame region (a crossing local that owns heap items, so its
+            // release runs after a later `wait`): the cells a callee returned are copied INTO the
+            // region, as a bind of any other `fixed` copies them (`store_binding_of_read`), and the
+            // bind makes the local live again. Without this the generic arm below stored the cells'
+            // address in the moved-flag slot: the local read back as moved, and its release as null.
+            inkwell::values::BasicValueEnum::PointerValue(cells)
+                if cg.sm_crossing_fixed_regions.contains_key(name) =>
+            {
+                let (region, bytes) = cg.sm_crossing_fixed_regions[name];
+                cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+                cg.builder
+                    .build_memmove(region, 8, cells, 8, cg.i64().const_int(bytes, false))
+                    .map_err(|err| format!("bind_sm_result fixed copy {name}: {err}"))?;
+                cg.builder
+                    .build_store(alloca, region)
+                    .map_err(|err| format!("bind_sm_result fixed store {name}: {err}"))?;
+            }
             // A `maybe` homed in a frame region: the result is copied INTO the region, as a bind of
             // any other `maybe` copies it (`store_binding_of_read`); the first slot stays its moved flag.
             inkwell::values::BasicValueEnum::PointerValue(envelope)

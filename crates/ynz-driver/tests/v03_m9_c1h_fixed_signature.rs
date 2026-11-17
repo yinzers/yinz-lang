@@ -128,3 +128,14 @@ fn a_fixed_of_strings_a_task_returns_is_received_and_released() {
 fn an_unreceived_fixed_of_strings_a_task_returns_is_released() {
     assert_fixture_balanced("v0_3_m9_c1h_fixed_handle_unreceived.ynz", "done\n");
 }
+
+// Bug: a `fixed<string>` a suspending function returned, bound to a local that is released after a
+// later `wait`, was stored as "moved" and released as a null list (High: data integrity of a value
+// that leaves its function).
+#[test]
+fn a_fixed_a_suspending_function_returns_is_released_after_a_later_wait() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1h_fixed_return_suspending_released_after_wait.ynz",
+        "A\n",
+    );
+}
