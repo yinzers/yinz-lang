@@ -14611,6 +14611,12 @@ fn collect_crossings_in_stmts(
                     value: Expr::Call(c),
                     ..
                 } if is_suspending_call(c, suspending) => Some(SuspensionSite::AtRoot),
+                // `return suspendingCall()` suspends inside the return statement; the scope-exit
+                // release at that return reads the open locals after the suspension.
+                Stmt::Return {
+                    value: Some(Expr::Call(c)),
+                    ..
+                } if is_suspending_call(c, suspending) => Some(SuspensionSite::AtRoot),
                 Stmt::If { body, .. }
                     if block_suspends_m3d(
                         body,
@@ -14883,6 +14889,13 @@ fn collect_crossings_in_stmts(
                 // Under M2 inference this lowers to the same state-machine step as an
                 // explicit `wait`, so locals declared before it must not be read after.
                 Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
+                    past_wait = true;
+                }
+                // `return suspendingCall()`: the return's own release reads the locals after the suspension.
+                Stmt::Return {
+                    value: Some(Expr::Call(c)),
+                    ..
+                } if is_suspending_call(c, suspending) => {
                     past_wait = true;
                 }
                 // v0.3-M4: bare conduit-method suspension (`ch.send(v)` / `ch.receive()`).

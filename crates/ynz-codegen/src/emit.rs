@@ -11789,7 +11789,8 @@ fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
 
         // `return suspendingCallee(args)` from a SM function — inline-poll + store return + Ready.
         Stmt::Return {
-            value: Some(inner), ..
+            value: Some(inner),
+            span: return_span,
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
             cg.refuse_unwrapped_suspending_return(inner)?;
             let return_val = emit_suspending_call_inline_poll(
@@ -11859,6 +11860,8 @@ fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
             let own_frame = cg
                 .sm_frame_ptr
                 .ok_or("sm return after inline-poll: no frame pointer")?;
+            // The returned value now sits in the return slot, so every open scope can be released.
+            cg.release_at_return(return_span)?;
             build_resume_ready_return(cg, own_frame, "sm return after inline-poll")?;
         }
 

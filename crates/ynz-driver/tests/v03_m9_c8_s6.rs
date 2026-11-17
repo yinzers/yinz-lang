@@ -821,3 +821,55 @@ fn a_local_given_to_the_parked_callee_is_released_once_by_the_callee() {
         "parent\n",
     );
 }
+
+// ── `return suspendingCall()` ───────────────────────────────────────────────────────────────
+
+/// Bug caught (High: leak, and a free of a never-written slot): `return suspendingCall()` stored the
+/// callee's result and returned Ready without releasing the open locals (`mine`, `more` leaked), and
+/// typeck's crossing scan did not count the call as a suspension, so those locals had no frame slot:
+/// the resumed state released stack slots it never wrote. The second program parks the same function
+/// in that call and drops it, so the drop entry reads the same slots.
+#[test]
+fn return_of_a_suspending_call_releases_the_open_locals() {
+    let program = "
+function inner() -> int {
+  wait sleep(1)
+  return 7
+}
+
+function mid() -> int {
+  let mine: array<int> = [4, 5]
+  let more: string = `x${mine.count()}`
+  return inner()
+}
+
+function entrypoint() -> nothing {
+  let result = mid()
+  print(`${result}`)
+}
+";
+    balanced_and_asan_clean("c8s6_return_suspending_call", program, "7\n");
+}
+
+#[test]
+fn a_task_parked_in_a_returned_suspending_call_releases_the_open_locals() {
+    let program = "
+function inner() -> int {
+  wait sleep(500)
+  return 7
+}
+
+function worker() -> int {
+  let mine: array<int> = [4, 5]
+  let more: string = `x${mine.count()}`
+  return inner()
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_return_suspending_call_parked", program, "parent\n");
+}
