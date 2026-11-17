@@ -4750,8 +4750,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             } => {
                 let cells = self.i64().array_type(fixed_cell_words(elem, count));
                 let slot = self.alloca_in_entry_llvm(cells, &format!("{site}_fixed_ret"))?;
-                self.builder
-                    .build_store(slot, val.into_array_value())
+                store_fixed_cells(&self.builder, slot, val.into_array_value())
                     .map_err(|err| format!("{site} fixed ret store: {err}"))?;
                 Ok(slot.into())
             }
@@ -9857,14 +9856,12 @@ fn lower_function_with_waits<'ctx, 'g>(
                         "ret_fixed_region",
                     )
                     .map_err(|err| format!("wrapper fixed region cast: {err}"))?;
-                let cells = builder
-                    .build_load(cells_ty, region, "ret_fixed_cells")
-                    .map_err(|err| format!("wrapper fixed load: {err}"))?;
-                cells
-                    .as_instruction_value()
-                    .ok_or("wrapper fixed load: no instruction value")?
-                    .set_alignment(8)
-                    .map_err(|err| format!("wrapper fixed load alignment: {err}"))?;
+                let cells = load_fixed_cells(&builder, cells_ty, region, "ret_fixed_cells")?;
+                // An empty list has no load to align (`load_fixed_cells` read nothing).
+                if let Some(load) = cells.as_instruction_value() {
+                    load.set_alignment(8)
+                        .map_err(|err| format!("wrapper fixed load alignment: {err}"))?;
+                }
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
                     .build_return(Some(&cells))
@@ -14600,6 +14597,44 @@ fn maybe_region_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> Opt
 /// (`MAX_FIXED_LENGTH`).
 fn fixed_cell_words(elem: &Type, count: usize) -> u32 {
     (fixed_region_bytes(elem, count) / 8) as u32
+}
+
+/// Load the cells of a `fixed` list from `region` as the by-value `[words x i64]` it travels as.
+/// A list of zero cells has no storage: its address may be a one-cell slot that holds nothing
+/// of it, so nothing is read (a zero-size access of that slot is an out-of-bounds access under
+/// AddressSanitizer) and the empty array is the value.
+///
+/// O(words) time and space: a load of the whole list.
+fn load_fixed_cells<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    cells_ty: inkwell::types::ArrayType<'ctx>,
+    region: PointerValue<'ctx>,
+    name: &str,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    if cells_ty.len() == 0 {
+        return Ok(cells_ty.const_zero().into());
+    }
+    builder
+        .build_load(cells_ty, region, name)
+        .map_err(|err| format!("{name}: {err}"))
+}
+
+/// Store a by-value `fixed` list (`[words x i64]`) into `slot`. A list of zero cells stores
+/// nothing (see `load_fixed_cells`).
+///
+/// O(words) time and space: a store of the whole list.
+fn store_fixed_cells<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    slot: PointerValue<'ctx>,
+    cells: inkwell::values::ArrayValue<'ctx>,
+) -> Result<(), String> {
+    if cells.get_type().len() == 0 {
+        return Ok(());
+    }
+    builder
+        .build_store(slot, cells)
+        .map(|_| ())
+        .map_err(|err| format!("fixed cells store: {err}"))
 }
 
 /// The bytes of a `fixed<elem>` list of `count` cells: 16 per decimal128 cell, 8 otherwise (the
@@ -21964,10 +21999,12 @@ fn lower_stmt_return<'ctx>(
                     size: FixedLength::Known(count),
                 } => {
                     let cells = cg.i64().array_type(fixed_cell_words(elem, count));
-                    let loaded = cg
-                        .builder
-                        .build_load(cells, val.into_pointer_value(), "ret_fixed_val")
-                        .map_err(|err| format!("ret fixed load: {err}"))?;
+                    let loaded = load_fixed_cells(
+                        &cg.builder,
+                        cells,
+                        val.into_pointer_value(),
+                        "ret_fixed_val",
+                    )?;
                     build_return_after_release(cg, edge, Some(&loaded), "ret fixed")?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {

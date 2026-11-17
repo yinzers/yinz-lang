@@ -158,3 +158,17 @@ fn a_fixed_of_zero_items_a_function_returns_is_asan_clean() {
         assert_asan_clean_and_prints("v0_3_m9_c1h_fixed_return_zero.ynz", no_optimize, "0\n");
     });
 }
+
+// Bug (same cause as above): the empty list a suspending function or a `background` task returns
+// travels through the suspension frame and the task handle; each of those copies is zero cells too
+// (High: memory safety at the empty boundary).
+#[test]
+fn a_fixed_of_zero_items_a_suspending_function_or_task_returns_is_asan_clean() {
+    at_both_optimization_levels(|no_optimize| {
+        assert_asan_clean_and_prints(
+            "v0_3_m9_c1h_fixed_return_zero_suspending.ynz",
+            no_optimize,
+            "0\n0\n",
+        );
+    });
+}
