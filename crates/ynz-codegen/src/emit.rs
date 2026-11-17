@@ -30278,7 +30278,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let (value_type, owns_cell) = match &resolved {
             ty if plain_word(ty) => (resolved.clone(), false),
             Type::Maybe { .. } => (resolved.clone(), true),
-            Type::ErrorsCapable { inner } if plain_word(inner) => (resolved.clone(), false),
+            // The ok word of an errors result is the payload as a stored value: a string, array or
+            // map word, a `maybe`'s counted cell (a union payload is not delivered by value, below),
+            // or a bignum's text.
+            Type::ErrorsCapable { inner }
+                if plain_word(inner)
+                    || matches!(&**inner, Type::Number { precision } if *precision > 34)
+                    || matches!(&**inner, Type::Maybe { inner: payload }
+                        if self.envelope_union_variants(payload).is_none()) =>
+            {
+                (resolved.clone(), false)
+            }
             Type::ErrorsCapable { inner }
                 if matches!(
                     **inner,

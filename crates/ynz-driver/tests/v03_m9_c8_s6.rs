@@ -1067,3 +1067,53 @@ finished_member_cases! {
     a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped: "number<40> errors",
         "  let made: number<40> = 2.5\n  return made";
 }
+
+/// Bug caught: pre-existing, a leak found by the C8 round-2 review: `handle_result_release_fn`
+/// released the unreceived completion of a task only for a string, array, map, plain `maybe` and an
+/// errors result of a plain word or scalar, so a `maybe<string> errors` (and every other result type
+/// a handle can carry that the list lacked) leaked when nobody received it. Tier Medium. One program
+/// per result type: the task finishes, the parent never receives it and frees the handle.
+fn unreceived_result_program(return_type: &str, body: &str) -> String {
+    unreceived_after_finish(&format!(
+        "shape Tiny {{
+  flag: boolean
+}}
+shape Big {{
+  label: string
+  count: int
+}}
+shape Thing = Tiny | Big
+
+function make() -> {return_type} {{
+  wait sleep(1)
+{body}
+}}"
+    ))
+}
+
+macro_rules! unreceived_result_cases {
+    ($($name:ident: $return_type:literal, $body:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = unreceived_result_program($return_type, $body);
+                balanced_and_asan_clean(stringify!($name), &source, "parent\n");
+            }
+        )+
+    };
+}
+
+unreceived_result_cases! {
+    an_unreceived_maybe_shape_result_is_released_with_the_handle: "maybe<Big>",
+        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    an_unreceived_maybe_decimal_result_is_released_with_the_handle: "maybe<number<20> >",
+        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
+    an_unreceived_maybe_string_errors_result_is_released_with_the_handle: "maybe<string> errors",
+        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
+    an_unreceived_maybe_shape_errors_result_is_released_with_the_handle: "maybe<Big> errors",
+        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle: "maybe<number<20> > errors",
+        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
+    an_unreceived_bignum_errors_result_is_released_with_the_handle: "number<40> errors",
+        "  let made: number<40> = 2.5\n  return made";
+}
