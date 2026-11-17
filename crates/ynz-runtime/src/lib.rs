@@ -5905,3 +5905,103 @@ mod release_walk_tests {
         }
     }
 }
+
+/// The drop-entry contract of `SpawnStateFnFuture` (C8 slice 6): a task retired before it returned
+/// re-enters its resume function at the complement of its `resume_point`; a task that returned, or
+/// whose resume function unwound, does not. Bug each test catches: running the entry on a returned
+/// frame frees what the function's own scope exit already freed (a double free); skipping it on a
+/// parked frame leaks every heap local. Tier: High (data integrity at the runtime/codegen seam).
+#[cfg(test)]
+mod drop_entry_contract {
+    use super::*;
+    use crate::runtime::SpawnStateFnFuture;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+    use ynz_abi::FRAME_RESUME_POINT_RETURNED;
+
+    struct NoopWaker;
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    const FRAME_BYTES: usize = 64;
+
+    /// A frame with its `resume_point` set to `resume_point`; a stub resume function records the
+    /// `resume_point` it was entered with and how often it ran.
+    unsafe fn parked_future(
+        resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
+        resume_point: i32,
+    ) -> SpawnStateFnFuture {
+        let frame = ynz_alloc_zeroed(FRAME_BYTES);
+        let future = SpawnStateFnFuture::new(
+            resume_fn,
+            frame,
+            FRAME_BYTES as i64,
+            -1,
+            std::ptr::null::<runtime::BgArgDropEntry>(),
+            0,
+        );
+        *(frame as *mut i32) = resume_point;
+        future
+    }
+
+    static PARKED_ENTERED: AtomicUsize = AtomicUsize::new(0);
+    static PARKED_RESUME_POINT: AtomicI32 = AtomicI32::new(0);
+    unsafe extern "C-unwind" fn record_parked(frame: *mut u8, waker: *mut u8) -> i32 {
+        assert!(waker.is_null(), "the drop entry runs with no waker");
+        PARKED_ENTERED.fetch_add(1, Ordering::SeqCst);
+        PARKED_RESUME_POINT.store(*(frame as *const i32), Ordering::SeqCst);
+        0
+    }
+
+    #[test]
+    fn a_parked_frame_is_entered_at_the_complement_of_its_resume_point() {
+        unsafe {
+            let before = PARKED_ENTERED.load(Ordering::SeqCst);
+            drop(parked_future(record_parked, 3));
+            assert_eq!(PARKED_ENTERED.load(Ordering::SeqCst), before + 1);
+            assert_eq!(PARKED_RESUME_POINT.load(Ordering::SeqCst), !3);
+        }
+    }
+
+    static RETURNED_ENTERED: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C-unwind" fn count_returned(_frame: *mut u8, _waker: *mut u8) -> i32 {
+        RETURNED_ENTERED.fetch_add(1, Ordering::SeqCst);
+        0
+    }
+
+    #[test]
+    fn a_returned_frame_is_not_entered() {
+        unsafe {
+            drop(parked_future(count_returned, FRAME_RESUME_POINT_RETURNED));
+            assert_eq!(RETURNED_ENTERED.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    static UNWOUND_ENTERED: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C-unwind" fn unwind_when_polled(_frame: *mut u8, waker: *mut u8) -> i32 {
+        if waker.is_null() {
+            UNWOUND_ENTERED.fetch_add(1, Ordering::SeqCst);
+            return 0;
+        }
+        panic!("the resume function unwinds mid-statement");
+    }
+
+    #[test]
+    fn a_frame_whose_resume_function_unwound_is_not_entered() {
+        unsafe {
+            let mut future = parked_future(unwind_when_polled, 2);
+            let waker = Waker::from(Arc::new(NoopWaker));
+            let mut context = Context::from_waker(&waker);
+            let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _: Poll<()> = Pin::new(&mut future).poll(&mut context);
+            }));
+            assert!(polled.is_err(), "the stub must have unwound");
+            drop(future);
+            assert_eq!(UNWOUND_ENTERED.load(Ordering::SeqCst), 0);
+        }
+    }
+}

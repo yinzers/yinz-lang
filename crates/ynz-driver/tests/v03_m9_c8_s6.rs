@@ -402,3 +402,111 @@ fn a_promoted_host_parked_at_its_cpu_join_releases_its_frame() {
         );
     });
 }
+
+// ── what a parked frame holds ────────────────────────────────────────────────────────────────
+//
+// Bug each catches: the drop entry skips a kind of frame local (its frame home differs: two slots,
+// a region behind a moved flag, a copy a statement made), so a task dropped while parked leaks it
+// or, for a moved one, frees it twice. Tier: Medium.
+
+const PARKED_HOLDERS: &str = "
+shape Big {
+  label: string
+  count: int
+}
+
+function fetchName(fail: boolean) -> string errors {
+  let status = wait __testFallibleAsync(fail)
+  return `name${status}`
+}
+
+function pickShape(index: int) -> maybe<Big> {
+  wait sleep(1)
+  let items: array<Big> = [{ label: `a`, count: 1 }]
+  let found = items.get(index)
+  return found
+}
+
+function takeShape(give kept: maybe<Big>) -> int {
+  return 1
+}
+";
+
+/// An errors-capable local (two frame slots), a `maybe<Shape>` local (a region behind a moved
+/// flag) and a `maybe` given away before the wait (its flag cleared: freeing it again is a double
+/// free), all parked in one wait.
+#[test]
+fn a_parked_task_releases_errors_and_maybe_locals_and_skips_a_given_one() {
+    let source = format!(
+        "{PARKED_HOLDERS}
+function worker() -> nothing {{
+  let name = fetchName(false)
+  let big = pickShape(0)
+  let given = pickShape(0)
+  let count = takeShape(given)
+  wait sleep(500)
+  print(name.or(`x`))
+  print(`${{count}}`)
+}}
+
+function entrypoint() -> nothing {{
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}}
+"
+    );
+    balanced_and_asan_clean("c8s6_holders", &source, "parent\n");
+}
+
+/// The copy a `for` loop makes of its variable (`hold_copy_in_frame`) is held in a frame slot of the
+/// open iteration, beside the local the iteration declares; the task is parked in the first
+/// iteration.
+#[test]
+fn a_parked_task_releases_the_loop_variable_copy_and_the_iteration_local() {
+    let source = "
+function makeNames() -> array<string> {
+  let names: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return names
+}
+
+function worker() -> nothing {
+  let names = makeNames()
+  for (label in names) {
+    let shout: string = label.toUpperCase()
+    wait sleep(500)
+    print(shout)
+  }
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_for_copies", source, "parent\n");
+}
+
+/// A `for` over a range yields at its back edge: parked between two iterations.
+#[test]
+fn a_task_parked_at_a_for_back_edge_releases_its_frame() {
+    let source = "
+function hog() -> nothing {
+  let keep: string = `k`.toUpperCase()
+  let sink = 0
+  for (outer in range(0, 2000000000)) {
+    sink = sink + outer
+  }
+  print(keep)
+  wait sleep(0)
+}
+
+function entrypoint() -> nothing {
+  background hog()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_for_back_edge", source, "parent\n");
+}
