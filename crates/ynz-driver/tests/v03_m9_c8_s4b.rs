@@ -347,3 +347,39 @@ function entrypoint() -> nothing {
 ";
     assert_source_balanced("narrowed_read_release_only", source, "250\nend\n");
 }
+
+/// Bug caught: pre-existing; errors return packed a decimal128 into a bignum ok word (wrong value,
+/// invalid free on release); tier Medium. An `errors` function declared `number<40>` returns a
+/// literal or a `number<34>`-or-narrower expression. The `return` must convert the value to the
+/// declared success type before it packs the ok word. Plain and suspending function alike.
+#[test]
+fn a_number_40_errors_return_of_a_narrower_value_is_converted_to_the_declared_type() {
+    for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
+        let source = format!(
+            "function literal() -> number<40> errors {{
+  {wait_line}
+  return 2.5
+}}
+
+function expression(n: int) -> number<40> errors {{
+  {wait_line}
+  let small: number<20> = 1.25
+  return small + small
+}}
+
+function entrypoint() -> nothing {{
+  let fallback: number<40> = 0.5
+  let first = literal()
+  print(first.or(fallback))
+  let second = expression(1)
+  print(second.or(fallback))
+}}
+"
+        );
+        assert_source_balanced(
+            &format!("number_40_errors_return_{suspending}"),
+            &source,
+            "2.5\n2.50\n",
+        );
+    }
+}

@@ -20582,6 +20582,12 @@ fn lower_stmt_return<'ctx>(
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
                 let val = own_returned_value(cg, expr, val, "sm_return_str")?;
+                let (val, val_ty) = match &ret_ty {
+                    Type::ErrorsCapable { inner } => {
+                        convert_to_declared_success_number(cg, val, val_ty, inner)?
+                    }
+                    _ => (val, val_ty),
+                };
                 // C1f (#423): an `errors` function whose success value is an envelope union
                 // writes the slot, payload inline, into its frame's `Return` region and puts the
                 // region's address in the result's ok word (`ec_region_to_standard` reads it).
@@ -21178,6 +21184,9 @@ fn lower_stmt_return<'ctx>(
                     _ => None,
                 };
                 let val = own_returned_value(cg, expr, val, "ec_return_str")?;
+                let declared_success = cg.current_fn_ret_ty.clone();
+                let (val, val_ty) =
+                    convert_to_declared_success_number(cg, val, val_ty, &declared_success)?;
                 // C1f (#423): an envelope union success value returns BY VALUE as the result's
                 // slot (`ec_result_type`), payload inline, so neither this frame's envelope nor a
                 // payload in this frame is read after `ret`. An `errors` value (a call result or
@@ -21714,6 +21723,36 @@ fn own_string_for_store<'ctx>(
     }
     let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
     Ok(copied)
+}
+
+/// An `errors` function declared `-> number<N> errors` with N > 34 (`declared_success` is the
+/// `number<N>`) packs a bignum (an owned text) in its ok word, whatever width the returned value was typed at: a literal or an expression of 34
+/// digits or fewer is a decimal128 cell (typeck keeps the literal's own width under an `errors`
+/// return), and packing that cell as the ok word reads a decimal as text, then frees it as a string.
+/// This converts such a value to the declared bignum, the one conversion `coerce_to_bignum_pair`
+/// uses, and returns the value and its type unchanged for every other pair.
+///
+/// Time: O(1) in the compiler, the conversion is O(digits) at run time. Space: one fresh string.
+fn convert_to_declared_success_number<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    val_ty: Type,
+    declared_success: &Type,
+) -> Result<(BasicValueEnum<'ctx>, Type), String> {
+    let declared_success = cg.resolve_type(declared_success);
+    let widens_to_bignum = matches!(declared_success, Type::Number { precision } if precision > 34)
+        && matches!(val_ty, Type::Number { precision } if precision <= 34);
+    if !widens_to_bignum {
+        return Ok((val, val_ty));
+    }
+    let text = cg
+        .builder
+        .build_call(cg.rt.decimal_to_string, &[val.into()], "ec_ret_dec2str")
+        .map_err(|err| format!("ec return decimal to bignum: {err}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+    Ok((text, declared_success))
 }
 
 /// The value a `return` hands its caller: a function returns an owned string, array, map or shape
