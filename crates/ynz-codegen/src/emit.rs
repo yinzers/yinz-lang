@@ -21805,8 +21805,8 @@ fn own_string_for_store<'ctx>(
 /// whatever width the returned value was typed at: a literal or an expression of 34 digits or fewer
 /// is a decimal128 cell (typeck keeps a literal's own width under an `errors` return, and a narrower
 /// local is narrower), and handing that cell over reads a decimal as text, then frees it as a string.
-/// This converts such a value to the declared bignum, the one conversion `coerce_to_bignum_pair`
-/// uses, and returns the value and its type unchanged for every other pair.
+/// This converts such a value to the declared bignum through `decimal_to_bignum_text`, the emission
+/// `coerce_to_bignum_pair` shares, and returns the value and its type unchanged for every other pair.
 ///
 /// Time: O(1) in the compiler, the conversion is O(digits) at run time. Space: one fresh string.
 fn convert_to_declared_success_number<'ctx>(
@@ -21821,13 +21821,7 @@ fn convert_to_declared_success_number<'ctx>(
     if !widens_to_bignum {
         return Ok((val, val_ty));
     }
-    let text = cg
-        .builder
-        .build_call(cg.rt.decimal_to_string, &[val.into()], "ec_ret_dec2str")
-        .map_err(|err| format!("ec return decimal to bignum: {err}"))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+    let text = decimal_to_bignum_text(cg, val, "ec_ret_dec2str")?;
     Ok((text, declared_success))
 }
 
@@ -24133,7 +24127,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         && cg.plain_releases_type(&resolved)
     {
         release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
-    } else if let Some(form) = bg_maybe_original_release_form(cg, arg, sole_holder, &resolved) {
+    } else if let Some(form) = bg_maybe_original_release_form(arg, sole_holder, &resolved) {
         // A `maybe` the task got a copy of (a counted envelope cell, `MaybeCellClone`): the original
         // is a binding the spawn consumed (released as its scope exit would, `Local`); nothing else
         // releases it.
@@ -24160,7 +24154,6 @@ fn prepare_bg_arg_for_ctx<'ctx>(
 ///
 /// Time: O(1)  Space: O(1)
 fn bg_maybe_original_release_form(
-    cg: &Cg<'_, '_>,
     arg: &ynz_ast::nodes::Expr,
     sole_holder: Option<ynz_typeck::check::SoleHolder>,
     resolved: &Type,
@@ -25284,6 +25277,24 @@ fn lower_sm_background_spawn<'ctx>(
     Ok(cg.i32().const_int(0, false).into())
 }
 
+/// The bignum text (an owned, heap-allocated C string) of a decimal128 value: the one emission of
+/// the conversion a `number<=34>` needs wherever a bignum (`number<N>`, N > 34) is expected, shared
+/// by `coerce_to_bignum_pair` and `convert_to_declared_success_number`.
+///
+/// O(1) time in the compiler, O(digits) at run time. Space: one fresh string.
+fn decimal_to_bignum_text<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    decimal: BasicValueEnum<'ctx>,
+    label: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    cg.builder
+        .build_call(cg.rt.decimal_to_string, &[decimal.into()], label)
+        .map_err(|err| format!("decimal to bignum text {label}: {err}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| "decimal_to_string returned void".to_string())
+}
+
 /// Coerce a decimal128 (N≤34) operand to a bignum C-string when the other side is
 /// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed, and the
 /// strings the coercion allocated: the caller releases them once the operation has read them.
@@ -25308,28 +25319,14 @@ fn coerce_to_bignum_pair<'ctx>(
     }
     let mut converted = Vec::new();
     let lhs2 = if matches!(lhs_ty, Type::Number { precision } if *precision <= 34) {
-        let s = cg
-            .builder
-            .build_call(cg.rt.decimal_to_string, &[lhs.into()], "lhs_dec2str")
-            .map_err(|e| format!("{e}"))?;
-        let text = s
-            .try_as_basic_value()
-            .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        let text = decimal_to_bignum_text(cg, lhs, "lhs_dec2str")?;
         converted.push(text.into_pointer_value());
         text
     } else {
         lhs
     };
     let rhs2 = if matches!(rhs_ty, Type::Number { precision } if *precision <= 34) {
-        let s = cg
-            .builder
-            .build_call(cg.rt.decimal_to_string, &[rhs.into()], "rhs_dec2str")
-            .map_err(|e| format!("{e}"))?;
-        let text = s
-            .try_as_basic_value()
-            .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        let text = decimal_to_bignum_text(cg, rhs, "rhs_dec2str")?;
         converted.push(text.into_pointer_value());
         text
     } else {
@@ -30535,8 +30532,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             ty if plain_word(ty) => (resolved.clone(), false),
             Type::Maybe { .. } => (resolved.clone(), true),
             // The ok word of an errors result is the payload as a stored value: a string, array or
-            // map word, a `maybe`'s counted cell (a union payload is not delivered by value, below),
-            // or a bignum's text.
+            // map word, a `maybe`'s counted cell, or a bignum's text. An errors result of a `maybe` of
+            // a union has no arm: the `_` arm declines it, so it is not released (IMP-ownership.md).
             Type::ErrorsCapable { inner }
                 if plain_word(inner)
                     || matches!(&**inner, Type::Number { precision } if *precision > 34)
