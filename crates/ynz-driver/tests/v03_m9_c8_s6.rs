@@ -1117,3 +1117,151 @@ unreceived_result_cases! {
     an_unreceived_bignum_errors_result_is_released_with_the_handle: "number<40> errors",
         "  let made: number<40> = 2.5\n  return made";
 }
+
+// ── a union a task returns through its handle ───────────────────────────────────────────────
+//
+// Bug caught: pre-existing (wrong value on main @ e730851, use-after-free from C7 on): the
+// completion word of a union result was the address of the union's region INSIDE the finished
+// child's frame, which is freed right after, so a received union was read from freed memory and an
+// unreceived one could not be released. Tier High (a use-after-free on a data path). The spawn
+// wrapper now hands the handle a move of the slot into one cell of its own; the receive side takes
+// that cell, an unreceived result is released through the one union release.
+
+fn union_handle_program(return_type: &str, receive_lines: &str) -> String {
+    format!(
+        "shape Tiny {{
+  flag: boolean
+}}
+shape Big {{
+  label: string
+  count: int
+}}
+shape Thing = Tiny | Big
+
+function make() -> {return_type} {{
+  wait sleep(1)
+  let big: Big = {{ label: `abc`.toUpperCase(), count: 7 }}
+  return big
+}}
+
+function entrypoint() -> nothing {{
+  let pending = background make()
+  wait sleep(50)
+{receive_lines}
+}}
+"
+    )
+}
+
+const RECEIVE_AND_NARROW: &str = "  let got = pending.receive()
+  let spare: Tiny = { flag: true }
+  let fallback: Thing = spare
+  let value = got.or(fallback)
+  if (value) {
+    is Big => {
+      print(value.label)
+      print(value.count)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }";
+
+const RECEIVE_AND_CHECK: &str = "  let got = pending.receive()
+  print(got.failed())";
+
+const NEVER_RECEIVE: &str = "  print(`parent`)";
+
+macro_rules! union_handle_cases {
+    ($($name:ident: $return_type:literal, $receive:expr, $expected:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = union_handle_program($return_type, $receive);
+                balanced_and_asan_clean(stringify!($name), &source, $expected);
+            }
+        )+
+    };
+}
+
+union_handle_cases! {
+    a_union_a_task_returns_is_received_and_narrowed_once: "Thing", RECEIVE_AND_NARROW, "ABC\n7\n";
+    a_union_errors_a_task_returns_is_received_and_narrowed_once: "Thing errors", RECEIVE_AND_NARROW, "ABC\n7\n";
+    a_union_a_task_returns_is_received_without_narrowing_and_released_once: "Thing", RECEIVE_AND_CHECK, "false\n";
+    a_union_errors_a_task_returns_is_received_without_narrowing_and_released_once: "Thing errors", RECEIVE_AND_CHECK, "false\n";
+    an_unreceived_union_result_is_released_with_the_handle: "Thing", NEVER_RECEIVE, "parent\n";
+    an_unreceived_union_errors_result_is_released_with_the_handle: "Thing errors", NEVER_RECEIVE, "parent\n";
+}
+
+/// The embedded call keeps the frame-region form: a union a suspending callee returns to a plain
+/// call site is read from the callee's region before its frame is freed, as before.
+#[test]
+fn a_union_an_embedded_suspending_call_returns_is_unchanged() {
+    let source = "shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function make() -> Thing {
+  wait sleep(1)
+  let big: Big = { label: `abc`.toUpperCase(), count: 7 }
+  return big
+}
+
+function entrypoint() -> nothing {
+  let value = make()
+  if (value) {
+    is Big => {
+      print(value.label)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }
+}
+";
+    balanced_and_asan_clean("c8s6_embedded_union", source, "ABC\n");
+}
+
+/// The failing `-> Thing errors` task: no cell exists (the move glue leaves `ok` 0), the error
+/// object is received or released, and nothing is freed twice.
+#[test]
+fn a_failed_union_errors_task_delivers_its_error_and_no_cell() {
+    for (name, receive, expected) in [
+        (
+            "received",
+            "  let got = pending.receive()\n  print(got.failed())",
+            "true\n",
+        ),
+        ("unreceived", "  print(`parent`)", "parent\n"),
+    ] {
+        let source = format!(
+            "shape Tiny {{
+  flag: boolean
+}}
+shape Big {{
+  label: string
+  count: int
+}}
+shape Thing = Tiny | Big
+
+function make() -> Thing errors {{
+  let status = wait __testFallibleAsync(true)
+  let tiny: Tiny = {{ flag: status == 42 }}
+  return tiny
+}}
+
+function entrypoint() -> nothing {{
+  let pending = background make()
+  wait sleep(50)
+{receive}
+}}
+"
+        );
+        balanced_and_asan_clean(&format!("c8s6_failed_union_{name}"), &source, expected);
+    }
+}

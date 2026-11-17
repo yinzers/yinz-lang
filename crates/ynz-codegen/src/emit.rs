@@ -18019,6 +18019,8 @@ fn lower_let_background_handle<'ctx>(
     // heap cell already (`maybe_to_heap_cell` at the return) and stays `EC_WORD`. The word
     // types are listed by name so a future aggregate return cannot fall through silently.
     let ret_kind = match &sig_ret {
+        // A union rides a cell the spawn wrapper moves it into (`handle_union_move_fn`).
+        ret if cg.handle_union_variants(ret).is_some() => ynz_abi::HANDLE_RET_KIND_UNION,
         Type::ErrorsCapable { inner } => match inner.as_ref() {
             Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_EC_NUMBER,
             t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_EC_HEAP_PTR,
@@ -18711,6 +18713,49 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                 (&o2, ready2_bb),
                 (&zero, closed2_bb),
             ]);
+            // A union result arrives as the cell the spawn wrapper moved it into (`HANDLE_RET_KIND_UNION`):
+            // copy the slot into one the binding owns, as a call result's region is copied, then
+            // free the cell's shell (its contents moved into the binding's slot).
+            if let Type::BackgroundHandle { result, .. } = cg.expr_type(receiver) {
+                if let Some(variants) = cg.handle_union_variants(&result) {
+                    let err = err_phi.as_basic_value().into_int_value();
+                    let cell_bits = ok_phi.as_basic_value().into_int_value();
+                    let standard =
+                        cg.ec_region_to_standard(err, cell_bits, &variants, false, "hrecv_union")?;
+                    let slot_size = cg.union_layout(&variants)?.slot_size;
+                    let free_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_free_cell");
+                    let after_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_done");
+                    let has_cell = cg
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            cell_bits,
+                            i64t.const_zero(),
+                            "hrecv_union_has_cell",
+                        )
+                        .map_err(|e| format!("hrecv union cell cmp: {e}"))?;
+                    cg.builder
+                        .build_conditional_branch(has_cell, free_bb, after_bb)
+                        .map_err(|e| format!("hrecv union cell branch: {e}"))?;
+                    cg.builder.position_at_end(free_bb);
+                    let cell = cg
+                        .builder
+                        .build_int_to_ptr(cell_bits, cg.ptr(), "hrecv_union_cell")
+                        .map_err(|e| format!("hrecv union cell ptr: {e}"))?;
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_free,
+                            &[cell.into(), i64t.const_int(slot_size, false).into()],
+                            "",
+                        )
+                        .map_err(|e| format!("hrecv union cell free: {e}"))?;
+                    cg.builder
+                        .build_unconditional_branch(after_bb)
+                        .map_err(|e| format!("hrecv union cell join: {e}"))?;
+                    cg.builder.position_at_end(after_bb);
+                    return Ok(standard.into());
+                }
+            }
             let st = ctx.struct_type(&[i64t.into(), i64t.into()], false);
             let mut r = st.const_zero();
             r = cg
@@ -25214,6 +25259,18 @@ fn lower_sm_background_spawn<'ctx>(
                     .const_null()
                     .into(),
             };
+        let result_move_val: inkwell::values::BasicMetadataValueEnum =
+            if ret_kind == ynz_abi::HANDLE_RET_KIND_UNION as u64 {
+                cg.handle_union_move_fn(&callee_return)?
+                    .as_global_value()
+                    .as_pointer_value()
+                    .into()
+            } else {
+                cg.ctx
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .const_null()
+                    .into()
+            };
         let handle = cg
             .builder
             .build_call(
@@ -25228,6 +25285,7 @@ fn lower_sm_background_spawn<'ctx>(
                     ret_kind_val.into(),
                     msg_chan_val,
                     result_release_val,
+                    result_move_val,
                 ],
                 "sm_spawn_handle",
             )
@@ -30263,6 +30321,227 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
+    /// The variants of the envelope union a handle task returns (`-> Thing` or `-> Thing errors`),
+    /// `None` for any other result type.
+    ///
+    /// Time: O(v)  Space: O(v)
+    fn handle_union_variants(&self, ret: &Type) -> Option<Vec<Type>> {
+        let resolved = self.resolve_type(ret);
+        let success = match &resolved {
+            Type::ErrorsCapable { inner } => self.resolve_type(inner),
+            other => other.clone(),
+        };
+        self.envelope_union_variants(&success)
+    }
+
+    /// The function `void(ptr slot, ptr err_out, ptr ok_out)` that moves a union result out of the
+    /// finished child's return slot into one cell of its own (`HANDLE_RET_KIND_UNION`): the
+    /// slot holds the address of the union's region in the child's frame, which dies right after
+    /// the completion is read. The cell is the completion's `ok`; a failed task has none (0). It is
+    /// a MOVE, one `memcpy` of the union slot (`union_layout`): the region owns the value's boxes
+    /// and the frame is never read again, so a deep copy (`union_persist_into` of an unmoved view)
+    /// would leave the originals with no owner.
+    ///
+    /// One function per result type. Time: O(1) to emit; O(slot size) at run time  Space: O(1)
+    fn handle_union_move_fn(&self, ret: &Type) -> Result<FunctionValue<'ctx>, String> {
+        let resolved = self.resolve_type(ret);
+        let variants = self
+            .handle_union_variants(&resolved)
+            .ok_or("internal: a union handle move for a result that is not a union")?;
+        let slot_size = self.union_layout(&variants)?.slot_size;
+        let name = format!("ynz_handle_move_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let move_fn = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(
+                &[self.ptr().into(), self.ptr().into(), self.ptr().into()],
+                false,
+            ),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(move_fn, "entry");
+        let move_bb = self.ctx.append_basic_block(move_fn, "move");
+        let done_bb = self.ctx.append_basic_block(move_fn, "done");
+        self.builder.position_at_end(entry);
+        let param = |index: u32| -> Result<PointerValue<'ctx>, String> {
+            Ok(move_fn
+                .get_nth_param(index)
+                .ok_or("handle union move: missing parameter")?
+                .into_pointer_value())
+        };
+        let (slot, err_out, ok_out) = (param(0)?, param(1)?, param(2)?);
+        let is_errors = matches!(resolved, Type::ErrorsCapable { .. });
+        let word = |offset: u64, label: &str| -> Result<inkwell::values::IntValue<'ctx>, String> {
+            // SAFETY: the return slot is 16 bytes (`FRAME_OFFSET_RETURN_SLOT`).
+            let address = unsafe {
+                self.builder
+                    .build_gep(
+                        self.ctx.i8_type(),
+                        slot,
+                        &[self.i64().const_int(offset, false)],
+                        label,
+                    )
+                    .map_err(|e| format!("handle union move gep {label}: {e}"))?
+            };
+            Ok(self
+                .builder
+                .build_load(self.i64(), address, label)
+                .map_err(|e| format!("handle union move load {label}: {e}"))?
+                .into_int_value())
+        };
+        let (err, region_bits) = if is_errors {
+            (word(0, "move_err")?, word(8, "move_region")?)
+        } else {
+            (self.i64().const_zero(), word(0, "move_region")?)
+        };
+        self.builder
+            .build_store(err_out, err)
+            .map_err(|e| format!("handle union move err store: {e}"))?;
+        self.builder
+            .build_store(ok_out, self.i64().const_zero())
+            .map_err(|e| format!("handle union move ok init: {e}"))?;
+        let succeeded = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                "move_succeeded",
+            )
+            .map_err(|e| format!("handle union move cmp: {e}"))?;
+        self.builder
+            .build_conditional_branch(succeeded, move_bb, done_bb)
+            .map_err(|e| format!("handle union move branch: {e}"))?;
+        self.builder.position_at_end(move_bb);
+        let cell = self.heap_cell(self.i64().const_int(slot_size, false), "handle_union")?;
+        let region = self
+            .builder
+            .build_int_to_ptr(region_bits, self.ptr(), "move_region_ptr")
+            .map_err(|e| format!("handle union move region: {e}"))?;
+        self.builder
+            .build_memcpy(cell, 1, region, 1, self.i64().const_int(slot_size, false))
+            .map_err(|e| format!("handle union move copy: {e}"))?;
+        let cell_bits = self
+            .builder
+            .build_ptr_to_int(cell, self.i64(), "move_cell_bits")
+            .map_err(|e| format!("handle union move cell bits: {e}"))?;
+        self.builder
+            .build_store(ok_out, cell_bits)
+            .map_err(|e| format!("handle union move ok store: {e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("handle union move join: {e}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_return(None)
+            .map_err(|e| format!("handle union move return: {e}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(move_fn)
+    }
+
+    /// `handle_result_release_fn` for a union result: the completion's `ok` is the cell
+    /// `handle_union_move_fn` moved the union into, released through the union's own release
+    /// (`release_fn` in its cell form: the variant's contents, then the cell); the error object
+    /// of a failed `errors` completion is dropped instead.
+    ///
+    /// Time: O(1) to emit  Space: O(1)
+    fn handle_union_release_fn(&self, ret: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let resolved = self.resolve_type(ret);
+        let success = match &resolved {
+            Type::ErrorsCapable { inner } => self.resolve_type(inner),
+            other => other.clone(),
+        };
+        let Some(glue) = self.release_fn(&success, true)? else {
+            return Ok(None);
+        };
+        let name = format!("ynz_handle_result_release_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx
+                .void_type()
+                .fn_type(&[self.i64().into(), self.i64().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        let failed_bb = self.ctx.append_basic_block(release, "failed");
+        let ok_bb = self.ctx.append_basic_block(release, "ok");
+        let release_bb = self.ctx.append_basic_block(release, "release");
+        let done_bb = self.ctx.append_basic_block(release, "done");
+        self.builder.position_at_end(entry);
+        let error_bits = release
+            .get_nth_param(0)
+            .ok_or("handle union release: missing err")?
+            .into_int_value();
+        let ok_bits = release
+            .get_nth_param(1)
+            .ok_or("handle union release: missing ok")?
+            .into_int_value();
+        let failed = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                error_bits,
+                self.i64().const_zero(),
+                "completion_failed",
+            )
+            .map_err(|e| format!("handle union release cmp: {e}"))?;
+        self.builder
+            .build_conditional_branch(failed, failed_bb, ok_bb)
+            .map_err(|e| format!("handle union release branch: {e}"))?;
+        self.builder.position_at_end(failed_bb);
+        let error_object = self
+            .builder
+            .build_int_to_ptr(error_bits, self.ptr(), "completion_error")
+            .map_err(|e| format!("handle union release error: {e}"))?;
+        self.builder
+            .build_call(self.rt.ynz_error_drop, &[error_object.into()], "")
+            .map_err(|e| format!("handle union release error drop: {e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("handle union release failed join: {e}"))?;
+        self.builder.position_at_end(ok_bb);
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                ok_bits,
+                self.i64().const_zero(),
+                "completion_present",
+            )
+            .map_err(|e| format!("handle union release present: {e}"))?;
+        self.builder
+            .build_conditional_branch(present, release_bb, done_bb)
+            .map_err(|e| format!("handle union release ok branch: {e}"))?;
+        self.builder.position_at_end(release_bb);
+        let cell = self
+            .builder
+            .build_int_to_ptr(ok_bits, self.ptr(), "completion_cell")
+            .map_err(|e| format!("handle union release cell: {e}"))?;
+        self.builder
+            .build_call(glue, &[cell.into()], "")
+            .map_err(|e| format!("handle union release call: {e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("handle union release join: {e}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_return(None)
+            .map_err(|e| format!("handle union release return: {e}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
+
     /// The function `void(i64 err, i64 ok)` that releases the heap a completion of a background task
     /// owns, when nobody received it (`ynz_rt_spawn_handle`'s `result_release`): the completion
     /// `(err, ok)` is what the task returned through its handle's outbox, so the release is the
@@ -30273,6 +30552,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// O(1) time to emit, once per return type.
     fn handle_result_release_fn(&self, ret: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
         let resolved = self.resolve_type(ret);
+        if self.handle_union_variants(&resolved).is_some() {
+            return self.handle_union_release_fn(&resolved);
+        }
         let plain_word = |ty: &Type| {
             matches!(
                 ty,

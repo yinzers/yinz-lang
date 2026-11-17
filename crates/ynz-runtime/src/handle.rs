@@ -98,6 +98,7 @@ use crate::channel::{CHANNEL_CLOSED, CHANNEL_PENDING, CHANNEL_READY};
 pub use ynz_abi::{
     HANDLE_RET_KIND_EC_HEAP_PTR as RET_KIND_EC_HEAP_PTR,
     HANDLE_RET_KIND_EC_NUMBER as RET_KIND_EC_NUMBER, HANDLE_RET_KIND_EC_WORD as RET_KIND_EC_WORD,
+    HANDLE_RET_KIND_UNION as RET_KIND_UNION,
     HANDLE_RET_KIND_VALUE_HEAP_PTR as RET_KIND_VALUE_HEAP_PTR,
     HANDLE_RET_KIND_VALUE_MAYBE as RET_KIND_VALUE_MAYBE,
     HANDLE_RET_KIND_VALUE_NUMBER as RET_KIND_VALUE_NUMBER,
@@ -112,6 +113,9 @@ struct HandleShared {
     /// nobody received: one left in the outbox when the handle is freed, or one the finished task
     /// could not deliver because the handle was already gone (C8 slice 6).
     result_release: Option<unsafe extern "C" fn(i64, i64)>,
+    /// Moves a union result out of the finished frame into a cell of its own: `(return slot, err out,
+    /// ok out)`. Present exactly when the kind is `RET_KIND_UNION`.
+    result_move: Option<unsafe extern "C" fn(*const u8, *mut i64, *mut i64)>,
     /// The 16-byte heap buffer holding a copied wide ok-value (`number` cases). `None` until
     /// the child completes with one; freed exactly once at handle drop via `Option::take`.
     ok_buf: Mutex<Option<Box<[u8; 16]>>>,
@@ -283,6 +287,14 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
             *lock_or_recover(&shared.ok_buf) = Some(buf);
             (0, ok)
         }
+        RET_KIND_UNION => {
+            let move_out = shared
+                .result_move
+                .expect("a union completion needs the move glue the spawn site passes");
+            let (mut err, mut ok) = (0_i64, 0_i64);
+            move_out(slot as *const u8, &mut err, &mut ok);
+            (err, ok)
+        }
         RET_KIND_VALUE_MAYBE => {
             // The return slot holds a plain `maybe<T>`'s `{flag, bits}` envelope pair inline. The
             // parent OWNS what it receives (it releases the envelope cell and the payload it holds
@@ -307,6 +319,8 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
 /// `ret_kind` — completion-extraction kind (see `RET_KIND_*`).
 /// `result_release` — releases the heap of a completion nobody received (`void(err, ok)`), or null
 ///   when the callee's result owns none.
+/// `result_move` — moves a union result out of the finished frame (`void(slot, *err, *ok)`), or null;
+///   non-null exactly for `RET_KIND_UNION`.
 /// `msg_chan` — the child's first `channel<T>` argument (the `.send()` conduit), or null.
 ///   The handle takes its OWN refcounted reference (the child's arg reference is separate,
 ///   released by the arg-drop machinery).
@@ -318,6 +332,8 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
 /// # Safety
 /// Same contract as `ynz_rt_spawn` for `resume_fn`/`frame_ptr`/`arg_drop_ptr`; `msg_chan`
 /// must be null or a live channel pointer.
+/// `result_move` — moves a union result out of the finished frame (`void(slot, *err, *ok)`), or null;
+///   non-null exactly for `RET_KIND_UNION`.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_rt_spawn_handle(
     resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
@@ -329,6 +345,7 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
     ret_kind: i64,
     msg_chan: *mut u8,
     result_release: *const u8,
+    result_move: *const u8,
 ) -> *mut u8 {
     // Bounded outbox (stdlib Rule 4): sized for the single completion delivery plus headroom
     // for the future child-side message-reply surface (the locked default capacity).
@@ -342,6 +359,15 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
                 *const u8,
                 unsafe extern "C" fn(i64, i64),
             >(result_release))
+        },
+        result_move: if result_move.is_null() {
+            None
+        } else {
+            // SAFETY: codegen passes null or the address of a `void(ptr, ptr, ptr)` function.
+            Some(std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(*const u8, *mut i64, *mut i64),
+            >(result_move))
         },
         ok_buf: Mutex::new(None),
         recv_waiters: Mutex::new(Vec::new()),
@@ -573,6 +599,7 @@ mod tests {
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
                 std::ptr::null(),
+                std::ptr::null(),
             );
             // Drive the runtime so the spawned task completes.
             rt.block_on(async { tokio::task::yield_now().await });
@@ -617,6 +644,7 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
                 std::ptr::null(),
             );
             rt.block_on(async { tokio::task::yield_now().await });
@@ -667,6 +695,7 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 chan,
+                std::ptr::null(),
                 std::ptr::null(),
             );
             assert_eq!(ynz_handle_send_poll(h, 111, cx_ptr), CHANNEL_PENDING);
@@ -741,6 +770,7 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
                 std::ptr::null(),
             );
             rt.block_on(async { tokio::task::yield_now().await });
@@ -827,6 +857,7 @@ mod tests {
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
                 std::ptr::null(),
+                std::ptr::null(),
             );
             // The child is scheduled but NOT yet driven — the outbox is empty, so the
             // parent's first poll takes the Pending path (the registration under test).
@@ -901,6 +932,7 @@ mod tests {
                 0,
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
                 std::ptr::null(),
             );
             let probe = HandleOrderProbe {
