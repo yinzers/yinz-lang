@@ -873,6 +873,9 @@ fn ast_type_short_name(ty: &AstType) -> String {
         AstType::Bool => "boolean".to_string(),
         AstType::Named(n, _) => n.clone(),
         AstType::Nothing => "nothing".to_string(),
+        // The length of `fixed<T, N>` is part of the type: `{ a: fixed<int, 2> }` and
+        // `{ a: fixed<int, 3> }` are different shapes.
+        AstType::Length { value, .. } => value.to_string(),
         AstType::Maybe { inner, .. } => format!("maybe_{}", ast_type_short_name(inner)),
         AstType::Generic { name, args, .. } => {
             let arg_str: Vec<_> = args.iter().map(ast_type_short_name).collect();

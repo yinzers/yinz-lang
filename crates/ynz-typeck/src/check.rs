@@ -1932,6 +1932,10 @@ impl<'b> Checker<'b> {
             return;
         }
 
+        for param in &f.params {
+            self.check_inline_shape_fields(&param.ty);
+        }
+        self.check_inline_shape_fields(&f.return_type);
         if !f.generics.is_empty() {
             self.check_generic_function_body(f);
             return;
@@ -3505,6 +3509,9 @@ impl<'b> Checker<'b> {
         // root positions for suspending conduit-method calls.
         self.record_conduit_root(value);
 
+        if let Some(annotation) = annotation {
+            self.check_inline_shape_fields(annotation);
+        }
         self.fixed_length_site = "on a local variable";
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
         self.fixed_length_site = "here";

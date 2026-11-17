@@ -101,6 +101,6 @@ fn a_fixed_field_survives_the_struct_of_arrays_layout() {
 fn inline_shapes_with_different_list_lengths_are_different_types() {
     assert_fixture_balanced_and_asan_clean(
         "v0_3_m9_c1h_fixed_field_inline_shape.ynz",
-        "2\n3\n5\n9\nP\n",
+        "2\n3\n9\nP\n",
     );
 }

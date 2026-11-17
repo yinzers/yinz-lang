@@ -251,6 +251,35 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// The field rules for every inline shape written in `ast_ty` (a `let` annotation, a parameter
+    /// or return type): an inline shape is a shape, so a `fixed<T, N>` field is stored by value and
+    /// a `fixed<T>` field is refused. The inline shapes inside a field's type are checked by the
+    /// field walk itself. O(size of the type).
+    pub(super) fn check_inline_shape_fields(&mut self, ast_ty: &AstType) {
+        match ast_ty {
+            AstType::AnonShape { fields, .. } => {
+                let inline_shape = render_ast_type(ast_ty);
+                for field in fields {
+                    self.check_shape_field_type(&inline_shape, &field.name, &field.ty);
+                }
+            }
+            AstType::Generic { args, .. } => {
+                for argument in args {
+                    self.check_inline_shape_fields(argument);
+                }
+            }
+            AstType::Maybe { inner, .. }
+            | AstType::ErrorCapable { inner, .. }
+            | AstType::Sensitive(inner) => self.check_inline_shape_fields(inner),
+            AstType::Union { variants, .. } => {
+                for variant in variants {
+                    self.check_inline_shape_fields(variant);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// A length written inside the type of a shape field, where none is allowed (everything but
     /// the whole field type). Walks the whole written type. O(size of the type).
     fn report_lengths_in_nested_field_type(&mut self, ast_ty: &AstType) {
