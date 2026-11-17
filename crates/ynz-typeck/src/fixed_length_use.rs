@@ -71,6 +71,7 @@ impl<'a> LengthUses<'a> {
         answer
     }
 
+    /// O(size of the function body, plus the bodies it hands the list to).
     fn compute(&self, function: &str, index: usize) -> bool {
         let (Some(declaration), Some(signature)) = (
             self.functions.get(function),
@@ -126,6 +127,7 @@ struct Uses<'a, 'b> {
 }
 
 impl Uses<'_, '_> {
+    /// O(statements in the block, each walked once).
     fn statements(&mut self, statements: &[Stmt]) {
         for statement in statements {
             if self.needed {
@@ -225,6 +227,7 @@ impl Uses<'_, '_> {
         }
     }
 
+    /// O(nodes in the expression, plus the callee bodies `argument` follows).
     fn expr(&mut self, expr: &Expr) {
         if self.needed {
             return;

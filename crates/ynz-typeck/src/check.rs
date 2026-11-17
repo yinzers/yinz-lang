@@ -1034,6 +1034,9 @@ impl TypedModule {
 /// Returns the typed module, monomorphization table, accumulated diagnostics, and the
 /// set of names that were resolved from the signature table or shape table during the
 /// check pass. The caller (`check_query`) uses this to detect unused imports.
+///
+/// O(passes x one body check): one pass, plus at most one more per function whose `fixed` return
+/// length is not written (see the loop below).
 // Each argument is a distinct, required compiler table (signatures, shapes, generics,
 // intrinsics, imported options, imported fn names); they don't bundle into a meaningful
 // context type for a single-call-site entry point. Matches the convention used across
@@ -9616,13 +9619,16 @@ impl<'b> Checker<'b> {
                 if name == "fixed" {
                     return self.resolve_written_fixed(ast_ty, args, span, at_signature_top);
                 }
-                if args.iter().any(|a| matches!(a, AstType::Length { .. })) {
+                if args
+                    .iter()
+                    .any(|argument| matches!(argument, AstType::Length { .. }))
+                {
                     self.report_length_on_other_generic(ast_ty, name, args, span);
                 }
                 let resolved_args: Vec<Type> = args
                     .iter()
-                    .filter(|a| !matches!(a, AstType::Length { .. }))
-                    .map(|a| self.ast_type_to_type(a))
+                    .filter(|argument| !matches!(argument, AstType::Length { .. }))
+                    .map(|argument| self.ast_type_to_type(argument))
                     .collect();
                 // The arms below fill a missing argument with `Error`. Report it here: callers
                 // skip their checks on a type holding an `Error` as already reported (`channel`
