@@ -10559,23 +10559,22 @@ fn register_drop_state<'ctx, 'g>(
 
 /// The type of the heap value the suspending callee `callee_name` hands back through its return
 /// slot, when the group's drop state must release it (`DropMember::returned_value`): a string,
-/// array or map; a `maybe` of a string, flat shape or decimal; an envelope union; or an
-/// errors-capable result of one of those, of a plain value or of a bignum. `None` for a result that
-/// owns no heap, and for a kind with no release of this shape yet (a channel, a handle, a `maybe` of
-/// a union).
+/// array or map; a `maybe` of a string, flat shape, decimal or envelope union; an envelope union; or
+/// an errors-capable result of one of those, of a plain value or of a bignum. `None` for a result
+/// that owns no heap, and for a kind with no release of this shape yet (a channel, a handle).
 ///
 /// O(1) time.
 fn callee_result_type(cg: &Cg<'_, '_>, callee_name: &str) -> Option<Type> {
     let returned = cg.resolve_type(&sm_callee_return_type(cg, callee_name)?);
     // A string, array or map is one pointer in the slot. A `maybe` of a string, a flat shape or a
     // decimal is its `{flag, bits}` pair. An envelope union is the address of its slot in the
-    // member's frame. Any other `maybe` owns nothing the slot could release.
+    // member's frame, as is a `maybe` of one. Any other `maybe` owns nothing the slot could release.
     let owns_released_heap = |ty: &Type| match ty {
         Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
         Type::Maybe { inner } => {
-            cg.envelope_union_variants(inner).is_none()
-                && (matches!(cg.resolve_type(inner), Type::String)
-                    || cg.maybe_payload_cell_size(ty).is_some())
+            cg.envelope_union_variants(inner).is_some()
+                || matches!(cg.resolve_type(inner), Type::String)
+                || cg.maybe_payload_cell_size(ty).is_some()
         }
         union @ Type::Union { .. } => cg.envelope_union_variants(union).is_some(),
         _ => false,
@@ -18719,11 +18718,16 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
             // copy the slot into one the binding owns, as a call result's region is copied, then
             // free the cell's shell (its contents moved into the binding's slot).
             if let Type::BackgroundHandle { result, .. } = cg.expr_type(receiver) {
-                if let Some(variants) = cg.handle_union_variants(&result) {
+                if let Some((variants, maybe)) = cg.handle_union_variants(&result) {
                     let err = err_phi.as_basic_value().into_int_value();
                     let cell_bits = ok_phi.as_basic_value().into_int_value();
-                    let standard =
-                        cg.ec_region_to_standard(err, cell_bits, &variants, false, "hrecv_union")?;
+                    let standard = cg.ec_region_to_standard(
+                        err,
+                        cell_bits,
+                        &variants,
+                        maybe,
+                        "hrecv_union",
+                    )?;
                     let slot_size = cg.union_layout(&variants)?.slot_size;
                     let free_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_free_cell");
                     let after_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_done");
@@ -30324,17 +30328,19 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(())
     }
 
-    /// The variants of the envelope union a handle task returns (`-> Thing` or `-> Thing errors`),
-    /// `None` for any other result type.
+    /// The variants of the envelope union a handle task returns (`-> Thing`, `-> Thing errors`,
+    /// `-> maybe<Thing>` or `-> maybe<Thing> errors`) and whether it is a `maybe` of it, `None` for any
+    /// other result type. All four ride the member frame's `Return` region, so one move and one
+    /// release serve them.
     ///
     /// Time: O(v)  Space: O(v)
-    fn handle_union_variants(&self, ret: &Type) -> Option<Vec<Type>> {
+    fn handle_union_variants(&self, ret: &Type) -> Option<(Vec<Type>, bool)> {
         let resolved = self.resolve_type(ret);
         let success = match &resolved {
             Type::ErrorsCapable { inner } => self.resolve_type(inner),
             other => other.clone(),
         };
-        self.envelope_union_variants(&success)
+        self.ec_success_union(&success)
     }
 
     /// The function `void(ptr slot, ptr err_out, ptr ok_out)` that moves a union result out of the
@@ -30348,7 +30354,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// One function per result type. Time: O(1) to emit; O(slot size) at run time  Space: O(1)
     fn handle_union_move_fn(&self, ret: &Type) -> Result<FunctionValue<'ctx>, String> {
         let resolved = self.resolve_type(ret);
-        let variants = self
+        let (variants, _) = self
             .handle_union_variants(&resolved)
             .ok_or("internal: a union handle move for a result that is not a union")?;
         let slot_size = self.union_layout(&variants)?.slot_size;
@@ -30455,11 +30461,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// Time: O(1) to emit  Space: O(1)
     fn handle_union_release_fn(&self, ret: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
         let resolved = self.resolve_type(ret);
-        let success = match &resolved {
-            Type::ErrorsCapable { inner } => self.resolve_type(inner),
-            other => other.clone(),
-        };
-        let Some(glue) = self.release_fn(&success, true)? else {
+        let (variants, _) = self
+            .handle_union_variants(&resolved)
+            .ok_or("internal: a union handle release for a result that is not a union")?;
+        let union_result = Type::Union { variants };
+        let Some(glue) = self.release_fn(&union_result, true)? else {
             return Ok(None);
         };
         let name = format!("ynz_handle_result_release_{}", mangle_type(&resolved));
@@ -30691,17 +30697,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             let companion =
                 self.alloca_in_entry_llvm(errors_result_type(self.ctx), "returned_result")?;
             let union_variants = match &resolved {
-                Type::ErrorsCapable { inner } => self.envelope_union_variants(inner),
+                Type::ErrorsCapable { inner } => self.ec_success_union(inner),
                 _ => None,
             };
-            let result = if let Some(variants) = union_variants {
+            let result = if let Some((variants, maybe)) = union_variants {
                 // The ok word is the address of the member frame's `Return` region; the release
                 // reads the standard pair over a copy of the slot, as a caller binding would.
                 self.ec_region_to_standard(
                     error_bits,
                     ok_bits,
                     &variants,
-                    false,
+                    maybe,
                     "returned_union_result",
                 )?
             } else {
@@ -30722,6 +30728,30 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder
                 .build_store(holder, companion)
                 .map_err(|e| format!("returned result holder: {e}"))?;
+        } else if let Some((variants, true)) = self.ec_success_union(&resolved) {
+            // A plain `maybe` of an envelope union: the slot holds the address of the member frame's
+            // `Return` region (the union slot, `none` as its tag), released as the union slot it is.
+            let bits = state_machine::load_return_value_i64(
+                self.ctx,
+                &self.builder,
+                child_frame,
+                "returned_bits",
+            )?;
+            let pointer = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), "returned_ptr")
+                .map_err(|e| format!("returned maybe union inttoptr: {e}"))?;
+            self.builder
+                .build_store(holder, pointer)
+                .map_err(|e| format!("returned maybe union holder: {e}"))?;
+            return self.emit_slot_release(
+                holder,
+                &Type::Union { variants },
+                ReleaseForm::Value,
+                true,
+                "returned_value",
+                "drop_returned",
+            );
         } else if matches!(resolved, Type::Maybe { .. }) {
             // The slot holds the `{flag, bits}` pair itself: rebuild the envelope on the stack and
             // release it in the form of a `maybe` a function returned (its payload is the cell

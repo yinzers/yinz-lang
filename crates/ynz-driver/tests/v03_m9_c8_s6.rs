@@ -1296,3 +1296,118 @@ function entrypoint() -> nothing {{
         balanced_and_asan_clean(&format!("c8s6_received_bignum_{name}"), &source, expected);
     }
 }
+
+// ── a `maybe` of a union a task returns ─────────────────────────────────────────────────────
+//
+// Bug caught: pre-existing, found by the C8 round-3 review (the same mechanism as the union cases
+// above): `-> maybe<Thing>` and `-> maybe<Thing> errors` left the union's region address in the
+// completion, so the finished frame's region was read after it was freed on a receive, and the
+// payload string leaked when the completion was unreceived or a finished group member was dropped.
+// Tier High (a use-after-free on a data path). They take the same move and release as a plain union.
+
+fn maybe_union_program(return_type: &str, body: &str, entry: &str) -> String {
+    format!(
+        "shape Tiny {{
+  flag: boolean
+}}
+shape Big {{
+  label: string
+  count: int
+}}
+shape Thing = Tiny | Big
+
+function make(flag: boolean) -> {return_type} {{
+  wait sleep(1)
+{body}
+}}
+
+function makeBig() -> {return_type} {{
+  wait sleep(1)
+  let big: Big = {{ label: `abc`.toUpperCase(), count: 7 }}
+  let wrapped: Thing = big
+  let items: array<Thing> = [wrapped]
+  return items.get(0)
+}}
+
+function slow() -> int {{
+  wait sleep(500)
+  return 1
+}}
+
+function worker() -> nothing {{
+  let first = makeBig()
+  let second = slow()
+  print(`${{second}}`)
+}}
+
+function entrypoint() -> nothing {{
+{entry}
+}}
+"
+    )
+}
+
+const MAYBE_UNION_SOME: &str = "  if (flag) {
+    let tiny: Tiny = { flag: true }
+    let wrapped: Thing = tiny
+    let items: array<Thing> = [wrapped]
+    return items.get(0)
+  }
+  let big: Big = { label: `abc`.toUpperCase(), count: 7 }
+  let wrapped: Thing = big
+  let items: array<Thing> = [wrapped]
+  return items.get(0)";
+
+const MAYBE_UNION_NONE: &str = "  let items: array<Thing> = []
+  return items.get(0)";
+
+const RECEIVE_MAYBE_UNION: &str = "  let pending = background make(false)
+  wait sleep(50)
+  let got = pending.receive()
+  let fallback: maybe<Thing> = none
+  let held = got.or(fallback)
+  print(held.exists())
+  if (held.exists()) {
+    let value = held.value
+    if (value) {
+      is Big => {
+        print(value.label)
+        print(value.count)
+      }
+      is Tiny => {
+        print(`tiny`)
+      }
+    }
+  }";
+
+const NEVER_RECEIVE_MAYBE_UNION: &str = "  let pending = background make(false)
+  wait sleep(50)
+  print(`parent`)";
+
+const DROP_GROUP_WITH_MAYBE_UNION: &str = "  background worker()
+  wait sleep(100)
+  print(`parent`)";
+
+macro_rules! maybe_union_handle_cases {
+    ($($name:ident: $return_type:literal, $body:expr, $entry:expr, $expected:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = maybe_union_program($return_type, $body, $entry);
+                balanced_and_asan_clean(stringify!($name), &source, $expected);
+            }
+        )+
+    };
+}
+
+maybe_union_handle_cases! {
+    a_maybe_union_a_task_returns_is_received_and_read_once: "maybe<Thing>", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
+    a_maybe_union_errors_a_task_returns_is_received_and_read_once: "maybe<Thing> errors", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
+    a_none_maybe_union_a_task_returns_is_received_once: "maybe<Thing>", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
+    a_none_maybe_union_errors_a_task_returns_is_received_once: "maybe<Thing> errors", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
+    an_unreceived_maybe_union_result_is_released_with_the_handle: "maybe<Thing>", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    an_unreceived_maybe_union_errors_result_is_released_with_the_handle: "maybe<Thing> errors", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    an_unreceived_none_maybe_union_result_is_released_with_the_handle: "maybe<Thing>", MAYBE_UNION_NONE, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped: "maybe<Thing>", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
+    a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped: "maybe<Thing> errors", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
+}
