@@ -230,6 +230,12 @@ fn binding_holds_place(ty: &Type) -> bool {
         | Type::Union { .. }
         | Type::BuiltinArray { .. }
         | Type::BuiltinMap { .. } => true,
+        // A `fixed<T, N>` read out of a shape field lives inside the shape: a binding that wrote
+        // through a view of it would write the field.
+        Type::BuiltinFixed {
+            size: crate::types::FixedLength::Known(_),
+            ..
+        } => true,
         Type::Maybe { inner } => matches!(
             inner.as_ref(),
             Type::Shape { .. }
@@ -252,6 +258,10 @@ fn reader_holds_heap(ty: &Type) -> bool {
             | Type::BuiltinMap { .. }
             | Type::Shape { .. }
             | Type::Union { .. }
+            | Type::BuiltinFixed {
+                size: crate::types::FixedLength::Known(_),
+                ..
+            }
     ) || matches!(ty, Type::Sensitive { inner } if matches!(inner.as_ref(), Type::String))
         || is_bignum(ty)
 }

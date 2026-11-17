@@ -21,13 +21,17 @@ pub enum Severity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiagnosticKind {
     /// Type mismatch — expected a specific type.
-    TypeMismatch { expected: String },
+    TypeMismatch {
+        expected: String,
+    },
     /// Binding is `const` so the operation is rejected.
     MutationOfConst,
     /// Name is not defined in this scope.
     NotDefined,
     /// Field is missing from a shape literal.
-    MissingField { field: String },
+    MissingField {
+        field: String,
+    },
     /// Field is hidden — not accessible from outside the declaring file.
     HiddenAccess,
     /// Import was not found.
@@ -133,18 +137,26 @@ pub enum DiagnosticKind {
     /// Function does not return on all paths.
     MissingReturn,
     /// A banned keyword was used.
-    BannedKeyword { keyword: String },
+    BannedKeyword {
+        keyword: String,
+    },
     /// A banned jargon word was used as an identifier — the identifier name is
     /// carried so the LSP code-action handler can build a quick-fix without
     /// re-parsing the source text.
-    BannedJargon { term: String },
+    BannedJargon {
+        term: String,
+    },
     /// An imported name is never referenced in the file.
-    UnusedImport { name: String },
+    UnusedImport {
+        name: String,
+    },
     /// A Tier 3 lint rule fired. `rule` is the kebab-case `[[lint_rule]]` registry name
     /// (`&'static str` because it always comes from the registry's baked constants) —
     /// it becomes the LSP `Diagnostic.code` so editors can group/dismiss by rule, and
     /// `ynz_registry::lsp_lint_rule_hover_for(code)` renders the rule's teaching hover.
-    LintRule { rule: &'static str },
+    LintRule {
+        rule: &'static str,
+    },
 }
 
 impl DiagnosticKind {

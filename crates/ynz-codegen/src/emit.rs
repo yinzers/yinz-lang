@@ -36,7 +36,8 @@ use ynz_typeck::{
     independence::{partition_independent_groups, IndependentGroup},
     is_base_suspension_intrinsic, type_attached_const_type,
     types::{channel_elem_drop, ChannelElemDrop},
-    FixedLength, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
+    FixedLength, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type,
+    TypedModule,
 };
 
 use crate::{
@@ -1412,7 +1413,11 @@ fn build_module<'ctx, 'g>(
             // version typeck found (`FixedInstances`), under that version's symbol; any other
             // function once under its own name.
             Item::Function(f) if f.generics.is_empty() => {
-                if typed.fixed_instances.length_parameters.contains_key(&f.name) {
+                if typed
+                    .fixed_instances
+                    .length_parameters
+                    .contains_key(&f.name)
+                {
                     for version in typed
                         .fixed_instances
                         .instances
@@ -1513,18 +1518,21 @@ fn build_module<'ctx, 'g>(
             Item::Function(f) if f.generics.is_empty() => {
                 // One body per specialised version of a function with `fixed<T>` length
                 // parameters (the same list Pass 1 declared), one body otherwise.
-                let versions: Vec<Option<&ynz_typeck::fixed_length::InstanceKey>> =
-                    if typed.fixed_instances.length_parameters.contains_key(&f.name) {
-                        typed
-                            .fixed_instances
-                            .instances
-                            .iter()
-                            .filter(|version| version.function == f.name)
-                            .map(Some)
-                            .collect()
-                    } else {
-                        vec![None]
-                    };
+                let versions: Vec<Option<&ynz_typeck::fixed_length::InstanceKey>> = if typed
+                    .fixed_instances
+                    .length_parameters
+                    .contains_key(&f.name)
+                {
+                    typed
+                        .fixed_instances
+                        .instances
+                        .iter()
+                        .filter(|version| version.function == f.name)
+                        .map(Some)
+                        .collect()
+                } else {
+                    vec![None]
+                };
                 for version in versions {
                     lower_function(
                         ctx,
@@ -2201,7 +2209,11 @@ fn abi_return_type<'ctx>(
         Type::BuiltinFixed {
             elem,
             size: FixedLength::Known(count),
-        } => Some(ctx.i64_type().array_type(fixed_cell_words(elem, *count)).into()),
+        } => Some(
+            ctx.i64_type()
+                .array_type(fixed_cell_words(elem, *count))
+                .into(),
+        ),
         _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
     })
 }
@@ -5691,6 +5703,30 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// A copy of the `count` cells at `cells` (a `fixed<elem>` list another holder owns) in a slot
+    /// of the function's entry block, with a copy of every string or shape item the cells point
+    /// at, so the copy owns what it holds. The slot is in the entry block, never in a loop body,
+    /// so a copy made on every pass of a loop does not grow the stack. O(count) time at run time.
+    fn copy_fixed_cells_into_entry_slot(
+        &self,
+        cells: PointerValue<'ctx>,
+        elem: &Type,
+        count: u64,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let elem = self.resolve_type(elem);
+        let block_ty = self.fixed_block_type(&elem, count as u32);
+        let slot = self.alloca_in_entry_llvm(block_ty, &format!("{site}_fixed_copy"))?;
+        let bytes = count * self.fixed_cell_bytes(&elem);
+        self.builder
+            .build_memcpy(slot, 8, cells, 8, self.i64().const_int(bytes, false))
+            .map_err(|err| format!("{site} fixed copy memcpy: {err}"))?;
+        if is_string_like(&elem) || matches!(elem, Type::Shape { .. }) {
+            emit_fixed_item_cells_copy(self, slot, count, &elem, site)?;
+        }
+        Ok(slot)
+    }
+
     /// Is a field of type `ty` a `fixed<T, N>` list stored by value in the shape (its length is
     /// known, so its cells are inline)? O(1) time.
     fn is_stored_fixed_field(&self, ty: &Type) -> bool {
@@ -8023,7 +8059,9 @@ fn lower_function<'ctx, 'g>(
         m3d_spike,
     );
     cg.length_subst = lengths;
-    cg.instance_lengths = version.map(|version| version.lengths.clone()).unwrap_or_default();
+    cg.instance_lengths = version
+        .map(|version| version.lengths.clone())
+        .unwrap_or_default();
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
@@ -12715,7 +12753,9 @@ fn lower_sm_for<'ctx, 'g>(
         let elem = elem.as_ref().clone();
         let n = match size {
             FixedLength::Known(n) => *n as u64,
-            FixedLength::Unknown | FixedLength::OfParam { .. } => return Err("SM for-loop: fixed array with unknown size".to_string()),
+            FixedLength::Unknown | FixedLength::OfParam { .. } => {
+                return Err("SM for-loop: fixed array with unknown size".to_string())
+            }
         };
         let size_val = cg.i64().const_int(n, false);
 
@@ -19762,6 +19802,7 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
                             | Type::Maybe { .. }
                             | Type::BuiltinArray { .. }
                             | Type::BuiltinMap { .. }
+                            | Type::BuiltinFixed { .. }
                     );
                 if is_view {
                     store(cg, val, &val_ty, slot)?;
@@ -19852,6 +19893,7 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
                             | Type::Maybe { .. }
                             | Type::BuiltinArray { .. }
                             | Type::BuiltinMap { .. }
+                            | Type::BuiltinFixed { .. }
                     )
                 {
                     store(cg, val, &ty, slot)?;
@@ -20604,7 +20646,9 @@ fn lower_stmt_for<'ctx>(
         let elem = elem.as_ref().clone();
         let n = match size {
             FixedLength::Known(n) => *n as u64,
-            FixedLength::Unknown | FixedLength::OfParam { .. } => return Err("codegen: cannot iterate fixed array with unknown size".to_string()),
+            FixedLength::Unknown | FixedLength::OfParam { .. } => {
+                return Err("codegen: cannot iterate fixed array with unknown size".to_string())
+            }
         };
         let size_val = cg.i64().const_int(n, false);
         let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
@@ -22398,6 +22442,22 @@ fn own_read_for_store<'ctx>(
                 release_target: Some(slot),
             })
         }
+        // A `fixed<T, N>` read out of a shape field (the one place a list that stays where it is
+        // can be read): the reader owns a copy of the cells, and of the items they point at.
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } if matches!(expr, Expr::FieldAccess { .. }) => {
+            if may_point || cg.is_moved_cells(pointer) {
+                return Ok(kept);
+            }
+            let copy = cg.copy_fixed_cells_into_entry_slot(pointer, elem, *count as u64, site)?;
+            Ok(OwnedRead {
+                value: copy.into(),
+                copied: true,
+                release_target: None,
+            })
+        }
         _ => Ok(kept),
     }
 }
@@ -22477,7 +22537,7 @@ fn store_binding_of_read_into<'ctx>(
 ) -> Result<(), String> {
     if matches!(
         cg.resolve_type(ty),
-        Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+        Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::BuiltinFixed { .. }
     ) {
         let owned = own_read_for_store(cg, expr, val, ty, false, name)?;
         return store(cg, owned.value, ty, slot);
@@ -23533,15 +23593,8 @@ fn lower_expr_node<'ctx>(
             match &recv_ty {
                 Type::Shape { name } => {
                     let name = name.clone();
-                    let raw = lower_ufcs_call(
-                        cg,
-                        receiver,
-                        recv_val,
-                        &name,
-                        method,
-                        method_span,
-                        args,
-                    )?;
+                    let raw =
+                        lower_ufcs_call(cg, receiver, recv_val, &name, method, method_span, args)?;
                     // v0.3-M7 R9: a UFCS call is the same C-ABI invocation as the
                     // direct-call arm — by-value number/maybe/shape results wrap into
                     // a caller-owned slot here too (one reception discipline).

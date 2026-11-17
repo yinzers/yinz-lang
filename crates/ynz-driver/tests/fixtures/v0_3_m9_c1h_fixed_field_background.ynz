@@ -1,0 +1,27 @@
+// v0.3-M9 C1h: a shape with fixed fields given to a background task (a copy and a move), which returns a value read from the list.
+// Expected output: 4, 14, B
+
+shape Bag {
+  tag: int
+  names: fixed<string, 2>
+  nums: fixed<int, 3>
+}
+
+function work(give bag: Bag) -> int {
+  wait sleep(1)
+  return bag.nums[2].or(-1) + bag.tag
+}
+
+function entrypoint() -> nothing {
+  let bag: Bag = { tag: 1, names: [`a`.toUpperCase(), `b`.toUpperCase()], nums: [1, 2, 3] }
+  let task = background work(bag.copy())
+  wait sleep(20)
+  let first = task.receive()
+  print(first.or(-1))
+  let other: Bag = { tag: 5, names: [`c`.toUpperCase(), `d`.toUpperCase()], nums: [7, 8, 9] }
+  let task2 = background work(other)
+  wait sleep(20)
+  let second = task2.receive()
+  print(second.or(-1))
+  print(bag.names[1].or(`?`))
+}

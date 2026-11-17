@@ -13,9 +13,10 @@ use ynz_ast::nodes::{FunctionDecl, Type as AstType};
 use ynz_diagnostics::SourceSpan;
 
 use super::{
-    fixed_field_length_missing_diag, fixed_length_mismatch_diag, fixed_length_missing_in_export_diag,
-    fixed_length_not_allowed_here_diag, fixed_length_not_usable_diag,
-    fixed_return_length_unknown_diag, fixed_return_lengths_differ_diag, render_ast_type, Checker,
+    fixed_field_length_missing_diag, fixed_length_mismatch_diag,
+    fixed_length_missing_in_export_diag, fixed_length_not_allowed_here_diag,
+    fixed_length_not_usable_diag, fixed_return_length_unknown_diag,
+    fixed_return_lengths_differ_diag, render_ast_type, Checker,
 };
 use crate::fixed_length::{
     apply_length_bindings, fixed_type, length_parameters, read_fixed_arguments, FixedArguments,
@@ -42,7 +43,9 @@ fn items(count: usize) -> String {
 fn length_text(length: &FixedLength) -> String {
     match length {
         FixedLength::Known(count) => items(*count),
-        FixedLength::Unknown | FixedLength::OfParam { .. } => "a list of unknown length".to_string(),
+        FixedLength::Unknown | FixedLength::OfParam { .. } => {
+            "a list of unknown length".to_string()
+        }
     }
 }
 
@@ -204,7 +207,10 @@ impl<'b> Checker<'b> {
             span.clone(),
             &render_ast_type(whole),
             &format!("on `{name}`, which takes none"),
-            &format!("Leave the length out: `{name}<{}>`", without_length.join(", ")),
+            &format!(
+                "Leave the length out: `{name}<{}>`",
+                without_length.join(", ")
+            ),
         ));
     }
 
@@ -252,7 +258,10 @@ impl<'b> Checker<'b> {
             AstType::Generic {
                 name, args, span, ..
             } => {
-                if args.iter().any(|argument| matches!(argument, AstType::Length { .. })) {
+                if args
+                    .iter()
+                    .any(|argument| matches!(argument, AstType::Length { .. }))
+                {
                     if name == "fixed" {
                         let element_text = read_fixed_arguments(args)
                             .element
@@ -487,12 +496,10 @@ impl<'b> Checker<'b> {
             return;
         };
         let element = type_name(elem);
-        if let Some(unknown) = returns.iter().find(|returned| {
-            matches!(
-                returned.length,
-                FixedLength::Unknown
-            )
-        }) {
+        if let Some(unknown) = returns
+            .iter()
+            .find(|returned| matches!(returned.length, FixedLength::Unknown))
+        {
             self.diags.push(fixed_return_length_unknown_diag(
                 unknown.span.clone(),
                 &function.name,
@@ -542,7 +549,10 @@ impl<'b> Checker<'b> {
             .collect();
         positions.push(("return type".to_string(), &function.return_type));
         for (part, ast_ty) in positions {
-            let AstType::Generic { name, args, span, .. } = ast_ty else {
+            let AstType::Generic {
+                name, args, span, ..
+            } = ast_ty
+            else {
                 continue;
             };
             if name != "fixed" {

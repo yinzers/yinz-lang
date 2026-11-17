@@ -2810,7 +2810,7 @@ impl<'b> Checker<'b> {
             let Some(default_expr) = &field.default else {
                 continue;
             };
-            let field_ty = self.ast_type_to_type(&field.ty);
+            let field_ty = self.ast_type_to_type_in_signature(&field.ty);
             if self.reject_int_literal_number_slot(
                 NumberSlotRole::Field { name: &field.name },
                 &field_ty,
