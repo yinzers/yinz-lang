@@ -24159,7 +24159,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         && cg.plain_releases_type(&resolved)
     {
         release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
-    } else if let Some(form) = bg_maybe_original_release_form(cg, arg, sole_holder, &resolved) {
+    } else if let Some(form) = bg_maybe_original_release_form(arg, sole_holder, &resolved) {
         // A `maybe` the task got a copy of (a counted envelope cell, `MaybeCellClone`): the original
         // is a binding the spawn consumed (released as its scope exit would, `Local`); nothing else
         // releases it.
@@ -24186,7 +24186,6 @@ fn prepare_bg_arg_for_ctx<'ctx>(
 ///
 /// Time: O(1)  Space: O(1)
 fn bg_maybe_original_release_form(
-    cg: &Cg<'_, '_>,
     arg: &ynz_ast::nodes::Expr,
     sole_holder: Option<ynz_typeck::check::SoleHolder>,
     resolved: &Type,
