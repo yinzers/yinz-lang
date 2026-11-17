@@ -672,3 +672,152 @@ function entrypoint() -> nothing {
 ";
     balanced_and_asan_clean("c8s6_given_shape_state0", source, "parent\n");
 }
+
+// ── a value given to the callee the task is parked in ───────────────────────────────────────
+//
+// The parked statement hands a local to a suspending callee, which owns it from then on. The local
+// is not read after the park, so it has no frame slot: its stack slot is never written on the drop
+// path. Bug each catches: the drop state reads that uninitialized stack slot and frees whatever it
+// holds (a double free of the callee's value, or a free of a stray pointer), or the callee's own
+// drop entry is skipped and the value leaks. Tier: High (memory safety of the drop entry).
+
+/// One local given to the parked callee.
+const GIVEN_TO_PARKED_CHILD: &str = "
+function inner(give rows: array<int>) -> nothing {
+  wait sleep(500)
+  print(`${rows.count()}`)
+}
+
+function worker() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  inner(rows)
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+
+/// A string given to the parked callee beside a local the task keeps.
+const STRING_GIVEN_TO_PARKED_CHILD: &str = "
+function inner(give label: string) -> nothing {
+  wait sleep(500)
+  print(label)
+}
+
+function worker() -> nothing {
+  let label: string = `x`.toUpperCase()
+  let kept: string = `y`.toUpperCase()
+  inner(label)
+  print(kept)
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+
+/// Two locals given to the two members of an independent group the task is parked in.
+const GIVEN_TO_PARKED_GROUP: &str = "
+function first(give rows: array<int>) -> int {
+  wait sleep(500)
+  return rows.count()
+}
+
+function second(give rows: array<int>) -> int {
+  wait sleep(500)
+  return rows.count()
+}
+
+function worker() -> nothing {
+  let a: array<int> = [1, 2, 3]
+  let b: array<int> = [4]
+  let x = first(a)
+  let y = second(b)
+  print(`${x + y}`)
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+
+/// The callee is called in a loop (its embedded frame reused) and parks on a later iteration.
+const GIVEN_TO_PARKED_CHILD_IN_A_LOOP: &str = "
+function inner(give rows: array<int>, ms: int) -> nothing {
+  let local: array<int> = [1]
+  wait sleep(ms)
+  print(`${rows.count()}`)
+}
+
+function worker() -> nothing {
+  let i = 0
+  while (i < 3) {
+    let rows: array<int> = [i]
+    inner(rows, i * 400)
+    i = i + 1
+  }
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+
+/// Recursion that gives a local to the next level, parked at the deepest one.
+const GIVEN_DOWN_A_PARKED_RECURSION: &str = "
+function down(n: int, give acc: array<int>) -> nothing {
+  if (n == 0) {
+    wait sleep(500)
+    print(`${acc.count()}`)
+    return
+  }
+  let next: array<int> = [n]
+  down(n - 1, next)
+  print(`${acc.count()}`)
+}
+
+function entrypoint() -> nothing {
+  let start: array<int> = [0]
+  background down(3, start)
+  wait sleep(100)
+  print(`parent`)
+}
+";
+
+#[test]
+fn a_local_given_to_the_parked_callee_is_released_once_by_the_callee() {
+    balanced_and_asan_clean(
+        "c8s6_given_to_parked_child",
+        GIVEN_TO_PARKED_CHILD,
+        "parent\n",
+    );
+    balanced_and_asan_clean(
+        "c8s6_string_given_to_parked_child",
+        STRING_GIVEN_TO_PARKED_CHILD,
+        "parent\n",
+    );
+    balanced_and_asan_clean(
+        "c8s6_given_to_parked_group",
+        GIVEN_TO_PARKED_GROUP,
+        "parent\n",
+    );
+    balanced_and_asan_clean(
+        "c8s6_given_to_parked_child_in_a_loop",
+        GIVEN_TO_PARKED_CHILD_IN_A_LOOP,
+        "1\nparent\n",
+    );
+    balanced_and_asan_clean(
+        "c8s6_given_down_a_parked_recursion",
+        GIVEN_DOWN_A_PARKED_RECURSION,
+        "parent\n",
+    );
+}

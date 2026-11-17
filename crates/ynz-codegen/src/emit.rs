@@ -10280,6 +10280,54 @@ fn innermost_statement(block: &ynz_ast::nodes::Block, offset: usize) -> Option<&
     None
 }
 
+/// The entries of a drop state's suspension edge whose binding the drop entry can read: those kept in
+/// a frame slot (a parameter, a crossing local, a CPU-group result), which `reload_params_from_frame`
+/// restored. Any other binding lives only in a stack slot of the resume call that parked, which the
+/// drop path never writes, so reading it would free a stray pointer.
+///
+/// Such a binding is not read after the park, so it holds no value there: the plan lists it only as
+/// `ReleaseIfLive`, a binding the parked statement hands over (a `give` to the awaited callee), and
+/// the hand-over ran before the park. It is left out; the callee owns the value and its own drop
+/// entry releases it. A plain `Release` of a binding with no frame slot breaks that reasoning, so it
+/// is an internal error rather than a guess.
+///
+/// O(entries + frame-backed names) time.
+fn frame_backed_drop_entries(
+    cg: &Cg<'_, '_>,
+    param_names: &[String],
+    entries: &[ynz_typeck::release_plan::ReleaseEntry],
+    function_name: &str,
+) -> Result<Vec<ynz_typeck::release_plan::ReleaseEntry>, String> {
+    use ynz_typeck::release_plan::Fate;
+    let crossing = cg.sm_crossing_names.as_deref().unwrap_or(&[]);
+    let is_frame_backed = |name: &str| {
+        param_names.iter().any(|param| param == name)
+            || crossing.iter().any(|local| local == name)
+            || cg
+                .m3d_spike_cpu_result_names
+                .iter()
+                .any(|(result, _)| result == name)
+    };
+    let mut kept = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if is_frame_backed(&entry.codegen_name) {
+            kept.push(entry.clone());
+            continue;
+        }
+        match entry.fate {
+            Fate::Omitted(_) | Fate::ReleaseIfLive(_) => {}
+            Fate::Release(_) => {
+                return Err(format!(
+                    "internal: the drop entry of `{function_name}` must release `{}`, which has \
+                     no frame slot",
+                    entry.codegen_name
+                ))
+            }
+        }
+    }
+    Ok(kept)
+}
+
 /// Emit the drop entry of continuation state `state`, the state a task parked at source offset
 /// `offset` resumes in (C8 slice 6). A dropped task re-enters its resume function with the bitwise
 /// complement of its `resume_point`; the resume switch sends that value to the block built here
@@ -10341,7 +10389,8 @@ fn register_drop_state<'ctx, 'g>(
     cg.builder.position_at_end(drop_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, state != 0, true)?;
     cg.release_open_temporaries("drop_temporary")?;
-    cg.emit_release_edge_with(entries, "drop", true)?;
+    let entries = frame_backed_drop_entries(cg, param_names, entries, &f.name)?;
+    cg.emit_release_edge_with(&entries, "drop", true)?;
     for member in children {
         let which = &member.child;
         let child_resume = &member.resume;
