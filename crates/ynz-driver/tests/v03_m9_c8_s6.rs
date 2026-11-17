@@ -615,3 +615,60 @@ fn an_unreceived_error_result_is_released_with_the_handle() {
     );
     balanced_and_asan_clean("c8s6_unreceived_error", &source, "parent\n");
 }
+
+/// A flat shape given to a task: the spawn allocates its cell and the ladder frees it
+/// (`OWNED_CELL`); the callee owns the fields. A task dropped while parked releases the fields
+/// through its drop entry and must not free the cell a second time through the frame slot (S5: the
+/// slot is null after the callee's own release, and the cell is the ladder's). Bug caught: a drop
+/// entry that frees the cell, or reads the slot for it, double frees or leaks it. Tier: High
+/// (ownership boundary between the drop entry and the spawn ladder).
+const PARKED_WITH_A_GIVEN_SHAPE: &str = "
+shape Crew {
+  label: string
+  members: array<string>
+}
+
+function worker(give crew: Crew) -> nothing {
+  let note: string = `n`.toUpperCase()
+  wait sleep(500)
+  print(`${crew.label}${note}`)
+}
+
+function entrypoint() -> nothing {
+  let members: array<string> = [`a`.toUpperCase()]
+  let crew: Crew = { label: `L`.toUpperCase(), members: members }
+  background worker(crew)
+  wait sleep(100)
+  print(`parent`)
+}
+";
+
+#[test]
+fn a_parked_task_given_a_flat_shape_releases_its_fields_and_the_ladder_frees_the_cell() {
+    balanced_and_asan_clean("c8s6_given_shape", PARKED_WITH_A_GIVEN_SHAPE, "parent\n");
+}
+
+/// The same task never polled (dropped in state 0): the given parameter is still a whole shape in
+/// its frame slot.
+#[test]
+fn a_task_dropped_before_its_first_poll_releases_a_given_shape() {
+    let source = "
+shape Crew {
+  label: string
+  members: array<string>
+}
+
+function worker(give crew: Crew) -> nothing {
+  wait sleep(500)
+  print(crew.label)
+}
+
+function entrypoint() -> nothing {
+  let members: array<string> = [`a`.toUpperCase()]
+  let crew: Crew = { label: `L`.toUpperCase(), members: members }
+  background worker(crew)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_given_shape_state0", source, "parent\n");
+}
