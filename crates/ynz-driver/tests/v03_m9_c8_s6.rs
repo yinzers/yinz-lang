@@ -995,3 +995,75 @@ function entrypoint() -> nothing {{
         );
     }
 }
+
+/// Bug caught: pre-existing, a leak found by the C8 round-2 review: `callee_result_type` listed only
+/// a string, array, map and an errors result of those or of a scalar, so a `maybe`, a union or a
+/// bignum a finished group member left in its return slot leaked when the task was dropped Pending
+/// before the group joined. Tier Medium. One program per result type: `quick` finishes with the
+/// value, `slow` keeps the group parked, and the parent returns while it waits.
+fn finished_member_program(return_type: &str, body: &str) -> String {
+    format!(
+        "shape Tiny {{
+  flag: boolean
+}}
+shape Big {{
+  label: string
+  count: int
+}}
+shape Thing = Tiny | Big
+
+function quick() -> {return_type} {{
+  wait sleep(1)
+{body}
+}}
+
+function slow() -> int {{
+  wait sleep(500)
+  return 1
+}}
+
+function worker() -> nothing {{
+  let a = quick()
+  let b = slow()
+  print(`${{b}}`)
+}}
+
+function entrypoint() -> nothing {{
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}}
+"
+    )
+}
+
+macro_rules! finished_member_cases {
+    ($($name:ident: $return_type:literal, $body:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = finished_member_program($return_type, $body);
+                balanced_and_asan_clean(stringify!($name), &source, "parent\n");
+            }
+        )+
+    };
+}
+
+finished_member_cases! {
+    a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped: "maybe<string>",
+        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped: "maybe<Big>",
+        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped: "maybe<number<20> >",
+        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
+    a_finished_member_returning_a_union_is_released_when_the_task_is_dropped: "Thing",
+        "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
+    a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped: "maybe<string> errors",
+        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped: "maybe<Big> errors",
+        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    a_finished_member_returning_a_union_errors_is_released_when_the_task_is_dropped: "Thing errors",
+        "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
+    a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped: "number<40> errors",
+        "  let made: number<40> = 2.5\n  return made";
+}

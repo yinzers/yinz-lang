@@ -10559,29 +10559,39 @@ fn register_drop_state<'ctx, 'g>(
 
 /// The type of the heap value the suspending callee `callee_name` hands back through its return
 /// slot, when the group's drop state must release it (`DropMember::returned_value`): a string,
-/// array or map, or an errors-capable result of one of those or of a plain value. `None` for a
-/// result that owns no heap, and for a kind with no release of this shape yet.
+/// array or map; a `maybe` of a string, flat shape or decimal; an envelope union; or an
+/// errors-capable result of one of those, of a plain value or of a bignum. `None` for a result that
+/// owns no heap, and for a kind with no release of this shape yet (a channel, a handle, a `maybe` of
+/// a union).
 ///
 /// O(1) time.
 fn callee_result_type(cg: &Cg<'_, '_>, callee_name: &str) -> Option<Type> {
-    let returned = sm_callee_return_type(cg, callee_name)?;
-    let plain = |ty: &Type| {
-        matches!(
-            ty,
-            Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
-        )
+    let returned = cg.resolve_type(&sm_callee_return_type(cg, callee_name)?);
+    // A string, array or map is one pointer in the slot. A `maybe` of a string, a flat shape or a
+    // decimal is its `{flag, bits}` pair. An envelope union is the address of its slot in the
+    // member's frame. Any other `maybe` owns nothing the slot could release.
+    let owns_released_heap = |ty: &Type| match ty {
+        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+        Type::Maybe { inner } => {
+            cg.envelope_union_variants(inner).is_none()
+                && (matches!(cg.resolve_type(inner), Type::String)
+                    || cg.maybe_payload_cell_size(ty).is_some())
+        }
+        union @ Type::Union { .. } => cg.envelope_union_variants(union).is_some(),
+        _ => false,
     };
     if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
-        let inner_is_supported = plain(&returned)
+        let inner_is_supported = owns_released_heap(&returned)
             || matches!(
                 returned,
                 Type::Int | Type::Bool | Type::Float | Type::Nothing
-            );
+            )
+            || matches!(returned, Type::Number { precision } if precision > 34);
         return inner_is_supported.then(|| Type::ErrorsCapable {
             inner: Box::new(returned),
         });
     }
-    plain(&returned).then_some(returned)
+    owns_released_heap(&returned).then_some(returned)
 }
 
 /// The embedded sub-frame of the suspending callee `callee_name` in the frame of `f`, as the
@@ -30374,28 +30384,70 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         ty: &Type,
     ) -> Result<(), String> {
         let holder = self.alloca_in_entry_llvm(self.ptr(), "returned_value_slot")?;
+        let resolved = self.resolve_type(ty);
+        let mut form = ReleaseForm::Local;
         if matches!(ty, Type::ErrorsCapable { .. }) {
             let (error_bits, ok_bits) =
                 state_machine::load_return_value_errors(self.ctx, &self.builder, child_frame)?;
             let companion =
                 self.alloca_in_entry_llvm(errors_result_type(self.ctx), "returned_result")?;
-            let mut result = errors_result_type(self.ctx).const_zero();
-            result = self
-                .builder
-                .build_insert_value(result, error_bits, 0, "returned_err")
-                .map_err(|e| format!("returned result err: {e}"))?
-                .into_struct_value();
-            result = self
-                .builder
-                .build_insert_value(result, ok_bits, 1, "returned_ok")
-                .map_err(|e| format!("returned result ok: {e}"))?
-                .into_struct_value();
+            let union_variants = match &resolved {
+                Type::ErrorsCapable { inner } => self.envelope_union_variants(inner),
+                _ => None,
+            };
+            let result = if let Some(variants) = union_variants {
+                // The ok word is the address of the member frame's `Return` region; the release
+                // reads the standard pair over a copy of the slot, as a caller binding would.
+                self.ec_region_to_standard(
+                    error_bits,
+                    ok_bits,
+                    &variants,
+                    false,
+                    "returned_union_result",
+                )?
+            } else {
+                let mut pair = errors_result_type(self.ctx).const_zero();
+                pair = self
+                    .builder
+                    .build_insert_value(pair, error_bits, 0, "returned_err")
+                    .map_err(|e| format!("returned result err: {e}"))?
+                    .into_struct_value();
+                self.builder
+                    .build_insert_value(pair, ok_bits, 1, "returned_ok")
+                    .map_err(|e| format!("returned result ok: {e}"))?
+                    .into_struct_value()
+            };
             self.builder
                 .build_store(companion, result)
                 .map_err(|e| format!("returned result store: {e}"))?;
             self.builder
                 .build_store(holder, companion)
                 .map_err(|e| format!("returned result holder: {e}"))?;
+        } else if matches!(resolved, Type::Maybe { .. }) {
+            // The slot holds the `{flag, bits}` pair itself: rebuild the envelope on the stack and
+            // release it in the form of a `maybe` a function returned (its payload is the cell
+            // or string the `return` allocated).
+            let (flag, bits) =
+                state_machine::load_return_value_errors(self.ctx, &self.builder, child_frame)?;
+            let envelope = self.alloca_in_entry_llvm(self.maybe_type(), "returned_maybe")?;
+            let mut pair = self.maybe_type().const_zero();
+            pair = self
+                .builder
+                .build_insert_value(pair, flag, 0, "returned_flag")
+                .map_err(|e| format!("returned maybe flag: {e}"))?
+                .into_struct_value();
+            pair = self
+                .builder
+                .build_insert_value(pair, bits, 1, "returned_bits")
+                .map_err(|e| format!("returned maybe bits: {e}"))?
+                .into_struct_value();
+            self.builder
+                .build_store(envelope, pair)
+                .map_err(|e| format!("returned maybe store: {e}"))?;
+            self.builder
+                .build_store(holder, envelope)
+                .map_err(|e| format!("returned maybe holder: {e}"))?;
+            form = self.temporary_release_form(&resolved);
         } else {
             let bits = state_machine::load_return_value_i64(
                 self.ctx,
@@ -30410,15 +30462,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder
                 .build_store(holder, pointer)
                 .map_err(|e| format!("returned value holder: {e}"))?;
+            // An envelope union's slot is the member's own frame region: release the slot, not a view.
+            if matches!(resolved, Type::Union { .. }) {
+                form = ReleaseForm::Value;
+            }
         }
-        self.emit_slot_release(
-            holder,
-            ty,
-            ReleaseForm::Local,
-            true,
-            "returned_value",
-            "drop_returned",
-        )
+        self.emit_slot_release(holder, ty, form, true, "returned_value", "drop_returned")
     }
 
     /// THE one release of a slot: load the pointer `slot` holds, skip a null one when
