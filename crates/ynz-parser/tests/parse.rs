@@ -2672,6 +2672,50 @@ fn m5_nested_generic_type() {
     }
 }
 
+// Bug (v0.3-M9 C1h, #433; High: parser of untrusted input): the length of `fixed<T, N>` is a
+// whole number in the argument list. Each written length must reach typeck as `Type::Length`
+// with its value (`0` and the largest `u32` included), and a number that is not closed by `,` or
+// `>` must be one diagnostic, not a silent parse or a cascade into the next item.
+#[test]
+fn a_whole_number_in_a_generic_argument_list_parses_as_a_length() {
+    for written in [0_u64, 1, 4, u32::MAX as u64] {
+        let stmts = parse_fn_body(&wrap(&format!("let x: fixed<int, {written}> = x")));
+        match &stmts[0] {
+            Stmt::Let {
+                ty: Some(Type::Generic { name, args, .. }),
+                ..
+            } => {
+                assert_eq!(name, "fixed");
+                assert_eq!(args.len(), 2, "{written}");
+                assert!(matches!(args[0], Type::Int), "{written}");
+                assert!(
+                    matches!(&args[1], Type::Length { value, .. } if *value == written),
+                    "{written}: {:?}",
+                    args[1]
+                );
+            }
+            other => panic!("expected `fixed` with a length, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_length_not_closed_by_a_comma_or_angle_bracket_is_refused_once() {
+    for written in ["fixed<int, 3 4>", "fixed<int, 3 int>"] {
+        let output = parse(&wrap(&format!("let x: {written} = x")));
+        let refused = output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .what
+                    .contains("after the length in a generic type argument list")
+            })
+            .count();
+        assert_eq!(refused, 1, "{written}: {:#?}", output.diagnostics);
+    }
+}
+
 #[test]
 fn m5_generic_type_depth_cap_error() {
     // WHY: the depth cap (16) must produce exactly ONE diagnostic, not a
