@@ -469,3 +469,72 @@ fn an_unusable_written_length_is_refused_by_kind_and_the_limits_are_accepted() {
         }
     }
 }
+
+// Bug: the fallback of `.or` on a received `fixed` list was not compared with the list's length:
+// `.or(oneItem)` gave a list of 1 item typed as the callee's 4, and `list[3]` read past the
+// fallback's stack block (High: memory safety of a value that leaves a task).
+#[test]
+fn a_fallback_of_another_length_is_refused_for_or_on_a_received_fixed() {
+    let received = |fallback: &str| {
+        format!(
+            "function build() -> fixed<int> {{\n  wait sleep(1)\n  let numbers: fixed<int> = [10, 20, 30, 40]\n  return numbers\n}}\n\
+             function entrypoint() -> nothing {{\n  let first = background build()\n  wait sleep(20)\n  let got = first.receive()\n  let again = first.receive()\n  let fallback: fixed<int> = {fallback}\n  let list = again.or(fallback)\n  print(list.count())\n}}"
+        )
+    };
+    let rows = [
+        ("exact", received("[1, 2, 3, 4]"), 0),
+        ("one item", received("[7]"), 1),
+        ("one over", received("[1, 2, 3, 4, 5]"), 1),
+        ("empty", received("[]"), 1),
+    ];
+    for (label, source, expected) in rows {
+        let output = check(&source);
+        assert_eq!(
+            refusals_of(&source, DiagnosticKind::FixedLengthMismatch),
+            expected,
+            "{label}\n{source}\n{:#?}",
+            errors(&output)
+        );
+        if expected == 0 {
+            assert!(
+                errors(&output).is_empty(),
+                "{label}: {:#?}",
+                errors(&output)
+            );
+        }
+    }
+}
+
+// Bug: a list of another length reassigned to a binding, or assigned to a sized field, was refused
+// with a message that named `fixed<int>` on both sides, so it read as no mismatch (Golden Rule 11).
+// Each side shows its length.
+#[test]
+fn a_length_mismatch_on_reassignment_or_field_assignment_names_both_lengths() {
+    let reassign = "function entrypoint() -> nothing {\n  let xs: fixed<int> = [1, 2, 3]\n  let ys: fixed<int> = [1, 2]\n  xs = ys\n  print(xs.count())\n}";
+    let output = check(reassign);
+    let reassign_texts: Vec<String> = errors(&output)
+        .iter()
+        .map(|diagnostic| format!("{} {}", diagnostic.what, diagnostic.why))
+        .collect();
+    assert_eq!(reassign_texts.len(), 1, "{:#?}", errors(&output));
+    assert!(
+        reassign_texts[0].contains("fixed<int, 2>") && reassign_texts[0].contains("fixed<int, 3>"),
+        "{}",
+        reassign_texts[0]
+    );
+
+    let field = "shape Bag {\n  nums: fixed<int, 3>\n}\n\
+                 function entrypoint() -> nothing {\n  let bag: Bag = { nums: [1, 2, 3] }\n  bag.nums = [1, 2]\n  print(bag.nums.count())\n}";
+    let output = check(field);
+    let field_errors = errors(&output);
+    assert_eq!(field_errors.len(), 1, "{field_errors:#?}");
+    assert_eq!(
+        field_errors[0].kind,
+        Some(DiagnosticKind::FixedLengthMismatch)
+    );
+    assert!(
+        field_errors[0].what.contains("2 items") && field_errors[0].what.contains("3 items"),
+        "{}",
+        field_errors[0].what
+    );
+}

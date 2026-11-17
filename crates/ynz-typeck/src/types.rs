@@ -256,6 +256,37 @@ pub fn type_name(t: &Type) -> String {
     }
 }
 
+/// The names of a slot's type and of the value stored in it, for a diagnostic that says they do
+/// not match. When both are `fixed` lists and only their LENGTHS differ, each shows its length
+/// (`fixed<int, 3>` and `fixed<int, 2>`): with `type_name` alone both read `fixed<int>`, and the
+/// message reads as no mismatch at all. Anything else keeps `type_name`. O(size of the types).
+pub fn type_names_for_mismatch(slot: &Type, value: &Type) -> (String, String) {
+    match (slot, value) {
+        (
+            Type::BuiltinFixed {
+                size: slot_size, ..
+            },
+            Type::BuiltinFixed {
+                size: value_size, ..
+            },
+        ) if slot_size != value_size => (type_name_with_length(slot), type_name_with_length(value)),
+        _ => (type_name(slot), type_name(value)),
+    }
+}
+
+/// Can a `fixed` slot of length `slot` hold a list of length `value`? A written length takes
+/// exactly that many items; a slot with no written length (`fixed<T>`) takes any list. A list
+/// whose length the compiler does not know never fits a written length: the slot would read
+/// cells the list may not have. O(1).
+pub fn fixed_length_fits(slot: &FixedLength, value: &FixedLength) -> bool {
+    match slot {
+        FixedLength::Known(slot_count) => {
+            matches!(value, FixedLength::Known(count) if count == slot_count)
+        }
+        FixedLength::Unknown | FixedLength::OfParam { .. } => true,
+    }
+}
+
 /// `type_name`, but a `fixed` list of known length shows it (`fixed<int, 4>`): what a function
 /// signature says, so hover and completion show the length a caller must pass (C1h, #433). Only the
 /// whole type is read; a `fixed` inside another type keeps `type_name`'s form. O(size of the type).

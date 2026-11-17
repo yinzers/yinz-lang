@@ -2796,7 +2796,7 @@ why_template = "Only the whole type of a function parameter, a return value or a
 kind_name = "FixedLengthMismatch"
 what_template = "{what_is}."
 what_instead_template = "{alternative}."
-why_template = "A list written `fixed<{element}, {expected}>` holds exactly {expected} items, and the code compiled for it reads exactly that many. A list of another length would be read past its end, or leave items unread, so the compiler checks the length at every call and every `return`."
+why_template = "A list written `fixed<{element}, {expected}>` holds exactly {expected} items, and the code compiled for it reads exactly that many. A list of another length would be read past its end, or leave items unread, so the compiler checks the length at every call, every `return` and every place a list is stored."
 
 # `{function}` the exported function, `{part}` `parameter `xs`` or `return type`, `{written}` the
 # type as written, `{suggested}` the same type with a length.

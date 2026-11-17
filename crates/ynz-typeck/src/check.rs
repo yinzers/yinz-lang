@@ -29,7 +29,10 @@ use crate::{
     signatures::SignatureTable,
     suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
     transfer_record::{Escape, RoleEvidence, ValueSpan},
-    types::{arc_shareable, channel_elem_drop, type_name, Type},
+    types::{
+        arc_shareable, channel_elem_drop, fixed_length_fits, type_name, type_names_for_mismatch,
+        Type,
+    },
 };
 
 mod fixed_lengths;
@@ -4544,19 +4547,13 @@ impl<'b> Checker<'b> {
                 // `Scope::end_branches`).
                 self.scope.rebind(target, event.origin, event.alias_class);
                 if value_ty != Type::Error && value_ty != bound_ty {
+                    let (bound_name, value_name) = type_names_for_mismatch(&bound_ty, &value_ty);
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
+                        format!("Cannot store a `{value_name}` in `{target}` — it holds `{bound_name}`."),
+                        format!("The value must be a `{bound_name}`."),
                         format!(
-                            "Cannot store a `{}` in `{}` — it holds `{}`.",
-                            type_name(&value_ty),
-                            target,
-                            type_name(&bound_ty)
-                        ),
-                        format!("The value must be a `{}`.", type_name(&bound_ty)),
-                        format!(
-                            "`{target}` was declared as `{}`. Storing a `{}` in it would change its type.",
-                            type_name(&bound_ty),
-                            type_name(&value_ty)
+                            "`{target}` was declared as `{bound_name}`. Storing a `{value_name}` in it would change its type."
                         ),
                     ));
                 }
@@ -5118,7 +5115,9 @@ impl<'b> Checker<'b> {
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
                 self.record_return(expr);
-                self.record_returned_length(ret, &val_ty, expr.span());
+                // A `-> T errors` function returns its success value `T`: its length is the one
+                // checked and inferred (an `errors` wrapper on either side is peeled).
+                self.record_returned_length(peel_errors(ret), peel_errors(&val_ty), expr.span());
                 // Int literal returned from a `-> number` function — the hinted
                 // infer silently types it `number` and the LLVM verifier rejects
                 // the raw-i64 ret at codegen (Future-Req #14, shared gate).
@@ -5148,7 +5147,9 @@ impl<'b> Checker<'b> {
                             declared_variant,
                             &format!("this function must return a `{}`", type_name(ret)),
                         ));
-                    } else if !compatible {
+                    } else if !compatible
+                        && !differs_only_in_fixed_length(declared_variant, peel_errors(&val_ty))
+                    {
                         self.diags.push(Diagnostic::error(
                             expr.span().clone(),
                             format!(
@@ -8060,6 +8061,20 @@ impl<'b> Checker<'b> {
         expected_ty: &Type,
         actual_ty: &Type,
     ) -> bool {
+        self.check_argument_type_reporting(name, arg, expected_ty, actual_ty, true)
+    }
+
+    /// `check_argument_type`. `report_length` is false for a call to a function the program
+    /// declares: `bind_call_lengths` states the length of its `fixed` arguments with the
+    /// parameter's name, so a list refused only for its length is not reported twice.
+    fn check_argument_type_reporting(
+        &mut self,
+        name: &str,
+        arg: &Expr,
+        expected_ty: &Type,
+        actual_ty: &Type,
+        report_length: bool,
+    ) -> bool {
         let mut accepted = true;
         let actual_ty = actual_ty.clone();
         // M7 P3c: range values are first-class — can be passed as function arguments.
@@ -8074,6 +8089,19 @@ impl<'b> Checker<'b> {
                         "Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.",
                         "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                     ));
+            }
+        } else if actual_ty != Type::Error && differs_only_in_fixed_length(expected_ty, &actual_ty)
+        {
+            accepted = false;
+            if report_length {
+                let value_text = expr_source_text(arg);
+                self.report_stored_length_mismatch(
+                    arg.span(),
+                    &value_text,
+                    &format!("the argument of `{name}`"),
+                    expected_ty,
+                    &actual_ty,
+                );
             }
         } else if actual_ty != Type::Error && !can_assign(expected_ty, &actual_ty) {
             // Accept a concrete shape as a `dynamic Contract` argument when the
@@ -8213,7 +8241,7 @@ impl<'b> Checker<'b> {
                 }
             }
 
-            self.check_argument_type(name, arg, expected_ty, &actual_ty);
+            self.check_argument_type_reporting(name, arg, expected_ty, &actual_ty, false);
         }
         // The lengths of the `fixed` arguments (C1h): checked against a written length, bound to
         // the callee's length parameters, and recorded for the specialised versions.
@@ -9000,7 +9028,13 @@ impl<'b> Checker<'b> {
                             else {
                                 continue;
                             };
-                            self.check_argument_type(method, arg, expected_ty, &actual_ty);
+                            self.check_argument_type_reporting(
+                                method,
+                                arg,
+                                expected_ty,
+                                &actual_ty,
+                                false,
+                            );
                         }
                         // The lengths of the `fixed` arguments (C1h), as the plain call form binds
                         // them: `p.f(xs)` is `f(p, xs)`. Keyed by the method name's span.
@@ -10742,6 +10776,18 @@ impl<'b> Checker<'b> {
                         ));
                     } else if actual != Type::Error
                         && expected != Type::Error
+                        && differs_only_in_fixed_length(&expected, &actual)
+                    {
+                        let value_text = expr_source_text(&lit_field.value);
+                        self.report_stored_length_mismatch(
+                            lit_field.value.span(),
+                            &value_text,
+                            &format!("field `{}`", lit_field.name),
+                            &expected,
+                            &actual,
+                        );
+                    } else if actual != Type::Error
+                        && expected != Type::Error
                         && !can_assign(&expected, &actual)
                     {
                         self.diags.push(Diagnostic::error(
@@ -11024,18 +11070,23 @@ impl<'b> Checker<'b> {
         }
 
         if field_ty != Type::Error && value_ty != Type::Error && field_ty != value_ty {
+            if differs_only_in_fixed_length(&field_ty, &value_ty) {
+                let value_text = expr_source_text(value);
+                self.report_stored_length_mismatch(
+                    value.span(),
+                    &value_text,
+                    &format!("field `{field}`"),
+                    &field_ty,
+                    &value_ty,
+                );
+                return;
+            }
+            let (field_name, value_name) = type_names_for_mismatch(&field_ty, &value_ty);
             self.diags.push(Diagnostic::error(
                 span.clone(),
-                format!(
-                    "Cannot assign `{}` to field `{field}` which has type `{}`.",
-                    type_name(&value_ty),
-                    type_name(&field_ty)
-                ),
-                format!("Pass a `{}` value.", type_name(&field_ty)),
-                format!(
-                    "The field `{field}` was declared as `{}`.",
-                    type_name(&field_ty)
-                ),
+                format!("Cannot assign `{value_name}` to field `{field}` which has type `{field_name}`."),
+                format!("Pass a `{field_name}` value."),
+                format!("The field `{field}` was declared as `{field_name}`."),
             ));
         }
     }
@@ -11730,8 +11781,10 @@ pub(crate) fn collect_union_aliases(
 /// order, `target` first, and swapping them changes the answer.
 ///
 /// This is mostly structural equality, with these exceptions:
-/// - `BuiltinFixed` ignores the `size` field so that `let f: fixed<int> = [1, 2, 3]` does not
-///   fail (annotation has `size: None`; the literal infers `size: Some(3)`).
+/// - A `fixed` slot with no written length (`let f: fixed<int> = [1, 2, 3]`, an unsized
+///   parameter) takes a list of any length. A slot with a written length (`fixed<int, 3>` in a
+///   field or a signature) takes a list of exactly that length: the code compiled for it reads
+///   that many items, so a shorter list is read past its end.
 /// - A concrete variant widens into a union that lists it (`Big` into `Tiny | Big`,
 ///   `map<string,string>` into `map<string,string> | nothing`). The reverse never holds: a
 ///   union is a tagged envelope, and a slot that expects one variant reads the envelope's
@@ -11748,13 +11801,15 @@ fn can_assign(target: &Type, source: &Type) -> bool {
     match (target, source) {
         (
             Type::BuiltinFixed {
-                elem: target_elem, ..
+                elem: target_elem,
+                size: target_size,
             },
             Type::BuiltinFixed {
-                elem: source_elem, ..
+                elem: source_elem,
+                size: source_size,
             },
-        )
-        | (Type::BuiltinArray { elem: target_elem }, Type::BuiltinArray { elem: source_elem })
+        ) => same_layout(target_elem, source_elem) && fixed_length_fits(target_size, source_size),
+        (Type::BuiltinArray { elem: target_elem }, Type::BuiltinArray { elem: source_elem })
         | (Type::Maybe { inner: target_elem }, Type::Maybe { inner: source_elem })
         | (
             Type::ErrorsCapable { inner: target_elem },
@@ -11794,7 +11849,51 @@ fn can_assign(target: &Type, source: &Type) -> bool {
 /// Do two element or payload types have the same memory layout, so a container of one is a
 /// container of the other? True when each is assignable to the other.
 fn same_layout(first: &Type, second: &Type) -> bool {
-    can_assign(first, second) && can_assign(second, first)
+    match (first, second) {
+        // Two lists inside a container agree on length when one of them accepts the other
+        // (`fixed<int, 4>` and `fixed<int>`); two written lengths must be the same.
+        (
+            Type::BuiltinFixed {
+                elem: first_elem,
+                size: first_size,
+            },
+            Type::BuiltinFixed {
+                elem: second_elem,
+                size: second_size,
+            },
+        ) => {
+            same_layout(first_elem, second_elem)
+                && (fixed_length_fits(first_size, second_size)
+                    || fixed_length_fits(second_size, first_size))
+        }
+        _ => can_assign(first, second) && can_assign(second, first),
+    }
+}
+
+/// The success type of an `errors` type (`T` of `T errors`), else the type itself. O(1).
+fn peel_errors(ty: &Type) -> &Type {
+    match ty {
+        Type::ErrorsCapable { inner } => inner,
+        other => other,
+    }
+}
+
+/// True when `value` is a `fixed` list that `slot` refuses only because of its length: the item
+/// types agree. O(size of the item types).
+fn differs_only_in_fixed_length(slot: &Type, value: &Type) -> bool {
+    match (slot, value) {
+        (
+            Type::BuiltinFixed {
+                elem: slot_elem,
+                size: slot_size,
+            },
+            Type::BuiltinFixed {
+                elem: value_elem,
+                size: value_size,
+            },
+        ) => same_layout(slot_elem, value_elem) && !fixed_length_fits(slot_size, value_size),
+        _ => false,
+    }
 }
 
 /// Why a plain value cannot enter the tagged envelope of a union slot, when it cannot: the

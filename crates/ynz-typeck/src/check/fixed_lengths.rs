@@ -430,6 +430,58 @@ impl<'b> Checker<'b> {
         apply_length_bindings(&ret, &parameters, &bindings)
     }
 
+    /// A `fixed` list stored where a list of another length belongs: a field, or the argument of a
+    /// built-in method such as the `.or` fallback. `slot` says where (for example field `items`), `value_text`
+    /// is the stored value as written. A list of unknown length is refused the same way: the slot
+    /// would read cells it may not have. Does nothing when the two types differ in more than the
+    /// length (the caller's type mismatch says that). O(1).
+    pub(super) fn report_stored_length_mismatch(
+        &mut self,
+        span: &SourceSpan,
+        value_text: &str,
+        slot: &str,
+        slot_ty: &Type,
+        value_ty: &Type,
+    ) {
+        let (
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(expected),
+            },
+            Type::BuiltinFixed { size: held, .. },
+        ) = (slot_ty, value_ty)
+        else {
+            return;
+        };
+        let element = type_name(elem);
+        let (what_is, alternative) = match held {
+            FixedLength::Known(count) => (
+                format!(
+                    "`{value_text}` holds {}, but {slot} must hold exactly {}",
+                    items(*count),
+                    items(*expected)
+                ),
+                format!("Use a list of {} for {slot}", items(*expected)),
+            ),
+            FixedLength::Unknown | FixedLength::OfParam { .. } => (
+                format!(
+                    "The number of items in `{value_text}` is not known here, so it cannot be checked against the {} {slot} must hold",
+                    items(*expected)
+                ),
+                format!(
+                    "Use a `fixed<{element}>` list written out in this function, so its length is known"
+                ),
+            ),
+        };
+        self.diags.push(fixed_length_mismatch_diag(
+            span.clone(),
+            &what_is,
+            &alternative,
+            &element,
+            *expected,
+        ));
+    }
+
     /// One `return` of the function being checked, whose return type is `declared`: a written
     /// length is checked against it; an unwritten one is collected so the function's length can be
     /// worked out when its body is done (`finish_function_returns`). O(1).
