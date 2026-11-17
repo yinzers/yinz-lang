@@ -905,7 +905,11 @@ function entrypoint() -> nothing {
   print(`parent`)
 }
 ";
-    balanced_and_asan_clean("c8s6_return_suspending_in_branch", in_a_branch, "5\nparent\n");
+    balanced_and_asan_clean(
+        "c8s6_return_suspending_in_branch",
+        in_a_branch,
+        "5\nparent\n",
+    );
 
     let in_a_loop = "
 function inner(n: int) -> int {

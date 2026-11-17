@@ -333,8 +333,7 @@ pub fn channel_elem_drop(elem: &Type) -> Option<ChannelElemDrop> {
 /// `shape` elements and bignum `number` (precision > 34) stay rejected
 /// (`channel-element-heap-upgrade` in the feature registry).
 pub fn channel_elem_supported(elem: &Type) -> bool {
-    matches!(elem, Type::Int | Type::Float | Type::Bool)
-        || channel_elem_drop(elem).is_some()
+    matches!(elem, Type::Int | Type::Float | Type::Bool) || channel_elem_drop(elem).is_some()
 }
 
 /// The user-facing names of the element types [`channel_elem_supported`] admits, in the
