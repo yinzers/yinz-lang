@@ -473,7 +473,7 @@ A task whose future is dropped before it returned (the runtime shut down, its ha
 - **A completion nobody receives** belongs to the handle. `ynz_rt_spawn_handle` takes `result_release`, a `void(err, ok)` the spawn site emits per return type (`handle_result_release_fn`: a string, array or map word; a `maybe`'s counted cell; an errors-capable pair as the companion struct; null for a result that owns no heap and for a `number`, whose ok word is in the handle's buffer). `ynz_handle_free` closes the outbox and releases what was delivered before; a task that finishes after the close finds `try_send` refused and releases its own result. A received completion belongs to the receiving binding, as before.
 - **Not released.** An embedded child's `Sleep` box (its frame's sleep handle) is freed by nobody when the child is parked in a `wait sleep` and dropped: `SpawnStateFnFuture::drop` frees the root's and the recursion chain's. It is invisible to the alloc counters (a Tokio box) and is a decision of the Chief Architect. A union, channel or handle a group member returns, and a `maybe` or union errors-capable result, are not released from a returned member's slot (`callee_result_type` lists what is).
 
-Pinned by `v03_m9_c8_s6` (one test per site, the parked-frame kinds, the unreceived results, the given shape), `v03_m9_c8_s0_red` (`dropped_while_pending_*`) and `drop_entry_contract` in `ynz-runtime` (the drop skips a returned and an unwound frame).
+Pinned by `v03_m9_c8_s6` (one test per site, the parked-frame kinds, the unreceived results, the given shape), `v03_m9_c8_s0` (`dropped_while_pending_*`) and `drop_entry_contract` in `ynz-runtime` (the drop skips a returned and an unwound frame).
 
 ### Non-owned reads — view or copy
 

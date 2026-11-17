@@ -522,8 +522,9 @@ pub fn assert_asan_clean(label: &str, program: &str, expected: &str, no_optimize
     assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
 }
 
-/// Run `built` and check it exits 0, prints `expected`, freed every heap allocation and every
-/// string, and is clean under AddressSanitizer. `label` names the program in a failure.
+/// Run `built` and check it exits 0, prints `expected`, allocated something (a program that allocates
+/// nothing would balance trivially), freed every heap allocation and every string, and is
+/// clean under AddressSanitizer. `label` names the program in a failure.
 pub fn assert_built_balanced_and_asan_clean(
     label: &str,
     built: &Built,
@@ -537,6 +538,10 @@ pub fn assert_built_balanced_and_asan_clean(
         run.stderr
     );
     assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
+    assert!(
+        counters.alloc + counters.string_alloc > 0,
+        "{label} (no_optimize={no_optimize}): non-vacuous: the program must allocate: {counters:?}"
+    );
     assert_eq!(
         counters.free, counters.alloc,
         "{label} (no_optimize={no_optimize}): every heap allocation must be freed: {counters:?}"
