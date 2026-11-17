@@ -399,7 +399,7 @@ background eat(choice)
 // COMPILE ERROR: Cannot give the union `Circle | Tag` to `eat`'s generic parameter `held`
 // in a `background` call.
 // Declare `held` as `Circle | Tag` in `eat`'s signature instead of a type parameter,
-// or wrap the union in a shape field and pass the shape.
+// or put the union in a field of a shape and pass the shape.
 ```
 
 **The compiler figures out which one to use** when the function signature is `give`:

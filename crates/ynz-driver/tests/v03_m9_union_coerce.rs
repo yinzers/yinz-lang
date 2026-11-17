@@ -137,7 +137,7 @@ fn v03_m9_union_coerce_suspending_let_wait_is_refused() {
     // through address 0x4. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_coerce_suspending_let_wait_refused.ynz",
-        "`wait count()` pauses and resumes before it gives its result",
+        "`wait count()` pauses and resumes before it gives its value",
     );
 }
 
@@ -147,7 +147,7 @@ fn v03_m9_union_coerce_suspending_let_direct_is_refused() {
     // callee called without `wait`. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_coerce_suspending_let_direct_refused.ynz",
-        "`count()` pauses and resumes before it gives its result",
+        "`count()` pauses and resumes before it gives its value",
     );
 }
 
@@ -235,10 +235,10 @@ fn refused_build_diagnostics(label: &str, program: &str) -> String {
 fn assert_return_refused(label: &str, program: &str, call: &str) {
     let diagnostics = refused_build_diagnostics(label, program);
     for teaching_part in [
-        format!("`{call}` pauses and resumes before it gives its result"),
+        format!("`{call}` pauses and resumes before it gives its value"),
         "can't be returned straight from this function".to_string(),
         format!("`let got = {call}`, then `return got`"),
-        "its result arrives without that tag being added".to_string(),
+        "its value arrives without that tag being added".to_string(),
     ] {
         assert!(
             diagnostics.contains(&teaching_part),
@@ -255,7 +255,7 @@ fn v03_m9_union_coerce_suspending_let_cpu_promoted_is_refused() {
     assert_source_refused(
         "promoted callee into a union let",
         PROMOTED_CALLEE_PROGRAM,
-        "`combine()` pauses and resumes before it gives its result",
+        "`combine()` pauses and resumes before it gives its value",
     );
 }
 
