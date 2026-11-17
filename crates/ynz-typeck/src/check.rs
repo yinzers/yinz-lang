@@ -32,7 +32,10 @@ use crate::{
     types::{arc_shareable, channel_elem_drop, type_name, Type},
 };
 
+mod fixed_lengths;
+
 use crate::binding_names::{decl_key, DeclKey};
+use crate::fixed_length::{close_instances, length_parameters, FixedCalls, FixedInstances};
 use crate::release_plan::{
     heap_class_of, slot_held_type, EdgeKind, HeapClass, Moved, RawEntry, ReleaseReads, TypeTables,
 };
@@ -964,6 +967,13 @@ pub struct TypedModule {
     /// C1g (#424): the type arguments each generic call was checked with, keyed by the call's
     /// span. Codegen picks the instance a call runs from this record and nothing else.
     pub generic_call_instances: crate::generics::GenericCallInstances,
+    /// C1h (#433): every call to a function with `fixed` length parameters and the specialised
+    /// versions the program needs (`crate::fixed_length::close_instances`). Codegen reads each
+    /// version from here and works out no length on its own.
+    pub fixed_instances: FixedInstances,
+    /// C1h (#433): the return type of each function whose return type is a `fixed` without a
+    /// written length, with the length worked out from its `return` statements.
+    pub inferred_return_types: std::collections::BTreeMap<String, Type>,
 }
 
 impl TypedModule {
@@ -1013,6 +1023,8 @@ impl TypedModule {
             non_owned_reads: self.non_owned_reads.clone(),
             temporaries: self.temporaries.clone(),
             callable_fns: self.callable_fns.clone(),
+            fixed_instances: self.fixed_instances.clone(),
+            inferred_return_types: self.inferred_return_types.clone(),
         })
     }
 }
@@ -1043,6 +1055,62 @@ pub fn check(
     DiagnosticBucket,
     HashSet<String>,
 ) {
+    // C1h (#433): a function whose return type is a `fixed` without a written length gets its
+    // length from its `return` statements, and its callers need it to type their calls. The
+    // body check runs again with what the last run worked out until nothing new is found: one
+    // run when no function has such a return type, and at most one more run per such function
+    // (a chain of calls each waits for the one below it).
+    let mut inferred_returns: HashMap<String, Type> = HashMap::new();
+    let function_count = module
+        .items
+        .iter()
+        .filter(|item| matches!(item, Item::Function(_)))
+        .count();
+    let mut passes = 1;
+    loop {
+        let (mut typed, mono_table, diags, referenced_names, worked_out) = check_one_pass(
+            module,
+            sig_table,
+            shape_table,
+            generic_fn_table,
+            generic_shape_table,
+            intrinsics,
+            imported_options,
+            ownership,
+            imported_fn_names,
+            &inferred_returns,
+        );
+        if worked_out == inferred_returns || passes > function_count {
+            typed.inferred_return_types = worked_out.into_iter().collect();
+            return (typed, mono_table, diags, referenced_names);
+        }
+        inferred_returns = worked_out;
+        passes += 1;
+    }
+}
+
+/// One run of the body check, typing each call of a function with an unwritten `fixed` return
+/// length with `inferred_returns`. Returns, besides the result of `check`, what this run worked
+/// out for those functions.
+#[allow(clippy::too_many_arguments)]
+fn check_one_pass(
+    module: &Module,
+    sig_table: &SignatureTable,
+    shape_table: &ShapeTable,
+    generic_fn_table: &GenericFnTable,
+    generic_shape_table: &GenericShapeTable,
+    intrinsics: &PrimitiveIntrinsicTable,
+    imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
+    ownership: &crate::effective_ownership::EffectiveOwnershipReport,
+    imported_fn_names: &HashSet<String>,
+    inferred_returns: &HashMap<String, Type>,
+) -> (
+    TypedModule,
+    MonomorphizationTable,
+    DiagnosticBucket,
+    HashSet<String>,
+    HashMap<String, Type>,
+) {
     let mut diags = DiagnosticBucket::new();
     let mut options_table = collect_options(module, &mut diags);
     // Merge imported options so function bodies can use cross-file options types.
@@ -1067,6 +1135,13 @@ pub fn check(
         diags,
         scope: Scope::new(),
         current_fn_name: String::new(),
+        fixed_calls: FixedCalls::new(),
+        returned_lengths: Vec::new(),
+        inferred_returns: inferred_returns.clone(),
+        inferred_return_out: HashMap::new(),
+        in_signature_resolution: false,
+        signature_top_pending: false,
+        fixed_length_site: "here",
         current_fn_ret: Type::Nothing,
         current_shape: None,
         type_param_scope: HashMap::new(),
@@ -1137,6 +1212,10 @@ pub fn check(
             generic_shapes: checker.generic_shape_table,
         },
     );
+    let fixed_instances = fixed_instances_of(
+        std::mem::take(&mut checker.fixed_calls),
+        checker.sig_table,
+    );
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -1155,12 +1234,15 @@ pub fn check(
         non_owned_reads,
         temporaries,
         callable_fns: callable_fns_of(&checker.local_fn_names, checker.imported_fn_names),
+        fixed_instances,
+        inferred_return_types: std::collections::BTreeMap::new(),
     };
     (
         typed,
         checker.mono_table,
         checker.diags,
         checker.referenced_names,
+        checker.inferred_return_out,
     )
 }
 
@@ -1205,6 +1287,13 @@ pub fn check_with_kernel_mode(
         diags,
         scope: Scope::new(),
         current_fn_name: String::new(),
+        fixed_calls: FixedCalls::new(),
+        returned_lengths: Vec::new(),
+        inferred_returns: HashMap::new(),
+        inferred_return_out: HashMap::new(),
+        in_signature_resolution: false,
+        signature_top_pending: false,
+        fixed_length_site: "here",
         current_fn_ret: Type::Nothing,
         current_shape: None,
         type_param_scope: HashMap::new(),
@@ -1289,8 +1378,132 @@ pub fn check_with_kernel_mode(
         non_owned_reads,
         temporaries,
         callable_fns: callable_fns_of(&checker.local_fn_names, checker.imported_fn_names),
+        fixed_instances: FixedInstances::default(),
+        inferred_return_types: std::collections::BTreeMap::new(),
     };
     (typed, checker.mono_table, checker.diags)
+}
+
+/// The specialised versions the program needs: the recorded calls closed over the length
+/// parameters of every function in `sig_table` (`crate::fixed_length::close_instances`).
+/// O(calls + versions).
+fn fixed_instances_of(calls: FixedCalls, sig_table: &SignatureTable) -> FixedInstances {
+    let length_parameters: std::collections::BTreeMap<String, Vec<String>> = sig_table
+        .fns
+        .iter()
+        .filter_map(|(name, signature)| {
+            let parameters = length_parameters(&signature.params);
+            (!parameters.is_empty()).then(|| (name.clone(), parameters))
+        })
+        .collect();
+    let instances = close_instances(&calls, &length_parameters);
+    FixedInstances {
+        calls,
+        length_parameters,
+        instances,
+    }
+}
+
+/// `FixedLengthNotUsable`: the length in a written `fixed<…>` is not a whole number the compiler
+/// can use. `problem` and `alternative` say what is wrong and the way out.
+fn fixed_length_not_usable_diag(
+    span: SourceSpan,
+    written: &str,
+    problem: &str,
+    alternative: &str,
+) -> Diagnostic {
+    let slots = [
+        ("written", written),
+        ("problem", problem),
+        ("alternative", alternative),
+        ("limit", "4294967295"),
+    ];
+    registry_diag(span, DiagnosticKind::FixedLengthNotUsable, &slots)
+}
+
+/// `FixedLengthNotAllowedHere`: a length written on a type that is not the whole type of a
+/// function parameter or return value, or on a generic that takes none.
+fn fixed_length_not_allowed_here_diag(
+    span: SourceSpan,
+    written: &str,
+    place: &str,
+    alternative: &str,
+) -> Diagnostic {
+    let slots = [
+        ("written", written),
+        ("place", place),
+        ("alternative", alternative),
+    ];
+    registry_diag(span, DiagnosticKind::FixedLengthNotAllowedHere, &slots)
+}
+
+/// `FixedLengthMismatch`: an argument or a `return` whose length is not the length the signature
+/// wrote. `what_is` is the whole first sentence, `alternative` the way out.
+fn fixed_length_mismatch_diag(
+    span: SourceSpan,
+    what_is: &str,
+    alternative: &str,
+    element: &str,
+    expected: usize,
+) -> Diagnostic {
+    let expected = expected.to_string();
+    let slots = [
+        ("what_is", what_is),
+        ("alternative", alternative),
+        ("element", element),
+        ("expected", expected.as_str()),
+    ];
+    registry_diag(span, DiagnosticKind::FixedLengthMismatch, &slots)
+}
+
+/// `FixedLengthMissingInExport`: an exported function's `fixed` parameter or return type that
+/// does not write its length.
+fn fixed_length_missing_in_export_diag(
+    span: SourceSpan,
+    function: &str,
+    part: &str,
+    written: &str,
+    suggested: &str,
+) -> Diagnostic {
+    let slots = [
+        ("function", function),
+        ("part", part),
+        ("written", written),
+        ("suggested", suggested),
+    ];
+    registry_diag(span, DiagnosticKind::FixedLengthMissingInExport, &slots)
+}
+
+/// `FixedReturnLengthsDiffer`: a function whose `return` statements give lists of different
+/// lengths. `lengths` lists them (`3 items and 2 items`), `first` is the first one's.
+fn fixed_return_lengths_differ_diag(
+    span: SourceSpan,
+    function: &str,
+    lengths: &str,
+    first: &str,
+) -> Diagnostic {
+    let slots = [
+        ("function", function),
+        ("lengths", lengths),
+        ("first", first),
+    ];
+    registry_diag(span, DiagnosticKind::FixedReturnLengthsDiffer, &slots)
+}
+
+/// `FixedReturnLengthUnknown`: the length a function returns cannot be worked out from its
+/// `return` statements.
+fn fixed_return_length_unknown_diag(
+    span: SourceSpan,
+    function: &str,
+    reason: &str,
+    element: &str,
+) -> Diagnostic {
+    let slots = [
+        ("function", function),
+        ("reason", reason),
+        ("element", element),
+    ];
+    registry_diag(span, DiagnosticKind::FixedReturnLengthUnknown, &slots)
 }
 
 /// Build the `wait_on_non_may_block` warning (registry `[[diagnostic_template]]` kind_name =
@@ -1348,6 +1561,23 @@ struct Checker<'b> {
     local_fn_names: HashSet<String>,
     /// The function whose body is being checked — the `{fn}` slot of `ParamNeedsGive`.
     current_fn_name: String,
+    /// v0.3-M9 C1h: every call to a function with length parameters (`FixedInstances::calls`).
+    fixed_calls: FixedCalls,
+    /// The `return` statements of the function being checked whose return type is a `fixed`
+    /// without a written length (`finish_function_returns` reads and clears them).
+    returned_lengths: Vec<fixed_lengths::ReturnedLength>,
+    /// What the previous pass worked out for each function whose return type is a `fixed`
+    /// without a written length; this pass types its calls with it.
+    inferred_returns: HashMap<String, Type>,
+    /// What this pass worked out (`finish_function_returns`).
+    inferred_return_out: HashMap<String, Type>,
+    /// True while a parameter or return type is being resolved.
+    in_signature_resolution: bool,
+    /// True until `ast_type_to_type` reads it: the next type resolved is the whole type of a
+    /// parameter or return value, where a written length is allowed.
+    signature_top_pending: bool,
+    /// Where the type being resolved sits, for a length written where none is allowed.
+    fixed_length_site: &'static str,
 
     // ── Mutable module-level output ───────────────────────────────────────────
     //
@@ -1600,6 +1830,7 @@ impl<'b> Checker<'b> {
                     let type_params: HashSet<String> =
                         s.generics.iter().map(|g| g.name.clone()).collect();
                     for field in &s.fields {
+                        self.report_lengths_in_shape_field(&field.ty);
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
                         // A hidden field with a default had its type checked, map keys
                         // included, by `check_hidden_field_defaults` below.
@@ -1675,9 +1906,10 @@ impl<'b> Checker<'b> {
         self.release.begin_function(&f.name, &f.body.span);
 
         // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
-        let ret_ty = self.ast_type_to_type(&f.return_type);
+        let ret_ty = self.ast_type_to_type_in_signature(&f.return_type);
         self.current_fn_ret = ret_ty.clone();
         self.current_fn_name = f.name.clone();
+        self.check_exported_fixed_lengths(f);
 
         // M7 P3a: track whether the current function is errors-capable.
         self.current_fn_errors_capable = f.errors_capable;
@@ -1712,7 +1944,8 @@ impl<'b> Checker<'b> {
         // record the enclosing shape for hidden-field visibility and Self resolution.
         self.current_shape = None;
         for (i, param) in f.params.iter().enumerate() {
-            let param_ty = self.ast_type_to_type(&param.ty);
+            let declared_ty = self.ast_type_to_type_in_signature(&param.ty);
+            let param_ty = self.parameter_type_from_signature(&f.name, i, declared_ty);
             if i == 0 && param.name == "self" {
                 if let Type::Shape { name } = &param_ty {
                     self.current_shape = Some(name.clone());
@@ -1859,6 +2092,7 @@ impl<'b> Checker<'b> {
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
         self.check_stmts(&f.body.stmts);
+        self.finish_function_returns(f, &ret_ty);
         self.record_exit(
             EdgeKind::BlockEnd,
             &f.body.span,
@@ -2612,7 +2846,7 @@ impl<'b> Checker<'b> {
             self.type_param_scope.insert(gp.name.clone(), ());
         }
 
-        let ret_ty = self.ast_type_to_type(&f.return_type);
+        let ret_ty = self.ast_type_to_type_in_signature(&f.return_type);
         self.current_fn_ret = ret_ty;
         self.current_fn_name = f.name.clone();
         self.current_shape = None;
@@ -2626,7 +2860,7 @@ impl<'b> Checker<'b> {
             }
         }
         for param in &f.params {
-            let param_ty = self.ast_type_to_type(&param.ty);
+            let param_ty = self.ast_type_to_type_in_signature(&param.ty);
             let alias_class = self.scope.new_class();
             self.declare_binding(
                 param.name.clone(),
@@ -3235,7 +3469,9 @@ impl<'b> Checker<'b> {
         // root positions for suspending conduit-method calls.
         self.record_conduit_root(value);
 
+        self.fixed_length_site = "on a local variable";
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
+        self.fixed_length_site = "here";
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 
         // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): `let x: number = 5`
@@ -4725,6 +4961,7 @@ impl<'b> Checker<'b> {
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
                 self.record_return(expr);
+                self.record_returned_length(ret, &val_ty, expr.span());
                 // Int literal returned from a `-> number` function — the hinted
                 // infer silently types it `number` and the LLVM verifier rejects
                 // the raw-i64 ret at codegen (Future-Req #14, shared gate).
@@ -6159,7 +6396,7 @@ impl<'b> Checker<'b> {
                     self.referenced_names.insert(name.to_string());
                     let params = sig.params.clone();
                     let ownerships = sig.param_ownerships.clone();
-                    let ret = sig.ret.clone();
+                    let ret = self.seeded_return_type(name, &sig.ret);
                     let callee_suspends = sig.suspends;
 
                     // Cross-module calls are resolved: `check_query` on the imported module
@@ -7821,6 +8058,21 @@ impl<'b> Checker<'b> {
 
             self.check_argument_type(name, arg, expected_ty, &actual_ty);
         }
+        // The lengths of the `fixed` arguments (C1h): checked against a written length, bound to
+        // the callee's length parameters, and recorded for the specialised versions.
+        let arguments: Vec<(String, Type, SourceSpan)> = call
+            .args
+            .iter()
+            .zip(actual_tys.iter())
+            .map(|(arg, actual)| (expr_source_text(arg), actual.clone(), arg.span().clone()))
+            .collect();
+        let ret = self.bind_call_lengths(
+            name,
+            (call.span.start, call.span.end),
+            params,
+            &arguments,
+            ret,
+        );
         // Reject Range return values (shouldn't be in sig_table, but guard anyway)
         if matches!(ret, Type::Range { .. }) {
             return Type::Error;
@@ -8593,6 +8845,29 @@ impl<'b> Checker<'b> {
                             };
                             self.check_argument_type(method, arg, expected_ty, &actual_ty);
                         }
+                        // The lengths of the `fixed` arguments (C1h), as the plain call form binds
+                        // them: `p.f(xs)` is `f(p, xs)`. Keyed by the method name's span.
+                        let signature_params = sig.params.clone();
+                        let arguments: Vec<(String, Type, SourceSpan)> = args
+                            .iter()
+                            .map(|arg| {
+                                let argument_span = arg.span();
+                                let actual = self
+                                    .expr_types
+                                    .get(&(argument_span.start, argument_span.end))
+                                    .cloned()
+                                    .unwrap_or(Type::Error);
+                                (expr_source_text(arg), actual, argument_span.clone())
+                            })
+                            .collect();
+                        let returned = self.seeded_return_type(method, &sig.ret);
+                        let returned = self.bind_call_lengths(
+                            method,
+                            (method_span.start, method_span.end),
+                            &signature_params[1..],
+                            &arguments,
+                            returned,
+                        );
                         // Kernel-mode rejection for UFCS suspending method calls. The
                         // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
                         // UFCS calls route through this path and need the same guard so that
@@ -8605,9 +8880,9 @@ impl<'b> Checker<'b> {
                                 format!("Remove the call to `{method}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
                                 "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                             ));
-                            return sig.ret.clone();
+                            return returned;
                         }
-                        return sig.ret.clone();
+                        return returned;
                     }
                 }
                 // Function exists but first param doesn't match
@@ -9055,6 +9330,8 @@ impl<'b> Checker<'b> {
     }
 
     fn ast_type_to_type(&mut self, ast_ty: &AstType) -> Type {
+        // True only for the whole type of a parameter or return value (`fixed_lengths`).
+        let at_signature_top = std::mem::take(&mut self.signature_top_pending);
         match ast_ty {
             AstType::Nothing => Type::Nothing,
             AstType::Int => Type::Int,
@@ -9180,8 +9457,19 @@ impl<'b> Checker<'b> {
                     ));
                     return Type::Error;
                 }
-                let resolved_args: Vec<Type> =
-                    args.iter().map(|a| self.ast_type_to_type(a)).collect();
+                // `fixed<T>` and `fixed<T, N>` are read by one function (`fixed_length`), which
+                // also says where a length may be written.
+                if name == "fixed" {
+                    return self.resolve_written_fixed(ast_ty, args, span, at_signature_top);
+                }
+                if args.iter().any(|a| matches!(a, AstType::Length { .. })) {
+                    self.report_length_on_other_generic(ast_ty, name, args, span);
+                }
+                let resolved_args: Vec<Type> = args
+                    .iter()
+                    .filter(|a| !matches!(a, AstType::Length { .. }))
+                    .map(|a| self.ast_type_to_type(a))
+                    .collect();
                 // The arms below fill a missing argument with `Error`. Report it here: callers
                 // skip their checks on a type holding an `Error` as already reported (`channel`
                 // reports its own count).
@@ -9198,21 +9486,6 @@ impl<'b> Checker<'b> {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinArray {
                             elem: Box::new(elem),
-                        }
-                    }
-                    "fixed" => {
-                        if resolved_args.len() > 1 {
-                            self.diags.push(Diagnostic::error(
-                                span.clone(),
-                                "`fixed<T>` takes one type argument. Yinz doesn't have tuple types.",
-                                "Define a shape with named fields instead:\n  shape IntervalConfig { minutes: int, timeframe: Timeframe }\n  const intervals: fixed<IntervalConfig> = [\n      { minutes: 5, timeframe: Timeframe.fiveMinute },\n      ...\n  ]",
-                                "Named fields are always self-documenting — `config.minutes` is clearer than a positional index. The shape compiles to the same stack-allocated memory layout a tuple would use, with zero overhead. Yinz also auto-reorders shape fields for optimal memory alignment, so the shape may pack tighter than a manual tuple.",
-                            ));
-                        }
-                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
-                        Type::BuiltinFixed {
-                            elem: Box::new(elem),
-                            size: crate::types::FixedLength::Unknown,
                         }
                     }
                     "map" => {
@@ -16253,6 +16526,7 @@ fn render_ast_type(ty: &ynz_ast::nodes::Type) -> String {
         }
         AstType::ErrorCapable { inner, .. } => format!("{} errors", render_ast_type(inner)),
         AstType::Sensitive(inner) => format!("sensitive {}", render_ast_type(inner)),
+        AstType::Length { value, .. } => value.to_string(),
         _ => "?".to_string(),
     }
 }

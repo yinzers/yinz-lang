@@ -76,6 +76,24 @@ pub enum DiagnosticKind {
     /// (8 bytes, or 16 for a `number` of up to 34 digits): a `number` of more than 34 digits, a
     /// shape, an array, any other type. The slot would hold only an address, so an equal key
     /// would miss. v0.3-M9 C6 follow-up, as ruled by the Product Manager.
+    /// The length of a `fixed<T, N>` is not a whole number the compiler can use (`fixed<int, N>`,
+    /// a number past 4294967295, or an argument after the length). v0.3-M9 C1h.
+    FixedLengthNotUsable,
+    /// A length written where only a function parameter or return type may write one (a local,
+    /// a shape field, nested inside another type), or on a type that takes none (`array<int, 4>`).
+    /// v0.3-M9 C1h.
+    FixedLengthNotAllowedHere,
+    /// A list whose length differs from the length a signature wrote: an argument, or a `return`
+    /// value, of another length or of a length the compiler does not know. v0.3-M9 C1h.
+    FixedLengthMismatch,
+    /// An `export function` whose `fixed` parameter or return type does not write its length:
+    /// another file sees only the signature. v0.3-M9 C1h.
+    FixedLengthMissingInExport,
+    /// A function whose `return` statements give lists of different lengths. v0.3-M9 C1h.
+    FixedReturnLengthsDiffer,
+    /// A function whose returned list length cannot be worked out from its `return` statements.
+    /// v0.3-M9 C1h.
+    FixedReturnLengthUnknown,
     MapKeyNotStorable,
     /// A `background` call passes a union to a parameter the generic callee declares as a bare
     /// type parameter: the task has no slot to copy the union into. v0.3-M9 C6.
@@ -153,6 +171,12 @@ impl DiagnosticKind {
                 "ArgumentConflictsWithTypeParameter"
             }
             DiagnosticKind::MapKeyNotStorable => "MapKeyNotStorable",
+            DiagnosticKind::FixedLengthNotUsable => "FixedLengthNotUsable",
+            DiagnosticKind::FixedLengthNotAllowedHere => "FixedLengthNotAllowedHere",
+            DiagnosticKind::FixedLengthMismatch => "FixedLengthMismatch",
+            DiagnosticKind::FixedLengthMissingInExport => "FixedLengthMissingInExport",
+            DiagnosticKind::FixedReturnLengthsDiffer => "FixedReturnLengthsDiffer",
+            DiagnosticKind::FixedReturnLengthUnknown => "FixedReturnLengthUnknown",
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "BackgroundUnionToGenericParameter"
             }
@@ -193,6 +217,12 @@ impl DiagnosticKind {
         "SuspendingResultIntoUnionReturn",
         "ArgumentConflictsWithTypeParameter",
         "MapKeyNotStorable",
+        "FixedLengthNotUsable",
+        "FixedLengthNotAllowedHere",
+        "FixedLengthMismatch",
+        "FixedLengthMissingInExport",
+        "FixedReturnLengthsDiffer",
+        "FixedReturnLengthUnknown",
         "BackgroundUnionToGenericParameter",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
@@ -236,6 +266,12 @@ impl DiagnosticKind {
                 "not the type this call needs".to_string()
             }
             DiagnosticKind::MapKeyNotStorable => "can't be a map key".to_string(),
+            DiagnosticKind::FixedLengthNotUsable => "not a usable length".to_string(),
+            DiagnosticKind::FixedLengthNotAllowedHere => "no length here".to_string(),
+            DiagnosticKind::FixedLengthMismatch => "wrong number of items".to_string(),
+            DiagnosticKind::FixedLengthMissingInExport => "write the length".to_string(),
+            DiagnosticKind::FixedReturnLengthsDiffer => "different lengths".to_string(),
+            DiagnosticKind::FixedReturnLengthUnknown => "length not known".to_string(),
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "declare the union type".to_string()
             }

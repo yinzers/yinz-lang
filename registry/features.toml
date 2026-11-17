@@ -2767,3 +2767,55 @@ what_instead_template = "Nothing to change — there is no source form for this 
 why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only {fields}, so grouping each field's values together lets those loops load just the bytes they use. Honest measurement: under the optimizer the compiler now runs by default, this layout measured about 1.49x faster on a comparable large loop of this shape — a real, shipped speedup, not a projected one. The layout costs nothing in correctness, and the speedup is already in the binaries `ynz build` produces today."
 since = "v0.3-M5"
 design_doc = "docs/internal/implementation/IMP-collections.md"
+
+# v0.3-M9 C1h (card #433): `fixed<T, N>` in function signatures. A `fixed` list costs what Rust's
+# `[T; N]` costs, so its length is a compile-time number. Six refusals; each text is rendered by
+# the emit sites in check.rs through `registry_diag`. Slot names are per template below.
+# Decided v0.3-M9 C1h: `git log --grep="fixed<T, N>"`.
+
+# `{written}` is the type as written (`fixed<int, N>`), `{problem}` says what is wrong with the length
+# in it, `{alternative}` is the way out (names only code that compiles), `{limit}` is 4294967295.
+[[diagnostic_template]]
+kind_name = "FixedLengthNotUsable"
+what_template = "`{written}` does not give a usable length: {problem}."
+what_instead_template = "{alternative}."
+why_template = "A `fixed` list is laid out when the program is compiled, so its length has to be a whole number written in the source, such as `4`, no larger than {limit}. A name, or a value worked out while the program runs, cannot be one."
+
+# `{written}` is the type as written, `{place}` says where (`on a local variable`, `on a shape
+# field`, `inside another type`, or `on `array`, which takes none`), `{alternative}` the way out.
+[[diagnostic_template]]
+kind_name = "FixedLengthNotAllowedHere"
+what_template = "`{written}` writes a length {place}."
+what_instead_template = "{alternative}."
+why_template = "Only the type of a function parameter or return value can write a length: the compiler checks every call and every `return` against it. Anywhere else the length of a `fixed` list comes from the list that is built, such as `[1, 2, 3]`, so a length written there would have nothing to check, and no other type takes one."
+
+# `{what_is}` is the whole first sentence (an argument or a `return` with another length, or one
+# whose length the compiler cannot tell), `{alternative}` the way out, `{element}` and `{expected}`
+# the written element type and length.
+[[diagnostic_template]]
+kind_name = "FixedLengthMismatch"
+what_template = "{what_is}."
+what_instead_template = "{alternative}."
+why_template = "A list written `fixed<{element}, {expected}>` holds exactly {expected} items, and the code compiled for it reads exactly that many. A list of another length would be read past its end, or leave items unread, so the compiler checks the length at every call and every `return`."
+
+# `{function}` the exported function, `{part}` `parameter `xs`` or `return type`, `{written}` the
+# type as written, `{suggested}` the same type with a length.
+[[diagnostic_template]]
+kind_name = "FixedLengthMissingInExport"
+what_template = "`{function}` is exported, but its {part} `{written}` does not say how many items it holds."
+what_instead_template = "Write the length, as in `{suggested}`, using the number of items the callers pass."
+why_template = "A `fixed` list without a written length is compiled once for each length the code that uses it passes, and a returned list takes its length from the function's `return` statements. A file that imports `{function}` sees only its signature, so it could ask for neither. A written length is the same in every file."
+
+# `{function}`, `{lengths}` (`3 and 2`), `{first}` the first length, `{element}` the element type.
+[[diagnostic_template]]
+kind_name = "FixedReturnLengthsDiffer"
+what_template = "`{function}` returns lists of different lengths: {lengths}."
+what_instead_template = "Make every `return` in `{function}` give a list with the same number of items, such as {first}."
+why_template = "A list comes back from a function by value, so its size is part of the function's type: one function returns one length. With {lengths} the caller could not know how many items to read."
+
+# `{function}`, `{reason}` says why it cannot be worked out, `{element}` the element type.
+[[diagnostic_template]]
+kind_name = "FixedReturnLengthUnknown"
+what_template = "The number of items `{function}` returns cannot be worked out: {reason}."
+what_instead_template = "Write the length in the return type of `{function}`, such as `fixed<{element}, 4>`, and make every `return` give that many items."
+why_template = "A list comes back from a function by value, so its size has to be known when the program is compiled. The compiler reads it from the `return` statements; where it cannot, the signature has to say it."

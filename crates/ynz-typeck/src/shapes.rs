@@ -171,11 +171,12 @@ impl ShapeTable {
                         }
                     }
                     "fixed" => {
-                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
-                        Type::BuiltinFixed {
-                            elem: Box::new(elem),
-                            size: crate::types::FixedLength::Unknown,
-                        }
+                        let written = crate::fixed_length::read_fixed_arguments(args);
+                        let element = written
+                            .element
+                            .map(|element| self.resolve_ast_type(element))
+                            .unwrap_or(Type::Error);
+                        crate::fixed_length::fixed_type(element, &written.length)
                     }
                     "map" => {
                         let mut args = resolved_args.into_iter();

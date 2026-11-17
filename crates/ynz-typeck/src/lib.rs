@@ -72,6 +72,7 @@ pub mod temporaries;
 pub mod transfer_record;
 pub mod type_at_offset;
 pub mod type_variant_sampler;
+pub mod fixed_length;
 pub mod types;
 
 pub use check::{

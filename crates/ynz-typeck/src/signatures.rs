@@ -134,11 +134,13 @@ pub fn collect_signatures(
                 continue;
             }
             Item::Function(f) => {
-                let params: Vec<(String, Type)> = f
+                let mut params: Vec<(String, Type)> = f
                     .params
                     .iter()
                     .map(|p| (p.name.clone(), sig_ast_type_to_type(&p.ty, shape_table)))
                     .collect();
+                // A parameter written `fixed<T>` is compiled once per length its callers pass.
+                crate::fixed_length::mark_length_parameters(&mut params);
                 let param_ownerships: Vec<Option<OwnershipModifier>> =
                     f.params.iter().map(|p| p.ownership.clone()).collect();
                 // sig_ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner }
@@ -441,16 +443,17 @@ fn resolve_sig_type_with_params(
             inner: Box::new(resolve(inner)),
         },
         AstType::Generic { name, args, .. } => {
+            if name == "fixed" {
+                let written = crate::fixed_length::read_fixed_arguments(args);
+                let element = written.element.map(resolve).unwrap_or(Type::Error);
+                return crate::fixed_length::fixed_type(element, &written.length);
+            }
             let mut resolved_args: Vec<Type> = args.iter().map(resolve).collect();
             // The built-in containers are their own types; `Generic` is a user-declared
             // generic shape. The arguments of a call have the built-in types.
             match (name.as_str(), resolved_args.len()) {
                 ("array", 1) => Type::BuiltinArray {
                     elem: Box::new(resolved_args.remove(0)),
-                },
-                ("fixed", 1) => Type::BuiltinFixed {
-                    elem: Box::new(resolved_args.remove(0)),
-                    size: crate::types::FixedLength::Unknown,
                 },
                 ("channel", 1) => Type::BuiltinChannel {
                     elem: Box::new(resolved_args.remove(0)),
