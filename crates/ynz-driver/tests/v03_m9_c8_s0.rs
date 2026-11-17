@@ -1,6 +1,6 @@
 //! v0.3-M9 C8 slice 0: one leak test per producer of the suspension-frame release (card #385,
-//! plan #17). They were written red before the slices that fix their producers (the file name keeps
-//! that history) and are all green now; each asserts the balance the producer broke.
+//! plan #17). They were written red before the slices that fix their producers and are all green now;
+//! each asserts the balance the producer broke.
 //!
 //! C7 released every heap local on the plain path; C8 releases a state-machine function's frame
 //! (one that suspends) and the frame of a task dropped while Pending.

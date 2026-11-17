@@ -1,6 +1,6 @@
-//! v0.3-M9 C8 slice 2: the producers of the slice that were red before it was built (card #385,
-//! plan #17). Each program is the smallest that leaks for that producer alone; counters and
-//! AddressSanitizer both run at -O0 and -O2, each level in its own process.
+//! v0.3-M9 C8 slice 2: the producers of the slice, written red before it was built and green
+//! now (card #385, plan #17). Each program is the smallest that leaks for that producer alone;
+//! counters and AddressSanitizer both run at -O0 and -O2, each level in its own process.
 //!
 //! - `wait_statement_temporary_*`: a temporary built in a statement that suspends. It is an
 //!   argument staged into a suspending callee's frame, so it must survive the `wait` and be
