@@ -9209,7 +9209,7 @@ impl<'b> Checker<'b> {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed {
                             elem: Box::new(elem),
-                            size: None,
+                            size: crate::types::FixedLength::Unknown,
                         }
                     }
                     "map" => {
@@ -10737,7 +10737,7 @@ impl<'b> Checker<'b> {
         if is_fixed {
             Type::BuiltinFixed {
                 elem: Box::new(elem_ty),
-                size: Some(size),
+                size: crate::types::FixedLength::Known(size),
             }
         } else {
             Type::BuiltinArray {

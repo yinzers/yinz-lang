@@ -87,7 +87,7 @@ pub fn all_type_variants() -> Vec<Type> {
         },
         Type::BuiltinFixed {
             elem: Box::new(Type::Int),
-            size: None,
+            size: crate::types::FixedLength::Unknown,
         },
         Type::Maybe {
             inner: Box::new(Type::Int),

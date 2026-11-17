@@ -106,7 +106,7 @@ fn m7_errors_capable_type_count_is_20() {
         },
         Type::BuiltinFixed {
             elem: Box::new(Type::Int),
-            size: None,
+            size: ynz_typeck::FixedLength::Unknown,
         },
         Type::Maybe {
             inner: Box::new(Type::Int),

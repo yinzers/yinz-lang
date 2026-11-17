@@ -367,7 +367,7 @@ fn heap_class_of_each_type() {
     };
     let string_list = Type::BuiltinFixed {
         elem: Box::new(Type::String),
-        size: None,
+        size: ynz_typeck::FixedLength::Unknown,
     };
     let cases: Vec<(Type, HeapClass)> = vec![
         (Type::Int, HeapClass::NoHeap),
@@ -436,7 +436,7 @@ fn heap_class_of_each_type() {
         (
             Type::BuiltinFixed {
                 elem: Box::new(Type::Int),
-                size: None,
+                size: ynz_typeck::FixedLength::Unknown,
             },
             HeapClass::NoHeap,
         ),
@@ -1142,7 +1142,7 @@ fn heap_class_of_the_remaining_kinds() {
         (
             Type::BuiltinFixed {
                 elem: Box::new(Type::TypeParam { name: "T".into() }),
-                size: None,
+                size: ynz_typeck::FixedLength::Unknown,
             },
             HeapClass::TypeParameter,
         ),

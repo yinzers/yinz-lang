@@ -6407,7 +6407,7 @@ fn cpu_runtime_axis_fixtures_compile_forced_exhaustive() {
         },
         Type::BuiltinFixed {
             elem: Box::new(Type::Int),
-            size: None,
+            size: ynz_typeck::FixedLength::Unknown,
         },
         Type::Shape {
             name: "Player".to_string(),

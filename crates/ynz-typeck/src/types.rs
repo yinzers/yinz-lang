@@ -1,3 +1,35 @@
+/// How many items a `fixed` list holds, as far as the compiler knows.
+///
+/// `fixed<T, N>` costs what Rust's `[T; N]` costs: the length is a compile-time constant, never a
+/// runtime field and never a pointer-and-length pair. A function whose parameter is written
+/// `fixed<T>` (no length) gets one specialised version per length its callers pass
+/// ([`FixedLength::OfParam`]).
+///
+/// `Ord` for the same reason as [`Type`]: it keys ordered containers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FixedLength {
+    /// The compiler does not know it: a shape field typed `fixed<T>`, or the result of an
+    /// operation that builds a list of runtime length (`filter`, `unique`, `limit`, `freeze`).
+    Unknown,
+    /// Known at compile time: a literal's item count, or the `N` of `fixed<T, N>`.
+    Known(usize),
+    /// The length of the `fixed<T>` parameter named `parameter` of the function being
+    /// checked. The body is checked once with this placeholder; each specialised version
+    /// replaces it with the length of the list its callers pass.
+    OfParam { parameter: String },
+}
+
+impl FixedLength {
+    /// The length when it is known now, `None` for [`Unknown`](FixedLength::Unknown) and for a
+    /// parameter's placeholder. O(1).
+    pub fn known(&self) -> Option<usize> {
+        match self {
+            FixedLength::Known(count) => Some(*count),
+            FixedLength::Unknown | FixedLength::OfParam { .. } => None,
+        }
+    }
+}
+
 /// The types known to the M7 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
@@ -78,12 +110,11 @@ pub enum Type {
     /// Element type is concrete at typeck time.
     BuiltinArray { elem: Box<Type> },
 
-    /// Stack-allocated fixed-size list: `fixed<T>` in source.
-    /// `size` is `Some(n)` when the literal element count is known at typeck time
-    /// (for literal-OOB checking), `None` when only the annotation is present.
+    /// Stack-allocated fixed-size list: `fixed<T>` in source, `fixed<T, N>` in a signature.
+    /// `size` says how many items the list holds, as far as the compiler knows (`FixedLength`).
     BuiltinFixed {
         elem: Box<Type>,
-        size: Option<usize>,
+        size: FixedLength,
     },
 
     /// Built-in optional type: `maybe<T>` in source.

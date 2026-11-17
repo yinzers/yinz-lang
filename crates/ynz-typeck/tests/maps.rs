@@ -634,7 +634,7 @@ fn m5p3c_type_variant_count_locked() {
         },
         Type::BuiltinFixed {
             elem: Box::new(Type::Int),
-            size: None,
+            size: ynz_typeck::FixedLength::Unknown,
         },
         Type::Maybe {
             inner: Box::new(Type::Int),

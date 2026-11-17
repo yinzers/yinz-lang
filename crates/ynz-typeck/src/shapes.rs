@@ -172,7 +172,7 @@ impl ShapeTable {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed {
                             elem: Box::new(elem),
-                            size: None,
+                            size: crate::types::FixedLength::Unknown,
                         }
                     }
                     "map" => {

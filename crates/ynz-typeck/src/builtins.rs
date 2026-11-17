@@ -128,7 +128,7 @@ pub fn array_method_return(method: &str, elem: &Type) -> Option<Type> {
         }),
         "freeze" => Some(Type::BuiltinFixed {
             elem: Box::new(elem),
-            size: None,
+            size: crate::types::FixedLength::Unknown,
         }),
         _ => None,
     }
@@ -155,16 +155,16 @@ pub fn fixed_method_return(method: &str, elem: &Type) -> Option<Type> {
         "sort" | "sortFast" | "sortStrict" | "filter" | "unique" | "limit" | "copy" => {
             Some(Type::BuiltinFixed {
                 elem: Box::new(elem),
-                size: None,
+                size: crate::types::FixedLength::Unknown,
             })
         }
         "append" | "prepend" | "concat" => Some(Type::BuiltinFixed {
             elem: Box::new(elem),
-            size: None,
+            size: crate::types::FixedLength::Unknown,
         }),
         "freeze" => Some(Type::BuiltinFixed {
             elem: Box::new(elem),
-            size: None,
+            size: crate::types::FixedLength::Unknown,
         }),
         _ => None,
     }

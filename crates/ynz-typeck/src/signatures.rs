@@ -450,7 +450,7 @@ fn resolve_sig_type_with_params(
                 },
                 ("fixed", 1) => Type::BuiltinFixed {
                     elem: Box::new(resolved_args.remove(0)),
-                    size: None,
+                    size: crate::types::FixedLength::Unknown,
                 },
                 ("channel", 1) => Type::BuiltinChannel {
                     elem: Box::new(resolved_args.remove(0)),

@@ -605,7 +605,7 @@ mod tests {
         assert_eq!(
             owned_copy_plan(&Type::BuiltinFixed {
                 elem: Box::new(Type::Int),
-                size: Some(3),
+                size: crate::types::FixedLength::Known(3),
             }),
             OwnedCopy::FixedMemcpy
         );

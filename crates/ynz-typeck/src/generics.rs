@@ -73,7 +73,7 @@ pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
         Type::BuiltinArray { elem } => Type::BuiltinArray { elem: apply(elem) },
         Type::BuiltinFixed { elem, size } => Type::BuiltinFixed {
             elem: apply(elem),
-            size: *size,
+            size: size.clone(),
         },
         Type::BuiltinChannel { elem } => Type::BuiltinChannel { elem: apply(elem) },
         Type::Maybe { inner } => Type::Maybe {

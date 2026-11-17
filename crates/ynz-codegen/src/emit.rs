@@ -36,7 +36,7 @@ use ynz_typeck::{
     independence::{partition_independent_groups, IndependentGroup},
     is_base_suspension_intrinsic, type_attached_const_type,
     types::{channel_elem_drop, ChannelElemDrop},
-    GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
+    FixedLength, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
 };
 
 use crate::{
@@ -1681,8 +1681,11 @@ fn mangle_type(ty: &Type) -> String {
         Type::Dynamic { contract } => format!("dyn:{contract}"),
         Type::BuiltinArray { elem } => format!("array({})", mangle_type(elem)),
         Type::BuiltinFixed { elem, size } => match size {
-            Some(size) => format!("fixed({size},{})", mangle_type(elem)),
-            None => format!("fixed(,{})", mangle_type(elem)),
+            FixedLength::Known(size) => format!("fixed({size},{})", mangle_type(elem)),
+            FixedLength::Unknown => format!("fixed(,{})", mangle_type(elem)),
+            FixedLength::OfParam { parameter } => {
+                format!("fixed(param {parameter},{})", mangle_type(elem))
+            }
         },
         Type::Maybe { inner } => format!("maybe({})", mangle_type(inner)),
         Type::Generic { name, args } => format!("generic:{name}({})", joined(args, ",")),
@@ -2544,7 +2547,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             },
             Type::BuiltinFixed { elem, size } => Type::BuiltinFixed {
                 elem: Box::new(self.resolve_type(elem)),
-                size: *size,
+                size: size.clone(),
             },
             Type::Maybe { inner } => Type::Maybe {
                 inner: Box::new(self.resolve_type(inner)),
@@ -9037,7 +9040,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         for (pos, cname) in crossing_names.iter().enumerate() {
             let Some(Type::BuiltinFixed {
                 elem,
-                size: Some(count),
+                size: FixedLength::Known(count),
             }) = crossing_frame_type(&f.body.stmts, cname, typed, shape_table)
             else {
                 continue;
@@ -12444,8 +12447,8 @@ fn lower_sm_for<'ctx, 'g>(
     if let Type::BuiltinFixed { elem, size } = &iter_ty {
         let elem = elem.as_ref().clone();
         let n = match size {
-            Some(n) => *n as u64,
-            None => return Err("SM for-loop: fixed array with unknown size".to_string()),
+            FixedLength::Known(n) => *n as u64,
+            FixedLength::Unknown | FixedLength::OfParam { .. } => return Err("SM for-loop: fixed array with unknown size".to_string()),
         };
         let size_val = cg.i64().const_int(n, false);
 
@@ -13910,7 +13913,7 @@ fn temporary_home(
         },
         Type::BuiltinFixed {
             elem,
-            size: Some(count),
+            size: FixedLength::Known(count),
         } => {
             let bytes = fixed_region_bytes(elem, *count);
             TemporaryHome::Region(TemporaryRegionKind::Bytes(bytes), fixed_frame_slots(bytes))
@@ -14289,7 +14292,7 @@ fn crossing_local_slot_count(
         // A `fixed` list: its moved flag, then its cells.
         Some(Type::BuiltinFixed {
             ref elem,
-            size: Some(count),
+            size: FixedLength::Known(count),
         }) => 1 + fixed_frame_slots(fixed_region_bytes(elem, count)),
         // A `maybe`: its moved flag, then the envelope and payload region.
         Some(Type::Maybe { ref inner }) => match maybe_region_payload_bytes(inner, shape_abi_sizes)
@@ -20299,8 +20302,8 @@ fn lower_stmt_for<'ctx>(
     if let Type::BuiltinFixed { elem, size } = &iter_ty {
         let elem = elem.as_ref().clone();
         let n = match size {
-            Some(n) => *n as u64,
-            None => return Err("codegen: cannot iterate fixed array with unknown size".to_string()),
+            FixedLength::Known(n) => *n as u64,
+            FixedLength::Unknown | FixedLength::OfParam { .. } => return Err("codegen: cannot iterate fixed array with unknown size".to_string()),
         };
         let size_val = cg.i64().const_int(n, false);
         let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
@@ -23218,7 +23221,7 @@ fn lower_expr_node<'ctx>(
                 }
                 Type::BuiltinFixed { elem, size } => {
                     let elem = elem.as_ref().clone();
-                    let sz = *size;
+                    let sz = size.known();
                     lower_fixed_method(cg, recv_val.into_pointer_value(), &elem, sz, method, args)
                 }
                 Type::Maybe { inner } => {
@@ -23359,7 +23362,7 @@ fn lower_expr_node<'ctx>(
             let arr_ty = cg.resolve_type(&cg.expr_type(expr));
             match &arr_ty {
                 Type::BuiltinFixed { elem, size } => {
-                    let n = size.unwrap_or(elements.len()) as u32;
+                    let n = size.known().unwrap_or(elements.len()) as u32;
                     let arr_t = cg.fixed_block_type(elem, n.max(1));
                     let slot = cg
                         .builder
@@ -23463,7 +23466,7 @@ fn lower_expr_node<'ctx>(
                 }
                 Type::BuiltinFixed { elem, size } => {
                     let fixed_elem_ty = elem.as_ref().clone();
-                    let n = size.unwrap_or(0) as u64;
+                    let n = size.known().unwrap_or(0) as u64;
                     let maybe_slot = cg
                         .builder
                         .build_alloca(cg.maybe_type(), "fixed_get")
@@ -27444,7 +27447,7 @@ fn emit_owned_copy<'ctx>(
                     "{site}: owned_copy_plan classified a non-fixed as FixedMemcpy"
                 ));
             };
-            let n = size.ok_or_else(|| {
+            let n = size.known().ok_or_else(|| {
                 format!(
                     "{site}: the length of this `fixed` list is not known here, so its copy \
                      cannot be sized — this is a compiler bug"
@@ -28243,11 +28246,11 @@ fn release_step(ty: &Type) -> ReleaseStep {
         Type::BuiltinFixed { elem, size } => match (release_step(elem), size) {
             (ReleaseStep::Nothing, _) => ReleaseStep::Nothing,
             (ReleaseStep::Unsupported(reason), _) => ReleaseStep::Unsupported(reason),
-            (_, Some(size)) => ReleaseStep::Fixed {
+            (_, FixedLength::Known(size)) => ReleaseStep::Fixed {
                 elem: elem.as_ref().clone(),
                 size: *size as u64,
             },
-            (_, None) => ReleaseStep::Unsupported(
+            (_, FixedLength::Unknown | FixedLength::OfParam { .. }) => ReleaseStep::Unsupported(
                 "the length of this `fixed` list is not known here, so its cells cannot be walked",
             ),
         },
@@ -29459,7 +29462,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Maybe { inner } => self.snapshot_old_maybe(old, live, inner, name)?,
             Type::Union { variants } => self.snapshot_old_union(old, live, variants, name)?,
             Type::BuiltinFixed {
-                size: Some(size), ..
+                size: FixedLength::Known(size),
+                ..
             } => {
                 let snapshot = self.alloca_in_entry_llvm(
                     self.i64().array_type(*size as u32),
@@ -32303,7 +32307,7 @@ mod copy_parity_tests {
                 ReleaseKind::Fixed => (
                     Type::BuiltinFixed {
                         elem: Box::new(Type::String),
-                        size: Some(2),
+                        size: ynz_typeck::FixedLength::Known(2),
                     },
                     |step| matches!(step, ReleaseStep::Fixed { .. }),
                 ),
@@ -35279,7 +35283,7 @@ mod tests {
                 },
                 resolved: Resolved::BuiltinFixed {
                     elem: Box::new(Resolved::Int),
-                    size: None,
+                    size: ynz_typeck::FixedLength::Unknown,
                 },
                 bare_expected: false,
                 ec_expected: false,
@@ -35508,7 +35512,7 @@ mod tests {
             },
             Resolved::BuiltinFixed {
                 elem: Box::new(Resolved::Int),
-                size: None,
+                size: ynz_typeck::FixedLength::Unknown,
             },
             Resolved::Maybe {
                 inner: Box::new(Resolved::Int),
