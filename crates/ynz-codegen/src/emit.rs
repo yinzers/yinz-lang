@@ -2494,6 +2494,10 @@ struct Cg<'ctx, 'g> {
     // v0.3-M9 C7 slice 3: a string read off an errors-capable result at its last use is the result's ok
     // word: where the store seam takes it, this word is nulled, so the result's release skips it.
     string_take_ec_words: HashMap<usize, (PointerValue<'ctx>, Option<usize>)>,
+    // v0.3-M9 C8 slice 4b: errors-capable locals whose ok word is BORROWED from a handle (`h.receive()` of a
+    // `maybe<T>` or `number`: the completion's 16-byte buffer belongs to the handle, which frees it when it
+    // drops). The scope exit drops only their error object, never the ok word.
+    ec_borrowed_ok: HashSet<String>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -8142,6 +8146,7 @@ fn plain_cg<'ctx, 'g>(
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
         string_take_ec_words: HashMap::new(),
+        ec_borrowed_ok: HashSet::new(),
     }
 }
 
@@ -8603,6 +8608,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
         string_take_ec_words: HashMap::new(),
+        ec_borrowed_ok: HashSet::new(),
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -17378,6 +17384,15 @@ fn emit_conduit_stmt<'ctx, 'g>(
         // EC results (send's `nothing errors`, handle-receive's `T errors`) that cross a
         // later suspension need the EC-crossing-local registration, mirroring the
         // let-suspending-call arms.
+        // A `maybe` or `number` a handle delivers sits in the handle's own buffer (`extract_completion`,
+        // `RET_KIND_VALUE_MAYBE` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word.
+        if matches!(op, ConduitOp::HandleRecv) {
+            if let Type::ErrorsCapable { inner } = cg.resolve_type(&cg.expr_type(inner)) {
+                if matches!(*inner, Type::Maybe { .. } | Type::Number { .. }) {
+                    cg.ec_borrowed_ok.insert(name.to_string());
+                }
+            }
+        }
         if cg.sm_crossing_errors_capable_set.contains(name) {
             cg.errors_capable_locals.insert(name.to_string());
         }
@@ -28948,8 +28963,90 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.emit_soa_release(slot, info, only_if_live, name, site)?;
                 continue;
             }
+            if self.ec_borrowed_ok.contains(name) {
+                self.emit_error_only_release(slot, only_if_live, name, site)?;
+                continue;
+            }
             self.emit_slot_release(slot, &ty, ReleaseForm::Local, only_if_live, name, site)?;
         }
+        Ok(())
+    }
+
+    /// The scope exit of an errors-capable local whose ok word the handle owns (`ec_borrowed_ok`): drop
+    /// the error object when the result failed, and nothing of the ok word.
+    ///
+    /// O(1) time to emit.
+    fn emit_error_only_release(
+        &self,
+        slot: PointerValue<'ctx>,
+        only_if_live: bool,
+        name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let result = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_borrowed_result"))
+            .map_err(|err| format!("borrowed result load {name}: {err}"))?
+            .into_pointer_value();
+        let check_bb = self.append_block(&format!("{site}_borrowed_check_{name}"));
+        let drop_bb = self.append_block(&format!("{site}_borrowed_drop_{name}"));
+        let done_bb = self.append_block(&format!("{site}_borrowed_done_{name}"));
+        if only_if_live {
+            let live = self
+                .builder
+                .build_is_not_null(result, &format!("{name}_borrowed_live"))
+                .map_err(|err| format!("borrowed null check {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(live, check_bb, done_bb)
+                .map_err(|err| format!("borrowed live branch {name}: {err}"))?;
+        } else {
+            self.builder
+                .build_unconditional_branch(check_bb)
+                .map_err(|err| format!("borrowed check branch {name}: {err}"))?;
+        }
+        self.builder.position_at_end(check_bb);
+        let err_gep = self
+            .builder
+            .build_struct_gep(
+                errors_result_type(self.ctx),
+                result,
+                0,
+                &format!("{name}_borrowed_err_gep"),
+            )
+            .map_err(|err| format!("borrowed err gep {name}: {err}"))?;
+        let err_bits = self
+            .builder
+            .build_load(self.i64(), err_gep, &format!("{name}_borrowed_err"))
+            .map_err(|err| format!("borrowed err load {name}: {err}"))?
+            .into_int_value();
+        let failed = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                err_bits,
+                self.i64().const_zero(),
+                &format!("{name}_borrowed_failed"),
+            )
+            .map_err(|err| format!("borrowed err cmp {name}: {err}"))?;
+        self.builder
+            .build_conditional_branch(failed, drop_bb, done_bb)
+            .map_err(|err| format!("borrowed drop branch {name}: {err}"))?;
+        self.builder.position_at_end(drop_bb);
+        let error_object = self
+            .builder
+            .build_int_to_ptr(
+                err_bits,
+                self.ptr(),
+                &format!("{name}_borrowed_error_object"),
+            )
+            .map_err(|err| format!("borrowed err inttoptr {name}: {err}"))?;
+        self.builder
+            .build_call(self.rt.ynz_error_drop, &[error_object.into()], "")
+            .map_err(|err| format!("borrowed err drop {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("borrowed done branch {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
         Ok(())
     }
 

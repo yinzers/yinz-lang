@@ -379,3 +379,10 @@ function entrypoint() -> nothing {
 ";
     assert_source_balanced("maybe_union_temporary", source, "1\n0\n");
 }
+
+#[test]
+fn a_maybe_a_handle_delivers_is_not_freed_by_its_binding_because_the_handle_owns_it() {
+    // `h.receive()` of a `maybe<int>` is a pointer into the handle's own 16-byte buffer: releasing
+    // it as a heap cell was a double free (ASan sweep, before the borrowed ok word was recorded).
+    assert_fixture_balanced("v0_3_m8_p4_handle_maybe_return.ynz", "7\ndone\n");
+}
