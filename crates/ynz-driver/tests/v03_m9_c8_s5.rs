@@ -968,3 +968,75 @@ suspending_launcher_cases! {
     a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_borrowed_plain_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", false, false;
     a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy: "number<20> ", "2.5", true, true;
 }
+
+/// A program whose `eat` takes the `maybe<Big>` parameter `held` (declared with `modifier`: `give `,
+/// `share ` or nothing) and runs `body`; `entry` is `entrypoint`'s body.
+fn parameter_maybe_program(modifier: &str, body: &str, entry: &str) -> String {
+    format!(
+        "shape Big {{
+  label: string
+  count: int
+}}
+
+function pick() -> maybe<Big> {{
+  let source: array<Big> = [{{ label: `kept`.toUpperCase(), count: 3 }}]
+  return source.get(0)
+}}
+
+function eat({modifier}held: maybe<Big>) -> nothing {{
+{body}
+}}
+
+function entrypoint() -> nothing {{
+{entry}
+}}
+"
+    )
+}
+
+const MOVE_INTO_LOCAL: &str = "  let mine = held
+  print(mine.exists())";
+const WAIT_THEN_MOVE_INTO_LOCAL: &str = "  wait sleep(1)
+  let mine = held
+  print(mine.exists())";
+const MOVE_AND_READ_VALUE: &str = "  let mine = held
+  let fallback: Big = { label: `x`, count: 0 }
+  print(mine.or(fallback).label)";
+const WAIT_THEN_READ_VALUE: &str = "  wait sleep(1)
+  let fallback: Big = { label: `x`, count: 0 }
+  print(held.or(fallback).label)";
+const COPY_AND_KEEP: &str = "  let mine = held.copy()
+  print(mine.exists())
+  print(held.exists())";
+
+/// Bug caught: a C7 defect found after close, on the C8 round-3 review: moving a `maybe<Shape>` into
+/// a local copied the payload's string fields although the source is consumed and nothing releases
+/// it (`maybe_payload_stable_bits`' moved branch cloned them, a C6 shape from before C7's release of
+/// a consumed source), so each such move leaked the strings of the payload. It reached a `give`
+/// parameter (`let mine = held`), a local moved to a local and the same on the state-machine path.
+/// A suspending callee given a call result also leaked the call result's payload cell (the staged
+/// envelope pointed at a cell nothing freed). Tier Medium. A `share` or bare parameter keeps copying
+/// (`.copy()`): the caller keeps its value, and each side frees its own.
+macro_rules! parameter_maybe_cases {
+    ($($name:ident: $modifier:literal, $body:expr, $entry:literal, $expected:literal;)+) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = parameter_maybe_program($modifier, $body, $entry);
+                assert_source_balanced(stringify!($name), &source, $expected);
+            }
+        )+
+    };
+}
+
+parameter_maybe_cases! {
+    a_given_maybe_shape_moved_into_a_local_is_released_once: "give ", MOVE_INTO_LOCAL, "  eat(pick())", "true\n";
+    a_given_maybe_shape_moved_into_a_local_after_a_wait_is_released_once: "give ", WAIT_THEN_MOVE_INTO_LOCAL, "  eat(pick())", "true\n";
+    a_given_maybe_shape_from_a_local_moved_into_a_local_is_released_once: "give ", MOVE_INTO_LOCAL, "  let found = pick()\n  eat(found)", "true\n";
+    a_given_maybe_shape_from_a_local_moved_after_a_wait_is_released_once: "give ", WAIT_THEN_MOVE_INTO_LOCAL, "  let found = pick()\n  eat(found)", "true\n";
+    a_moved_given_maybe_shape_keeps_its_payload_readable: "give ", MOVE_AND_READ_VALUE, "  eat(pick())", "KEPT\n";
+    a_suspending_callee_given_a_call_result_maybe_shape_frees_the_payload_cell: "give ", WAIT_THEN_READ_VALUE, "  eat(pick())", "KEPT\n";
+    a_moved_local_maybe_shape_is_released_once: "give ", "  print(held.exists())", "  let found = pick()\n  let moved = found\n  print(moved.exists())\n  eat(pick())", "true\ntrue\n";
+    a_bare_maybe_shape_parameter_copy_leaves_the_caller_its_own: "", COPY_AND_KEEP, "  let found = pick()\n  eat(found)\n  print(found.exists())", "true\ntrue\ntrue\n";
+    a_share_maybe_shape_parameter_copy_leaves_the_caller_its_own: "share ", COPY_AND_KEEP, "  let found = pick()\n  eat(found)\n  print(found.exists())", "true\ntrue\ntrue\n";
+}

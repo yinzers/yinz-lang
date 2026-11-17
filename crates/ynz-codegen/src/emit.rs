@@ -4270,55 +4270,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_pointer_value())
     }
 
-    /// Copy every direct `string` field of the shape at `shape_ptr`, in place, through the one
-    /// string copy ([`Cg::string_clone_call`], the call `emit_owned_copy`'s `StringClone` arm
-    /// makes): the shape's bytes were just copied, so each string field still points at the
-    /// source's string, and two shapes holding one string would free it twice. Fields that hold
-    /// a pointer to something else (a nested shape, an `array`, a `map`) stay shared: the
-    /// residual named in `ynz_typeck::owned_copy`'s header.
-    /// O(fields) time, plus one string copy per string field.
-    fn copy_shape_string_fields(
-        &self,
-        shape_ptr: PointerValue<'ctx>,
-        shape_name: &str,
-        site: &str,
-    ) -> Result<(), String> {
-        let struct_ty = self
-            .shape_types
-            .get(shape_name)
-            .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
-        let fields = self
-            .shape_table
-            .get(shape_name)
-            .ok_or_else(|| format!("{site}: shape `{shape_name}` not in the shape table"))?
-            .fields
-            .clone();
-        for (index, field) in fields.iter().enumerate() {
-            if !is_string_like(&self.resolve_type(&field.ty)) {
-                continue;
-            }
-            let field_ptr = self
-                .builder
-                .build_struct_gep(
-                    struct_ty,
-                    shape_ptr,
-                    index as u32,
-                    &format!("{site}_sf_{}", field.name),
-                )
-                .map_err(|err| format!("{site} string field gep: {err}"))?;
-            let original = self
-                .builder
-                .build_load(self.ptr(), field_ptr, &format!("{site}_sfv_{}", field.name))
-                .map_err(|err| format!("{site} string field load: {err}"))?;
-            let copied =
-                self.string_clone_call(original, &format!("{site}_field_{}", field.name))?;
-            self.builder
-                .build_store(field_ptr, copied)
-                .map_err(|err| format!("{site} string field store: {err}"))?;
-        }
-        Ok(())
-    }
-
     /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
     /// `maybe_to_owned_dest`, v0.3-M7 Phase 3 / R9): given a maybe envelope's
     /// loaded `flag` and `bits`, return payload bits that are STABLE past the
@@ -4408,8 +4359,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .build_memcpy(owned_pay, 1, src_pay, 1, size)
                     .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
                 // The payload owns a copy of everything the shape owns unless the envelope it
-                // came from moves in; a moved payload still owns strings of its own (a string is
-                // moved by `string_moves`, not by this record).
+                // came from moves in: a consumed source is released by nobody (its scope exit skips
+                // it), so a moved payload takes the strings and cells its source owned and clones
+                // nothing.
                 if take {
                     // The cell and the strings and cells it owns are the binding's now; only the
                     // emptied cell goes.
@@ -4418,9 +4370,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .map_err(|err| {
                             format!("maybe_payload_stable_bits free the taken cell: {err}")
                         })?;
-                } else if moved {
-                    self.copy_shape_string_fields(owned_pay, name, &format!("{site}_pay"))?;
-                } else {
+                } else if !moved {
                     self.deepen_shape_fields(owned_pay, name)?;
                 }
                 owned_pay
@@ -14085,13 +14035,29 @@ fn wait_temporary_slot_count(
 }
 
 /// The frame slots the region of a staged argument of type `ty` takes (`Cg::stage_value_in_frame`):
-/// a shape's bytes, a `maybe`'s 16-byte envelope (its payload is a heap pointer already). Any other type stages nothing.
+/// a shape's bytes, a `maybe`'s 16-byte envelope and the bytes of the payload cell behind it (a flat
+/// shape's or a decimal's). Any other type stages nothing.
 ///
 /// O(1) time.
 fn staged_region_slots(ty: &Type, sizes: &HashMap<String, u64>) -> usize {
     match ty {
         Type::Shape { name } => shape_frame_slots(name, sizes),
-        Type::Maybe { .. } => fixed_frame_slots(MAYBE_ENVELOPE_BYTES),
+        Type::Maybe { inner } => {
+            fixed_frame_slots(MAYBE_ENVELOPE_BYTES + staged_maybe_payload_bytes(inner, sizes))
+        }
+        _ => 0,
+    }
+}
+
+/// The bytes of the payload a staged `maybe` carries into its region beside the envelope: a flat
+/// shape's bytes or a decimal's 16, 0 for any other payload (a string, array or map is one pointer
+/// in the envelope already).
+///
+/// O(1) time.
+fn staged_maybe_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> u64 {
+    match inner {
+        Type::Shape { name } => sizes.get(name).copied().unwrap_or(0),
+        Type::Number { precision } if *precision <= 34 => DECIMAL_CELL_SIZE,
         _ => 0,
     }
 }
@@ -31030,9 +30996,104 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_memcpy(region, 1, value, 1, size)
             .map_err(|err| format!("stage a shape into the frame: {err}"))?;
+        if let Type::Maybe { inner } = ty {
+            self.stage_maybe_payload(value, region, inner)?;
+        }
         self.builder
             .build_ptr_to_int(region, self.i64(), "staged_shape_bits")
             .map_err(|err| format!("staged shape bits: {err}"))
+    }
+
+    /// Move the payload of the `maybe` `value` into the region behind its staged envelope at `region`
+    /// and point the staged envelope at it. The payload cell a call result owns (a flat shape's, a
+    /// decimal's) is the caller's to free, and the callee releases a `give` parameter in its `Local`
+    /// form, which frees what the payload owns and no cell. So the bytes move (the strings and cells
+    /// they own are the callee's now) and the emptied cell is freed here. A payload that sits in this
+    /// resume invocation's stack is copied the same way and left alone. A payload with no bytes of
+    /// its own (`staged_maybe_payload_bytes`) stays as the envelope has it.
+    ///
+    /// Time: O(1) + one memcpy of the payload's bytes  Space: O(1)
+    fn stage_maybe_payload(
+        &self,
+        value: PointerValue<'ctx>,
+        region: PointerValue<'ctx>,
+        inner: &Type,
+    ) -> Result<(), String> {
+        let inner = self.resolve_type(inner);
+        let payload_bytes = staged_maybe_payload_bytes(&inner, &self.shape_abi_sizes);
+        if payload_bytes == 0 {
+            return Ok(());
+        }
+        let copy_bb = self
+            .ctx
+            .append_basic_block(self.current_fn, "staged_maybe_payload");
+        let done_bb = self
+            .ctx
+            .append_basic_block(self.current_fn, "staged_maybe_done");
+        let (flag, bits) = self.load_maybe_env_pair(value, "staged_maybe")?;
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                "staged_maybe_present",
+            )
+            .map_err(|err| format!("staged maybe present: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, copy_bb, done_bb)
+            .map_err(|err| format!("staged maybe branch: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let source = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), "staged_maybe_source")
+            .map_err(|err| format!("staged maybe source: {err}"))?;
+        // SAFETY: the region holds the 16-byte envelope, then `payload_bytes` for the payload
+        // (`staged_region_slots`).
+        let payload_home = unsafe {
+            self.builder
+                .build_gep(
+                    self.ctx.i8_type(),
+                    region,
+                    &[self.i64().const_int(MAYBE_ENVELOPE_BYTES, false)],
+                    "staged_maybe_home",
+                )
+                .map_err(|err| format!("staged maybe home: {err}"))?
+        };
+        let size = self.i64().const_int(payload_bytes, false);
+        self.builder
+            .build_memcpy(payload_home, 1, source, 1, size)
+            .map_err(|err| format!("staged maybe payload copy: {err}"))?;
+        if self
+            .fresh_payload_maybes
+            .contains(&(value.as_value_ref() as usize))
+        {
+            if matches!(inner, Type::Shape { .. }) {
+                self.builder
+                    .build_call(self.rt.ynz_free, &[source.into(), size.into()], "")
+                    .map_err(|err| format!("staged maybe free the cell: {err}"))?;
+            } else {
+                self.builder
+                    .build_call(self.rt.ynz_number_cell_free, &[source.into()], "")
+                    .map_err(|err| format!("staged maybe free the number cell: {err}"))?;
+            }
+        }
+        let home_bits = self
+            .builder
+            .build_ptr_to_int(payload_home, self.i64(), "staged_maybe_home_bits")
+            .map_err(|err| format!("staged maybe home bits: {err}"))?;
+        let bits_slot = self
+            .builder
+            .build_struct_gep(self.maybe_type(), region, 1, "staged_maybe_bits_slot")
+            .map_err(|err| format!("staged maybe bits slot: {err}"))?;
+        self.builder
+            .build_store(bits_slot, home_bits)
+            .map_err(|err| format!("staged maybe bits store: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("staged maybe join: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
     }
 
     /// The next free frame slot for a temporary of a suspending statement. Running out is an

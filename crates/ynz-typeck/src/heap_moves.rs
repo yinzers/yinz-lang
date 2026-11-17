@@ -17,11 +17,14 @@
 //! * a FRESH value no name holds (a literal, a call result whose every return is fresh, an
 //!   explicit `.copy()`), or
 //! * the WHOLE of an owned binding that the store consumed (`let moved = holder`,
-//!   `holders.add(holder)`, a field of a literal), or
+//!   `holders.add(holder)`, a field of a literal). A `give` parameter is one: it owns its value as a
+//!   local does, and the release plan skips its scope exit once it is consumed, so the store takes
+//!   what it holds; or
 //! * a `return` of a fresh value or of an owned local (the caller takes the boxes).
 //!
-//! A read through a place that stays where it is (a field, an element, a parameter, a call that
-//! returns its argument) is never in the record: the binding that takes it owns a deep copy.
+//! A read through a place that stays where it is (a field, an element, a parameter not declared
+//! `give`, a call that returns its argument) is never in the record: the binding that takes it
+//! owns a deep copy.
 //!
 //! Cost: O(1) time per recorded store, O(m) memory for m recorded stores.
 
