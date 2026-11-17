@@ -55,39 +55,8 @@ fn assert_run_balances(built: &support::Built, what: &str, expected: Option<&str
     );
 }
 
-/// `balanced_fixture!(case, "fixture.ynz", "producer: what leaks")`: the fixture, built and run
-/// at both optimization levels, frees what it allocates.
-macro_rules! balanced_fixture {
-    ($case:ident, $fixture:literal, $bug:literal) => {
-        #[doc = $bug]
-        #[test]
-        #[ignore = "planned RED (v0.3-M9 C8): the suspension-frame release is not built yet"]
-        fn $case() {
-            at_both_optimization_levels(|no_optimize| {
-                let built = build($fixture, no_optimize);
-                assert_run_balances(&built, $bug, None, no_optimize);
-            });
-        }
-    };
-}
-
-/// `balanced_program!(case, SOURCE, "stdout", "producer: what leaks")`: the generated program,
-/// built and run at both optimization levels, prints `stdout` and frees what it allocates.
-macro_rules! balanced_program {
-    ($case:ident, $source:expr, $expected:literal, $bug:literal) => {
-        #[doc = $bug]
-        #[test]
-        #[ignore = "planned RED (v0.3-M9 C8): the suspension-frame release is not built yet"]
-        fn $case() {
-            at_both_optimization_levels(|no_optimize| {
-                let built = build_source($source, stringify!($case), no_optimize);
-                assert_run_balances(&built, $bug, Some($expected), no_optimize);
-            });
-        }
-    };
-}
-
-/// `green_program!` is `balanced_program!` for a producer a slice has fixed: the same body, no `#[ignore]`.
+/// `green_program!(case, SOURCE, "stdout", "producer: what leaks")`: the generated program, built and run at
+/// both optimization levels, prints `stdout` and frees what it allocates.
 macro_rules! green_program {
     ($case:ident, $source:expr, $expected:literal, $bug:literal) => {
         #[doc = $bug]
@@ -101,7 +70,8 @@ macro_rules! green_program {
     };
 }
 
-/// `green_fixture!` is `balanced_fixture!` for a producer a slice has fixed: the same body, no `#[ignore]`.
+/// `green_fixture!(case, "fixture.ynz", "producer: what leaks")`: the fixture, built and run at both
+/// optimization levels, frees what it allocates.
 macro_rules! green_fixture {
     ($case:ident, $fixture:literal, $bug:literal) => {
         #[doc = $bug]
@@ -175,7 +145,7 @@ function entrypoint() -> nothing {
 }
 ";
 
-balanced_program!(
+green_program!(
     dropped_while_pending_at_shutdown,
     DROPPED_AT_SHUTDOWN,
     "parent\n",
@@ -203,7 +173,7 @@ function entrypoint() -> nothing {
 }
 ";
 
-balanced_program!(
+green_program!(
     dropped_while_pending_in_nested_child_frame,
     DROPPED_IN_NESTED_CHILD,
     "parent\n",

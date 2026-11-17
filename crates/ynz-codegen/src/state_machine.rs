@@ -144,6 +144,26 @@ pub fn store_resume_point<'ctx>(
     Ok(())
 }
 
+/// Store `ynz_abi::FRAME_RESUME_POINT_RETURNED` to the `resume_point` of a frame / sub-frame: the
+/// function has returned, so a task dropped later has nothing left to drop.
+///
+/// # Side effects
+///
+/// Mutates the frame's `resume_point`; every Ready return of a resume function runs it (C8 slice 6).
+pub fn store_resume_point_returned<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let returned = ctx
+        .i32_type()
+        .const_int(ynz_abi::FRAME_RESUME_POINT_RETURNED as u64, false);
+    builder
+        .build_store(frame_ptr, returned)
+        .map_err(|e| format!("store_resume_point_returned: {e}"))?;
+    Ok(())
+}
+
 /// Return a GEP pointer to the 16-byte return slot at `FRAME_OFFSET_RETURN_SLOT` (offset 16).
 ///
 /// # Side effects

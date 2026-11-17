@@ -328,7 +328,6 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
             arg_drop_count: arg_drop_count as usize,
             // The CHILD TASK's own caller identity (frame tokens; purged by its drop ladder).
             task_gen: next_caller_generation(),
-            finished: false,
         },
         outbox_tx: Some(outbox_tx),
         ret_kind,

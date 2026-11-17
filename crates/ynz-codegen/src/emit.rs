@@ -10327,7 +10327,11 @@ fn register_drop_state<'ctx, 'g>(
                         .map_err(|e| format!("drop rec slot gep: {e}"))?
                 };
                 cg.builder
-                    .build_load(ctx.ptr_type(AddressSpace::default()), slot, "drop_rec_frame")
+                    .build_load(
+                        ctx.ptr_type(AddressSpace::default()),
+                        slot,
+                        "drop_rec_frame",
+                    )
                     .map_err(|e| format!("drop rec frame load: {e}"))?
                     .into_pointer_value()
             }
@@ -10356,6 +10360,23 @@ fn register_drop_state<'ctx, 'g>(
         .map_err(|e| format!("drop ret: {e}"))?;
     cg.sm_drop_cases.push((!(state as u32), drop_bb));
     cg.builder.position_at_end(saved);
+    Ok(())
+}
+
+/// Return Ready (0) from a resume function: mark the frame returned
+/// (`ynz_abi::FRAME_RESUME_POINT_RETURNED`) so a task dropped later runs no drop entry, then return.
+/// Every Ready return of a resume function comes here (C8 slice 6).
+///
+/// O(1) time: one store and the return.
+fn build_resume_ready_return<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    frame_ptr: PointerValue<'ctx>,
+    what: &str,
+) -> Result<(), String> {
+    state_machine::store_resume_point_returned(cg.ctx, &cg.builder, frame_ptr)?;
+    cg.builder
+        .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
+        .map_err(|e| format!("{what}: {e}"))?;
     Ok(())
 }
 
@@ -10422,9 +10443,7 @@ fn lower_sm_body<'ctx, 'g>(
             frame_ptr,
             cg.ctx.i64_type().const_int(0, false),
         )?;
-        cg.builder
-            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-            .map_err(|e| format!("sm terminal ret: {e}"))?;
+        build_resume_ready_return(cg, frame_ptr, "sm terminal ret")?;
     }
 
     // Terminate any unreached state blocks. LLVM requires every basic block to have a terminator.
@@ -10445,9 +10464,7 @@ fn lower_sm_body<'ctx, 'g>(
                 frame_ptr,
                 cg.ctx.i64_type().const_int(0, false),
             )?;
-            cg.builder
-                .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-                .map_err(|e| format!("sm orphan state ret: {e}"))?;
+            build_resume_ready_return(cg, frame_ptr, "sm orphan state ret")?;
         }
     }
 
@@ -11587,9 +11604,10 @@ fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
                     }
                 }
             }
-            cg.builder
-                .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-                .map_err(|e| format!("sm return after inline-poll: {e}"))?;
+            let own_frame = cg
+                .sm_frame_ptr
+                .ok_or("sm return after inline-poll: no frame pointer")?;
+            build_resume_ready_return(cg, own_frame, "sm return after inline-poll")?;
         }
 
         // `while (cond) { ...wait/suspending_call... }` — emit a frame-backed loop.
@@ -16945,7 +16963,21 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     // cont_state_bb: parent resumed after child suspended. Re-poll the child.
     // GEPs must be recomputed in each basic block (LLVM SSA dominance requirement).
     *current_state = continuation_state;
-    register_drop_state(cg, f, param_names, shape_table, parent_frame, call_expr.span().start, continuation_state, Some((DropChild::Embedded { offset: child_offset }, child_resume_fn)))?;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        parent_frame,
+        call_expr.span().start,
+        continuation_state,
+        Some((
+            DropChild::Embedded {
+                offset: child_offset,
+            },
+            child_resume_fn,
+        )),
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
 
@@ -17364,7 +17396,16 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         .get(&f.name)
         .and_then(|layout| layout.recursion_slot)
         .map(|offset| (DropChild::Boxed { offset }, child_resume_fn));
-    register_drop_state(cg, f, param_names, shape_table, parent_frame, call_offset, continuation_state, boxed_child)?;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        parent_frame,
+        call_offset,
+        continuation_state,
+        boxed_child,
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
 
@@ -18418,7 +18459,16 @@ fn emit_wait_point<'ctx, 'g>(
     // (each resume_fn call has fresh allocas — the old allocas from state_0's call are gone).
     // Then re-poll the handle to confirm Ready and transition to post_wait_bb.
     *current_state = continuation_state;
-    register_drop_state(cg, f, param_names, shape_table, frame_ptr, inner.span().start, continuation_state, None)?;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        frame_ptr,
+        inner.span().start,
+        continuation_state,
+        None,
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
     state_machine::emit_sleep_poll_branch(
@@ -20695,9 +20745,7 @@ fn lower_stmt_return<'ctx>(
             }
         }
         cg.release_at_return(edge)?;
-        cg.builder
-            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-            .map_err(|e| format!("sm resume ready ret: {e}"))?;
+        build_resume_ready_return(cg, frame_ptr, "sm resume ready ret")?;
         return Ok(());
     }
 
@@ -22178,9 +22226,7 @@ fn lower_expr_node<'ctx>(
                             err_ptr_i64,
                             cg.i64().const_int(0, false),
                         )?;
-                        cg.builder
-                            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-                            .map_err(|e| format!("sm nap error ret: {e}"))?;
+                        build_resume_ready_return(cg, frame_ptr, "sm nap error ret")?;
                         // Success path: extract field1 (success bits), update slot to inner type.
                         cg.builder.position_at_end(success_bb);
                         let success_bits = cg

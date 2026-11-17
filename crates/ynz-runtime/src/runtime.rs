@@ -991,9 +991,6 @@ pub(crate) struct SpawnStateFnFuture {
     /// module via a thread-local while `poll` runs (so every frame token this task mints
     /// carries it), and used by `Drop`'s kind-2 arm to purge the task's suspended sends.
     pub(crate) task_gen: u64,
-    /// True once `poll` returned Ready: the function's own scope exits released its frame
-    /// locals, so `Drop` must not run the frame's drop entry (C8 slice 6 spike).
-    pub(crate) finished: bool,
 }
 
 impl SpawnStateFnFuture {
@@ -1010,6 +1007,9 @@ impl SpawnStateFnFuture {
         arg_drop_ptr: *const BgArgDropEntry,
         arg_drop_count: i64,
     ) -> Self {
+        // The stub resume functions of the unit tests have no drop entry: mark the frame returned.
+        // SAFETY: a test frame is at least a frame header, 4-aligned.
+        unsafe { *(frame_ptr as *mut i32) = ynz_abi::FRAME_RESUME_POINT_RETURNED };
         Self {
             resume_fn,
             frame_ptr,
@@ -1018,8 +1018,6 @@ impl SpawnStateFnFuture {
             arg_drop_ptr: arg_drop_ptr as *mut BgArgDropEntry,
             arg_drop_count: arg_drop_count as usize,
             task_gen: crate::channel::next_caller_generation(),
-            // The stub resume functions of the unit tests have no drop entry.
-            finished: true,
         }
     }
 }
@@ -1111,16 +1109,17 @@ impl Drop for SpawnStateFnFuture {
             return;
         }
         unsafe {
-            // 0. A task retired before it finished (C8 slice 6 spike): run the frame's drop
-            //    entry. It releases the heap values the frame holds at its current suspension
-            //    point and, through the awaited callee's own drop entry, those of every nested
-            //    child frame. The entry is the resume function re-entered at the bitwise
-            //    complement of its resume point (codegen's drop dispatch is the default target
-            //    of the resume switch). It reads frame slots, so it runs before anything is
-            //    freed; the ladder below frees only what the function does not own (a borrowed
-            //    argument's clone).
-            if !self.finished {
-                let resume_point = self.frame_ptr as *mut i32;
+            // 0. A task retired before it returned (C8 slice 6): run the frame's drop entry. The entry
+            //    is the resume function re-entered at the bitwise complement of its `resume_point`
+            //    (the resume switch's default target is the drop dispatch). It releases the heap values
+            //    the frame holds in the state it is parked in and, through the awaited callee's own
+            //    entry, those of every nested child frame. A function that returned stored
+            //    `FRAME_RESUME_POINT_RETURNED` (the one state Rust's own completed future has), so it
+            //    has nothing left to drop. It reads frame slots, so it runs before anything is freed;
+            //    the ladder below frees only what the function does not own (a borrowed argument's
+            //    clone).
+            let resume_point = self.frame_ptr as *mut i32;
+            if *resume_point != ynz_abi::FRAME_RESUME_POINT_RETURNED {
                 *resume_point = !*resume_point;
                 (self.resume_fn)(self.frame_ptr, std::ptr::null_mut());
             }
@@ -1281,10 +1280,23 @@ impl Drop for SpawnStateFnFuture {
     }
 }
 
+/// Marks a frame returned when its resume function unwinds (`SpawnStateFnFuture::poll`): dropped
+/// only on the unwind path, so a poll that returns costs nothing.
+struct ReturnedOnUnwind {
+    frame_ptr: *mut u8,
+}
+
+impl Drop for ReturnedOnUnwind {
+    fn drop(&mut self) {
+        // SAFETY: frame_ptr is the live frame of the task being polled (4-aligned header).
+        unsafe { *(self.frame_ptr as *mut i32) = ynz_abi::FRAME_RESUME_POINT_RETURNED };
+    }
+}
+
 impl Future for SpawnStateFnFuture {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker_ctx = cx as *mut Context<'_> as *mut u8;
         // Publish this task's identity for the duration of the resume-fn call: any
         // ynz_channel_send_poll the state machine reaches keys its suspended send by
@@ -1293,15 +1305,20 @@ impl Future for SpawnStateFnFuture {
         // unchanged. RAII: restores the previous value even if resume_fn unwinds; re-set
         // from the future's own fields at every poll, so work-stealing is safe.
         let _drive_guard = crate::channel::DriveGuard::enter(self.drive_identity());
+        // A resume function that unwinds leaves its frame mid-statement: the drop entry of the state it
+        // was in would release values the half-run statement already took or never built. The guard
+        // marks the frame returned on that path only (it is forgotten on every other), so the drop
+        // skips the entry and the frame leaks what it holds, which a panic already does.
+        let unwind_guard = ReturnedOnUnwind {
+            frame_ptr: self.frame_ptr,
+        };
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
+        std::mem::forget(unwind_guard);
         match result {
             // Ready — fire-and-forget; return value in frame slot 0 is intentionally ignored.
-            0 => {
-                self.finished = true;
-                Poll::Ready(())
-            }
+            0 => Poll::Ready(()),
             1 => Poll::Pending,
             _ => panic!(
                 "ynz runtime: state-machine resume_fn returned unexpected value {result} \
@@ -1368,7 +1385,6 @@ pub unsafe extern "C" fn ynz_rt_spawn(
         arg_drop_ptr: arg_drop_ptr as *mut BgArgDropEntry,
         arg_drop_count: arg_drop_count as usize,
         task_gen: crate::channel::next_caller_generation(),
-        finished: false,
     };
     let _ = spawn_on_runtime(future, "ynz_rt_spawn");
 }

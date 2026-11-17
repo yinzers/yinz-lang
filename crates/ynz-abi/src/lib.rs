@@ -17,6 +17,16 @@
 /// layout table in `ynz-codegen`'s `state_machine` module for the full per-frame layout.
 pub const FRAME_OFFSET_RESUME_POINT: u64 = 0;
 
+/// The `resume_point` of a function that has returned (reached Ready): the resume function stores it
+/// at every Ready return, which is the one state a future in Rust also has (a completed future is
+/// `Returned`). A task dropped before it finished re-enters its resume function with the bitwise
+/// complement of its `resume_point` (`!resume_point`, negative: a state number is never negative),
+/// which the resume switch sends to the drop entry of that state (C8 slice 6). A returned frame has
+/// nothing left to drop, so the runtime tests for this value and skips the entry; it costs no
+/// field of the frame and no store beyond the one at the return. Greater than any state number
+/// (a function has far fewer than 2^31 suspension points).
+pub const FRAME_RESUME_POINT_RETURNED: i32 = i32::MAX;
+
 /// Byte offset of the `sleep_handle` pointer field within each (sub-)frame. Present regardless
 /// of whether the fn directly calls `sleep`; zeroed when unused. `ynz-codegen` writes this slot
 /// (`store_sleep_handle` / `load_sleep_handle` in `state_machine.rs`); `ynz-runtime`'s
