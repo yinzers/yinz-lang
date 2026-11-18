@@ -18,7 +18,6 @@ use support::{
 /// What a case checks the counters of.
 #[derive(Clone, Copy)]
 enum Balance {
-    Heap,
     HeapAndStrings,
     Strings,
 }
@@ -27,7 +26,6 @@ fn check(label: &str, program: &str, expected: &str, balance: Balance) {
     at_both_optimization_levels(|no_optimize| {
         let counters = run_balanced(label, program, expected, no_optimize);
         match balance {
-            Balance::Heap => assert_heap_balanced(label, &counters, no_optimize),
             Balance::HeapAndStrings => {
                 assert_heap_balanced(label, &counters, no_optimize);
                 assert_strings_balanced(label, &counters, no_optimize);
