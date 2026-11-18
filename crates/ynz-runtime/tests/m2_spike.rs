@@ -52,6 +52,19 @@ fn miri_budget(native: Duration, under_miri: Duration) -> Duration {
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn with_runtime<F: FnOnce(&tokio::runtime::Runtime)>(f: F) {
+    with_runtime_then(f, || {});
+}
+
+/// Like `with_runtime`, and additionally runs `after_runtime_dropped` once the runtime has been
+/// dropped (all remaining tasks dropped, their frame Drop impls run) but while `TEST_LOCK` is
+/// still held. Tests that read the global FRAME_*/STRING_* counters must read them there: a
+/// read after this returns races with the next test that takes the lock and allocates frames
+/// (observed as `alloc=1001 free=1000`).
+fn with_runtime_then<F, G>(f: F, after_runtime_dropped: G)
+where
+    F: FnOnce(&tokio::runtime::Runtime),
+    G: FnOnce(),
+{
     // Build a private multi-thread runtime for this test — avoids coupling to the
     // C-ABI global RUNTIME whose handle is not accessible outside the crate.
     //
@@ -66,6 +79,8 @@ fn with_runtime<F: FnOnce(&tokio::runtime::Runtime)>(f: F) {
         .build()
         .expect("spike: failed to build test runtime");
     f(&rt);
+    drop(rt);
+    after_runtime_dropped();
 }
 
 // ── Shared error ABI types ────────────────────────────────────────────────────
@@ -991,39 +1006,43 @@ fn contract_5_errors_cascade_through_sm_boundary() {
 // to a local per-test runtime. Same invariant: net frame count == 0.
 #[test]
 fn contract_6_frame_ownership_no_leak() {
-    with_runtime(|rt| {
-        reset_counters();
-        const N: usize = 1000;
-        let mut join_handles = Vec::with_capacity(N);
+    with_runtime_then(
+        |rt| {
+            reset_counters();
+            const N: usize = 1000;
+            let mut join_handles = Vec::with_capacity(N);
 
-        for _ in 0..N {
-            let fut = FnFetchEvent::new(); // 100ms sleep
-            let h = rt.spawn(FetchEventWrapper(fut));
-            join_handles.push(h);
-        }
-
-        // Abort half mid-flight — frame Drop must free the allocation.
-        for h in join_handles.drain(N / 2..) {
-            h.abort();
-        }
-
-        // Wait for remaining half to complete.
-        rt.block_on(async {
-            for h in join_handles {
-                let _ = h.await; // JoinError on aborted tasks is expected — ignore
+            for _ in 0..N {
+                let fut = FnFetchEvent::new(); // 100ms sleep
+                let h = rt.spawn(FetchEventWrapper(fut));
+                join_handles.push(h);
             }
-        });
-    });
-    // Runtime dropped here — all remaining tasks are dropped, running Drop impls.
 
-    let net = net_frame_count();
-    eprintln!(
-        "contract_6: alloc={} free={} net={}",
-        FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
-        FRAME_FREE_COUNT.load(Ordering::SeqCst),
-        net
+            // Abort half mid-flight — frame Drop must free the allocation.
+            for h in join_handles.drain(N / 2..) {
+                h.abort();
+            }
+
+            // Wait for remaining half to complete.
+            rt.block_on(async {
+                for h in join_handles {
+                    let _ = h.await; // JoinError on aborted tasks is expected — ignore
+                }
+            });
+        },
+        // Runs after the runtime is dropped (all remaining tasks dropped, running Drop impls) and
+        // while TEST_LOCK is still held, so no other test can touch the counters mid-read.
+        || {
+            let net = net_frame_count();
+            eprintln!(
+                "contract_6: alloc={} free={} net={}",
+                FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
+                FRAME_FREE_COUNT.load(Ordering::SeqCst),
+                net
+            );
+            assert_eq!(net, 0, "frame leak detected: net alloc-free = {net}");
+        },
     );
-    assert_eq!(net, 0, "frame leak detected: net alloc-free = {net}");
 }
 
 // ── Spike fixture: FnPulse (Contract #7 — wait-in-loop) ─────────────────────
@@ -1568,27 +1587,30 @@ impl Future for FibFuture {
 // Frame alloc/free counters track 67 calls (fib call count for n=8).
 #[test]
 fn contract_10_recursive_state_machine() {
-    with_runtime(|rt| {
-        reset_counters();
-        let result = rt.block_on(fib_async(8));
-        eprintln!(
-            "contract_10: fib(8)={result} alloc={} free={}",
-            FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
-            FRAME_FREE_COUNT.load(Ordering::SeqCst)
-        );
-        assert_eq!(result, 21, "fib(8) expected 21, got {result}");
-    });
-
-    let net = net_frame_count();
-    assert_eq!(
-        net, 0,
-        "recursive SM: frame leak detected: net alloc-free = {net}"
-    );
-    // fib(8) makes exactly 67 calls (known from the Fibonacci call tree).
-    let allocs = FRAME_ALLOC_COUNT.load(Ordering::SeqCst) as usize;
-    assert_eq!(
-        allocs, 67,
-        "fib(8): expected 67 frame allocations, got {allocs}"
+    with_runtime_then(
+        |rt| {
+            reset_counters();
+            let result = rt.block_on(fib_async(8));
+            eprintln!(
+                "contract_10: fib(8)={result} alloc={} free={}",
+                FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
+                FRAME_FREE_COUNT.load(Ordering::SeqCst)
+            );
+            assert_eq!(result, 21, "fib(8) expected 21, got {result}");
+        },
+        || {
+            let net = net_frame_count();
+            assert_eq!(
+                net, 0,
+                "recursive SM: frame leak detected: net alloc-free = {net}"
+            );
+            // fib(8) makes exactly 67 calls (known from the Fibonacci call tree).
+            let allocs = FRAME_ALLOC_COUNT.load(Ordering::SeqCst) as usize;
+            assert_eq!(
+                allocs, 67,
+                "fib(8): expected 67 frame allocations, got {allocs}"
+            );
+        },
     );
 }
 
@@ -1754,53 +1776,55 @@ fn contract_12_codegen_invariant_documented() {
 // to a local per-test runtime. Same invariant: net frame/string counters return to baseline.
 #[test]
 fn contract_6_expanded_drop_impl_non_trivial_cleanup() {
-    with_runtime(|rt| {
-        reset_counters();
-        const N: usize = 1000;
-        let mut join_handles = Vec::with_capacity(N);
+    with_runtime_then(
+        |rt| {
+            reset_counters();
+            const N: usize = 1000;
+            let mut join_handles = Vec::with_capacity(N);
 
-        // Use a heap string that gets stored in the frame and crosses the wait boundary.
-        for _ in 0..N {
-            let greeting = SpikeFatString::new("hello from the steel city yo");
-            let fut = FnChat::new(greeting);
-            let h = rt.spawn(FnChatWrapper(fut));
-            join_handles.push(h);
-        }
-
-        // Abort half mid-flight — frame Drop must free the heap string.
-        for h in join_handles.drain(N / 2..) {
-            h.abort();
-        }
-
-        // Wait for remaining half to complete normally.
-        rt.block_on(async {
-            for h in join_handles {
-                let _ = h.await; // ignore JoinError from aborted tasks
+            // Use a heap string that gets stored in the frame and crosses the wait boundary.
+            for _ in 0..N {
+                let greeting = SpikeFatString::new("hello from the steel city yo");
+                let fut = FnChat::new(greeting);
+                let h = rt.spawn(FnChatWrapper(fut));
+                join_handles.push(h);
             }
-        });
-    });
-    // Runtime dropped — remaining tasks dropped, running Drop impls on all frames.
 
-    let net_frames = net_frame_count();
-    let string_frees = net_string_count();
-    eprintln!(
-        "contract_6_expanded: frame alloc={} free={} net_frames={} string_frees={}",
-        FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
-        FRAME_FREE_COUNT.load(Ordering::SeqCst),
-        net_frames,
-        string_frees
-    );
+            // Abort half mid-flight — frame Drop must free the heap string.
+            for h in join_handles.drain(N / 2..) {
+                h.abort();
+            }
 
-    assert_eq!(net_frames, 0, "frame leak: net alloc-free = {net_frames}");
-    // string_frees must equal exactly N (1000): every frame fires the counter exactly once,
-    // either via the completion path (greeting.take() at resume_point 2) or the Drop path
-    // (greeting.is_some() guard in Drop). Which path fires depends on whether the task was
-    // aborted or completed normally, but the total count is deterministic — each of the 1000
-    // frames contributes exactly one increment regardless of scheduling order.
-    assert_eq!(
+            // Wait for remaining half to complete normally.
+            rt.block_on(async {
+                for h in join_handles {
+                    let _ = h.await; // ignore JoinError from aborted tasks
+                }
+            });
+        },
+        || {
+            let net_frames = net_frame_count();
+            let string_frees = net_string_count();
+            eprintln!(
+                "contract_6_expanded: frame alloc={} free={} net_frames={} string_frees={}",
+                FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
+                FRAME_FREE_COUNT.load(Ordering::SeqCst),
+                net_frames,
+                string_frees
+            );
+
+            assert_eq!(net_frames, 0, "frame leak: net alloc-free = {net_frames}");
+            // string_frees must equal exactly N (1000): every frame fires the counter exactly once,
+            // either via the completion path (greeting.take() at resume_point 2) or the Drop path
+            // (greeting.is_some() guard in Drop). Which path fires depends on whether the task was
+            // aborted or completed normally, but the total count is deterministic — each of the 1000
+            // frames contributes exactly one increment regardless of scheduling order.
+            assert_eq!(
         string_frees,
         1000,
         "string cleanup count must return to baseline of 1000 (one per frame); got {string_frees} — Drop impl may not be cleaning up non-trivial locals on all paths"
+    );
+        },
     );
 }
 
