@@ -26,9 +26,9 @@ fn a_fixed_string_list_held_by_a_union_local_is_released() {
     assert_fixture_balanced("v0_3_m9_c1m_fixed_string_union_local.ynz", &["kept\n"]);
 }
 
-// Bug: a `maybe<array<int>>` returned from a function leaked its rows and the returned row (High: data
+// Bug: a `maybe<array<int>>` returned from a function leaked 4 of 8 allocations (High: data
 // integrity and release).
 #[test]
 fn a_maybe_array_returned_from_a_function_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1m_maybe_array_returned.ynz", &["3\n"]);
+    assert_fixture_balanced("v0_3_m9_c1m_maybe_array_returned.ynz", &["true\n"]);
 }

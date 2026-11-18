@@ -101,8 +101,13 @@ pub fn fixed_type(element: Type, length: &WrittenLength<'_>) -> Type {
 /// by `can_assign`, as for any sized `fixed` slot. Only a variant with the value's item type and no
 /// length changes; any other type is returned as it is. O(variants).
 pub fn union_binding_type_with_value_length(annotated: &Type, value: &Type) -> Type {
-    let (Type::Union { variants }, Type::BuiltinFixed { elem: value_elem, size }) =
-        (annotated, value)
+    let (
+        Type::Union { variants },
+        Type::BuiltinFixed {
+            elem: value_elem,
+            size,
+        },
+    ) = (annotated, value)
     else {
         return annotated.clone();
     };
