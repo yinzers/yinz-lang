@@ -451,6 +451,17 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             // alias-no-op types are `Unknown` and can never be transferred through it.
             PostfixOpKind::Copy => match (ctx.type_of)(receiver) {
                 Some(ty) if copy_is_independent(&ty) => Provenance::Fresh,
+                // The `.copy()` of a type parameter is the instance's copy: codegen substitutes
+                // the concrete type, and a heap type's copy is independent (`owned_copy_plan`),
+                // while an instance with no heap to own (`int`, `number` up to 34 digits,
+                // `range`) has a release that frees nothing, so a copy that is the receiver's
+                // own bits cannot be freed through this name. The plan judges the result as an
+                // owner exactly as it judges any value of a type parameter (`Release(
+                // TypeParameter)`, `IMP-ownership.md`). An instance whose `.copy()` is refused
+                // (a union, a `channel`) never builds. Reading it as `Unknown` joined the result
+                // to the receiver's class, so a `share` parameter's copy was `CallerOwns` and
+                // never released (C1m item 4).
+                Some(Type::TypeParam { .. }) => Provenance::Fresh,
                 _ => Provenance::Unknown,
             },
             // `.freeze()` is typed `nothing` (no sink can accept it, nothing to hold). If it
