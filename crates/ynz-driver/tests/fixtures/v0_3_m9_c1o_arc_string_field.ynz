@@ -26,7 +26,7 @@ function entrypoint() -> nothing {
   launch(results)
   let churn = `abcdefgh`.toUpperCase()
   print(churn)
-  let a = results.receive()
-  let b = results.receive()
+  let firstArea = results.receive()
+  let secondArea = results.receive()
   print(`done`)
 }
