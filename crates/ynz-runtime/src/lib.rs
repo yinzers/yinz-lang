@@ -3330,7 +3330,7 @@ mod m7_string_runtime {
             let result = ynz_string_concat(c(b"Hello\0"), c(b" World\0"));
             assert!(!result.is_null());
             assert_eq!(str_from_ptr(result), "Hello World");
-            ynz_string_release(result as *const u8);
+            ynz_string_release(result);
         }
     }
 
@@ -3341,7 +3341,7 @@ mod m7_string_runtime {
             let r = ynz_string_concat(c(b"\0"), c(b"\0"));
             assert!(!r.is_null());
             assert_eq!(str_from_ptr(r), "");
-            ynz_string_release(r as *const u8);
+            ynz_string_release(r);
         }
     }
 
@@ -3374,7 +3374,7 @@ mod m7_string_runtime {
             let ch = ynz_string_codepoint_at(c(s), 1); // 'e'
             assert!(!ch.is_null());
             assert_eq!(str_from_ptr(ch), "e");
-            ynz_string_release(ch as *const u8);
+            ynz_string_release(ch);
         }
     }
 
@@ -3423,12 +3423,12 @@ mod m7_string_runtime {
             let upper = ynz_string_to_upper(c(b"hello\0"));
             assert!(!upper.is_null());
             assert_eq!(str_from_ptr(upper), "HELLO");
-            ynz_string_release(upper as *const u8);
+            ynz_string_release(upper);
 
             let lower = ynz_string_to_lower(c(b"HELLO\0"));
             assert!(!lower.is_null());
             assert_eq!(str_from_ptr(lower), "hello");
-            ynz_string_release(lower as *const u8);
+            ynz_string_release(lower);
         }
     }
 
@@ -3439,7 +3439,7 @@ mod m7_string_runtime {
             let trimmed = ynz_string_trim(c(b"  hello  \0"));
             assert!(!trimmed.is_null());
             assert_eq!(str_from_ptr(trimmed), "hello");
-            ynz_string_release(trimmed as *const u8);
+            ynz_string_release(trimmed);
         }
     }
 
@@ -3450,7 +3450,7 @@ mod m7_string_runtime {
             let sub = ynz_string_substring(c(b"hello\0"), 1, 4); // "ell"
             assert!(!sub.is_null());
             assert_eq!(str_from_ptr(sub), "ell");
-            ynz_string_release(sub as *const u8);
+            ynz_string_release(sub);
         }
     }
 
@@ -3478,7 +3478,7 @@ mod m7_string_runtime {
             let result = ynz_string_builder_finalize(b);
             assert!(!result.is_null());
             assert_eq!(str_from_ptr(result), "Hello, World!");
-            ynz_string_release(result as *const u8);
+            ynz_string_release(result);
         }
     }
 
@@ -3527,7 +3527,7 @@ mod m7_string_runtime {
             let result = ynz_string_replace(c(b"hello world\0"), c(b"world\0"), c(b"Yinz\0"));
             assert!(!result.is_null());
             assert_eq!(str_from_ptr(result), "hello Yinz");
-            ynz_string_release(result as *const u8);
+            ynz_string_release(result);
         }
     }
 
