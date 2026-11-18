@@ -248,7 +248,8 @@ pub fn run_counted(built: &Built) -> (RunOutput, Counters) {
 /// runtime waits for the running tasks only up to `YNZ_SHUTDOWN_TIMEOUT_MS`, 5 s by default, and
 /// cancels the rest, so a task still spinning at that cut-off prints nothing: with the default,
 /// such a test passes or fails by how loaded the machine is. Here the exit itself is the
-/// completion signal, and only [`RUN_WATCHDOG`] bounds the wait.
+/// completion signal, and only [`RUN_WATCHDOG`] bounds the wait. Decided (search history for
+/// "shutdown budget"): this is not a loosened timeout, and only the C6 spawn tests call it.
 pub fn run_counted_until_tasks_finish(built: &Built) -> (RunOutput, Counters) {
     run_counted_with_drain_budget(built, Some(TASK_DRAIN_BUDGET_MS))
 }
