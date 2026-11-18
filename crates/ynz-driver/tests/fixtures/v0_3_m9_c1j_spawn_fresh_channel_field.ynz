@@ -1,0 +1,28 @@
+// v0.3-M9 C1j: a `background` call passes a `channel` field of a fresh call result
+// (`make().line`). A channel is shared with the task on purpose (the spawn takes a counted
+// reference), so this is not a piece the task needs a copy of: the program is accepted, the task
+// sends on the channel it was given, and the rest of `make()`'s result is released when the line
+// ends. Before the fix the refusal for a piece with no owned copy rejected it.
+// Expected output: `sent` and `done`, in either order.
+
+shape Hub {
+  line: channel<int>
+  id: int
+}
+
+function listen(line: channel<int>) -> nothing {
+  let sent = line.send(7)
+  print(`sent`)
+}
+
+function make() -> Hub {
+  let line: channel<int> = channel<int>(2)
+  let hub: Hub = { line: line, id: 1 }
+  return hub
+}
+
+function entrypoint() -> nothing {
+  background listen(make().line)
+  wait sleep(50)
+  print(`done`)
+}

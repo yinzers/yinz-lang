@@ -1,0 +1,30 @@
+// v0.3-M9 C1j: a `background` call passes the `fixed<array<string>, 2>` field of a NAMED value
+// (`bag.rows`). The `fixed` list's cells live with the spawner's frame and its items cannot be
+// copied, so the task read the dead frame (a crash, ASan: stack-use-after-return). Refused at
+// compile time instead.
+// Expected: a compile error naming the type and the line.
+
+shape Bag {
+  rows: fixed<array<string>, 2>
+  id: int
+}
+
+function f(rows: fixed<array<string>, 2>) -> nothing {
+  wait sleep(100)
+  for (row in rows) {
+    print(row.count())
+  }
+}
+
+function launch() -> nothing {
+  let first: array<string> = [`a`.toUpperCase()]
+  let second: array<string> = [`b`.toUpperCase(), `c`.toUpperCase()]
+  let bag: Bag = { rows: [first, second], id: 1 }
+  background f(bag.rows)
+}
+
+function entrypoint() -> nothing {
+  launch()
+  wait sleep(300)
+  print(`done`)
+}
