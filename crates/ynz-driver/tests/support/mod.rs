@@ -29,6 +29,11 @@ use std::time::{Duration, Instant};
 /// false-trip it.
 const RUN_WATCHDOG: Duration = Duration::from_secs(120);
 
+/// The runtime's exit drain budget (`YNZ_SHUTDOWN_TIMEOUT_MS`) for the `*_until_tasks_finish`
+/// runs: below [`RUN_WATCHDOG`], so a task that never finishes shows as a missing task in the
+/// assertions before the watchdog calls it a hang.
+const TASK_DRAIN_BUDGET_MS: &str = "100000";
+
 /// `ASAN_OPTIONS` for the Yinz fixtures:
 /// - `detect_leaks=0`: the safety fixtures guard against freeing early or twice. They pass
 ///   today BECAUSE nothing is freed, so leak detection would be red until the release pass
@@ -236,11 +241,30 @@ fn run_with_watchdog(mut command: Command) -> RunOutput {
 /// counters. Panics when the counter file is missing or a key is absent: a silent `0` would turn
 /// "the counter did not report" into "the program balanced".
 pub fn run_counted(built: &Built) -> (RunOutput, Counters) {
+    run_counted_with_drain_budget(built, None)
+}
+
+/// [`run_counted`] for a program whose `background` CPU tasks outlast its `entrypoint`. At exit the
+/// runtime waits for the running tasks only up to `YNZ_SHUTDOWN_TIMEOUT_MS`, 5 s by default, and
+/// cancels the rest, so a task still spinning at that cut-off prints nothing: with the default,
+/// such a test passes or fails by how loaded the machine is. Here the exit itself is the
+/// completion signal, and only [`RUN_WATCHDOG`] bounds the wait.
+pub fn run_counted_until_tasks_finish(built: &Built) -> (RunOutput, Counters) {
+    run_counted_with_drain_budget(built, Some(TASK_DRAIN_BUDGET_MS))
+}
+
+fn run_counted_with_drain_budget(
+    built: &Built,
+    drain_budget_ms: Option<&str>,
+) -> (RunOutput, Counters) {
     let counter_file = built.binary.with_extension("counters");
     let mut command = Command::new(&built.binary);
     command
         .env("YNZ_ALLOC_COUNTER", "1")
         .env("YNZ_ALLOC_COUNTER_OUTPUT", &counter_file);
+    if let Some(budget) = drain_budget_ms {
+        command.env("YNZ_SHUTDOWN_TIMEOUT_MS", budget);
+    }
     let output = run_with_watchdog(command);
     let text = std::fs::read_to_string(&counter_file).unwrap_or_else(|err| {
         panic!(
@@ -379,6 +403,16 @@ pub fn build_asan(built: &Built) -> PathBuf {
 pub fn run_asan_binary(sanitized_binary: &Path) -> RunOutput {
     let mut command = Command::new(sanitized_binary);
     command.env("ASAN_OPTIONS", ASAN_OPTIONS);
+    run_with_watchdog(command)
+}
+
+/// [`run_asan_binary`] with the exit waiting for every running task, as
+/// [`run_counted_until_tasks_finish`] does.
+pub fn run_asan_binary_until_tasks_finish(sanitized_binary: &Path) -> RunOutput {
+    let mut command = Command::new(sanitized_binary);
+    command
+        .env("ASAN_OPTIONS", ASAN_OPTIONS)
+        .env("YNZ_SHUTDOWN_TIMEOUT_MS", TASK_DRAIN_BUDGET_MS);
     run_with_watchdog(command)
 }
 
