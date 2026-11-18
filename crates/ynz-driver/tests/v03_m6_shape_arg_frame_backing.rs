@@ -487,3 +487,23 @@ fn v03_m6_fixed_arg_to_suspending_callee_is_rejected() {
          stderr:\n{stderr}"
     );
 }
+
+#[test]
+fn v03_m9_c1h_number_literal_and_expression_args_reach_a_suspending_callee() {
+    // WHY: a `number` literal or expression passed to a suspending callee was staged in the
+    // caller's resume-function stack (only a named local was frame-backed), so the callee
+    // read dead stack after its `wait`: `tally(2.25)` printed 0.25 instead of 2.50 and
+    // `tally(seed + 2.75)` read whatever the stack held. It made
+    // `red_opt_dangling_stack_return_sm_tier` depend on stack garbage. Tier: Medium.
+    let (stdout, stderr, code, timed_out) = ynz_run_with_timeout(
+        "v0_3_m9_c1h_number_literal_arg_suspending_call.ynz",
+        RUN_TIMEOUT,
+    );
+    assert!(!timed_out, "must not hang; stderr:\n{stderr}");
+    assert_eq!(code, 0, "must run clean; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "2.50\n5.50\n",
+        "a number literal or expression argument must survive the callee's wait; \
+         stderr:\n{stderr}"
+    );
+}

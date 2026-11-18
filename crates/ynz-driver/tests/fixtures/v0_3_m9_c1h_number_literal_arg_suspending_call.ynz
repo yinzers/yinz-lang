@@ -1,0 +1,18 @@
+// A `number` that is not a named local (a literal, or an expression) passed to a
+// suspending callee must live in the caller's frame: the callee reads it after its own
+// `wait`, when the caller's resume function has returned and its stack is gone.
+// Prints 2.50, then 5.50.
+
+function tally(start: number) -> number {
+  wait sleep(1)
+  let total = start + 0.25
+  return total
+}
+
+function entrypoint() -> nothing {
+  let literal = tally(2.25)
+  print(literal.toString())
+  let seed: number = 2.5
+  let computed = tally(seed + 2.75)
+  print(computed.toString())
+}

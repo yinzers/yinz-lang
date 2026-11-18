@@ -14390,13 +14390,14 @@ fn wait_temporary_slot_count(
 }
 
 /// The frame slots the region of a staged argument of type `ty` takes (`Cg::stage_value_in_frame`):
-/// a shape's bytes, a `maybe`'s 16-byte envelope and the bytes of the payload cell behind it (a flat
+/// a shape's bytes, a decimal128 `number`'s 16, a `maybe`'s 16-byte envelope and the bytes of the payload cell behind it (a flat
 /// shape's or a decimal's). Any other type stages nothing.
 ///
 /// O(1) time.
 fn staged_region_slots(ty: &Type, sizes: &HashMap<String, u64>) -> usize {
     match ty {
         Type::Shape { name } => shape_frame_slots(name, sizes),
+        Type::Number { precision } if *precision <= 34 => fixed_frame_slots(DECIMAL_CELL_SIZE),
         Type::Maybe { inner } => {
             fixed_frame_slots(MAYBE_ENVELOPE_BYTES + staged_maybe_payload_bytes(inner, sizes))
         }
@@ -31662,6 +31663,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let size = match ty {
             Type::Shape { name } => self.shape_abi_size_const(name, "stage_value_in_frame")?,
             Type::Maybe { .. } => self.i64().const_int(MAYBE_ENVELOPE_BYTES, false),
+            Type::Number { precision } if *precision <= 34 => {
+                self.i64().const_int(DECIMAL_CELL_SIZE, false)
+            }
             other => {
                 return Err(format!(
                     "internal: a `{}` argument has no staging region",

@@ -51,7 +51,7 @@ use ynz_ast::nodes::{Block, Expr, Item, MatchPatternKind, OwnershipModifier, Pos
 use crate::release_plan::{heap_class_of, HeapClass, ReleaseKind, TypeTables};
 use crate::signatures::FunctionSig;
 use crate::string_ownership::is_fresh_string_expr;
-use crate::types::{is_owned_text, Type};
+use crate::types::{is_owned_text, Type, DECIMAL128_MAX_PRECISION};
 
 /// `(span.start, span.end)`.
 pub type Span = (usize, usize);
@@ -484,8 +484,10 @@ impl Walk<'_> {
     }
 
     /// An argument of a Yinz function that builds a shape or `maybe` value and that no
-    /// temporary covers (it is at a `give` position, or its shape owns no heap): recorded so codegen
-    /// keeps its bytes in the frame while a suspending callee runs (`Temporaries::is_staged_argument`).
+    /// temporary covers (it is at a `give` position, or its shape owns no heap), or a decimal128
+    /// `number` that is not a named local (a literal or an expression; a named local is frame-backed
+    /// as a crossing local): recorded so codegen keeps its bytes in the frame while a suspending
+    /// callee runs (`Temporaries::is_staged_argument`).
     /// A value that enters a union slot is staged as a union, not as a shape. A `maybe` of an envelope
     /// union has no frame home yet and is not staged.
     ///
@@ -494,7 +496,7 @@ impl Walk<'_> {
         let span = span_of(arg);
         if self.out.temporaries.contains_key(&span)
             || self.facts.union_coercions.contains_key(&span)
-            || !self.builds_a_value(arg)
+            || !(self.builds_a_value(arg) || self.is_unnamed_decimal(arg))
             || !self
                 .type_of(arg)
                 .is_some_and(|ty| self.has_staging_region(ty))
@@ -504,7 +506,18 @@ impl Walk<'_> {
         self.out.staged_arguments.insert(span);
     }
 
-    /// True for the kinds a staged argument keeps in a frame region: a shape and a `maybe` that is not
+    /// True when `expr` is a decimal128 `number` that is not a named local: its value sits in a stack
+    /// temporary the expression made, which a named local does not (the crossing classifier frames it).
+    ///
+    /// O(1) time.
+    fn is_unnamed_decimal(&self, expr: &Expr) -> bool {
+        !matches!(expr, Expr::Ident(..))
+            && self
+                .type_of(expr)
+                .is_some_and(|ty| matches!(ty, Type::Number { precision } if *precision <= DECIMAL128_MAX_PRECISION))
+    }
+
+    /// True for the kinds a staged argument keeps in a frame region: a shape, a decimal128 `number` and a `maybe` that is not
     /// of an envelope union (a `fixed` call result has no known size: its signature type is unsized).
     ///
     /// O(1) time.
@@ -512,6 +525,7 @@ impl Walk<'_> {
         match ty {
             Type::Shape { .. } => true,
             Type::Maybe { inner } => !crate::check::is_envelope_union(inner),
+            Type::Number { precision } => *precision <= DECIMAL128_MAX_PRECISION,
             _ => false,
         }
     }
