@@ -34,3 +34,16 @@ fn a_fixed_string_list_held_by_a_union_local_is_released() {
 fn a_maybe_array_returned_from_a_function_is_released() {
     assert_fixture_balanced("v0_3_m9_c1m_maybe_array_returned.ynz", &["true\n"]);
 }
+
+// Bug: a `.copy()` of a shape `T` held in a `T | nothing` local is released through an envelope the
+// copy was never wrapped into, and crashes when the shape's first field is `0` (High: data
+// integrity and release).
+#[test]
+#[ignore = "needs #496 (C1n) folded first: a bare `T` entering a `T | nothing` slot is wrapped \
+             there; Code Fixer r1 2026-11-18"]
+fn a_shape_copy_held_by_a_generic_union_local_is_released() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1m_generic_shape_copy_into_union_local.ynz",
+        &["kept\nABCDEFGHIJ\n"],
+    );
+}
