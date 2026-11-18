@@ -11,7 +11,7 @@ mod support;
 
 use support::{
     at_both_optimization_levels, build_asan, build_source, concurrently, run_asan_binary,
-    run_counted,
+    run_asan_binary_until_tasks_finish, run_counted, run_counted_until_tasks_finish,
 };
 
 /// A function that overwrites the stack the producing functions just left.
@@ -214,7 +214,7 @@ fn assert_spawned_tasks_read_their_numbers(suspending_callee: bool) {
     let source = spawned_numbers_program(suspending_callee);
     at_both_optimization_levels(|no_optimize| {
         let built = build_source(&source, "c6 number spawn", no_optimize);
-        let (output, _) = run_counted(&built);
+        let (output, _) = run_counted_until_tasks_finish(&built);
         assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
         assert_eq!(
             output.stdout.matches("2.5 5.00\n").count(),
@@ -227,7 +227,7 @@ fn assert_spawned_tasks_read_their_numbers(suspending_callee: bool) {
             "{}",
             output.stdout
         );
-        let run = run_asan_binary(&build_asan(&built));
+        let run = run_asan_binary_until_tasks_finish(&build_asan(&built));
         assert!(
             !run.stderr.contains("AddressSanitizer"),
             "AddressSanitizer reported an error (no_optimize={no_optimize}):\n{}",
@@ -506,10 +506,10 @@ fn assert_spawned_tasks_read_their_number_keys(suspending_callee: bool) {
     };
     at_both_optimization_levels(|no_optimize| {
         let built = build_source(&source, "c6 number key spawn", no_optimize);
-        let (output, _) = run_counted(&built);
+        let (output, _) = run_counted_until_tasks_finish(&built);
         assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
         expected_lines(&output.stdout);
-        let run = run_asan_binary(&build_asan(&built));
+        let run = run_asan_binary_until_tasks_finish(&build_asan(&built));
         assert!(
             !run.stderr.contains("AddressSanitizer"),
             "AddressSanitizer reported an error (no_optimize={no_optimize}):\n{}",

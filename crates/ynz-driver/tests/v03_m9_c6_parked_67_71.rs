@@ -12,7 +12,7 @@ mod support;
 
 use support::{
     at_both_optimization_levels, build_asan, build_source, concurrently, run_asan_binary,
-    run_counted,
+    run_asan_binary_until_tasks_finish, run_counted, run_counted_until_tasks_finish,
 };
 
 /// What the callee does while the spawner moves on, which decides the spawn arm.
@@ -82,7 +82,7 @@ fn assert_task_reads_its_own_union(callee: Callee, argument: Argument, no_optimi
     };
     let source = union_spawn_program(callee, argument, tasks);
     let built = build_source(&source, "c6 union spawn", no_optimize);
-    let (output, _) = run_counted(&built);
+    let (output, _) = run_counted_until_tasks_finish(&built);
     assert_eq!(output.exit_code, 0, "{source}\nstderr:\n{}", output.stderr);
     assert_eq!(
         output.stdout.matches("task sees boxed\n").count(),
@@ -90,7 +90,7 @@ fn assert_task_reads_its_own_union(callee: Callee, argument: Argument, no_optimi
         "every task must read the Tag the spawner held at the spawn:\n{}\n{source}",
         output.stdout
     );
-    let run = run_asan_binary(&build_asan(&built));
+    let run = run_asan_binary_until_tasks_finish(&build_asan(&built));
     assert!(
         !run.stderr.contains("AddressSanitizer"),
         "AddressSanitizer reported an error:\n{}\n{source}",
