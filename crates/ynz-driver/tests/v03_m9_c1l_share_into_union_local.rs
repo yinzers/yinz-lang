@@ -41,7 +41,6 @@ fn a_share_parameter_stored_into_a_union_local_is_refused_with_the_teaching_text
 // Guards the advised `.copy()` form leaking or double-freeing the array (High: data integrity and
 // release).
 #[test]
-#[ignore = "finding for the Software Architect: output and ASan are right, but 4 of 6 allocations leak (a generic union local holding an array); not fixed here"]
 fn a_copy_of_a_share_parameter_stored_into_a_union_local_is_released() {
     assert_fixture_balanced_and_asan_clean(
         "v0_3_m9_c1l_share_into_union_local_copy.ynz",
@@ -52,7 +51,6 @@ fn a_copy_of_a_share_parameter_stored_into_a_union_local_is_released() {
 // Guards the advised `give` form leaking or double-freeing the array (High: data integrity and
 // release).
 #[test]
-#[ignore = "finding for the Software Architect: output and ASan are right, but both allocations leak (a generic union local holding an array); not fixed here"]
 fn a_give_parameter_stored_into_a_union_local_is_released() {
     assert_fixture_balanced_and_asan_clean("v0_3_m9_c1l_share_into_union_local_give.ynz", "kept\n");
 }

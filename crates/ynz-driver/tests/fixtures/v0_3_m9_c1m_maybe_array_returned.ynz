@@ -1,0 +1,16 @@
+// v0.3-M9 C1m: a function returns a `maybe<array<int>>` read from an array of rows it owns, and
+// the caller reads it.
+// Before: the rows and the returned row leaked (2 of 8 allocations freed), though the output was
+// right.
+// Expected output: `3`.
+
+function firstRow() -> maybe<array<int>> {
+  let rows: array<array<int>> = [[1, 2, 3]]
+  return rows.get(0)
+}
+
+function entrypoint() -> nothing {
+  let fallback: array<int> = []
+  let built = firstRow()
+  print(built.or(fallback).count())
+}

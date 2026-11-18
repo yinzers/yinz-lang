@@ -1,0 +1,9 @@
+// v0.3-M9 C1m: a `fixed<string> | nothing` local takes a given fixed list of strings.
+// Before: the local never released the list's two strings, though the output was right.
+// Expected output: `kept`.
+
+function entrypoint() -> nothing {
+  let seed: fixed<string> = [`amy`.toUpperCase(), `bob`.toUpperCase()]
+  let src: fixed<string> | nothing = seed
+  print(`kept`)
+}
