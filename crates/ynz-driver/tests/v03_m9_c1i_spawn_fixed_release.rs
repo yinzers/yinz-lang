@@ -4,7 +4,29 @@
 
 mod support;
 
-use support::assert_fixture_balanced_and_asan_clean as assert_fixture_balanced;
+use support::{
+    assert_built_balanced_and_asan_clean_printing_one_of, at_both_optimization_levels, build,
+};
+
+/// Every fixture here ends `wait sleep(50)` then `print(done)`, while the task it spawned prints
+/// `task_output`. Nothing waits for a fire-and-forget task, and a handled task is not awaited
+/// either, so the language fixes neither order: a loaded machine puts `done` first (3 of 50 runs
+/// under 16 busy loops). What the bug check needs is the balance and ASan, asserted in both orders.
+fn assert_fixture_balanced(fixture: &str, task_output_then_done: &str) {
+    let task_output = task_output_then_done
+        .strip_suffix("done\n")
+        .expect("expected output ends with the spawner's `done` line");
+    let done_first = format!("done\n{task_output}");
+    at_both_optimization_levels(|no_optimize| {
+        let built = build(fixture, no_optimize);
+        assert_built_balanced_and_asan_clean_printing_one_of(
+            fixture,
+            &built,
+            &[task_output_then_done, done_first.as_str()],
+            no_optimize,
+        );
+    });
+}
 
 // Bug: 2 of 4 strings leaked (High: data integrity and release).
 #[test]

@@ -531,13 +531,29 @@ pub fn assert_built_balanced_and_asan_clean(
     expected: &str,
     no_optimize: bool,
 ) {
+    assert_built_balanced_and_asan_clean_printing_one_of(label, built, &[expected], no_optimize);
+}
+
+/// [`assert_built_balanced_and_asan_clean`] for a program whose output order the language does not
+/// fix: it passes when the output is any one of `accepted`. A fire-and-forget task is never waited
+/// for, so its prints can land before or after the spawner's own, and a loaded machine shows both.
+pub fn assert_built_balanced_and_asan_clean_printing_one_of(
+    label: &str,
+    built: &Built,
+    accepted: &[&str],
+    no_optimize: bool,
+) {
     let (run, counters) = run_counted(built);
     assert_eq!(
         run.exit_code, 0,
         "{label} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
         run.stderr
     );
-    assert_eq!(run.stdout, expected, "{label} (no_optimize={no_optimize})");
+    assert!(
+        accepted.contains(&run.stdout.as_str()),
+        "{label} (no_optimize={no_optimize}): output {:?} is none of {accepted:?}",
+        run.stdout
+    );
     assert!(
         counters.alloc + counters.string_alloc > 0,
         "{label} (no_optimize={no_optimize}): non-vacuous: the program must allocate: {counters:?}"
