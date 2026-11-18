@@ -8930,39 +8930,11 @@ impl<'b> Checker<'b> {
     }
 }
 
-/// Resolve a simple AST type to a typeck Type using available table info.
-///
-/// Used for union alias resolution before the full Checker is built.
-/// Only handles: Named shapes, union of Named shapes, primitives.
-fn resolve_alias_type(ast_ty: &AstType, shape_table: &crate::shapes::ShapeTable) -> Type {
-    match ast_ty {
-        AstType::Int => Type::Int,
-        AstType::Float => Type::Float,
-        AstType::Bool => Type::Bool,
-        AstType::Number { precision } => Type::Number {
-            precision: *precision,
-        },
-        AstType::Named(n, _) if n == "string" => Type::String,
-        AstType::Named(n, _) if shape_table.contains(n) => Type::Shape { name: n.clone() },
-        AstType::Union { variants, .. } => {
-            let resolved: Vec<Type> = variants
-                .iter()
-                .map(|v| resolve_alias_type(v, shape_table))
-                .collect();
-            if resolved.len() < 2 {
-                Type::Error
-            } else {
-                Type::Union { variants: resolved }
-            }
-        }
-        _ => Type::Error,
-    }
-}
-
 /// Collect `shape Name = Type` alias declarations from the module.
 ///
 /// These are union type aliases like `shape Shape = Circle | Square | Triangle`.
-/// The alias name maps to the resolved alias type.
+/// The alias name maps to the type `ShapeTable::resolve_ast_type` resolves its right-hand side to
+/// (the single resolver — there is no alias-specific one).
 pub(crate) fn collect_union_aliases(
     module: &Module,
     shape_table: &crate::shapes::ShapeTable,
@@ -8971,7 +8943,7 @@ pub(crate) fn collect_union_aliases(
     for item in &module.items {
         if let Item::ShapeDecl(sd) = item {
             if let Some(alias_ast_ty) = &sd.alias_ty {
-                let resolved = resolve_alias_type(alias_ast_ty, shape_table);
+                let resolved = shape_table.resolve_ast_type(alias_ast_ty);
                 aliases.insert(sd.name.clone(), resolved);
             }
         }
