@@ -1,0 +1,21 @@
+// v0.3-M9 C1k: a function returns a shared `map<string, string> | nothing` parameter as it is,
+// and the caller releases what a call hands back (the union is the map's raw pointer). The
+// `return` copies the map, as it copies a plain `map` parameter, so the caller's release frees the
+// copy and `table` still owns its own.
+// Before: the result was an alias of `table`, and both frees ran (a segmentation fault).
+// Expected output: `ok`, `end`.
+
+function fallback(share first: map<string, string> | nothing, share second: map<string, string> | nothing) -> map<string, string> | nothing {
+  return second
+}
+
+function describeTable(share table: map<string, string> | nothing) -> string {
+  return `ok`
+}
+
+function entrypoint() -> nothing {
+  let table: map<string, string> = { `a`: `b` }
+  let other: map<string, string> = table.copy()
+  print(describeTable(fallback(other, table)))
+  print(`end`)
+}

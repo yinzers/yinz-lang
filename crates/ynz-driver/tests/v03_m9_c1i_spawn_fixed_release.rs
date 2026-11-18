@@ -67,22 +67,34 @@ fn an_array_given_to_a_task_inside_a_branch_is_released_once() {
 // spawn's release of a fresh original covered only a shape (High: data integrity and release).
 #[test]
 fn a_fresh_fixed_of_strings_given_to_a_forgotten_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1i_spawn_fixed_fresh_string_forget.ynz", "2\nA\ndone\n");
+    assert_fixture_balanced(
+        "v0_3_m9_c1i_spawn_fixed_fresh_string_forget.ynz",
+        "2\nA\ndone\n",
+    );
 }
 
 #[test]
 fn a_fresh_fixed_of_strings_given_to_a_handled_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1i_spawn_fixed_fresh_string_handle.ynz", "2\nA\ndone\n");
+    assert_fixture_balanced(
+        "v0_3_m9_c1i_spawn_fixed_fresh_string_handle.ynz",
+        "2\nA\ndone\n",
+    );
 }
 
 #[test]
 fn a_fresh_fixed_of_shapes_given_to_a_forgotten_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1i_spawn_fixed_fresh_shape_forget.ynz", "2\nA\ndone\n");
+    assert_fixture_balanced(
+        "v0_3_m9_c1i_spawn_fixed_fresh_shape_forget.ynz",
+        "2\nA\ndone\n",
+    );
 }
 
 #[test]
 fn a_fresh_fixed_of_shapes_given_to_a_handled_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1i_spawn_fixed_fresh_shape_handle.ynz", "2\nA\ndone\n");
+    assert_fixture_balanced(
+        "v0_3_m9_c1i_spawn_fixed_fresh_shape_handle.ynz",
+        "2\nA\ndone\n",
+    );
 }
 
 // The same producer reached through a list literal instead of a call result.

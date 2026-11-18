@@ -1,0 +1,31 @@
+// v0.3-M9 C1k: a generic function takes `give item: T | nothing` and holds it in a local. Each
+// instance judges its own union: `T | nothing` is the raw `string` or `array<int>` pointer for
+// those two, and the tagged envelope union `Big | nothing` for the shape. The release of `item`
+// and of the local reads the instance's union, with `T` substituted (`Cg::resolve_type`), not the
+// generic's `T | nothing`.
+// Before: the build failed with an internal error ("cannot release a value of type `T | nothing`")
+// for every instance, though the same program built on `main`.
+// Expected output: `ate` three times, then `end`.
+
+shape Big {
+  label: string
+  items: array<int>
+}
+
+function eat<T>(give item: T | nothing, give other: T) -> nothing {
+  let held: T | nothing = item
+  print(`ate`)
+}
+
+function entrypoint() -> nothing {
+  let text: string = `hello`.toUpperCase()
+  let moreText: string = `bye`.toUpperCase()
+  eat(text, moreText)
+  let numbers: array<int> = [1, 2, 3]
+  let moreNumbers: array<int> = [4]
+  eat(numbers, moreNumbers)
+  let big: Big = { label: `hello`.toUpperCase(), items: [1] }
+  let bigger: Big = { label: `bye`.toUpperCase(), items: [2] }
+  eat(big, bigger)
+  print(`end`)
+}
