@@ -111,9 +111,11 @@ pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
 /// variant is that variant. Without this a nested union is a different type from the flat
 /// union holding the same variants, and a correct call is refused with a message that says the
 /// parameter expects the very type the argument has (C1g, #424).
+/// Codegen's `Cg::resolve_type` flattens an
+/// instance's union the same way, so the instance and its callers judge one union.
 ///
 /// O(total variants squared) time, O(total variants) space.
-fn flatten_union(substituted: Vec<Type>) -> Type {
+pub fn flatten_union(substituted: Vec<Type>) -> Type {
     let mut flat: Vec<Type> = Vec::with_capacity(substituted.len());
     for variant in substituted {
         let contributed = match variant {

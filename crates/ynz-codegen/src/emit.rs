@@ -2736,6 +2736,18 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Maybe { inner } => Type::Maybe {
                 inner: Box::new(self.resolve_type(inner)),
             },
+            // The variants are substituted too, and the union flattened as typeck builds an
+            // instance's union (`generics::apply_substitution`): `T | nothing` with `T = Big` is the
+            // envelope union `Big | nothing`, and with `T = int` the raw union `int | nothing`. THE
+            // one place a union's variants are substituted, so every caller that asks whether a
+            // union is an envelope union (`is_envelope_union`) or what a raw one holds
+            // (`raw_union_variant`) judges the instance's union, not the generic's.
+            Type::Union { variants } => ynz_typeck::generics::flatten_union(
+                variants
+                    .iter()
+                    .map(|variant| self.resolve_type(variant))
+                    .collect(),
+            ),
             other => other.clone(),
         }
     }
@@ -5748,24 +5760,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// none (`int | float`). The copy (`deepen_shape_fields`, `own_returned_value`) and the release
     /// (`release_step`) read the same fact.
     ///
-    /// A generic instance's union (`T | nothing`, `T = Big`) is judged with its variants
-    /// substituted, as `resolve_type` leaves them alone: `Big | nothing` is an envelope union.
-    ///
     /// Time: O(v) for a union's v variants  Space: O(v)
     fn stored_form_type(&self, ty: &Type) -> Type {
-        let resolved = match self.resolve_type(ty) {
-            Type::Union { variants } => Type::Union {
-                variants: variants
-                    .iter()
-                    .map(|variant| self.resolve_type(variant))
-                    .collect(),
-            },
-            other => other,
-        };
+        let resolved = self.resolve_type(ty);
         match &resolved {
             Type::Union { variants } if !ynz_typeck::check::is_envelope_union(&resolved) => {
                 ynz_typeck::check::raw_union_variant(variants)
-                    .map_or(Type::Nothing, |held| self.resolve_type(held))
+                    .map_or(Type::Nothing, |held| self.stored_form_type(held))
             }
             _ => resolved,
         }
@@ -6883,12 +6884,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 let Type::Union { variants } = resolved else {
                     return None;
                 };
-                Some(
-                    variants
-                        .iter()
-                        .map(|variant| self.resolve_type(variant))
-                        .collect(),
-                )
+                Some(variants)
             }
             _ => None,
         }
