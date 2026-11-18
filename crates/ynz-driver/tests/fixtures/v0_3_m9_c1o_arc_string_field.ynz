@@ -1,0 +1,32 @@
+// v0.3-M9 C1o (card #503): an Auto-Arc group whose shape owns a heap `string`. `launch` spawns
+// two tasks with the same `scene`, then returns and releases its own `scene` (and the name) while
+// both tasks are still suspended. The tasks must read the Arc block's OWN copy of the name.
+// Bug: the block held the spawner's pointer, so the tasks read a freed string (ASan
+// heap-use-after-free in `ynz_string_builder_append`). `churn` reuses the freed bytes.
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(100)
+  print(`task sees ${scene.name}`)
+  results.send(scene.width * scene.height)
+}
+
+function launch(results: channel<int>) -> nothing {
+  let scene: Scene = { name: `three rivers`.toUpperCase(), width: 6, height: 7 }
+  background render(scene, results)
+  background render(scene, results)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  launch(results)
+  let churn = `abcdefgh`.toUpperCase()
+  print(churn)
+  let a = results.receive()
+  let b = results.receive()
+  print(`done`)
+}
