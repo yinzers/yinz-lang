@@ -4862,21 +4862,26 @@ fn m5_p3_array_shape_nested_if_runs() {
 // ── v0.3-M3g Phase 3: E1 watchdog — never let a hang wedge the test binary ────
 
 /// Watchdog ceiling for a single compiled-fixture RUN (not the `ynz build`/`ynz run` compiler
-/// invocation itself — the compiler is not what a fused-continuation deadlock hangs). Generous
-/// per Phase 1's CI-contention caveat (A7) — every fixture's real execution is well under a
-/// second; 20s is a hang detector, not a performance budget.
-const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(20);
+/// invocation itself — the compiler is not what a fused-continuation deadlock hangs).
+///
+/// A LIVENESS bound, not a performance budget: about 10x the slowest observed fixture run. The
+/// slowest is the `--no-auto-parallel` (sequential) run of
+/// `v0_3_m3g_panic_io_member_with_cpu_in_flight.ynz`, which must finish its 150-million-iteration
+/// loop before it panics: ~9-12s idle and ~18-21s with 16 busy loops on 16 cores, in a debug
+/// build. The earlier 20s ceiling sat at ~1x that run and tripped at random under load (card
+/// #474); every other fixture runs in well under a second. A real E1 deadlock never exits, so it
+/// still trips this.
+const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(200);
 
 /// Spawn `cmd`, poll for exit without draining stdout/stderr until the process exits (safe for
 /// this corpus — every fixture's output is a handful of short lines, far under the OS pipe
 /// buffer), and PANIC (never silently hang) if it doesn't exit within `RUN_WATCHDOG`.
 ///
 /// This is the E1 safety net: a genuine 4c-class deadlock in the fused continuation (a spawned
-/// CPU handle or an I/O sub-frame that never gets re-polled) must fail FAST here instead of
-/// wedging this test binary — and by extension CI — indefinitely. NEVER "fix" a watchdog
-/// failure by widening the timeout or weakening the fixture; a watchdog trip is exactly the
-/// deadlock class this milestone's fused-continuation design exists to eliminate, and finding
-/// one here means the design invariant broke, not that the test is too strict.
+/// CPU handle or an I/O sub-frame that never gets re-polled) must fail here instead of wedging
+/// this test binary — and by extension CI — indefinitely. A trip means either that deadlock or
+/// that a fixture's run outgrew `RUN_WATCHDOG`'s ~10x margin: time the fixture's binary alone,
+/// idle and under load, before deciding which. Never weaken the fixture to make it pass.
 ///
 /// Used by the shared run-a-compiled-fixture helpers (`build_to_tmpdir_and_run`,
 /// `ynz_run_with_alloc_counter`) that every M3b/M3d/M3g concurrency fixture test routes
@@ -4906,10 +4911,9 @@ fn run_with_watchdog(mut cmd: Command) -> Output {
                     let _ = child.wait();
                     panic!(
                         "WATCHDOG TRIP: compiled fixture did not exit within {RUN_WATCHDOG:?} — \
-                         treat this as an E1 deadlock (a spawned CPU handle or I/O sub-frame \
-                         that never got re-polled by the shared continuation), never a slow \
-                         test; fix the fused-continuation codegen, never widen this timeout or \
-                         weaken the fixture."
+                         an E1 deadlock (a spawned CPU handle or I/O sub-frame that never got \
+                         re-polled by the shared continuation) unless timing the fixture binary \
+                         alone shows its run now takes a large fraction of this ceiling."
                     );
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
