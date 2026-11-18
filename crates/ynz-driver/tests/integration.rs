@@ -5520,19 +5520,12 @@ fn m3d_assert_fires_n_byte_identical_alloc_free(
 ///
 /// Since the v0.3-M5 P2 by-value ABI, array header+buffer allocations route through the
 /// COUNTED `ynz_alloc` (FRAGO 005 — the E8 gate must see element buffers; they were
-/// invisible raw malloc before, `baselines-p0.md` scope fact). Local arrays are not
-/// dropped at scope exit in a CPU-group host (pre-existing design; C8 slice 2 now releases a
-/// state-machine host's own locals, so these fixtures pin gap 0), so an array-building fixture
-/// legitimately shows `alloc == free + gap` where `gap` = 2 × (arrays constructed) +
-/// 5 × (maps constructed): buffers held until process exit. Pinning the exact gap
-/// keeps the mutation-proof teeth: a per-element or per-iteration allocation
-/// regression (or a new frame leak) changes the gap.
-///
-/// P3 step-4 VERDICT (was "INTERIM pending P3", FRAGO 009): this exact-gap encoding
-/// is RATIFIED as the durable accounting until the ownership model's drop story
-/// (plan Future Requirements #6) lands — parity is GREEN in FRAGO 009's "no NEW
-/// leak class" sense, so no drop insertion now and no D6 loud-reject fallback.
-/// See `m5_p3_e8_parity_gate` for the full gate + the FRAGO 011 persist-cell pins.
+/// invisible raw malloc before, `baselines-p0.md` scope fact). Locals are released at scope exit
+/// (C7 for a plain host, C8 for a state-machine host), so every caller pins gap 0: `gap`
+/// would be 2 × (arrays leaked) + 5 × (maps leaked). The parameter stays so a fixture that
+/// holds a counted buffer on purpose can pin its exact gap, which keeps the mutation-proof
+/// teeth: a per-element or per-iteration allocation regression (or a new frame leak) changes
+/// the gap. See `m5_p3_e8_parity_gate` for the gate + the FRAGO 011 persist-cell pins.
 fn m3d_assert_fires_byte_identical_alloc_gap(
     fixture_name: &str,
     expected_stdout: &str,
@@ -5896,10 +5889,10 @@ fn v03_m3d_return_class_array_fires_byte_identical() {
 #[test]
 fn v03_m3d_return_class_map_fires_byte_identical() {
     // WHY: a `map<int, int>`-returning CPU pair. Output asserts the entry counts
-    // (order-independent). Asserts FIRE + byte-identical + alloc==free+10 — since the
+    // (order-independent). Asserts FIRE + byte-identical + alloc==free — since the
     // v0.3-M5 P3 by-value map ABI, each map's FIVE buffers (header/ctrl/keys/vals/order)
-    // route through the COUNTED ynz_alloc (previously invisible raw malloc); locals are
-    // never dropped (pre-existing design), so 2 maps × 5 buffers = a deliberate gap of 10.
+    // route through the COUNTED ynz_alloc, so a leaked map would show as a gap of 5 per map;
+    // the scope-exit release pass (C7) frees both maps, so the gap pinned here is 0.
     m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_map.ynz", "3\n5", 0);
 }
 
@@ -6214,9 +6207,8 @@ fn v03_m3d_same_callee_array_distinct_values() {
 fn v03_m3d_same_callee_map_distinct_values() {
     // WHY: same callee `buildMap`, args 3 and 5 → entry counts 3 and 5 (distinct, order-
     // independent). Proves same-callee members bind separate `map<int, int>` values. FIRE +
-    // byte-identical + alloc==free+10 (2 maps × 5 counted, never-dropped buffers — the
-    // v0.3-M5 P3 by-value map ABI made the pre-existing held-until-exit map memory VISIBLE
-    // to the counter; see v03_m3d_return_class_map_fires_byte_identical's WHY).
+    // byte-identical + alloc==free (2 maps × 5 counted buffers, all released at scope exit;
+    // see v03_m3d_return_class_map_fires_byte_identical's WHY).
     m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_map.ynz", "3\n5", 0);
 }
 
@@ -7591,8 +7583,8 @@ fn v03_m3d_danger_float_if_arm_fires_byte_identical() {
 fn v03_m3d_danger_map_match_arm_fires_byte_identical() {
     // WHY: a heap-pointer return (`map<int, int>`) packed inside a `match` arm. The map's heap
     // pointer travels through the result slot; that pack/bind must survive match-arm machinery.
-    // alloc==free+10: 2 maps × 5 counted, never-dropped buffers (v0.3-M5 P3 by-value map ABI;
-    // see v03_m3d_return_class_map_fires_byte_identical's WHY).
+    // alloc==free: 2 maps × 5 counted buffers, all released at scope exit (v0.3-M5 P3 by-value
+    // map ABI; see v03_m3d_return_class_map_fires_byte_identical's WHY).
     m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_map_match_arm.ynz", "3\n5", 0);
 }
 
@@ -10629,24 +10621,20 @@ fn m5_p3_mapshape_wait_get_escape() {
 //
 // FRAGO 009 parity semantics: the gate targets "no NEW leak class vs the
 // pointer representation" — per-element/per-iteration allocation regressions
-// and clone→drop imbalance must be ZERO. It does NOT demand literal
-// alloc==free: (1) the PRE-EXISTING never-drop-local design holds array/map
-// buffers to process exit (+2 per array, +5 per map — visibility, not a
-// leak); (2) the FRAGO 011 counted persist cells (shape-field stores, maybe
-// persists) are accounted-and-deferred-to-drop-story, pinned EXACT-COUNT so
-// drift from the deliberate class fails loud.
+// and clone→drop imbalance must be ZERO. Since the scope-exit release pass
+// (C7) the fixtures below pin alloc==free: a local array or map is released
+// at its scope end (+2 per array, +5 per map), and the FRAGO 011 counted
+// persist cells (shape-field stores, maybe persists) are freed by the
+// overwrite that replaces them or at the scope end. Any gap is a leak.
 //
 // STEP-4 VERDICT (drop-insertion vs D6-fallback, assigned to this step by
-// FRAGO 009/011): parity is GREEN in the re-specified sense — no new leak
-// class exists, so neither remedy fires. No element-aware drop is inserted
-// now (YAGNI until the ownership model's drop story, plan Future Requirements
-// #6) and D6's loud-reject fallback is NOT taken. The exact-gap encoding
-// (`alloc == free + gap`) is ratified as the DURABLE accounting until FR #6
-// lands a drop story. Note: the map-side re-set-over-key cell leak FRAGO 011
+// FRAGO 009/011): the drop story landed as C7, so neither remedy fires: no
+// element-aware drop was needed and D6's loud-reject fallback was NOT taken.
+// Note: the map-side re-set-over-key cell leak FRAGO 011
 // assigned to this verdict is structurally GONE — the P3 elem_size cut stores
-// map shape values INLINE (lib.rs map runtime header comment); only shape-
-// FIELD re-assign and maybe-persist overwrites still mint deliberate
-// accounted cells (pinned below).
+// map shape values INLINE (lib.rs map runtime header comment); shape-
+// FIELD re-assign and maybe-persist overwrites still mint counted cells,
+// each freed as above (pinned below).
 
 #[test]
 fn m5_p3_e8_gate_visibility_arrays() {
@@ -10697,9 +10685,9 @@ fn m5_p3_e8_parity_gate() {
     // a KNOWN count and loop-scales the read path so any per-element /
     // per-iteration allocation regression shifts the pinned totals loudly.
     // Paper-Trace (predicted BEFORE first run; observed matched exactly):
-    //   +2  one array<Part> (header+buffer)      — pre-existing never-drop
+    //   +2  one array<Part> (header+buffer)      — released at the scope end (C7)
     //   +0  40 read iterations                   — entry-block staging only
-    //   +5  one map<int,Part> (5 buffers)        — never-drop
+    //   +5  one map<int,Part> (5 buffers)        — released at the scope end (C7)
     //   +0  3 map shape-value sets (1 overwrite) — INLINE since the P3 cut
     //   +4  shape-field persists (1 lit + 3 assigns) — FRAGO 011 exact-count
     //   free=3 re-assign cells, plus 7 at the scope end (C7 slice 1): the array's 2 and the map's 5,
@@ -10729,20 +10717,18 @@ fn m5_p3_e8_parity_gate() {
 fn v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak() {
     // WHY: v0.3-M6 Phase 1c step 3d — the heap-cell LOOP parity verdict, resolved (not
     // assumed) per FRAGO 013's carried open recon. A crossing `maybe`/`union` binding
-    // re-bound PER ITERATION runs the bind-time heap-cell promotion each pass and
-    // orphans the prior iteration's cell(s); cells are never freed (the M5 P3/FRAGO 009
-    // never-drop-locals exact-gap semantics, now surfacing through Phase 1c's NEW
-    // promotion sites). Paper-Trace (predicted BEFORE first run; observed matched
-    // exactly, stable across repeated runs):
-    //   +5  maybe loop, 5 iterations — 1 envelope cell per promotion (non-shape payload)
+    // re-bound PER ITERATION once ran the bind-time heap-cell promotion each pass and
+    // orphaned the prior iteration's cell(s), which nothing freed. Now neither is
+    // promoted to a heap cell, so the loop must balance. Paper-Trace:
+    //   +0  maybe loop, 5 iterations — the crossing `maybe` is homed in a frame region (it was +5,
+    //       one envelope cell per promotion)
     //   +0  union loop, 3 iterations — the union binding is a frame region (C1f #423: by value,
     //       no promotion; it was +6, two cells per iteration)
-    //   ±0  frames — the composed task frame is alloc'd AND freed (free=1 observed;
-    //       free>0 keeps the probe non-vacuous: the suspension machinery genuinely ran)
+    //   ±0  frames — the composed task frame is alloc'd AND freed (free>0 keeps the probe
+    //       non-vacuous: the suspension machinery genuinely ran)
     // The stdout assertion (200 = 5×40; `square`×3) proves each iteration's binding
-    // survived its suspension — the gap measures real crossing promotions, not dead
-    // code. A larger gap = a NEW leak class; free growing by 5 = a drop story landed
-    // (update this pin + the step-3d verdict record); any other drift = investigate.
+    // survived its suspension — the balance covers real crossing bindings, not dead
+    // code. Any gap = a NEW leak class (a cell promoted per iteration again).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m6_heap_cell_loop_parity.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "200\nsquare\nsquare\nsquare\n");
@@ -11044,11 +11030,11 @@ fn m5_p5_bg_copy_alloc_gap_pin() {
 // (`release_ladder_payload`). Pre-fix the ladder freed it and the receiver read a freed
 // header: `got.count()` printed `-4760032263271174595` / SIGSEGV on this exact fixture.
 //
-// The alloc gap follows the M5 exact-gap accounting (`m3d_assert_fires_byte_identical_alloc_gap`
-// doc): local arrays are never dropped at scope exit, so every array a local ends up holding
-// costs 2 counted allocs held to process exit. The gap is pinned EXACTLY because it is the
-// mutation tripwire for both failure directions: the ladder freeing a sent payload again
-// shrinks it by 2 (the double-owner regression); a payload nobody frees grows it.
+// The alloc gap follows the exact-gap accounting (`m3d_assert_fires_byte_identical_alloc_gap`
+// doc): local arrays are released at scope exit, so every fixture below pins gap 0. The gap is
+// pinned EXACTLY because it is the mutation tripwire for both failure directions: the ladder
+// freeing a sent payload again shrinks it by 2 (the double-owner regression, a double free);
+// a payload nobody frees grows it (a leak).
 
 /// Byte-exact stdout + exact alloc gap for one hand-off fixture. `gap_explained` names every
 /// held-to-exit array the pin counts so a drift is diagnosable from the failure message.
@@ -11101,10 +11087,10 @@ fn bg_arg_channel_send_receiver_reads_intact_array_after_task_retired() {
 fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
     // WHY: the never-drained sibling. Ownership rests with the channel (its teardown glue is
     // the payload's one drop — `send_of_ladder_owned_payload_releases_ladder_alloc_free_parity`
-    // proves that path in the runtime). The spawner's channel local is itself never released
-    // today (no scope-exit `ynz_channel_free` is emitted — the pre-existing never-drop-locals
-    // class), so the payload is held to exit WITH the channel: gap 4, not the pre-fix 2 that
-    // meant the ladder had freed a pointer still sitting in the channel's buffer.
+    // proves that path in the runtime). The spawner's channel local is released when it leaves
+    // scope, so the payload is freed WITH the channel: gap 0. `free`
+    // exceeding `alloc` would mean the ladder had freed a pointer still sitting in the channel's
+    // buffer.
     assert_bg_arg_handoff_fixture(
         "bg_arg_channel_send_array_never_drained.ynz",
         "never drained\n",
@@ -11278,18 +11264,10 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
     //   3. the parent dereferences `bucket[0]`, which is precisely what the old defect made
     //      unsafe (garbage / SIGSEGV across runs) and why the old pin refused to do it.
     //
-    // C5a re-pin, 8 -> 12: the green-world fixture needs two more array locals than the refused one
-    // (`spare` in the task, `fallback` in the parent, 2 counted allocations each, never released
-    // like every other heap local). Measured: the old fixture under the old compiler is alloc=14
-    // free=6, the new fixture under the OLD and the NEW compiler is alloc=18 free=6, so the
-    // hand-over rule adds no leak and the 4 extra are the 2 extra locals.
-    //
-    // Gap accounting (8): the parent's own three locals (`seed`, `bucket`, `rows` — 2 counted
-    // allocations each) are never released, which is the separate, pre-existing "nothing frees
-    // a heap local at scope exit" class, and the task's deep-copied item is not freed by the
-    // element-blind `ynz_array_drop` (a documented four-field deferral at the emitter). The
-    // task's own container clone and its `rows` clone ARE freed — the old defect was that the
-    // ladder freed something the PARENT still held, and that is gone.
+    // Gap accounting (0): the parent's three locals (`seed`, `bucket`, `rows`) and the task's `spare`
+    // and `mine` are released at their scope exits (C7, C8 slices 2 and 5), and the assertion below
+    // pins alloc == free, so no allocation is held to exit. The old defect was that the ladder
+    // freed something the PARENT still held, and that is gone.
     // C5a: the original fixture stores a bare parameter in a container, which hands it over and
     // is refused now (`v03_m9_store_hands_over.rs`); this one spells it with `give rows`.
     let fixture_name = "bg_arg_container_add_gives_row.ynz";

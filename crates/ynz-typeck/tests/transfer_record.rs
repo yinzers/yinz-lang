@@ -739,8 +739,8 @@ fn storing_bits_hands_nothing_over() {
     assert_eq!(escapes_of(&transfers, "numbers"), Vec::<Escape>::new());
 }
 
-/// (High) A string is immortal bytes under C3, so storing one hands nothing over and the name
-/// stays readable.
+/// (High) A string is a counted heap allocation, but a store copies it or takes it by move, so
+/// storing one hands nothing over and the name stays readable.
 #[test]
 fn storing_a_string_hands_nothing_over() {
     assert_accepted(

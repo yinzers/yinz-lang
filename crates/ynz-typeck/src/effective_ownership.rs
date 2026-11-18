@@ -296,8 +296,8 @@ impl<'a> ProvenanceCtx<'a> {
     }
 }
 
-/// A type whose values are bits (or immortal string bytes) — holding one never aliases a
-/// heap allocation, so an element of that type contributes nothing to a literal's roots.
+/// A type whose values are bits or a `string` (a store copies or moves it, `own_string_for_store`):
+/// holding one never aliases another owner's allocation, so it adds nothing to a literal's roots.
 /// `Error` counts as value-like so an earlier type error does not cascade into a transfer
 /// refusal. `None` (type unknown to the oracle) is treated as heap-typed by the callers.
 pub(crate) fn value_like(ty: &Type) -> bool {
@@ -420,7 +420,7 @@ fn call_result_provenance<'e>(
 /// — no wildcard arm, by design.
 pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
     match expr {
-        // Value bits, or immortal string bytes.
+        // Value bits, or a string literal (a store copies it, so nothing aliases it).
         Expr::IntLit(..)
         | Expr::NumberLit(..)
         | Expr::BoolLit(..)

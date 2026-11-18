@@ -7015,7 +7015,7 @@ impl<'b> Checker<'b> {
                         // element kind (`array`/`map`) — the ONE transfer decision; the arm
                         // inspects no syntax of its own. `number` is copy-through (a fresh
                         // cell is minted at the send), `int`/`float`/`bool`/`string` are
-                        // value bits or immortal bytes — none reach here.
+                        // value bits or a string, which a store copies or takes by move — none reach here.
                         let sink = TransferSink::Send {
                             channel: receiver_name.as_str(),
                         };

@@ -7045,10 +7045,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// the pre-M5 pointer ABI's stable-heap-element contract per persisted
     /// value.
     ///
-    /// Ownership/drop: nobody frees these cells yet — the pre-existing
-    /// never-drop-locals design (FRAGO 009; Phase 3 step 4 owns the parity
-    /// verdict). Eager free-on-overwrite would be UNSOUND today: `.copy()` is
-    /// a shallow struct memcpy, so two parents may share one nested cell.
+    /// Ownership/drop: the scope-exit release pass (C7) frees each cell, with the
+    /// value that holds it or at the overwrite that replaces it; this helper only
+    /// allocates. Freeing at the allocation site would be UNSOUND: a shape
+    /// `.copy()` is a shallow struct memcpy, so two parents may share one nested cell.
     fn heap_cell(
         &self,
         size: inkwell::values::IntValue<'ctx>,
@@ -16014,9 +16014,9 @@ fn build_cpu_trampoline<'ctx, 'g>(
     // FRAGO 009 defect C: free the staged decimal128 arg cell now — AFTER packing
     // copied the i128 out of any return pointer that may alias it. One alloc (spawn
     // site) / one free (here). A blocking-pool task dropped un-run at runtime
-    // shutdown leaks this cell (process-exit-only, same class as the shipped
-    // never-drop-locals semantics — tracked as v0.3-M6 Future-Req #17, deferred to
-    // the drop-story milestone).
+    // shutdown leaks this cell. It is held to process exit, so the alloc/free parity gate
+    // reports it; deferred, tracked as v0.3-M6 Future-Req #17 (a task dropped before it
+    // ran).
     if let Some(cell) = arg_cell {
         tramp_builder
             .build_call(
@@ -21957,7 +21957,7 @@ fn lower_stmt_return<'ctx>(
                 // cell before packing its address into the ok word (verified live:
                 // `-> maybe<int> errors` / `-> Coin errors` / `-> number errors`
                 // all returned garbage under default<O2> pre-fix). Same
-                // never-drop-cells posture as store_field (FRAGO 009); everything
+                // promotion as store_field (FRAGO 009); everything
                 // else is self-contained bits or already heap-backed.
                 let success_bits = match cg.resolve_type(&val_ty) {
                     Type::Maybe { ref inner } => {
@@ -22080,7 +22080,7 @@ fn lower_stmt_return<'ctx>(
                     // A wide payload's pointer (shape struct alloca / number i128
                     // slot) targets the callee's own stack — promote it to a counted
                     // heap cell (flag-guarded; the shared promotion discipline, never
-                    // a return-side twin). Same never-drop-cells posture as
+                    // a return-side twin). Same promotion as
                     // store_field (FRAGO 009).
                     // A `.copy()` of a `maybe` already holds its payload in a heap cell of its own: the
                     // return keeps it and gives the emptied envelope cell back.

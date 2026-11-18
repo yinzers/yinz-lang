@@ -128,10 +128,10 @@ fn assert_runs(name: &str, expected_stdout: &str) {
 }
 
 /// Exit 0 + byte-exact stdout + exact alloc/free parity: `alloc == free + expected_gap`, where
-/// the gap is the set of heap values still HELD at exit (no scope-exit drop pass exists, so a
-/// received or buffered value is held to exit by its binding or by the channel). A smaller gap
-/// is a double free (the ladder, the glue, or `refuse_closed` freed a value someone still
-/// holds); a larger gap is a leak (P2-3's class).
+/// the gap is the set of heap values still HELD at exit. Scope-exit release (C7, C8) frees a
+/// received or buffered value with its binding or with the channel, so a fixture pins 0 unless a
+/// value is held on purpose. A smaller gap is a double free (the ladder, the glue, or
+/// `refuse_closed` freed a value someone still holds); a larger gap is a leak (P2-3's class).
 fn assert_runs_with_parity(
     name: &str,
     expected_stdout: &str,
