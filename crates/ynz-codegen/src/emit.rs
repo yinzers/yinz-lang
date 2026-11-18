@@ -2237,6 +2237,37 @@ fn is_ptr_param(ty: &ynz_ast::nodes::Type, shape_table: &ShapeTable) -> bool {
     }
 }
 
+/// How `maybe_payload_stable_bits` copies a wide payload: `heap` makes a counted heap cell that
+/// outlives the frame (else the binding's own slot or region), `moved` says the source envelope
+/// is consumed so its payload is not deep-copied, and `take` says the source cell is freed once
+/// the copy is made (a value a call returned already sits in a cell of the caller's).
+#[derive(Clone, Copy)]
+struct PayloadCopy {
+    heap: bool,
+    moved: bool,
+    take: bool,
+}
+
+/// What `union_persist_if_ok` persists: the union's `variants`, whether the `view` it is given is
+/// the pointer to a `maybe` pair (`maybe`), and the move decision (`deep`: `Some` is passed to
+/// `union_persist_into_core` as it stands, `None` lets `union_persist_into_as` decide from the
+/// source).
+struct UnionPersist<'a> {
+    variants: &'a [Type],
+    maybe: bool,
+    deep: Option<bool>,
+}
+
+/// How a state-machine loop made the copy of its variable, for `release_sm_loop_copy`:
+/// `embed_copy` (a shape embedded in the frame), `body_suspends` (the body contains a suspension
+/// point) and `held` (the copy is held in a slot of the iteration's heap frame).
+#[derive(Clone, Copy)]
+struct SmLoopCopy {
+    embed_copy: bool,
+    body_suspends: bool,
+    held: bool,
+}
+
 /// One SoA field segment: where a field's per-element column lives inside the
 /// single segmented buffer (D2 — one allocation, compile-time offsets).
 #[derive(Clone)]
@@ -4278,8 +4309,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .into_int_value();
 
         let moved = self.is_moved_cells(src_env);
-        let final_bits =
-            self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap, moved, take)?;
+        let final_bits = self.maybe_payload_stable_bits(
+            flag,
+            bits,
+            inner_ty,
+            site,
+            PayloadCopy { heap, moved, take },
+        )?;
         // A `maybe` of an envelope union holds a VIEW of a slot someone else owns (an element's, a
         // field's, a per-site wrap's): a binding that keeps it would release what that owner
         // releases, so the payload is copied into a slot of the binding's own, deep like every union
@@ -4527,10 +4563,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         bits: inkwell::values::IntValue<'ctx>,
         inner_ty: &Type,
         site: &str,
-        heap: bool,
-        moved: bool,
-        take: bool,
+        copy: PayloadCopy,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let PayloadCopy { heap, moved, take } = copy;
         enum WidePayload {
             Shape(String),
             Number,
@@ -6294,11 +6329,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         err: inkwell::values::IntValue<'ctx>,
         view: PointerValue<'ctx>,
         dst: PointerValue<'ctx>,
-        variants: &[Type],
-        maybe: bool,
-        deep: Option<bool>,
+        persisted: UnionPersist<'_>,
         site: &str,
     ) -> Result<(), String> {
+        let UnionPersist {
+            variants,
+            maybe,
+            deep,
+        } = persisted;
         let present_bb = self.append_block(&format!("{site}_present"));
         let join_bb = self.append_block(&format!("{site}_join"));
         let is_ok = self
@@ -6352,7 +6390,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_store(scratch, slot_ty.const_zero())
             .map_err(|err| format!("{site}: zero the result slot: {err}"))?;
-        self.union_persist_if_ok(err, view, scratch, variants, maybe, None, site)?;
+        self.union_persist_if_ok(
+            err,
+            view,
+            scratch,
+            UnionPersist {
+                variants,
+                maybe,
+                deep: None,
+            },
+            site,
+        )?;
         let slot = self
             .builder
             .build_load(slot_ty, scratch, &format!("{site}_slot_value"))
@@ -6849,9 +6897,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             err,
             view,
             crossing.region,
-            &crossing.variants,
-            false,
-            Some(false),
+            UnionPersist {
+                variants: &crossing.variants,
+                maybe: false,
+                deep: Some(false),
+            },
             &site,
         )?;
         let region_ok = self.crossing_union_ok_word(name, err)?;
@@ -12807,9 +12857,11 @@ fn lower_sm_for<'ctx, 'g>(
                 var_slot,
                 &elem,
                 owned_elem.as_ref(),
-                embed_copy,
-                body_suspends,
-                held_copy,
+                SmLoopCopy {
+                    embed_copy,
+                    body_suspends,
+                    held: held_copy,
+                },
             )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
@@ -12926,9 +12978,11 @@ fn lower_sm_for<'ctx, 'g>(
                 var_slot,
                 &elem,
                 Some(&owned_elem),
-                false,
-                body_suspends,
-                held_copy,
+                SmLoopCopy {
+                    embed_copy: false,
+                    body_suspends,
+                    held: held_copy,
+                },
             )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
@@ -14524,7 +14578,7 @@ fn staged_maybe_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> u64
 /// * an argument that is, or is coerced into, an envelope union takes one slot, which keeps the
 ///   pointer to the callee's `Param` region the statement's end releases (a `give` position leaves
 ///   it unused);
-//// * a shape or `maybe` value typeck records as a staged argument
+/// * a shape or `maybe` value typeck records as a staged argument
 ///   (`Temporaries::is_staged_argument`) takes the region its bytes are held in
 ///   (`Cg::stage_value_in_frame`).
 ///
@@ -14711,7 +14765,7 @@ fn load_fixed_cells<'ctx>(
     region: PointerValue<'ctx>,
     name: &str,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
-    if cells_ty.len() == 0 {
+    if cells_ty.is_empty() {
         return Ok(cells_ty.const_zero().into());
     }
     builder
@@ -14728,7 +14782,7 @@ fn store_fixed_cells<'ctx>(
     slot: PointerValue<'ctx>,
     cells: inkwell::values::ArrayValue<'ctx>,
 ) -> Result<(), String> {
-    if cells.get_type().len() == 0 {
+    if cells.get_type().is_empty() {
         return Ok(());
     }
     builder
@@ -21294,9 +21348,11 @@ fn lower_stmt_return<'ctx>(
                         err_i64,
                         view,
                         region,
-                        &variants,
-                        maybe,
-                        None,
+                        UnionPersist {
+                            variants: &variants,
+                            maybe,
+                            deep: None,
+                        },
                         "sm_ec_union_ret",
                     )?;
                     let region_bits = cg
@@ -21689,9 +21745,11 @@ fn lower_stmt_return<'ctx>(
                                 bits,
                                 inner,
                                 "sm_ret_maybe",
-                                true,
-                                moved,
-                                takes_a_fresh_payload,
+                                PayloadCopy {
+                                    heap: true,
+                                    moved,
+                                    take: takes_a_fresh_payload,
+                                },
                             )?;
                             state_machine::store_return_value_errors(
                                 cg.ctx,
@@ -22050,9 +22108,11 @@ fn lower_stmt_return<'ctx>(
                             bits,
                             inner,
                             "ret_maybe",
-                            true,
-                            moved,
-                            takes_a_fresh_payload,
+                            PayloadCopy {
+                                heap: true,
+                                moved,
+                                take: takes_a_fresh_payload,
+                            },
                         )?
                     };
                     let mut env = cg.maybe_type().const_zero();
@@ -23157,10 +23217,13 @@ fn release_sm_loop_copy<'ctx>(
     var_slot: PointerValue<'ctx>,
     element_type: &Type,
     owned: Option<&OwnedRead<'ctx>>,
-    embed_copy: bool,
-    body_suspends: bool,
-    held: bool,
+    copy: SmLoopCopy,
 ) -> Result<(), String> {
+    let SmLoopCopy {
+        embed_copy,
+        body_suspends,
+        held,
+    } = copy;
     if held {
         return Ok(());
     }
@@ -31719,15 +31782,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             };
             // A temporary of a suspending statement lives in the heap frame: a pointer to heap that
             // stays put, or a region of bytes the value is moved into (`temporary_home`).
-            let home = if !frame_backed {
-                TemporaryHome::Pointer
-            } else if matches!(
-                release_step(&ty),
-                ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
-            ) {
+            let home = if !frame_backed
+                || matches!(
+                    release_step(&ty),
+                    ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+                ) {
                 TemporaryHome::Pointer
             } else {
-                temporary_home(&ty, minted_maybe_copy, &self.shape_abi_sizes)
+                temporary_home(&ty, minted_maybe_copy, self.shape_abi_sizes)
             };
             if home == TemporaryHome::Skip {
                 continue;
@@ -31803,7 +31865,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
         };
         let first =
-            self.take_wait_temporary_slots(staged_region_slots(ty, &self.shape_abi_sizes))?;
+            self.take_wait_temporary_slots(staged_region_slots(ty, self.shape_abi_sizes))?;
         let region = state_machine::shape_frame_region_ptr(
             self.ctx,
             &self.builder,
@@ -31848,7 +31910,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         inner: &Type,
     ) -> Result<(), String> {
         let inner = self.resolve_type(inner);
-        let payload_bytes = staged_maybe_payload_bytes(&inner, &self.shape_abi_sizes);
+        let payload_bytes = staged_maybe_payload_bytes(&inner, self.shape_abi_sizes);
         if payload_bytes == 0 {
             return Ok(());
         }
@@ -32923,10 +32985,9 @@ fn release_glue_free_kind<'ctx>(
             // A position of a suspending callee that is KNOWN not to be `give` is borrowed: the callee
             // neither releases nor moves it on, so the value the task holds is the ladder's to release
             // whole, as for a plain callee. Only an unknown callee keeps the flat free.
-            let known_borrowed = matches!(
-                cg.suspending_callee_param_ownership(callee, arg_index),
-                Some(_)
-            );
+            let known_borrowed = cg
+                .suspending_callee_param_ownership(callee, arg_index)
+                .is_some();
             if !known_borrowed && cg.callee_takes_a_given_parameter(callee) {
                 return Ok(kind);
             }
