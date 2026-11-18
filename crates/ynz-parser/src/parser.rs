@@ -2480,17 +2480,32 @@ impl<'a> Parser<'a> {
 
         // Desugar: inject `let k = __entry.key` and `let v = __entry.value` at the
         // top of the body, then append the user's statements.
+        //
+        // WHY each node gets its own span: typeck records every expression's type under
+        // its `(start, end)` span and codegen reads it back by the same key
+        // (`expr_types`). The three expressions synthesized here — the `.key` access
+        // (type K), the `.value` access (type V) and the `__entry` receivers (type
+        // MapEntry<K, V>) — must therefore not share a span, or the last type recorded
+        // overwrites the others and codegen sees `__entry` as a `K`/`V` ("field_gep:
+        // receiver is not a Shape"). The accesses reuse the span of the name they bind;
+        // both receivers share the body span (same MapEntry type, and a block is never an
+        // expression, so no user expression can collide with it — same approach as
+        // `parse_for_shape_destructure`).
         let entry_span = key_span.clone();
+        let entry_receiver_span = body_span.clone();
         let key_binding = Stmt::Let {
             is_const: false,
             name: key_name.clone(),
             name_span: key_span.clone(),
             ty: None,
             value: Expr::FieldAccess {
-                receiver: Box::new(Expr::Ident("__entry".to_string(), entry_span.clone())),
+                receiver: Box::new(Expr::Ident(
+                    "__entry".to_string(),
+                    entry_receiver_span.clone(),
+                )),
                 field: "key".to_string(),
-                field_span: entry_span.clone(),
-                span: entry_span.clone(),
+                field_span: key_span.clone(),
+                span: key_span.clone(),
             },
             span: key_span.clone(),
         };
@@ -2500,10 +2515,13 @@ impl<'a> Parser<'a> {
             name_span: val_span.clone(),
             ty: None,
             value: Expr::FieldAccess {
-                receiver: Box::new(Expr::Ident("__entry".to_string(), entry_span.clone())),
+                receiver: Box::new(Expr::Ident(
+                    "__entry".to_string(),
+                    entry_receiver_span.clone(),
+                )),
                 field: "value".to_string(),
-                field_span: entry_span.clone(),
-                span: entry_span.clone(),
+                field_span: val_span.clone(),
+                span: val_span.clone(),
             },
             span: val_span.clone(),
         };

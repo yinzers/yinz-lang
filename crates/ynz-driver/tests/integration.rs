@@ -11322,3 +11322,40 @@ fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
          alloc={alloc} free={free}"
     );
 }
+
+// ── Card #399: `for ((key, value) in map)` ───────────────────────────────────
+
+#[test]
+fn card399_map_for_key_value_prints_every_pair() {
+    // WHY (card #399, Medium tier — user flow): `for ((key, value) in map)` failed in codegen
+    // with `field_gep: receiver is not a Shape, got <K or V>` because the parser's desugar gave
+    // `__entry`, `.key` and `.value` one shared span and typeck's span-keyed `expr_types` kept
+    // only the last type. Covers string/int/number/shape/array/boolean pairs and nesting.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("card399_map_for_key_value.ynz"));
+    assert_eq!(
+        code, 0,
+        "destructured map loop must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout,
+        "PA=Harrisburg\nOH=Columbus\n\
+         alice=90\nbob=85\n\
+         1=1.5\n2=2.25\n\
+         a=Ann:3\nb=Bo:5\n\
+         1=2\n  1/2\n  2/1\n2=1\n  1/2\n  2/1\n\
+         x is on\n",
+        "every pair printed in insertion order"
+    );
+}
+
+#[test]
+fn card399_map_for_key_value_with_wait_in_body() {
+    // WHY (card #399, Medium tier): the same destructured loop through the state-machine
+    // lowering (`lower_sm_for` map arm) when the body contains a `wait`.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("card399_map_for_key_value_wait.ynz"));
+    assert_eq!(
+        code, 0,
+        "destructured map loop with wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "pat:31\nsam:42\n", "pairs survive the wait");
+}

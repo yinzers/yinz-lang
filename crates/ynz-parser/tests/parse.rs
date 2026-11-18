@@ -3440,6 +3440,45 @@ fn m7_for_destructure_preserves_user_body_stmts() {
 }
 
 #[test]
+fn card399_for_destructure_synthetic_exprs_have_distinct_spans() {
+    // WHY (card #399, High tier — desugar feeds the span-keyed `expr_types` table): the
+    // `.key` access, the `.value` access, the `__entry` receivers and the iterated map
+    // are four expressions with four different types. If any two share a `(start, end)`
+    // span, typeck's last write wins and codegen sees `__entry` typed as the key or value
+    // type (`field_gep: receiver is not a Shape`).
+    let stmts = parse_fn_body(&wrap("for ((k, v) in m) { }"));
+    let Stmt::For { iter, body, .. } = &stmts[0] else {
+        panic!("expected For, got {:?}", stmts[0]);
+    };
+    let access_parts = |stmt: &Stmt| match stmt {
+        Stmt::Let {
+            value: Expr::FieldAccess { receiver, span, .. },
+            ..
+        } => (receiver.span().clone(), span.clone()),
+        other => panic!("expected `let` of a field access, got {other:?}"),
+    };
+    let (key_receiver, key_access) = access_parts(&body.stmts[0]);
+    let (value_receiver, value_access) = access_parts(&body.stmts[1]);
+    let key_of = |span: &SourceSpan| (span.start, span.end);
+    let spans = [
+        key_of(iter.span()),
+        key_of(&key_access),
+        key_of(&value_access),
+        key_of(&key_receiver),
+    ];
+    for (position, first) in spans.iter().enumerate() {
+        for second in &spans[position + 1..] {
+            assert_ne!(first, second, "synthetic span collision: {spans:?}");
+        }
+    }
+    assert_eq!(
+        key_of(&key_receiver),
+        key_of(&value_receiver),
+        "both receivers are the same MapEntry-typed `__entry`, so they may share one span"
+    );
+}
+
+#[test]
 fn m7_for_single_binding_still_works() {
     // WHY: The existing `for (x in collection)` form must continue to work after
     // adding destructure support. The LParen-check branch must only fire for `((`
