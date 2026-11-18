@@ -495,6 +495,7 @@ fn v03_m9_c1h_number_literal_and_expression_args_reach_a_suspending_callee() {
     // read dead stack after its `wait`: `tally(2.25)` printed 0.25 instead of 2.50 and
     // `tally(seed + 2.75)` read whatever the stack held. It made
     // `red_opt_dangling_stack_return_sm_tier` depend on stack garbage. Tier: Medium.
+    // Decided: this fix rides in C1h (#433); search git log "decimal128 staging fix rides".
     let (stdout, stderr, code, timed_out) = ynz_run_with_timeout(
         "v0_3_m9_c1h_number_literal_arg_suspending_call.ynz",
         RUN_TIMEOUT,
