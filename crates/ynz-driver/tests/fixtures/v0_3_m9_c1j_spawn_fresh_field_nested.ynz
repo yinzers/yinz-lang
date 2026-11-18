@@ -1,0 +1,28 @@
+// v0.3-M9 C1j: a fire-and-forget `background` call passes a field two levels deep in a fresh call
+// result (`make().inner.items`). The task holds its own copy of the array; the whole temporary
+// `make()` returns (outer shape, inner shape, array, strings) must be released by the statement.
+// Expected output: the count, the first name, then `done`.
+
+shape Inner {
+  items: array<string>
+}
+
+shape Outer {
+  inner: Inner
+}
+
+function crunch(xs: array<string>) -> nothing {
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function make() -> Outer {
+  let outer: Outer = { inner: { items: [`a`.toUpperCase(), `b`.toUpperCase()] } }
+  return outer
+}
+
+function entrypoint() -> nothing {
+  background crunch(make().inner.items)
+  wait sleep(50)
+  print(`done`)
+}

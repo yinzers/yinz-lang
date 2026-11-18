@@ -1,0 +1,19 @@
+// v0.3-M9 C1j: a fire-and-forget `background` call passes an element of a fresh call result
+// (`make()[0]`, a `maybe<string>`). The whole array `make()` returns must be released by the
+// statement, and the task keeps its own copy of the element.
+// Expected output: the element, then `done`.
+
+function show(item: maybe<string>) -> nothing {
+  print(item.or(`?`))
+}
+
+function make() -> array<string> {
+  let names: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return names
+}
+
+function entrypoint() -> nothing {
+  background show(make()[0])
+  wait sleep(50)
+  print(`done`)
+}

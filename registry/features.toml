@@ -1893,6 +1893,18 @@ what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a ba
 what_instead_template = "Declare `{name}` as an `array<{items}>` instead, or give the task each item as an argument of its own."
 why_template = "A `fixed` value is kept with the function that made it, and a background task keeps running after that function has finished. To give the task a value of its own, the compiler copies the items out for it. That works for items that can be copied, such as a `string` or a shape, and not for items that cannot, such as an `array` or a `map`. So the call is refused, rather than letting the task read something that is gone."
 
+# `SpawnArgNotIndependent` for a piece of a value the `background` line itself builds
+# (`background crunch(make().rows)`), of a type the owned-copy table refuses. The two rows above
+# talk about a name the spawner keeps or hands over; here there is no name, the value `make()`
+# builds is released when this line ends, and the task is handed the piece as it is, so it would
+# read memory that is gone. `{type}`, `{detail}`, `{fix}` and `{why}` are the same per-type fills
+# the rows above use.
+[[diagnostic_template]]
+kind_name = "SpawnArgNotIndependentFreshPiece"
+what_template = "A `{type}` read out of a value this line builds cannot be handed to a background task{detail}."
+what_instead_template = "{fix}"
+why_template = "The value this call builds is released when the line ends, and a background task keeps running after it. The task would be handed that `{type}` as it is, and by the time it looked there would be nothing left to read. {why}"
+
 [[diagnostic_template]]
 kind_name = "Borrowed"
 what_template = "`{name}` is already borrowed and cannot be given or reassigned while the borrow is active."

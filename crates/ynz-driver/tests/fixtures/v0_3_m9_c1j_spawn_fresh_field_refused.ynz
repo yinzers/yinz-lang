@@ -1,0 +1,29 @@
+// v0.3-M9 C1j: a `background` call passes a field of a fresh call result whose type has no
+// independent copy (`fixed<array<string>>`). The task would be handed the field as it is while
+// `make()`'s result is released at the end of the line (the task read garbage), and releasing
+// nothing leaked it, so the call is refused.
+// Expected: a compile error naming the type, the reason and the owned-copy recovery.
+
+function crunch(rows: fixed<array<string>, 2>) -> nothing {
+  wait sleep(30)
+  for (row in rows) {
+    print(row.count())
+  }
+}
+
+shape Crate {
+  rows: fixed<array<string>, 2>
+}
+
+function make() -> Crate {
+  let first: array<string> = [`a`.toUpperCase()]
+  let second: array<string> = [`b`.toUpperCase(), `c`.toUpperCase()]
+  let crate: Crate = { rows: [first, second] }
+  return crate
+}
+
+function entrypoint() -> nothing {
+  background crunch(make().rows)
+  wait sleep(100)
+  print(`done`)
+}

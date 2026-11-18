@@ -103,6 +103,11 @@ pub struct Temporaries {
     /// suspends cannot read after its own `wait`; codegen keeps them in a frame region while it
     /// stages the argument (`Cg::stage_value_in_frame`).
     staged_arguments: HashSet<Span>,
+    /// The `background` arguments that are a piece of a fresh value (`make().rows`) of a type the
+    /// task cannot be given a copy of (`OwnedCopy::Refused`): the spawn hands the piece over
+    /// uncopied, so neither the task nor the statement end can release it, and typeck refuses the
+    /// spawn (`Temporaries::refused_spawn_pieces`).
+    refused_spawn_pieces: Vec<ynz_diagnostics::SourceSpan>,
 }
 
 impl Temporaries {
@@ -128,6 +133,12 @@ impl Temporaries {
     /// shape that owns no heap).
     pub fn is_staged_argument(&self, start: usize, end: usize) -> bool {
         self.staged_arguments.contains(&(start, end))
+    }
+
+    /// The `background` arguments that are a piece of a fresh value of a type with no owned copy
+    /// (`make().rows` typed `fixed<array<string>>`), in walk order.
+    pub fn refused_spawn_pieces(&self) -> &[ynz_diagnostics::SourceSpan] {
+        &self.refused_spawn_pieces
     }
 
     /// True when the expression at `start..end` builds a temporary.
@@ -552,6 +563,35 @@ impl Walk<'_> {
         }
     }
 
+    /// A `background` argument that is a field or element read off a value (`make().items`,
+    /// `make().inner.items`, `make()[0]`): when that value is a temporary, the task is handed a
+    /// copy of the piece and nothing else holds the rest, so the value dies at the statement end
+    /// like any other temporary (`value`). The exception is a piece of a type with no owned copy
+    /// (`OwnedCopy::Refused`): codegen hands that piece to the task as it is, so releasing the
+    /// value would free what the task still reads. It is recorded instead
+    /// (`Temporaries::refused_spawn_pieces`) for typeck to refuse. A whole value or a piece of a
+    /// binding is not touched (the spawn releases the first, the binding's scope exit the second).
+    ///
+    /// O(d) time for a piece d fields deep; O(1) space.
+    fn spawn_argument_piece(&mut self, arg: &Expr, key: Span) {
+        let mut base = arg;
+        while let Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } = base {
+            base = receiver;
+        }
+        if std::ptr::eq(base, arg) {
+            return;
+        }
+        match self.type_of(arg).map(crate::owned_copy::owned_copy_plan) {
+            Some(crate::owned_copy::OwnedCopy::Refused(_)) => {
+                if self.is_temporary(base) {
+                    self.out.refused_spawn_pieces.push(arg.span().clone());
+                }
+            }
+            Some(_) => self.value(base, Use::Borrowed, key, false),
+            None => {}
+        }
+    }
+
     fn children(&mut self, expr: &Expr, key: Span, suppress: bool) {
         match expr {
             Expr::Ident(..)
@@ -677,9 +717,19 @@ impl Walk<'_> {
             // awaited call is handed is judged as for a plain call: a temporary of the statement
             // that survives the suspension in a frame slot (C8 slice 2, `open_wait_temporaries`).
             Expr::Wait(inner, _) => self.value(inner, Use::Taken, key, suppress),
-            // A `background` call hands its arguments to the task: nothing is a temporary of this
-            // statement.
-            Expr::Background(inner, _) => self.value(inner, Use::Taken, key, true),
+            // A `background` call hands its arguments to the task: a whole value it is given is
+            // not a temporary of this statement (the spawn releases it, `prepare_bg_arg_for_ctx`).
+            // A PIECE of a fresh value (`make().items`) is different: the task gets a copy of the
+            // piece and nothing hands the rest of `make()`'s result on, so that result is a
+            // temporary of the statement like any other (`spawn_argument_piece`).
+            Expr::Background(inner, _) => {
+                self.value(inner, Use::Taken, key, true);
+                if let Expr::Call(call) = inner.as_ref() {
+                    for arg in &call.args {
+                        self.spawn_argument_piece(arg, key);
+                    }
+                }
+            }
         }
     }
 }
