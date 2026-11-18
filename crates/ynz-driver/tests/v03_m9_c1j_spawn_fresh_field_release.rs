@@ -68,7 +68,8 @@ fn a_field_with_no_owned_copy_of_a_fresh_call_result_is_refused_for_a_task() {
     assert_refused_with(
         "v0_3_m9_c1j_spawn_fresh_field_refused.ynz",
         &[
-            "A `fixed<array<string>>` read out of another value cannot be handed to a background task",
+            "A `fixed<array<string>>` read out of another value",
+            "cannot be handed to a background task",
             "`array<string>` values",
             "when this line ends",
             "background crunch(make().rows)",
