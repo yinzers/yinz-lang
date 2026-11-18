@@ -62,35 +62,18 @@ fn an_element_of_a_fresh_call_result_given_to_a_task_is_released() {
 // A piece with no owned copy (`fixed<array<string>>`) is handed to the task as it is, so
 // releasing the temporary at the statement end would free what the task still reads (garbage
 // output), and not releasing it leaks silently. The spawn is refused at compile time instead,
-// with the owned-copy table's own text (High: data integrity and release).
+// with the text of the one spawn refusal (High: data integrity and release).
 #[test]
 fn a_field_with_no_owned_copy_of_a_fresh_call_result_is_refused_for_a_task() {
-    let fixture = "v0_3_m9_c1j_spawn_fresh_field_refused.ynz";
-    let compiled = compile(fixture);
-    assert!(
-        !compiled.success,
-        "{fixture}: must be refused, but compiled:\n{}",
-        compiled.diagnostics
+    assert_refused_with(
+        "v0_3_m9_c1j_spawn_fresh_field_refused.ynz",
+        &[
+            "A `fixed<array<string>>` read out of another value cannot be handed to a background task",
+            "`array<string>` values",
+            "when this line ends",
+            "background crunch(make().rows)",
+        ],
     );
-    for fragment in [
-        "A `fixed<array<string>>` read out of a value this line builds cannot be handed to a background task",
-        "`array<string>` values",
-        "released when the line ends",
-        "background crunch(make().rows)",
-    ] {
-        assert!(
-            compiled.diagnostics.contains(fragment),
-            "{fixture}: diagnostic must contain {fragment:?}; got:\n{}",
-            compiled.diagnostics
-        );
-    }
-    for internal in ["codegen:", "internal error", "compiler bug"] {
-        assert!(
-            !compiled.diagnostics.contains(internal),
-            "{fixture}: a user error must come from typeck ({internal:?}):\n{}",
-            compiled.diagnostics
-        );
-    }
 }
 
 /// `fixture` must be refused by typeck: a user error carrying every fragment, never a backend
@@ -175,18 +158,36 @@ fn a_copyable_field_of_a_named_value_given_to_a_task_stays_accepted() {
     assert_fixture_balanced("v0_3_m9_c1j_spawn_named_copyable_field.ynz", "2\nA\ndone\n");
 }
 
-// A union has no independent copy, so a union piece is refused like any other (the one
-// `spawn_arg_refusal`, no special case): it is a field of a live `bag`, the same case as a named
-// union read after the spawn. Bug: it compiled, and on `main` ran wrong (the wrong variant at O2,
-// nothing at O0, ASan stack-use-after-return) (High: data integrity and release).
+// A union field of a named value stays accepted: a union parameter gets a slot of its own in the
+// task (`spawn_rehoming`: `UnionSlot`), so `launch` can return and release `bag` while the task
+// still reads its copy. Bug it guards: on `main` this ran wrong (the wrong variant at O2, nothing
+// at O0, ASan stack-use-after-return) (High: data integrity and release).
 #[test]
-fn a_union_field_of_a_named_value_is_refused_for_a_task() {
-    assert_refused_with(
-        "v0_3_m9_c1j_spawn_named_union_field.ynz",
-        &[
-            "`Circle | Tag`",
-            "cannot be handed to a background task",
-            "background f(bag.choice)",
-        ],
+fn a_union_field_of_a_named_value_given_to_a_task_stays_accepted() {
+    assert_fixture_balanced("v0_3_m9_c1j_spawn_named_union_field.ynz", "BOXED\ndone\n");
+}
+
+// A union variant that owns heap: the slot copies the payload and releases it once. Bug it
+// catches: a slot that shares the array or the string with `bag` frees them twice, or leaks them
+// (High: data integrity and release).
+#[test]
+fn a_union_field_with_a_heap_payload_of_a_named_value_is_copied_for_the_task() {
+    assert_fixture_balanced("v0_3_m9_c1j_spawn_union_heap_field.ynz", "2\nA\nL\ndone\n");
+}
+
+// The same payload read out of a fresh call result: the temporary is released once and the task
+// reads its own copy (High: data integrity and release).
+#[test]
+fn a_union_field_with_a_heap_payload_of_a_fresh_call_result_is_copied_for_the_task() {
+    assert_fixture_balanced("v0_3_m9_c1j_spawn_union_heap_fresh.ynz", "2\nA\nL\ndone\n");
+}
+
+// A named union that owns heap is read by the spawner after the spawn and by the task after the
+// spawner has returned: neither side may read freed storage (High: data integrity and release).
+#[test]
+fn a_named_union_with_a_heap_payload_read_after_the_spawn_is_copied_for_the_task() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1j_spawn_union_heap_reused.ynz",
+        "L\n2\nA\nL\ndone\n",
     );
 }

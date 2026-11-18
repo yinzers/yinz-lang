@@ -1,0 +1,45 @@
+// v0.3-M9 C1j: a `background` call passes a union field of a FRESH call result
+// (`make().choice`) whose variant owns heap. The task gets a slot of its own with a copy of the
+// payload, and the temporary `make()` returned is released once. Must be accepted, balanced and
+// ASan clean.
+// Expected output: the payload's item count, first item and label, then `done`.
+
+shape Circle {
+  radius: float
+}
+
+shape Names {
+  items: array<string>
+  label: string
+}
+
+shape Bag {
+  choice: Circle | Names
+  id: int
+}
+
+function f(choice: Circle | Names) -> nothing {
+  wait sleep(100)
+  if (choice) {
+    is Circle => {
+      print(`circle`)
+    }
+    is Names => {
+      print(choice.items.count())
+      print(choice.items[0].or(`?`))
+      print(choice.label)
+    }
+  }
+}
+
+function make() -> Bag {
+  let names: Names = { items: [`a`.toUpperCase(), `b`.toUpperCase()], label: `l`.toUpperCase() }
+  let bag: Bag = { choice: names, id: 1 }
+  return bag
+}
+
+function entrypoint() -> nothing {
+  background f(make().choice)
+  wait sleep(300)
+  print(`done`)
+}

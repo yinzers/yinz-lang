@@ -1,0 +1,49 @@
+// v0.3-M9 C1j: a NAMED union whose variant owns heap is given to a task and read again by the
+// spawner after the spawn. The task gets a slot of its own with a copy of the payload, so the
+// spawner keeps its value, and the task reads its copy after the spawner has returned. Must be
+// accepted, balanced and ASan clean.
+// Expected output: the spawner's read (the label), then the task's (count, first item, label),
+// then `done`.
+
+shape Circle {
+  radius: float
+}
+
+shape Names {
+  items: array<string>
+  label: string
+}
+
+function f(choice: Circle | Names) -> nothing {
+  wait sleep(100)
+  if (choice) {
+    is Circle => {
+      print(`circle`)
+    }
+    is Names => {
+      print(choice.items.count())
+      print(choice.items[0].or(`?`))
+      print(choice.label)
+    }
+  }
+}
+
+function launch() -> nothing {
+  let names: Names = { items: [`a`.toUpperCase(), `b`.toUpperCase()], label: `l`.toUpperCase() }
+  let choice: Circle | Names = names
+  background f(choice)
+  if (choice) {
+    is Circle => {
+      print(`circle`)
+    }
+    is Names => {
+      print(choice.label)
+    }
+  }
+}
+
+function entrypoint() -> nothing {
+  launch()
+  wait sleep(300)
+  print(`done`)
+}
