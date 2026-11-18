@@ -7,14 +7,15 @@ use support::{
     assert_built_balanced_and_asan_clean_printing_one_of, at_both_optimization_levels, build,
 };
 
-/// The spawner prints `churn` while the tasks sleep; a task's own line never lands after
-/// `done` (a task prints before it sends, the spawner prints `done` after both receives), but
-/// `churn` can land before, between or after them. Every legal order is accepted.
-fn assert_group_balanced(fixture: &str, churn: &str, task_line: &str) {
+/// The spawner prints `churn` while the tasks run; `churn` can land before, between or after
+/// the two task lines, so every legal order is accepted. `closing` is what the spawner prints
+/// last, after every task line: `done\n` when it first receives both results, empty when the
+/// runtime's shutdown drain (not a wall-clock sleep) is what waits for the tasks.
+fn assert_group_balanced(fixture: &str, churn: &str, task_line: &str, closing: &str) {
     let task_line_twice = format!("{task_line}{task_line}");
-    let churn_first = format!("{churn}{task_line_twice}done\n");
-    let churn_between = format!("{task_line}{churn}{task_line}done\n");
-    let churn_last = format!("{task_line_twice}{churn}done\n");
+    let churn_first = format!("{churn}{task_line_twice}{closing}");
+    let churn_between = format!("{task_line}{churn}{task_line}{closing}");
+    let churn_last = format!("{task_line_twice}{churn}{closing}");
     at_both_optimization_levels(|no_optimize| {
         let built = build(fixture, no_optimize);
         assert_built_balanced_and_asan_clean_printing_one_of(
@@ -34,6 +35,7 @@ fn a_string_field_of_an_arc_group_shape_outlives_the_spawner_and_is_freed_once()
         "v0_3_m9_c1o_arc_string_field.ynz",
         "ABCDEFGH\n",
         "task sees THREE RIVERS\n",
+        "done\n",
     );
 }
 
@@ -45,5 +47,6 @@ fn every_string_field_of_a_cpu_arm_arc_group_shape_is_owned_by_the_block() {
         "v0_3_m9_c1o_arc_cpu_arm_two_strings.ynz",
         "ABCDEFGH\n",
         "cpu task sees POINT PARK on ALLEGHENY\n",
+        "",
     );
 }
