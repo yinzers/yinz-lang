@@ -3101,7 +3101,9 @@ impl<'b> Checker<'b> {
     /// given — recording `Copy` there was parked item 16); then, when the remaining
     /// statements are in hand, the class-aware liveness rule (v0.3-M8 Phase 4, `IMP-
     /// ownership.md` sink 3: `Give` iff origin `Owned`/`Param(give)` and no alias-class
-    /// member is read afterwards, else `Copy`); with no liveness view, `Copy` (the safe
+    /// member is read afterwards, else `Copy`; a read by a LATER argument of the same call counts, so
+    /// of one binding passed twice only the last read gives it, the earlier ones copy it);
+    /// with no liveness view, `Copy` (the safe
     /// direction — the caller keeps its original). A non-ident argument that is not provably
     /// safe (`bg_arg_is_provably_safe`, default-deny FRAGO 022) records `Give` so codegen's
     /// presence-gated heap-upgrade fires. A `Copy` is always RECORDED, never omitted —
@@ -3112,6 +3114,7 @@ impl<'b> Checker<'b> {
         ident: Option<&str>,
         callee: Option<&str>,
         position: usize,
+        later_args: &[&Expr],
         remaining: Option<&[Stmt]>,
         fill_only: bool,
     ) -> Option<BgOwnership> {
@@ -3168,7 +3171,16 @@ impl<'b> Checker<'b> {
                     };
                     // The NEXT pass of an enclosing loop reads a binding declared outside it as
                     // surely as a later statement does, and `remaining` ends at this block's end.
+                    // A later argument of this same call reads the binding after this one does:
+                    // the spawn consumes it at its last read, never at an earlier one (the
+                    // slot is nulled where the consuming read happens, so a second read would
+                    // clone a null).
                     let used_after = self.bound_outside_current_loop(name)
+                        || later_args.iter().any(|later| {
+                            members
+                                .iter()
+                                .any(|member| expr_refs_ident(later, member.as_str()))
+                        })
                         || remaining.iter().any(|stmt| {
                             members
                                 .iter()
@@ -3525,6 +3537,7 @@ impl<'b> Checker<'b> {
                                     ident,
                                     callee_for_sig.as_deref(),
                                     position,
+                                    &bg_args[position + 1..],
                                     Some(remaining),
                                     false,
                                 );
@@ -4436,6 +4449,7 @@ impl<'b> Checker<'b> {
                     ident,
                     callee_for_sig.as_deref(),
                     position,
+                    &args[position + 1..],
                     None,
                     false,
                 );
@@ -5694,6 +5708,7 @@ impl<'b> Checker<'b> {
                             simple_ident_name(arg),
                             callee_for_sig.as_deref(),
                             position,
+                            &bg_args[position + 1..],
                             None,
                             true,
                         );

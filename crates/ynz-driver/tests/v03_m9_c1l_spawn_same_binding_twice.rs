@@ -17,7 +17,10 @@ fn one_array_binding_passed_twice_to_a_task_is_copied_twice_and_released_once() 
     at_both_optimization_levels(|no_optimize| {
         let built = build(fixture, no_optimize);
         assert_built_balanced_and_asan_clean_printing_one_of(
-            fixture, &built, &accepted, no_optimize,
+            fixture,
+            &built,
+            &accepted,
+            no_optimize,
         );
     });
 }
