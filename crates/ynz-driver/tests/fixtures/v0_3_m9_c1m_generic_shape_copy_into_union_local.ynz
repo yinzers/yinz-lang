@@ -1,0 +1,22 @@
+// v0.3-M9 C1m: a generic function keeps a `.copy()` of a `share` parameter in a `T | nothing`
+// local, and `T` is a shape whose first field is `0`.
+// The instance's local is a `Pt | nothing` envelope; the release reads its tag word. A bare `T`
+// value that is never wrapped into that envelope (C1n, #496) has the shape's first field there:
+// `0` selects the shape variant and the release reads a bogus payload, a crash.
+// Expected output: `kept`, then the caller's label `ABCDEFGHIJ`.
+
+shape Pt {
+  count: int
+  label: string
+}
+
+function keep<T>(share first: T) -> nothing {
+  let held: T | nothing = first.copy()
+  print(`kept`)
+}
+
+function entrypoint() -> nothing {
+  let point: Pt = { count: 0, label: `abcdefghij`.toUpperCase() }
+  keep(point)
+  print(point.label)
+}

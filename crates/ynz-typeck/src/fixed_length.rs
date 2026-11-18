@@ -93,6 +93,40 @@ pub fn fixed_type(element: Type, length: &WrittenLength<'_>) -> Type {
     }
 }
 
+/// The type a binding annotated with a union holds when the value is a `fixed` list: the union's
+/// `fixed<T>` variant takes the VALUE's length. A list's length is a compile-time constant of its
+/// value, never of an annotation that does not write one (`fixed<string> | nothing`), and the
+/// release walks exactly that many cells, so a binding typed with `Unknown` could not be released
+/// (`OmitReason::UnsizedFixed`, a leak). A later store of a list of another length is then refused
+/// by `can_assign`, as for any sized `fixed` slot. Only a variant with the value's item type and no
+/// length changes; any other type is returned as it is. O(variants).
+pub fn union_binding_type_with_value_length(annotated: &Type, value: &Type) -> Type {
+    let (
+        Type::Union { variants },
+        Type::BuiltinFixed {
+            elem: value_elem,
+            size,
+        },
+    ) = (annotated, value)
+    else {
+        return annotated.clone();
+    };
+    let sized = variants
+        .iter()
+        .map(|variant| match variant {
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Unknown,
+            } if elem == value_elem => Type::BuiltinFixed {
+                elem: elem.clone(),
+                size: size.clone(),
+            },
+            other => other.clone(),
+        })
+        .collect();
+    Type::Union { variants: sized }
+}
+
 // ── Length parameters of a function ──────────────────────────────────────────────────────────
 
 /// Mark every unsized `fixed<T>` parameter of a function signature as `OfParam`: the function is

@@ -3788,7 +3788,7 @@ impl<'b> Checker<'b> {
                 // not the concrete variant. `let s: Shape = circle` → s is Shape, not Circle.
                 self.record_union_coercion(value, ann_ty, &value_ty);
                 self.refuse_suspending_result_into_union_let(name, value, ann_ty);
-                ann_ty.clone()
+                crate::fixed_length::union_binding_type_with_value_length(ann_ty, &value_ty)
             } else {
                 // Use the value_ty to preserve size information from ArrayLit inference.
                 value_ty

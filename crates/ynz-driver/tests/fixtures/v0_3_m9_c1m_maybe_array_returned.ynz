@@ -1,0 +1,18 @@
+// v0.3-M9 C1m: a function returns a `maybe<array<int>>` that is a row of a list of rows it owns,
+// and the caller reads it.
+// Before: 4 of 8 allocations leaked (the local list of rows and its row were never released: the
+// return marks the list `Returned`, and the caller's binding is not an owner), though the output
+// was right.
+// Expected output: `true`.
+
+function firstRow() -> maybe<array<int>> {
+  let row: array<int> = [1, 2, 3]
+  let rows: array<array<int>> = [row]
+  let picked = rows.get(0)
+  return picked
+}
+
+function entrypoint() -> nothing {
+  let built = firstRow()
+  print(built.exists())
+}
