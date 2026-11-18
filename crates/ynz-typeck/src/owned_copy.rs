@@ -369,6 +369,12 @@ pub enum SpawnRehoming {
     StabilizeLoopView,
     /// A `decimal128` number lives in frame-owned storage, so it is copied into a heap cell.
     DecimalCell,
+    /// A union is given a slot of its own in the task, a copy of what the variant owns, whether
+    /// the argument is a name, a field of a live value or a field of a fresh call result: the
+    /// state-machine spawn persists it into the callee frame (`stage_union_arg`) and the CPU
+    /// spawn into `bg_union_arg_cell`. Neither path reads the owned-copy table, which refuses
+    /// every union.
+    UnionSlot,
 }
 
 /// Does the `background` path re-home this type with a mechanism of its own?
@@ -383,6 +389,7 @@ pub fn spawn_rehoming(ty: &Type) -> Option<SpawnRehoming> {
         Type::BuiltinChannel { .. } => Some(SpawnRehoming::ShareChannel),
         Type::MapEntry { .. } => Some(SpawnRehoming::StabilizeLoopView),
         Type::Number { precision } if *precision <= 34 => Some(SpawnRehoming::DecimalCell),
+        Type::Union { .. } => Some(SpawnRehoming::UnionSlot),
         _ => None,
     }
 }

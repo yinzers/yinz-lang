@@ -103,11 +103,20 @@ pub struct Temporaries {
     /// suspends cannot read after its own `wait`; codegen keeps them in a frame region while it
     /// stages the argument (`Cg::stage_value_in_frame`).
     staged_arguments: HashSet<Span>,
-    /// The `background` arguments that are a piece of a fresh value (`make().rows`) of a type the
-    /// task cannot be given a copy of (`OwnedCopy::Refused`): the spawn hands the piece over
-    /// uncopied, so neither the task nor the statement end can release it, and typeck refuses the
-    /// spawn (`Temporaries::refused_spawn_pieces`).
-    refused_spawn_pieces: Vec<ynz_diagnostics::SourceSpan>,
+    /// The `background` arguments that are a piece of a value (`make().rows`, `bag.rows`) of a type
+    /// the spawn cannot give the task a value of its own of (`spawn_arg_refusal`): the task would
+    /// be handed the piece as it is while the value it was read from releases it, so typeck
+    /// refuses the spawn (`Temporaries::refused_spawn_pieces`).
+    refused_spawn_pieces: Vec<RefusedSpawnPiece>,
+}
+
+/// One `background` argument that is a piece of a value and cannot be handed to the task: where it
+/// is, its type, and the per-type text `spawn_arg_refusal` gave for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefusedSpawnPiece {
+    pub span: ynz_diagnostics::SourceSpan,
+    pub ty: Type,
+    pub refusal: crate::owned_copy::CopyRefusal,
 }
 
 impl Temporaries {
@@ -135,9 +144,10 @@ impl Temporaries {
         self.staged_arguments.contains(&(start, end))
     }
 
-    /// The `background` arguments that are a piece of a fresh value of a type with no owned copy
-    /// (`make().rows` typed `fixed<array<string>>`), in walk order.
-    pub fn refused_spawn_pieces(&self) -> &[ynz_diagnostics::SourceSpan] {
+    /// The `background` arguments that are a piece of a value (fresh or named) of a type the spawn
+    /// cannot give the task a value of its own of (`make().rows`, `bag.rows` typed
+    /// `fixed<array<string>>`), in walk order.
+    pub fn refused_spawn_pieces(&self) -> &[RefusedSpawnPiece] {
         &self.refused_spawn_pieces
     }
 
@@ -564,13 +574,19 @@ impl Walk<'_> {
     }
 
     /// A `background` argument that is a field or element read off a value (`make().items`,
-    /// `make().inner.items`, `make()[0]`): when that value is a temporary, the task is handed a
-    /// copy of the piece and nothing else holds the rest, so the value dies at the statement end
-    /// like any other temporary (`value`). The exception is a piece of a type with no owned copy
-    /// (`OwnedCopy::Refused`): codegen hands that piece to the task as it is, so releasing the
-    /// value would free what the task still reads. It is recorded instead
-    /// (`Temporaries::refused_spawn_pieces`) for typeck to refuse. A whole value or a piece of a
-    /// binding is not touched (the spawn releases the first, the binding's scope exit the second).
+    /// `make().inner.items`, `make()[0]`, `bag.rows`). THE decision for such a piece is
+    /// `spawn_arg_refusal` on its type, the one question the named-argument refusal asks too:
+    ///
+    /// - refused: the spawn hands the piece to the task as it is, while the value it was read from
+    ///   releases it (a fresh value at the statement end, a binding at its scope exit). It is
+    ///   recorded (`Temporaries::refused_spawn_pieces`) for typeck to refuse, whatever the piece is
+    ///   read from.
+    /// - not refused: the task gets a value of its own, and when the value read from is a
+    ///   temporary, nothing else holds the rest of it, so it dies at the statement end like any
+    ///   other temporary (`value`). A piece of a binding needs nothing more: the binding's scope
+    ///   exit releases it.
+    ///
+    /// A whole value is not a piece: the spawn releases it (`prepare_bg_arg_for_ctx`).
     ///
     /// O(d) time for a piece d fields deep; O(1) space.
     fn spawn_argument_piece(&mut self, arg: &Expr, key: Span) {
@@ -581,14 +597,19 @@ impl Walk<'_> {
         if std::ptr::eq(base, arg) {
             return;
         }
-        match self.type_of(arg).map(crate::owned_copy::owned_copy_plan) {
-            Some(crate::owned_copy::OwnedCopy::Refused(_)) => {
-                if self.is_temporary(base) {
-                    self.out.refused_spawn_pieces.push(arg.span().clone());
-                }
+        let Some(ty) = self.type_of(arg) else {
+            return;
+        };
+        match crate::owned_copy::spawn_arg_refusal(ty) {
+            Some((_cause, refusal)) => {
+                let ty = ty.clone();
+                self.out.refused_spawn_pieces.push(RefusedSpawnPiece {
+                    span: arg.span().clone(),
+                    ty,
+                    refusal,
+                });
             }
-            Some(_) => self.value(base, Use::Borrowed, key, false),
-            None => {}
+            None => self.value(base, Use::Borrowed, key, false),
         }
     }
 

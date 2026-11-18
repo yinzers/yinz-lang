@@ -24396,6 +24396,14 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
             return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
         }
+        // A union gets its slot before this function is called (the spawn arms' own union step:
+        // `bg_union_arg_cell` / `stage_union_arg`), so one that arrives here has skipped it.
+        Some(ynz_typeck::owned_copy::SpawnRehoming::UnionSlot) => {
+            return Err(format!(
+                "a union background argument reached the owned-copy path without a slot ({})",
+                ynz_typeck::types::type_name(ty)
+            ));
+        }
         None => {}
     }
 
@@ -24664,6 +24672,20 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                     && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
                     && matches!(resolved, Type::BuiltinFixed { .. })),
                 "a named `fixed` with uncopyable items reached the background hand-over arm"
+            );
+            // A piece of another value (`bag.rows`, `make().rows`) that `spawn_arg_refusal`
+            // refuses is refused by typeck (`Temporaries::refused_spawn_pieces`, the same
+            // question), because this arm would hand the task storage the value it was read from
+            // still owns and releases. Only a piece the spawn re-homes itself or can copy gets
+            // here.
+            debug_assert!(
+                !(matches!(
+                    arg,
+                    ynz_ast::nodes::Expr::FieldAccess { .. }
+                        | ynz_ast::nodes::Expr::IndexAccess { .. }
+                ) && ynz_typeck::owned_copy::spawn_arg_refusal(&resolved).is_some()),
+                "a piece of another value that spawn_arg_refusal refuses reached the background \
+                 hand-over arm; typeck must have refused it"
             );
             return Ok((val, BgArgFreeKind::None));
         }

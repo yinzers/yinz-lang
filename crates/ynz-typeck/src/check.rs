@@ -748,45 +748,36 @@ fn record_temporaries_of(
     )
 }
 
-/// The refusals of the `background` arguments that are a piece of a fresh value of a type with no
-/// owned copy (`Temporaries::refused_spawn_pieces`): `background crunch(make().rows)` with `rows`
-/// a `fixed<array<string>>`. The piece is handed to the task as it is while `make()`'s result
-/// dies at the statement end, so the call is refused with the per-type text of the owned-copy
-/// table (the one `.copy()` and the named-argument refusals read).
+/// The refusals of the `background` arguments that are a piece of a value the spawn cannot give
+/// the task a value of its own of (`Temporaries::refused_spawn_pieces`, decided by
+/// `spawn_arg_refusal`): `background crunch(make().rows)` or `background f(bag.rows)` with `rows`
+/// a `fixed<array<string>>`. The piece would be handed to the task as it is while the value it was
+/// read from releases it, so the call is refused with the per-type text of the one refusal.
 ///
 /// O(p) time for p refused pieces; O(1) space.
-fn refuse_spawn_pieces_of_fresh_values(
-    temporaries: &crate::temporaries::Temporaries,
-    expr_types: &HashMap<(usize, usize), Type>,
-) -> Vec<Diagnostic> {
-    let mut refusals = Vec::new();
-    for span in temporaries.refused_spawn_pieces() {
-        let Some(ty) = expr_types.get(&(span.start, span.end)) else {
-            continue;
-        };
-        let crate::owned_copy::OwnedCopy::Refused(refusal) = crate::owned_copy::owned_copy_plan(ty)
-        else {
-            continue;
-        };
-        let fills = [
-            ("type", type_name(ty)),
-            ("detail", refusal.detail),
-            ("fix", refusal.fix),
-            ("why", refusal.why),
-        ];
-        let slots: Vec<(&str, &str)> = fills
-            .iter()
-            .map(|(slot, value)| (*slot, value.as_str()))
-            .collect();
-        refusals.push(registry_diag_template(
-            span.clone(),
-            DiagnosticKind::SpawnArgNotIndependent,
-            "SpawnArgNotIndependentFreshPiece",
-            &slots,
-        ));
-    }
-    refusals
-
+fn refuse_spawn_pieces(temporaries: &crate::temporaries::Temporaries) -> Vec<Diagnostic> {
+    temporaries
+        .refused_spawn_pieces()
+        .iter()
+        .map(|piece| {
+            let fills = [
+                ("type", type_name(&piece.ty)),
+                ("detail", piece.refusal.detail.clone()),
+                ("fix", piece.refusal.fix.clone()),
+                ("why", piece.refusal.why.clone()),
+            ];
+            let slots: Vec<(&str, &str)> = fills
+                .iter()
+                .map(|(slot, value)| (*slot, value.as_str()))
+                .collect();
+            registry_diag_template(
+                piece.span.clone(),
+                DiagnosticKind::SpawnArgNotIndependent,
+                "SpawnArgNotIndependentPiece",
+                &slots,
+            )
+        })
+        .collect()
 }
 /// Every Yinz function a call can reach: the module's own and the imported ones.
 fn callable_fns_of(local_fns: &HashSet<String>, imported_fns: &HashSet<String>) -> HashSet<String> {
@@ -1259,7 +1250,7 @@ fn check_one_pass(
             generic_shapes: checker.generic_shape_table,
         },
     );
-    for refusal in refuse_spawn_pieces_of_fresh_values(&temporaries, &checker.expr_types) {
+    for refusal in refuse_spawn_pieces(&temporaries) {
         checker.diags.push(refusal);
     }
     let fixed_instances = fixed_instances_of(
@@ -1418,7 +1409,7 @@ pub fn check_with_kernel_mode(
             generic_shapes: checker.generic_shape_table,
         },
     );
-    for refusal in refuse_spawn_pieces_of_fresh_values(&temporaries, &checker.expr_types) {
+    for refusal in refuse_spawn_pieces(&temporaries) {
         checker.diags.push(refusal);
     }
     let typed = TypedModule {
