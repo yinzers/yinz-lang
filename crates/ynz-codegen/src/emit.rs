@@ -5742,11 +5742,28 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         )
     }
 
+    /// The type a shape field of type `ty` is copied and released as: itself, except a union that
+    /// is not an envelope union, which is its one variant's raw pointer or bits
+    /// (`raw_union_variant`): that variant, or `nothing` when it holds none (`int | float`). The
+    /// copy (`deepen_shape_fields`) and the release (`release_step`) read the same fact.
+    ///
+    /// Time: O(v) for a union's v variants  Space: O(v)
+    fn stored_field_type(&self, ty: &Type) -> Type {
+        let resolved = self.resolve_type(ty);
+        match &resolved {
+            Type::Union { variants } if !ynz_typeck::check::is_envelope_union(&resolved) => {
+                ynz_typeck::check::raw_union_variant(variants)
+                    .map_or(Type::Nothing, |held| self.resolve_type(held))
+            }
+            _ => resolved,
+        }
+    }
+
     /// Does a field of type `ty` own heap a shape copy must copy (`deepen_shape_fields`)?
     ///
     /// Time: O(v) for a union's v variants  Space: O(v)
     fn field_needs_deepen(&self, ty: &Type) -> bool {
-        let ty = self.resolve_type(ty);
+        let ty = self.stored_field_type(ty);
         self.envelope_union_variants(&ty).is_some()
             || is_string_like(&ty)
             || self.fixed_field_items_need_copy(&ty)
@@ -5803,7 +5820,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or_else(|| format!("deepen_shape_fields: shape `{shape_name}` not in table"))?
             .clone();
         for (field_index, field) in shape_def.fields.iter().enumerate() {
-            let field_ty = self.resolve_type(&field.ty);
+            let field_ty = self.stored_field_type(&field.ty);
             let site = format!("deepen_{shape_name}_{}", field.name);
             let envelope_variants = self.envelope_union_variants(&field_ty);
             if !self.field_needs_deepen(&field_ty) {
@@ -28782,8 +28799,9 @@ enum ReleaseStep {
     /// A `maybe<T>` envelope `{flag, bits}`: the payload it owns (a string, a shape's heap cell,
     /// a `number`'s cell), and, in the cell flavor, the envelope cell.
     Maybe { inner: Type },
-    /// A union: the variant its tag names (an envelope union is a slot, any other a `{tag, data}`
-    /// view).
+    /// An ENVELOPE union (`is_envelope_union`): the variant its tag names (a slot, or the
+    /// `{tag, data}` view of one a binding owns). Any other union is its one variant's raw pointer,
+    /// which `release_step` answers as that variant's step.
     Union { variants: Vec<Type> },
     /// A `channel<T>`: one counted reference (`ynz_channel_free`).
     Channel,
@@ -28835,8 +28853,16 @@ fn release_step(ty: &Type) -> ReleaseStep {
         Type::Maybe { inner } => ReleaseStep::Maybe {
             inner: inner.as_ref().clone(),
         },
-        Type::Union { variants } => ReleaseStep::Union {
-            variants: variants.clone(),
+        // An envelope union is a tagged slot. Any other union is its one variant's raw pointer or
+        // bits (`map<..> | nothing`), released as that variant, or owns nothing (`int | float`).
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(ty) => {
+            ReleaseStep::Union {
+                variants: variants.clone(),
+            }
+        }
+        Type::Union { variants } => match ynz_typeck::check::raw_union_variant(variants) {
+            Some(held) => release_step(held),
+            None => ReleaseStep::Nothing,
         },
         Type::BuiltinChannel { .. } => ReleaseStep::Channel,
         Type::BackgroundHandle { .. } => ReleaseStep::Handle,
@@ -29043,19 +29069,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             ReleaseStep::Union { .. } if home == ReleaseHome::FixedCell => Ok(self
                 .local_release_fn(&ty)?
                 .map(|glue| (as_pointer(glue), false))),
-            ReleaseStep::Union { variants } => {
-                if self.envelope_union_variants(&ty).is_some() {
-                    Ok(self
-                        .release_fn(&ty, false)?
-                        .map(|glue| (as_pointer(glue), true)))
-                } else {
-                    Err(format!(
-                        "internal: a union of {} variants with no shape variant has no stored \
-                         form to release",
-                        variants.len()
-                    ))
-                }
-            }
+            ReleaseStep::Union { .. } => Ok(self
+                .release_fn(&ty, false)?
+                .map(|glue| (as_pointer(glue), true))),
             // A `fixed<T, N>` field holds its cells inline: the release walks them in place.
             ReleaseStep::Fixed { .. } if home == ReleaseHome::Field => Ok(self
                 .release_fn(&ty, false)?
@@ -29179,9 +29195,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let owns_cell = form == ReleaseForm::Cell
             && (matches!(
                 step,
-                ReleaseStep::Shape { .. } | ReleaseStep::Maybe { .. } | ReleaseStep::Fixed { .. }
-            ) || (matches!(step, ReleaseStep::Union { .. })
-                && self.envelope_union_variants(&resolved).is_some()));
+                ReleaseStep::Shape { .. }
+                    | ReleaseStep::Maybe { .. }
+                    | ReleaseStep::Fixed { .. }
+                    | ReleaseStep::Union { .. }
+            ));
         let local = form == ReleaseForm::Local
             && matches!(step, ReleaseStep::Maybe { .. } | ReleaseStep::Union { .. });
         let name = format!(
@@ -29248,7 +29266,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .map_err(|err| format!("release cell taken return {name}: {err}"))?;
             self.builder.position_at_end(release_cell);
         }
-        self.emit_release_body(release, &step, &resolved, local, value, &name)?;
+        self.emit_release_body(release, &step, local, value, &name)?;
         if owns_cell {
             let size = self.release_cell_size(&step)?;
             self.builder
@@ -29295,7 +29313,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         &self,
         function: FunctionValue<'ctx>,
         step: &ReleaseStep,
-        ty: &Type,
         local: bool,
         value: PointerValue<'ctx>,
         site: &str,
@@ -29367,7 +29384,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.emit_maybe_payload_release(function, value, inner, local, site)?
             }
             ReleaseStep::Union { variants } => {
-                if self.envelope_union_variants(ty).is_some() && !local {
+                if !local {
                     self.emit_union_slot_release(function, value, variants, site)?;
                 } else {
                     self.emit_union_view_release(function, value, variants, site)?;
@@ -29522,12 +29539,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // `maybe_to_owned` made, or the slot a call's result landed in): the variant it holds
             // is released through the view, as a local union binding's is. A stored `maybe` of a
             // union has no release here.
-            ReleaseStep::Union { .. }
-                if local && self.envelope_union_variants(&inner).is_some() =>
-            {
-                self.release_form_fn(&inner, ReleaseForm::Local)?
-                    .map(|glue| glue.as_global_value().as_pointer_value())
-            }
+            ReleaseStep::Union { .. } if local => self
+                .release_form_fn(&inner, ReleaseForm::Local)?
+                .map(|glue| glue.as_global_value().as_pointer_value()),
             // A local `maybe` of a channel owns one counted reference (its holder took it or was
             // handed it); a `maybe` stored in a shape field or a list does not release it here.
             ReleaseStep::Channel if local => Some(
@@ -29660,20 +29674,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder.position_at_end(present_bb);
         let tag = self.union_tag_bits(view, site)?;
         let payload = self.union_payload_ptr(view, site)?;
-        let boxed = match self.envelope_union_variants(&Type::Union {
-            variants: variants.to_vec(),
-        }) {
-            Some(envelope_variants) => Some(self.union_layout(&envelope_variants)?.boxed),
-            None => None,
-        };
+        let envelope_variants = self
+            .envelope_union_variants(&Type::Union {
+                variants: variants.to_vec(),
+            })
+            .ok_or_else(|| format!("internal: {site} released a non-envelope union as a view"))?;
+        let boxed = self.union_layout(&envelope_variants)?.boxed;
         let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
         let mut bodies: Vec<(BasicBlock<'ctx>, PointerValue<'ctx>)> = Vec::new();
         for (index, variant) in variants.iter().enumerate() {
-            let release = match (self.resolve_type(variant), boxed) {
-                (Type::Shape { name }, Some(boxed)) => self
+            let release = match self.resolve_type(variant) {
+                Type::Shape { name } => self
                     .release_fn(&Type::Shape { name }, boxed)?
                     .map(|glue| (glue.as_global_value().as_pointer_value(), boxed)),
-                (other, _) => self.stored_release(&other, ReleaseHome::Field)?,
+                other => self.stored_release(&other, ReleaseHome::Field)?,
             };
             if let Some((glue, _)) = release {
                 let block = self
@@ -32823,6 +32837,15 @@ fn release_glue_free_kind<'ctx>(
         // A `string` the task owns: the spawn-time clone, or the moved original.
         (BgArgFreeKind::None, string_like) if is_string_like(string_like) => true,
         (BgArgFreeKind::None, Type::BuiltinMap { .. }) => true,
+        // A union that is not an envelope union is its one variant's raw pointer, handed to the task
+        // as it is (a refused copy type, `prepare_bg_arg_for_ctx`'s hand-over): the task owns what
+        // that variant owns, released as the variant is (`release_step`). A union that owns nothing
+        // (`int | float`) has no release.
+        (BgArgFreeKind::None, Type::Union { .. })
+            if !ynz_typeck::check::is_envelope_union(&resolved) =>
+        {
+            release_step(&resolved) != ReleaseStep::Nothing
+        }
         (BgArgFreeKind::HeapShape { .. }, Type::Shape { name }) => {
             !cg.shape_field_releases(name)?.is_empty()
         }
@@ -32925,6 +32948,76 @@ mod copy_parity_tests {
             assert!(
                 expected,
                 "{ty:?}: refused to copy, but its release is {step:?}"
+            );
+        }
+    }
+
+    /// Bug: a union with no tag (`array<int> | nothing`, `int | float`) is the raw pointer or
+    /// bits of its one variant, and the release table said "no stored form" for it, so a shape
+    /// with such a field did not build (High: release). The release plan classifies the same
+    /// union by the same variant (`raw_union_variant`); this holds the two together, so an edit
+    /// to one fails here instead of leaking or double-freeing.
+    #[test]
+    fn a_union_without_a_tag_releases_as_the_variant_the_release_plan_classifies() {
+        use ynz_typeck::generics::GenericShapeTable;
+        use ynz_typeck::release_plan::{heap_class_of, HeapClass, ReleaseKind, TypeTables};
+        use ynz_typeck::shapes::ShapeTable;
+        let shapes = ShapeTable::default();
+        let generic_shapes = GenericShapeTable::default();
+        let tables = TypeTables {
+            shapes: &shapes,
+            generic_shapes: &generic_shapes,
+        };
+        let array = Type::BuiltinArray {
+            elem: Box::new(Type::Int),
+        };
+        let map = Type::BuiltinMap {
+            key: Box::new(Type::String),
+            val: Box::new(Type::Int),
+        };
+        let channel = Type::BuiltinChannel {
+            elem: Box::new(Type::Int),
+        };
+        let cases = [
+            (vec![Type::Int, Type::Float], HeapClass::NoHeap),
+            (vec![Type::Int, Type::Nothing], HeapClass::NoHeap),
+            (
+                vec![Type::Bool, Type::Float, Type::Nothing],
+                HeapClass::NoHeap,
+            ),
+            (
+                vec![Type::String, Type::Nothing],
+                HeapClass::Heap(ReleaseKind::String),
+            ),
+            (
+                vec![array, Type::Nothing],
+                HeapClass::Heap(ReleaseKind::Array),
+            ),
+            (vec![map, Type::Nothing], HeapClass::Heap(ReleaseKind::Map)),
+            (
+                vec![channel, Type::Nothing],
+                HeapClass::Heap(ReleaseKind::Channel),
+            ),
+        ];
+        for (variants, class) in cases {
+            let ty = Type::Union { variants };
+            assert!(
+                !ynz_typeck::check::is_envelope_union(&ty),
+                "{ty:?} must be a union with no tag"
+            );
+            assert_eq!(heap_class_of(&ty, &tables), class, "{ty:?}");
+            let step = release_step(&ty);
+            let consistent = match class {
+                HeapClass::NoHeap => step == ReleaseStep::Nothing,
+                HeapClass::Heap(ReleaseKind::String) => step == ReleaseStep::String,
+                HeapClass::Heap(ReleaseKind::Array) => matches!(step, ReleaseStep::Array { .. }),
+                HeapClass::Heap(ReleaseKind::Map) => matches!(step, ReleaseStep::Map { .. }),
+                HeapClass::Heap(ReleaseKind::Channel) => step == ReleaseStep::Channel,
+                _ => false,
+            };
+            assert!(
+                consistent,
+                "{ty:?}: the release plan says {class:?} but the release table says {step:?}"
             );
         }
     }

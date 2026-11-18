@@ -12256,6 +12256,28 @@ fn is_errors_maybe_of_envelope_union(candidate: &Type) -> bool {
     }
 }
 
+/// The variant a union that is NOT an envelope union ([`is_envelope_union`]) holds as its raw
+/// pointer or bits (`map<..> | nothing` holds the map pointer, null for `nothing`): its one
+/// variant beside `nothing`. `None` when no variant is held that way: a union of two or more
+/// value variants (`int | float`) owns no heap, and `nothing` alone owns none.
+///
+/// THE answer to "what does a raw union slot hold" that codegen's release table reads
+/// (`release_step`). The release plan classifies the same variant (`heap_class_of`,
+/// `slot_held_type`), and the codegen test
+/// `a_union_without_a_tag_releases_as_the_variant_the_release_plan_classifies` holds the two
+/// together. Meaningful only for a union that is not an envelope union.
+///
+/// Time: O(v) for v variants  Space: O(1)
+pub fn raw_union_variant(variants: &[Type]) -> Option<&Type> {
+    let mut present = variants
+        .iter()
+        .filter(|variant| !matches!(variant, Type::Nothing));
+    match (present.next(), present.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
+}
+
 /// A union with a shape variant (`Tiny | Big`, `Circle | nothing`), or one with no shape variant
 /// that holds heap beside at least one other variant (`string | array<int>`, `string | channel<int>`,
 /// `string | int`), is a pointer to a tagged `{tag, data}` envelope and is stored as a tagged slot

@@ -12,7 +12,10 @@ fn assert_fixture_balanced(fixture: &str, accepted: &[&str]) {
     at_both_optimization_levels(|no_optimize| {
         let built = build(fixture, no_optimize);
         assert_built_balanced_and_asan_clean_printing_one_of(
-            fixture, &built, accepted, no_optimize,
+            fixture,
+            &built,
+            accepted,
+            no_optimize,
         );
     });
 }
@@ -35,5 +38,23 @@ fn an_array_or_nothing_given_to_a_task_is_released() {
     assert_fixture_balanced(
         "v0_3_m9_c1k_spawn_array_nothing.ynz",
         &["ran\ndone\n", "done\nran\n"],
+    );
+}
+
+// Bug the release alone would add: a copy shared the field's pointer, so releasing both the
+// original and the copy freed one string, array or map twice (High: data integrity and release).
+#[test]
+fn a_copied_shape_with_a_string_or_nothing_field_releases_its_own_string() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1k_shape_string_nothing_copied.ynz",
+        &["A\nA\nA\n"],
+    );
+}
+
+#[test]
+fn a_copied_shape_with_array_and_map_or_nothing_fields_releases_its_own_values() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1k_shape_array_map_nothing_copied.ynz",
+        &["A\nA\n"],
     );
 }
