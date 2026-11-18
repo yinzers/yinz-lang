@@ -436,11 +436,11 @@ pub use crate::owned_copy::copy_is_independent;
 /// beneficial-emission condition", item 4): can a value of this type be shared across a
 /// `background` boundary as ONE refcounted block whose bytes every task reads?
 ///
-/// A `shape` whose fields are all `int`/`float`/`bool`/`string` — the field kinds a byte copy
-/// of the struct shares soundly: value bits, or (`string`) a pointer the shipped copy path (a
-/// byte `memcpy` of the struct into `ynz_alloc`'d storage) ALREADY shares between the caller
-/// and every task, and which the runtime never releases today (no string free exists), so
-/// sharing it by count changes nothing. Excluded, each for a reason the block cannot express:
+/// A `shape` whose fields are all `int`/`float`/`bool`/`string`: value bits, which a byte copy of
+/// the struct shares soundly, or a `string`, the one heap kind the block can own. The block holds
+/// a copy of each string of its own (made once at group creation by `deepen_shape_fields`) and
+/// releases them with the shape's release function when the last reference drops (C1o), so a
+/// task never reads a string the spawner has released. Excluded, each for a reason the block cannot express:
 /// - `number` fields: 16-byte alignment; the block's data starts 8-aligned (`arc.rs`). ALSO:
 ///   a shape with a `number` field SIGSEGVs on ANY `background` spawn today on the copy path
 ///   (parked item 40 / FRAGO 012, hotfix pending) — do not widen the floor to `number` until

@@ -1902,7 +1902,7 @@ mod tests {
                     // (exactly what `ynz_arc_clone` at a group spawn leaves in the slot).
                     // The block is ONE counted allocation; the ladder's release must free
                     // NOTHING while the co-owner lives.
-                    let base = crate::arc::ynz_arc_new(16);
+                    let base = crate::arc::ynz_arc_new(16, None);
                     (
                         crate::arc::ynz_arc_clone(base) as i64,
                         16,
