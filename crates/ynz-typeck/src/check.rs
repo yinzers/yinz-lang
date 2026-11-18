@@ -3168,15 +3168,34 @@ impl<'b> Checker<'b> {
                     // either label, because a consumed binding's storage dies with the frame
                     // exactly as an unconsumed one's does — and the alternative for it is the
                     // emitter's own bare error string with no teaching slots at all.
+                    // The one exception to "under `Give` there is nothing to be independent
+                    // FROM": a `fixed` list's cells are kept with the spawner's frame, so a
+                    // consumed `fixed` still has to be copied out for the task, and when its
+                    // items cannot be copied the spawn hands the task a pointer into the dead
+                    // frame (a use after return, and nothing releases the items). Refused here,
+                    // under either label, so codegen's `consumed_shape_needs_no_copy` arm never
+                    // sees a `fixed` with frame cells.
+                    let consumed_fixed = matches!(label, BgOwnership::Give)
+                        && matches!(ty, Type::BuiltinFixed { .. })
+                        && matches!(
+                            cause,
+                            crate::owned_copy::SpawnRefusalCause::NoIndependentCopy
+                        );
                     let fires = matches!(label, BgOwnership::Copy)
+                        || consumed_fixed
                         || matches!(
                             cause,
                             crate::owned_copy::SpawnRefusalCause::StorageDiesWithTheFrame
                         );
                     if fires {
+                        let items = match &ty {
+                            Type::BuiltinFixed { elem, .. } => type_name(elem),
+                            _ => String::new(),
+                        };
                         let fills = [
                             ("name", name),
                             ("type", &type_name(&ty)),
+                            ("items", &items),
                             ("detail", &refusal.detail),
                             ("fix", &refusal.fix),
                             ("why", &refusal.why),
@@ -3186,6 +3205,18 @@ impl<'b> Checker<'b> {
                         // list, which is what `diagnostic_template_parity` scans for to prove
                         // no shipped template is dead.
                         let diag = match cause {
+                            // A consumed `fixed` is the same kind with its own text: the
+                            // hand-over advice of the row below is already what this program does.
+                            crate::owned_copy::SpawnRefusalCause::NoIndependentCopy
+                                if consumed_fixed =>
+                            {
+                                registry_diag_template(
+                                    span.clone(),
+                                    DiagnosticKind::SpawnArgNotIndependent,
+                                    "SpawnArgNotIndependentHandedOver",
+                                    &fills,
+                                )
+                            }
                             crate::owned_copy::SpawnRefusalCause::NoIndependentCopy => {
                                 registry_diag(
                                     span.clone(),
@@ -3445,7 +3476,7 @@ impl<'b> Checker<'b> {
                             let callee_for_sig: Option<String> = self
                                 .background_spawn_call_form(inner.as_ref())
                                 .and_then(|(c, _)| c.map(str::to_string));
-                            let mut gives: Vec<String> = Vec::new();
+                            let mut gives: Vec<(String, SourceSpan)> = Vec::new();
                             for (position, arg) in bg_args.iter().enumerate() {
                                 let ident = match arg {
                                     Expr::Ident(name, _) => Some(name.as_str()),
@@ -3462,14 +3493,17 @@ impl<'b> Checker<'b> {
                                 if let (Some(name), Some(BgOwnership::Give)) =
                                     (ident, recorded.as_ref())
                                 {
-                                    gives.push(name.to_string());
+                                    gives.push((name.to_string(), arg.span().clone()));
                                 }
                             }
                             // Infer_expr runs first (for diagnostics / type registration),
                             // then we consume the .give bindings so any subsequent stmt
-                            // that reads the binding triggers the use-after-give error.
+                            // that reads the binding triggers the use-after-give error. The give is
+                            // recorded at the ARGUMENT's span: codegen nulls the binding's slot where it reads
+                            // that identifier (`null_handed_founders`), so a give inside a branch releases
+                            // once at the spawn, not again at the scope exit.
                             self.infer_expr(expr, None);
-                            for name in &gives {
+                            for (name, arg_span) in &gives {
                                 // `ident_read_in_stmt` does not distinguish `const` from `let`,
                                 // so a `const` binding not read after spawn would reach this
                                 // path. Consuming a `const` would incorrectly block re-reads in
@@ -3488,7 +3522,7 @@ impl<'b> Checker<'b> {
                                                 given: name.clone(),
                                                 missed_revive: None,
                                             },
-                                            expr.span(),
+                                            &arg_span,
                                         );
                                     }
                                 }

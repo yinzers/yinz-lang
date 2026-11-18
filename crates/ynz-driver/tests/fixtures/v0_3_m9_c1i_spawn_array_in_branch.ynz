@@ -1,0 +1,18 @@
+// v0.3-M9 C1i: a `background` call inside an `if` consumes an `array<string>` declared outside it.
+// The scope exit after the `if` must not release the strings the spawn already released.
+// Before: the spawn released the original and the scope exit released it again (double free).
+// Expected output: the count, the first name, then `done`.
+
+function crunch(xs: array<string>) -> nothing {
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function entrypoint() -> nothing {
+  let xs: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  if (xs.count() > 1) {
+    background crunch(xs)
+  }
+  wait sleep(50)
+  print(`done`)
+}

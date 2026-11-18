@@ -1,0 +1,23 @@
+// v0.3-M9 C1i: a fire-and-forget `background` call passes a `fixed<Part>` (a shape that owns a
+// string) with no ownership keyword. Every item's string is released exactly once.
+// Expected output: the count, the first name, then `done`.
+
+shape Part {
+  name: string
+}
+
+function crunch(xs: fixed<Part>) -> nothing {
+  let nobody: Part = { name: `none` }
+  let first: Part = xs[0].or(nobody)
+  print(xs.count())
+  print(first.name)
+}
+
+function entrypoint() -> nothing {
+  let first: Part = { name: `a`.toUpperCase() }
+  let second: Part = { name: `b`.toUpperCase() }
+  let xs: fixed<Part> = [first, second]
+  background crunch(xs)
+  wait sleep(50)
+  print(`done`)
+}

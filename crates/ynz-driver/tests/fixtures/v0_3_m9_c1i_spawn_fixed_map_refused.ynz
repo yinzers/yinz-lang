@@ -1,0 +1,17 @@
+// v0.3-M9 C1i: as `v0_3_m9_c1i_spawn_fixed_array_refused.ynz`, for a `fixed<map<string, int>>`.
+// Expected: a compile error naming `xs`, why, and the `array` recovery.
+
+function crunch(xs: fixed<map<string, int>>) -> nothing {
+  print(xs.count())
+}
+
+function entrypoint() -> nothing {
+  let first: map<string, int> = {}
+  first.set(`a-${1}`, 1)
+  let second: map<string, int> = {}
+  second.set(`b-${2}`, 2)
+  let xs: fixed<map<string, int>> = [first, second]
+  background crunch(xs)
+  wait sleep(50)
+  print(`done`)
+}

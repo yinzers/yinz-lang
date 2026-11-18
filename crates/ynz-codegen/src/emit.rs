@@ -24655,6 +24655,16 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         // back to, so narrowing the gate here would only turn a shipped pass-through into a
         // backend error. For a `map` the fallback is a real clone, so the honest gate applies.
         if (refused && recorded_give) || (!refused && sole_holder.is_some()) {
+            // Typeck refuses a named `fixed` whose items cannot be copied (`SpawnArgNotIndependent`
+            // under either label), because its cells sit in the spawner's frame and this arm
+            // would hand the task that frame. A `fixed` that is not a plain name (a shape field,
+            // which has storage of its own) is not refused and does reach here.
+            debug_assert!(
+                !(refused
+                    && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
+                    && matches!(resolved, Type::BuiltinFixed { .. })),
+                "a named `fixed` with uncopyable items reached the background hand-over arm"
+            );
             return Ok((val, BgArgFreeKind::None));
         }
     }
@@ -24677,12 +24687,13 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     } else if matches!(
         sole_holder,
         Some(ynz_typeck::check::SoleHolder::FreshTemporary)
-    ) && matches!(resolved, Type::Shape { .. })
+    ) && matches!(resolved, Type::Shape { .. } | Type::BuiltinFixed { .. })
         && cg.plain_releases_type(&resolved)
     {
-        // A fresh shape (a call result, a literal) is re-homed by a copy (`ShapeMemcpy` has no
-        // transfer, it sits on the spawner's frame), and `Expr::Background` suppresses its
-        // statement-end temporary: nobody else releases the original's fields.
+        // A fresh shape or `fixed` (a call result, a literal) is re-homed by a copy (`ShapeMemcpy`
+        // and the fixed items copy have no transfer: the original sits on the spawner's frame),
+        // and `Expr::Background` suppresses its statement-end temporary: nobody else releases the
+        // original's fields or items.
         release_owned_read(cg, val, &resolved, "bg_fresh_original")?;
     }
     Ok(copied)
@@ -28962,14 +28973,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// True when a binding of the (resolved) type `ty` is one the plain emitter releases at its
-    /// scope exits: an array, a map, or a shape, flat or nested (`ReleaseKind::Shape` and
-    /// `NestedShape`; strings, channels and handles are never copied by a spawn). A shape the
-    /// shape table does not describe is not released here.
+    /// scope exits: an array, a map, a `fixed` list (whose items are released, the cells are the
+    /// frame's), or a shape, flat or nested (`ReleaseKind::Shape` and `NestedShape`; strings,
+    /// channels and handles are never copied by a spawn). A shape the shape table does not
+    /// describe is not released here.
     ///
     /// Time: O(1)  Space: O(1)
     fn plain_releases_type(&self, ty: &Type) -> bool {
         match ty {
-            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::BuiltinFixed { .. } => true,
             Type::Shape { name } => self.shape_table.layout_shape(name).is_some(),
             _ => false,
         }

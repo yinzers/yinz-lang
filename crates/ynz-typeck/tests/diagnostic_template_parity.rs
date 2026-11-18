@@ -45,6 +45,7 @@ const TEMPLATES_WITHOUT_A_VARIANT: &[&str] = &[
     "StatementNestingTooDeep",
     "UnionWhereVariantExpectedNameIt",
     "UnionWhereVariantExpectedNoIsArm",
+    "SpawnArgNotIndependentHandedOver",
     "UnionVariantNotStorableNumberPrecision",
     "MapKeyNotStorableWideNumber",
     "MapKeyNotStorableSensitive",

@@ -1,0 +1,19 @@
+// v0.3-M9 C1i: a `background` call is handed a `fixed<array<string>>` it consumes (nothing reads
+// `xs` after the spawn). A `fixed` value is kept with the function that made it, and its items
+// cannot be copied for the task, so the call is refused with a teaching diagnostic.
+// Before: it compiled, and the task read the spawner's dead frame (the item pointers were garbage
+// at O0) and nothing released the arrays.
+// Expected: a compile error naming `xs`, why, and the `array` recovery.
+
+function crunch(xs: fixed<array<string>>) -> nothing {
+  print(xs.count())
+}
+
+function entrypoint() -> nothing {
+  let first: array<string> = [`a`.toUpperCase()]
+  let second: array<string> = [`b`.toUpperCase()]
+  let xs: fixed<array<string>> = [first, second]
+  background crunch(xs)
+  wait sleep(50)
+  print(`done`)
+}

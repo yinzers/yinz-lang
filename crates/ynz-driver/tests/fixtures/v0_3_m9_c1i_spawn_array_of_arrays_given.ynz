@@ -1,0 +1,16 @@
+// v0.3-M9 C1i: the recovery the refusal of a `fixed<array<string>>` spawn argument teaches: the
+// same items in an `array<array<string>>` can be handed to a task, which reads and releases them.
+// Expected output: the count, then `done`.
+
+function crunch(xs: array<array<string>>) -> nothing {
+  print(xs.count())
+}
+
+function entrypoint() -> nothing {
+  let first: array<string> = [`a`.toUpperCase()]
+  let second: array<string> = [`b`.toUpperCase()]
+  let xs: array<array<string>> = [first, second]
+  background crunch(xs)
+  wait sleep(50)
+  print(`done`)
+}
