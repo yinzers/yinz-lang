@@ -63,6 +63,19 @@ fn parse_type(s: &str) -> Type {
     }
 }
 
+/// Whether a method registered on `registered` applies to a call whose receiver is `actual`.
+///
+/// The registry spells every `number` receiver as the bare word `number`, which `parse_type`
+/// reads as `Number { precision: 34 }`. A `number<N>` is one type family for method lookup:
+/// every `N` (narrow `N < 34`, `34`, and bignum `N > 34`) shares the registered `number`
+/// methods. Every other type still matches by equality.
+fn receiver_matches(registered: &Type, actual: &Type) -> bool {
+    match (registered, actual) {
+        (Type::Number { .. }, Type::Number { .. }) => true,
+        _ => registered == actual,
+    }
+}
+
 /// Build a table from all registry entries whose `since` matches the predicate.
 fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
     let mut print_types = Vec::new();
@@ -240,7 +253,7 @@ impl PrimitiveIntrinsicTable {
     pub fn lookup_method(&self, receiver: &Type, name: &str) -> Option<Type> {
         self.methods
             .iter()
-            .find(|(r, n, _)| r == receiver && *n == name)
+            .find(|(r, n, _)| receiver_matches(r, receiver) && *n == name)
             .map(|(_, _, ret)| ret.clone())
     }
 
@@ -248,7 +261,7 @@ impl PrimitiveIntrinsicTable {
     pub fn lookup_method_1arg(&self, receiver: &Type, name: &str) -> Option<(&Type, Type)> {
         self.methods_1arg
             .iter()
-            .find(|(r, n, _, _)| r == receiver && *n == name)
+            .find(|(r, n, _, _)| receiver_matches(r, receiver) && *n == name)
             .map(|(_, _, arg_ty, ret_ty)| (arg_ty, ret_ty.clone()))
     }
 
@@ -256,7 +269,7 @@ impl PrimitiveIntrinsicTable {
     pub fn methods_for_type(&self, ty: &Type) -> Vec<&'static str> {
         self.methods
             .iter()
-            .filter(|(r, _, _)| r == ty)
+            .filter(|(r, _, _)| receiver_matches(r, ty))
             .map(|(_, n, _)| *n)
             .collect()
     }

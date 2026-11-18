@@ -1,0 +1,6 @@
+// Card #419: N = 50 — a different bignum precision than N = 40 (any N other than 34 was refused).
+function entrypoint() -> nothing {
+  let a: number<50> = 2.0
+  let c: number<50> = a / 3.0
+  print(c.toString())
+}

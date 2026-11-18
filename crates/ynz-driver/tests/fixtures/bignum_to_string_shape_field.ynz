@@ -1,0 +1,16 @@
+// Card #419: `.toString()` on a bignum shape field, plus the string living apart from the bignum.
+shape Account {
+  budget: number<40>
+}
+
+function render(acct: Account) -> nothing {
+  let text = acct.budget.toString()
+  print(text)
+  print(acct.budget)
+}
+
+function entrypoint() -> nothing {
+  let one: number<40> = 1.0
+  let acct: Account = { budget: one / 3.0 }
+  render(acct)
+}

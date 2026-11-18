@@ -1,0 +1,14 @@
+// Card #419: widening `number` method lookup to every precision also reaches `.toFloat()` and
+// `.toInt()`; each must read the right representation (decimal128 cell vs bignum string).
+function entrypoint() -> nothing {
+  let one: number<40> = 1.0
+  let third: number<40> = one / 3.0
+  print(third.toFloat())
+  print(third.toInt().or(-1))
+  let wide: number<50> = 12345.5
+  print(wide.toInt().or(-1))
+  let narrow: number<20> = 1.5
+  print(narrow.toString())
+  print(narrow.toFloat())
+  print(narrow.toInt().or(-1))
+}
