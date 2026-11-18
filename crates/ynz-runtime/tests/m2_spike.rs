@@ -1914,83 +1914,50 @@ fn frame_size_measurement_all_fixtures() {
     eprintln!("=== All frames ≤ 256 bytes ✓ ===\n");
 }
 
-// ── Sync-bridge overhead measurement ─────────────────────────────────────────
+// Liveness bound, about 10x the unloaded median of one bridged 100ms wait (113.5ms over 20
+// runs; min 103.8, max 133.0). Not a performance budget.
+const SYNC_BRIDGE_LIVENESS_BOUND_MS: u64 = 1100;
+
+// ── Sync-bridge liveness check ───────────────────────────────────────────────
 //
-// Threshold: ≤ 1% of a 100ms wait = ≤ 1000µs absolute.
-// Compares ynz_rt_run_entrypoint_spike vs direct future polling.
+// WHY: the sync bridge (`ynz_rt_run_entrypoint_spike`, driven from a spawn_blocking thread)
+// must COMPLETE a 100ms wait and return. A hang or stall here is a real bug; how many
+// microseconds the bridge adds is not asserted. The original 1000µs (1% of 100ms) overhead
+// assertion was a one-time M2 design check that passed at 196µs; it was retired because it
+// failed under CPU contention with no defect behind it (a performance assertion in the
+// unit lane). The bound below is a liveness timeout, about 10x the unloaded median of
+// the call (see SYNC_BRIDGE_LIVENESS_BOUND_MS).
 //
-// Miri-incompatible (M6 Phase 6b): unlike the other timing-budget contracts in
-// this file, this test's ENTIRE purpose is a sub-millisecond overhead-RATIO
-// measurement between two code paths — there is no correctness assertion to
-// preserve by widening a threshold (see `miri_budget` above for the contracts
-// where that applies). Under Miri's interpreted execution the absolute overhead
-// of the interpreter itself dwarfs the microsecond-scale difference being
-// measured, so the ratio is pure noise, not a real regression signal. Behavior
-// stays covered by the ordinary `cargo test`/`cargo nextest` lane at native speed.
+// Miri-ignored: contracts #4a-#4d already drive the same bridge path under Miri; this test
+// adds only a wall-clock bound, which Miri's interpreter overhead makes meaningless.
 #[cfg_attr(
     miri,
-    ignore = "sub-millisecond overhead-ratio benchmark — Miri's interpreter \
-              overhead dwarfs the measurement itself, not a real bug; see \
-              comment above"
+    ignore = "wall-clock liveness bound only; the same bridge path runs under Miri in \
+              contracts #4a-#4d"
 )]
 #[test]
-fn sync_bridge_overhead_measurement() {
+fn sync_bridge_completes_within_liveness_bound() {
     with_runtime(|rt| {
-        const REPS: usize = 10;
-
-        // Measure direct future polling baseline (drive a 100ms SyncBridgeTarget directly).
         let start = Instant::now();
-        for _ in 0..REPS {
-            let fut = SyncBridgeTarget::new(100);
-            rt.block_on(SyncBridgeTargetWrapper(fut));
-        }
-        let baseline_total = start.elapsed();
-        let baseline_per = baseline_total / REPS as u32;
-
-        // Measure via sync bridge — must be called from sync context (spawn_blocking),
-        // not from inside an async future (Handle::block_on panics there).
-        let start = Instant::now();
-        for _ in 0..REPS {
-            rt.block_on(async {
-                tokio::task::spawn_blocking(|| {
-                    let mut target = SyncBridgeTarget::new(100);
-                    let frame_ptr = target.as_mut() as *mut SyncBridgeTarget as *mut u8;
-                    // SAFETY: frame_ptr valid; sync_bridge_resume valid.
-                    unsafe { ynz_rt_run_entrypoint_spike(sync_bridge_resume, frame_ptr) };
-                    drop(target);
-                })
-                .await
-                .expect("sync bridge overhead: spawn_blocking panicked")
-            });
-        }
-        let bridge_total = start.elapsed();
-        let bridge_per = bridge_total / REPS as u32;
-
-        let overhead = if bridge_per > baseline_per {
-            bridge_per - baseline_per
-        } else {
-            Duration::ZERO
-        };
-
-        let overhead_us = overhead.as_micros();
-        let threshold_us = 1000u128; // 1% of 100ms = 1000µs
-
-        eprintln!(
-            "\n=== Sync-Bridge Overhead Measurement ===\n  \
-             baseline: {baseline_per:?} (direct future poll)\n  \
-             bridge:   {bridge_per:?} (via sync bridge)\n  \
-             overhead: {overhead_us}µs (threshold: {threshold_us}µs = 1% of 100ms)\n  \
-             result: {}\n===\n",
-            if overhead_us <= threshold_us {
-                "✓ within budget"
-            } else {
-                "✗ EXCEEDS budget"
-            }
-        );
+        rt.block_on(async {
+            // Must be called from sync context (spawn_blocking), not from inside an async
+            // future (Handle::block_on panics there).
+            tokio::task::spawn_blocking(|| {
+                let mut target = SyncBridgeTarget::new(100);
+                let frame_ptr = target.as_mut() as *mut SyncBridgeTarget as *mut u8;
+                // SAFETY: frame_ptr valid; sync_bridge_resume valid.
+                unsafe { ynz_rt_run_entrypoint_spike(sync_bridge_resume, frame_ptr) };
+                drop(target);
+            })
+            .await
+            .expect("sync bridge liveness: spawn_blocking panicked")
+        });
+        let elapsed = start.elapsed();
+        eprintln!("sync_bridge_liveness: elapsed={elapsed:?}");
 
         assert!(
-            overhead_us <= threshold_us,
-            "sync bridge overhead {overhead_us}µs exceeds ≤{threshold_us}µs (1% of 100ms) budget"
+            elapsed < Duration::from_millis(SYNC_BRIDGE_LIVENESS_BOUND_MS),
+            "sync bridge call took {elapsed:?}; liveness bound {SYNC_BRIDGE_LIVENESS_BOUND_MS}ms"
         );
     });
 }
