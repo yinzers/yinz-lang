@@ -168,20 +168,20 @@ A `YnzString` is exactly 24 bytes with 8-byte alignment. The tag byte lives at o
 
 ## String Ownership and Release
 
-Current state (v0.3, before the 24-byte layout lands): a `string` value is one `ptr` to NUL-terminated UTF-8 bytes. A `u64` header sits in front of the first byte (`STRING_HEADER_BYTES = 8`, `ynz_abi`):
+Current state (v0.3, before the 24-byte layout lands): a `string` value is one `ptr` to NUL-terminated UTF-8 bytes. A `u64` header sits in front of the first byte (`STRING_HEADER_BYTES = 8`, `STATIC_STRING_HEADER = 0`, `crates/ynz-abi/src/lib.rs:204-216`):
 
 | Header | Bytes are | Source |
 |---|---|---|
-| `STATIC_STRING_HEADER` (0) | static, never freed | literals, `true`/`false`, options display names, the `none`/placeholder debug text, error-message literals, `[REDACTED]` |
+| `STATIC_STRING_HEADER` (0) | static, never freed (a static string is the only kind never freed; every heap string is released by its owner) | literals, `true`/`false`, options display names, the `none`/placeholder debug text, error-message literals, `[REDACTED]` |
 | any other value | heap, owned; the value is the byte capacity (length + NUL, never 0) | every string the runtime allocates: interpolation, string methods, `int`/`float`/`number` `.toString()`, bignum results |
 
 Rules:
 
-- Every string source that can reach Yinz code carries the header: codegen emits static strings as `{ i64 0, [N x i8] }`, and `heap_string_buffer` (the one string allocator, counted by `YNZ_ALLOC_COUNTER`) writes the capacity. Compiler-internal C strings (panic text, file names, debug-print fragments) are not `string` values and have no header.
-- `ynz_string_release(ptr)` is the one release entry point: null and static bytes are no-ops; heap bytes are freed and counted. It accepts any string, so a caller never needs to know where one came from.
+- Every string source that can reach Yinz code carries the header: codegen emits static strings as `{ i64 0, [N x i8] }` (`build_static_string`, `crates/ynz-codegen/src/emit.rs:35897-35930`), and `heap_string_buffer` (`crates/ynz-runtime/src/lib.rs:642-655`, the one string allocator, counted by `YNZ_ALLOC_COUNTER`) writes the capacity. Compiler-internal C strings (panic text, file names, debug-print fragments) are not `string` values and have no header.
+- `ynz_string_release(ptr)` (`crates/ynz-runtime/src/lib.rs:657-689`) is the one release entry point: null and static bytes are no-ops; heap bytes are freed and counted. It accepts any string, so a caller never needs to know where one came from. Codegen calls it from the one release helper (`Cg::release_fn`, `emit.rs:29322-29333`; the string arm of `release_step`, `emit.rs:28978-29041`) at every scope exit that releases a string (`IMP-ownership.md` "The one release helper").
 - A heap string has exactly one owner when it is released. A store guarantees that with the rule in "Storing a string" below.
 - A conversion result is never shared: two `.toString()` results alive together are two strings.
-- `print(n)` and `${n}` of an `int`, `float` or `number` build no string: the text is read once and dropped, so codegen calls a runtime entry that formats and writes (`ynz_{int,float,decimal}_print`) or appends to the string builder (`ynz_{int,float,decimal}_append`), with nothing to release. `int` formats into a stack buffer owned by that call (never shared across calls or threads); `float` prints from one and appends by formatting straight into the builder; `number` keeps the one `String` the numerics crate returns (the only allocation left). Only `.toString()` returns an owned heap string. Test: `v03_m9_string_ownership` counts heap strings for each case.
+- `print(n)` and `${n}` of an `int`, `float` or `number` build no string: the text is read once and dropped, so codegen calls a runtime entry that formats and writes (`ynz_{int,float,decimal}_print`) or appends to the string builder (`ynz_{int,float,decimal}_append`; `crates/ynz-runtime/src/lib.rs:288-360`), with nothing to release. `int` formats into a stack buffer owned by that call (never shared across calls or threads); `float` prints from one and appends by formatting straight into the builder; `number` keeps the one `String` the numerics crate returns (the only allocation left). Only `.toString()` returns an owned heap string. Test: `v03_m9_string_ownership` counts heap strings for each case.
 - Cost: 8 header bytes per string (Rust `String` is a 24-byte handle, `&'static str` a 16-byte fat pointer; Yinz pointer plus header is 16 bytes at most), one 8-byte store per allocation, one load and compare per release, no atomics.
 
 ### Storing a string
