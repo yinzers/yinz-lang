@@ -28962,14 +28962,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// True when a binding of the (resolved) type `ty` is one the plain emitter releases at its
-    /// scope exits: an array, a map, or a shape, flat or nested (`ReleaseKind::Shape` and
-    /// `NestedShape`; strings, channels and handles are never copied by a spawn). A shape the
-    /// shape table does not describe is not released here.
+    /// scope exits: an array, a map, a `fixed` list (whose items are released, the cells are the
+    /// frame's), or a shape, flat or nested (`ReleaseKind::Shape` and `NestedShape`; strings,
+    /// channels and handles are never copied by a spawn). A shape the shape table does not
+    /// describe is not released here.
     ///
     /// Time: O(1)  Space: O(1)
     fn plain_releases_type(&self, ty: &Type) -> bool {
         match ty {
-            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::BuiltinFixed { .. } => true,
             Type::Shape { name } => self.shape_table.layout_shape(name).is_some(),
             _ => false,
         }
