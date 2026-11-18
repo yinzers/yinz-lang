@@ -5748,9 +5748,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// none (`int | float`). The copy (`deepen_shape_fields`, `own_returned_value`) and the release
     /// (`release_step`) read the same fact.
     ///
+    /// A generic instance's union (`T | nothing`, `T = Big`) is judged with its variants
+    /// substituted, as `resolve_type` leaves them alone: `Big | nothing` is an envelope union.
+    ///
     /// Time: O(v) for a union's v variants  Space: O(v)
     fn stored_form_type(&self, ty: &Type) -> Type {
-        let resolved = self.resolve_type(ty);
+        let resolved = match self.resolve_type(ty) {
+            Type::Union { variants } => Type::Union {
+                variants: variants
+                    .iter()
+                    .map(|variant| self.resolve_type(variant))
+                    .collect(),
+            },
+            other => other,
+        };
         match &resolved {
             Type::Union { variants } if !ynz_typeck::check::is_envelope_union(&resolved) => {
                 ynz_typeck::check::raw_union_variant(variants)
