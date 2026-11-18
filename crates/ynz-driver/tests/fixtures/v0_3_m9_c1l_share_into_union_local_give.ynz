@@ -1,0 +1,13 @@
+// v0.3-M9 C1l: the same program as `..._refused`, written the other way the refusal advises: the
+// parameter is declared `give`, so the caller hands the array over and the union local owns it.
+// Expected output: `kept`.
+
+function keep<T>(give first: T) -> nothing {
+  let held: T | nothing = first
+  print(`kept`)
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  keep(rows)
+}
