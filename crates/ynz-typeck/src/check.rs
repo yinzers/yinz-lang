@@ -8881,7 +8881,10 @@ impl<'b> Checker<'b> {
             ("reordered", reordered),
             ("first", type_name(&bound_variants[0])),
         ];
-        let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let slots: Vec<(&str, &str)> = slots
+            .iter()
+            .map(|(slot_name, slot_value)| (*slot_name, slot_value.as_str()))
+            .collect();
         self.diags.push(registry_diag(
             call.span.clone(),
             DiagnosticKind::GenericUnionBoundOutOfOrder,
