@@ -1,4 +1,4 @@
-// Card #419: `.toString()` on a bignum shape field, plus the string living apart from the bignum.
+// Card #419: `.toString()` on a bignum shape field.
 shape Account {
   budget: number<40>
 }

@@ -31,6 +31,8 @@ fn assert_stdout_lines(fixture: &str, expected: &[&str]) {
 
 #[test]
 fn bignum_n40_to_string_prints_all_forty_digits() {
+    // Tier: Medium (user flow). Bug caught: `number<40>.toString()` refused at compile time, and a
+    // bignum pointer read as a decimal128 value if it got through.
     // 1/3 at 40 digits: "0." followed by exactly forty 3s.
     assert_stdout_lines(
         "bignum_to_string_n40.ynz",
@@ -40,6 +42,8 @@ fn bignum_n40_to_string_prints_all_forty_digits() {
 
 #[test]
 fn bignum_n50_to_string_prints_all_fifty_digits() {
+    // Tier: Medium (user flow). Bug caught: `toString` refused for any N other than 34; this is a
+    // second precision, and its last digit rounds up rather than truncating.
     // 2/3 at 50 digits: "0." followed by exactly fifty 6s, the last rounded to 7.
     assert_stdout_lines(
         "bignum_to_string_n50.ynz",
@@ -49,18 +53,23 @@ fn bignum_n50_to_string_prints_all_fifty_digits() {
 
 #[test]
 fn bignum_shape_field_to_string_matches_print_of_the_field() {
+    // Tier: Medium (user flow). Bug caught: `toString` on a bignum shape-field receiver refused or
+    // mis-lowered, giving a string unlike `print` of the same field.
     let digits = "0.3333333333333333333333333333333333333333";
     assert_stdout_lines("bignum_to_string_shape_field.ynz", &[digits, digits]);
 }
 
 #[test]
 fn narrow_number_to_string_results_do_not_share_a_buffer() {
-    // Bug caught: both strings aliasing the runtime's thread-local format buffer (printed 2.5 twice).
+    // Tier: Medium (user flow). Bug caught: both strings aliasing the runtime's thread-local
+    // format buffer (printed 2.5 twice).
     assert_stdout_lines("number_to_string_owned.ynz", &["1.5", "2.5"]);
 }
 
 #[test]
 fn number_conversions_read_the_right_representation_at_every_precision() {
+    // Tier: Medium (user flow). Bug caught: `toFloat`/`toInt` on `number<N>` reading a bignum
+    // string as a decimal128 cell (or the reverse) once method lookup covers every precision.
     assert_stdout_lines(
         "bignum_number_conversions.ynz",
         &[
