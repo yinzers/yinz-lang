@@ -2795,8 +2795,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// (C1g `v0_3_m9_c1g_generic_call_runs_its_checked_instance`). Likewise `T | U` with `T = U = Tiny`
     /// flattens to the plain `Tiny`: the value already IS the slot, which callers see as `Tiny`
     /// (`apply_substitution`), so nothing is wrapped. A bound union whose flat
-    /// variants come in another order than the slot's (`Tiny | T`) is not this case and still
-    /// reaches the lowering, which refuses it instead of mis-tagging.
+    /// variants come in another order than the slot's (`Tiny | T`) is not this case: typeck
+    /// refuses that generic call (`GenericUnionBoundOutOfOrder`), so no instance reaches the
+    /// lowering with one; the lowering's refusal stays as a guard against mis-tagging.
     ///
     /// Time: O(size of the slot type)  Space: O(size of the slot type)
     fn coercion_at(&self, key: (usize, usize)) -> Option<&ynz_typeck::check::UnionCoercion> {
@@ -2810,27 +2811,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // written, where `T` may become a shape. The instance whose `T` is a `string` or an `int`
         // holds that union as its raw pointer or bits (`is_envelope_union`): no envelope to
         // wrap in.
-        let Type::Union { variants: flat } = &flat_slot else {
-            return None;
-        };
-        if !ynz_typeck::check::is_envelope_union(&flat_slot) {
+        if !matches!(flat_slot, Type::Union { .. })
+            || !ynz_typeck::check::is_envelope_union(&flat_slot)
+        {
             return None;
         }
         // `T | nothing` with `T = Big | Tiny`: the value is an envelope union whose variants are the
         // first of the instance's flat union (`Big | Tiny | nothing`), so its tags are the slot's
         // tags and the envelope is the slot's envelope: nothing is wrapped. Typeck cannot tell
-        // (`T` is abstract in the body), and a union that sits elsewhere in the flat order
-        // (`nothing | T`) is not a prefix and still reaches the lowering, which refuses it.
+        // (`T` is abstract in the body). A union that sits elsewhere in the flat order
+        // (`nothing | T`) never reaches here: typeck refuses that generic call
+        // (`check_generic_fn_call`, asking the same `union_keeps_slot_tags`).
         let held = self.declared_variant(coercion);
-        if let Some(
-            held @ Type::Union {
-                variants: held_variants,
-            },
-        ) = &held
-        {
-            if ynz_typeck::check::is_envelope_union(held) && flat.starts_with(held_variants) {
-                return None;
-            }
+        if held.is_some_and(|held| ynz_typeck::check::union_keeps_slot_tags(&held, &flat_slot)) {
+            return None;
         }
         Some(coercion)
     }

@@ -1599,3 +1599,54 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
          }",
     );
 }
+
+// ── v0.3-M9 C1n (#387): a type parameter bound to a union, not first in the return union ───────
+
+#[test]
+fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+    // WHY: the refusal's text must come from the registry (Golden Rule 11), and the return type
+    // it suggests (the type parameter first) must compile.
+    let program = |return_type: &str| {
+        format!(
+            "shape Big {{ label: string }}\n\
+             shape Tiny {{ count: int }}\n\
+             function carry<T>(give item: T) -> {return_type} {{ return item }}\n\
+             function entrypoint() -> nothing {{\n\
+               let big: Big = {{ label: `hello` }}\n\
+               let choice: Big | Tiny = big\n\
+               let got = carry(choice)\n\
+               print(`done`)\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::GenericUnionBoundOutOfOrder,
+        &program("nothing | T"),
+        &[
+            ("callee", "carry"),
+            ("typeParam", "T"),
+            ("bound", "Big | Tiny"),
+            ("declared", "nothing | T"),
+            ("instance", "nothing | Big | Tiny"),
+            ("before", "nothing"),
+            ("reordered", "T | nothing"),
+            ("first", "Big"),
+        ],
+    );
+    assert_rendered(
+        DiagnosticKind::GenericUnionBoundOutOfOrder,
+        &program("Tiny | T"),
+        &[
+            ("callee", "carry"),
+            ("typeParam", "T"),
+            ("bound", "Big | Tiny"),
+            ("declared", "Tiny | T"),
+            ("instance", "Tiny | Big"),
+            ("before", "Tiny"),
+            ("reordered", "T | Tiny"),
+            ("first", "Big"),
+        ],
+    );
+    assert_compiles(&program("T | nothing"));
+    assert_compiles(&program("T | Tiny"));
+}

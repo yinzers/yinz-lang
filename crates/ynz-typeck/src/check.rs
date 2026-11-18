@@ -8777,6 +8777,9 @@ impl<'b> Checker<'b> {
 
         // Compute concrete return type.
         let concrete_ret = apply_substitution(&sig.ret, &subst);
+        if self.refuse_bound_union_out_of_slot_order(call, name, sig, &subst, &concrete_ret) {
+            return Type::Error;
+        }
 
         // Record the instantiation.
         let concrete_type_args: Vec<Type> = sig
@@ -8800,6 +8803,91 @@ impl<'b> Checker<'b> {
         );
 
         concrete_ret
+    }
+
+    /// Refuse a generic call whose return type is a union written with a type parameter that the
+    /// call binds to an envelope union placed anywhere but first (`nothing | T`, `Tiny | T`, with
+    /// `T = Big | Tiny`). Returns true when it refused (pushed `GenericUnionBoundOutOfOrder`).
+    ///
+    /// The instance returns the value it was given as it is: a `Big | Tiny` box, tagged 0 for
+    /// `Big` and 1 for `Tiny`. Its declared return union `nothing | Big | Tiny` numbers `nothing`
+    /// first, so a reader of the returned union would take that box's tags for other variants
+    /// (`main` took a `Big` for the `Tiny` of `Tiny | T`). No conversion between two unions' tags
+    /// exists (a union value is not accepted where a wider union is declared,
+    /// `let wide: nothing | Big | Tiny = choice`), so the call is refused here instead of codegen
+    /// reaching its "compiler bug" guard. The shared question is `union_keeps_slot_tags`, which
+    /// codegen's `Cg::coercion_at` asks too.
+    ///
+    /// Time: O(v squared) for v variants  Space: O(v)
+    fn refuse_bound_union_out_of_slot_order(
+        &mut self,
+        call: &CallExpr,
+        callee: &str,
+        sig: &GenericFnSig,
+        subst: &Substitution,
+        concrete_ret: &Type,
+    ) -> bool {
+        let Type::Union {
+            variants: declared_variants,
+        } = &sig.ret
+        else {
+            return false;
+        };
+        if !is_envelope_union(concrete_ret) {
+            return false;
+        }
+        let offending = declared_variants
+            .iter()
+            .enumerate()
+            .find_map(|(position, variant)| {
+                let Type::TypeParam { name } = variant else {
+                    return None;
+                };
+                let bound = subst.get(name)?;
+                (is_envelope_union(bound) && !union_keeps_slot_tags(bound, concrete_ret))
+                    .then_some((position, name, bound))
+            });
+        let Some((
+            position,
+            type_param,
+            bound @ Type::Union {
+                variants: bound_variants,
+            },
+        )) = offending
+        else {
+            return false;
+        };
+        let join = |variants: Vec<&Type>| {
+            variants
+                .into_iter()
+                .map(type_name)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        let before = join(declared_variants[..position].iter().collect());
+        let reordered = join(
+            std::iter::once(&declared_variants[position])
+                .chain(declared_variants[..position].iter())
+                .chain(declared_variants[position + 1..].iter())
+                .collect(),
+        );
+        let slots = [
+            ("callee", callee.to_string()),
+            ("typeParam", type_param.clone()),
+            ("bound", type_name(bound)),
+            ("declared", type_name(&sig.ret)),
+            ("instance", type_name(concrete_ret)),
+            ("before", before),
+            ("reordered", reordered),
+            ("first", type_name(&bound_variants[0])),
+        ];
+        let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.diags.push(registry_diag(
+            call.span.clone(),
+            DiagnosticKind::GenericUnionBoundOutOfOrder,
+            &slots,
+        ));
+        true
     }
 
     /// Type-check a UFCS dot-call expression: `receiver.method(args)`.
@@ -12367,6 +12455,32 @@ pub fn is_envelope_union(candidate: &Type) -> bool {
                 .any(|variant| matches!(variant, Type::Shape { .. }))
                 || is_tagged_union_of_heap(variants)
         }
+        _ => false,
+    }
+}
+
+/// Does the envelope union `held` (what a type parameter was bound to, `Big | Tiny`) already carry
+/// the tags of the flat union `flat_slot` an instance's declared union becomes? True when `held`'s
+/// variants are the first of `flat_slot`'s, in the same order (`Big | Tiny` in `Big | Tiny |
+/// nothing`): the box `held` is numbers its variants as `flat_slot` does, so it is used as it is.
+/// False for a `held` that sits elsewhere in the flat order (`nothing | Big | Tiny`, `Tiny | Big`)
+/// or is not an envelope union: no conversion between two boxes' tags exists.
+///
+/// THE one answer to "does the bound union keep the slot's tags": typeck refuses a generic call
+/// where it is false (`check_generic_fn_call`), and codegen's `Cg::coercion_at` asks it to skip
+/// the coercion where it is true, so the two never disagree (authoritative-derivation.md).
+///
+/// Time: O(v) for v variants  Space: O(1)
+pub fn union_keeps_slot_tags(held: &Type, flat_slot: &Type) -> bool {
+    match (held, flat_slot) {
+        (
+            Type::Union {
+                variants: held_variants,
+            },
+            Type::Union {
+                variants: slot_variants,
+            },
+        ) => is_envelope_union(held) && slot_variants.starts_with(held_variants),
         _ => false,
     }
 }

@@ -105,6 +105,10 @@ pub enum DiagnosticKind {
     /// A `background` call passes a union to a parameter the generic callee declares as a bare
     /// type parameter: the task has no slot to copy the union into. v0.3-M9 C6.
     BackgroundUnionToGenericParameter,
+    /// A generic call whose declared return union (`nothing | T`, `Tiny | T`) has a type parameter
+    /// the call binds to a union that would not be first in the instance's flat union: the value the
+    /// instance returns keeps its own tags, which would name other variants. v0.3-M9 C1n (#387).
+    GenericUnionBoundOutOfOrder,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -189,6 +193,7 @@ impl DiagnosticKind {
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "BackgroundUnionToGenericParameter"
             }
+            DiagnosticKind::GenericUnionBoundOutOfOrder => "GenericUnionBoundOutOfOrder",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -235,6 +240,7 @@ impl DiagnosticKind {
         "FixedFieldLengthMissing",
         "FixedLengthMissingInTaskFunction",
         "BackgroundUnionToGenericParameter",
+        "GenericUnionBoundOutOfOrder",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -287,6 +293,9 @@ impl DiagnosticKind {
             DiagnosticKind::FixedLengthMissingInTaskFunction => "write the length".to_string(),
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "declare the union type".to_string()
+            }
+            DiagnosticKind::GenericUnionBoundOutOfOrder => {
+                "put the type parameter first".to_string()
             }
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),

@@ -1827,6 +1827,23 @@ what_template = "Cannot give the union `{union}` to `{callee}`'s generic paramet
 what_instead_template = "Declare `{parameter}` as `{union}` in `{callee}`'s signature instead of a type parameter, or put the union in a field of a shape and pass the shape."
 why_template = "A `background` task keeps its own copy of every argument, because it can still be running after the function that spawned it has returned. It can only copy a union when `{callee}` declares the union type. A generic parameter gives it no union slot to copy into, so the task would read the spawner's memory after the spawner returned."
 
+# v0.3-M9 C1n (card #387): `carry(choice)` with `function carry<T>(give item: T) -> nothing | T` and
+# `choice` a `Big | Tiny` (also `-> Tiny | T`). The function returns the box it was given, tagged as
+# `Big | Tiny` is; the declared union numbers its variants from `nothing` (or `Tiny`), so the caller
+# would read the wrong variant. No conversion between two unions' tags exists (a union value is not
+# accepted where a wider union is declared), so typeck refuses the call; `main` refused it too (at the
+# caller's `is Big` arm) or, for `Tiny | T`, read a `Big` as a `Tiny`. Rendered by
+# `check_generic_fn_call`; `{callee}` the function, `{typeParam}` the type parameter and `{bound}` the
+# union the call makes it, `{declared}` the return type as written and `{instance}` what it becomes,
+# `{before}` the declared variants written before the type parameter, `{reordered}` the return type
+# with the type parameter first, `{first}` the first variant of `{bound}`.
+# Decided v0.3-M9 C1n (#387): `git log --grep=GenericUnionBoundOutOfOrder`.
+[[diagnostic_template]]
+kind_name = "GenericUnionBoundOutOfOrder"
+what_template = "This call makes `{typeParam}` the union `{bound}`, but `{callee}` returns `{declared}`, with `{before}` written before `{typeParam}`, and a `{instance}` can't be returned from it yet."
+what_instead_template = "Write `{typeParam}` first in the return type of `{callee}`: `{reordered}`. Or call it with a value that is not a union."
+why_template = "A union is a box with a tag saying which variant is inside, counted in the order the variants are written. `{callee}` hands back the `{bound}` box it was given, which counts `{first}` as variant 0. `{instance}` counts `{before}` first, so code that reads the returned union would take the tag of a `{first}` for another variant, and could read the wrong data or crash. With `{typeParam}` written first, `{bound}` counts its variants the same way in both."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full
