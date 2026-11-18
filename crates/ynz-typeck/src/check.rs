@@ -8090,7 +8090,9 @@ impl<'b> Checker<'b> {
                         "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                     ));
             }
-        } else if actual_ty != Type::Error && differs_only_in_fixed_length(expected_ty, &actual_ty)
+        } else if actual_ty != Type::Error
+            && !can_assign(expected_ty, &actual_ty)
+            && differs_only_in_fixed_length(expected_ty, &actual_ty)
         {
             accepted = false;
             if report_length {
@@ -10776,6 +10778,7 @@ impl<'b> Checker<'b> {
                         ));
                     } else if actual != Type::Error
                         && expected != Type::Error
+                        && !can_assign(&expected, &actual)
                         && differs_only_in_fixed_length(&expected, &actual)
                     {
                         let value_text = expr_source_text(&lit_field.value);
@@ -11879,7 +11882,8 @@ fn peel_errors(ty: &Type) -> &Type {
 }
 
 /// True when `value` is a `fixed` list that `slot` refuses only because of its length: the item
-/// types agree. O(size of the item types).
+/// types agree. It only picks the diagnostic: `can_assign` decides whether a list is refused, and a
+/// site asks this after `can_assign` said no. O(size of the item types).
 fn differs_only_in_fixed_length(slot: &Type, value: &Type) -> bool {
     match (slot, value) {
         (
