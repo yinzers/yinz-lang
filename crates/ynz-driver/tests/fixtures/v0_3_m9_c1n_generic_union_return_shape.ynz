@@ -1,0 +1,45 @@
+// v0.3-M9 C1n: a generic function returns `T | nothing` with `T` = a shape: once its given first
+// argument, once its shared second argument (copied for the caller). The caller narrows the result
+// and prints the payload.
+// Before: the instance copied the shape's bytes raw instead of wrapping them in the `Big | nothing`
+// envelope, so the caller read a present value as `nothing` and printed `absent`, and the values
+// leaked (10 allocations, 6 frees).
+// Expected output: `hello`, `bye`.
+
+shape Big {
+  label: string
+  items: array<int>
+}
+
+function wrap<T>(give item: T, share other: T) -> T | nothing {
+  return item
+}
+
+function wrapOther<T>(give item: T, share other: T) -> T | nothing {
+  return other
+}
+
+function entrypoint() -> nothing {
+  let first: Big = { label: `hello`.toUpperCase(), items: [1] }
+  let second: Big = { label: `bye`.toUpperCase(), items: [2] }
+  let wrapped = wrap(first, second)
+  if (wrapped) {
+    is Big => {
+      print(wrapped.label.toLowerCase())
+    }
+    else => {
+      print(`absent`)
+    }
+  }
+  let third: Big = { label: `hello`.toUpperCase(), items: [1] }
+  let fourth: Big = { label: `bye`.toUpperCase(), items: [2] }
+  let wrappedOther = wrapOther(third, fourth)
+  if (wrappedOther) {
+    is Big => {
+      print(wrappedOther.label.toLowerCase())
+    }
+    else => {
+      print(`absent`)
+    }
+  }
+}
