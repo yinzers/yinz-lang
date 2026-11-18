@@ -219,16 +219,16 @@ mod tests {
     #[test]
     fn drop_glue_runs_once_on_the_last_release_with_the_data_intact() {
         unsafe {
-            let p = ynz_arc_new(8, Some(count_and_read_glue));
-            (p as *mut u64).write(0xC10);
-            let q = ynz_arc_clone(p);
-            ynz_arc_free(p, 8);
+            let block = ynz_arc_new(8, Some(count_and_read_glue));
+            (block as *mut u64).write(0xC10);
+            let second_reference = ynz_arc_clone(block);
+            ynz_arc_free(block, 8);
             assert_eq!(
                 GLUE_RUNS.load(Ordering::SeqCst),
                 0,
                 "not the last reference"
             );
-            ynz_arc_free(q, 8);
+            ynz_arc_free(second_reference, 8);
             assert_eq!(
                 GLUE_RUNS.load(Ordering::SeqCst),
                 1,
