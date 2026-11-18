@@ -2790,12 +2790,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // tags and the envelope is the slot's envelope: nothing is wrapped. Typeck cannot tell
         // (`T` is abstract in the body), and a union that sits elsewhere in the flat order
         // (`nothing | T`) is not a prefix and still reaches the lowering, which refuses it.
-        let held = match &coercion.slot {
-            Type::Union { variants: declared } => declared
-                .get(coercion.tag)
-                .map(|declared_variant| self.resolve_type(declared_variant)),
-            _ => None,
-        };
+        let held = self.declared_variant(coercion);
         if let Some(
             held @ Type::Union {
                 variants: held_variants,
@@ -5204,6 +5199,22 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(self.build_union_envelope(bits, tag, &site)?.into())
     }
 
+    /// The variant typeck recorded at `coercion.tag` in the slot as written, resolved in THIS
+    /// instance (`T` in `T | nothing` with `T = Big | Tiny` is `Big | Tiny`); `None` when the slot
+    /// is not a union or the tag is out of range. THE one lookup of it: `coerced_variant` takes
+    /// the variant to wrap from it, and `coercion_at` asks whether it already is the slot's
+    /// layout.
+    ///
+    /// Time: O(size of the variant)  Space: O(size of the variant)
+    fn declared_variant(&self, coercion: &ynz_typeck::check::UnionCoercion) -> Option<Type> {
+        match &coercion.slot {
+            Type::Union { variants: declared } => declared
+                .get(coercion.tag)
+                .map(|declared_variant| self.resolve_type(declared_variant)),
+            _ => None,
+        }
+    }
+
     /// The variant a coercion wraps and the envelope tag it takes in THIS instance: the variant
     /// is the one typeck recorded at `coercion.tag` in the slot as written (in `T | Tiny` a `Tiny`
     /// is variant 1), and the tag is its place in the instance's flat union
@@ -5226,16 +5237,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 coercion.slot
             ));
         };
-        let variant = declared
-            .get(coercion.tag)
-            .map(|declared_variant| self.resolve_type(declared_variant))
-            .ok_or_else(|| {
-                format!(
-                    "codegen: {site}: coercion tag {} is out of range for a union of {} variants",
-                    coercion.tag,
-                    declared.len()
-                )
-            })?;
+        let variant = self.declared_variant(coercion).ok_or_else(|| {
+            format!(
+                "codegen: {site}: coercion tag {} is out of range for a union of {} variants",
+                coercion.tag,
+                declared.len()
+            )
+        })?;
         let tag = match flat
             .iter()
             .position(|flat_variant| *flat_variant == variant)
