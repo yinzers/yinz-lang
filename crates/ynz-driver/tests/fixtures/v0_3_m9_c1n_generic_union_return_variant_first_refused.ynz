@@ -1,0 +1,29 @@
+// v0.3-M9 C1n (card #387, C10 blocker): a generic function returns `Tiny | T` with `T` bound to
+// a union (`Big | Tiny`). The instance's return would be the flat union `Tiny | Big`, but the
+// value `carry` returns is the `Big | Tiny` box: its tag 0 would read as `Tiny`, so an `is Tiny`
+// arm would take a `Big` for a `Tiny` (`main` printed `tiny` for this program).
+// Expected: the build is refused with `GenericUnionBoundOutOfOrder`; the program is not run.
+
+shape Big {
+  label: string
+  items: array<int>
+}
+shape Tiny {
+  count: int
+}
+function carry<T>(give item: T) -> Tiny | T {
+  return item
+}
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`.toUpperCase(), items: [1] }
+  let choice: Big | Tiny = big
+  let got = carry(choice)
+  if (got) {
+    is Tiny => {
+      print(`tiny`)
+    }
+    else => {
+      print(`other`)
+    }
+  }
+}

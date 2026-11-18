@@ -1,0 +1,31 @@
+// v0.3-M9 C1n (card #387, C10 blocker): a generic function returns `nothing | T` with `T` bound
+// to a union (`Big | Tiny`). The instance's return would be the flat union
+// `nothing | Big | Tiny`, but the value `carry` returns is the `Big | Tiny` box, whose tags are
+// numbered from `Big`: the tags would name the wrong variants. No widening of a union value
+// into a wider union exists (`let wide: nothing | Big | Tiny = choice` is refused, on `main` too),
+// so typeck refuses the call instead of codegen stopping with "compiler bug".
+// Expected: the build is refused with `GenericUnionBoundOutOfOrder`; the program is not run.
+
+shape Big {
+  label: string
+  items: array<int>
+}
+shape Tiny {
+  count: int
+}
+function carry<T>(give item: T) -> nothing | T {
+  return item
+}
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`.toUpperCase(), items: [1] }
+  let choice: Big | Tiny = big
+  let got = carry(choice)
+  if (got) {
+    is Big => {
+      print(got.label.toLowerCase())
+    }
+    else => {
+      print(`absent`)
+    }
+  }
+}
