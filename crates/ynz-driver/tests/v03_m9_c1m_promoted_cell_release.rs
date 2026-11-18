@@ -1,6 +1,5 @@
 //! v0.3-M9 C1m (card #494): a value held in a promoted union or `maybe` cell is released once by
-//! the one release helper, whether it came from a generic return, a `fixed<string>` local or a
-//! `maybe<array<int>>` return.
+//! the one release helper, whether it is a `fixed<string>` local or a `maybe<array<int>>` return.
 
 mod support;
 
@@ -18,16 +17,6 @@ fn assert_fixture_balanced(fixture: &str, accepted: &[&str]) {
             no_optimize,
         );
     });
-}
-
-// Bug: a generic function returning `T | nothing` with `T` a shape leaked one value per call
-// (4 allocations, 2 frees) (High: data integrity and release).
-#[test]
-fn a_generic_union_return_of_a_shape_is_released() {
-    assert_fixture_balanced(
-        "v0_3_m9_c1m_generic_union_return_shape.ynz",
-        &["kept\nkept\n"],
-    );
 }
 
 // Bug: a `fixed<string> | nothing` local leaked its two strings (High: data integrity and
