@@ -5116,22 +5116,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let span = expr.span();
         let site = format!("coerce_{}_{}", span.start, span.end);
-        let Type::Union { variants } = self.resolve_type(&coercion.slot) else {
-            return Err(format!(
-                "codegen: {site}: typeck recorded a coercion into `{:?}`, which is not a union",
-                coercion.slot
-            ));
-        };
-        let variant = variants
-            .get(coercion.tag)
-            .map(|v| self.resolve_type(v))
-            .ok_or_else(|| {
-                format!(
-                    "codegen: {site}: coercion tag {} is out of range for a union of {} variants",
-                    coercion.tag,
-                    variants.len()
-                )
-            })?;
+        let (tag, variant) = self.coerced_variant(coercion, &site)?;
         // Internal guard behind typeck's teaching refusal (`record_union_coercion`): both ask
         // `ynz_typeck::check::envelope_refusal`, so a variant the envelope cannot hold (and a
         // narrow `number` typeck assigned to a wide `number` variant, whose slot address would
@@ -5185,9 +5170,57 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 ))
             }
         };
-        Ok(self
-            .build_union_envelope(bits, coercion.tag as u64, &site)?
-            .into())
+        Ok(self.build_union_envelope(bits, tag, &site)?.into())
+    }
+
+    /// The variant a coercion wraps and the envelope tag it takes in THIS instance: the variant
+    /// is the one typeck recorded at `coercion.tag` in the slot as written (in `T | Tiny` a `Tiny`
+    /// is variant 1), and the tag is its place in the instance's flat union
+    /// (`resolve_type`, which flattens `T | Tiny` with `T = Big | Other` to `Big | Other | Tiny`),
+    /// which is the order a reader of the envelope's tag uses. A variant that is itself a union (the value is
+    /// already a union, in another order than the slot) is returned as it is for the caller to
+    /// refuse, never wrapped under another variant's tag.
+    ///
+    /// Time: O(v) for v variants  Space: O(v)
+    fn coerced_variant(
+        &self,
+        coercion: &ynz_typeck::check::UnionCoercion,
+        site: &str,
+    ) -> Result<(u64, Type), String> {
+        let (Type::Union { variants: declared }, Type::Union { variants: flat }) =
+            (&coercion.slot, self.resolve_type(&coercion.slot))
+        else {
+            return Err(format!(
+                "codegen: {site}: typeck recorded a coercion into `{:?}`, which is not a union",
+                coercion.slot
+            ));
+        };
+        let variant = declared
+            .get(coercion.tag)
+            .map(|declared_variant| self.resolve_type(declared_variant))
+            .ok_or_else(|| {
+                format!(
+                    "codegen: {site}: coercion tag {} is out of range for a union of {} variants",
+                    coercion.tag,
+                    declared.len()
+                )
+            })?;
+        let tag = match flat
+            .iter()
+            .position(|flat_variant| *flat_variant == variant)
+        {
+            Some(position) => position,
+            // A union variant is in the flat union as its own variants, never as itself.
+            None if matches!(variant, Type::Union { .. }) => coercion.tag,
+            None => {
+                return Err(format!(
+                    "codegen: {site}: the variant `{variant:?}` of the coercion into `{:?}` is not \
+                     in the instance's union",
+                    coercion.slot
+                ))
+            }
+        };
+        Ok((tag as u64, variant))
     }
 
     /// The envelope for the identifier `name` at `span` when that use belongs to an active
@@ -22206,11 +22239,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     // persisted into takes it as it is (`union_persist_into_as`). A shape variant moves only when
     // typeck says the shape does.
     let wraps_a_shape = matches!(
-        cg.resolve_type(&coercion.slot),
-        Type::Union { ref variants }
-            if variants
-                .get(coercion.tag)
-                .is_some_and(|variant| matches!(cg.resolve_type(variant), Type::Shape { .. }))
+        cg.coerced_variant(&coercion, "union_wrap"),
+        Ok((_, Type::Shape { .. }))
     );
     let wrapped_value_moves = !wraps_a_shape || cg.typed.heap_moves.contains(span.start, span.end);
     let view = cg.wrap_into_union_envelope(expr, val, &coercion)?;

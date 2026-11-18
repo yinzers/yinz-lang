@@ -88,3 +88,13 @@ fn a_generic_union_with_both_parameters_the_same_shape_is_that_shape() {
         &["HELLO\nend\n"],
     );
 }
+
+// Bug: a generic union flattened by `resolve_type` kept the tag of the slot as written, so a
+// variant after a bound union was read as the wrong shape (High: data integrity).
+#[test]
+fn a_generic_union_bound_to_a_union_tags_a_later_variant_in_the_flat_order() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1k_generic_union_flat_tag_order.ynz",
+        &["tiny\nend\n"],
+    );
+}
