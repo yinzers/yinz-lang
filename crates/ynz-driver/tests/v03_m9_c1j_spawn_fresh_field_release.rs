@@ -169,14 +169,24 @@ fn a_fixed_of_arrays_field_of_a_named_value_is_refused_for_a_task() {
     );
 }
 
-// Controls: a named piece the task gets its own copy of stays accepted, and so does a union piece
-// (the spawn gives a union argument a slot of its own).
+// Control: a named piece the task gets its own copy of stays accepted.
 #[test]
 fn a_copyable_field_of_a_named_value_given_to_a_task_stays_accepted() {
     assert_fixture_balanced("v0_3_m9_c1j_spawn_named_copyable_field.ynz", "2\nA\ndone\n");
 }
 
+// A union has no independent copy, so a union piece is refused like any other (the one
+// `spawn_arg_refusal`, no special case): it is a field of a live `bag`, the same case as a named
+// union read after the spawn. Bug: it compiled, and on `main` ran wrong (the wrong variant at O2,
+// nothing at O0, ASan stack-use-after-return) (High: data integrity and release).
 #[test]
-fn a_union_field_of_a_named_value_given_to_a_task_stays_accepted() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_named_union_field.ynz", "BOXED\ndone\n");
+fn a_union_field_of_a_named_value_is_refused_for_a_task() {
+    assert_refused_with(
+        "v0_3_m9_c1j_spawn_named_union_field.ynz",
+        &[
+            "`Circle | Tag`",
+            "cannot be handed to a background task",
+            "background f(bag.choice)",
+        ],
+    );
 }

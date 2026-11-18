@@ -1,8 +1,8 @@
-// v0.3-M9 C1j control: a `background` call passes a union field of a NAMED value
-// (`bag.choice`). A union argument gets a slot of its own in the task (a copy of what it owns), so
-// `launch` can return and release `bag` while the task still reads the payload. Must stay
-// accepted, balanced and ASan clean.
-// Expected output: the payload's name, then `done`.
+// v0.3-M9 C1j: a `background` call passes a union field of a NAMED value (`bag.choice`). A union
+// has no independent copy (a named union read after a spawn is refused the same way), and `bag`
+// is a live value that releases the field when `launch` returns. Before the fix this compiled; on
+// `main` it ran wrong (the wrong variant at O2, nothing at O0, ASan stack-use-after-return).
+// Expected: a compile error naming the type and the line.
 
 shape Circle {
   radius: float
