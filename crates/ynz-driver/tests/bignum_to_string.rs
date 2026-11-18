@@ -54,6 +54,12 @@ fn bignum_shape_field_to_string_matches_print_of_the_field() {
 }
 
 #[test]
+fn narrow_number_to_string_results_do_not_share_a_buffer() {
+    // Bug caught: both strings aliasing the runtime's thread-local format buffer (printed 2.5 twice).
+    assert_stdout_lines("number_to_string_owned.ynz", &["1.5", "2.5"]);
+}
+
+#[test]
 fn number_conversions_read_the_right_representation_at_every_precision() {
     assert_stdout_lines(
         "bignum_number_conversions.ynz",

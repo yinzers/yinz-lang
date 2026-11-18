@@ -21727,7 +21727,8 @@ fn lower_number_to_int<'ctx>(
 }
 
 /// Copy a null-terminated string into a fresh heap string (`ynz_string_from_static` allocates
-/// and copies), so the result shares no memory with `source`.
+/// and copies), so the result shares no memory with `source` (a bignum's buffer or the
+/// runtime's thread-local format buffer).
 ///
 /// O(n) time, O(n) memory: one strlen plus one malloc/memcpy of the string.
 fn lower_owned_string_copy<'ctx>(
@@ -22319,16 +22320,12 @@ fn lower_method_call<'ctx>(
         (Type::Number { .. }, "toFloat") => {
             lower_number_to_f64(cg, recv, recv_ty).map(|float_value| float_value.into())
         }
-        (Type::Number { precision }, "toString") => {
+        (Type::Number { .. }, "toString") => {
+            // `to_c_string` returns memory the result must not alias: a bignum's own buffer
+            // (N > 34), or the runtime's one thread-local format buffer (N <= 34), which the
+            // next `toString` call overwrites. Copy so the caller owns its string.
             let text = to_c_string(cg, recv, recv_ty)?;
-            if *precision > 34 {
-                // A bignum IS its decimal string, so `to_c_string` hands back the bignum's own
-                // buffer. `.toString()` must give the caller a string of its own: copy it, so
-                // the string and the bignum never share one allocation.
-                lower_owned_string_copy(cg, text).map(|copy| copy.into())
-            } else {
-                Ok(text.into())
-            }
+            lower_owned_string_copy(cg, text).map(|copy| copy.into())
         }
         (Type::Bool, "toString") => to_c_string(cg, recv, &Type::Bool).map(|p| p.into()),
 

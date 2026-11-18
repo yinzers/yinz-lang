@@ -1,0 +1,10 @@
+// Card #419: two `.toString()` results alive at once must not share a buffer (the runtime
+// formats narrow numbers into one thread-local buffer; the result must be copied out of it).
+function entrypoint() -> nothing {
+  let first: number<20> = 1.5
+  let second: number<20> = 2.5
+  let first_text = first.toString()
+  let second_text = second.toString()
+  print(first_text)
+  print(second_text)
+}
