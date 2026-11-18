@@ -305,7 +305,7 @@ fn nested_spawn_inner_panic_isolated() {
 #[cfg_attr(
     miri,
     ignore = "pure wall-clock latency measurement with no correctness assertion beyond the \
-              timing threshold itself — same class as sync_bridge_overhead_measurement \
+              timing threshold itself — same class as the former sync-bridge overhead assertion \
               (tests/m2_spike.rs). Miri's interpreter overhead dwarfs the ≤500ms debug budget \
               (observed 569ms for what native runs in single-digit ms); there is no secondary \
               ordering/return-value assertion here worth preserving under a widened budget, so \
@@ -359,7 +359,7 @@ fn rt_init_shutdown_within_5ms() {
 #[cfg_attr(
     miri,
     ignore = "pure per-call nanosecond-cost benchmark with no correctness assertion beyond the \
-              timing threshold — same class as sync_bridge_overhead_measurement \
+              timing threshold — same class as the former sync-bridge overhead assertion \
               (tests/m2_spike.rs). Miri's interpreter overhead is orders of magnitude above the \
               debug-build 500ns/call budget by design (observed ~120000ns/call), and there is no \
               secondary behavior to preserve under a widened budget — the ONLY thing this test \
