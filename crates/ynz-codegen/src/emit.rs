@@ -2779,8 +2779,32 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // written, where `T` may become a shape. The instance whose `T` is a `string` or an `int`
         // holds that union as its raw pointer or bits (`is_envelope_union`): no envelope to
         // wrap in.
+        let Type::Union { variants: flat } = &flat_slot else {
+            return None;
+        };
         if !ynz_typeck::check::is_envelope_union(&flat_slot) {
             return None;
+        }
+        // `T | nothing` with `T = Big | Tiny`: the value is an envelope union whose variants are the
+        // first of the instance's flat union (`Big | Tiny | nothing`), so its tags are the slot's
+        // tags and the envelope is the slot's envelope: nothing is wrapped. Typeck cannot tell
+        // (`T` is abstract in the body), and a union that sits elsewhere in the flat order
+        // (`nothing | T`) is not a prefix and still reaches the lowering, which refuses it.
+        let held = match &coercion.slot {
+            Type::Union { variants: declared } => declared
+                .get(coercion.tag)
+                .map(|declared_variant| self.resolve_type(declared_variant)),
+            _ => None,
+        };
+        if let Some(
+            held @ Type::Union {
+                variants: held_variants,
+            },
+        ) = &held
+        {
+            if ynz_typeck::check::is_envelope_union(held) && flat.starts_with(held_variants) {
+                return None;
+            }
         }
         Some(coercion)
     }

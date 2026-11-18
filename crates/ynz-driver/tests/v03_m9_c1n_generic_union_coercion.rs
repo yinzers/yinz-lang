@@ -30,3 +30,14 @@ fn a_generic_union_return_of_a_shape_is_wrapped_and_released() {
         &["hello\nbye\n"],
     );
 }
+
+// Bug: a generic `T | nothing` instantiated with `T` = an envelope union (`Big | Tiny`) failed to
+// build ("no envelope lowering") once the generic return was recorded as a coercion; it built and
+// printed `hello` before (High: a regression of a program that was correct).
+#[test]
+fn a_generic_union_return_of_a_union_value_is_returned_as_it_is() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1n_generic_union_return_union_bound.ynz",
+        &["hello\n"],
+    );
+}
