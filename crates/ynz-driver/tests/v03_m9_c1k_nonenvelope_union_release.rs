@@ -68,3 +68,13 @@ fn a_shared_map_or_nothing_parameter_returned_as_it_is_is_copied() {
         &["ok\nend\n"],
     );
 }
+
+// Bug: a generic instance's `T | nothing` was judged with `T` unsubstituted, so releasing the
+// given argument was an internal error at build time (High: data integrity and release).
+#[test]
+fn a_generic_union_given_to_a_function_is_released_as_the_instance_stores_it() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1k_generic_union_given_released.ynz",
+        &["ate\nate\nate\nend\n"],
+    );
+}
