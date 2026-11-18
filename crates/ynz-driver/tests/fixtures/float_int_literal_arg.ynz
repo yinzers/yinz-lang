@@ -1,0 +1,8 @@
+// Card #419: an int literal passed where the parameter is `float` must be an f64 constant.
+function show(value: float) -> nothing {
+  print(value)
+}
+
+function entrypoint() -> nothing {
+  show(3)
+}
