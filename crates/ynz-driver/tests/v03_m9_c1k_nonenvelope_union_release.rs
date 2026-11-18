@@ -58,3 +58,13 @@ fn a_copied_shape_with_array_and_map_or_nothing_fields_releases_its_own_values()
         &["A\nA\n"],
     );
 }
+
+// Bug: the call result of a function returning a shared `map | nothing` parameter aliased the
+// argument, and the caller released it while its owner did too (High: data integrity and release).
+#[test]
+fn a_shared_map_or_nothing_parameter_returned_as_it_is_is_copied() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1k_union_returned_shared_param.ynz",
+        &["ok\nend\n"],
+    );
+}

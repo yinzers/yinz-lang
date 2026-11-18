@@ -5742,13 +5742,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         )
     }
 
-    /// The type a shape field of type `ty` is copied and released as: itself, except a union that
-    /// is not an envelope union, which is its one variant's raw pointer or bits
-    /// (`raw_union_variant`): that variant, or `nothing` when it holds none (`int | float`). The
-    /// copy (`deepen_shape_fields`) and the release (`release_step`) read the same fact.
+    /// The type a stored value of type `ty` (a shape field, a returned value) is copied and
+    /// released as: itself, except a union that is not an envelope union, which is its one
+    /// variant's raw pointer or bits (`raw_union_variant`): that variant, or `nothing` when it holds
+    /// none (`int | float`). The copy (`deepen_shape_fields`, `own_returned_value`) and the release
+    /// (`release_step`) read the same fact.
     ///
     /// Time: O(v) for a union's v variants  Space: O(v)
-    fn stored_field_type(&self, ty: &Type) -> Type {
+    fn stored_form_type(&self, ty: &Type) -> Type {
         let resolved = self.resolve_type(ty);
         match &resolved {
             Type::Union { variants } if !ynz_typeck::check::is_envelope_union(&resolved) => {
@@ -5763,7 +5764,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///
     /// Time: O(v) for a union's v variants  Space: O(v)
     fn field_needs_deepen(&self, ty: &Type) -> bool {
-        let ty = self.stored_field_type(ty);
+        let ty = self.stored_form_type(ty);
         self.envelope_union_variants(&ty).is_some()
             || is_string_like(&ty)
             || self.fixed_field_items_need_copy(&ty)
@@ -5820,7 +5821,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or_else(|| format!("deepen_shape_fields: shape `{shape_name}` not in table"))?
             .clone();
         for (field_index, field) in shape_def.fields.iter().enumerate() {
-            let field_ty = self.stored_field_type(&field.ty);
+            let field_ty = self.stored_form_type(&field.ty);
             let site = format!("deepen_{shape_name}_{}", field.name);
             let envelope_variants = self.envelope_union_variants(&field_ty);
             if !self.field_needs_deepen(&field_ty) {
@@ -22370,7 +22371,9 @@ fn own_returned_value<'ctx>(
     if cg.coercion_at((span.start, span.end)).is_some() {
         return Ok(val);
     }
-    let ty = cg.expr_type(expr);
+    // A union that is not an envelope union is its one variant's raw pointer, returned as that
+    // variant is (`stored_form_type`, as `copied_at_return` reads it).
+    let ty = cg.stored_form_type(&cg.expr_type(expr));
     // A channel, or a `maybe` of one, is returned as one counted reference the caller owns: a value
     // that moves (a fresh one, an owned local at its last use) hands over the reference it holds, any
     // other read (a parameter, an element, a field) takes a reference of its own.
