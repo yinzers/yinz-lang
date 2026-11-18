@@ -364,6 +364,31 @@ counter.send(7)
 
 One more rule: the handle form needs a function that can pause (one that uses `wait`, a channel, or calls something that does). For a pure number-cruncher that never pauses, use fire-and-forget `background crunch()` — handle support for those ships in a later milestone, and the compile error says exactly that.
 
+**When the handle goes out of scope, the task stops.** A handle belongs to the block it was declared in. When that block ends (or the function returns), the task stops at its next pause, and anything it would have done after that never runs:
+
+```ynz
+function worker() -> int errors {
+  wait sleep(20)
+  print(`worker: after first sleep`)
+  wait sleep(20)
+  print(`worker: done`)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  if (true) {
+    let h = background worker()
+    print(`leaving the block`)
+  }
+  // `h` is gone, so `worker` was stopped. "worker: done" never prints.
+  print(`block exited`)
+  wait sleep(150)
+  print(`finished`)
+}
+```
+
+If you want the task to finish, keep its handle alive until you have what you need, for example by calling `h.receive()`. A fire-and-forget `background worker()` has no handle, so nothing stops it: it runs until it ends or until `entrypoint` returns.
+
 ---
 
 ## Ownership with background tasks
