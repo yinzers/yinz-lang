@@ -12235,16 +12235,17 @@ fn union_variant_refusal_diag(
 }
 
 /// The coercion a value of type `value_ty` needs to enter a slot of type `slot_ty`: `Some` when
-/// the slot is an envelope union and the value is one of its variants but not itself a union,
-/// `None` otherwise (a union value already is an envelope; `nothing` is the null pointer; a
-/// union with no shape variant is the raw pointer, and has no envelope to build).
+/// the slot is an envelope union (or may become one, `may_become_envelope_union`) and the value
+/// is one of its variants but not itself a union, `None` otherwise (a union value already is an
+/// envelope; `nothing` is the null pointer; a union with no shape variant is the raw pointer, and
+/// has no envelope to build).
 ///
 /// The tag is the variant the value IS: an exact type match first, then the first variant the
 /// value is assignable to (`number<A>` into `number<B>`).
 ///
 /// Time: O(v) for v variants  Space: O(size of the slot type)
 fn union_coercion_for(slot_ty: &Type, value_ty: &Type) -> Option<UnionCoercion> {
-    if !is_envelope_union(slot_ty) {
+    if !may_become_envelope_union(slot_ty) {
         return None;
     }
     let Type::Union { variants } = slot_ty else {
@@ -12348,6 +12349,21 @@ pub fn is_envelope_union(candidate: &Type) -> bool {
         }
         _ => false,
     }
+}
+
+/// Is `candidate` an envelope union ([`is_envelope_union`]) now, or a union a generic body writes
+/// with a variant a type argument decides (`T | nothing`, `Box<T> | nothing`), which is an
+/// envelope union in the instances whose argument is a shape? A generic body is checked once, with
+/// its type parameters abstract, so a coercion typeck does not record there is one no instance
+/// can wrap; codegen asks `is_envelope_union` of each instance's resolved slot
+/// (`Cg::coercion_at`) and wraps only where it holds.
+///
+/// Time: O(v) for v variants  Space: O(1)
+fn may_become_envelope_union(candidate: &Type) -> bool {
+    is_envelope_union(candidate)
+        || matches!(candidate, Type::Union { variants } if variants
+            .iter()
+            .any(|variant| matches!(variant, Type::TypeParam { .. } | Type::Generic { .. })))
 }
 
 /// True for the variants of a union with NO shape variant that needs a tag to be released: two or

@@ -2775,6 +2775,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         if plain == flat_slot {
             return None;
         }
+        // Typeck records a generic body's `return item` into `T | nothing` against the slot as
+        // written, where `T` may become a shape. The instance whose `T` is a `string` or an `int`
+        // holds that union as its raw pointer or bits (`is_envelope_union`): no envelope to
+        // wrap in.
+        if !ynz_typeck::check::is_envelope_union(&flat_slot) {
+            return None;
+        }
         Some(coercion)
     }
 
