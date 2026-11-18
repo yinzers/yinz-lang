@@ -186,7 +186,7 @@ Rules:
 
 ### Storing a string
 
-One rule, applied at every place that keeps a string: **a store takes a string by move when typeck's record says nothing else can reach it, and otherwise by an owned copy.** The record is `TypedModule::string_moves` (`ynz-typeck/src/string_ownership.rs`); codegen reads it and decides nothing itself. The copy is `OwnedCopy::StringClone` (`ynz_string_clone`, a fresh counted heap string with the same bytes), made through the one `emit_owned_copy` seam. Codegen reaches that seam through one function, `own_string_for_store`; there is no second copy routine. A string missing from the record is copied, so a gap in the record costs an allocation, never a double free.
+One rule, applied at every place that keeps a string: **a store takes a string by move when typeck's record says nothing else can reach it, and otherwise by an owned copy.** The record is `TypedModule::string_moves` (`StringMoves`, `crates/ynz-typeck/src/string_ownership.rs:46-52`, filled by the one liveness walk `record_moves_and_reads`, `:96-118`); codegen reads it and decides nothing itself. The copy is `OwnedCopy::StringClone` (`owned_copy_plan`, `crates/ynz-typeck/src/owned_copy.rs:147-332`; the runtime entry `ynz_string_clone`, `crates/ynz-runtime/src/lib.rs:691-708`, a fresh counted heap string with the same bytes), made through the one `emit_owned_copy` seam (`crates/ynz-codegen/src/emit.rs:28091-28375`). Codegen reaches that seam through one function, `own_string_for_store` (`emit.rs:22446-22464`: a string remembered as movable is taken as it is, any other is copied); there is no second copy routine. A string missing from the record is copied, so a gap in the record costs an allocation, never a double free.
 
 The stores that take the rule: a `let`/`const` binding and an assignment, a shape field, an array literal element, `add` and index assignment, a `fixed` element, a map key (stored by raw pointer) and a map value, a channel `send`, a `background` argument, a value entering a union slot (`let`, field, argument, `.or()` fallback), a `return`, and the payload of a `maybe<string>` that is bound, stored or returned.
 
@@ -198,21 +198,18 @@ The stores that take the rule: a `let`/`const` binding and an assignment, a shap
 
 A function returns an owned string, so a caller binds a call result by move; inside the callee a returned local at its last use moves and anything else is copied at the `return`. A `share`, `lend` or bare string parameter is never movable: the caller owns it. A `give` string parameter is the exception: the call hands the string over (the checker refuses any later read of the caller's binding), so the callee owns and releases it and the caller's release plan omits that binding as moved (`Omitted(Moved)`, or `ReleaseIfLive` when only some paths gave it). Exactly one side releases. Only a string that founds its own class follows the give; a string joined to a shape's class (a `let` of a field read) owns a copy the give does not take, so its own scope releases it. See `IMP-ownership.md`, "Strings".
 
-Containers copy their strings with themselves. `.copy()` and a `background` copy of a shape (its direct `string` fields), a `map<string, V>` or `map<K, string>` (keys and values), an `array<string>`, a `fixed<string>`, an `array<Shape>` whose shape has `string` fields, and a `maybe<string>` or `maybe<Shape>` payload each give the copy strings of its own. Equality follows: string fields and `array<string>.contains` compare by content, since a stored copy has no pointer identity with its source.
+Containers copy their strings with themselves, all the way down. `.copy()` and a `background` copy of a shape (every heap field: `string`, nested shape, `array`, `map`, `maybe`, envelope union, `fixed` cells), a `map<string, V>` or `map<K, string>` (keys and values), an `array<string>`, a `fixed<string>`, an `array<Shape>` whose shape has `string` fields, and a `maybe<string>` or `maybe<Shape>` payload each give the copy strings of its own. The emitters are `deepen_shape_fields` (`emit.rs:5924-6002`), `emit_array_elem_deep_copy` (`emit.rs:28727-28840`), `emit_map_values_deep_copy` (`emit.rs:28543-28715`) and `emit_fixed_item_cells_copy` (`emit.rs:28439-28535`). Equality follows: string fields (`shape_value_eq`, `emit.rs:7791-8108`, the string arm at `:8037-8048`) and `array<string>.contains` (`lower_array_method`, `emit.rs:33863-34087`, the string arm at `:34013`) compare by content, since a stored copy has no pointer identity with its source.
 
-Constraints for the scope-exit release pass (C6/C7):
+### The scope-exit release pass
 
-- A binding whose last use was a move has handed its string to the place that took it. The pass must not release that binding at scope exit; it consults the same record, not its own liveness test.
+The pass exists. Typeck decides, once, which binding releases what on which exit edge (`ReleasePlan`, `crates/ynz-typeck/src/release_plan.rs:1229-1240`); codegen emits that list at each scope exit through `emit_release_edge` (`emit.rs:30818-30824`) and `emit_release_edge_with` (`emit.rs:30829-30859`) and derives no ownership fact of its own. Pin: `v03_m9_release_safety`.
+
+- A string is never statically moved. `string_moves` says a read of a `let` binding may be taken by a store. The plan lists each such last-use read as a `MoveSite` with `MoveCause::LastUse` (`release_plan.rs:200-209`, `:1475-1491`, `:193-195`), and the binding's fate is `ReleaseIfLive`, else `Release`.
+- Codegen decides at the store. `remember_movable_string` (`emit.rs:22392-22427`) remembers a movable string; the store seam (`own_string_for_store`) takes it and nulls the binding's slot, so the scope-exit release skips it. A copy leaves the binding owning its string, and the release frees it.
 - A binding read at its last use by something that is not a store (a `print`, a call argument that is only read) still owns its string and is released.
 - Every stored string is released by its owner once: the binding, field, element, map cell, envelope or channel slot that holds it.
 
 Cost: clone where Rust clones, move where Rust moves. Above Rust only where a borrowed string is stored that Rust would keep as `&str` (a literal, a field or parameter read, an `.or()` result), and where a `maybe<string>` or `maybe<Shape>` payload is bound or stored (Rust keeps an `Option<&T>`).
-
-Residuals:
-
-- A nested shape, `array`, `map` or `maybe` field of a copied shape is copied as a pointer, so the copy and the original share it (and the strings inside it). This is the named residual of `ynz_typeck::owned_copy`.
-- A `map` value cell that holds a pointer other than a string is shared the same way.
-- The release story for the strings inside a copied container (element-aware drop) belongs to C6/C7: until it lands, nothing frees a string, and the stored copies leak instead of aliasing.
 
 Test: `v03_m9_c3b_string_store` counts heap strings for each store kind and runs each under AddressSanitizer at both optimization levels.
 
