@@ -1,0 +1,28 @@
+// v0.3-M9 C1j: a NAMED union that has no shape variant and no heap (`int | float`,
+// `int | nothing`) is the variant's raw bits, not a tagged envelope, so a spawn gives the task no
+// slot of its own for it (`spawn_rehoming` lists only envelope unions). The spawner stops reading
+// each name at the spawn, so each is given to the task as it was on `main`. Must be accepted,
+// balanced and ASan clean; a spawn that is promised a slot it cannot make stops the build with an
+// internal error.
+// Expected output: the tasks' `task` twice and `done`.
+
+function takeMaybe(count: int | nothing) -> nothing {
+  print(`task`)
+}
+
+function takeNumber(amount: int | float) -> nothing {
+  print(`task`)
+}
+
+function launch() -> nothing {
+  let count: int | nothing = 2
+  background takeMaybe(count)
+  let amount: int | float = 3
+  background takeNumber(amount)
+}
+
+function entrypoint() -> nothing {
+  launch()
+  wait sleep(50)
+  print(`done`)
+}

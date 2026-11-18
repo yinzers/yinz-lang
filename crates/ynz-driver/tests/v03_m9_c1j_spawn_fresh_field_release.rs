@@ -191,3 +191,30 @@ fn a_named_union_with_a_heap_payload_read_after_the_spawn_is_copied_for_the_task
         "L\n2\nA\nL\ndone\n",
     );
 }
+
+// A union with no shape variant and no tag (`array<int> | nothing`, `int | float`) is the variant's
+// raw pointer or bits, and codegen makes a task slot only for an envelope union. The spawn must not
+// promise one: a named one is given as on `main`. Bug: `spawn_rehoming` said `UnionSlot` for every
+// union, so this program stopped the build with an internal error `main` never gave (High: data
+// integrity and release).
+#[test]
+fn a_named_union_without_an_envelope_is_given_to_a_task_as_before() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1j_spawn_plain_union_given.ynz",
+        "task\ntask\ndone\n",
+    );
+}
+
+// The piece form of the same union: no slot to copy into, so the task would share the array with
+// the value it is read from. Refused by typeck with the one spawn refusal, never a backend error.
+#[test]
+fn a_field_of_a_union_without_an_envelope_of_a_fresh_call_result_is_refused_for_a_task() {
+    assert_refused_with(
+        "v0_3_m9_c1j_spawn_plain_union_field_refused.ynz",
+        &[
+            "`array<int> | nothing`",
+            "cannot be handed to a background task",
+            "background crunch(make().items)",
+        ],
+    );
+}

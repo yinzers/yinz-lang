@@ -369,11 +369,14 @@ pub enum SpawnRehoming {
     StabilizeLoopView,
     /// A `decimal128` number lives in frame-owned storage, so it is copied into a heap cell.
     DecimalCell,
-    /// A union is given a slot of its own in the task, a copy of what the variant owns, whether
-    /// the argument is a name, a field of a live value or a field of a fresh call result: the
-    /// state-machine spawn persists it into the callee frame (`stage_union_arg`) and the CPU
+    /// An ENVELOPE union (`check::is_envelope_union`: the one question codegen asks too before it
+    /// makes a slot) is given a slot of its own in the task, a copy of what the variant owns,
+    /// whether the argument is a name, a field of a live value or a field of a fresh call result:
+    /// the state-machine spawn persists it into the callee frame (`stage_union_arg`) and the CPU
     /// spawn into `bg_union_arg_cell`. Neither path reads the owned-copy table, which refuses
-    /// every union.
+    /// every union. A union that is not an envelope (`int | float`, `string | nothing`) is the
+    /// variant's raw bits or pointer, has no slot to copy into, and is NOT listed here: it stays
+    /// on the owned-copy table's answer.
     UnionSlot,
 }
 
@@ -389,7 +392,9 @@ pub fn spawn_rehoming(ty: &Type) -> Option<SpawnRehoming> {
         Type::BuiltinChannel { .. } => Some(SpawnRehoming::ShareChannel),
         Type::MapEntry { .. } => Some(SpawnRehoming::StabilizeLoopView),
         Type::Number { precision } if *precision <= 34 => Some(SpawnRehoming::DecimalCell),
-        Type::Union { .. } => Some(SpawnRehoming::UnionSlot),
+        union @ Type::Union { .. } if crate::check::is_envelope_union(union) => {
+            Some(SpawnRehoming::UnionSlot)
+        }
         _ => None,
     }
 }
