@@ -807,7 +807,7 @@ fn loom_arc_group_clone_per_task_then_transient_release_frees_exactly_once() {
     let _lane = ARC_MODEL_LANE.lock().unwrap();
     model("arc_group_clone_per_task", |_iteration| unsafe {
         let frees_before = ARC_BLOCK_FREES.load(Ordering::Relaxed);
-        let block = ynz_arc_new(ARC_SIZE);
+        let block = ynz_arc_new(ARC_SIZE, None);
         (block as *mut u64).write(ARC_DATA);
         assert_eq!(arc_strong_count(block), 1);
         let mut joins = Vec::new();

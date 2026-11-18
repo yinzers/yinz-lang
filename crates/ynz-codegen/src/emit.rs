@@ -24567,7 +24567,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // ONE block instead of taking its own heap copy. Codegen reads typeck's recorded
     // `BgOwnership::Arc { group, first, last }` and consults no ownership fact of its own
     // (authoritative-derivation): `first` mints the block (`ynz_arc_new` + a copy of the
-    // struct bytes) into the caller-side transient; EVERY member (the first included — the
+    // struct bytes, then a copy of each heap field it owns) into the caller-side transient; EVERY member (the first included — the
     // transient's own reference is separate) takes the task's reference with
     // `ynz_arc_clone`; `last` queues the transient for release right after this spawn call.
     // The task's reference rides the drop ladder as `BG_ARG_KIND_ARC_SHAPE`. The transient is
@@ -24583,7 +24583,8 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         {
             let (group, first, last) = (*group, *first, *last);
             let arc = arc_decls(cg.ctx, cg.module);
-            let Type::Shape { name } = cg.resolve_type(ty) else {
+            let resolved_shape = cg.resolve_type(ty);
+            let Type::Shape { name } = &resolved_shape else {
                 return Err(format!(
                     "auto-arc: typeck admitted a non-shape argument ({}) to an Arc group",
                     ynz_typeck::types::type_name(ty)
@@ -24591,17 +24592,25 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             };
             let struct_ty = cg
                 .shape_types
-                .get(&name)
+                .get(name)
                 .ok_or_else(|| format!("auto-arc: LLVM type for `{name}` not found"))?;
             let abi_size =
-                cg.shape_abi_sizes.get(&name).copied().ok_or_else(|| {
+                cg.shape_abi_sizes.get(name).copied().ok_or_else(|| {
                     format!("auto-arc: shape `{name}` missing from shape_abi_sizes")
                 })?;
             if first {
                 let size_val = cg.i64().const_int(abi_size, false);
+                // The block owns what the shape's heap fields point at (C1o): `deepen_shape_fields`
+                // below gives it a copy of each, and the block's drop glue is the shape's own
+                // release function (`release_fn`, the one release helper), which the LAST
+                // `ynz_arc_free` runs. A shape that owns no heap has no release function: null glue.
+                let drop_glue = match cg.release_fn(&resolved_shape, false)? {
+                    Some(release) => release.as_global_value().as_pointer_value(),
+                    None => cg.ptr().const_null(),
+                };
                 let block = cg
                     .builder
-                    .build_call(arc.new, &[size_val.into()], "arc_new")
+                    .build_call(arc.new, &[size_val.into(), drop_glue.into()], "arc_new")
                     .map_err(|e| format!("auto-arc: ynz_arc_new call: {e}"))?
                     .try_as_basic_value()
                     .basic()
@@ -24614,6 +24623,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                 cg.builder
                     .build_store(block, struct_val)
                     .map_err(|e| format!("auto-arc: store to block: {e}"))?;
+                cg.deepen_shape_fields(block, name)?;
                 cg.arc_transients.insert(group, (block, abi_size));
             }
             let (transient, size) = cg.arc_transients.get(&group).copied().ok_or_else(|| {
@@ -25179,9 +25189,11 @@ fn emit_bg_arg_frees<'ctx>(
 /// the same `declare_fn` `RuntimeDecls` uses) rather than eagerly in `RuntimeDecls`: a module
 /// with no admitted spawn group then carries no `ynz_arc_*` declaration at all, so its IR is
 /// byte-identical to the pre-emission compiler's — the single-reader no-op proof. The DATA
-/// pointer is what codegen holds and passes; the refcount header (data − 8) is runtime-private.
+/// pointer is what codegen holds and passes; the refcount header (data − 16) is runtime-private.
 struct ArcDecls<'ctx> {
-    /// `ynz_arc_new(size: i64) -> ptr` — a block for `size` data bytes, count = 1.
+    /// `ynz_arc_new(size: i64, drop_glue: ptr) -> ptr` — a block for `size` data bytes, count = 1;
+    /// `drop_glue` (`void(data)`, or null) is run by the last `ynz_arc_free` and releases what the
+    /// data owns.
     new: FunctionValue<'ctx>,
     /// `ynz_arc_clone(data: ptr) -> ptr` — one more reference (same pointer back).
     clone: FunctionValue<'ctx>,
@@ -25196,7 +25208,7 @@ fn arc_decls<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) -> ArcDecls<'ctx> 
         new: crate::runtime_decls::declare_fn(
             module,
             "ynz_arc_new",
-            ptr.fn_type(&[i64.into()], false),
+            ptr.fn_type(&[i64.into(), ptr.into()], false),
         ),
         clone: crate::runtime_decls::declare_fn(
             module,

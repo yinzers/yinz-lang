@@ -1,0 +1,28 @@
+// v0.3-M9 C1o (card #503): the CPU-arm twin, with TWO string fields. The tasks do not suspend
+// (`ynz_rt_spawn_blocking`), so each releases its reference in the closure-body free, not the
+// state-machine ladder. `launch` returns and releases its `scene` while the tasks still block.
+// The last reference to drop (a task's) must release the block's own copies of both names.
+// `entrypoint` returns at once: the runtime's shutdown drain waits for the tasks, so no sleep
+// orders the output.
+shape Scene {
+  name: string
+  river: string
+  width: int
+}
+
+function tally(scene: Scene) -> nothing {
+  sleepBlocking(100)
+  print(`cpu task sees ${scene.name} on ${scene.river}`)
+}
+
+function launch() -> nothing {
+  let scene: Scene = { name: `point park`.toUpperCase(), river: `allegheny`.toUpperCase(), width: 3 }
+  background tally(scene)
+  background tally(scene)
+}
+
+function entrypoint() -> nothing {
+  launch()
+  let churn = `abcdefgh`.toUpperCase()
+  print(churn)
+}
