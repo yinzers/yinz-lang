@@ -1142,8 +1142,11 @@ fn contract_7_wait_in_loop() {
             elapsed >= Duration::from_millis(95),
             "loop completed too fast ({elapsed:?}); some iterations may have been skipped"
         );
+        // Liveness bound, not a performance bound: about 10x the unloaded median (111 ms), so a
+        // hung or stalled loop still fails but CPU contention (16 busy loops reached 141 ms) does
+        // not. Performance belongs in the benchmark lane.
         assert!(
-            elapsed < miri_budget(Duration::from_millis(150), Duration::from_millis(3000)),
+            elapsed < miri_budget(Duration::from_millis(1100), Duration::from_millis(3000)),
             "loop elapsed {elapsed:?} exceeds budget"
         );
     });
