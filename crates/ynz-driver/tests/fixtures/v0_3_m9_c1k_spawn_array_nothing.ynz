@@ -1,0 +1,15 @@
+// v0.3-M9 C1k: a named `array<int> | nothing` local given to a task with no ownership keyword.
+// The task gets its own copy, and the spawner's original is released at its scope exit.
+// Before (also on `main`): the original's array header and buffer leaked.
+// Expected output: `ran` and `done`, in either order (nothing waits for the task).
+
+function inspect(xs: array<int> | nothing) -> nothing {
+  print(`ran`)
+}
+
+function entrypoint() -> nothing {
+  let xs: array<int> | nothing = [1, 2, 3]
+  background inspect(xs)
+  wait sleep(50)
+  print(`done`)
+}
