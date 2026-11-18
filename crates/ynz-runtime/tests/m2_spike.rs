@@ -52,6 +52,19 @@ fn miri_budget(native: Duration, under_miri: Duration) -> Duration {
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn with_runtime<F: FnOnce(&tokio::runtime::Runtime)>(f: F) {
+    with_runtime_then(f, || {});
+}
+
+/// Like `with_runtime`, and additionally runs `after_runtime_dropped` once the runtime has been
+/// dropped (all remaining tasks dropped, their frame Drop impls run) but while `TEST_LOCK` is
+/// still held. Tests that read the global FRAME_*/STRING_* counters must read them there: a
+/// read after this returns races with the next test that takes the lock and allocates frames
+/// (observed as `alloc=1001 free=1000`).
+fn with_runtime_then<F, G>(f: F, after_runtime_dropped: G)
+where
+    F: FnOnce(&tokio::runtime::Runtime),
+    G: FnOnce(),
+{
     // Build a private multi-thread runtime for this test — avoids coupling to the
     // C-ABI global RUNTIME whose handle is not accessible outside the crate.
     //
@@ -66,6 +79,8 @@ fn with_runtime<F: FnOnce(&tokio::runtime::Runtime)>(f: F) {
         .build()
         .expect("spike: failed to build test runtime");
     f(&rt);
+    drop(rt);
+    after_runtime_dropped();
 }
 
 // ── Shared error ABI types ────────────────────────────────────────────────────
@@ -991,39 +1006,43 @@ fn contract_5_errors_cascade_through_sm_boundary() {
 // to a local per-test runtime. Same invariant: net frame count == 0.
 #[test]
 fn contract_6_frame_ownership_no_leak() {
-    with_runtime(|rt| {
-        reset_counters();
-        const N: usize = 1000;
-        let mut join_handles = Vec::with_capacity(N);
+    with_runtime_then(
+        |rt| {
+            reset_counters();
+            const N: usize = 1000;
+            let mut join_handles = Vec::with_capacity(N);
 
-        for _ in 0..N {
-            let fut = FnFetchEvent::new(); // 100ms sleep
-            let h = rt.spawn(FetchEventWrapper(fut));
-            join_handles.push(h);
-        }
-
-        // Abort half mid-flight — frame Drop must free the allocation.
-        for h in join_handles.drain(N / 2..) {
-            h.abort();
-        }
-
-        // Wait for remaining half to complete.
-        rt.block_on(async {
-            for h in join_handles {
-                let _ = h.await; // JoinError on aborted tasks is expected — ignore
+            for _ in 0..N {
+                let fut = FnFetchEvent::new(); // 100ms sleep
+                let h = rt.spawn(FetchEventWrapper(fut));
+                join_handles.push(h);
             }
-        });
-    });
-    // Runtime dropped here — all remaining tasks are dropped, running Drop impls.
 
-    let net = net_frame_count();
-    eprintln!(
-        "contract_6: alloc={} free={} net={}",
-        FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
-        FRAME_FREE_COUNT.load(Ordering::SeqCst),
-        net
+            // Abort half mid-flight — frame Drop must free the allocation.
+            for h in join_handles.drain(N / 2..) {
+                h.abort();
+            }
+
+            // Wait for remaining half to complete.
+            rt.block_on(async {
+                for h in join_handles {
+                    let _ = h.await; // JoinError on aborted tasks is expected — ignore
+                }
+            });
+        },
+        // Runs after the runtime is dropped (all remaining tasks dropped, running Drop impls) and
+        // while TEST_LOCK is still held, so no other test can touch the counters mid-read.
+        || {
+            let net = net_frame_count();
+            eprintln!(
+                "contract_6: alloc={} free={} net={}",
+                FRAME_ALLOC_COUNT.load(Ordering::SeqCst),
+                FRAME_FREE_COUNT.load(Ordering::SeqCst),
+                net
+            );
+            assert_eq!(net, 0, "frame leak detected: net alloc-free = {net}");
+        },
     );
-    assert_eq!(net, 0, "frame leak detected: net alloc-free = {net}");
 }
 
 // ── Spike fixture: FnPulse (Contract #7 — wait-in-loop) ─────────────────────
