@@ -3168,15 +3168,34 @@ impl<'b> Checker<'b> {
                     // either label, because a consumed binding's storage dies with the frame
                     // exactly as an unconsumed one's does — and the alternative for it is the
                     // emitter's own bare error string with no teaching slots at all.
+                    // The one exception to "under `Give` there is nothing to be independent
+                    // FROM": a `fixed` list's cells are kept with the spawner's frame, so a
+                    // consumed `fixed` still has to be copied out for the task, and when its
+                    // items cannot be copied the spawn hands the task a pointer into the dead
+                    // frame (a use after return, and nothing releases the items). Refused here,
+                    // under either label, so codegen's `consumed_shape_needs_no_copy` arm never
+                    // sees a `fixed` with frame cells.
+                    let consumed_fixed = matches!(label, BgOwnership::Give)
+                        && matches!(ty, Type::BuiltinFixed { .. })
+                        && matches!(
+                            cause,
+                            crate::owned_copy::SpawnRefusalCause::NoIndependentCopy
+                        );
                     let fires = matches!(label, BgOwnership::Copy)
+                        || consumed_fixed
                         || matches!(
                             cause,
                             crate::owned_copy::SpawnRefusalCause::StorageDiesWithTheFrame
                         );
                     if fires {
+                        let items = match &ty {
+                            Type::BuiltinFixed { elem, .. } => type_name(elem),
+                            _ => String::new(),
+                        };
                         let fills = [
                             ("name", name),
                             ("type", &type_name(&ty)),
+                            ("items", &items),
                             ("detail", &refusal.detail),
                             ("fix", &refusal.fix),
                             ("why", &refusal.why),
@@ -3186,6 +3205,18 @@ impl<'b> Checker<'b> {
                         // list, which is what `diagnostic_template_parity` scans for to prove
                         // no shipped template is dead.
                         let diag = match cause {
+                            // A consumed `fixed` is the same kind with its own text: the
+                            // hand-over advice of the row below is already what this program does.
+                            crate::owned_copy::SpawnRefusalCause::NoIndependentCopy
+                                if consumed_fixed =>
+                            {
+                                registry_diag_template(
+                                    span.clone(),
+                                    DiagnosticKind::SpawnArgNotIndependent,
+                                    "SpawnArgNotIndependentHandedOver",
+                                    &fills,
+                                )
+                            }
                             crate::owned_copy::SpawnRefusalCause::NoIndependentCopy => {
                                 registry_diag(
                                     span.clone(),

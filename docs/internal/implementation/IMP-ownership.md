@@ -108,7 +108,7 @@ The r4 text this replaced — "`.copy()` is only legal when every field is trans
 | `number` wider than 34 digits (a bignum) | A fresh copy of its decimal text, as a `string` (`StringClone`): a bignum is owned text, released like a string |
 | `channel<T>`, a task handle, a union, `dynamic C`, a loop's `MapEntry`, an unchecked `errors` value, `nothing`, a type placeholder, a generic shape | **Compile error**, with WHAT / WHAT-INSTEAD / WHY naming what to do instead |
 
-A refusal is a real answer and it is loud: a user who can see the refusal is better off than a user handed an alias they cannot see. The refusal text lives with the plan (`CopyRefusal`, three slots) and renders through the `CopyNotIndependent` diagnostic template; the `background` face of the same ruling renders through `SpawnArgNotIndependent`.
+A refusal is a real answer and it is loud: a user who can see the refusal is better off than a user handed an alias they cannot see. The refusal text lives with the plan (`CopyRefusal`, three slots) and renders through the `CopyNotIndependent` diagnostic template; the `background` face of the same ruling renders through `SpawnArgNotIndependent`. Under a `Give` label the refusal is skipped except for a named `fixed` whose items cannot be copied (its cells are kept with the spawner's frame): that case fires too, with the `SpawnArgNotIndependentHandedOver` text (decided: plan-caused hole, `git log --grep=HandedOver`).
 
 ### `.freeze()` — lock a binding from further mutation
 

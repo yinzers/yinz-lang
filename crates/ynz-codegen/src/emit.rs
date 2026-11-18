@@ -24655,6 +24655,16 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         // back to, so narrowing the gate here would only turn a shipped pass-through into a
         // backend error. For a `map` the fallback is a real clone, so the honest gate applies.
         if (refused && recorded_give) || (!refused && sole_holder.is_some()) {
+            // Typeck refuses a named `fixed` whose items cannot be copied (`SpawnArgNotIndependent`
+            // under either label), because its cells sit in the spawner's frame and this arm
+            // would hand the task that frame. A `fixed` that is not a plain name (a shape field,
+            // which has storage of its own) is not refused and does reach here.
+            debug_assert!(
+                !(refused
+                    && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
+                    && matches!(resolved, Type::BuiltinFixed { .. })),
+                "a named `fixed` with uncopyable items reached the background hand-over arm"
+            );
             return Ok((val, BgArgFreeKind::None));
         }
     }

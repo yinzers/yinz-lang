@@ -1881,6 +1881,18 @@ what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a ba
 what_instead_template = "{fix}"
 why_template = "{why}"
 
+# `SpawnArgNotIndependent` for a `fixed` value the spawn CONSUMES (nothing reads it afterwards). The
+# row above says "this line still reads it" and "hand it over instead", both false here: the value is
+# already handed over, and handing a `fixed` over does not move its items, because they are kept
+# with the function that made it. Only a `fixed` whose items cannot be copied reaches this (the
+# owned-copy table refuses it); a `fixed` of strings or shapes is copied for the task. `{items}` is
+# the item type, `{detail}` the same per-type fill the row above uses.
+[[diagnostic_template]]
+kind_name = "SpawnArgNotIndependentHandedOver"
+what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a background task{detail}."
+what_instead_template = "Declare `{name}` as an `array<{items}>` instead, or give the task each item as an argument of its own."
+why_template = "A `fixed` value is kept with the function that made it, and a background task keeps running after that function has finished. To give the task a value of its own, the compiler copies the items out for it. That works for items that can be copied, such as a `string` or a shape, and not for items that cannot, such as an `array` or a `map`. So the call is refused, rather than letting the task read something that is gone."
+
 [[diagnostic_template]]
 kind_name = "Borrowed"
 what_template = "`{name}` is already borrowed and cannot be given or reassigned while the borrow is active."
