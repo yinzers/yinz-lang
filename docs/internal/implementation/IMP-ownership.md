@@ -606,7 +606,7 @@ A refused store (a parameter, a piece, a loop cell) is `ParamNeedsGive` / `Trans
 
 > **WHAT**: This line gives `{expr}` away — it is {act} — but `{expr}` is {reason}, so someone here still holds it.
 > **WHAT INSTEAD**: Give away a copy instead: `{fix}`. If you meant to hand over the whole thing, give the whole thing: the binding that owns it.
-> **WHY**: Whoever receives a `{type}` will eventually free it. If this side could still reach the same value afterward — through the field, the item, the loop, or the name it was built from — two places would hold one value and one of them would free it under the other. A `.copy()` belongs to nobody else, so it is safe to hand over.
+> **WHY**: Whoever receives a `{type}` will eventually free it. But `{expr}` is {reason}, so another holder may free it too: if the receiver and that holder both kept the one value, the same memory would be freed twice, and if one freed it first, the other would be left reading memory that is already gone. A `.copy()` belongs to nobody else, so it is safe to hand over.
 
 Worked examples (the gallery renders these; `crates/ynz-driver/tests/error_galleries.rs` counts them):
 

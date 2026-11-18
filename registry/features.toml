@@ -1672,7 +1672,7 @@ why_template = "A parameter without `give` still belongs to the caller — the c
 kind_name = "TransferNeedsCopy"
 what_template = "This line gives `{expr}` away — it is {act} — but `{expr}` is {reason}, so someone here still holds it."
 what_instead_template = "Give away a copy instead: `{fix}`. If you meant to hand over the whole thing, give the whole thing: the binding that owns it."
-why_template = "Whoever receives a `{type}` will eventually free it. If this side could still reach the same value afterward — through the field, the item, the loop, or the name it was built from — two places would hold one value and one of them would free it under the other. A `.copy()` belongs to nobody else, so it is safe to hand over."
+why_template = "Whoever receives a `{type}` will eventually free it. But `{expr}` is {reason}, so another holder may free it too: if the receiver and that holder both kept the one value, the same memory would be freed twice, and if one freed it first, the other would be left reading memory that is already gone. A `.copy()` belongs to nobody else, so it is safe to hand over."
 
 [[diagnostic_template]]
 kind_name = "HandleChannelArgNeedsBinding"
