@@ -17,7 +17,7 @@ function bake(give ticket: Delivery) -> nothing {
   print(`baking ${ticket.miles.toString()}`)
 }
 
-function sort(job: Delivery | Pickup) -> nothing {
+function sort(lines: array<channel<int>>) -> nothing {
   sleepBlocking(10)
 }
 
@@ -47,7 +47,6 @@ function entrypoint() -> nothing {
   // WHY: CopyNotIndependent on a union — which choice is live is only settled while the
   // program runs, and the two choices are different sizes.
   let run: Delivery = { miles: 9 }
-  let secondRun: Delivery = { miles: 9 }
   let either: Delivery | Pickup = run
   let bothWays = either.copy()
 
@@ -67,13 +66,12 @@ function entrypoint() -> nothing {
   let void = nothingAtAll().copy()
 
   // WHY: SpawnArgNotIndependent — the `background` face of the same rule. This line still
-  // reads `parcel` after the task starts, so the task would need its own separate one, and a
-  // union has no separate one to give. Hand it over instead, or read it before the spawn.
-  let parcel: Delivery | Pickup = secondRun
-  background sort(parcel)
-  if (parcel is Delivery) {
-    print(`still a delivery`)
-  }
+  // reads `pings` after the task starts, so the task would need its own separate one, and an
+  // `array<channel<int>>` has no separate one to give. Hand it over instead, or read it before
+  // the spawn. (A union is not a trigger here: a task is given a slot of its own for one.)
+  let pings: array<channel<int>> = [orders]
+  background sort(pings)
+  print(pings.count())
 
   // WHY: SpawnArgStorageDiesWithTheFrame — a different rule from the seven above, and it needs
   // its own words. A `range` is kept with the function that made it, so the problem is not that

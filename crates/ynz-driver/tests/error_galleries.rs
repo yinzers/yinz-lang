@@ -673,7 +673,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         // round 2026-09-07, should-fix 5: the previous text was a dead end at this very
         // trigger).
         "Drop the `.copy()` and call the function on its own",
-        "move every later read of `parcel` above the `background` line",
+        "move every later read of `pings` above the `background` line",
         "for a `range`, its start and end as two `int` values",
         "Check `.failed()` on `count` first",
         "Use `.message` to read what went wrong",
