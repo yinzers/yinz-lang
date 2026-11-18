@@ -1705,6 +1705,17 @@ fn wait_on_non_may_block_warning(
     )
 }
 
+/// One spawn argument as `record_spawn_arg_ownership` sees it: the argument, the name it is
+/// written with when it is a plain binding, the spawned callee, its position in the call, and
+/// the arguments after it (a read by a LATER argument of the same call counts as a later read).
+struct SpawnArgSite<'call> {
+    arg: &'call Expr,
+    ident: Option<&'call str>,
+    callee: Option<&'call str>,
+    position: usize,
+    later_args: &'call [&'call Expr],
+}
+
 struct Checker<'b> {
     // ── Borrowed look-up tables (module-wide, read-only during check) ─────────
     //
@@ -3110,14 +3121,17 @@ impl<'b> Checker<'b> {
     /// codegen's `is_heap_arg` gate reads PRESENCE (parked item 19, the fr23 class).
     fn record_spawn_arg_ownership(
         &mut self,
-        arg: &Expr,
-        ident: Option<&str>,
-        callee: Option<&str>,
-        position: usize,
-        later_args: &[&Expr],
+        site: SpawnArgSite<'_>,
         remaining: Option<&[Stmt]>,
         fill_only: bool,
     ) -> Option<BgOwnership> {
+        let SpawnArgSite {
+            arg,
+            ident,
+            callee,
+            position,
+            later_args,
+        } = site;
         let span = arg.span();
         let key = (span.start, span.end);
         // The sole-holder record (`TypedModule::background_arg_sole_holder`), written BEFORE
@@ -3533,11 +3547,13 @@ impl<'b> Checker<'b> {
                                     _ => None,
                                 };
                                 let recorded = self.record_spawn_arg_ownership(
-                                    arg,
-                                    ident,
-                                    callee_for_sig.as_deref(),
-                                    position,
-                                    &bg_args[position + 1..],
+                                    SpawnArgSite {
+                                        arg,
+                                        ident,
+                                        callee: callee_for_sig.as_deref(),
+                                        position,
+                                        later_args: &bg_args[position + 1..],
+                                    },
                                     Some(remaining),
                                     false,
                                 );
@@ -3573,7 +3589,7 @@ impl<'b> Checker<'b> {
                                                 given: name.clone(),
                                                 missed_revive: None,
                                             },
-                                            &arg_span,
+                                            arg_span,
                                         );
                                     }
                                 }
@@ -4445,11 +4461,13 @@ impl<'b> Checker<'b> {
                     _ => None,
                 };
                 let _ = self.record_spawn_arg_ownership(
-                    arg,
-                    ident,
-                    callee_for_sig.as_deref(),
-                    position,
-                    &args[position + 1..],
+                    SpawnArgSite {
+                        arg,
+                        ident,
+                        callee: callee_for_sig.as_deref(),
+                        position,
+                        later_args: &args[position + 1..],
+                    },
                     None,
                     false,
                 );
@@ -5704,11 +5722,13 @@ impl<'b> Checker<'b> {
                         // would). v0.3-M8 Phase 5: through the ONE shared recording
                         // function, fill-only (never clobbers a prior, more precise entry).
                         let _ = self.record_spawn_arg_ownership(
-                            arg,
-                            simple_ident_name(arg),
-                            callee_for_sig.as_deref(),
-                            position,
-                            &bg_args[position + 1..],
+                            SpawnArgSite {
+                                arg,
+                                ident: simple_ident_name(arg),
+                                callee: callee_for_sig.as_deref(),
+                                position,
+                                later_args: &bg_args[position + 1..],
+                            },
                             None,
                             true,
                         );

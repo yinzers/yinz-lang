@@ -1494,7 +1494,7 @@ impl ReleasePlan {
                 .move_sites
                 .values()
                 .flatten()
-                .any(|site| &site.founder == &decl);
+                .any(|site| site.founder == decl);
             if !has_site {
                 self.internal_errors.push(format!(
                     "internal: `{}` in `{}` is released only if live but no read moves it",
