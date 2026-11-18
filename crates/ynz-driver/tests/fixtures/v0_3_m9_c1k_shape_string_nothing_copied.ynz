@@ -1,0 +1,23 @@
+// v0.3-M9 C1k: a shape with a `string | nothing` field is copied (a task's argument, `.copy()`)
+// and every copy releases its own string. The union is the string's raw pointer, so the copy must
+// clone it, as it clones a plain `string` field, or the release of the field frees one string twice.
+// Before the shape's release freed such a field, a copy shared the pointer harmlessly (and leaked).
+// Expected output: `A` three times (the task's, the spawner's, the copy's).
+
+shape Holder {
+  label: string
+  name: string | nothing
+}
+
+function show(h: Holder) -> nothing {
+  print(h.label)
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { label: `a`.toUpperCase(), name: `bob`.toUpperCase() }
+  background show(holder)
+  wait sleep(50)
+  print(holder.label)
+  let twin: Holder = holder.copy()
+  print(twin.label)
+}
