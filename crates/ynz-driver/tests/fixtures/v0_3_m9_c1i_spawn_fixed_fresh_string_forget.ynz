@@ -1,0 +1,21 @@
+// v0.3-M9 C1i: a fire-and-forget `background` call passes a `fixed<string>` that is a fresh call
+// result, not a named binding. The task holds its own copy; the call result's original strings
+// must be released by the spawn, since the statement-end temporary is suppressed for a spawn.
+// Before: 2 of the 4 strings leaked (the copy was released, the original never was).
+// Expected output: the count, the first name, then `done`.
+
+function crunch(xs: fixed<string>) -> nothing {
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function build() -> fixed<string> {
+  let xs: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return xs
+}
+
+function entrypoint() -> nothing {
+  background crunch(build())
+  wait sleep(50)
+  print(`done`)
+}
