@@ -3106,6 +3106,24 @@ pub unsafe extern "C" fn ynz_bignum_div(a: *const i8, b: *const i8, precision: u
     bignum_binop(a, b, precision, bignum_div_op)
 }
 
+/// Convert a bignum (null-terminated decimal string) to the nearest `f64`.
+///
+/// Backs `(number<N>).toFloat()` and `.toInt()` for N > 34, the same f64 route the
+/// decimal128 path takes (`ynz_decimal_to_float`). A bignum string is produced only by
+/// `format_bignum`, so it always parses; a string that does not is a runtime-contract
+/// breach and yields NaN (which `.toInt()` turns into `nothing`) rather than a silent 0.
+///
+/// # Safety
+/// `num_ptr` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_to_float(num_ptr: *const i8) -> f64 {
+    std::ffi::CStr::from_ptr(num_ptr)
+        .to_str()
+        .ok()
+        .and_then(|text| text.parse::<f64>().ok())
+        .unwrap_or(f64::NAN)
+}
+
 /// Helper: parse, apply op, format, return as heap-allocated C string.
 ///
 /// # Safety
