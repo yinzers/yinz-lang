@@ -1,0 +1,23 @@
+// v0.3-M9 C1j: a field of a fresh call result whose type is a union with no shape variant and
+// heap beside `nothing` (`array<int> | nothing`) has no slot to be copied into, and the task
+// would share the array with the value it is read from. Refused at compile time with the text of
+// the one spawn refusal, never as a backend error.
+
+shape Bag {
+  items: array<int> | nothing
+  label: string
+}
+
+function make() -> Bag {
+  return { items: [1, 2].copy(), label: `l`.toUpperCase() }
+}
+
+function crunch(items: array<int> | nothing) -> nothing {
+  print(`task`)
+}
+
+function entrypoint() -> nothing {
+  background crunch(make().items)
+  wait sleep(50)
+  print(`done`)
+}

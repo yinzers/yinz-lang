@@ -103,6 +103,20 @@ pub struct Temporaries {
     /// suspends cannot read after its own `wait`; codegen keeps them in a frame region while it
     /// stages the argument (`Cg::stage_value_in_frame`).
     staged_arguments: HashSet<Span>,
+    /// The `background` arguments that are a piece of a value (`make().rows`, `bag.rows`) of a type
+    /// the spawn cannot give the task a value of its own of (`spawn_arg_refusal`): the task would
+    /// be handed the piece as it is while the value it was read from releases it, so typeck
+    /// refuses the spawn (`Temporaries::refused_spawn_pieces`).
+    refused_spawn_pieces: Vec<RefusedSpawnPiece>,
+}
+
+/// One `background` argument that is a piece of a value and cannot be handed to the task: where it
+/// is, its type, and the per-type text `spawn_arg_refusal` gave for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefusedSpawnPiece {
+    pub span: ynz_diagnostics::SourceSpan,
+    pub ty: Type,
+    pub refusal: crate::owned_copy::CopyRefusal,
 }
 
 impl Temporaries {
@@ -128,6 +142,13 @@ impl Temporaries {
     /// shape that owns no heap).
     pub fn is_staged_argument(&self, start: usize, end: usize) -> bool {
         self.staged_arguments.contains(&(start, end))
+    }
+
+    /// The `background` arguments that are a piece of a value (fresh or named) of a type the spawn
+    /// cannot give the task a value of its own of (`make().rows`, `bag.rows` typed
+    /// `fixed<array<string>>`), in walk order.
+    pub fn refused_spawn_pieces(&self) -> &[RefusedSpawnPiece] {
+        &self.refused_spawn_pieces
     }
 
     /// True when the expression at `start..end` builds a temporary.
@@ -552,6 +573,46 @@ impl Walk<'_> {
         }
     }
 
+    /// A `background` argument that is a field or element read off a value (`make().items`,
+    /// `make().inner.items`, `make()[0]`, `bag.rows`). THE decision for such a piece is
+    /// `spawn_arg_refusal` on its type, the one question the named-argument refusal asks too:
+    ///
+    /// - refused: the spawn hands the piece to the task as it is, while the value it was read from
+    ///   releases it (a fresh value at the statement end, a binding at its scope exit). It is
+    ///   recorded (`Temporaries::refused_spawn_pieces`) for typeck to refuse, whatever the piece is
+    ///   read from.
+    /// - not refused: the task gets a value of its own, and when the value read from is a
+    ///   temporary, nothing else holds the rest of it, so it dies at the statement end like any
+    ///   other temporary (`value`). A piece of a binding needs nothing more: the binding's scope
+    ///   exit releases it.
+    ///
+    /// A whole value is not a piece: the spawn releases it (`prepare_bg_arg_for_ctx`).
+    ///
+    /// O(d) time for a piece d fields deep; O(1) space.
+    fn spawn_argument_piece(&mut self, arg: &Expr, key: Span) {
+        let mut base = arg;
+        while let Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } = base {
+            base = receiver;
+        }
+        if std::ptr::eq(base, arg) {
+            return;
+        }
+        let Some(ty) = self.type_of(arg) else {
+            return;
+        };
+        match crate::owned_copy::spawn_arg_refusal(ty) {
+            Some((_cause, refusal)) => {
+                let ty = ty.clone();
+                self.out.refused_spawn_pieces.push(RefusedSpawnPiece {
+                    span: arg.span().clone(),
+                    ty,
+                    refusal,
+                });
+            }
+            None => self.value(base, Use::Borrowed, key, false),
+        }
+    }
+
     fn children(&mut self, expr: &Expr, key: Span, suppress: bool) {
         match expr {
             Expr::Ident(..)
@@ -677,9 +738,19 @@ impl Walk<'_> {
             // awaited call is handed is judged as for a plain call: a temporary of the statement
             // that survives the suspension in a frame slot (C8 slice 2, `open_wait_temporaries`).
             Expr::Wait(inner, _) => self.value(inner, Use::Taken, key, suppress),
-            // A `background` call hands its arguments to the task: nothing is a temporary of this
-            // statement.
-            Expr::Background(inner, _) => self.value(inner, Use::Taken, key, true),
+            // A `background` call hands its arguments to the task: a whole value it is given is
+            // not a temporary of this statement (the spawn releases it, `prepare_bg_arg_for_ctx`).
+            // A PIECE of a fresh value (`make().items`) is different: the task gets a copy of the
+            // piece and nothing hands the rest of `make()`'s result on, so that result is a
+            // temporary of the statement like any other (`spawn_argument_piece`).
+            Expr::Background(inner, _) => {
+                self.value(inner, Use::Taken, key, true);
+                if let Expr::Call(call) = inner.as_ref() {
+                    for arg in &call.args {
+                        self.spawn_argument_piece(arg, key);
+                    }
+                }
+            }
         }
     }
 }

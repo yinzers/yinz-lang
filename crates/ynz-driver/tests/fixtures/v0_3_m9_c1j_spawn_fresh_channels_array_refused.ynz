@@ -1,0 +1,25 @@
+// v0.3-M9 C1j: a `background` call passes an `array<channel<int>>` field of a fresh call result.
+// A channel is shared, but an array of them has no independent copy, and the task would be handed
+// the array as it is while the line's `make()` result is released.
+// Expected: a compile error naming the type and the line.
+
+shape Bus {
+  lines: array<channel<int>>
+}
+
+function ping(lines: array<channel<int>>) -> nothing {
+  print(lines.count())
+}
+
+function make() -> Bus {
+  let first: channel<int> = channel<int>(1)
+  let lines: array<channel<int>> = [first]
+  let bus: Bus = { lines: lines }
+  return bus
+}
+
+function entrypoint() -> nothing {
+  background ping(make().lines)
+  wait sleep(50)
+  print(`done`)
+}

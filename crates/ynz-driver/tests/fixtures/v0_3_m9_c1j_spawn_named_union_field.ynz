@@ -1,0 +1,42 @@
+// v0.3-M9 C1j control: a `background` call passes a union field of a NAMED value
+// (`bag.choice`). A union argument gets a slot of its own in the task (a copy of what it owns), so
+// `launch` can return and release `bag` while the task still reads the payload. Must stay
+// accepted, balanced and ASan clean.
+// Expected output: the payload's name, then `done`.
+
+shape Circle {
+  radius: float
+}
+
+shape Tag {
+  name: string
+}
+
+shape Bag {
+  choice: Circle | Tag
+  id: int
+}
+
+function f(choice: Circle | Tag) -> nothing {
+  wait sleep(100)
+  if (choice) {
+    is Circle => {
+      print(`circle`)
+    }
+    is Tag => {
+      print(choice.name)
+    }
+  }
+}
+
+function launch() -> nothing {
+  let tag: Tag = { name: `boxed`.toUpperCase() }
+  let bag: Bag = { choice: tag, id: 1 }
+  background f(bag.choice)
+}
+
+function entrypoint() -> nothing {
+  launch()
+  wait sleep(300)
+  print(`done`)
+}

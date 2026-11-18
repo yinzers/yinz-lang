@@ -747,6 +747,38 @@ fn record_temporaries_of(
         },
     )
 }
+
+/// The refusals of the `background` arguments that are a piece of a value the spawn cannot give
+/// the task a value of its own of (`Temporaries::refused_spawn_pieces`, decided by
+/// `spawn_arg_refusal`): `background crunch(make().rows)` or `background f(bag.rows)` with `rows`
+/// a `fixed<array<string>>`. The piece would be handed to the task as it is while the value it was
+/// read from releases it, so the call is refused with the per-type text of the one refusal.
+///
+/// O(p) time for p refused pieces; O(1) space.
+fn refuse_spawn_pieces(temporaries: &crate::temporaries::Temporaries) -> Vec<Diagnostic> {
+    temporaries
+        .refused_spawn_pieces()
+        .iter()
+        .map(|piece| {
+            let fills = [
+                ("type", type_name(&piece.ty)),
+                ("detail", piece.refusal.detail.clone()),
+                ("fix", piece.refusal.fix.clone()),
+                ("why", piece.refusal.why.clone()),
+            ];
+            let slots: Vec<(&str, &str)> = fills
+                .iter()
+                .map(|(slot, value)| (*slot, value.as_str()))
+                .collect();
+            registry_diag_template(
+                piece.span.clone(),
+                DiagnosticKind::SpawnArgNotIndependent,
+                "SpawnArgNotIndependentPiece",
+                &slots,
+            )
+        })
+        .collect()
+}
 /// Every Yinz function a call can reach: the module's own and the imported ones.
 fn callable_fns_of(local_fns: &HashSet<String>, imported_fns: &HashSet<String>) -> HashSet<String> {
     local_fns.union(imported_fns).cloned().collect()
@@ -1218,6 +1250,9 @@ fn check_one_pass(
             generic_shapes: checker.generic_shape_table,
         },
     );
+    for refusal in refuse_spawn_pieces(&temporaries) {
+        checker.diags.push(refusal);
+    }
     let fixed_instances = fixed_instances_of(
         std::mem::take(&mut checker.fixed_calls),
         checker.sig_table,
@@ -1374,6 +1409,9 @@ pub fn check_with_kernel_mode(
             generic_shapes: checker.generic_shape_table,
         },
     );
+    for refusal in refuse_spawn_pieces(&temporaries) {
+        checker.diags.push(refusal);
+    }
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
