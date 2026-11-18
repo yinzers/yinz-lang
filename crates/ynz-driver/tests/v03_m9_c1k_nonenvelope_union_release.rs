@@ -78,3 +78,13 @@ fn a_generic_union_given_to_a_function_is_released_as_the_instance_stores_it() {
         &["ate\nate\nate\nend\n"],
     );
 }
+
+// Bug: `resolve_type` flattened a generic `T | U` with `T = U` to the plain shape, and the build
+// failed with an internal error for a program that built before (High: data integrity).
+#[test]
+fn a_generic_union_with_both_parameters_the_same_shape_is_that_shape() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1k_generic_union_same_type_args.ynz",
+        &["HELLO\nend\n"],
+    );
+}

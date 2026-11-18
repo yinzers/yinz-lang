@@ -1,0 +1,24 @@
+// v0.3-M9 C1k: a generic `T | U` called with both type parameters bound to the same shape is the
+// plain shape in that instance (`Big | Big` flattens to `Big`), as the caller sees it. The
+// returned value is not wrapped in an envelope, so there is no union slot to write it into.
+// Before: `Cg::resolve_type` flattened the slot to `Big`, and the build stopped with "typeck
+// recorded a coercion into ..., which is not a union". On the plan head the program built, and
+// crashed when it ran (the callee returned an envelope the caller read as a `Big`).
+// Expected output: `HELLO`, `end`.
+
+shape Big {
+  label: string
+  items: array<int>
+}
+
+function pick<T, U>(give first: T, share second: U) -> T | U {
+  return first
+}
+
+function entrypoint() -> nothing {
+  let first: Big = { label: `hello`.toUpperCase(), items: [1] }
+  let second: Big = { label: `bye`.toUpperCase(), items: [2] }
+  let chosen = pick(first, second)
+  print(chosen.label)
+  print(`end`)
+}

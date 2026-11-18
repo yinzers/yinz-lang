@@ -2761,7 +2761,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// coercion of variant 0. When the instance binds `T` to a union (`Big | Tiny`), the value
     /// already IS the slot's flat union (`Big | Tiny`, the type `apply_substitution` builds):
     /// there is no plain variant to wrap, and wrapping would nest an envelope in an envelope
-    /// (C1g `v0_3_m9_c1g_generic_call_runs_its_checked_instance`). A bound union whose flat
+    /// (C1g `v0_3_m9_c1g_generic_call_runs_its_checked_instance`). Likewise `T | U` with `T = U = Tiny`
+    /// flattens to the plain `Tiny`: the value already IS the slot, which callers see as `Tiny`
+    /// (`apply_substitution`), so nothing is wrapped. A bound union whose flat
     /// variants come in another order than the slot's (`Tiny | T`) is not this case and still
     /// reaches the lowering, which refuses it instead of mis-tagging.
     ///
@@ -2769,8 +2771,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     fn coercion_at(&self, key: (usize, usize)) -> Option<&ynz_typeck::check::UnionCoercion> {
         let coercion = self.typed.union_coercions.get(&key)?;
         let plain = self.resolve_type(self.typed.expr_types.get(&key)?);
-        let flat_slot = ynz_typeck::generics::apply_substitution(&coercion.slot, &self.type_subst);
-        if matches!(plain, Type::Union { .. }) && plain == flat_slot {
+        let flat_slot = self.resolve_type(&coercion.slot);
+        if plain == flat_slot {
             return None;
         }
         Some(coercion)
