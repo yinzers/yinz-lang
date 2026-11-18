@@ -448,7 +448,7 @@ pub fn check(
         mono_table: MonomorphizationTable::default(),
         maybe_non_none: HashSet::new(),
         union_narrowed: HashMap::new(),
-        union_aliases: collect_union_aliases(module, shape_table),
+        union_aliases: shape_table.union_aliases.clone(),
         errors_success_narrowed: HashSet::new(),
         errors_consumed: HashSet::new(),
         errors_failed_true_branch: Vec::new(),
@@ -533,7 +533,7 @@ pub fn check_with_kernel_mode(
         mono_table: MonomorphizationTable::default(),
         maybe_non_none: HashSet::new(),
         union_narrowed: HashMap::new(),
-        union_aliases: collect_union_aliases(module, shape_table),
+        union_aliases: shape_table.union_aliases.clone(),
         errors_success_narrowed: HashSet::new(),
         errors_consumed: HashSet::new(),
         errors_failed_true_branch: Vec::new(),
@@ -8928,27 +8928,6 @@ impl<'b> Checker<'b> {
             }
         }
     }
-}
-
-/// Collect `shape Name = Type` alias declarations from the module.
-///
-/// These are union type aliases like `shape Shape = Circle | Square | Triangle`.
-/// The alias name maps to the type `ShapeTable::resolve_ast_type` resolves its right-hand side to
-/// (the single resolver — there is no alias-specific one).
-pub(crate) fn collect_union_aliases(
-    module: &Module,
-    shape_table: &crate::shapes::ShapeTable,
-) -> HashMap<String, Type> {
-    let mut aliases = HashMap::new();
-    for item in &module.items {
-        if let Item::ShapeDecl(sd) = item {
-            if let Some(alias_ast_ty) = &sd.alias_ty {
-                let resolved = shape_table.resolve_ast_type(alias_ast_ty);
-                aliases.insert(sd.name.clone(), resolved);
-            }
-        }
-    }
-    aliases
 }
 
 /// Check whether two types are compatible for assignment.
