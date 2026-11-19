@@ -101,7 +101,7 @@ let player = players.get(5).or(defaultPlayer)   // always returns a Player
 
 The same rule applies to all collections — `array<T>`, `fixed<T>`, `map<K, V>`, and `string`. Every access that might not exist returns `maybe`. No out-of-bounds crashes anywhere in the language.
 
-**Why brackets and `.get()` both exist:** brackets are the everyday shorthand familiar to anyone who's used JS, Python, or any C-family language. `.get()` is the long form — useful when you want the operation to be explicit, or when chaining with `.or(default)`.
+**Brackets and `.get()` both work:** brackets are the everyday shorthand. `.get()` is the long form — useful when you want the operation to be explicit, or when you want `.or(default)` on the result.
 
 ---
 

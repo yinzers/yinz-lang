@@ -303,6 +303,8 @@ shape Player {
 }
 ```
 
+**Why `hidden` exists**: per-field visibility within an exported shape. Without it, external code could write `player.damageMultiplier = 10` and bypass the invariants `takeDamage` maintains; module-level "don't export the field" cannot work because exporting a shape exposes all its fields.
+
 **Why `hidden` over `private`**: Golden Rule 5. "Hidden field" reads like English. "Private" requires knowing OOP access modifier terminology. A developer who has never seen Yinz understands what `hidden damageMultiplier` means.
 
 **Why require defaults**: Without a default, the caller would need to provide the hidden field during construction — which would require knowing the field name, defeating the purpose of hiding it. Requiring defaults makes the initial state explicit and visible in the type definition (Golden Rule 4 — self-documenting). The caller only provides visible fields.

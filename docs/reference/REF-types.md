@@ -282,7 +282,7 @@ print(player.damageMultiplier)
 
 `hidden` is about visibility, not mutability. Hidden fields can be both read and written by standalone functions in the same file. They're invisible to imports.
 
-**Why this exists**: per-field visibility within an exported shape. Without `hidden`, external code could write `player.damageMultiplier = 10` bypassing whatever invariants `takeDamage` maintains. Module-level "don't export the field" doesn't work because you can't export a shape without exposing all its fields.
+`hidden` gives per-field visibility within an exported shape: code in other files cannot write `player.damageMultiplier = 10` and bypass whatever invariants `takeDamage` maintains.
 
 ---
 

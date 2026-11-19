@@ -58,7 +58,7 @@ The granular model exists because (a) each version has predictable scope, (b) ea
 
 ### Spec + design docs
 - [ ] `docs/reference/REF-feature.md` written or updated — audience is an 18-year-old JS dev, examples-heavy, plain English
-- [ ] `docs/internal/implementation/IMP-feature.md` written or updated — rationale, alternatives considered, locked decisions
+- [ ] `docs/internal/implementation/IMP-feature.md` written or updated — the decision in force plus a one-clause reason (alternatives go in the commit message)
 - [ ] [`docs/reference/REF-language-overview.md`](REF-language-overview.md) table of contents updated if a new spec file was created
 - [ ] [`docs/README.md`](../README.md) index updated if a new design file was created
 - [ ] Resolved open questions moved from [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md) to the relevant design file

@@ -136,13 +136,9 @@ function buildProfile(id: string) -> Profile errors {
 
 ---
 
-## Why loops don't auto-parallelize
+## Loops run one iteration at a time
 
 Independent statements in a function auto-parallelize based on dependencies. Loop iterations do not.
-
-Loop iterations could be 3 or 300,000. Parallelizing 300,000 network calls simultaneously would overwhelm any API, database, or server. The risk is too high for an unbounded default.
-
-Independent statements in a function have a predictable count — typically 3 to 10 — and the compiler can see all of them at once. Loop iteration counts are unpredictable at compile time.
 
 The rule: independent statements = auto-parallel. Loop iterations = sequential by default.
 

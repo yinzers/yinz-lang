@@ -197,7 +197,7 @@ The same suffix pattern applies to subtract / multiply / etc:
 | `.wrappingAdd(n)`, `.wrappingSub(n)`, `.wrappingMul(n)` | Wraps on overflow |
 | `.saturatingAdd(n)`, `.saturatingSub(n)`, `.saturatingMul(n)` | Caps at int.max / int.min |
 
-**Why panic by default:** wrap-around is almost always a bug, not a feature. Making it loud at the call site is better than silent corruption downstream. If you want wrap (rare — usually cryptography or hashing), you ask for it visibly.
+Overflow panics by default. If you want wrap (rare — usually cryptography or hashing), you ask for it visibly with `.wrappingAdd()` and its siblings.
 
 ---
 

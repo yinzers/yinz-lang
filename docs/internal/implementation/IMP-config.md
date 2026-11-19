@@ -24,6 +24,8 @@ Configuration lives in three distinct layers:
 2. `.env` auto-loaded — secrets, connection strings, machine-specific values (runtime, never compiled in)
 3. `set` functions in `main()` — runtime behavior (shutdown, threads, logging, error handling)
 
+**Why `.env` for secrets**: secrets and connection strings differ on every machine, so they never belong in code or the compiled binary; the same binary reads different `.env` values at runtime.
+
 **Why three layers**: Each layer has a different lifecycle, different audience, and different security requirements. Mixing them creates confusion about when values are read, who can see them, and what they affect.
 
 ---

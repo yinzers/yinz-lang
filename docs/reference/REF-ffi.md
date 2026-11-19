@@ -63,12 +63,6 @@ The compiler knows nothing about what a foreign function actually does. It canno
 
 ---
 
-## Why `foreign` over `unsafe`
-
-`foreign` describes what it IS — code from another language. `unsafe` only says it's dangerous without saying why. A junior developer reading `foreign function c_sqrt(...)` immediately understands: this comes from outside Yinz, the compiler can't check it.
-
----
-
 ## Type mapping — note
 
 How C types like `void*`, `char*`, and raw pointers map to Yinz types is an open design question. See [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md).

@@ -178,7 +178,7 @@ let panic = assertPanics(processUnchecked(badInput))
 assert(panic.message.contains("null"))
 ```
 
-Why the separation: if a single `assertFails` caught both errors AND panics, a typo in your test code that causes a panic would be silently counted as "yes it failed as expected" — and the test would pass for the wrong reason. With separate functions, panics from test bugs always cascade up to the test runner with full stack trace. You see exactly where the test broke.
+`assertFails` catches only errors, and `assertPanics` catches only panics. A panic from a typo in your test code always reaches the test runner with a full stack trace, so you see exactly where the test broke.
 
 Both `assertFails` and `assertPanics` return the captured failure for inspection. The returned value has `.message`, `.trace`, and `.source` (`{ file, line }`).
 

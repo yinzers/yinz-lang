@@ -74,7 +74,7 @@ if (dbUrl.exists()) {
 }
 ```
 
-**Why env vars?** Secrets and connection strings are different on every machine and environment. They should never be in your code or your compiled binary. The `.env` file lives on the machine and never gets committed. The binary reads it at runtime — different machines, different values, same binary.
+Keep secrets and connection strings in `.env`, never in your code or your compiled binary. The `.env` file lives on the machine and never gets committed. The binary reads it at runtime — different machines, different values, same binary.
 
 **Missing `.env` is fine.** If the file doesn't exist, `env.get()` returns `none` for every key. The program decides how to handle that.
 
@@ -108,7 +108,7 @@ function entrypoint() -> nothing {
 }
 ```
 
-**Why code and not a config file?** Runtime settings often depend on the environment, command-line arguments, or other conditions. Code handles this naturally:
+Runtime settings are code, so they can branch on the environment, command-line arguments, or other conditions:
 
 ```
 function entrypoint() -> nothing {
