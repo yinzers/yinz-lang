@@ -15,6 +15,6 @@ function describe(value: Outer) -> nothing {
 
 function entrypoint() -> nothing {
   let c: Circle = { radius: 1.0 }
-  let outer: Outer = c
+  let outer: Outer = c.copy()
   describe(c)
 }
