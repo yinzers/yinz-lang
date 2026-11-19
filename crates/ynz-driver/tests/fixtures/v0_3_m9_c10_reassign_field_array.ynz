@@ -1,0 +1,17 @@
+// v0.3-M9 C10: a loop over a shape FIELD whose body assigns that field keeps walking the list it
+// started with, as a loop over a binding does. Correct behavior: prints 6, 1.
+
+shape Holder {
+  rows: array<array<int>>
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { rows: [[1], [2], [3]] }
+  let total = 0
+  for (row in holder.rows) {
+    holder.rows = [[9]]
+    total = total + row[0].or(0)
+  }
+  print(total)
+  print(holder.rows.count())
+}
