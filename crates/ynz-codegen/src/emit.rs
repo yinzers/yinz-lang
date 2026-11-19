@@ -34941,28 +34941,76 @@ fn lower_float_to_int<'ctx>(
     Ok(result_slot.into())
 }
 
-/// Lower `(number).toInt()` → `maybe<int>`.
-fn lower_number_to_int<'ctx>(
+/// Lower a `number<N>` → `f64` conversion, the one route `.toFloat()` and `.toInt()` share.
+///
+/// N ≤ 34 reads the decimal128 cell through `ynz_decimal_to_float`; N > 34 (bignum, a pointer to
+/// its decimal string) parses that string through `ynz_bignum_to_float`. Each representation
+/// has its own runtime reader because passing one's value to the other's reads wrong bytes.
+fn lower_number_to_f64<'ctx>(
     cg: &mut Cg<'ctx, '_>,
-    num_ptr: inkwell::values::PointerValue<'ctx>,
-) -> Result<BasicValueEnum<'ctx>, String> {
-    // Use ynz_decimal_to_float then float_to_int.
-    let f64t = cg.f64();
-    let prt = cg.ptr();
-    let fn_ty = f64t.fn_type(&[prt.into()], false);
-    let f = cg
-        .module
-        .get_function("ynz_decimal_to_float")
-        .unwrap_or_else(|| cg.module.add_function("ynz_decimal_to_float", fn_ty, None));
-    let f_val = cg
+    number: BasicValueEnum<'ctx>,
+    number_ty: &Type,
+) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+    let reader = match number_ty {
+        Type::Number { precision } if *precision > 34 => cg.rt.ynz_bignum_to_float,
+        Type::Number { .. } => {
+            let f64t = cg.f64();
+            let prt = cg.ptr();
+            let fn_ty = f64t.fn_type(&[prt.into()], false);
+            cg.module
+                .get_function("ynz_decimal_to_float")
+                .unwrap_or_else(|| cg.module.add_function("ynz_decimal_to_float", fn_ty, None))
+        }
+        other => return Err(format!("lower_number_to_f64: `{other:?}` is not a number")),
+    };
+    Ok(cg
         .builder
-        .build_call(f, &[num_ptr.into()], "d2f")
+        .build_call(reader, &[number.into()], "number_to_f64")
         .map_err(|e| format!("{e}"))?
         .try_as_basic_value()
         .basic()
-        .ok_or("decimal_to_float void")?
-        .into_float_value();
-    lower_float_to_int(cg, f_val)
+        .ok_or("number-to-f64 reader returned void")?
+        .into_float_value())
+}
+
+/// Lower `(number).toInt()` → `maybe<int>`: number → f64 → int, for every precision.
+fn lower_number_to_int<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    number: BasicValueEnum<'ctx>,
+    number_ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let as_float = lower_number_to_f64(cg, number, number_ty)?;
+    lower_float_to_int(cg, as_float)
+}
+
+/// Copy a null-terminated string into a fresh heap string (`ynz_string_from_static` allocates
+/// and copies), so the result shares no memory with `source` (a bignum's buffer or the
+/// runtime's thread-local format buffer).
+///
+/// O(n) time, O(n) memory: one strlen plus one malloc/memcpy of the string.
+fn lower_owned_string_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    source: PointerValue<'ctx>,
+) -> Result<PointerValue<'ctx>, String> {
+    let byte_count = cg
+        .builder
+        .build_call(cg.rt.ynz_string_byte_count, &[source.into()], "copy_len")
+        .map_err(|e| format!("{e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_string_byte_count returned void")?;
+    Ok(cg
+        .builder
+        .build_call(
+            cg.rt.ynz_string_from_static,
+            &[source.into(), byte_count.into()],
+            "owned_copy",
+        )
+        .map_err(|e| format!("{e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_string_from_static returned void")?
+        .into_pointer_value())
 }
 
 /// Lower `(string).toInt()` → `maybe<int>` via `ynz_string_to_int` runtime.
@@ -35527,23 +35575,14 @@ fn lower_method_call<'ctx>(
         }
         (Type::Float, "toString") => to_c_string(cg, recv, &Type::Float).map(|p| p.into()),
         (Type::Number { .. }, "toFloat") => {
-            let f64t = cg.f64();
-            let prt = cg.ptr();
-            let fn_ty = f64t.fn_type(&[prt.into()], false);
-            let f = cg
-                .module
-                .get_function("ynz_decimal_to_float")
-                .unwrap_or_else(|| cg.module.add_function("ynz_decimal_to_float", fn_ty, None));
-            let r = cg
-                .builder
-                .build_call(f, &[recv.into()], "d2f")
-                .map_err(|e| format!("{e}"))?;
-            Ok(r.try_as_basic_value()
-                .basic()
-                .ok_or("decimal_to_float void")?)
+            lower_number_to_f64(cg, recv, recv_ty).map(|float_value| float_value.into())
         }
         (Type::Number { .. }, "toString") => {
-            to_c_string(cg, recv, &Type::Number { precision: 34 }).map(|p| p.into())
+            // `to_c_string` returns memory the result must not alias: a bignum's own buffer
+            // (N > 34), or the runtime's one thread-local format buffer (N <= 34), which the
+            // next `toString` call overwrites. Copy so the caller owns its string.
+            let text = to_c_string(cg, recv, recv_ty)?;
+            lower_owned_string_copy(cg, text).map(|copy| copy.into())
         }
         (Type::Bool, "toString") => to_c_string(cg, recv, &Type::Bool).map(|p| p.into()),
 
@@ -35553,7 +35592,7 @@ fn lower_method_call<'ctx>(
             Ok(recv)
         }
         (Type::Float, "toInt") => lower_float_to_int(cg, recv.into_float_value()),
-        (Type::Number { .. }, "toInt") => lower_number_to_int(cg, recv.into_pointer_value()),
+        (Type::Number { .. }, "toInt") => lower_number_to_int(cg, recv, recv_ty),
         (Type::String, "toInt") => lower_string_to_int(cg, recv.into_pointer_value()),
         (Type::String, "toFloat") => lower_string_to_float(cg, recv.into_pointer_value()),
         (Type::String, "toNumber") => lower_string_to_number(cg, recv.into_pointer_value()),

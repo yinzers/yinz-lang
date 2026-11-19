@@ -265,6 +265,8 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_bignum_div: FunctionValue<'ctx>,
     pub ynz_bignum_compare: FunctionValue<'ctx>,
     pub ynz_bignum_neg: FunctionValue<'ctx>,
+    // ynz_bignum_to_float(a: *const i8) → f64 — backs `.toFloat()` / `.toInt()` on `number<N>`, N > 34.
+    pub ynz_bignum_to_float: FunctionValue<'ctx>,
 
     // ── v0.3-M1: Tokio scheduler runtime ─────────────────────────────────
     // Called by generated `main` and `background` lowering.
@@ -890,6 +892,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_bignum_neg",
                 ptr.fn_type(&[ptr.into(), i32.into()], false),
+            ),
+            ynz_bignum_to_float: declare_fn(
+                module,
+                "ynz_bignum_to_float",
+                f64.fn_type(&[ptr.into()], false),
             ),
 
             // v0.3-M1: Tokio scheduler runtime
