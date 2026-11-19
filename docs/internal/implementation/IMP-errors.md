@@ -21,9 +21,7 @@ User spec: [`docs/reference/REF-errors.md`](../../reference/REF-errors.md)
 
 No try/catch. No Result types. No `?` operator. Functions that can fail declare `errors` after their return type. Auto-propagation in `errors` functions. Compile-time enforcement in non-errors functions.
 
-**Why try/catch was rejected**: Separates error handling from the call site — you lose context. Error handling logic ends up far from the code that caused the error. Nested try/catch blocks are hard to read and easy to get wrong.
-
-**Why Result types were rejected**: Require boilerplate at every level of the call stack. Every function that calls a fallible function must unwrap or propagate explicitly — the boilerplate multiplies through the codebase. Rust's `?` operator reduces this, but it's still a symbol with no plain-English meaning.
+Decided: try/catch, Result types and the `?` operator rejected.
 
 **Why `errors` works**: Keeps the contract at the function boundary with zero boilerplate inside `errors` functions. Auto-propagation handles the common case (let failures cascade to the caller). Explicit handling is required when the function doesn't auto-propagate, enforced at compile time.
 

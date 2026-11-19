@@ -30,9 +30,7 @@ Configuration lives in three distinct layers:
 
 ## TOML over JSON or YAML
 
-**Why not JSON**: No comments — can't annotate config. Missing trailing commas cause cryptic errors. Every key needs quotes. Designed for machine data exchange, not human editing.
-
-**Why not YAML**: Whitespace-sensitive — indentation errors cause silent failures. Implicit type coercion: `no` becomes boolean `false`, `NO` (Norwegian country code) becomes `false`. Has caused real production outages. Not worth the risk for a config file format.
+Decided: JSON and YAML rejected.
 
 **Why TOML**: Designed specifically for config files. Comments allowed. Explicit types with no implicit coercion. Not whitespace-sensitive. Used by Rust (Cargo.toml), Python (pyproject.toml). Clean and predictable.
 

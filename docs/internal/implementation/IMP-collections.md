@@ -169,9 +169,7 @@ When the compiler can prove the keys are NOT externally-controlled (e.g., the ma
 
 When the compiler picks perfect hashing or identity hash for a literal, the IDE shows a muted hint: `// perfect hash — zero collisions for these compile-time-known keys`.
 
-### Why not let the user pick from N hashers
-
-C++ template parameters explode when stdlib offers many hashers (`std::unordered_map<K, V, Hash, KeyEqual, Allocator>` with 4 type parameters). Yinz keeps it simple: the safe default covers 95% of use cases (and the cases where overhead matters are exactly the cases that need safety), the fast opt-in covers the security-irrelevant 5%, and the compiler auto-selects perfect/identity hash where it can. No template-parameter explosion.
+Decided: user-selectable hashers rejected. The safe default, the fast opt-in and compiler-chosen perfect/identity hashing cover every case.
 
 ---
 
@@ -475,23 +473,14 @@ variant (next section) is the SAME single allocation, segmented per field, with 
 computed at compile time from `cap ×` per-field sizes — a layout variant of one representation,
 never a second substrate (the twin-substrate drift class is eliminated by construction).
 
-**Rejected alternatives:**
-- **Per-element heap cells** (the scratch analysis's Option B): one allocation per element violates
-  GR6 (zero-cost), fragments cache lines, multiplies alloc=free accounting, and immediately forces
-  `ynz_array_drop` to become element-aware — the exact leak-hazard class an earlier M3a fix round
-  hit.
-- **LLVM module globals**: stable storage for compile-time-literal-field shapes only — the partial
-  fix whose runtime-field hole WAS the forcing bug.
+Decided: per-element heap cells and LLVM module globals rejected.
 
 ### Element-blind drop, parity-gated (D6)
 
 `ynz_array_drop` stays element-blind, matching pre-M5 semantics. The migration was gated by an
 alloc=free parity check (`YNZ_ALLOC_COUNTER_OUTPUT`) against the pre-migration baseline, with a
 buffer-visibility entry criterion so the gate could not pass vacuously — it ran green, proving no
-NEW leak class vs the pointer representation. **Rejected:** element-aware drop now — YAGNI until
-the ownership model's drop story adds guaranteed heap-owned-field freeing (plan
-`2026-07-03-v0-3-m5-auto-soa` Future Requirements #6). A contingency loud-reject
-(`array<Shape-with-heap-fields>` typeck error) was armed for a parity RED and was not needed.
+NEW leak class vs the pointer representation. Decided: element-aware drop rejected (until the ownership model's drop story adds guaranteed heap-owned-field freeing).
 
 ### `contains` on `array<Shape>` = field-wise value equality (D12)
 
@@ -501,11 +490,7 @@ membership (GR4), matches every primitive cell's behavior, and matches the non-O
 shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
 `crates/ynz-codegen/src/emit.rs`).
 
-**Rejected alternatives:**
-- **Pointer identity**: has no by-value analogue — there is no stable element pointer to compare.
-- **Whole-element memcmp**: compares garbage padding bytes — both natural alignment padding and
-  M4's false-sharing cache-line pads. Per-field compares are the only layout-honest form; for
-  padded shapes the wrapper GEP at offset 0 is layout-correct.
+Decided: pointer identity and whole-element memcmp rejected.
 
 **Pointer-typed fields (string, nested shape/collection) compare by identity** — ratified as final
 for M5 after the E8-class review. Deep value equality for those fields is a future extension, not

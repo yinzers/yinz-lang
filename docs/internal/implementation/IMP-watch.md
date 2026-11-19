@@ -384,9 +384,9 @@ Rationale: editor save sequences typically settle within 50ms (empirical: VS Cod
 
 Press `r` to trigger manual rebuild, `q` to quit, etc. Not in M4 — M4 ships a non-interactive loop only. Design pointer: when this ships, the key-reading loop belongs in `event_loop.rs` alongside the file-event loop, not as a separate thread. Registered in [`registry/features.toml`](../../../registry/features.toml) as `ynz-watch-interactive-commands`.
 
-### Config file rejection (explicit)
+### Config file
 
-`.ynzwatch.toml` (or equivalent per-watch config file) was considered and explicitly rejected. Yinz's zero-config ethos means env vars only for tuning. A config file would add discovery logic, schema versioning, and documentation overhead for parameters most users never touch. If real demand emerges, the decision can be revisited. Registered in [`registry/features.toml`](../../../registry/features.toml) as `ynz-watch-config-file` (rejection, not deferral).
+Decided: a per-watch config file (`.ynzwatch.toml`) rejected; tuning is by env vars only. Registered in [`registry/features.toml`](../../../registry/features.toml) as `ynz-watch-config-file` (rejection, not deferral).
 
 ### `yinz.toml` hot-reload (deferred to v0.5)
 

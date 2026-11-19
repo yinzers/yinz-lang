@@ -161,13 +161,7 @@ No new shape is needed — this reuses M7's own errors-capable mechanism uniform
 
 Yinz's `follows` contracts require method signatures to match exactly. There's no language-level mechanism for "this method returns `maybe<T>` OR `maybe<T> errors`" — adding one would complicate every `follows` contract for one feature. Two explicit contracts is simpler and matches the user's mental model: "is this iterator infallible or fallible?"
 
-**Why not Option A (single contract that always returns `errors`):**
-
-Forces every for loop (even `for (x in [1,2,3])`) into an `errors` context. Pollutes pure code with annotations for a failure mode that can't actually happen on in-memory data. Rejected.
-
-**Why not Option B (swallow errors and return `none`):**
-
-Violates Yinz's core error principle: failures are visible and structured. A `for (line in file.lines(path))` that silently stops on an I/O error and returns a truncated result is the exact bug pattern Yinz exists to prevent. Rejected outright.
+Decided: a single contract that always returns `errors`, and swallowing errors as `none`, rejected.
 
 **Writing a custom iterable — the choice is clarifying:**
 

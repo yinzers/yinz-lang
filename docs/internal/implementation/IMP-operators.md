@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-operators.md`](../../reference/REF-operators.md)
 
 Operators are syntactic sugar for methods on standard library contracts. No magic method names, no special dispatch rules — the same `follows` system used everywhere else.
 
-**Why not magic methods**: Languages like Python use `__add__`, `__eq__`, `__str__`. These are invisible to autocomplete, require knowing the naming convention, and feel like magic. The `follows` approach is fully transparent — type `.add` and see the method. The operator is sugar for a regular method.
+Decided: Python-style magic method names (`__add__`) rejected; type `.add` and autocomplete shows the function.
 
 **Why stdlib-defined contracts vs built-in operator keywords**: User types follow stdlib contracts (`Addable`, `Equatable`). This means the operator system is extensible without compiler changes — new operator contracts can be added to the stdlib like any other type. The compiler maps `+` → `add()` at the syntax level; everything else is regular type system.
 
