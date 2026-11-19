@@ -410,16 +410,16 @@ When `array<T>` runs out of capacity, it grows by **1.5×** (Java/Folly choice).
 
 When the compiler can prove an `array<T>` declaration is never grown (no `.add()`, `.remove()`, `.resize()`, no call to a function whose signature declares `lend` AND may grow the array), THREE things happen:
 
-1. **Codegen auto-promotion (silent perf win)**: the compiler emits `fixed<T, N>` codegen for the binding — stack-allocated, no heap, no growth tracking. The user gets the perf benefit automatically without rewriting source.
+1. **Codegen auto-promotion (silent perf win)**: the compiler emits `fixed<T>` codegen for the binding — stack-allocated, no heap, no growth tracking. The user gets the perf benefit automatically without rewriting source.
 
-2. **Muted IDE hint (informational, always-on)**: per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), the IDE shows a neutral-gray muted hint after the binding (e.g., `// promoted to fixed<int, 3>`). Click-to-make-explicit converts the source to `fixed<int> = [1, 2, 3]`. This surface tells the user the inference happened — they SEE that the compiler made a perf-positive decision, even if they don't act on it. Same protocol as type-inference and ownership-inference muted hints.
+2. **Muted IDE hint (informational, always-on)**: per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), the IDE shows a neutral-gray muted hint after the binding (e.g., `// promoted to fixed — never grown`). Click-to-make-explicit converts the source to `fixed<int> = [1, 2, 3]`. This surface tells the user the inference happened — they SEE that the compiler made a perf-positive decision, even if they don't act on it. Same protocol as type-inference and ownership-inference muted hints.
 
 3. **Tier 3 lint suggestion (visible teaching surface)**: a Tier 3 lint suggestion (yellow squiggle in IDE, surfaced in compile output) recommends rewriting the source as `fixed<T>` explicitly for code-review clarity and future-proofing. Per [`docs/internal/implementation/IMP-linting.md`](IMP-linting.md) rule `prefer-fixed-when-immutable`. This surface is the teaching nudge — the lint says "best practice is to write the stricter form yourself."
 
 ```
-let nums: array<int> = [1, 2, 3]   // muted hint: // promoted to fixed<int, 3>
+let nums: array<int> = [1, 2, 3]   // muted hint: // promoted to fixed — never grown
                                     // yellow squiggle from prefer-fixed-when-immutable
-                                    // (compiler already emitted fixed<int, 3> codegen)
+                                    // (compiler already emitted fixed<int> codegen)
 ```
 
 Why three surfaces (not just two):
@@ -428,12 +428,12 @@ Why three surfaces (not just two):
 - The **codegen** answers "what runs at runtime?" — invisible, auto-applied.
 
 Hover tooltip on the muted hint:
-- **WHAT**: The compiler is treating this `array<int>` as `fixed<int, 3>` because it proved no growth happens. Stack-allocated, no heap, no growth tracking.
+- **WHAT**: The compiler is treating this `array<int>` as `fixed<int>` because it proved no growth happens. Stack-allocated, no heap, no growth tracking.
 - **WHAT INSTEAD**: Click to convert the source to `fixed<int> = [1, 2, 3]`. Behavior identical.
 - **WHY**: `fixed<T>` is the stricter form when the size is known. The compiler picks it automatically when it's safe; the explicit source form makes the choice visible in code review and prevents a future `.add()` from silently switching the codegen back.
 
 Hover tooltip on the yellow lint squiggle:
-- **WHAT**: This `array<int>` is auto-promoted to `fixed<int, 3>` codegen — the perf optimization already happened. This lint is about source-level clarity, not perf.
+- **WHAT**: This `array<int>` is auto-promoted to `fixed<int>` codegen — the perf optimization already happened. This lint is about source-level clarity, not perf.
 - **WHAT INSTEAD**: For explicit code as a best practice, write `fixed<int> = [1, 2, 3]` so the choice is visible to readers.
 - **WHY**: Writing `fixed<T>` explicitly makes the perf characteristic obvious in code review (the next reader sees "stack-allocated, can't grow" without having to trace the access pattern) and prevents a future `.add()` from silently forcing the codegen back to heap allocation — if growth is unintended, the explicit `fixed<T>` makes that future `.add()` a compile error instead of a silent codegen change.
 

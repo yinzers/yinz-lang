@@ -87,7 +87,7 @@ function attack(share self: Warrior) -> string { return self.name + " swings " +
 // COMPILE ERROR: A function named `attack` is already defined in this file.
 ```
 
-**Actual v0.1 behavior**: two functions sharing a name in the same file is a compile error no matter how their parameter types differ. `extends` gives a child shape its parent's *fields* only ([data-only inheritance](#single-inheritance-with-extends-data-only)) — it does not give call sites polymorphic dispatch over a shared function name. The only working polymorphism mechanism in v0.1 is **generics** (monomorphization, verified correct).
+**Actual v0.1 behavior**: two functions sharing a name in the same file is a compile error no matter how their parameter types differ. `extends` gives a child shape its parent's *fields* only ([data-only inheritance](#single-inheritance-with-extends-data-only)) — it does not give call sites polymorphic dispatch over a shared function name. The polymorphism mechanisms in v0.1 are **generics** (static dispatch through monomorphization) and **`dynamic Contract`** (runtime dispatch, see [Dynamic dispatch](#dynamic-dispatch--when-and-how)).
 
 **Status**: overload-by-argument-type dispatch is now tracked as a deferred language feature, not a shipped one — see the `function-overload-by-argument-type` `[[deferred_language_feature]]` registry entry in [`registry/features.toml`](../../../registry/features.toml) for the WHY/SUBSTITUTE/SHIPS_IN/DESIGN_DOC deferral fields. Until it ships, give overload-shaped functions distinct names (e.g. `attackEntity`/`attackWarrior`) or reach for generics.
 
@@ -257,7 +257,7 @@ This pattern qualifies as auto-promotion (codegen surface only):
 
 ### Dynamic dispatch — when and how
 
-Dynamic dispatch is needed when the concrete type genuinely isn't known until runtime — e.g., a heterogeneous collection of values that all satisfy a contract but are different types. Surface syntax for the opt-in is TBD at M4 implementation. Candidate: `dynamic Drawable` (matches Yinz's plain-English vocabulary; explicitly NOT `dyn Drawable` — `dyn` is Rust jargon and violates Golden Rule 5).
+Dynamic dispatch is needed when the concrete type genuinely isn't known until runtime — e.g., a heterogeneous collection of values that all satisfy a contract but are different types. The opt-in is `dynamic Contract` (for example `dynamic Drawable`), shipped. It is written `dynamic`, never `dyn` (Rust jargon; Golden Rule 5).
 
 ### Tradeoff
 
