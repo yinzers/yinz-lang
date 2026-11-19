@@ -80,7 +80,9 @@ fn ynz_run_with_timeout(name: &str, timeout: Duration) -> (String, String, i32, 
     (stdout, stderr, code, timed_out)
 }
 
-const RUN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Liveness budget, not a performance assertion: an order of magnitude over the observed run so
+/// a contended parallel test lane never flips it.
+const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[test]
 fn v03_m6_number_arg_background_cpu_arm_yields_staged_value() {

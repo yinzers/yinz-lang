@@ -7,7 +7,7 @@
 //!
 //! - `variable_type_hints`            — `: TypeName` after un-annotated `let` bindings
 //! - `ownership_call_site_hints`      — `share`/`lend`/`give` after call arguments
-//! - `copy_point_hints`               — `.copy (N bytes)` for trivially-copyable passes
+//! - `copy_point_hints`               — `.copy() (N bytes)` for trivially-copyable passes
 //! - `array_to_fixed_promotion_hints` — decoration on never-grown `array<T>` bindings
 //! - `let_to_const_promotion_hints`   — decoration on never-mutated `let` bindings
 //! - `wait_points_hints`              — muted `wait` before suspending call sites (Addition)
@@ -121,7 +121,7 @@ pub struct OwnershipHint {
 
 /// Trivially-copyable copy-point hint at a function-call argument.
 ///
-/// Rendered as `.copy (N bytes, trivially copyable)` at `position`.
+/// Rendered as `.copy() (N bytes, trivially copyable)` at `position`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CopyHint {
     pub position: usize,
@@ -1145,7 +1145,7 @@ fn collect_ownership_hints_expr(
     }
 }
 
-/// Emit `.copy (N bytes, trivially copyable)` hints at trivially-copyable pass sites.
+/// Emit `.copy() (N bytes, trivially copyable)` hints at trivially-copyable pass sites.
 ///
 /// `int`, `float`, `bool`, and `number` values always copy on pass — no heap
 /// allocation, no ownership transfer.  The hint makes this explicit so the user

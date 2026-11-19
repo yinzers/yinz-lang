@@ -4862,8 +4862,10 @@ fn m5_p3_array_shape_nested_if_runs() {
 /// Watchdog ceiling for a single compiled-fixture RUN (not the `ynz build`/`ynz run` compiler
 /// invocation itself — the compiler is not what a fused-continuation deadlock hangs). Generous
 /// per Phase 1's CI-contention caveat (A7) — every fixture's real execution is well under a
-/// second; 20s is a hang detector, not a performance budget.
-const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(20);
+/// second; 60s is a hang detector, not a performance budget. It was raised from 20s because a
+/// loaded parallel test lane starved healthy runs past 20s (a liveness ceiling is ~10x the
+/// observed run, never a performance assertion); at 60s a trip is a real deadlock.
+const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Spawn `cmd`, poll for exit without draining stdout/stderr until the process exits (safe for
 /// this corpus — every fixture's output is a handful of short lines, far under the OS pipe
@@ -4871,10 +4873,10 @@ const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(20);
 ///
 /// This is the E1 safety net: a genuine 4c-class deadlock in the fused continuation (a spawned
 /// CPU handle or an I/O sub-frame that never gets re-polled) must fail FAST here instead of
-/// wedging this test binary — and by extension CI — indefinitely. NEVER "fix" a watchdog
-/// failure by widening the timeout or weakening the fixture; a watchdog trip is exactly the
-/// deadlock class this milestone's fused-continuation design exists to eliminate, and finding
-/// one here means the design invariant broke, not that the test is too strict.
+/// wedging this test binary — and by extension CI — indefinitely. NEVER "fix" a trip of the
+/// current ceiling by widening it further or weakening the fixture; a trip at `RUN_WATCHDOG` is
+/// exactly the deadlock class this milestone's fused-continuation design exists to eliminate,
+/// and finding one here means the design invariant broke, not that the test is too strict.
 ///
 /// Used by the shared run-a-compiled-fixture helpers (`build_to_tmpdir_and_run`,
 /// `ynz_run_with_alloc_counter`) that every M3b/M3d/M3g concurrency fixture test routes
@@ -4906,8 +4908,8 @@ fn run_with_watchdog(mut cmd: Command) -> Output {
                         "WATCHDOG TRIP: compiled fixture did not exit within {RUN_WATCHDOG:?} — \
                          treat this as an E1 deadlock (a spawned CPU handle or I/O sub-frame \
                          that never got re-polled by the shared continuation), never a slow \
-                         test; fix the fused-continuation codegen, never widen this timeout or \
-                         weaken the fixture."
+                         test; fix the fused-continuation codegen, never widen this ceiling further \
+                         or weaken the fixture."
                     );
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));

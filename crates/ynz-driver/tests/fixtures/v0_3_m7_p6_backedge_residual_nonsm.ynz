@@ -31,9 +31,9 @@ function entrypoint() -> nothing {
   // OFF the I/O worker (blocking-pool routing) — never from spawn-order scheduling luck.
   wait sleep(50)
   background victimPing()
-  // Keep the program alive while both background tasks run: runtime shutdown cancels
-  // still-pending async tasks rather than running them to completion, so the entrypoint
-  // must outlast the hog's loop (well under a second) for both prints to appear.
+  // Keep the program alive past the victim. The hog (a blocking-pool task, so no handle
+  // to join yet) may outlive this sleep on a loaded machine; the driving test lengthens
+  // YNZ_SHUTDOWN_TIMEOUT_MS so shutdown still waits for it to finish and print.
   wait sleep(4000)
   print(`main done`)
 }

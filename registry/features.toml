@@ -2475,14 +2475,14 @@ domain = "copy_points"
 placement_category = "Addition"
 description = "Shows where a trivially-copyable value is implicitly copied at a call site"
 example_source = "let n: int = 5"
-example_hint_rendered = ".copy (8 bytes, trivially copyable)"
+example_hint_rendered = ".copy() (8 bytes, trivially copyable)"
 
 [[muted_hint_domain]]
 domain = "array_to_fixed_promotion"
 placement_category = "Replacement"
 description = "Shows when the compiler promotes array<T> to fixed<T> because the value is never grown"
 example_source = "let nums: array<int> = [1, 2, 3]"
-example_hint_rendered = "// promoted to fixed<int, 3> — never grown"
+example_hint_rendered = "// promoted to fixed — never grown"
 
 [[muted_hint_domain]]
 domain = "let_to_const_promotion"
