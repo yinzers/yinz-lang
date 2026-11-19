@@ -40,6 +40,11 @@ fn run_fixture_single_worker(path: &Path) -> (String, String, i32) {
         // One I/O worker: the starvation shape is deterministic (see module WHY).
         // The env var is inherited by the compiled fixture binary `ynz run` spawns.
         .env("YNZ_WORKER_THREADS", "1")
+        // Liveness budget, not a performance bound: shutdown abandons a blocking-pool hog
+        // still running after the 5s default grace, which a loaded machine (many parallel
+        // test binaries) can exceed for a 100M-iteration loop. 120s is ~10x the worst
+        // hog time observed under load; a healthy run still ends as soon as the hog does.
+        .env("YNZ_SHUTDOWN_TIMEOUT_MS", "120000")
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn ynz: {e}"));
     (

@@ -30,16 +30,17 @@ function victimPing() -> nothing {
 }
 
 function entrypoint() -> nothing {
-  background hogTally()
+  let hog = background hogTally()
   // Let the hog OCCUPY the single worker before the victim is spawned — Tokio's
   // scheduler does not guarantee spawn-order execution (newest-task-first fast paths),
   // so without this gap the victim can run first even with no preemption at all,
   // which would fake the exact GREEN this fixture exists to prove for real.
   wait sleep(50)
   background victimPing()
-  // Keep the program alive while both background tasks run: runtime shutdown cancels
-  // still-pending async tasks rather than running them to completion, so the entrypoint
-  // must outlast the hog's loop (well under a second) for both prints to appear.
-  wait sleep(4000)
+  // Join the hog instead of sleeping a fixed time: runtime shutdown CANCELS a still-pending
+  // async task, so a fixed keep-alive raced the hog's CPU time (100M iterations take
+  // seconds under a loaded machine) and dropped `hog done` from stdout. receive() waits
+  // exactly as long as the hog needs; the hog's loop is finite, so it cannot hang.
+  hog.receive()
   print(`main done`)
 }
