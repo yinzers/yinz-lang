@@ -62,14 +62,14 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Modules | [`docs/internal/implementation/IMP-modules.md`](internal/implementation/IMP-modules.md) | `import`/`export`, no defaults, no wildcards, root-relative paths, stdlib auto-import |
 | Configuration | [`docs/internal/implementation/IMP-config.md`](internal/implementation/IMP-config.md) | Three layers, TOML choice, no env splitting, `set` functions |
 | Linting & build | [`docs/internal/implementation/IMP-linting.md`](internal/implementation/IMP-linting.md) | "Compiler IS the linter" — three-tier diagnostics (errors/warnings/suggestions), curated v0.4 rule list, three-part WHAT/INSTEAD/WHY format, customization v1.x |
-| Versioning | [`docs/internal/decisions/ADR-versioning.md`](internal/decisions/ADR-versioning.md) | Pre-release delete policy, post-release major bumps, no backwards compat |
+| Versioning | [`docs/internal/implementation/IMP-versioning.md`](internal/implementation/IMP-versioning.md) | Pre-release delete policy, post-release major bumps, no backwards compat |
 
 ## Compiler & Tooling
 
 | Topic | File | What's in it |
 |-------|------|--------------|
 | Compiler design | [`docs/internal/implementation/IMP-compiler.md`](internal/implementation/IMP-compiler.md) | Incremental builds, IDE language server, no-indexing rationale |
-| Compiler implementation language | [`docs/internal/decisions/ADR-compiler-language.md`](internal/decisions/ADR-compiler-language.md) | Rust + Salsa + inkwell + ariadne + hand-written recursive descent — decision and rationale |
+| Compiler implementation language | [`docs/internal/implementation/IMP-compiler-language.md`](internal/implementation/IMP-compiler-language.md) | Rust + Salsa + inkwell + ariadne + hand-written recursive descent — the compiler stack in force |
 | MVP scope | [`docs/reference/REF-mvp-scope.md`](reference/REF-mvp-scope.md) | Granular 24-version sequence to v1.0 + 3 post-launch versions |
 | Compiler error style | [`docs/reference/REF-compiler-errors.md`](reference/REF-compiler-errors.md) | Required three-part WHAT/WHAT-INSTEAD/WHY format, jargon ban-list, tone guide, multi-error strategy |
 | Formatter (`ynz fmt`) | [`docs/internal/implementation/IMP-fmt.md`](internal/implementation/IMP-fmt.md) | Zero-config canonical formatting, `ynz-fmt` crate, comment attachment rules, LSP format-on-save consumer |

@@ -28,7 +28,7 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 | Path | Purpose |
 |------|---------|
-| `/docs/` | ALL project documentation — see [`docs/README.md`](docs/README.md) for the index. `docs/reference/` = language spec (formerly `/spec/`) + cross-cutting cited-as-authority principles; `docs/internal/implementation/` = compiler design rationale (formerly `/design/`); `docs/internal/decisions/` = one-time locked architecture calls (ADRs); `docs/internal/scratchpad/` = unbuilt/future design ideas (formerly `/design/future/`, `/design/stdlib/`, `design/open-questions.md`). Migrated 2026-07-01 onto the global `IMP-documentation-system.md` taxonomy. |
+| `/docs/` | ALL project documentation — see [`docs/README.md`](docs/README.md) for the index. `docs/reference/` = language spec (formerly `/spec/`) + cross-cutting cited-as-authority principles; `docs/internal/implementation/` = compiler design rationale (formerly `/design/`); `docs/internal/scratchpad/` = unbuilt/future design ideas (formerly `/design/future/`, `/design/stdlib/`, `design/open-questions.md`). Migrated 2026-07-01 onto the global `IMP-documentation-system.md` taxonomy. |
 | [`docs/internal/implementation/IMP-feature-registry.md`](docs/internal/implementation/IMP-feature-registry.md) | SSOT registry schema + carve-out policy (see [`registry/features.toml`](registry/features.toml)) |
 | [`docs/internal/implementation/IMP-lsp.md`](docs/internal/implementation/IMP-lsp.md) | LSP server architecture — salsa wiring, JSON-RPC dispatch, capability negotiation, framework choice rationale, self-hosting migration plan |
 | [`registry/features.toml`](registry/features.toml) | Single source of truth for all feature inventories (keywords, jargon, intrinsics, deferred features, hint domains) |
@@ -77,9 +77,9 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 - Always use Yinz terms — see [`.claude/rules/vocabulary.md`](.claude/rules/vocabulary.md) for the full reference
 - Language-spec files (`docs/reference/REF-*.md`) are written for a HS grad — short sections, example-heavy, plain English
 - No method chaining in code examples; step-by-step with named variables
-- Living design decisions go in the relevant `docs/internal/implementation/IMP-*.md` file (WHY captured); one-time locked calls get their own `docs/internal/decisions/ADR-*.md`
+- Living design decisions go in the relevant `docs/internal/implementation/IMP-*.md` file (the decision in force plus a one-clause reason; alternatives and evidence go in the commit message). Write no ADR file
 - Open questions go in [`docs/internal/scratchpad/SCRATCH-open-questions.md`](docs/internal/scratchpad/SCRATCH-open-questions.md)
-- When a design decision is made, move it from open questions to its `IMP-*.md`/`ADR-*.md` home
+- When a design decision is made, move it from open questions to its `IMP-*.md` home
 - Every example in spec/design/plan/rule files MUST use real Yinz operations from the current scope — no invented APIs for illustration (see [`.claude/rules/dot-postfix.md`](.claude/rules/dot-postfix.md) "Examples-must-use-real-operations rule")
 
 ---

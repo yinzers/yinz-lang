@@ -115,12 +115,12 @@ Shared instantiations cannot be optimized differently per call site (no per-call
 
 ### Salsa integration
 
-The deduplication cache is keyed by Salsa queries ([`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md)) so it persists across builds. An identical instantiation from unchanged source need not be recompiled. Combined with Yinz's incremental compilation, this means: edit one file, recompile that file's changes only, and any unchanged-but-shared generic instantiations stay cached.
+The deduplication cache is keyed by Salsa queries ([`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md)) so it persists across builds. An identical instantiation from unchanged source need not be recompiled. Combined with Yinz's incremental compilation, this means: edit one file, recompile that file's changes only, and any unchanged-but-shared generic instantiations stay cached.
 
 ### Cross-references
 
 - `lockin-build-and-crossplat.md` Finding #13 for Rust's specialized-per-type compile-scaling pain (called "monomorphization" in the source — same concept).
-- [`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md) for the Salsa caching model.
+- [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md) for the Salsa caching model.
 
 ---
 
