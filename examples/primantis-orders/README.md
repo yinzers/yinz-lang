@@ -43,7 +43,7 @@ These files are INTENTIONALLY broken — they're not meant to compile. The point
 
 ## Why this exists
 
-Every phase that adds a new compile-error class adds intentional triggers to `m{N}_errors.ynz`. Each trigger has a `// WHY:` comment naming the diagnostic class. This gives Patrick a visible reference for the language's teaching diagnostics — the human-eyes-on layer that automated snapshot tests can't replace.
+Every work item that adds compile-error classes adds one new gallery file named `<version>_<slug>_errors.ynz`, registered in `crates/ynz-driver/tests/error_galleries.rs`; existing gallery files stay as they are. Each trigger has a `// WHY:` comment naming the diagnostic class. This gives maintainers a visible reference for the language's teaching diagnostics — the human-eyes-on layer that automated snapshot tests can't replace.
 
 ## Companion: `examples/pirates-roster/`
 

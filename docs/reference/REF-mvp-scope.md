@@ -54,7 +54,7 @@ The granular model exists because (a) each version has predictable scope, (b) ea
 
 ### Demo files (from v0.1 onward)
 - [ ] `examples/pirates-roster/entrypoint.ynz` extended with a realistic section showing the new feature in context — not a toy snippet, something that looks like real code
-- [ ] `examples/primantis-orders/v{0.N}_errors.ynz` (or milestone-specific `m{N}_errors.ynz`) — intentional triggers for every new compile error class, each with `// WHY: <DiagnosticClassName>` comment
+- [ ] A new gallery file `examples/primantis-orders/<version>_<slug>_errors.ynz`, registered in `crates/ynz-driver/tests/error_galleries.rs` — intentional triggers for every new compile error class, each with `// WHY: <DiagnosticClassName>` comment
 
 ### Spec + design docs
 - [ ] `docs/reference/REF-feature.md` written or updated — audience is an 18-year-old JS dev, examples-heavy, plain English
