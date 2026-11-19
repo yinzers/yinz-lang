@@ -4,7 +4,7 @@
 // carry a TextEdit so the user can click the decoration to rewrite the source.
 // Without the edit, the decoration is a dead teaching surface — the user sees
 // the hint but clicking it does nothing, breaking the "compiler is a teacher"
-// contract (Golden Rule 11). This test catches regressions where the TextEdit
+// contract (Golden Rule 3). This test catches regressions where the TextEdit
 // is dropped or never attached.
 
 use lsp_types::{Position, Range};

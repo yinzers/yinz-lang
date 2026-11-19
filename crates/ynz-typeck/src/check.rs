@@ -1118,7 +1118,7 @@ impl<'b> Checker<'b> {
         //
         // This guard is permanent (not a temporary M2 limitation): step-by-step style —
         // one operation per line with a named variable — is Yinz's deliberate design
-        // (Golden Rule 7). Keeping each suspending call on its own statement also means
+        // (Golden Rule 9). Keeping each suspending call on its own statement also means
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
         self.check_stmts(&f.body.stmts);
@@ -1545,7 +1545,7 @@ impl<'b> Checker<'b> {
             // Two bindings with the same name around a suspension share ONE slot — the later
             // write clobbers the earlier value, producing a silent wrong answer. Rejecting is
             // the correct design: two bindings with the same name across a suspension is
-            // confusing (Golden Rule 2) AND currently unrepresentable in the frame-slot layout.
+            // confusing (Golden Rule 4) AND currently unrepresentable in the frame-slot layout.
             //
             // Two distinct collision shapes are caught here:
             //   (a) Nested shadow: outer `let x` before suspension + inner `let x` in a nested
@@ -5348,7 +5348,7 @@ impl<'b> Checker<'b> {
         // opposite way — no kernel false positive). Text/severity/code come from the
         // `[[lint_rule]]` registry entry via the generic firing helper.
         if !self.kernel_mode {
-            // Contextual WHAT-INSTEAD (Golden Rule 11): echo the user's own literal
+            // Contextual WHAT-INSTEAD (Golden Rule 3): echo the user's own literal
             // milliseconds into `wait sleep({ms})` when the argument is a literal.
             let ms_text = match call.args.first() {
                 Some(Expr::IntLit(n, _)) => n.to_string(),
@@ -7078,7 +7078,7 @@ impl<'b> Checker<'b> {
                 name_span,
                 span,
             } => {
-                // Catch capitalized built-in names (Array, Fixed, Map) — Golden Rule 13:
+                // Catch capitalized built-in names (Array, Fixed, Map) — Golden Rule 10:
                 // capital letter = type, everything else = lowercase. Built-ins are lowercase.
                 let lower = name.to_lowercase();
                 if name.as_str() != lower.as_str()

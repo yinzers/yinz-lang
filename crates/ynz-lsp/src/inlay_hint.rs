@@ -20,7 +20,7 @@
 //!
 //! Every firing hint carries a WHAT / WHAT-INSTEAD / WHY hover tooltip sourced
 //! from the registry via `ynz_registry::lsp_inlay_hint_hover_for`.  Per Golden
-//! Rule 11 (compiler is a teacher), muted annotations without a hover tooltip
+//! Rule 3 (compiler is a teacher), muted annotations without a hover tooltip
 //! are teaching surfaces the user cannot learn from.
 //!
 //! # Registered-but-not-firing domains (empty list, no error)

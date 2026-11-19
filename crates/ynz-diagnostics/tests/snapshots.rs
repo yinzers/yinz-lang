@@ -1,4 +1,4 @@
-// WHY: Three-part format is mandatory per Golden Rule 11. Snapshots catch silent
+// WHY: Three-part format is mandatory per Golden Rule 3. Snapshots catch silent
 // regression to one-line error strings where the "What to do instead" or "Why"
 // sections are dropped.
 

@@ -60,7 +60,7 @@ fn regression_no_errors_fixture_has_zero_diagnostics() {
 
 #[test]
 fn regression_errors_fixture_has_diagnostics_with_teaching_content() {
-    // WHY: Golden Rule 11 requires every diagnostic to carry WHAT/WHAT INSTEAD/WHY
+    // WHY: Golden Rule 3 requires every diagnostic to carry WHAT/WHAT INSTEAD/WHY
     // content. This test verifies that at least one diagnostic in has_errors.ynz
     // contains both "WHAT INSTEAD:" and "WHY:" markers in its message. If this
     // fails, the diagnostic_transform pipeline lost the teaching content.
@@ -82,7 +82,7 @@ fn regression_errors_fixture_has_diagnostics_with_teaching_content() {
     assert!(
         has_teaching_content,
         "at least one diagnostic in has_errors.ynz must contain 'WHAT INSTEAD:' and 'WHY:' \
-         (Golden Rule 11 teaching format); found diagnostics:\n{:?}",
+         (Golden Rule 3 teaching format); found diagnostics:\n{:?}",
         diags
             .iter()
             .map(|d| d.get("message").and_then(|m| m.as_str()).unwrap_or(""))

@@ -1807,8 +1807,8 @@ fn first_write_site_in_expr(
 // value may exist. Typeck previously ACCEPTED such calls while codegen claimed LLVM
 // `noalias` on both parameters — a false claim the optimizer exploits into a silent
 // miscompile (RED fixture `v0_3_m7_p1_share_lend_alias.ynz`). Patrick's decision
-// (FRAGO 002, 2026-07-16): reject at compile time (Golden Rule 5), with a teaching
-// diagnostic (Golden Rule 11) — rather than merely dropping the attribute, which would
+// (FRAGO 002, 2026-07-16): reject at compile time (Golden Rule 2), with a teaching
+// diagnostic (Golden Rule 3) — rather than merely dropping the attribute, which would
 // leave typeck's unsoundness in place.
 //
 // Write-capability convention: a position counts as write-capable when its declared

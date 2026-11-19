@@ -492,7 +492,7 @@ function waitForRosterSlot(n: int) -> int {
 // scheduleCheck — a nested state machine: calls waitForRosterSlot (value-returning
 // SM), then announcePirate (also suspending). Demonstrates inline poll-and-yield:
 // each nested suspending call is driven as an embedded sub-frame — no OS bridge.
-// Step-by-step style (Golden Rule 7) keeps each local's use within a single
+// Step-by-step style (Golden Rule 9) keeps each local's use within a single
 // suspension segment — the clearest form. Frame-backed crossing locals, which
 // span suspension points, are also supported for cases that need them.
 function scheduleCheck(name: string) -> nothing {

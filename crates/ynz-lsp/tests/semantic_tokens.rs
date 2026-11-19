@@ -1,6 +1,6 @@
 // WHY: Semantic token integration tests verify that the delta-encoded wire
 // format is correct for each token type and that the per-token-type lookup
-// classification matches the Golden Rule 13 capital-letter convention and the
+// classification matches the Golden Rule 10 capital-letter convention and the
 // sig_table lookup. Bugs here produce wrong colors in VSCode (e.g., keywords
 // showing as variables) without any compile error or test failure in typeck.
 
@@ -62,7 +62,7 @@ fn test_semantic_tokens_keywords_emit_keyword_type() {
 
 #[test]
 fn test_semantic_tokens_pascalcase_identifier_is_type() {
-    // WHY: Golden Rule 13 — capital letter = type. Any PascalCase identifier
+    // WHY: Golden Rule 10 — capital letter = type. Any PascalCase identifier
     // must emit IDX_TYPE (1). Wrong classification means VSCode colors a type
     // name the same as a variable, hiding the naming-convention signal.
     let src = "shape Player { name: string }\n";

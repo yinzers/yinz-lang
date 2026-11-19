@@ -224,7 +224,7 @@ fn build_start_precedes_build_end() {
 //      If diagnostics are swallowed, a CI dashboard sees `build-end { outcome: "errors" }`
 //      with zero context — operators can't distinguish "unknown identifier" from "syntax error"
 //      and have to re-run in text mode to see what went wrong. Each diagnostic must carry
-//      the three-part WHAT/WHAT-INSTEAD/WHY shape per Golden Rule 11.
+//      the three-part WHAT/WHAT-INSTEAD/WHY shape per Golden Rule 3.
 #[test]
 fn diagnostic_events_emitted_on_compile_error() {
     let shared = Arc::new(Mutex::new(Vec::<u8>::new()));

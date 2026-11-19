@@ -4,7 +4,7 @@
 // WHY: WideValueSuspendingReturn guard (Round-22 FIX a). The diagnostic used to call
 // `type_name` on the raw internal shape name, printing "__anon__health__int" instead of
 // "{ health: int }". This leaked compiler-internal naming into user-facing output (Golden
-// Rule 11 violation). The fix routes all Shape name rendering through `type_name()`, which
+// Rule 3 violation). The fix routes all Shape name rendering through `type_name()`, which
 // formats anon shapes as `{ field: type }` pairs. This fixture verifies the readable form
 // appears in stderr.
 //

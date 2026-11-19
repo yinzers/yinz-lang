@@ -166,7 +166,7 @@ since = "M8"
 name = "wait"
 token = "Wait"
 since = "M8"
-# Rule 11 hover docs — v0.3-M3b (ordering-barrier semantics locked 2026-06-05)
+# Rule 3 hover docs — v0.3-M3b (ordering-barrier semantics locked 2026-06-05)
 hover_what = "Forces this call to complete before execution continues. Also joins any prior auto-parallel in-flight work. Suspension at I/O points is automatic and does not require `wait`."
 hover_what_instead = "Write `wait foo()` when `foo` must finish before the next statement runs AND the two operations are independent (different resources, no value threaded between them). For data-dependent calls, the compiler already orders them — `wait` is redundant."
 hover_why = "`wait` is an ordering barrier, not a suspension trigger. The compiler auto-inserts suspension at every call that transitively reaches a blocking operation — you never write `wait` for that. `wait` is the tool for causal ordering the compiler cannot infer: charge a payment, THEN send a confirmation email to a different service."
@@ -175,7 +175,7 @@ hover_why = "`wait` is an ordering barrier, not a suspension trigger. The compil
 name = "background"
 token = "Background"
 since = "M8"
-# Rule 11 hover docs — v0.3-M3b (give/copy inference + real routing semantics)
+# Rule 3 hover docs — v0.3-M3b (give/copy inference + real routing semantics)
 hover_what = "Schedules a function to run as a concurrent task outside the current function's lifetime. The compiler infers whether to move or copy each argument based on whether you use it after the call."
 hover_what_instead = "Write `background fn(value)` — the compiler picks `.give` (zero-copy move) when `value` is not used after, or `.copy` when it is. Write `background fn(value.give)` or `background fn(value.copy)` to be explicit. Functions whose parameter is `share` cannot be called via `background` — a shared borrow would dangle if the caller returns first."
 hover_why = "A `background` task runs concurrently with whatever follows the call. Functions that transitively reach a blocking operation route to the I/O thread pool (cooperative scheduling); functions with no blocking calls route to the CPU thread pool. The IDE shows the routing decision as a muted comment at the call site."
@@ -1236,7 +1236,7 @@ triggers = "A measured relay workload where the extra `.copy()` per hop is a rea
 [[deferred_language_feature]]
 name = "seq-cst-ordering-opt-in"
 substitute = "Use the default acquire-release ordering, which is correct for every synchronization pattern that appears in v0.3-M4 user code: channel send/receive handoff and Arc reference counting. Sequential consistency (a global total order across multiple concurrent operations) is needed only for unusual multi-producer/multi-consumer patterns whose correctness contract depends on a global total order — rare even in systems code, and not expressible in v0.3."
-why = "Yinz's channel and shared-state primitives use acquire-release ordering by default (cheaper on ARM, where seq-cst needs barriers on both loads and stores; essentially free on x86; correct for handoff/lock/refcount patterns per IMP-no-function-coloring 'Atomic Ordering Default'). The design doc reserves an explicit named opt-in for the rare global-total-order case (candidate `atomic.add(n).withGlobalOrdering()`, 'final naming TBD when concurrency primitives ship'). v0.3-M4 Phase 0 lock: DEFER the opt-in surface — no v0.3-M4 workload requires seq-cst, the naming is unresolved, and shipping an unused ordering-tunable now would surface memory-ordering jargon (Golden Rule 12) with no consumer. Acquire-release is the shipped default; the opt-in lands when a real workload needs it. The roadmap pre-authorizes this deferral."
+why = "Yinz's channel and shared-state primitives use acquire-release ordering by default (cheaper on ARM, where seq-cst needs barriers on both loads and stores; essentially free on x86; correct for handoff/lock/refcount patterns per IMP-no-function-coloring 'Atomic Ordering Default'). The design doc reserves an explicit named opt-in for the rare global-total-order case (candidate `atomic.add(n).withGlobalOrdering()`, 'final naming TBD when concurrency primitives ship'). v0.3-M4 Phase 0 lock: DEFER the opt-in surface — no v0.3-M4 workload requires seq-cst, the naming is unresolved, and shipping an unused ordering-tunable now would surface memory-ordering jargon (Golden Rule 5) with no consumer. Acquire-release is the shipped default; the opt-in lands when a real workload needs it. The roadmap pre-authorizes this deferral."
 ships_in = "v0.4+"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "A real workload whose correctness contract requires a global total order across multiple concurrent atomic operations (seq-cst), OR the v0.4 concurrency-polish milestone — at which point the named opt-in surface (`.withGlobalOrdering()` or its final name) is designed and shipped."

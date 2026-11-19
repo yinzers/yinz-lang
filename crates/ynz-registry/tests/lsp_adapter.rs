@@ -114,14 +114,14 @@ fn hover_unregistered_returns_none() {
     assert!(lsp_hover_for_token("_totally_unregistered_xyz_").is_none());
 }
 
-// WHY: v0.3-M1 added Rule-11 hover docs (WHAT/WHAT-INSTEAD/WHY) to the `wait` and
+// WHY: v0.3-M1 added Rule-3 hover docs (WHAT/WHAT-INSTEAD/WHY) to the `wait` and
 // `background` keywords. These tests verify the new schema fields are emitted
 // by build.rs and rendered by lsp_adapter.rs. Without them, users hovering over
 // these keywords in VSCode see only "Introduced in M8." — no teaching content.
 
 #[test]
 fn hover_wait_includes_what_what_instead_why() {
-    // WHY: `wait` hover must contain Rule-11 WHAT/WHAT-INSTEAD/WHY content from
+    // WHY: `wait` hover must contain Rule-3 WHAT/WHAT-INSTEAD/WHY content from
     // the KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
     // v0.3-M3b updated to ordering-barrier semantics (LOCKED 2026-06-05): `wait` is an
     // explicit ordering tool, not a suspension trigger — suspension is automatic.
@@ -145,7 +145,7 @@ fn hover_wait_includes_what_what_instead_why() {
 
 #[test]
 fn hover_background_includes_what_what_instead_why() {
-    // WHY: `background` hover must contain Rule-11 WHAT/WHAT-INSTEAD/WHY content
+    // WHY: `background` hover must contain Rule-3 WHAT/WHAT-INSTEAD/WHY content
     // from the KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
     // v0.3-M3b updated to describe real routing semantics and give/copy inference
     // (the old text said "separate thread" — background routes to a thread pool, not

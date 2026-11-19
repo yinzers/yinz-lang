@@ -53,7 +53,7 @@ fn admitted_soa_array_fires_one_lint_with_substituted_teaching_vars() {
     // WHY: the positive cell — the one admitted array must fire exactly one
     // suggestion anchored on its declaration, carrying the rule name as its
     // diagnostic code and the per-site vars (array/shape/fields/len) substituted
-    // into the registry templates (Golden Rule 11: contextual, never generic).
+    // into the registry templates (Golden Rule 3: contextual, never generic).
     let _guard = env_guard();
     let lints = lints_for("m5_p4_soa_qualifying.ynz");
     assert_eq!(

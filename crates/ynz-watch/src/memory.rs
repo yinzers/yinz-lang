@@ -105,7 +105,7 @@ pub fn check_rss(config: &MemoryConfig, last_warn: &mut Option<Instant>) -> RssC
     }
 }
 
-/// Hard-stop message following WHAT/WHAT-INSTEAD/WHY format (Golden Rule 11).
+/// Hard-stop message following WHAT/WHAT-INSTEAD/WHY format (Golden Rule 3).
 pub fn hard_stop_message(rss_mb: u64, threshold_mb: u64, args: &str) -> String {
     format!(
         "WHAT: ynz watch hit {rss_mb}MB memory; this is the safety stop (ceiling: {threshold_mb}MB).\n\

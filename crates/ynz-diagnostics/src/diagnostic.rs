@@ -197,7 +197,7 @@ pub struct RelatedSpan {
 /// - **why**: the reason — correctness, performance, convention, or safety
 ///
 /// All three fields are required. The constructor panics if any is empty — this encodes
-/// Golden Rule 11 in the type system so a missing "Why:" can never reach a user.
+/// Golden Rule 3 in the type system so a missing "Why:" can never reach a user.
 ///
 /// When `kind` is `Some`, the renderer uses `kind.tag()` as the caret label and
 /// places `what_instead` in the note alongside `why`. When `kind` is `None`, the
@@ -228,15 +228,15 @@ impl Diagnostic {
 
         assert!(
             !what.is_empty(),
-            "Diagnostic.what must not be empty — Golden Rule 11 requires all three message parts"
+            "Diagnostic.what must not be empty — Golden Rule 3 requires all three message parts"
         );
         assert!(
             !what_instead.is_empty(),
-            "Diagnostic.what_instead must not be empty — Golden Rule 11 requires all three message parts"
+            "Diagnostic.what_instead must not be empty — Golden Rule 3 requires all three message parts"
         );
         assert!(
             !why.is_empty(),
-            "Diagnostic.why must not be empty — Golden Rule 11 requires all three message parts"
+            "Diagnostic.why must not be empty — Golden Rule 3 requires all three message parts"
         );
 
         Self {
