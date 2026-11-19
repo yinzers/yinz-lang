@@ -25,14 +25,14 @@ Use plain English words instead of CS terms throughout the language:
 |---------|-----------|-----|
 | `void` | `nothing` | Reads like English |
 | `null` / `undefined` | `none` with `maybe` | Explicit optionality |
-| `struct` / `class` / `interface` | `type` | One concept, one word |
+| `struct` / `class` / `interface` | `shape` | One concept, one word |
 | `enum` | `options` | Non-programmers understand it |
 | `abstract` | `base` | "Base type you build on" |
 | `implements` | `follows` | "Player follows Damageable" |
 | `\|` (union) | `\|` | Same as TypeScript — `Circle \| Square` |
 | `typeof` / `instanceof` | `is` | "if shape is Circle" |
 | `fn` | `function` | Spell it out |
-| `&T` / `&mut T` | `.share` / `.lend` | Dot methods, autocomplete-discoverable |
+| `&T` / `&mut T` | `share` / `lend` | Keywords written in function signatures only |
 | `Result<T,E>` / `?` | `errors` keyword | Auto-propagation |
 
 **Why**: Golden Rule 5. Every keyword that requires CS background knowledge is a barrier to junior developers. Keywords that read like plain English lower the learning curve and make code self-documenting.
