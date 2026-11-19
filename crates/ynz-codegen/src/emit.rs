@@ -22711,11 +22711,12 @@ fn own_read_for_store<'ctx>(
         // an `.or` picks: the receiver's own, or its fallback): the reader owns a copy of the
         // cells, and of the items they point at. A read typeck judged a view never gets here as a
         // copy (`may_point`), so this is the owned form of exactly the reads that are not views.
+        // Which reads these are is typeck's one list (`store_seam_copies_fixed_read`), the same
+        // one that decides whether a temporary behind the read is released.
         Type::BuiltinFixed {
             elem,
             size: FixedLength::Known(count),
-        } if matches!(expr, Expr::FieldAccess { .. })
-            || matches!(expr, Expr::MethodCall { method, .. } if method == "or") => {
+        } if ynz_typeck::temporaries::store_seam_copies_fixed_read(expr) => {
             if may_point || cg.is_moved_cells(pointer) {
                 return Ok(kept);
             }

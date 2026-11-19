@@ -1,0 +1,36 @@
+// v0.3-M9 C1h: a background task returns a `fixed` of ints and one of shapes that own a string;
+// the parent reads each through `.or` with a fallback list written in place.
+// The shapes' fallback owns strings too, so the one released list must be the picked one.
+// Expected output: each list's count, then its last item.
+
+shape Part {
+  name: string
+}
+
+function buildInts() -> fixed<int> {
+  wait sleep(1)
+  let numbers: fixed<int> = [10, 20, 30]
+  return numbers
+}
+
+function buildParts() -> fixed<Part> {
+  wait sleep(1)
+  let first: Part = { name: `a`.toUpperCase() }
+  let second: Part = { name: `bb` }
+  let parts: fixed<Part> = [first, second]
+  return parts
+}
+
+function entrypoint() -> nothing {
+  let ints = background buildInts()
+  let parts = background buildParts()
+  wait sleep(20)
+  let gotInts = ints.receive()
+  let intList = gotInts.or([0, 0, 0])
+  print(intList.count())
+  print(intList[2].or(-1))
+  let gotParts = parts.receive()
+  let partList = gotParts.or([{ name: `none`.toUpperCase() }, { name: `nn` }])
+  print(partList.count())
+  print(partList[1].or({ name: `?` }).name)
+}

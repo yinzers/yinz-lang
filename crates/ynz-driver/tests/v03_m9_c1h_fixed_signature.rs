@@ -180,3 +180,14 @@ fn a_fixed_of_zero_items_a_suspending_function_or_task_returns_is_asan_clean() {
 fn a_received_fixed_of_strings_read_with_an_inline_fallback_is_released_once() {
     assert_fixture_balanced("v0_3_m9_c1h_fixed_handle_strings_inline_or.ynz", "2\nB\n");
 }
+
+// Bug (same read as above, other item kinds): an `.or` fallback list of ints, or of shapes that
+// own a string, written in place must release the picked list once and the fallback's temporary
+// once (High: memory safety).
+#[test]
+fn a_received_fixed_of_ints_and_of_shapes_read_with_an_inline_fallback_is_released_once() {
+    assert_fixture_balanced(
+        "v0_3_m9_c1h_fixed_handle_item_kinds_inline_or.ynz",
+        "3\n30\n2\nbb\n",
+    );
+}

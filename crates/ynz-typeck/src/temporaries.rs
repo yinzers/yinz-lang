@@ -231,6 +231,19 @@ fn span_of(expr: &Expr) -> Span {
     (span.start, span.end)
 }
 
+/// True when the store seam copies a `fixed` list read by `expr` (`own_read_for_store` in
+/// codegen): a read out of a shape field, or of the list an `.or` picks. THE one list of such
+/// reads: the seam asks it to decide whether to copy, and `copy_covers` asks it to decide whether
+/// a temporary behind the read may be released. Any other `fixed` place read (an element, a
+/// `get`) stays a pointer at its place, so a temporary behind it must outlive the statement.
+pub fn store_seam_copies_fixed_read(expr: &Expr) -> bool {
+    match expr {
+        Expr::FieldAccess { .. } => true,
+        Expr::MethodCall { method, .. } => method == "or",
+        _ => false,
+    }
+}
+
 impl Walk<'_> {
     fn type_of(&self, expr: &Expr) -> Option<&Type> {
         self.facts.expr_types.get(&span_of(expr))
@@ -315,7 +328,7 @@ impl Walk<'_> {
         let suppress_inside = suppress
             || (usage == Use::Taken
                 && self.is_piece_read(expr)
-                && !self.copy_covers(self.type_of(expr)));
+                && !self.copy_covers(expr, self.type_of(expr)));
         self.children(expr, key, suppress_inside);
         if usage == Use::Borrowed && !suppress && self.is_temporary(expr) {
             let span = span_of(expr);
@@ -337,15 +350,16 @@ impl Walk<'_> {
         }
     }
 
-    /// True when a `let` or `return` of a place read of this type copies it (or takes it) before
-    /// the temporary behind the place dies.
-    fn copy_covers(&self, ty: Option<&Type>) -> bool {
+    /// True when a `let` or `return` of the place read `expr`, of type `ty`, copies it (or takes
+    /// it) before the temporary behind the place dies. A `fixed` list is covered only for the
+    /// reads the store seam copies (`store_seam_copies_fixed_read`).
+    fn copy_covers(&self, expr: &Expr, ty: Option<&Type>) -> bool {
         match ty {
+            Some(Type::BuiltinFixed { .. }) => store_seam_copies_fixed_read(expr),
             Some(
                 Type::String
                 | Type::BuiltinArray { .. }
                 | Type::BuiltinMap { .. }
-                | Type::BuiltinFixed { .. }
                 | Type::Shape { .. },
             ) => true,
             Some(ty) if is_owned_text(ty) => true,
