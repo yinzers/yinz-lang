@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.3.4] — 2026-11-19 — M8 Concurrency Completion + M9 Concurrency Foundations
+
+Commit range: v0.3.3..v0.3.4.
+
+### What ships
+
+A value now has one owner and is freed when that owner's scope ends. Until this release the compiler freed no heap local at scope exit: a loop that built an array each pass leaked every pass (measured at 2,000 iterations: 4,000 allocations, zero frees, linear). Plain functions, state-machine resume functions and task retirement now release every heap type (strings, arrays, maps, shapes, unions, `maybe`, `errors` results, `fixed` lists, `number` of more than 34 digits), and storing a heap value into a place hands it over to that place.
+
+Alongside it, the concurrency work that had been merged but not released ships: channel close and `maybe<T>` receive, the transfer rule for what a task may take, Auto-Arc sharing of one shape between background tasks, a loom-checked runtime, and a generated-program fuzzer. Three use-after-free bugs and one SIGSEGV that were live in v0.3.3 are fixed.
+
+### Added
+
+- Release at scope exit: a heap local is freed at every exit edge of its scope (block end, loop pass, early `return`, `return suspendingCall()`), in plain functions and in resume functions of state machines. A reassignment frees the value it replaces. Statement temporaries are freed at statement end. A `give` parameter is released in the callee.
+- A binding that hands its value over is recorded in a release plan (`release_plan.rs`) that typeck builds and codegen reads: each owner is `ReleaseIfLive`, a moved binding's slot is nulled at the move, so a given value is not freed twice and a revived one is.
+- One owned-copy operation (`owned_copy_plan` in `owned_copy.rs`, emitted by `emit_owned_copy`): `.copy()` is deep for arrays, maps, shapes and `fixed` lists, and a type with no independent copy is refused with a teaching diagnostic. A copied container owns copies of its strings.
+- A `background` handle that leaves scope stops its task at the task's next pause (`v03_m8_handle_scope_pin`). The user spec names the rule and the way to keep a task running.
+- `fixed<T, N>` in signatures: a written length in a parameter, a return type and a shape field. The length is part of the type; a `fixed` return travels by value (also from a `background` task), and a function with an unsized `fixed` parameter is compiled once per length.
+- Storing a heap value into a place (`list.add(v)`, `table.set(k, v)`, `x.field = v`, `x[i] = v`, a container literal, `let b = a`, `b = a`) hands it over, and reading the source afterwards is `ConsumedByStore` (WHAT / WHAT-INSTEAD / WHY; it suggests `.copy()`). A muted hint shows `a` handed to `list`. Revive on reassignment is path-aware, and a give inside a loop must not reach the next pass. Chief's 2026-11-13 "deny and teach" ruling.
+- Union diagnostics: `UnionWhereVariantExpected` (a union passed, returned, annotated or stored where one variant is expected), `ArgumentConflictsWithTypeParameter`, `GenericUnionBoundOutOfOrder`, `BackgroundUnionToGenericParameter`, `UnionVariantNotStorable` (a `number<10>` into a `number<40>` variant). The `primantis-orders` gallery gains `v0_3_m9_errors.ynz`.
+- A `map` keeps a `number` key of up to 34 digits inline, found by value.
+- Channels: `.close()`, a bare `receive()` that returns `maybe<T>`, the transfer rule (`ConsumedBySend`, `ParamNeedsGive`, `SendPayloadNeedsCopy`), `HandleChannelArgNeedsBinding`, and `MessageBeforeFailedCheck` (`.message` and its siblings are readable only after a `.failed()` check, flow-sensitive).
+- Auto-Arc: two or more `background` statements in one block that pass the same whole binding share one heap block, one counted reference per task; the muted `auto_arc` hint fires on both spawn forms.
+- Tests: a loom lane for the runtime (`cfg(loom)` sync shim, models with revert-proofs; production code instruction-identical), and a generator of type-valid `.ynz` programs feeding the cross-implementation consistency check.
+
+### Fixed
+
+- Use-after-free in a spawned task's drop ladder (PR #89): `ch.send(rows)`, `h.send(rows)` and `return rows` each freed a payload the task had already handed off, ending in a garbage count and SIGSEGV. The runtime send core now tells the ladder the payload left.
+- SIGSEGV when a shape with a `number` field was passed to a `background` spawn on the inferred-copy path (PR #90): the shape sat at an 8-mod-16 offset in the state-machine frame and was read as 16-aligned. The frame region pointer is now rounded to 16 bytes with one slot of slack per embedded shape.
+- `ynz fmt` took 91 seconds on a 1,352-line file (PR #88): `CommentContext::line_of` rescanned the source from byte 0 on every call. It now takes 0.06 seconds, with identical output.
+- A local read only by a statement that itself suspends got no frame slot and was read uninitialised on resume (both M8 fuzzer defects, one producer: `collect_crossings_in_stmts`).
+- String-map slot probing was O(n²) to build and is now O(n); decimal128 and bignum rounding (sticky and tie classification, division, scientific notation) is exact; parser, LSP, driver and watch robustness fixes, including a nesting-depth cap with a `StatementNestingTooDeep` diagnostic and a trailing-comment span fix (PR #92, audit remediation Lane A).
+- `let whole: float = 2` printed a denormal and, as an argument, failed LLVM verification: an int literal typed `float` now lowers to an `f64` constant (#94).
+- `number<N>.toString()`, `.toFloat()` and `.toInt()` now resolve and lower for every precision. Before, `number<40>.toFloat()` printed `inf` and `number<40>.toString()` printed garbage digits; every `toString` result is now a string of its own, where two live results of a narrow `number` had shared one buffer (`1.5` then `2.5` printed `2.5` twice) (#95).
+- A union alias with `nothing` (`shape MaybeCircle = Circle | nothing`) was resolved to `Circle | unknown` and refused as valid code. Union aliases are derived once, in `collect_shapes`, to a fixpoint, so an alias that names a later alias gives the same type in a parameter and in a `let` (#96).
+- `for ((key, value) in map)` failed with ICE `field_gep: receiver is not a Shape`: the desugared accesses shared one span, so the last recorded type overwrote the `MapEntry` type. Each access now has the span of the name it binds (#97, card #399).
+- A union narrowed by `is` reads the variant payload, not the envelope, including after a state-machine resume.
+- `let list = got.or([...])` on a received `fixed<string>` aborted with a double free; the store seam and the release plan now share one list of the `fixed` reads a `let` copies (`store_seam_copies_fixed_read`).
+
+### Changed
+
+- `.copy()` and a `background` argument copy go through the one owned-copy plan; the per-type alias dispatch (`AliasNoOp`) is deleted. The spawn path reads ownership from `effective_ownership::provenance` instead of matching syntax.
+- The lint `background-handle-not-waited` and the deferral `background-handle-cancel-injection` are retired from the feature registry: a handle leaving scope now stops its task, so the exposure they pointed at is gone.
+- The `map` key diagnostics read "can't be keyed by `{key}` yet" and say how a map stores keys today; `sensitive string` keys keep their own text.
+- Tests that asserted a fixed output order for `background` programs now check the multiset of stdout lines, decided from the source (`background` present), not from the file name. The corpus sweep runs in parallel and `/tmp` is a tmpfs in the dev container.
+
+### Deferred (tracked, not silent)
+
+- **A `map` keyed by a shape, an `array<int>`, or any other type that is not one 8- or 16-byte value is refused for now** (`MapKeyNotStorable`). Temporary by Chief's 2026-11-19 ruling: "Land #93 with the map-key refusals marked temporary and build the support right after." Card #518 builds the support.
+- **A `map` keyed by a `number` of more than 34 digits (`number<35>`, `number<50>`) is refused for now** (`MapKeyNotStorableWideNumber`). Also temporary, but not on #518, because a working alternative exists: key by an `int` or `string` id, or by a `number<34>`.
+- A `map` keyed by a `sensitive string` stays refused by design (`MapKeyNotStorableSensitive`): a map would release the key as an ordinary string and compare keys with a comparison that is not constant-time.
+- Refused, pending Chief's ruling (listed in `IMP-ownership.md`): a `background` union passed to a generic callee's bare type parameter; a `number<10>` into a `number<40>` union variant; a `fixed<string>` received from a task and kept across a later `wait`; an unsized `fixed` parameter of a function built once; an unsized `fixed` field; a returned `fixed` whose length cannot be worked out.
+- Stores kept refused by Chief, 2026-11-18 (card #493): a `share` parameter stored into a union local, and a piece of a local array stored into a literal. The fix is `.copy()` at the store.
+- Auto-Arc covers two or more `background` statements in one block; loops, groups that straddle a suspension, arrays, maps and nested-shape or `number` fields stay out of it.
+
 ## [0.3.3] — 2026-07-17 — M7: Optimizer Pipeline + Preemption Re-Measurement
 
 Commit range: v0.3.2..v0.3.3.
