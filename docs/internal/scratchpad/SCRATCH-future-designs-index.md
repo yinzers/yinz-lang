@@ -92,4 +92,4 @@ These came up in conversation but were not committed to a design. They live here
 
 - [`docs/README.md`](../../README.md) (the main design index that links to these)
 - [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) (the milestone sequence — what's in v0.1, v0.2, etc., including deferred features with substitutes and triggers)
-- [`.claude/rules/plan-invariants.md`](../../../.claude/rules/plan-invariants.md) (M4+ plans must reference relevant future docs in their `### Runtime Dependencies` section)
+- M4+ milestone plans reference the relevant future docs in their `### Runtime Dependencies` section.

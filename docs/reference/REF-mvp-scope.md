@@ -52,7 +52,7 @@ The granular model exists because (a) each version has predictable scope, (b) ea
 - [ ] [`tooling/vscode-ynz/README.md`](../../tooling/vscode-ynz/README.md) updated if the new capability changes what users do in the editor
 - [ ] `.vsix` attached to the GitHub release alongside the Yinz binary
 
-### Demo files (from v0.1 onward — per [`.claude/rules/plan-invariants.md`](../../.claude/rules/plan-invariants.md))
+### Demo files (from v0.1 onward)
 - [ ] `examples/pirates-roster/entrypoint.ynz` extended with a realistic section showing the new feature in context — not a toy snippet, something that looks like real code
 - [ ] `examples/primantis-orders/v{0.N}_errors.ynz` (or milestone-specific `m{N}_errors.ynz`) — intentional triggers for every new compile error class, each with `// WHY: <DiagnosticClassName>` comment
 

@@ -64,12 +64,12 @@ Themed as the Duquesne Incline tracking its current elevation up Mt Washington. 
 
 ## Adding a new example
 
-1. **Pick a Pittsburgh-themed folder name.** Bridges, neighborhoods, foods, sports figures, Steel City history, n'at. See [`.claude/rules/examples-structure.md`](../.claude/rules/examples-structure.md) for the discipline.
+1. **Pick a Pittsburgh-themed folder name.** Bridges, neighborhoods, foods, sports figures, Steel City history, n'at. Keep the layout flat: every example is a top-level folder under `examples/`, with no grouping subfolders and no `examples/yinz.toml`.
 2. **Decide kind**: project (gets a `yinz.toml`, single-entry by default) OR gallery (loose files; no `yinz.toml` unless its tool needs one).
-3. **For new language features (every milestone — the demo grows each time)**: extend `pirates-roster/entrypoint.ynz` per [`.claude/rules/plan-invariants.md`](../.claude/rules/plan-invariants.md) `### Demo & Error Gallery`. Don't create a new top-level demo for individual language features — `pirates-roster/` is the canonical growth path.
+3. **For new language features (every milestone — the demo grows each time)**: extend `pirates-roster/entrypoint.ynz` with the new feature in context, in every phase that adds executable surface. Don't create a new top-level demo for individual language features — `pirates-roster/` is the canonical growth path.
 4. **For new stdlib modules (v0.5+)**: add a NEW per-module example project using the single-entry layout (mirror `pirates-roster/`'s shape). One module = one example project. Pick a Pittsburgh-themed name for the folder.
 5. **For demonstrating a project layout pattern**: amend `pirates-roster/` (single-entry) or `stadium-fleet/` (multi-entry). Don't introduce a third layout example.
-6. **For new error classes**: add intentional triggers to the corresponding milestone file in `primantis-orders/` per the gallery's existing pattern.
+6. **For new error classes**: add intentional triggers to the corresponding milestone file in `primantis-orders/` (`m{N}_errors.ynz`), each with a `// WHY:` comment, per the gallery's existing pattern.
 7. **For tool behavior demos** (formatter, watch, lsp): add to the matching gallery folder or create a peer one with a themed name.
 
 The structure is **flat**. Do NOT make `examples/` itself a multi-entry workspace (`[workspace]` semantically means "binaries that ship together," which examples never are). Each demo is its own top-level folder.
