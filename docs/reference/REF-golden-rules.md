@@ -98,7 +98,7 @@ Every keyword, function, and pattern should be readable by a junior developer wh
 ---
 
 **6. Zero-cost abstractions**
-High-level syntax compiles to the same machine code as hand-written low-level code.
+High-level syntax compiles to what a careful Rust/C++ programmer would write by hand. The features themselves cost what they inherently cost.
 
 *Why*: If convenience costs performance, developers will bypass the readable path in hot code. Zero-cost means the right choice and the fast choice are always the same choice.
 
@@ -108,7 +108,7 @@ High-level syntax compiles to the same machine code as hand-written low-level co
 - Features themselves (Arc reference counting, async runtime scheduler, arena allocator bookkeeping) cost what they inherently cost. Those costs apply whether the developer writes them manually or the compiler infers them.
 - Compiler inference happens at compile time → zero RUNTIME cost from the inference itself. The compiler choosing `share` for a call site produces identical machine code to declaring the function's signature explicitly.
 - The "hand-written low-level" benchmark is "what would a careful Rust/C++/Zig programmer write," not "the absolute theoretical minimum." Memory safety has a cost — that cost is the bar; not zero.
-- **Any future design tradeoff that costs MORE than hand-written code requires Patrick's explicit approval AND documentation in [`docs/README.md`](../README.md).** This clarification block exists to prevent future drift — interpreting Rule 6 as "soften zero-cost" is wrong.
+- **A design that costs more than hand-written code needs Chief's confirmation, recorded in the commit and the feature's IMP design doc.** Rule 6 is not a softer "zero-cost".
 
 This clarification was added 2026-05-14 after the design-lockdown conversation surfaced the risk that auto-inferred features (auto-Arc for cross-thread shared state, auto-wait for I/O) might be mistaken for zero-cost violations. They aren't — the cost is in the underlying feature, not the inference.
 

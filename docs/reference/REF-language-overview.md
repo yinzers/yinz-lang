@@ -58,7 +58,7 @@ Every decision in this language follows these rules. When something seems weird,
 3. **The compiler is a teacher** — errors explain what went wrong and suggest fixes
 4. **Self-documenting syntax** — a jr dev who's never seen Yinz should understand any line
 5. **Human-readable over jargon** — `options` not `enum`, `nothing` not `void`, `follows` not `implements`
-6. **Zero-cost abstractions** — high-level syntax compiles to the same code as low-level
+6. **Zero-cost abstractions** — high-level syntax compiles to what a careful Rust/C++ programmer would write by hand; the features themselves cost what they inherently cost
 7. **Efficiency first, dynamic after** — the default path is always the fastest path
 8. **Compiler does the hard work** — smart defaults, type inference, optimization
 9. **Step-by-step over chaining** — each operation gets its own line and a name
