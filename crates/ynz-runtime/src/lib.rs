@@ -2012,6 +2012,32 @@ pub unsafe extern "C" fn ynz_array_set(
     std::ptr::copy_nonoverlapping(src, slot, elem_size as usize);
 }
 
+/// Blank the cell at `idx`: zero all `elem_size` bytes of it, owning nothing afterwards.
+///
+/// The hand-over of a loop row (C1q): the row's new holder took what the cell owned, so the list's
+/// own release must skip the cell. An all-zero cell is a null pointer (a string, array, map or
+/// `fixed` item) or an inline cell whose heap fields are null (a shape, a union slot), and every
+/// release glue skips a null (`ynz_string_release`, `ynz_array_release`, `ynz_map_release`, the
+/// `fixed` cell walk's filled check). Aborts when `idx` is out of range, as `ynz_array_set` does.
+///
+/// O(elem_size) time, O(1) memory.
+///
+/// # Safety
+/// `arr` must be a valid non-null pointer returned by `ynz_array_new`; the cell's old contents
+/// must already be owned elsewhere (or garbage the caller means to leak).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_blank_cell(arr: *mut YnzArray, idx: i64) {
+    if idx < 0 || idx >= (*arr).len {
+        std::process::abort();
+    }
+    let elem_size = (*arr).elem_size;
+    std::ptr::write_bytes(
+        (*arr).data.add((idx * elem_size) as usize),
+        0,
+        elem_size as usize,
+    );
+}
+
 /// Return the number of elements in the array.
 ///
 /// # Safety

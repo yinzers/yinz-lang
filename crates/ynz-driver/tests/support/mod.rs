@@ -400,6 +400,35 @@ pub fn build_asan(built: &Built) -> PathBuf {
     build_asan_from_ir(directory, &ir)
 }
 
+/// [`run_asan_binary`] with the runtime's alloc counters on: what the sanitized program printed
+/// plus the counters it wrote. Panics when the counter file is missing, as [`run_counted`] does.
+pub fn run_asan_binary_counted(sanitized_binary: &Path) -> (RunOutput, Counters) {
+    let counter_file = sanitized_binary.with_extension("counters");
+    let mut command = Command::new(sanitized_binary);
+    command
+        .env("ASAN_OPTIONS", ASAN_OPTIONS)
+        .env("YNZ_ALLOC_COUNTER", "1")
+        .env("YNZ_ALLOC_COUNTER_OUTPUT", &counter_file);
+    let output = run_with_watchdog(command);
+    let text = std::fs::read_to_string(&counter_file).unwrap_or_else(|err| {
+        panic!(
+            "counter file {} not written ({err}); exit {}, stderr:\n{}",
+            counter_file.display(),
+            output.exit_code,
+            output.stderr
+        )
+    });
+    let counters = Counters {
+        alloc: counter_value(&text, "alloc"),
+        free: counter_value(&text, "free"),
+        string_alloc: counter_value(&text, "string_alloc"),
+        string_free: counter_value(&text, "string_free"),
+        string_alloc_bytes: counter_value(&text, "string_alloc_bytes"),
+        string_free_bytes: counter_value(&text, "string_free_bytes"),
+    };
+    (output, counters)
+}
+
 /// Run an ASan-built binary under the fixtures' `ASAN_OPTIONS`, with the liveness watchdog.
 pub fn run_asan_binary(sanitized_binary: &Path) -> RunOutput {
     let mut command = Command::new(sanitized_binary);
