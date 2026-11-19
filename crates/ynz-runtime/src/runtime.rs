@@ -484,7 +484,7 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
 /// NONDETERMINISTIC across runs — live-reproduced on `examples/pirates-roster`
 /// (six runs, six different output orderings) the moment the clock-based cut landed.
 /// Byte-exact output goldens and the cross-mode byte-identity gate are load-bearing
-/// in this repo (Phase 5 determinism proofs; the plan-invariants demo golden), so the
+/// in this repo (Phase 5 determinism proofs; the `pirates-roster` demo golden), so the
 /// budget must be a deterministic function of program execution alone. The cost of the
 /// trade: loops with heavy per-iteration bodies yield less often than a strict 10ms
 /// quantum would — recorded honestly in IMP-no-function-coloring.md's preemption
