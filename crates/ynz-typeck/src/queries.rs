@@ -56,6 +56,14 @@ pub struct CheckOutput {
     /// Carried cross-module the same way `suspends_set` is (via the per-fn flag on
     /// the export table).
     pub does_real_work_set: std::collections::HashSet<String>,
+    /// The places each local function writes through each parameter
+    /// (`walked_place::analyze_written_param_places`), by function name and parameter position.
+    ///
+    /// Computed once here, before the bodies are checked: the loop check reads it through
+    /// `FunctionSig::written_param_places`, and the export table copies it onto the exported
+    /// signatures so an importer's loop sees the same answer.
+    pub written_param_places:
+        std::collections::HashMap<String, Vec<Vec<crate::walked_place::WrittenPlace>>>,
     /// The transitive effective-ownership fixpoint (v0.3-M7 Phase 2, FRAGO 002).
     ///
     /// Codegen's `declare_function` consults this — never the raw AST ownership
@@ -279,6 +287,7 @@ fn check_query_cycle_initial(
         diagnostics: DiagnosticBucket::new(),
         suspends_set: std::collections::HashSet::new(),
         does_real_work_set: std::collections::HashSet::new(),
+        written_param_places: std::collections::HashMap::new(),
         effective_ownership: crate::effective_ownership::EffectiveOwnershipReport::empty(),
     })
 }
@@ -392,6 +401,16 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         // Union with the imported fn's own flag (set by load_export_table). For
         // locally-defined fns, sig.does_real_work starts false and is set here.
         sig.does_real_work = sig.does_real_work || local_real_work;
+    }
+
+    // The places each local function writes through its parameters: read by the loop check
+    // (`Checker::check_walked_list_kept`) when a loop passes the list it walks to a callee.
+    let written_param_places =
+        crate::walked_place::analyze_written_param_places(&parse.module, &sig_output.imported_fns);
+    for (name, sig) in merged_sig_table.fns.iter_mut() {
+        if let Some(places) = written_param_places.get(name.as_str()) {
+            sig.written_param_places = places.clone();
+        }
     }
 
     // Reject non-self mutual recursion among suspending functions.
@@ -636,6 +655,7 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         diagnostics: all_diags,
         suspends_set,
         does_real_work_set: does_real_work_result,
+        written_param_places,
         effective_ownership: effective_ownership_report,
     })
 }

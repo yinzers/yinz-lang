@@ -105,6 +105,10 @@ pub enum DiagnosticKind {
     /// A `background` call passes a union to a parameter the generic callee declares as a bare
     /// type parameter: the task has no slot to copy the union into. v0.3-M9 C6.
     BackgroundUnionToGenericParameter,
+    /// A `for` loop walks a list, and its body assigns that list's holder, a prefix or the root of
+    /// the walked place, an element it walks through, or calls a function that does: the
+    /// assignment frees the list the loop is still reading. v0.3-M9 C10 (#387), plan #17.
+    WalkedListWrittenInLoop,
     /// A generic call whose declared return union (`nothing | T`, `Tiny | T`) has a type parameter
     /// the call binds to a union that would not be first in the instance's flat union: the value the
     /// instance returns keeps its own tags, which would name other variants. v0.3-M9 C1n (#387).
@@ -193,6 +197,7 @@ impl DiagnosticKind {
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "BackgroundUnionToGenericParameter"
             }
+            DiagnosticKind::WalkedListWrittenInLoop => "WalkedListWrittenInLoop",
             DiagnosticKind::GenericUnionBoundOutOfOrder => "GenericUnionBoundOutOfOrder",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
@@ -240,6 +245,7 @@ impl DiagnosticKind {
         "FixedFieldLengthMissing",
         "FixedLengthMissingInTaskFunction",
         "BackgroundUnionToGenericParameter",
+        "WalkedListWrittenInLoop",
         "GenericUnionBoundOutOfOrder",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
@@ -294,6 +300,7 @@ impl DiagnosticKind {
             DiagnosticKind::BackgroundUnionToGenericParameter => {
                 "declare the union type".to_string()
             }
+            DiagnosticKind::WalkedListWrittenInLoop => "walk a copy".to_string(),
             DiagnosticKind::GenericUnionBoundOutOfOrder => {
                 "put the type parameter first".to_string()
             }

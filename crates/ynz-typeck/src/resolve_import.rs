@@ -480,6 +480,13 @@ fn load_export_table(
         // callee would appear trivial and the importer would never parallelize calls
         // to it (v0.3-M3d cross-module worth-it propagation).
         sig.does_real_work = check_out.does_real_work_set.contains(name.as_str());
+        // The places the body writes through its parameters, for the importer's loops
+        // (`walked_place`): the pre-analysis sig_table carries none.
+        sig.written_param_places = check_out
+            .written_param_places
+            .get(name.as_str())
+            .cloned()
+            .unwrap_or_default();
     }
     export_table
 }

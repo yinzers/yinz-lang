@@ -2676,6 +2676,7 @@ fn run_kernel(source: &str) -> CheckOutput {
         diagnostics: all_diags,
         suspends_set: std::collections::HashSet::new(),
         does_real_work_set: std::collections::HashSet::new(),
+        written_param_places: std::collections::HashMap::new(),
         effective_ownership: ynz_typeck::effective_ownership::EffectiveOwnershipReport::empty(),
     }
 }

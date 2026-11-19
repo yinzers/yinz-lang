@@ -76,6 +76,7 @@ pub mod transfer_record;
 pub mod type_at_offset;
 pub mod type_variant_sampler;
 pub mod types;
+pub mod walked_place;
 
 pub use check::{
     block_contains_back_edge_yield, check, check_with_kernel_mode, crossing_local_names,

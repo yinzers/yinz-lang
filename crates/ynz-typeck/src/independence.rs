@@ -947,6 +947,7 @@ mod tests {
             contains_wait: false,
             suspends: true,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         }
     }

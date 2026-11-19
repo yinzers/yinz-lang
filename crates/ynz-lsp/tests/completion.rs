@@ -102,6 +102,7 @@ fn completion_list_with_user_fns_includes_them() {
             contains_wait: false,
             suspends: false,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         },
     );
@@ -169,6 +170,7 @@ fn user_symbols_sort_before_keywords() {
             contains_wait: false,
             suspends: false,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         },
     );
@@ -515,6 +517,7 @@ fn user_defined_fn_has_snippet_with_param_tab_stops() {
             contains_wait: false,
             suspends: false,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         },
     );
@@ -600,6 +603,7 @@ fn user_defined_fn_self_only_snippet_has_cursor_stop() {
             contains_wait: false,
             suspends: false,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         },
     );

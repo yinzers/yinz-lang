@@ -50,6 +50,15 @@ pub struct FunctionSig {
     /// Propagated cross-module through `module_signatures_query` / `exports.rs`
     /// exactly as `suspends` is.
     pub does_real_work: bool,
+    /// The places the body writes through each parameter, by parameter position
+    /// (`crate::walked_place::analyze_written_param_places`): for `function reset(lend holder:
+    /// Holder) { holder.rows = ... }`, `[[[Field("rows")]]]`. A caller's `for` loop that passes
+    /// the list it walks to such a parameter is refused when the callee writes the walked place
+    /// or a prefix of it (`WalkedListWrittenInLoop`).
+    ///
+    /// Empty in the signature pre-pass and set by `check_query` before the bodies are checked,
+    /// exactly like `suspends`; carried across modules with the export table.
+    pub written_param_places: Vec<Vec<crate::walked_place::WrittenPlace>>,
     /// The function's exported name in its defining module, when the caller imported it
     /// under an alias (`import { getValue as fetchVal } from "data_ops"`).
     ///
@@ -198,6 +207,7 @@ pub fn collect_signatures(
                         // `may_block::does_real_work_set` runs. False during the
                         // signature pre-pass; must not be used there.
                         does_real_work: false,
+                        written_param_places: Vec::new(),
                         // Functions from the local module are never aliased from the
                         // module's own perspective — their local name IS their symbol name.
                         original_name: None,

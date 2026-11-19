@@ -5199,10 +5199,133 @@ impl<'b> Checker<'b> {
         }
         let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
+        // After the body, so the receiver types of its method calls are known.
+        self.check_walked_list_kept(var, iter, &iter_ty, body);
         self.end_loop_body(loop_mark, None, body);
         self.end_branch_arm(body);
         self.scope.pop();
         self.scope.end_branches(true);
+    }
+
+    /// Refuse a loop whose body frees the list it is walking (`crate::walked_place`): an
+    /// assignment to the root binding, a prefix of the walked place or an element it walks
+    /// through, or a call that passes the root or a prefix to a function that writes that place
+    /// (`FunctionSig::written_param_places`). The binding or field path the body assigns exactly
+    /// stays legal: codegen holds that list (`Cg::begin_loop_held`). One refusal per loop: the
+    /// first write found, the fix is the same copy for all of them.
+    ///
+    /// O(size of the loop body * path length) time.
+    fn check_walked_list_kept(
+        &mut self,
+        loop_variable: &str,
+        iter: &Expr,
+        iter_ty: &Type,
+        body: &Block,
+    ) {
+        if !matches!(
+            iter_ty,
+            Type::BuiltinArray { .. }
+                | Type::BuiltinFixed { .. }
+                | Type::BuiltinMap { .. }
+                | Type::String
+        ) {
+            return;
+        }
+        let Some(walked) = crate::walked_place::walked_place_steps(iter) else {
+            return;
+        };
+        let direct_write = crate::walked_place::assignment_freeing_walked_list(body, &walked).map(
+            |(span, written)| {
+                let released = crate::walked_place::place_text(&written);
+                (span.clone(), format!("assigns `{released}`"), released)
+            },
+        );
+        let Some((span, write, released)) =
+            direct_write.or_else(|| self.call_freeing_walked_list(body, &walked))
+        else {
+            return;
+        };
+        let walked_text = expr_source_text(iter);
+        let copy_name = match walked.last() {
+            Some(crate::walked_place::PlaceStep::Field(name))
+            | Some(crate::walked_place::PlaceStep::Root(name)) => format!("{name}Copy"),
+            _ => match walked.first() {
+                Some(crate::walked_place::PlaceStep::Root(name)) => format!("{name}Copy"),
+                _ => "walkedCopy".to_string(),
+            },
+        };
+        self.diags.push(registry_diag(
+            span,
+            DiagnosticKind::WalkedListWrittenInLoop,
+            &[
+                ("loopVariable", loop_variable),
+                ("walked", walked_text.as_str()),
+                ("write", write.as_str()),
+                ("released", released.as_str()),
+                ("copyName", copy_name.as_str()),
+            ],
+        ));
+    }
+
+    /// The first call in `body` that passes the walked root, or a prefix of the walked place, to a
+    /// parameter whose function writes the walked place or a prefix of it: where the call is, how
+    /// the diagnostic words it, and the place it writes. A callee the call form cannot name (a
+    /// generic one, a method of another receiver type) is not a user function here and is skipped.
+    ///
+    /// O(size of the body * path length * written places) time.
+    fn call_freeing_walked_list(
+        &self,
+        body: &Block,
+        walked: &[crate::walked_place::PlaceStep<'_>],
+    ) -> Option<(SourceSpan, String, String)> {
+        let mut found = None;
+        for stmt in &body.stmts {
+            crate::walked_place::visit_calls_in_stmt(stmt, &mut |site| {
+                if found.is_some() {
+                    return;
+                }
+                let Some(sig) = self.sig_table.fns.get(site.callee) else {
+                    return;
+                };
+                if sig.params.len() != site.arguments.len() {
+                    return;
+                }
+                if site.is_method_form {
+                    let receiver_span = site.arguments[0].span();
+                    let receiver_ty = self
+                        .expr_types
+                        .get(&(receiver_span.start, receiver_span.end));
+                    if receiver_ty != Some(&sig.params[0].1) {
+                        return;
+                    }
+                }
+                for (position, argument) in site.arguments.iter().enumerate() {
+                    let Some(through_parameter) = sig.written_param_places.get(position) else {
+                        continue;
+                    };
+                    let written_places = crate::walked_place::places_written_by_call(
+                        argument,
+                        sig.param_ownerships.get(position).and_then(Option::as_ref),
+                        through_parameter,
+                    );
+                    for written in written_places {
+                        if crate::walked_place::write_frees_walked_list(&written, walked, false) {
+                            let released = crate::walked_place::place_text(&written);
+                            let write = format!(
+                                "calls `{}`, which assigns `{released}`",
+                                expr_source_text(site.call)
+                            );
+                            found = Some((site.call.span().clone(), write, released));
+                            return;
+                        }
+                    }
+                }
+            });
+            if found.is_some() {
+                break;
+            }
+        }
+        found
     }
 
     /// True when the loop over `iter` hands its rows over (`crate::loop_row_handover`): `iter` is
