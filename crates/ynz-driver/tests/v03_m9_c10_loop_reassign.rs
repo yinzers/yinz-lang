@@ -62,16 +62,8 @@ macro_rules! reassign_case {
     };
 }
 
-reassign_case!(
-    array,
-    "v0_3_m9_c10_reassign_array.ynz",
-    "3\n9\n1\n"
-);
-reassign_case!(
-    string,
-    "v0_3_m9_c10_reassign_string.ynz",
-    "3\nXYZ\n"
-);
+reassign_case!(array, "v0_3_m9_c10_reassign_array.ynz", "3\n9\n1\n");
+reassign_case!(string, "v0_3_m9_c10_reassign_string.ynz", "3\nXYZ\n");
 reassign_case!(map, "v0_3_m9_c10_reassign_map.ynz", "6\n1\n");
 reassign_case!(
     shape_rows,
@@ -83,11 +75,7 @@ reassign_case!(
     "v0_3_m9_c10_reassign_early_return.ynz",
     "4\n3\n"
 );
-reassign_case!(
-    never_runs,
-    "v0_3_m9_c10_reassign_never_runs.ynz",
-    "3\n3\n"
-);
+reassign_case!(never_runs, "v0_3_m9_c10_reassign_never_runs.ynz", "3\n3\n");
 // Guard, green on every sha: a `while` re-reads the binding each pass.
 reassign_case!(
     while_over_index,
