@@ -409,6 +409,19 @@ struct BindingEvent {
     joined: Vec<DeclKey>,
 }
 
+/// True when a binding of this origin is the one holder of its value, so a `background` spawn
+/// or a `for` loop over it may take the value away: a `let` that owns its value, or a `give`
+/// parameter. THE one answer both read (`record_spawn_arg_ownership`,
+/// `Checker::loop_hands_rows_over`); `check_transfer` decides the same by origin arm.
+///
+/// O(1) time.
+fn origin_owns_value(origin: &Origin) -> bool {
+    matches!(
+        origin,
+        Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
+    )
+}
+
 /// What a binding event says about the binding's part in releasing its value.
 fn role_evidence_of(origin: &Origin) -> RoleEvidence {
     match origin {
@@ -3201,10 +3214,7 @@ impl<'b> Checker<'b> {
                 } else if let Some(remaining) = remaining {
                     let (origin_ok, members) = match self.scope.lookup(name) {
                         Some(e) => (
-                            matches!(
-                                e.origin,
-                                Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
-                            ),
+                            origin_owns_value(&e.origin),
                             self.scope.visible_members_of(e.alias_class),
                         ),
                         None => (false, vec![name.to_string()]),
@@ -5230,13 +5240,9 @@ impl<'b> Checker<'b> {
         let Some(entry) = self.scope.lookup(name) else {
             return false;
         };
-        let owns_list = matches!(
-            entry.origin,
-            Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
-        );
         if entry.is_const
             || entry.consumed.is_some()
-            || !owns_list
+            || !origin_owns_value(&entry.origin)
             || self.non_give_param_in_class(entry.alias_class).is_some()
         {
             return false;
