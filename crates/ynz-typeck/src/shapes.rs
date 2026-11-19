@@ -583,12 +583,30 @@ pub fn collect_shapes(
 
     // M6: collect union type aliases (shape Shape = Circle | Square).
     // Must happen after all regular shapes are in `table` so variant types can be resolved.
-    for item in &module.items {
-        if let Item::ShapeDecl(s) = item {
-            if let Some(alias_ast_ty) = &s.alias_ty {
-                let resolved = table.resolve_ast_type(alias_ast_ty);
-                table.union_aliases.insert(s.name.clone(), resolved);
+    // This is the one place alias types are derived: the checker and the LSP query take
+    // `table.union_aliases` as-is. An alias may name an alias declared later in the file, so
+    // resolve to a fixpoint: each pass fixes aliases whose referenced aliases are now resolved.
+    // O(a^2 * t) time for `a` aliases of type size `t` (an alias chain of depth `a` needs `a`
+    // passes); O(a * t) memory. Passes are capped at `a` so a cyclic alias cannot loop forever.
+    let alias_decls: Vec<(&String, &AstType)> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ShapeDecl(s) => s.alias_ty.as_ref().map(|alias_ty| (&s.name, alias_ty)),
+            _ => None,
+        })
+        .collect();
+    for _ in 0..alias_decls.len() {
+        let mut any_alias_changed = false;
+        for (alias_name, alias_ast_ty) in &alias_decls {
+            let resolved = table.resolve_ast_type(alias_ast_ty);
+            if table.union_aliases.get(*alias_name) != Some(&resolved) {
+                table.union_aliases.insert((*alias_name).clone(), resolved);
+                any_alias_changed = true;
             }
+        }
+        if !any_alias_changed {
+            break;
         }
     }
 

@@ -1127,7 +1127,7 @@ pub(crate) fn compute_cpu_promotions(
     );
 
     // Steps 2 + 3 — transitive-SM closure + guard-probe rollback to fixpoint.
-    let union_aliases = crate::check::collect_union_aliases(module, shape_table);
+    let union_aliases = shape_table.union_aliases.clone();
     loop {
         if candidates.is_empty() {
             break;

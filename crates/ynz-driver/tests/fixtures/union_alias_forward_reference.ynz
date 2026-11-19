@@ -1,0 +1,20 @@
+// WHY: an alias that names an alias declared LATER (`Outer` uses `Inner`) used to resolve
+// differently in the shape table (`unknown | Square`, used for parameter types) and in the
+// checker's own copy (`Circle | Square | Square`, used for `let`), so `describe(c)` was
+// refused while the `let` lines passed. Aliases are now derived once, in `collect_shapes`,
+// to a fixpoint, and every consumer reads that one map.
+shape Circle { radius: float }
+shape Square { side: float }
+
+shape Outer = Inner | Square
+shape Inner = Circle | Square
+
+function describe(value: Outer) -> nothing {
+  print(`described`)
+}
+
+function entrypoint() -> nothing {
+  let c: Circle = { radius: 1.0 }
+  let outer: Outer = c
+  describe(c)
+}

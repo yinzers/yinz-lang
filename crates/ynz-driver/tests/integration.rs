@@ -780,6 +780,32 @@ fn m3_is_type_deferral_now_runnable_in_m6() {
 }
 
 #[test]
+fn union_alias_with_nothing_member_compiles_and_runs() {
+    // Bug (High tier — type resolution): a union alias containing `nothing` resolved to
+    // `Circle | unknown` through a second, drifted resolver, so a valid program was refused
+    // with "This value is `Circle | nothing`, but `m` is declared as `Circle | unknown`".
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("union_alias_nothing_member.ynz"));
+    assert_eq!(
+        code, 0,
+        "alias with a `nothing` member must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "ok\n");
+}
+
+#[test]
+fn union_alias_naming_a_later_alias_resolves_the_same_everywhere() {
+    // Bug (High tier — type resolution): alias types were derived twice, in `collect_shapes`
+    // (read by parameter types) and again in the checker (read by `let`), and the two disagreed
+    // for an alias naming a later-declared alias, so `describe(c)` was refused.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("union_alias_forward_reference.ynz"));
+    assert_eq!(
+        code, 0,
+        "forward alias reference must resolve identically for params and lets; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "described\n");
+}
+
+#[test]
 fn m4_share_param_compiles_and_runs() {
     // WHY: M4 ships ownership annotations (`share`, `lend`, `give`) on parameters.
     // This fixture previously tested the M3 deferral; now it tests M4 success:
