@@ -4,9 +4,10 @@
 //! use-after-free: a segfault or abort in the shipped binary, `heap-use-after-free` under ASan).
 //! `main` never released on reassignment, so it ran these programs correctly and leaked.
 //!
-//! Tier: High (memory safety). One case per iterated kind the loop lowers (array, string, map)
-//! and per row kind that is not a plain `int` list (shape rows), plus the exits the held
-//! collection must be released on (a `return` inside the body, a reassignment that never runs).
+//! Tier: High (memory safety). One case per iterated kind the loop lowers (array, string, map),
+//! per row kind that is not a plain `int` list (shape rows) and per place the loop walks (a
+//! binding, a shape field), plus the exits the held collection must be released on (a `return`
+//! inside the body, a reassignment that never runs).
 //!
 //! Per case, at -O2 and -O0, the bug each test catches:
 //! * `asan`: the loop reads the released collection (a plain run may print the right values from
@@ -76,6 +77,22 @@ reassign_case!(
     "4\n3\n"
 );
 reassign_case!(never_runs, "v0_3_m9_c10_reassign_never_runs.ynz", "3\n3\n");
+// The iterated place is a shape field: `holder.rows = ...` inside `for (row in holder.rows)`.
+reassign_case!(
+    field_array,
+    "v0_3_m9_c10_reassign_field_array.ynz",
+    "6\n1\n"
+);
+reassign_case!(
+    field_string,
+    "v0_3_m9_c10_reassign_field_string.ynz",
+    "3\nX\n"
+);
+reassign_case!(
+    field_some_passes_and_return,
+    "v0_3_m9_c10_reassign_field_some_passes.ynz",
+    "6\n3\n"
+);
 // Guard, green on every sha: a `while` re-reads the binding each pass.
 reassign_case!(
     while_over_index,

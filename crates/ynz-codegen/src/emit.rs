@@ -28101,6 +28101,7 @@ fn lower_stmt_field_assign<'ctx>(
     let Some(glue) = cg.stored_release(&field_ty, ReleaseHome::Field)? else {
         return store_field(cg, val, &field_ty, field_ptr);
     };
+    let mut old_pointer = None;
     let old_slot = match cg.envelope_union_variants(&cg.resolve_type(&field_ty)) {
         // A `fixed<T, N>` field: keep a copy of its cells (the items they point at are still the
         // old list's, which the release below frees after the new list is stored).
@@ -28146,11 +28147,34 @@ fn lower_stmt_field_assign<'ctx>(
             cg.builder
                 .build_store(saved, old_value)
                 .map_err(|err| format!("field assign save store: {err}"))?;
+            old_pointer = Some(old_value.into_pointer_value());
             saved
         }
     };
     store_field(cg, val, &field_ty, field_ptr)?;
-    cg.call_stored_release(glue, old_slot, "field_assign")
+    // A `for` loop walking this very field keeps the list it started with: it takes the old value
+    // over and releases it when the loop ends (`Cg::hold_for_walking_field_loops`).
+    let walked_by_loop = match (old_pointer, ynz_typeck::cpu_admission::place_path(target)) {
+        (Some(old_pointer), Some(path)) if !cg.loop_held.is_empty() => {
+            cg.hold_for_walking_field_loops(&path, field_ptr, old_pointer)?
+        }
+        _ => None,
+    };
+    let Some(walked_by_loop) = walked_by_loop else {
+        return cg.call_stored_release(glue, old_slot, "field_assign");
+    };
+    let release_bb = cg.append_block("field_assign_release");
+    let done_bb = cg.append_block("field_assign_released");
+    cg.builder
+        .build_conditional_branch(walked_by_loop, done_bb, release_bb)
+        .map_err(|err| format!("field assign loop-held branch: {err}"))?;
+    cg.builder.position_at_end(release_bb);
+    cg.call_stored_release(glue, old_slot, "field_assign")?;
+    cg.builder
+        .build_unconditional_branch(done_bb)
+        .map_err(|err| format!("field assign loop-held join: {err}"))?;
+    cg.builder.position_at_end(done_bb);
+    Ok(())
 }
 
 /// PostfixOp lowering: `.copy()` and `.freeze()`.
@@ -30177,13 +30201,17 @@ struct TemporaryRegion {
     kind: TemporaryRegionKind,
 }
 
-/// A collection a plain `for` loop walks while its own body reassigns the iterated binding. The
-/// loop reads the collection it started with on every pass, so the assignment that replaces it
-/// must not release it: the loop takes it over (`Cg::hold_for_walking_loops`) and releases it when
-/// it exits (`Cg::release_loop_held`).
+/// A collection a plain `for` loop walks while its own body reassigns the iterated binding or
+/// field. The loop reads the collection it started with on every pass, so the assignment that
+/// replaces it must not release it: the loop takes it over (`Cg::hold_for_walking_loops`,
+/// `Cg::hold_for_walking_field_loops`) and releases it when it exits (`Cg::release_loop_held`).
 struct LoopHeld<'ctx> {
-    /// The iterated binding's slot: an assignment to that slot replaces `collection`.
+    /// What holds `collection`: the iterated binding's slot, or the address of the iterated field
+    /// (`field_path` is set). An assignment to that place replaces `collection`.
     slot: PointerValue<'ctx>,
+    /// The iterated field as `["holder", "rows"]` for `for (row in holder.rows)`; `None` for a
+    /// loop over a binding.
+    field_path: Option<Vec<String>>,
     /// The collection the loop walks (a list, map or string pointer).
     collection: PointerValue<'ctx>,
     /// An `i1` entry-block slot, set once an assignment left `collection` for the loop to release.
@@ -32598,12 +32626,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(held)
     }
 
-    /// Start holding the collection a plain `for` loop over the binding `iter` walks, when the loop
-    /// body reassigns that binding (`stmt_assigns_name`): the loop reads `collection` on every
-    /// pass, and the release an assignment makes of the value it replaces (plan #17) would free it
-    /// under the loop. Any other loop is left as it was. Call after `collection` is evaluated and
-    /// before the loop's first branch; `held_before` is `self.loop_held.len()` then, for
-    /// `end_loop_held`. A resume function is not covered: its loop state lives in the frame.
+    /// Start holding the collection a plain `for` loop over the binding or field `iter` walks, when
+    /// the loop body reassigns it (`stmt_assigns_name`, `stmt_assigns_field_path`): the loop reads
+    /// `collection` on every pass, and the release an assignment makes of the value it replaces
+    /// (plan #17) would free it under the loop. Any other loop is left as it was. Call after
+    /// `collection` is evaluated and before the loop's first branch; `held_before` is
+    /// `self.loop_held.len()` then, for `end_loop_held`. A resume function is not covered: its loop
+    /// state lives in the frame.
     ///
     /// O(body) time to scan, O(1) to emit.
     fn begin_loop_held(
@@ -32613,26 +32642,49 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         collection: PointerValue<'ctx>,
         ty: &Type,
     ) -> Result<(), String> {
-        let Expr::Ident(name, _) = iter else {
-            return Ok(());
-        };
-        if self.sm_frame_ptr.is_some()
-            || !body
-                .stmts
-                .iter()
-                .any(|stmt| ynz_typeck::cpu_admission::stmt_assigns_name(stmt, name))
-        {
+        if self.sm_frame_ptr.is_some() {
             return Ok(());
         }
-        let slot = self
-            .reload_slot(name)
-            .ok_or_else(|| format!("internal: the iterated binding `{name}` has no slot"))?;
+        let (slot, field_path) = match iter {
+            Expr::Ident(name, _) => {
+                if !body
+                    .stmts
+                    .iter()
+                    .any(|stmt| ynz_typeck::cpu_admission::stmt_assigns_name(stmt, name))
+                {
+                    return Ok(());
+                }
+                let slot = self.reload_slot(name).ok_or_else(|| {
+                    format!("internal: the iterated binding `{name}` has no slot")
+                })?;
+                (slot, None)
+            }
+            Expr::FieldAccess {
+                receiver, field, ..
+            } => {
+                let Some(path) = ynz_typeck::cpu_admission::place_path(iter) else {
+                    return Ok(());
+                };
+                if !body
+                    .stmts
+                    .iter()
+                    .any(|stmt| ynz_typeck::cpu_admission::stmt_assigns_field_path(stmt, &path))
+                {
+                    return Ok(());
+                }
+                let path = path.into_iter().map(str::to_string).collect();
+                let (address, _) = field_gep(self, receiver, field)?;
+                (address, Some(path))
+            }
+            _ => return Ok(()),
+        };
         let taken_over = self.alloca_in_entry_llvm(self.ctx.bool_type(), "loop_held")?;
         self.builder
             .build_store(taken_over, self.ctx.bool_type().const_zero())
             .map_err(|err| format!("loop held flag init: {err}"))?;
         self.loop_held.push(LoopHeld {
             slot,
+            field_path,
             collection,
             taken_over,
             ty: ty.clone(),
@@ -32689,46 +32741,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         mut replaced: ReplacedValue<'ctx>,
         slot: PointerValue<'ctx>,
     ) -> Result<ReplacedValue<'ctx>, String> {
-        let bool_type = self.ctx.bool_type();
-        let mut claimed = bool_type.const_zero();
-        for held in self.loop_held.iter().filter(|held| held.slot == slot) {
-            let same_collection = self
-                .builder
-                .build_int_compare(
-                    IntPredicate::EQ,
-                    held.collection,
-                    replaced.held,
-                    "loop_held_same",
-                )
-                .map_err(|err| format!("loop held compare: {err}"))?;
-            let unclaimed = self
-                .builder
-                .build_not(claimed, "loop_held_unclaimed")
-                .map_err(|err| format!("loop held not: {err}"))?;
-            let walked = self
-                .builder
-                .build_and(same_collection, unclaimed, "loop_held_walked")
-                .map_err(|err| format!("loop held and: {err}"))?;
-            let takes = self
-                .builder
-                .build_and(walked, replaced.live, "loop_held_takes")
-                .map_err(|err| format!("loop held and: {err}"))?;
-            let was_taken = self
-                .builder
-                .build_load(bool_type, held.taken_over, "loop_held_was_taken")
-                .map_err(|err| format!("loop held flag load: {err}"))?
-                .into_int_value();
-            let now_taken = self
-                .builder
-                .build_or(was_taken, takes, "loop_held_now_taken")
-                .map_err(|err| format!("loop held or: {err}"))?;
-            self.builder
-                .build_store(held.taken_over, now_taken)
-                .map_err(|err| format!("loop held flag store: {err}"))?;
-            claimed = self
-                .builder
-                .build_or(claimed, takes, "loop_held_claimed")
-                .map_err(|err| format!("loop held or: {err}"))?;
+        let mut claimed = self.ctx.bool_type().const_zero();
+        for held in self
+            .loop_held
+            .iter()
+            .filter(|held| held.field_path.is_none() && held.slot == slot)
+        {
+            claimed = self.claim_for_loop(held, replaced.held, replaced.live, claimed)?;
         }
         let not_claimed = self
             .builder
@@ -32739,6 +32758,89 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_and(replaced.live, not_claimed, "loop_held_release_live")
             .map_err(|err| format!("loop held and: {err}"))?;
         Ok(replaced)
+    }
+
+    /// An assignment to the field `path` (its cell at `field_address`) replaces `old_value`:
+    /// returns an `i1` that is set when a plain `for` loop walking that field's old collection
+    /// (`begin_loop_held`) took it over, and the assignment must then not release it. `None` when
+    /// no loop around this point walks that field.
+    ///
+    /// O(nested loops over the field) to emit; a few instructions at run time.
+    fn hold_for_walking_field_loops(
+        &self,
+        path: &[&str],
+        field_address: PointerValue<'ctx>,
+        old_value: PointerValue<'ctx>,
+    ) -> Result<Option<inkwell::values::IntValue<'ctx>>, String> {
+        let mut claimed = self.ctx.bool_type().const_zero();
+        let mut any_loop = false;
+        for held in self.loop_held.iter().filter(|held| {
+            held.field_path
+                .as_ref()
+                .is_some_and(|walked| walked.iter().map(String::as_str).eq(path.iter().copied()))
+        }) {
+            let same_cell = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    held.slot,
+                    field_address,
+                    "loop_held_same_cell",
+                )
+                .map_err(|err| format!("loop held cell compare: {err}"))?;
+            claimed = self.claim_for_loop(held, old_value, same_cell, claimed)?;
+            any_loop = true;
+        }
+        Ok(any_loop.then_some(claimed))
+    }
+
+    /// One loop's turn to take the value an assignment replaces: it takes it when the assignment
+    /// replaces `held.collection` (`replaced_pointer`), `applies` is set, and no outer loop took it
+    /// already (`claimed`). Records the take in the loop's flag and returns `claimed` with it.
+    fn claim_for_loop(
+        &self,
+        held: &LoopHeld<'ctx>,
+        replaced_pointer: PointerValue<'ctx>,
+        applies: inkwell::values::IntValue<'ctx>,
+        claimed: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let bool_type = self.ctx.bool_type();
+        let same_collection = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                held.collection,
+                replaced_pointer,
+                "loop_held_same",
+            )
+            .map_err(|err| format!("loop held compare: {err}"))?;
+        let unclaimed = self
+            .builder
+            .build_not(claimed, "loop_held_unclaimed")
+            .map_err(|err| format!("loop held not: {err}"))?;
+        let walked = self
+            .builder
+            .build_and(same_collection, unclaimed, "loop_held_walked")
+            .map_err(|err| format!("loop held and: {err}"))?;
+        let takes = self
+            .builder
+            .build_and(walked, applies, "loop_held_takes")
+            .map_err(|err| format!("loop held and: {err}"))?;
+        let was_taken = self
+            .builder
+            .build_load(bool_type, held.taken_over, "loop_held_was_taken")
+            .map_err(|err| format!("loop held flag load: {err}"))?
+            .into_int_value();
+        let now_taken = self
+            .builder
+            .build_or(was_taken, takes, "loop_held_now_taken")
+            .map_err(|err| format!("loop held or: {err}"))?;
+        self.builder
+            .build_store(held.taken_over, now_taken)
+            .map_err(|err| format!("loop held flag store: {err}"))?;
+        self.builder
+            .build_or(claimed, takes, "loop_held_claimed")
+            .map_err(|err| format!("loop held or: {err}"))
     }
 
     /// Release the copy every plain `for` loop around this point made for its variable, innermost

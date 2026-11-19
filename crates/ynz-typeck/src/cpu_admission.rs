@@ -869,18 +869,60 @@ fn expr_contains_suspending_call(
 ///
 /// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
 pub fn stmt_assigns_name(stmt: &Stmt, name: &str) -> bool {
+    stmt_any_assignment(
+        stmt,
+        &|assignment| matches!(assignment, Stmt::Assign { target, .. } if target.as_str() == name),
+    )
+}
+
+/// True when `stmt` (at any nesting depth) assigns the field path `path` (`holder.rows = ...` is
+/// `["holder", "rows"]`) with a field assignment `=`.
+///
+/// Time: O(N * P) where N = AST nodes, P = path length  Space: O(D) recursion depth.
+pub fn stmt_assigns_field_path(stmt: &Stmt, path: &[&str]) -> bool {
+    stmt_any_assignment(stmt, &|assignment| match assignment {
+        Stmt::FieldAssign { target, .. } => {
+            place_path(target).is_some_and(|assigned| assigned == path)
+        }
+        _ => false,
+    })
+}
+
+/// The names a place expression is made of, root binding first: `holder.inner.rows` is
+/// `["holder", "inner", "rows"]`. `None` for any other expression (a call, an index, a literal).
+///
+/// Time: O(P) where P = path length  Space: O(P).
+pub fn place_path(expr: &Expr) -> Option<Vec<&str>> {
+    match expr {
+        Expr::Ident(name, _) => Some(vec![name.as_str()]),
+        Expr::FieldAccess {
+            receiver, field, ..
+        } => {
+            let mut path = place_path(receiver)?;
+            path.push(field.as_str());
+            Some(path)
+        }
+        _ => None,
+    }
+}
+
+/// True when `matches_assignment` holds for `stmt` or any statement nested in it.
+fn stmt_any_assignment(stmt: &Stmt, matches_assignment: &dyn Fn(&Stmt) -> bool) -> bool {
+    if matches_assignment(stmt) {
+        return true;
+    }
+    let block_any = |block: &Block| {
+        block
+            .stmts
+            .iter()
+            .any(|nested| stmt_any_assignment(nested, matches_assignment))
+    };
     match stmt {
-        Stmt::Assign { target, .. } => target.as_str() == name,
-        Stmt::If { body, .. } => body.stmts.iter().any(|s| stmt_assigns_name(s, name)),
-        Stmt::While { body, .. } | Stmt::For { body, .. } => {
-            body.stmts.iter().any(|s| stmt_assigns_name(s, name))
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            block_any(body)
         }
         Stmt::Match { arms, else_arm, .. } => {
-            arms.iter()
-                .any(|a| a.body.stmts.iter().any(|s| stmt_assigns_name(s, name)))
-                || else_arm
-                    .as_ref()
-                    .is_some_and(|b| b.stmts.iter().any(|s| stmt_assigns_name(s, name)))
+            arms.iter().any(|arm| block_any(&arm.body)) || else_arm.as_ref().is_some_and(block_any)
         }
         _ => false,
     }
