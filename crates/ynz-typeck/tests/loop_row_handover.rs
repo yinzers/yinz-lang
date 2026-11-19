@@ -249,3 +249,95 @@ fn a_list_reassigned_in_the_body_keeps_the_copy_refusal() {
         "{found:#?}"
     );
 }
+
+/// The loop is refused with the `.copy()` text and nothing is recorded as handed over.
+fn assert_keeps_the_copy_refusal(source: &str) {
+    let (loops, stores, found) = record_of(source);
+    assert_eq!((loops, stores), (0, 0), "{source}");
+    assert!(
+        found.iter().any(|message| message.contains("one cell of")),
+        "expected the loop-cell refusal for:\n{source}\ngot {found:#?}"
+    );
+}
+
+#[test]
+fn a_const_list_never_hands_its_rows_over() {
+    // WHY (High): a `const` list cannot lose a row; blanking its cell would mutate it.
+    assert_keeps_the_copy_refusal(
+        "function keep() -> array<array<int>> {
+  const matrix: array<array<int>> = [[1], [2]]
+  let kept: array<array<int>> = []
+  for (row in matrix) {
+    kept.add(row)
+  }
+  return kept
+}\n",
+    );
+}
+
+#[test]
+fn a_list_in_a_function_that_suspends_never_hands_its_rows_over() {
+    // WHY (High): a suspension inside the loop can resume after the list was released elsewhere;
+    // the hand-over is only admitted for a function that never suspends.
+    assert_keeps_the_copy_refusal(
+        "function keep(give matrix: array<array<int>>) -> array<array<int>> {
+  let kept: array<array<int>> = []
+  for (row in matrix) {
+    wait sleep(1)
+    kept.add(row)
+  }
+  return kept
+}\n",
+    );
+}
+
+#[test]
+fn a_list_that_is_not_a_plain_binding_never_hands_its_rows_over() {
+    // WHY (High): the loop can only prove "not read again" for a name; a field of a shape can be
+    // reached through the shape.
+    assert_keeps_the_copy_refusal(
+        "shape Holder {
+  rows: array<array<int>>
+}
+function keep(give holder: Holder) -> array<array<int>> {
+  let kept: array<array<int>> = []
+  for (row in holder.rows) {
+    kept.add(row)
+  }
+  return kept
+}\n",
+    );
+}
+
+#[test]
+fn rows_of_a_fixed_list_of_unions_keep_the_copy_refusal() {
+    // WHY (High): a `fixed` list of unions is kept on the `.copy()` refusal (commit `980bdea`):
+    // no hand-over is recorded.
+    let source = "shape Big { name: string }
+shape Tiny { flag: boolean }
+shape Thing = Big | Tiny
+function keep(give matrix: fixed<Thing>) -> array<Thing> {
+  let kept: array<Thing> = []
+  for (row in matrix) {
+    kept.add(row)
+  }
+  return kept
+}\n";
+    let (loops, _, found) = record_of(source);
+    assert_eq!(loops, 0);
+    assert!(!found.is_empty(), "{found:#?}");
+}
+
+#[test]
+fn a_map_entry_loop_hands_nothing_over() {
+    // WHY (High): a map is not a list of cells; only list loops are handed over.
+    let source = "function keep(give table: map<string, array<int>>) -> array<array<int>> {
+  let kept: array<array<int>> = []
+  for ((name, row) in table) {
+    kept.add(row)
+  }
+  return kept
+}\n";
+    let (loops, stores, _) = record_of(source);
+    assert_eq!((loops, stores), (0, 0));
+}
