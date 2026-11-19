@@ -95,9 +95,8 @@ function entrypoint() -> nothing {
   let byPlain: map<Plain, int> = {}
   print(byPlain.count().toString())
 
-  // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — not supported yet: it is kept
-  // outside the 16-byte slot, so only its address would be the key. Key by an `int`, a `string`
-  // or a `number<34>` for now.
+  // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — it is kept outside the 16-byte
+  // slot, so only its address would be the key.
   let byPrice: map<number<50>, int> = {}
   print(byPrice.count().toString())
 

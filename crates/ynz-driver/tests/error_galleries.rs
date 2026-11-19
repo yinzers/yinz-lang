@@ -734,7 +734,7 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
         ),
         (
             "wide number map key (C6)",
-            "A `map` can't be keyed by `number<50>` yet",
+            "A `map` cannot be keyed by `number<50>`",
         ),
         (
             "sensitive string map key (C7)",

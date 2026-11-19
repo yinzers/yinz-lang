@@ -1790,10 +1790,12 @@ why_template = "`{callee}` is compiled once for each type `{typeParam}` stands f
 # equal key would be found at another address and miss. Rendered by `check_map_key_type`; `{key}`
 # is the key type, `{key_is}` says why it is not one 8- or 16-byte value, `{recovery}` is the way
 # out (a shape's names the compiling `map<string, Shape>`). The `number<N>` of more than 34 digits
-# has its own text below, because its reason is its size, not its layout. The refusal is
-# temporary: the text says "yet", and the WHY states how a map stores keys today.
+# has its own text below, because its reason is its size, not its layout, and that refusal is
+# permanent. Only this shape / array / other-type refusal is temporary (support is built on card
+# #518): its text says "yet", and its WHY states how a map stores keys today.
 # Decided v0.3-M9 C6 follow-up: `git log --grep=MapKeyNotStorable`; temporary, Chief's 2026-11-19
-# ruling: `git log --grep="mark map-key refusals temporary"`.
+# ruling: `git log --grep="mark map-key refusals temporary"`; the wide `number` stays refused,
+# Chief's 2026-11-19 ruling: `git log --grep="settle remaining refusals"`.
 [[diagnostic_template]]
 kind_name = "MapKeyNotStorable"
 what_template = "A `map` can't be keyed by `{key}` yet."
@@ -1805,9 +1807,9 @@ why_template = "Today a map keeps each key in one slot of 8 bytes (for an `int`,
 # (`number<50>`), `{digits}` its digit count (`50`).
 [[diagnostic_template]]
 kind_name = "MapKeyNotStorableWideNumber"
-what_template = "A `map` can't be keyed by `{key}` yet."
+what_template = "A `map` cannot be keyed by `{key}`."
 what_instead_template = "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`)."
-why_template = "Today a map keeps a `number` key inside its own 16-byte slot, which holds up to 34 digits. A `{key}` can have up to {digits} digits and takes as much memory as its digits need, kept outside the map, so it does not fit in the slot. The slot could hold only its address, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
+why_template = "A map keeps a `number` key inside its own 16-byte slot, which holds up to 34 digits. A `{key}` can have up to {digits} digits and takes as much memory as its digits need, kept outside the map, so it does not fit in the slot. The slot could hold only its address, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
 
 # The same refusal for a `sensitive string` key: selected by `check_map_key_type`; the diagnostic
 # carries `MapKeyNotStorable`. `{key}` is the type (`sensitive string`). The reason is the secret
