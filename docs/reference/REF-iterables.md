@@ -152,17 +152,22 @@ If you want to keep reading past failures (for example, log them and continue), 
 
 ```ynz
 // Skip lines that failed to read — silently discards failures, continues to next
-for (line in file.lines(path).orSkipFailures()) {
+const allLines = file.lines(path)
+const readableLines = allLines.orSkipFailures()
+for (line in readableLines) {
   if (line.contains(`ERROR`)) { print(line) }
 }
 
-// Skip and log each failure to stderr — compose .logSkippedFailuresTo() with .orSkipFailures()
-for (line in file.lines(path).logSkippedFailuresTo(terminal.stderr).orSkipFailures()) {
+// Skip and log each failure to stderr — apply .logSkippedFailuresTo() first, then .orSkipFailures()
+const loggedLines = allLines.logSkippedFailuresTo(terminal.stderr)
+const survivingLines = loggedLines.orSkipFailures()
+for (line in survivingLines) {
   if (line.contains(`ERROR`)) { print(line) }
 }
 
 // Get each step as a success-or-failure value, decide per line
-for (result in file.lines(path).withErrors()) {
+const lineResults = allLines.withErrors()
+for (result in lineResults) {
   if (result.failed()) {
     log.warn(`bad line: ${result.message}`)
   } else {
@@ -175,7 +180,7 @@ for (result in file.lines(path).withErrors()) {
 
 With any adapter, the enclosing function no longer needs to be `errors`.
 
-**`.orSkipFailures()` is silent** — it drops failed iterations without any I/O. If you want logging, chain `.logSkippedFailuresTo(sink)` before it. `terminal.stderr` and `terminal.stdout` are built-in log sinks. You can also pass any value that follows the `LogSink` contract (has a `.write(message)` method).
+**`.orSkipFailures()` is silent** — it drops failed iterations without any I/O. If you want logging, apply `.logSkippedFailuresTo(sink)` first and call `.orSkipFailures()` on its result. `terminal.stderr` and `terminal.stdout` are built-in log sinks. You can also pass any value that follows the `LogSink` contract (has a `.write(message)` method).
 
 ---
 
