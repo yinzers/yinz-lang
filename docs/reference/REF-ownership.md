@@ -114,7 +114,7 @@ print(rows.count())
 
 Numbers, booleans, options, strings and ranges are copied, so storing them gives nothing away.
 
-A `for` loop can hand its rows over. When you never read the list again, not inside the loop and not after it, storing the loop variable takes the row out of the list instead of copying it, and the list frees only the rows that stayed:
+A `for` loop can hand its rows over. When you never read the list again, not inside the loop and not after it, storing the loop variable takes the row out of the list instead of copying it:
 
 ```ynz
 let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
@@ -124,7 +124,19 @@ for (row in matrix) {
 }
 ```
 
-If the list is read inside or after the loop, the row still belongs to it and storing it needs `.copy()`.
+If you read the list inside the loop or after it, each row still belongs to the list, so the compiler asks for a copy:
+
+```ynz
+let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
+let kept: array<array<int>> = []
+for (row in matrix) {
+  kept.add(row)
+  // COMPILE ERROR: This line gives `row` away — it is handed to `kept` — but `row` is one cell of
+  // `matrix`, which this loop is walking, so someone here still holds it.
+  //   Give away a copy instead: `row.copy()`.
+}
+print(matrix.count())
+```
 
 ---
 
