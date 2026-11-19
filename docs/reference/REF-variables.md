@@ -69,7 +69,7 @@ healPlayer(player)            // COMPILE ERROR: player is const — healPlayer's
 
 The compiler rejects all three at compile time. `const` is a complete promise — no exceptions.
 
-**Why this matters**: when you mark a value `const`, the compiler can optimize more aggressively (it knows the value never changes, so it can keep it in a register, share it across threads safely, and skip certain checks). The full picture lives in [Ownership](REF-ownership.md) — `const` and the ownership system work together to give you both safety AND performance.
+`const` and the ownership system work together to give you both safety and performance. The full picture lives in [Ownership](REF-ownership.md).
 
 ---
 
