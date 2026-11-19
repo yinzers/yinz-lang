@@ -3022,7 +3022,7 @@ fn v03_m3a_p1_shadow_crossing_local() {
     // crossing local `x` must be rejected at typeck with a clean compile error. Codegen
     // assumes one alloca per crossing-local name (the sm_entry alloca); a shadow would
     // require two allocas for the same name, which violates the frame-slot invariant.
-    // The name ambiguity across a suspension boundary also violates Golden Rule 2.
+    // The name ambiguity across a suspension boundary also violates Golden Rule 4.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shadow_crossing_local.ynz"));
     assert_eq!(
         code, 1,
@@ -4687,7 +4687,7 @@ fn v03_m3a_p3_for_shape_loop_var_survives_wait() {
 
 #[test]
 fn v03_m3a_p3_for_shape_loop_var_alloc_one() {
-    // WHY: GR8 invariant — an array<Shape> loop var must add ZERO per-element and
+    // WHY: GR6 invariant — an array<Shape> loop var must add ZERO per-element and
     // per-iteration allocations. Since the v0.3-M5 P2 by-value ABI, shape element
     // BYTES live inline in the (counted, FRAGO 005) array buffer — no per-element
     // globals or heap copies — so the constant is alloc=3 (task frame + array
@@ -8828,7 +8828,7 @@ fn v03_m3b_p4_share_read_pair_byte_identical() {
 
 #[test]
 fn v03_m3b_p4_share_read_pair_sequentializes_under_floor() {
-    // test-ratchet: the conservative floor (Golden Rule 5 soundness > Rule 10 perf) forfeits
+    // test-ratchet: the conservative floor (Golden Rule 2 soundness > Rule 7 perf) forfeits
     // read-only-mutable-heap parallelism. A mutable-heap arg is unconditionally a potential
     // aliased write under the floor, which does not trust any per-form ownership classifier
     // (that approach missed five distinct write forms across three gate rounds), so the pair
@@ -9018,7 +9018,7 @@ fn v03_m3b_p4_mutable_heap_share_read_byte_identical() {
 
 #[test]
 fn v03_m3b_p4_mutable_heap_share_read_sequentializes_under_floor() {
-    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
+    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR2 > GR7).
     // A mutable-heap arg is unconditionally a potential write under the floor, so the pair
     // sequentializes (≈300ms) in both modes. The assertion locks that sound behavior.
     //
@@ -9065,7 +9065,7 @@ fn v03_m3b_p4_bare_read_heap_byte_identical() {
 
 #[test]
 fn v03_m3b_p4_bare_read_heap_sequentializes_under_floor() {
-    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
+    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR2 > GR7).
     // A mutable-heap arg is unconditionally a potential write under the floor, so two bare-read
     // heap calls sequentialize (≈300ms) in both modes. The assertion locks that sound behavior.
     //

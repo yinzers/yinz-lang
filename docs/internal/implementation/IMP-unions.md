@@ -19,7 +19,7 @@ User spec: [`docs/reference/REF-unions.md`](../../reference/REF-unions.md)
 
 ## What a union type is
 
-`shape Shape = Circle | Square | Triangle` declares a type whose values can be any of the listed variants. Each variant is a concrete shape (with its own fields). The `|` operator in type position separates variants — the same syntax as TypeScript union types (Golden Rule 6 — borrow familiar syntax).
+`shape Shape = Circle | Square | Triangle` declares a type whose values can be any of the listed variants. Each variant is a concrete shape (with its own fields). The `|` operator in type position separates variants — the same syntax as TypeScript union types (Golden Rule 12 — borrow familiar syntax).
 
 Union types are the structural complement to `options`: `options` carries only a tag label; unions carry a tag PLUS a typed payload for each variant.
 
@@ -136,6 +136,6 @@ Symmetric with single-variant `options` rejection.
 - [`docs/internal/implementation/IMP-narrowing.md`](IMP-narrowing.md) — flow-sensitive `is` narrowing (how the compiler tracks which variant is proven inside a block)
 - [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) — `maybe<T>` lowering (the `T | none` special case; unions reuse M5's maybe encoding for that form)
 - [`docs/internal/implementation/IMP-control-flow.md`](IMP-control-flow.md) — multi-case `if` exhaustiveness; jump-table lowering
-- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 6 — borrow familiar syntax (`|` from TypeScript)
+- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 12 — borrow familiar syntax (`|` from TypeScript)
 - `crates/ynz-typeck/src/unions_table.rs` — UnionLayoutTable cache (M6 implementation)
 - `crates/ynz-codegen/src/unions.rs` — union codegen helpers (M6 implementation)

@@ -6,11 +6,11 @@ pub struct KeywordEntry {
     /// The `Token::Xxx` variant emitted (e.g. `"Function"`).
     pub token: &'static str,
     pub since: &'static str,
-    /// WHAT this keyword does (Rule 11 first clause). `None` = no hover doc yet.
+    /// WHAT this keyword does (Rule 3 first clause). `None` = no hover doc yet.
     pub hover_what: Option<&'static str>,
-    /// WHAT INSTEAD the developer should write to use it correctly (Rule 11 second clause).
+    /// WHAT INSTEAD the developer should write to use it correctly (Rule 3 second clause).
     pub hover_what_instead: Option<&'static str>,
-    /// WHY the keyword works the way it does — contextual, not generic (Rule 11 third clause).
+    /// WHY the keyword works the way it does — contextual, not generic (Rule 3 third clause).
     pub hover_why: Option<&'static str>,
 }
 
@@ -116,7 +116,7 @@ pub struct DiagnosticTemplateEntry {
 /// at registry-parse time so a lint can never block a compile.
 ///
 /// The three `*_template` fields carry the canonical WHAT / WHAT-INSTEAD / WHY text
-/// (Golden Rule 11) with `{placeholder}` substitution via [`crate::render_template`] —
+/// (Golden Rule 3) with `{placeholder}` substitution via [`crate::render_template`] —
 /// the firing site in the compiler supplies the per-site vars, so the rule's teaching
 /// text has exactly ONE home. Adding a new lint rule is a TOML entry plus its firing
 /// site; no mechanism change (schema, parser, constants, LSP seam) is required.

@@ -1,6 +1,6 @@
 ---
 name: "REF-naming"
-description: "Design rationale for Yinz's human-readable keyword naming choices (e.g. nothing, none, shape, follows) over traditional CS jargon, per Golden Rule 12."
+description: "Design rationale for Yinz's human-readable keyword naming choices (e.g. nothing, none, shape, follows) over traditional CS jargon, per Golden Rule 5."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -35,11 +35,11 @@ Use plain English words instead of CS terms throughout the language:
 | `&T` / `&mut T` | `.share` / `.lend` | Dot methods, autocomplete-discoverable |
 | `Result<T,E>` / `?` | `errors` keyword | Auto-propagation |
 
-**Why**: Golden Rule 12. Every keyword that requires CS background knowledge is a barrier to junior developers. Keywords that read like plain English lower the learning curve and make code self-documenting.
+**Why**: Golden Rule 5. Every keyword that requires CS background knowledge is a barrier to junior developers. Keywords that read like plain English lower the learning curve and make code self-documenting.
 
 ---
 
-## Capital Letter = Type (Golden Rule 13)
+## Capital Letter = Type (Golden Rule 10)
 
 PascalCase is exclusively for types. Everything else is lowercase camelCase — modules, functions, variables, keywords. No exceptions.
 

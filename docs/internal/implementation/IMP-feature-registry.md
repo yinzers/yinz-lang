@@ -290,7 +290,7 @@ The rule's teaching text, severity, and LSP code all have exactly ONE home — t
 | `description` | string | yes | One-sentence description (LSP hover/documentation surface) |
 | `what_template` | string | yes | Parameterized WHAT (`{placeholder}` substitution, same grammar as `diagnostic_template`) |
 | `what_instead_template` | string | yes | Parameterized WHAT-INSTEAD |
-| `why_template` | string | yes | Parameterized WHY — contextual, per Golden Rule 11 |
+| `why_template` | string | yes | Parameterized WHY — contextual, per Golden Rule 3 |
 | `since` | string | yes | Milestone tag (e.g. `"v0.3-M4"`) |
 | `design_doc` | string | yes | Repo-relative path of the design doc that locked the rule |
 

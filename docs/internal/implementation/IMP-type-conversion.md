@@ -23,7 +23,7 @@ All type conversions are dot methods. No `as` keyword. No angle bracket casts. T
 
 **Why no `as`**: `as` is a programmer keyword that requires knowing the type system to use correctly. Dot methods are autocomplete-discoverable — a developer types `.to` and sees exactly what's available. `value.toNumber()` is self-documenting; `value as number` requires knowing what `as` does.
 
-**Dot-first design (Golden Rule 1)**: If something can be a dot method with autocomplete, it should be. Type conversion is exactly this case.
+**Dot-first design (Golden Rule 11)**: If something can be a dot method with autocomplete, it should be. Type conversion is exactly this case.
 
 ---
 
@@ -49,4 +49,4 @@ if (condition) {
 }
 ```
 
-**Why**: Ternaries are compact but hard to read and hard to extend. Pre-assignment is two lines but self-explanatory at any experience level. Consistent with the "step-by-step over chaining" philosophy (Golden Rule 7).
+**Why**: Ternaries are compact but hard to read and hard to extend. Pre-assignment is two lines but self-explanatory at any experience level. Consistent with the "step-by-step over chaining" philosophy (Golden Rule 9).

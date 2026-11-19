@@ -20,7 +20,7 @@ Two paired modules, both speaking HTTP, paired by protocol but split by directio
 | `request` | Outbound — your program reaches out to other servers | v0.15 |
 | `server`  | Inbound — your program serves endpoints for other clients | v0.21 |
 
-Both modules share the `Request` / `Response` types (capital — types per Rule 13), since HTTP messages are direction-agnostic at the wire level. The `request` module BUILDS Requests and CONSUMES Responses; the `server` module CONSUMES Requests and BUILDS Responses.
+Both modules share the `Request` / `Response` types (capital — types per Rule 10), since HTTP messages are direction-agnostic at the wire level. The `request` module BUILDS Requests and CONSUMES Responses; the `server` module CONSUMES Requests and BUILDS Responses.
 
 Early design — finalized API shape locks at v0.15 (request) and v0.21 (server). What follows is the direction-of-travel, not the committed surface.
 
@@ -53,7 +53,7 @@ request.websocket(url)
 
 ### Mid-level builder (tier 2)
 
-For cases the helpers don't cover (custom methods, complex headers, retries, timeouts). Step-by-step on a named variable — no chaining (Golden Rule 7):
+For cases the helpers don't cover (custom methods, complex headers, retries, timeouts). Step-by-step on a named variable — no chaining (Golden Rule 9):
 
 ```
 let req = request.build()

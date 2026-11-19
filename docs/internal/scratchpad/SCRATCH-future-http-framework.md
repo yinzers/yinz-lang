@@ -33,7 +33,7 @@ Most production HTTP servers want this exact behavior:
 
 - One request handler panics → 500 to that client, server keeps serving others
 - Accept loop crashes (rare) → framework restarts it
-- All panics logged with stack trace + WHY (per Golden Rule 11)
+- All panics logged with stack trace + WHY (per Golden Rule 3)
 - Custom panic handlers possible (alerting, metrics, structured logging)
 
 Every HTTP framework in every language eventually grows this. In Yinz, it's the default — the user gets resilience without remembering to wire it up. Per the BullMQ pattern Patrick referenced during the design-lockdown conversation: BullMQ workers rarely crash their host process because the framework handles isolation; Yinz HTTP should match that.

@@ -303,7 +303,7 @@ Prettier output (top) is canonical for any user. Rustfmt output (bottom) is only
 
 ## Cross-References
 
-- [`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md) — why Rust was chosen for the compiler implementation
+- [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md) — Rust compiler stack
 - [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md) — registry schema + carve-out policy (formatter is consumer-only)
 - [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) — format-on-save wiring (textDocument/formatting deferred to v0.2-M5)
 - [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) — muted-hint protocol (consumption deferred to v0.2-M5)

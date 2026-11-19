@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-functions.md`](../../reference/REF-functions.md)
 
 `function` spells it out. `fn` saves two characters.
 
-**Why**: Golden Rule 9 (fast to type without sacrificing readability) and Golden Rule 2 (self-documenting). `fn` requires knowing the abbreviation. `function` is immediately readable by anyone who has seen JavaScript. The extra characters are worth it.
+**Why**: Golden Rule 13 (fast to type without sacrificing readability) and Golden Rule 4 (self-documenting). `fn` requires knowing the abbreviation. `function` is immediately readable by anyone who has seen JavaScript. The extra characters are worth it.
 
 ---
 

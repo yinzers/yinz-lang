@@ -53,19 +53,19 @@ If you've written JavaScript | TypeScript before, most of this should feel famil
 
 Every decision in this language follows these rules. When something seems weird, one of these is why.
 
-1. **Dot-first design** — if something can be `.method()` with autocomplete, it is
-2. **Self-documenting syntax** — a jr dev who's never seen Yinz should understand any line
-3. **No garbage collector** — ownership handles memory; no pauses, no overhead
-4. **Compiler does the hard work** — smart defaults, type inference, optimization
-5. **Compile-time safety** — wrong code fails at compile time, never at runtime
-6. **Familiar syntax** — borrowed from JavaScript/TypeScript where possible
-7. **Step-by-step over chaining** — each operation gets its own line and a name
-8. **Zero-cost abstractions** — high-level syntax compiles to the same code as low-level
-9. **Fast to type** — quick without sacrificing readability
-10. **Efficiency first, dynamic after** — the default path is always the fastest path
-11. **The compiler is a teacher** — errors explain what went wrong and suggest fixes
-12. **Human-readable over jargon** — `options` not `enum`, `nothing` not `void`, `follows` not `implements`
-13. **Capital letter = type** — scan any line: capital letter means type, lowercase means everything else (variable, function, keyword, module)
+1. **No garbage collector** — ownership handles memory; no pauses, no overhead
+2. **Compile-time safety** — wrong code fails at compile time, never at runtime
+3. **The compiler is a teacher** — errors explain what went wrong and suggest fixes
+4. **Self-documenting syntax** — a jr dev who's never seen Yinz should understand any line
+5. **Human-readable over jargon** — `options` not `enum`, `nothing` not `void`, `follows` not `implements`
+6. **Zero-cost abstractions** — high-level syntax compiles to the same code as low-level
+7. **Efficiency first, dynamic after** — the default path is always the fastest path
+8. **Compiler does the hard work** — smart defaults, type inference, optimization
+9. **Step-by-step over chaining** — each operation gets its own line and a name
+10. **Capital letter = type** — scan any line: capital letter means type, lowercase means everything else (variable, function, keyword, module)
+11. **Dot-first design** — if something can be `.method()` with autocomplete, it is
+12. **Familiar syntax** — borrowed from JavaScript/TypeScript where possible
+13. **Fast to type** — quick without sacrificing readability
 
 ---
 

@@ -10,7 +10,7 @@
 //! If `ynz-fmt` encounters a parse error, the handler returns:
 //!   - An empty `Vec<TextEdit>` (no changes applied), AND
 //!   - A `window/showMessage` Info notification so the user knows WHY the file
-//!     was not formatted.  Silent-empty is a violation of Golden Rule 11 (teaching
+//!     was not formatted.  Silent-empty is a violation of Golden Rule 3 (teaching
 //!     mission); the visible signal is required, not optional.
 //!
 //! # Line-ending policy
@@ -99,7 +99,7 @@ pub fn formatting_response(
     match ynz_fmt::format(source) {
         Ok(formatted) => whole_file_edits(source, formatted, state.encoding),
         Err(ynz_fmt::FmtError::ParseError(_)) => {
-            // Visible signal per Golden Rule 11: user must know WHY no formatting happened.
+            // Visible signal per Golden Rule 3: user must know WHY no formatting happened.
             show_message(
                 sender,
                 MessageType::INFO,

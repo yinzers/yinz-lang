@@ -669,7 +669,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
 
     // Every refusal must carry a real WHAT-INSTEAD, not just a WHAT. These are the concrete
     // things the six refusals tell the reader to do instead; a refusal that loses its fix is
-    // a dead end, which is the failure mode Golden Rule 11 exists to prevent.
+    // a dead end, which is the failure mode Golden Rule 3 exists to prevent.
     for phrase in [
         "let replies: channel<int> = channel<int>()",
         "let second = background worker(orders)",

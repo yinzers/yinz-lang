@@ -91,7 +91,7 @@ The runtime-injection APIs are themselves stdlib items — they're heap-free (th
 
 ## Compile-error format for blocked features
 
-Following Golden Rule 11's three-part format:
+Following Golden Rule 3's three-part format:
 
 ```
 let buffer = array<int>()

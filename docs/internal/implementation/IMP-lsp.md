@@ -18,7 +18,7 @@ This doc is for **compiler contributors and milestone implementers**, not Yinz l
 User spec reference: N/A (tooling internals)
 Plan reference: [`.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md) (M2); [`.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md) (M5)
 
-Cross-references: [`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md)
+Cross-references: [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md)
 
 ---
 
@@ -329,7 +329,7 @@ See [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) for the 
 | `variable_type` | Firing | Addition | `: int (from 42)` after `x` in `let x = 42` | Always — every unannotated `let` | Today |
 | `ownership_call_site` | Firing | Informational | `share (matches foo's signature)` after arg | Every call site where callee signature has `share`/`lend`/`give` | Today |
 | `copy_points` | Firing | Informational | `.copy (8 bytes, trivially copyable)` | Trivially-copyable arg passed while binding still live afterward | Today |
-| `array_to_fixed_promotion` | Firing | Replacement | `// promoted to fixed<int, 3> — never grown` | `let x: array<T> = [...]` where no `.add()` / `.lend` found in scope | Today |
+| `array_to_fixed_promotion` | Firing | Replacement | `// promoted to fixed — never grown` | `let x: array<T> = [...]` where no `.add()` / `.lend` found in scope | Today |
 | `let_to_const_promotion` | Firing | Replacement | `// effectively const — never reassigned` | `let x = ...` where no reassignment / `.lend` / `.give` found in scope | Today |
 | `function_param_type` | Protocol-only | Addition | (empty — awaiting lambdas) | N/A until lambdas ship | v0.3+ (lambdas milestone) |
 | `wait_points` | Protocol-only | Addition | (empty — awaiting I/O suspension analysis) | N/A until `wait`-auto-insertion analysis ships | v0.3 (concurrency milestone) |

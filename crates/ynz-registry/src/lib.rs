@@ -201,7 +201,7 @@ pub fn muted_hint_domain_lookup(domain: &str) -> Option<&'static MutedHintDomain
 ///
 /// Returns `None` when the domain is not in the registry (deferred/unknown).
 ///
-/// Per Golden Rule 11, every teaching surface must answer WHAT / WHAT-INSTEAD / WHY. Inlay hints
+/// Per Golden Rule 3, every teaching surface must answer WHAT / WHAT-INSTEAD / WHY. Inlay hints
 /// without a hover tooltip are muted annotations the user cannot learn from.
 pub fn lsp_inlay_hint_hover_for(domain: &str) -> Option<String> {
     let entry = muted_hint_domain_lookup(domain)?;

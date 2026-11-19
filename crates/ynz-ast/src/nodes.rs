@@ -485,7 +485,7 @@ pub enum Expr {
 
     /// Dot-postfix body operation: `value.copy()` or `value.freeze()`.
     ///
-    /// Actions (Golden Rule 2 — parens for actions). Only `.copy()` and `.freeze()`
+    /// Actions (Golden Rule 4 — parens for actions). Only `.copy()` and `.freeze()`
     /// are body-level operations; `.share`/`.lend`/`.give` are inferred at call
     /// sites and have no body syntax.
     PostfixOp {

@@ -3,7 +3,7 @@
 Demos live here. Two categories:
 
 1. **Project examples** — full Yinz projects (have a `yinz.toml`). Demonstrate the two valid project layouts.
-2. **Galleries** — loose `.ynz` files that exercise specific compiler/tool behavior. NOT Yinz projects.
+2. **Galleries** — loose `.ynz` files that exercise specific compiler/tool behavior. NOT Yinz projects; a gallery has a `yinz.toml` only when its tool needs one (`ynz watch <dir>` does).
 
 All folders are **Pittsburgh-themed** by convention — see [`.claude/rules/examples-structure.md`](../.claude/rules/examples-structure.md) for the rules around adding new ones.
 
@@ -44,7 +44,7 @@ The `[entries]` table is a v0.22 feature. Pre-v0.22, multi-entry projects must s
 
 ---
 
-## Galleries (loose files, no `yinz.toml`)
+## Galleries (loose files, no `yinz.toml` unless their tool needs one)
 
 ### `primantis-orders/` — per-milestone compile-error gallery
 
@@ -54,19 +54,19 @@ Themed around Primanti's-style restaurant orders going wrong (wrong toppings, mi
 
 ### `burgh-poem/` — formatter showcase
 
-`messy.ynz` is intentionally badly-formatted Yinz code. Run `ynz fmt examples/burgh-poem/messy.ynz` to see canonical Yinz formatting applied (or `ynz fmt --check` to see the unified diff). Not a project — single file.
+`messy.ynz` is intentionally badly-formatted Yinz code. Run `ynz fmt examples/burgh-poem/messy.ynz` to see canonical Yinz formatting applied (or `ynz fmt --check` to see the unified diff). Not a project — single file. See [`burgh-poem/README.md`](burgh-poem/README.md).
 
 ### `incline-watcher/` — `ynz watch` file-watcher demo
 
-Themed as the Duquesne Incline tracking its current elevation up Mt Washington. Edit the elevation in `entrypoint.ynz` and save; `ynz watch examples/incline-watcher/` rebuilds and re-executes within a second. Try `--json` for structured-event output, `--check` to skip the execute step, `--no-clear` to preserve scrollback. Ships in v0.2-M4.
+Themed as the Duquesne Incline tracking its current elevation up Mt Washington. Edit the elevation in `entrypoint.ynz` and save; `ynz watch examples/incline-watcher/` rebuilds and re-executes within a second. Try `--json` for structured-event output, `--check` to skip the execute step, `--no-clear` to preserve scrollback. It carries a `yinz.toml` because `ynz watch <dir>` needs one. See [`incline-watcher/README.md`](incline-watcher/README.md).
 
 ---
 
 ## Adding a new example
 
 1. **Pick a Pittsburgh-themed folder name.** Bridges, neighborhoods, foods, sports figures, Steel City history, n'at. See [`.claude/rules/examples-structure.md`](../.claude/rules/examples-structure.md) for the discipline.
-2. **Decide kind**: project (gets a `yinz.toml`, single-entry by default) OR gallery (loose files).
-3. **For new language features in M1–M8**: extend `pirates-roster/entrypoint.ynz` per [`.claude/rules/plan-invariants.md`](../.claude/rules/plan-invariants.md) `### Demo & Error Gallery`. Don't create a new top-level demo for individual language features — `pirates-roster/` is the canonical growth path.
+2. **Decide kind**: project (gets a `yinz.toml`, single-entry by default) OR gallery (loose files; no `yinz.toml` unless its tool needs one).
+3. **For new language features (every milestone — the demo grows each time)**: extend `pirates-roster/entrypoint.ynz` per [`.claude/rules/plan-invariants.md`](../.claude/rules/plan-invariants.md) `### Demo & Error Gallery`. Don't create a new top-level demo for individual language features — `pirates-roster/` is the canonical growth path.
 4. **For new stdlib modules (v0.5+)**: add a NEW per-module example project using the single-entry layout (mirror `pirates-roster/`'s shape). One module = one example project. Pick a Pittsburgh-themed name for the folder.
 5. **For demonstrating a project layout pattern**: amend `pirates-roster/` (single-entry) or `stadium-fleet/` (multi-entry). Don't introduce a third layout example.
 6. **For new error classes**: add intentional triggers to the corresponding milestone file in `primantis-orders/` per the gallery's existing pattern.

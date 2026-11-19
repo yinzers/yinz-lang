@@ -94,7 +94,7 @@ For workloads where these specific musl limitations matter, `--dynamic-glibc` is
 
 Yinz generates a specialized version per concrete generic instantiation (each concrete type combination produces its own specialized machine code) — same model as Rust, same model as C++ templates. To prevent the compile-time scaling problem Rust hits, the compiler tracks generated instantiations in a **shared instantiation cache** keyed by `(type-path, concrete-type-arguments)` and deduplicates identical instantiations across the build graph.
 
-> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). Banned from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 12. Use "specialized version per type" in any text a Yinz user might read.
+> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). Banned from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 5. Use "specialized version per type" in any text a Yinz user might read.
 
 ### Why deduplication is the default
 
@@ -115,12 +115,12 @@ Shared instantiations cannot be optimized differently per call site (no per-call
 
 ### Salsa integration
 
-The deduplication cache is keyed by Salsa queries ([`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md)) so it persists across builds. An identical instantiation from unchanged source need not be recompiled. Combined with Yinz's incremental compilation, this means: edit one file, recompile that file's changes only, and any unchanged-but-shared generic instantiations stay cached.
+The deduplication cache is keyed by Salsa queries ([`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md)) so it persists across builds. An identical instantiation from unchanged source need not be recompiled. Combined with Yinz's incremental compilation, this means: edit one file, recompile that file's changes only, and any unchanged-but-shared generic instantiations stay cached.
 
 ### Cross-references
 
 - `lockin-build-and-crossplat.md` Finding #13 for Rust's specialized-per-type compile-scaling pain (called "monomorphization" in the source — same concept).
-- [`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md) for the Salsa caching model.
+- [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md) for the Salsa caching model.
 
 ---
 

@@ -33,9 +33,9 @@ export function fetchUser(id: UserId) -> maybe<User> errors {
 
 The previous design used `///` (triple-slash) to distinguish doc comments from regular `//` comments. Two reasons overturned that:
 
-1. **Rule 6 violation**: In TypeScript — the language Yinz's target audience knows best — `///` is a compiler directive (`/// <reference path="..." />`), NOT a doc comment. A TypeScript developer seeing `///` in Yinz will be confused or assume it does something completely different. JSDoc (`/** */`) is what TS devs use for docs, but that's its own problem (see below).
+1. **Rule 12 violation**: In TypeScript — the language Yinz's target audience knows best — `///` is a compiler directive (`/// <reference path="..." />`), NOT a doc comment. A TypeScript developer seeing `///` in Yinz will be confused or assume it does something completely different. JSDoc (`/** */`) is what TS devs use for docs, but that's its own problem (see below).
 
-2. **Rule 2 violation**: The distinction between `//` (invisible) and `///` (visible to tooling) requires documentation to understand. A jr dev who just graduated and knows JavaScript has never seen `///` as a meaningful marker. They'd have to read the spec to know which one shows in hover. That's anti-Yinz.
+2. **Rule 4 violation**: The distinction between `//` (invisible) and `///` (visible to tooling) requires documentation to understand. A jr dev who just graduated and knows JavaScript has never seen `///` as a meaningful marker. They'd have to read the spec to know which one shows in hover. That's anti-Yinz.
 
 **Why not JSDoc (`/** */`)**:
 

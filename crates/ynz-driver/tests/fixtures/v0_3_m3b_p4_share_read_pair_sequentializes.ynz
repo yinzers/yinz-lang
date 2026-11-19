@@ -3,8 +3,8 @@
 // `readOne(share h)` and `readTwo(share h)` both take the SAME heap value by `share`. The
 // floor keys on the argument TYPE: a mutable-heap argument (`Holder`) is an unconditional
 // potential aliased write, so the pair is sequenced even though both calls only read.
-// Read-only-mutable-heap overlap is a forfeited capability (Golden Rule 5 soundness > Rule
-// 10 perf) documented in `design/concurrency.md` Design Divergences.
+// Read-only-mutable-heap overlap is a forfeited capability (Golden Rule 2 soundness > Rule
+// 7 perf) documented in `design/concurrency.md` Design Divergences.
 //
 // The two 200ms sleeps therefore do NOT overlap — the integration test's TIMING assertion
 // requires default ≈ 400ms (full sum, no overlap), and stdout is byte-identical across modes.

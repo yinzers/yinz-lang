@@ -62,7 +62,7 @@ supervise.pool(
 )
 ```
 
-All configuration is via named parameters on a single call — no chaining. Names are dot-discoverable per Golden Rule 1.
+All configuration is via named parameters on a single call — no chaining. Names are dot-discoverable per Golden Rule 11.
 
 ---
 

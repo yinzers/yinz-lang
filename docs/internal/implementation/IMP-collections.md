@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-collections.md`](../../reference/REF-collections
 
 `fixed<T>` = stack-allocated, size-locked at creation. `array<T>` = heap-allocated, growable.
 
-**Why**: Golden Rule 10 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `fixed<T>` requires no annotation — it's what you get when you declare a collection with known content. `array<T>` is the explicit opt-in for when you need growth.
+**Why**: Golden Rule 7 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `fixed<T>` requires no annotation — it's what you get when you declare a collection with known content. `array<T>` is the explicit opt-in for when you need growth.
 
 **Removed**: `collection<T>` type removed — unnecessary complexity. Two collection types are enough. "Collections" still exists as an English umbrella term covering `fixed<T>`, `array<T>`, `map<K,V>` — but it's not a TYPE, just a category name.
 
@@ -33,7 +33,7 @@ User spec: [`docs/reference/REF-collections.md`](../../reference/REF-collections
 
 Each operation gets its own line with a named variable.
 
-**Why**: Golden Rule 7. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value. The compiler fuses sequential operations into a single optimized pass anyway, so there's no performance cost for the readability benefit.
+**Why**: Golden Rule 9. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value. The compiler fuses sequential operations into a single optimized pass anyway, so there's no performance cost for the readability benefit.
 
 ---
 
@@ -46,7 +46,7 @@ Several method names chosen for plain-English readability over functional progra
 - `.get(index)` over `items[n]` — safe access returning `maybe<T>`; brackets are sugar for `.get()`
 - `.last()` added — mirrors `.first()`, returns `maybe<T>`
 
-**Why**: Golden Rule 12. Every method name that requires FP background knowledge is a barrier. `.limit`, `.filter`, `.prepend` are plain English instructions anyone can guess.
+**Why**: Golden Rule 5. Every method name that requires FP background knowledge is a barrier. `.limit`, `.filter`, `.prepend` are plain English instructions anyone can guess.
 
 ---
 
@@ -248,7 +248,7 @@ shape Event {
 
 Same shape, same semantics, ~33% less memory for this example. Multiply by N entries in an `array<Event>` and the cache benefit compounds.
 
-**Why auto-reorder by default**: Yinz's principle is "fast by design even for inexperienced developers" (Golden Rule 10 + auto-promotion corollary). C/C++ require the user to manually order fields for packing — a perf trap that beginners universally fall into. Rust auto-reorders by default (FFI structs opt out via `#[repr(C)]`); Yinz inherits that pattern but goes further by NOT having an opt-out keyword for pure Yinz code.
+**Why auto-reorder by default**: Yinz's principle is "fast by design even for inexperienced developers" (Golden Rule 7 + auto-promotion corollary). C/C++ require the user to manually order fields for packing — a perf trap that beginners universally fall into. Rust auto-reorders by default (FFI structs opt out via `#[repr(C)]`); Yinz inherits that pattern but goes further by NOT having an opt-out keyword for pure Yinz code.
 
 **Why no opt-out keyword in Yinz**: the only legitimate reasons to pin field layout are:
 1. **FFI to C** — handled by FFI bindings at the boundary, not by polluting the shape declaration. (FFI is v2+ per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md).)
@@ -298,7 +298,7 @@ For the cases where the auto-pick is wrong, two explicit forms:
 - **`.sortFast()`** — forces unstable regardless of element type. Use when the user knows equal items are interchangeable even though they're composite (e.g., `array<Shape>` where the sort key is a UUID and there are no other relevant fields).
 - **`.sortStrict()`** — forces stable regardless of element type. Use when the user knows they need stable behavior even on primitives (the canonical case: multi-step / radix sort, see "Gotcha" below).
 
-Naming follows Golden Rule 12 (human-readable over jargon): `Fast` describes user intent, `Strict` describes the property. Neither uses the word "unstable" (jargon — sounds like "broken" to a non-programmer).
+Naming follows Golden Rule 5 (human-readable over jargon): `Fast` describes user intent, `Strict` describes the property. Neither uses the word "unstable" (jargon — sounds like "broken" to a non-programmer).
 
 ### Multi-step sort detection — compiler upgrades unstable to stable
 
@@ -410,16 +410,16 @@ When `array<T>` runs out of capacity, it grows by **1.5×** (Java/Folly choice).
 
 When the compiler can prove an `array<T>` declaration is never grown (no `.add()`, `.remove()`, `.resize()`, no call to a function whose signature declares `lend` AND may grow the array), THREE things happen:
 
-1. **Codegen auto-promotion (silent perf win)**: the compiler emits `fixed<T, N>` codegen for the binding — stack-allocated, no heap, no growth tracking. The user gets the perf benefit automatically without rewriting source.
+1. **Codegen auto-promotion (silent perf win)**: the compiler emits `fixed<T>` codegen for the binding — stack-allocated, no heap, no growth tracking. The user gets the perf benefit automatically without rewriting source.
 
-2. **Muted IDE hint (informational, always-on)**: per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), the IDE shows a neutral-gray muted hint after the binding (e.g., `// promoted to fixed<int, 3>`). Click-to-make-explicit converts the source to `fixed<int> = [1, 2, 3]`. This surface tells the user the inference happened — they SEE that the compiler made a perf-positive decision, even if they don't act on it. Same protocol as type-inference and ownership-inference muted hints.
+2. **Muted IDE hint (informational, always-on)**: per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), the IDE shows a neutral-gray muted hint after the binding (e.g., `// promoted to fixed — never grown`). Click-to-make-explicit converts the source to `fixed<int> = [1, 2, 3]`. This surface tells the user the inference happened — they SEE that the compiler made a perf-positive decision, even if they don't act on it. Same protocol as type-inference and ownership-inference muted hints.
 
 3. **Tier 3 lint suggestion (visible teaching surface)**: a Tier 3 lint suggestion (yellow squiggle in IDE, surfaced in compile output) recommends rewriting the source as `fixed<T>` explicitly for code-review clarity and future-proofing. Per [`docs/internal/implementation/IMP-linting.md`](IMP-linting.md) rule `prefer-fixed-when-immutable`. This surface is the teaching nudge — the lint says "best practice is to write the stricter form yourself."
 
 ```
-let nums: array<int> = [1, 2, 3]   // muted hint: // promoted to fixed<int, 3>
+let nums: array<int> = [1, 2, 3]   // muted hint: // promoted to fixed — never grown
                                     // yellow squiggle from prefer-fixed-when-immutable
-                                    // (compiler already emitted fixed<int, 3> codegen)
+                                    // (compiler already emitted fixed<int> codegen)
 ```
 
 Why three surfaces (not just two):
@@ -428,12 +428,12 @@ Why three surfaces (not just two):
 - The **codegen** answers "what runs at runtime?" — invisible, auto-applied.
 
 Hover tooltip on the muted hint:
-- **WHAT**: The compiler is treating this `array<int>` as `fixed<int, 3>` because it proved no growth happens. Stack-allocated, no heap, no growth tracking.
+- **WHAT**: The compiler is treating this `array<int>` as `fixed<int>` because it proved no growth happens. Stack-allocated, no heap, no growth tracking.
 - **WHAT INSTEAD**: Click to convert the source to `fixed<int> = [1, 2, 3]`. Behavior identical.
 - **WHY**: `fixed<T>` is the stricter form when the size is known. The compiler picks it automatically when it's safe; the explicit source form makes the choice visible in code review and prevents a future `.add()` from silently switching the codegen back.
 
 Hover tooltip on the yellow lint squiggle:
-- **WHAT**: This `array<int>` is auto-promoted to `fixed<int, 3>` codegen — the perf optimization already happened. This lint is about source-level clarity, not perf.
+- **WHAT**: This `array<int>` is auto-promoted to `fixed<int>` codegen — the perf optimization already happened. This lint is about source-level clarity, not perf.
 - **WHAT INSTEAD**: For explicit code as a best practice, write `fixed<int> = [1, 2, 3]` so the choice is visible to readers.
 - **WHY**: Writing `fixed<T>` explicitly makes the perf characteristic obvious in code review (the next reader sees "stack-allocated, can't grow" without having to trace the access pattern) and prevents a future `.add()` from silently forcing the codegen back to heap allocation — if growth is unintended, the explicit `fixed<T>` makes that future `.add()` a compile error instead of a silent codegen change.
 
@@ -466,7 +466,7 @@ by-value representation fixes the root cause, and the guard was **lifted in v0.3
 [`IMP-concurrency.md`](IMP-concurrency.md) for exactly what the lift removed). The array now OWNS
 its element bytes: the heap buffer survives suspension, so the shapes do too, regardless of
 literal-vs-runtime field values. The bug was latent even without suspension — the array never owned
-what it pointed at (a GR3/GR8 violation), it just usually got away with it.
+what it pointed at (a GR1/GR6 violation), it just usually got away with it.
 
 ### One allocation per buffer (D2)
 
@@ -477,7 +477,7 @@ never a second substrate (the twin-substrate drift class is eliminated by constr
 
 **Rejected alternatives:**
 - **Per-element heap cells** (the scratch analysis's Option B): one allocation per element violates
-  GR8 (zero-cost), fragments cache lines, multiplies alloc=free accounting, and immediately forces
+  GR6 (zero-cost), fragments cache lines, multiplies alloc=free accounting, and immediately forces
   `ynz_array_drop` to become element-aware — the exact leak-hazard class an earlier M3a fix round
   hit.
 - **LLVM module globals**: stable storage for compile-time-literal-field shapes only — the partial
@@ -497,7 +497,7 @@ the ownership model's drop story adds guaranteed heap-owned-field freeing (plan
 
 By-value storage has no pointer-identity substrate, so the migration forced a semantics pick.
 Value equality is the golden-rules-consistent one: `roster.contains(pirate)` reads as content
-membership (GR2), matches every primitive cell's behavior, and matches the non-OOP
+membership (GR4), matches every primitive cell's behavior, and matches the non-OOP
 shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
 `crates/ynz-codegen/src/emit.rs`).
 

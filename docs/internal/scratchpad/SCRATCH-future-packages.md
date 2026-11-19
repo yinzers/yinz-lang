@@ -87,7 +87,7 @@ The exact byte layout is a v0.2 implementation detail — this doc establishes t
 
 - **Not the source-level package model** — that's in [`docs/reference/REF-packages.md`](../../reference/REF-packages.md) and [`docs/internal/implementation/IMP-packages.md`](../implementation/IMP-packages.md). Those documents are about `ynz add`, `ynz_modules`, `yinz.toml`, etc.
 - **Not the package registry** — registry hosting/auth/publishing is a separate v0.2+ design (no doc yet; will be in `docs/internal/implementation/IMP-registry.md` when it's time).
-- **Not an ABI specification** — Yinz packages are compiled per-target-triple. ABI stability across versions isn't promised (per [`docs/internal/decisions/ADR-versioning.md`](../decisions/ADR-versioning.md)'s pre-release delete policy). This is the BINARY metadata format, not a stable wire protocol.
+- **Not an ABI specification** — Yinz packages are compiled per-target-triple. ABI stability across versions isn't promised (per [`docs/internal/implementation/IMP-versioning.md`](../implementation/IMP-versioning.md)'s pre-release delete policy). This is the BINARY metadata format, not a stable wire protocol.
 
 ---
 

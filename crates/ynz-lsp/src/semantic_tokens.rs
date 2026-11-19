@@ -55,7 +55,7 @@ pub fn semantic_tokens_options() -> SemanticTokensServerCapabilities {
 ///
 /// Walks the lex output linearly — no AST traversal needed. Identifier
 /// classification uses a two-level lookup:
-///   1. Name starts with ASCII uppercase → `TYPE` (Golden Rule 13: capital = type).
+///   1. Name starts with ASCII uppercase → `TYPE` (Golden Rule 10: capital = type).
 ///   2. Name appears in `sig_table` → `FUNCTION`.
 ///   3. Name appears in `options` `variants` list → `ENUM_MEMBER`.
 ///   4. Fallback → `VARIABLE`.
@@ -255,15 +255,15 @@ fn classify_token(tok: &Token, sig: &ynz_typeck::queries::SignatureOutput) -> Op
     }
 }
 
-/// Classify an identifier using Golden Rule 13 and the signature tables.
+/// Classify an identifier using Golden Rule 10 and the signature tables.
 ///
 /// Decision order (first match wins):
-///   1. Starts with ASCII uppercase → TYPE (Golden Rule 13: capital letter = type)
+///   1. Starts with ASCII uppercase → TYPE (Golden Rule 10: capital letter = type)
 ///   2. Found in `sig_table.fns` → FUNCTION
 ///   3. Found as an options variant (checked from imported_options) → ENUM_MEMBER
 ///   4. Fallback → VARIABLE
 fn classify_identifier(name: &str, sig: &ynz_typeck::queries::SignatureOutput) -> u32 {
-    // Golden Rule 13: capital letter = type.
+    // Golden Rule 10: capital letter = type.
     if name.starts_with(|c: char| c.is_ascii_uppercase()) {
         return IDX_TYPE;
     }

@@ -172,7 +172,7 @@ These enforce Yinz language fundamentals. Violating them creates ambiguity that 
 
 | Rule | Catches |
 |------|---------|
-| `type-naming` | Types must start with capital letter (Golden Rule 13). `type player` is an error. |
+| `type-naming` | Types must start with capital letter (Golden Rule 10). `type player` is an error. |
 | `variable-naming` | Variables/functions/modules must start with lowercase. `function FetchUser` is an error. |
 | `duplicate-import-name` | Same name imported twice without alias. Forces explicit disambiguation. |
 | `out-of-bounds-literal` | `fixed<T>` of size N, accessed with literal index ≥ N. |

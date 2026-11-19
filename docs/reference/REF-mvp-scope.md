@@ -323,7 +323,7 @@ The `db` module is one of the most substantial stdlib entries — see [`docs/int
 - **Iterator model** — `db.query()` returns a streaming iterator over a small ring buffer. `.collect()` is explicit opt-in, not default.
 - **Direct wire-to-struct deserialization** — compiler generates a typed deserializer per shape at compile time. No intermediate allocation layer.
 - **Migrations** — atomic (transactional DDL), pre-flight schema validation, content-hash migration tracking (not filename-based).
-- **Compiler as query advisor** — N+1 detection, missing-index suggestions, query rewrite hints. Rule 11 format: WHAT/WHAT-INSTEAD/WHY at every warning.
+- **Compiler as query advisor** — N+1 detection, missing-index suggestions, query rewrite hints. Rule 3 format: WHAT/WHAT-INSTEAD/WHY at every warning.
 - **Typed runtime errors** — `DatabaseError` with structured fields + Postgres error-code mapping to human-readable summaries and suggestions.
 
 **IDE support for embedded SQL (ships with this version)**:
@@ -396,12 +396,12 @@ Substantial design surface (engine choice, flags, captures, replace). Gets its o
 Three-tier API design (see HTTP open question in [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md) to be designed when this version is up):
 
 1. **High-level helpers** — `request.get(url)`, `request.post(url, body)`, `request.put(url, body)`, `request.delete(url)`, `request.websocket(url)`
-2. **Mid-level builder** — `request.build()` returns a configurable Request value; configure step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, `req.send()`) — no chaining per Golden Rule 7
+2. **Mid-level builder** — `request.build()` returns a configurable Request value; configure step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, `req.send()`) — no chaining per Golden Rule 9
 3. **Low-level socket access** — `net.tcp.connect(host, port)` returning a raw socket. The floor of the user-accessible network stack (anything lower is FFI territory).
 
 With TLS support from day 1 in this version.
 
-**Naming note**: the module is called `request` (not `http`) so the direction is unambiguous on read — `request.get(url)` is clearly outbound. The inbound counterpart is `server` (v0.21). Shared `Request`/`Response` types (capital — they're types per Rule 13) live in both modules' surface; both directions touch them since HTTP semantics are direction-agnostic at the message level.
+**Naming note**: the module is called `request` (not `http`) so the direction is unambiguous on read — `request.get(url)` is clearly outbound. The inbound counterpart is `server` (v0.21). Shared `Request`/`Response` types (capital — they're types per Rule 10) live in both modules' surface; both directions touch them since HTTP semantics are direction-agnostic at the message level.
 
 > **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `request.*` methods; TLS support wired from day one (no plain HTTP default); WHAT/WHAT-INSTEAD/WHY for network errors (timeout, DNS failure, non-2xx status); stdlib example project; extension bump; spec + design docs.
 
@@ -467,7 +467,7 @@ Install mechanism targets bun-class speed (content-addressed cache, hard-links, 
 
 **Multi-entry projects ship in v0.22 too** — the `[entries]` table in `yinz.toml` (one project, multiple named binaries) lands here alongside `[dependencies]`. Each named entry is a **ship**; the canonical folder convention is `ships/<name>/entrypoint.ynz` plus a top-level `shared/` for cross-ship code. See `examples/stadium-fleet/` for the layout and [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md) "Workspace / Multi-Package Projects" for the locked rationale.
 
-**Why this version (late in the v0 train)**: There is no public release until v1.0. Shipping the package manager early would mean every pre-v1.0 breaking language change cracks every package — packages would live in an unstable language for ~17 releases. Landing it at v0.22 puts packages into a stable-ish language with the stdlib mostly built (so packages have real APIs to depend on), and gives the package manager one polish cycle before v1.0's backwards-compat promise kicks in. Per [`docs/internal/decisions/ADR-versioning.md`](../internal/decisions/ADR-versioning.md), pre-v1.0 has no compatibility guarantee, so the early-shipped value (ecosystem bootstrap, "fill gaps with packages") doesn't accrue until there's a public community — which is v1.0.
+**Why this version (late in the v0 train)**: There is no public release until v1.0. Shipping the package manager early would mean every pre-v1.0 breaking language change cracks every package — packages would live in an unstable language for ~17 releases. Landing it at v0.22 puts packages into a stable-ish language with the stdlib mostly built (so packages have real APIs to depend on), and gives the package manager one polish cycle before v1.0's backwards-compat promise kicks in. Per [`docs/internal/implementation/IMP-versioning.md`](../internal/implementation/IMP-versioning.md), pre-v1.0 has no compatibility guarantee, so the early-shipped value (ecosystem bootstrap, "fill gaps with packages") doesn't accrue until there's a public community — which is v1.0.
 
 > **⚠️ DO NOT FORGET** (checklist at top): `ynz add/remove/update/install` CLI help text follows WHAT/WHAT-INSTEAD/WHY for all errors (package not found, version conflict, network failure); lock file format documented in spec; multi-entry project layout documented in spec (`examples/stadium-fleet/` demo updated); extension integration (show installed packages, dependency warnings); spec + design docs.
 
@@ -495,7 +495,7 @@ Public launch milestone. Ships:
 
 - **Formal grammar lock** — the EBNF / parser becomes the contract for backward compatibility
 - **All compile errors reviewed** for the WHAT/WHAT-INSTEAD/WHY format per [`docs/reference/REF-teaching-mission.md`](REF-teaching-mission.md)
-- **Backward-compatibility policy** kicks in (see [`docs/internal/decisions/ADR-versioning.md`](../internal/decisions/ADR-versioning.md))
+- **Backward-compatibility policy** kicks in (see [`docs/internal/implementation/IMP-versioning.md`](../internal/implementation/IMP-versioning.md))
 
 v1.0 is when the language becomes "stable" — breaking changes after this require a major version bump.
 
@@ -521,7 +521,7 @@ A way to mark stdlib functions / language features as deprecated, with compiler 
 
 - **Why this version**: Only relevant post-v1.0 when backwards-compatibility kicks in. v0.1 follows the no-backwards-compatibility-pre-release policy — breaking changes are fine.
 - **Substitute used pre-v1.0**: None needed.
-- **Locked design**: See [`docs/internal/decisions/ADR-versioning.md`](../internal/decisions/ADR-versioning.md) and [`docs/internal/implementation/IMP-linting.md`](../internal/implementation/IMP-linting.md)
+- **Locked design**: See [`docs/internal/implementation/IMP-versioning.md`](../internal/implementation/IMP-versioning.md) and [`docs/internal/implementation/IMP-linting.md`](../internal/implementation/IMP-linting.md)
 
 > **⚠️ DO NOT FORGET** (checklist at top): **full WHAT/WHAT-INSTEAD/WHY audit of every existing compile error** (v1.0 ships this as a named requirement — "All compile errors reviewed"); operator overloading registry entries (`follows Add`, `follows Subtract`, etc.); custom `Iterable<T>` contract entries; formal grammar doc written; extension v1.0 release with all screenshots refreshed; spec + design docs for operator overloading and custom iterables; v1.0 release blog post / announcement (public launch).
 
@@ -665,9 +665,9 @@ Financial data ingestion, brokerage integrations, market data feeds.
 The Yinz compiler rewritten in Yinz (current bootstrap is in Rust).
 
 - **Why v2+**: Need feature parity in v1.0+ stable Yinz first. Bootstrap-in-Rust serves us for years.
-- **Substitute used pre-v2**: Rust bootstrap compiler — see [`docs/internal/decisions/ADR-compiler-language.md`](../internal/decisions/ADR-compiler-language.md).
+- **Substitute used pre-v2**: Rust bootstrap compiler — see [`docs/internal/implementation/IMP-compiler-language.md`](../internal/implementation/IMP-compiler-language.md).
 - **Trigger to land**: v2+ AND the language is stable enough to self-host.
-- **Locked design**: See [`docs/internal/decisions/ADR-compiler-language.md`](../internal/decisions/ADR-compiler-language.md)
+- **Locked design**: See [`docs/internal/implementation/IMP-compiler-language.md`](../internal/implementation/IMP-compiler-language.md)
 - **Registry entries**: No entry — compiler-internal milestone with no user-facing token reserved. No `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry applies.
 
 ---

@@ -98,7 +98,7 @@ pub enum HeapCell {
     None,
 }
 
-/// Why a type has no independent copy, in the three slots Golden Rule 11 requires. Rendered
+/// Why a type has no independent copy, in the three slots Golden Rule 3 requires. Rendered
 /// through the `CopyNotIndependent` `[[diagnostic_template]]`, which supplies the sentence
 /// shell; these are its `{detail}` / `{fix}` / `{why}` fills.
 #[derive(Clone, Debug, PartialEq, Eq)]
