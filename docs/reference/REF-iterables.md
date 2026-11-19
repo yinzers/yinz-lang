@@ -152,21 +152,23 @@ If you want to keep reading past failures (for example, log them and continue), 
 
 ```ynz
 // Skip lines that failed to read — silently discards failures, continues to next
-const allLines = file.lines(path)
-const readableLines = allLines.orSkipFailures()
+const firstPassLines = file.lines(path)
+const readableLines = firstPassLines.orSkipFailures()
 for (line in readableLines) {
   if (line.contains(`ERROR`)) { print(line) }
 }
 
 // Skip and log each failure to stderr — apply .logSkippedFailuresTo() first, then .orSkipFailures()
-const loggedLines = allLines.logSkippedFailuresTo(terminal.stderr)
+const secondPassLines = file.lines(path)
+const loggedLines = secondPassLines.logSkippedFailuresTo(terminal.stderr)
 const survivingLines = loggedLines.orSkipFailures()
 for (line in survivingLines) {
   if (line.contains(`ERROR`)) { print(line) }
 }
 
 // Get each step as a success-or-failure value, decide per line
-const lineResults = allLines.withErrors()
+const thirdPassLines = file.lines(path)
+const lineResults = thirdPassLines.withErrors()
 for (result in lineResults) {
   if (result.failed()) {
     log.warn(`bad line: ${result.message}`)
