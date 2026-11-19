@@ -1,0 +1,20 @@
+// v0.3-M9 C10: a `for` loop walks the list it started with, even when its body reassigns the
+// iterated binding (twice per pass here). The old list lives until the loop ends; the second
+// list of each pass is released at once. Correct behavior: prints 3, 9, 1.
+
+function entrypoint() -> nothing {
+  let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
+  let kept: array<array<int>> = []
+  for (row in matrix) {
+    kept.add(row.copy())
+    matrix = [[9], [8]]
+    matrix = [[7]]
+  }
+  print(kept.count())
+  let total = 0
+  for (row in kept) {
+    total = total + row[0].or(0)
+  }
+  print(total)
+  print(matrix.count())
+}

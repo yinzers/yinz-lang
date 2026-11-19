@@ -1,0 +1,26 @@
+// v0.3-M9 C10: the same for a list of shape rows, each copied into `kept` before the reassignment.
+// Correct behavior: prints 3, A, B, C, 1.
+
+shape Tag {
+  label: string
+  nums: array<int>
+}
+
+function entrypoint() -> nothing {
+  let matrix: array<Tag> = [
+    { label: `a`.toUpperCase(), nums: [1] },
+    { label: `b`.toUpperCase(), nums: [2] },
+    { label: `c`.toUpperCase(), nums: [3] }
+  ]
+  let kept: array<Tag> = []
+  for (row in matrix) {
+    kept.add(row.copy())
+    let fresh: array<Tag> = [{ label: `z`.toUpperCase(), nums: [9] }]
+    matrix = fresh
+  }
+  print(kept.count())
+  for (tag in kept) {
+    print(tag.label)
+  }
+  print(matrix.count())
+}
