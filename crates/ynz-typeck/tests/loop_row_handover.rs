@@ -227,3 +227,25 @@ fn a_loop_over_a_list_of_numbers_hands_nothing_over() {
     let (loops, stores, errors) = record_of(source);
     assert_eq!((loops, stores, errors.len()), (0, 0, 0), "{errors:#?}");
 }
+
+#[test]
+fn a_list_reassigned_in_the_body_keeps_the_copy_refusal() {
+    // WHY (High): `matrix = [...]` in the body releases the list the loop is still walking; a row
+    // taken from a cell of it is read through freed memory (the probe aborted at run time).
+    let source = "function keep(give matrix: array<array<int>>) -> array<array<int>> {
+  let kept: array<array<int>> = []
+  for (row in matrix) {
+    kept.add(row)
+    matrix = [[9]]
+  }
+  return kept
+}\n";
+    let (loops, stores, found) = record_of(source);
+    assert_eq!((loops, stores), (0, 0));
+    assert!(
+        found
+            .iter()
+            .any(|message| message.contains("one cell of `matrix`")),
+        "{found:#?}"
+    );
+}

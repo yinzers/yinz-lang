@@ -5247,7 +5247,15 @@ impl<'b> Checker<'b> {
                 .iter()
                 .any(|member| ident_read_in_stmt(stmt, member.as_str()))
         });
-        !read_in_body && !self.class_used_after(name, &members, &[], &[])
+        // A write to the list inside the body (`matrix = [...]`) releases the list the loop is
+        // still walking: a row taken from a cell of the released list is read through freed
+        // memory, so such a loop keeps the `.copy()` refusal.
+        let written_in_body = body.stmts.iter().any(|stmt| {
+            members
+                .iter()
+                .any(|member| stmt_writes_binding(stmt, member.as_str()))
+        });
+        !read_in_body && !written_in_body && !self.class_used_after(name, &members, &[], &[])
     }
 
     /// M7 P3c: look up the element type T for iterating over a user-defined shape.
@@ -13800,6 +13808,31 @@ fn visit_ident_reads_in_stmt(stmt: &Stmt, name: &str, visit: &mut dyn FnMut(&Sou
                 visit_ident_reads_in_stmt(inner, name, visit);
             }
         }
+    }
+}
+
+/// True when `stmt`, at any nesting depth, assigns `name` or declares a binding of that name
+/// (a shadowing `let` makes the name denote a new value). THE writer walk of
+/// `Checker::loop_hands_rows_over`; reads are `ident_read_in_stmt`'s.
+/// O(size of `stmt`) time, O(depth) memory.
+fn stmt_writes_binding(stmt: &Stmt, name: &str) -> bool {
+    let any_in = |block: &Block| {
+        block
+            .stmts
+            .iter()
+            .any(|inner| stmt_writes_binding(inner, name))
+    };
+    match stmt {
+        Stmt::Assign { target, .. } => target == name,
+        Stmt::Let { name: declared, .. } => declared == name,
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => any_in(body),
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|arm| any_in(&arm.body)) || else_arm.as_ref().is_some_and(any_in)
+        }
+        Stmt::Expr(_)
+        | Stmt::Return { .. }
+        | Stmt::FieldAssign { .. }
+        | Stmt::IndexAssign { .. } => false,
     }
 }
 
