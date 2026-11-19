@@ -75,7 +75,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 **Language features (all v0.1):**
 - Variables (`let`, `const`)
 - Functions (with ownership modifiers: `share`/`lend`/`give`/`copy`/`.freeze`)
-- Types (struct-like with fields and methods)
+- Shapes (data fields plus contract signatures; behavior lives in standalone functions)
 - Options (named value sets, replaces enums)
 - Unions (`shape Foo = A | B | C`)
 - Maybe types (`maybe<T>`, `none`, `.exists()`, `.value`, `.or(default)`)

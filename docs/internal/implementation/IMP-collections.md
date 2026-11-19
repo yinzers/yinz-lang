@@ -65,7 +65,7 @@ scores["bob"] = 75              // sugar for scores.set("bob", 75)
 
 Works on: `array<T>`, `fixed<T>`, `map<K,V>`, `string` (read only — strings are immutable).
 
-Does NOT work on: `type` instances. Types use dot access for fields and methods — brackets at a value position on a type are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
+Does NOT work on: shape values. Shapes use dot access for fields, and functions are called with dot sugar — brackets at a value position on a shape value are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
 
 **Why bracket sugar:**
 - **Familiarity:** Every JS/Python/C-family dev expects `arr[0]`. Forcing `.get(0)` everywhere creates needless friction.
@@ -78,7 +78,7 @@ Does NOT work on: `type` instances. Types use dot access for fields and methods 
 
 Maps have methods (`.count()`, `.get()`, `.set()`, `.keys()`, `.values()`, `.filter()`, etc.). If keys could be accessed via dot, a key named `count` would collide with the `.count()` method — exactly the JavaScript bug class around `obj.constructor`, `obj.toString`, etc.
 
-Types don't have this problem because the user defines both fields and methods in one place, and the compiler can verify no collision. Map keys are runtime user data; method names are compile-time built-ins. The two namespaces can't be unified.
+Shapes don't have this problem because the user declares the fields in one place, and the compiler can verify no field name collides with a function called through dot sugar. Map keys are runtime user data; method names are compile-time built-ins. The two namespaces can't be unified.
 
 Bracket access keeps the namespaces visually separated: `m["count"]` is unambiguously a key lookup; `m.count()` is unambiguously a method call. No collision possible.
 
