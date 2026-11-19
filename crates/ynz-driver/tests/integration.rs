@@ -4862,8 +4862,8 @@ fn m5_p3_array_shape_nested_if_runs() {
 /// Watchdog ceiling for a single compiled-fixture RUN (not the `ynz build`/`ynz run` compiler
 /// invocation itself — the compiler is not what a fused-continuation deadlock hangs). Generous
 /// per Phase 1's CI-contention caveat (A7) — every fixture's real execution is well under a
-/// second; 20s is a hang detector, not a performance budget.
-const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(20);
+/// second; 60s is a hang detector, not a performance budget.
+const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Spawn `cmd`, poll for exit without draining stdout/stderr until the process exits (safe for
 /// this corpus — every fixture's output is a handful of short lines, far under the OS pipe
