@@ -1,0 +1,22 @@
+// v0.3-M9 C1q: a loop row given to another list is handed over when the iterated list is not
+// read again (Rust's `for row in matrix`): no `.copy()`, no row copy. The `if` hands over only
+// some rows; `matrix` releases the rest.
+// Correct behavior: prints 2, then 6.
+
+function entrypoint() -> nothing {
+  let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
+  let kept: array<array<int>> = []
+  let seen = 0
+  for (row in matrix) {
+    seen = seen + 1
+    if (seen != 2) {
+      kept.add(row)
+    }
+  }
+  print(kept.count())
+  let total = 0
+  for (row in kept) {
+    total = total + row[0].or(0)
+  }
+  print(total)
+}

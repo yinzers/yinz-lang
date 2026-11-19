@@ -1220,6 +1220,7 @@ fn check_one_pass(
         release: crate::release_plan::ReleaseRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
+        enclosing_remaining: Vec::new(),
         stored_literals: HashSet::new(),
         reported_consumed_reads: HashSet::new(),
     };
@@ -1379,6 +1380,7 @@ pub fn check_with_kernel_mode(
         release: crate::release_plan::ReleaseRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
+        enclosing_remaining: Vec::new(),
         stored_literals: HashSet::new(),
         reported_consumed_reads: HashSet::new(),
     };
@@ -1967,6 +1969,12 @@ struct Checker<'b> {
     loop_gives: Vec<LoopGive>,
     /// Frame index of the body of each enclosing loop, outermost first.
     loop_body_frames: Vec<usize>,
+    /// For each compound statement (`if`, `match`, `while`, `for`) being checked, the statements
+    /// that follow it in its own block, outermost first. With the statements that follow the
+    /// current one inside the innermost block, they are everything that runs after the current
+    /// statement before the function ends: the ONE answer "is this read later?" asks
+    /// (`Checker::class_used_after`).
+    enclosing_remaining: Vec<Vec<Stmt>>,
     /// The literals whose parts were already handed over (`hand_literal_parts_over`), by span: a
     /// literal inferred twice hands its parts over once.
     stored_literals: HashSet<(usize, usize)>,
@@ -3183,23 +3191,11 @@ impl<'b> Checker<'b> {
                         ),
                         None => (false, vec![name.to_string()]),
                     };
-                    // The NEXT pass of an enclosing loop reads a binding declared outside it as
-                    // surely as a later statement does, and `remaining` ends at this block's end.
                     // A later argument of this same call reads the binding after this one does:
                     // the spawn consumes it at its last read, never at an earlier one (the
                     // slot is nulled where the consuming read happens, so a second read would
                     // clone a null).
-                    let used_after = self.bound_outside_current_loop(name)
-                        || later_args.iter().any(|later| {
-                            members
-                                .iter()
-                                .any(|member| expr_refs_ident(later, member.as_str()))
-                        })
-                        || remaining.iter().any(|stmt| {
-                            members
-                                .iter()
-                                .any(|member| ident_read_in_stmt(stmt, member.as_str()))
-                        });
+                    let used_after = self.class_used_after(name, &members, later_args, remaining);
                     if origin_ok && !used_after {
                         BgOwnership::Give
                     } else {
@@ -3501,6 +3497,15 @@ impl<'b> Checker<'b> {
                 self.admit_arc_groups_from(stmts, i);
             }
 
+            // The statements after a compound statement are read after everything inside it.
+            let compound_with_rest = i + 1 < stmts.len()
+                && matches!(
+                    stmt,
+                    Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. }
+                );
+            if compound_with_rest {
+                self.enclosing_remaining.push(stmts[i + 1..].to_vec());
+            }
             match stmt {
                 Stmt::Expr(expr) => {
                     // v0.3-M4 Phase 2: record the conduit-method root span for this statement
@@ -3669,6 +3674,9 @@ impl<'b> Checker<'b> {
                 } => {
                     self.check_index_assign(receiver, index, value, span);
                 }
+            }
+            if compound_with_rest {
+                self.enclosing_remaining.pop();
             }
         }
         // Clean up early-return narrowing facts when leaving the block.
@@ -6310,6 +6318,41 @@ impl<'b> Checker<'b> {
             (Some(body_frame), Some(frame)) => frame < *body_frame,
             _ => false,
         }
+    }
+
+    /// THE one "is this read later?" answer: true when `name`, or any binding in `members` (its
+    /// alias class), is read by something that runs after the current statement: the NEXT pass of
+    /// an enclosing loop (the binding is declared outside it), a later argument of the same call
+    /// (`later_args`), the statements after it in its own block (`remaining`), or the statements
+    /// after every enclosing `if`, `match`, `while` and `for` up to the function's end
+    /// (`enclosing_remaining`). The `background` give inference (`record_spawn_arg_ownership`) and
+    /// the loop-row hand-over (`check_stmt_for`) both read it, so the two cannot disagree on what
+    /// "later" is (`.claude/rules/authoritative-derivation.md`).
+    ///
+    /// O(size of the statements after the current one) time per call; O(1) memory.
+    fn class_used_after(
+        &self,
+        name: &str,
+        members: &[String],
+        later_args: &[&Expr],
+        remaining: &[Stmt],
+    ) -> bool {
+        let read_by = |stmt: &Stmt| {
+            members
+                .iter()
+                .any(|member| ident_read_in_stmt(stmt, member.as_str()))
+        };
+        self.bound_outside_current_loop(name)
+            || later_args.iter().any(|later| {
+                members
+                    .iter()
+                    .any(|member| expr_refs_ident(later, member.as_str()))
+            })
+            || remaining.iter().any(read_by)
+            || self
+                .enclosing_remaining
+                .iter()
+                .any(|block| block.iter().any(read_by))
     }
 
     /// Open a loop body (its frame is already pushed). Returns the mark `end_loop_body` needs.

@@ -1,0 +1,18 @@
+// v0.3-M9 C1q: the same hand-over for `string` rows: the heap string moves into `kept`.
+// Correct behavior: prints 2, A, C.
+
+function entrypoint() -> nothing {
+  let matrix: array<string> = [`a`.toUpperCase(), `b`.toUpperCase(), `c`.toUpperCase()]
+  let kept: array<string> = []
+  let seen = 0
+  for (row in matrix) {
+    seen = seen + 1
+    if (seen != 2) {
+      kept.add(row)
+    }
+  }
+  print(kept.count())
+  for (text in kept) {
+    print(text)
+  }
+}

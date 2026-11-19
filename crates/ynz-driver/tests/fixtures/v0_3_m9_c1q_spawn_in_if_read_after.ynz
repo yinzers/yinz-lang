@@ -1,0 +1,22 @@
+// v0.3-M9 C1q (shared liveness helper): a `background` spawn inside an `if`, with the binding
+// read after the `if`. The spawn must copy (the binding is read later); it was inferred `Give`
+// because the liveness walk stopped at the end of the `if` block, and the read after was refused
+// as "given away".
+// Correct behavior: prints 3.
+
+function total(rows: array<int>) -> int {
+  wait sleep(20)
+  let sum = 0
+  for (value in rows) {
+    sum = sum + value
+  }
+  return sum
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  if (rows.count() > 0) {
+    background total(rows)
+  }
+  print(rows.count())
+}
