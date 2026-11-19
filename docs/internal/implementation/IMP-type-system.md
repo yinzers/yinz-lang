@@ -132,12 +132,9 @@ shape Item follows Comparable {
 
 // Standalone functions provide the implementations.
 // Compiler verifies these match Comparable's signature when checking `follows`.
+// A file holds one function per name, so Item's `compare` lives in the file that declares Item.
 function compare(share self: Player, share other: Player) -> int {
   return self.health - other.health
-}
-
-function compare(share self: Item, share other: Item) -> int {
-  return self.weight - other.weight
 }
 
 // A generic function — works on anything that follows Comparable
@@ -262,7 +259,7 @@ Dynamic dispatch is needed when the concrete type genuinely isn't known until ru
 ### Tradeoff
 
 Generating a specialized version per concrete type produces more machine code than a single runtime-dispatched implementation. For very large programs with many concrete types satisfying the same contract, binary size grows proportionally. Mitigated by:
-1. Monomorphization deduplication (per [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md) Generics & Monomorphization section) — identical instantiations share LLVM IR
+1. Deduplication of identical specialized versions (per the generics section of [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md)) — identical instantiations share LLVM IR
 2. Opt-in dynamic dispatch (`dynamic ...` in stored-value contexts) recovers code size when that matters
 
 The default favors perf; the opt-in covers binary-size-constrained cases.
