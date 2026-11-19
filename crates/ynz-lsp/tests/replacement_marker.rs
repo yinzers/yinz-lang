@@ -265,19 +265,23 @@ fn changed_bindings_and_loop_variables_get_no_marker_hover_or_action() {
         "  items.add(1)\n",
         "  for ((key, value) in table) {\n",
         "  }\n",
+        "  for ((letter, other) in table) {\n",
+        "  }\n",
         "}\n",
     );
     let client = open_document(src);
 
     // The `for ((key, value) in ...)` loop variables are bindings the parser
     // synthesizes with no written `let`; marking them would rewrite the loop's own
-    // source text into `const`.
+    // source text into `const`. `letter` starts with the characters `let` but is a
+    // variable name, not the keyword.
     for (anchor, needle) in [
         ("let total", "let"),
         ("let items", "let"),
         ("items:", "array"),
         ("for ((", "key"),
         ("for ((", "value"),
+        ("for ((letter", "letter"),
     ] {
         let (line, column) = position_of(src, anchor, needle);
         assert!(
