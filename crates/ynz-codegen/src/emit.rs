@@ -23255,7 +23255,15 @@ fn lower_expr_node<'ctx>(
     expr: &Expr,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
-        Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
+        Expr::IntLit(n, _) => {
+            // Typeck types an int literal as `Float` under a float hint. The i64 constant
+            // would be stored (or passed) as f64 bits — a denormal — so the constant must
+            // be f64 when the type typeck computed says so. O(1).
+            if cg.expr_type(expr) == Type::Float {
+                return Ok(cg.f64().const_float(*n as f64).into());
+            }
+            Ok(cg.i64().const_int(*n as u64, true).into())
+        }
 
         Expr::NumberLit(s, _) => {
             let ty = cg.expr_type(expr);
