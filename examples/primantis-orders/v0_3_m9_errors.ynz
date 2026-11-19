@@ -1,4 +1,4 @@
-// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C1e hidden defaults, C5a store hands over, C6 map keys and a union given to a generic task)
+// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C1e hidden defaults, C5a store hands over, C6 map keys and a union given to a generic task, C10 a loop whose body frees the list it walks)
 //
 // Every block below intentionally triggers a diagnostic added or extended in v0.3-M9.
 // Run `ynz build v0_3_m9_errors.ynz` to see all diagnostics.
@@ -18,6 +18,10 @@ shape Order = Plain | Special
 
 shape Ticket {
   held: Special
+}
+
+shape Book {
+  tickets: array<array<int>>
 }
 
 shape Round = Plain | int
@@ -109,4 +113,15 @@ function entrypoint() -> nothing {
   // own, which only exists when the callee declares the union type; `eat`'s `held` is a bare `T`.
   let given: Order = special.copy()
   background eat(given)
+
+  // WHY: WalkedListWrittenInLoop — `ticketBook = fresh` releases the book whose `tickets` the
+  // loop is still reading, so the next pass would read a list that was already released.
+  let ticketBook: Book = { tickets: [[1], [2]] }
+  let spent = 0
+  for (ticketRow in ticketBook.tickets) {
+    let fresh: Book = { tickets: [[9]] }
+    ticketBook = fresh
+    spent = spent + ticketRow[0].or(0)
+  }
+  print(spent.toString())
 }

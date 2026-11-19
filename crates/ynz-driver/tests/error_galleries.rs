@@ -693,15 +693,16 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
     // argument of another type than its type parameter was made to stand for, (C1e) a hidden
     // field whose default is not its declared type, (C5a) a store that hands a value over and a
     // later read of it, and (C6) a map key no slot holds (three forms) and a union given to a
-    // generic task parameter. One trigger each; the count plus a key phrase per class keeps one
+    // generic task parameter, and (C10) a loop whose body assigns the root of the list it walks.
+    // One trigger each; the count plus a key phrase per class keeps one
     // from regressing into a generic message.
     let (stderr, code) = compile_gallery(&gallery("v0_3_m9_errors.ynz"));
     assert_ne!(code, 0, "v0_3_m9 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert_eq!(
-        error_count, 12,
-        "v0_3_m9 gallery must produce exactly 12 errors, one per trigger; got \
+        error_count, 13,
+        "v0_3_m9 gallery must produce exactly 13 errors, one per trigger; got \
          {error_count}.\nstderr:\n{stderr}"
     );
 
@@ -743,6 +744,10 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
         (
             "union given to a generic task parameter (C6)",
             "Cannot give the union `Plain | Special` to `eat`'s generic parameter `held`",
+        ),
+        (
+            "assignment that frees the list a loop walks (C10)",
+            "The `for` loop over `ticketBook.tickets` assigns `ticketBook`",
         ),
     ] {
         assert!(
