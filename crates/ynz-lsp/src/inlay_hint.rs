@@ -9,7 +9,7 @@
 //! |---|---|---|
 //! | `variable_type` | Addition | `: TypeName` after un-annotated `let` |
 //! | `ownership_call_site` | Informational | `share`/`lend`/`give` after call args |
-//! | `copy_points` | Informational | `.copy (N bytes)` for trivially-copyable args |
+//! | `copy_points` | Informational | `.copy() (N bytes)` for trivially-copyable args |
 //! | `array_to_fixed_promotion` | Replacement | decoration on never-grown arrays |
 //! | `let_to_const_promotion` | Replacement | decoration on never-mutated lets |
 //! | `wait_points` | Addition | muted `wait` before suspending call sites |
@@ -243,7 +243,7 @@ pub fn inlay_hint_response(
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
             hints.push(make_hint(
                 pos,
-                format!(".copy ({}, trivially copyable)", h.size_text),
+                format!(".copy() ({}, trivially copyable)", h.size_text),
                 InlayHintKind::PARAMETER,
                 "copy_points",
             ));
