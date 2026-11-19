@@ -113,7 +113,7 @@ pub fn promotion_hover(
     byte_offset: usize,
     encoding: PositionEncoding,
 ) -> Option<Hover> {
-    let mark = mark_at_offset(marks, byte_offset)?;
+    let mark = mark_at_offset(marks, text, byte_offset)?;
     let markdown = ynz_registry::lsp_inlay_hint_hover_for(mark.domain)?;
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {

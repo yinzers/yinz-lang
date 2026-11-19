@@ -73,14 +73,28 @@ pub fn promotion_marks(db: &dyn SourceFileRegistry, sf: SourceFile) -> Vec<Promo
         .collect()
 }
 
-/// The mark whose token contains `byte_offset` (cursor at either edge counts,
-/// matching how `hover::token_at_offset` resolves a token).
+/// The mark whose token the cursor is on. A cursor at the token's end byte only
+/// counts when no other token starts there (whitespace or end of file follows),
+/// matching `hover::token_at_offset`, which resolves such an offset to the
+/// following token: hovering the `<` of `array<int>` must not show the `array`
+/// hover.
 ///
 /// Time: O(M).  Space: O(1).
-pub fn mark_at_offset(marks: &[PromotionMark], byte_offset: usize) -> Option<&PromotionMark> {
-    marks
-        .iter()
-        .find(|mark| mark.start <= byte_offset && byte_offset <= mark.end)
+pub fn mark_at_offset<'marks>(
+    marks: &'marks [PromotionMark],
+    text: &str,
+    byte_offset: usize,
+) -> Option<&'marks PromotionMark> {
+    marks.iter().find(|mark| {
+        if mark.start > byte_offset || byte_offset > mark.end {
+            return false;
+        }
+        byte_offset < mark.end
+            || text
+                .get(mark.end..)
+                .and_then(|after_token| after_token.chars().next())
+                .map_or(true, char::is_whitespace)
+    })
 }
 
 /// Build the `TextEdit` that rewrites the marked token (`array` → `fixed`,

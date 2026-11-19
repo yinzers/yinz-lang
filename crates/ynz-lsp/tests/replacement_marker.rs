@@ -178,6 +178,21 @@ fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
         "hover on `array` must teach the array→fixed decision, got: {hover}"
     );
 
+    let angle_bracket_hover = client.request(
+        12,
+        "textDocument/hover",
+        json!({
+            "textDocument": { "uri": URI },
+            "position": { "line": line, "character": array_column + "array".len() },
+        }),
+    );
+    assert!(
+        angle_bracket_hover["contents"]["value"]
+            .as_str()
+            .map_or(true, |text| !text.contains("**WHAT INSTEAD**")),
+        "hover on the `<` after `array` must not show the `array` promotion hover, got: {angle_bracket_hover}"
+    );
+
     let rewrites = rewrite_actions_at(&client, line, array_column);
     assert_eq!(
         rewrites.len(),
