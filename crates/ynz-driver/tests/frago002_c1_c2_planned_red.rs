@@ -47,9 +47,9 @@
 //
 // test-ratchet: mirrors the fr23 / d5 planned-RED precedent exactly — a still-planned
 // RED is `#[ignore]`d so a plain `cargo test` / `cargo nextest` run does not see it as
-// a failure (nextest fail-fast is a per-target failure; see
-// `.claude/plans/parked.md` entry 52), is run explicitly with `-- --ignored` to
-// observe the RED, and its fixing FRAGO removes the `#[ignore]` mark rather than
+// a failure (nextest fail-fast is a per-target failure; see hub card #549), is run
+// explicitly with `-- --ignored` to observe the RED, and its fixing FRAGO removes
+// the `#[ignore]` mark rather than
 // deleting or weakening the assertion. Step 3.1 did exactly that for A, D, G and J,
 // and step 3.2 for N; every assertion is byte-identical to the one that was failing,
 // except N's WHY comment, which drops its "or a refusal" branch now that the ruling

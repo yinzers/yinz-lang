@@ -184,8 +184,8 @@ fn fr23_red_maybe_payload_spawn_receiver_reads_live_values() {
     // lookup left to regress. The sibling test was deleted; its fixture
     // (`let first = identity(m)` producing an owned `maybe<Cargo>` through a
     // generic `give`) is inexpressible under v0.3-M8 Phase 4's transfer rule and
-    // stays that way until the `maybe-move-out` deferred feature lands (see
-    // `.claude/plans/parked.md`) — three independent attempts to construct an owned
+    // stays that way until the `maybe-move-out` deferred feature lands (see hub card
+    // #560) — three independent attempts to construct an owned
     // `maybe<Cargo>` argument all failed for documented reasons (direct return: type
     // error; a `give` accessor: `returns_fresh` correctly propagates `Reaches`;
     // `channel<Cargo>.receive()`: element type unsupported). This B' lock and the
