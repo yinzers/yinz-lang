@@ -8,19 +8,19 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ## Golden Rules (check every design decision against these — lower number wins)
 
-1. **Dot-first design.** If something can be `.method()` with autocomplete, do it that way. No cryptic symbols, no keywords to memorize.
-2. **Self-documenting syntax.** Every keyword, function, and pattern should be readable by a jr dev who's never seen Yinz. If docs are required to understand a line, the design failed.
-3. **No garbage collector.** Ownership-based memory management only. One memory model. The compiler handles allocation and freeing.
-4. **Compiler does the hard work.** Smart defaults everywhere. Type inference inside function bodies. Developer writes simple code; compiler makes it fast.
-5. **Compile-time safety.** Wrong = caught at compile time, never at runtime.
-6. **Familiar syntax.** Borrow from TypeScript/JavaScript wherever possible.
-7. **Step-by-step over chaining.** No method chaining. Each operation gets its own line with a named variable. Compiler fuses into a single optimized pass.
-8. **Zero-cost abstractions.** High-level syntax compiles to the same machine code as hand-written low-level code.
-9. **Fast to type.** Quick to write without sacrificing readability. `function` over `fn` is worth it; don't add ceremony where it adds nothing.
-10. **Efficiency first, dynamic after.** Default = most performant. `fixed<T>` by default, opt into `array<T>` when you need growth.
-11. **The compiler is a teacher.** Errors explain what went wrong AND why. Suggestions explain why one approach beats another. Every diagnostic answers WHAT happened, WHAT to do instead, and WHY. The WHY must be **specific and contextual** — not generic ("avoids allocation") but tied to the actual call site ("scores isn't used again after this, so sortInPlace() skips the allocation"). The compiler is a senior developer mentoring a junior developer — see [`docs/reference/REF-teaching-mission.md`](docs/reference/REF-teaching-mission.md) for the full mission.
-12. **Human-readable over programmer jargon.** `options` not `enum`. `follows` not `implements`. `nothing` not `void`. If a non-programmer can guess the meaning, the naming is right. (Note: union types use `|` for consistency with TypeScript — `or` was triple-overloaded.)
-13. **Capital letter = type. Everything else = lowercase.** Scan any line of code — capital letter means type, no capital means everything else (function, variable, keyword, module). `Player` is a type. `player` is a variable. `request` is a module. `Request` would be a type. Zero ambiguity.
+1. **No garbage collector.** Ownership-based memory management only. One memory model. The compiler handles allocation and freeing.
+2. **Compile-time safety.** Wrong = caught at compile time, never at runtime.
+3. **The compiler is a teacher.** Errors explain what went wrong AND why. Suggestions explain why one approach beats another. Every diagnostic answers WHAT happened, WHAT to do instead, and WHY. The WHY must be **specific and contextual** — not generic ("avoids allocation") but tied to the actual call site ("scores isn't used again after this, so sortInPlace() skips the allocation"). The compiler is a senior developer mentoring a junior developer — see [`docs/reference/REF-teaching-mission.md`](docs/reference/REF-teaching-mission.md) for the full mission.
+4. **Self-documenting syntax.** Every keyword, function, and pattern should be readable by a jr dev who's never seen Yinz. If docs are required to understand a line, the design failed.
+5. **Human-readable over programmer jargon.** `options` not `enum`. `follows` not `implements`. `nothing` not `void`. If a non-programmer can guess the meaning, the naming is right. (Note: union types use `|` for consistency with TypeScript — `or` was triple-overloaded.)
+6. **Zero-cost abstractions.** High-level syntax compiles to the same machine code as hand-written low-level code.
+7. **Efficiency first, dynamic after.** Default = most performant. `fixed<T>` by default, opt into `array<T>` when you need growth.
+8. **Compiler does the hard work.** Smart defaults everywhere. Type inference inside function bodies. Developer writes simple code; compiler makes it fast.
+9. **Step-by-step over chaining.** No method chaining. Each operation gets its own line with a named variable. Compiler fuses into a single optimized pass.
+10. **Capital letter = type. Everything else = lowercase.** Scan any line of code — capital letter means type, no capital means everything else (function, variable, keyword, module). `Player` is a type. `player` is a variable. `request` is a module. `Request` would be a type. Zero ambiguity.
+11. **Dot-first design.** If something can be `.method()` with autocomplete, do it that way. No cryptic symbols, no keywords to memorize.
+12. **Familiar syntax.** Borrow from TypeScript/JavaScript wherever possible.
+13. **Fast to type.** Quick to write without sacrificing readability. `function` over `fn` is worth it; don't add ceremony where it adds nothing.
 
 ---
 

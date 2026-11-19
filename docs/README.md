@@ -82,7 +82,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Golden rules | [`docs/reference/REF-golden-rules.md`](reference/REF-golden-rules.md) | All 13 rules with full reasoning. Rule 11 expanded — teaching mission. Rule 8 clarification block (zero-cost meaning). Rule 12 union-syntax exception (`\|` not `or`). |
+| Golden rules | [`docs/reference/REF-golden-rules.md`](reference/REF-golden-rules.md) | All 13 rules with full reasoning. Rule 3 expanded — teaching mission. Rule 6 clarification block (zero-cost meaning). Rule 5 union-syntax exception (`\|` not `or`). |
 | Teaching mission | [`docs/reference/REF-teaching-mission.md`](reference/REF-teaching-mission.md) | First-class language goal — compiler as mentor, three-part diagnostic format, IDE as a teaching surface (muted-hint protocol), university-adoption aspiration |
 | IDE hints protocol | [`docs/reference/REF-ide-hints.md`](reference/REF-ide-hints.md) | Muted-text protocol for the v0.2 LSP — what gets hinted, styling rules, tooltip format, the click-to-make-explicit guarantee |
 | Open questions | [`docs/internal/scratchpad/SCRATCH-open-questions.md`](internal/scratchpad/SCRATCH-open-questions.md) | Unresolved design decisions |

@@ -196,7 +196,7 @@ The Sequelize structured-object style is the closest existing reference and a go
 
 Why no chaining: chained builders force you to mentally re-execute the chain to know the resulting SQL; they fragment the query across multiple lines that each look like a complete value; they make the type of each intermediate stage either incoherent (Sequelize) or absurdly complex (Knex with generics). One options object = one SQL statement, fully visible at one call site.
 
-### Compiler as query advisor (Rule 11)
+### Compiler as query advisor (Rule 3)
 
 The compiler knows the schema — types, indexes, constraints — because those are defined in the same Yinz models used for migrations. It should use this to:
 
@@ -322,7 +322,7 @@ This eliminates an entire class of bugs: a developer runs a migration and forget
 
 ### Diesel — queries that can't be valid don't compile
 
-With schema-first types, the compiler knows the full schema at compile time. Querying a column that doesn't exist is a compile error. Type mismatch between a query result and a struct field is a compile error. The error messages follow Rule 11 — WHAT went wrong, WHAT to do instead, WHY — not Diesel's wall of unreadable trait bounds.
+With schema-first types, the compiler knows the full schema at compile time. Querying a column that doesn't exist is a compile error. Type mismatch between a query result and a struct field is a compile error. The error messages follow Rule 3 — WHAT went wrong, WHAT to do instead, WHY — not Diesel's wall of unreadable trait bounds.
 
 ---
 

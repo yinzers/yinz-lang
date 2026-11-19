@@ -3,8 +3,8 @@
 Scope: every user-facing teaching surface — compiler diagnostics (lexer, parser, typeck,
 driver, codegen), IDE surfaces (LSP hover, inlay hints, code actions, completion), and the
 registry teaching text ([`registry/features.toml`](../../../registry/features.toml)) — audited
-against Golden Rule 11 (WHAT/WHAT-INSTEAD/WHY), Golden Rule 12 (human-readable over jargon),
-Golden Rule 13 (capital = type), the spec-writing audience bar (HS grad who knows JS),
+against Golden Rule 3 (WHAT/WHAT-INSTEAD/WHY), Golden Rule 5 (human-readable over jargon),
+Golden Rule 10 (capital = type), the spec-writing audience bar (HS grad who knows JS),
 [`inference.md`](../../../.claude/rules/inference.md), [`vocabulary.md`](../../../.claude/rules/vocabulary.md),
 [`dot-postfix.md`](../../../.claude/rules/dot-postfix.md), and
 [`authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md).
@@ -60,7 +60,7 @@ each class.
   - `variable_type` → fallback uses the registry example `: int (from 42)` — `(from 42)` is not
     typeable either.
   The function's own doc comment (lib.rs:171–175) admits Informational domains "MUST set
-  `hover_what_instead`" — and the three firing ones don't. The failure mode Golden Rule 11 calls
+  `hover_what_instead`" — and the three firing ones don't. The failure mode Golden Rule 3 calls
   out ("muted annotations the user cannot learn from") is here inverted: annotations the user
   learns the *wrong thing* from.
 - **Fix**: add explicit `hover_what` / `hover_what_instead` / `hover_why` to every FIRING domain
@@ -124,7 +124,7 @@ each class.
 
 ---
 
-## B. Too technical — jargon/implementation leakage into user-facing text (Golden Rule 12, spec audience bar)
+## B. Too technical — jargon/implementation leakage into user-facing text (Golden Rule 5, spec audience bar)
 
 ### B1. Banned word `infer` in keyword hovers — and the jargon audit doesn't cover those fields
 - **Where**: `features.toml:172` (`wait` hover_why: "causal ordering the compiler cannot
@@ -244,7 +244,7 @@ documented shared-wording discipline working, though a shared helper/const would
 
 ---
 
-## E. Naming & convention consistency inside teaching examples (Golden Rules 12/13)
+## E. Naming & convention consistency inside teaching examples (Golden Rules 5/10)
 
 ### E1. snake_case rename suggestions in a camelCase language
 - `check.rs:1918–1920` — "declare a new variable: `` `let my_{target} = {target}` ``" and the
@@ -256,8 +256,8 @@ documented shared-wording discipline working, though a shared helper/const would
 - **Fix**: camelCase templates (`inner{PascalName}` is awkward with interpolation; simplest:
   `{name}2`, `updated{PascalName}`, or prose "rename one of them" plus a camelCase example).
 
-### E2. `MAX_HEALTH` example vs Golden Rule 13's scan rule
-- `parser.rs:740, 758` — const-decl errors teach `const MAX_HEALTH = 100`. GR13 says "capital
+### E2. `MAX_HEALTH` example vs Golden Rule 10's scan rule
+- `parser.rs:740, 758` — const-decl errors teach `const MAX_HEALTH = 100`. GR10 says "capital
   letter = type" with zero ambiguity; naming.md defines camelCase variables and never blesses
   SCREAMING_SNAKE constants. Either the convention has an undocumented constants exception
   (then document it in naming.md) or the example should be `const maxHealth = 100`. Today the
@@ -271,7 +271,7 @@ documented shared-wording discipline working, though a shared helper/const would
 
 ### E4. "PascalCase" jargon vs the house phrasing
 - `parser.rs:3550` — "Write `options Status { … }` with a **PascalCase** name" vs
-  `parser.rs:3652` — "the name must start with a **capital letter**" (house style, GR13
+  `parser.rs:3652` — "the name must start with a **capital letter**" (house style, GR10
   phrasing). Use the capital-letter phrasing in both.
 
 ### E5. Inline `.copy (N bytes, trivially copyable)` label
@@ -320,7 +320,7 @@ documented shared-wording discipline working, though a shared helper/const would
 
 ## G. What's genuinely good (so the fixes don't regress it)
 
-- `Diagnostic::new` panics on any empty WHAT/WHAT-INSTEAD/WHY (`diagnostic.rs:142–153`) — GR11
+- `Diagnostic::new` panics on any empty WHAT/WHAT-INSTEAD/WHY (`diagnostic.rs:142–153`) — GR3
   encoded in the type system. Keep.
 - Channel/backpressure teaching (`check.rs:3506–3521`, capacity errors) — explains backpressure
   as "that is backpressure working, not a deadlock". Model text.
@@ -370,7 +370,7 @@ contextual-not-generic WHY requirement, and the HS-grad-who-knows-JS audience te
 well-designed and, where followed, produce the best diagnostics in the codebase (§G). Its two
 real weaknesses:
 
-- **It is smeared across six documents** — `REF-golden-rules.md` (R11/R12), `REF-teaching-mission.md`,
+- **It is smeared across six documents** — `REF-golden-rules.md` (R3/R5), `REF-teaching-mission.md`,
   `.claude/rules/inference.md`, `vocabulary.md`, `spec-writing.md`, `dot-postfix.md`. Any
   writer of a new diagnostic must hold all six in context simultaneously; nobody does, so
   slips are structural. Even `inference.md` itself carries banned-register jargon

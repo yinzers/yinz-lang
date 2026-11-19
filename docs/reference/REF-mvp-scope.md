@@ -323,7 +323,7 @@ The `db` module is one of the most substantial stdlib entries — see [`docs/int
 - **Iterator model** — `db.query()` returns a streaming iterator over a small ring buffer. `.collect()` is explicit opt-in, not default.
 - **Direct wire-to-struct deserialization** — compiler generates a typed deserializer per shape at compile time. No intermediate allocation layer.
 - **Migrations** — atomic (transactional DDL), pre-flight schema validation, content-hash migration tracking (not filename-based).
-- **Compiler as query advisor** — N+1 detection, missing-index suggestions, query rewrite hints. Rule 11 format: WHAT/WHAT-INSTEAD/WHY at every warning.
+- **Compiler as query advisor** — N+1 detection, missing-index suggestions, query rewrite hints. Rule 3 format: WHAT/WHAT-INSTEAD/WHY at every warning.
 - **Typed runtime errors** — `DatabaseError` with structured fields + Postgres error-code mapping to human-readable summaries and suggestions.
 
 **IDE support for embedded SQL (ships with this version)**:
@@ -396,12 +396,12 @@ Substantial design surface (engine choice, flags, captures, replace). Gets its o
 Three-tier API design (see HTTP open question in [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md) to be designed when this version is up):
 
 1. **High-level helpers** — `request.get(url)`, `request.post(url, body)`, `request.put(url, body)`, `request.delete(url)`, `request.websocket(url)`
-2. **Mid-level builder** — `request.build()` returns a configurable Request value; configure step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, `req.send()`) — no chaining per Golden Rule 7
+2. **Mid-level builder** — `request.build()` returns a configurable Request value; configure step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, `req.send()`) — no chaining per Golden Rule 9
 3. **Low-level socket access** — `net.tcp.connect(host, port)` returning a raw socket. The floor of the user-accessible network stack (anything lower is FFI territory).
 
 With TLS support from day 1 in this version.
 
-**Naming note**: the module is called `request` (not `http`) so the direction is unambiguous on read — `request.get(url)` is clearly outbound. The inbound counterpart is `server` (v0.21). Shared `Request`/`Response` types (capital — they're types per Rule 13) live in both modules' surface; both directions touch them since HTTP semantics are direction-agnostic at the message level.
+**Naming note**: the module is called `request` (not `http`) so the direction is unambiguous on read — `request.get(url)` is clearly outbound. The inbound counterpart is `server` (v0.21). Shared `Request`/`Response` types (capital — they're types per Rule 10) live in both modules' surface; both directions touch them since HTTP semantics are direction-agnostic at the message level.
 
 > **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `request.*` methods; TLS support wired from day one (no plain HTTP default); WHAT/WHAT-INSTEAD/WHY for network errors (timeout, DNS failure, non-2xx status); stdlib example project; extension bump; spec + design docs.
 

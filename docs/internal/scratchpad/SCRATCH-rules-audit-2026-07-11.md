@@ -55,7 +55,7 @@ data** — every AI session reads the contradiction and half of them follow the 
 - **Fix**: point both at `docs/internal/implementation/IMP-<feature>.md` per docs-checklist.
 
 ### 1.4 Golden-rule count drift: "12" vs 13 — including inside CLAUDE.md itself
-- CLAUDE.md's Golden Rules section lists **13** (R13 capital-letter added later).
+- CLAUDE.md's Golden Rules section lists **13** (R10 capital-letter added later).
 - `language-design.md`: "check every proposed feature against all **12** golden rules" (×1,
   plus "against all 12 golden rules" in its intro). `CLAUDE.md` §When Working on This Project:
   "Check every proposed language feature against all **12** golden rules" — stale in the same
@@ -93,8 +93,8 @@ data** — every AI session reads the contradiction and half of them follow the 
   module/type case distinction and links vocabulary.md for term mappings. (Or merge the two
   files outright — their scopes overlap ~70%.)
 
-### 2.2 Golden Rule 13 restated in four homes
-- `REF-golden-rules.md` (canonical), CLAUDE.md header list, `naming.md` §Golden Rule 13
+### 2.2 Golden Rule 10 restated in four homes
+- `REF-golden-rules.md` (canonical), CLAUDE.md header list, `naming.md` §Golden Rule 10
   (full section with examples), `vocabulary.md` §Capital Letter Rule (another full section).
   Four hand-maintained copies of one rule. Keep the canonical + CLAUDE.md one-liner; the two
   rule files should state it in one line + link.
@@ -217,13 +217,13 @@ data** — every AI session reads the contradiction and half of them follow the 
 
 ## Class 5 — Gaps (rules that should exist and don't)
 
-1. **A consolidated teaching-surfaces rule** — the six-document smear (GR11/12,
+1. **A consolidated teaching-surfaces rule** — the six-document smear (GR3/5,
    teaching-mission, inference, vocabulary, spec-writing, dot-postfix) with no single
    checklist a diagnostic-writer or reviewer can load. Full spec: teaching audit §H2.7. This
    is the highest-value NEW rule.
 2. **Constant naming convention** — `naming.md` defines camelCase variables and the capital
    rule, but nothing ratifies or bans `MAX_HEALTH`-style constants; meanwhile parser
-   diagnostics teach `const MAX_HEALTH = 100` (teaching audit E2). GR13's "capital = type,
+   diagnostics teach `const MAX_HEALTH = 100` (teaching audit E2). GR10's "capital = type,
    zero ambiguity" is silently violated either way. One paragraph in naming.md settles it.
 3. **Import-path canon** — backtick-quoted, project-root-relative, no `.ynz` suffix lives only
    in scattered parser/typeck error strings (which contradict each other — teaching audit A3).

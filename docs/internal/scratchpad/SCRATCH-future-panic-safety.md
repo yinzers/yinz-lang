@@ -162,7 +162,7 @@ The contract holds across both versions: errors are visible, period. Even with a
 
 ### Step-by-step pattern (no method chaining)
 
-Per Golden Rule 7 (no method chaining), background error handling uses step-by-step syntax:
+Per Golden Rule 9 (no method chaining), background error handling uses step-by-step syntax:
 
 ```ynz
 // Fire-and-forget — error logged to stderr by default
@@ -184,7 +184,7 @@ task.onError((e) => log.warn("error: ${e.message}"))
 supervise.alwaysRestart(processOrder, onError: (e) => log.warn(e))
 ```
 
-NEVER `background fn().onError(...)` chained — that violates Rule 7. Always assign to a handle, then attach handlers as separate statements.
+NEVER `background fn().onError(...)` chained — that violates Rule 9. Always assign to a handle, then attach handlers as separate statements.
 
 ### Why "always log when fire-and-forget" is the right default
 

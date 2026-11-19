@@ -37,4 +37,4 @@ Object/type destructuring is supported. Array destructuring is not.
 
 ## Destructuring in Function Parameters
 
-`function greet({ name, health }: Player) -> string` puts the type annotation after the destructured pattern. Same as TypeScript — familiar to JS/TS developers (Golden Rule 6).
+`function greet({ name, health }: Player) -> string` puts the type annotation after the destructured pattern. Same as TypeScript — familiar to JS/TS developers (Golden Rule 12).

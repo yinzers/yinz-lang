@@ -1,6 +1,6 @@
 ---
 name: "REF-compiler-errors"
-description: "The compiler's character as a teacher (Golden Rule 11, docs/reference/REF-teaching-mission.md) is set by its error messages. If they use jargon, the language fails its own promise — regardless of how good the syntax design is...."
+description: "The compiler's character as a teacher (Golden Rule 3, docs/reference/REF-teaching-mission.md) is set by its error messages. If they use jargon, the language fails its own promise — regardless of how good the syntax design is...."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-14"
@@ -13,7 +13,7 @@ metadata:
 
 # Compiler Error Messages — Style Spec
 
-The compiler's character as a teacher (Golden Rule 11, [`docs/reference/REF-teaching-mission.md`](REF-teaching-mission.md)) is set by its error messages. If they use jargon, the language fails its own promise — regardless of how good the syntax design is. This file is the contract every error message must satisfy.
+The compiler's character as a teacher (Golden Rule 3, [`docs/reference/REF-teaching-mission.md`](REF-teaching-mission.md)) is set by its error messages. If they use jargon, the language fails its own promise — regardless of how good the syntax design is. This file is the contract every error message must satisfy.
 
 ---
 
@@ -126,7 +126,7 @@ COMPILE ERROR: Yinz uses `shape` to declare a data structure, not `type`.
   Replace `type Foo { ... }` with `shape Foo { ... }`.
 
   `type` is overloaded — it's also the everyday word for "what kind of thing this is."
-  `shape` is unambiguous: a shape is the structure of your data. (Golden Rule 2:
+  `shape` is unambiguous: a shape is the structure of your data. (Golden Rule 4:
   self-documenting syntax.)
 ```
 

@@ -56,7 +56,7 @@ w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an 
 
 `base shape Entity` instead of `abstract class Entity`.
 
-**Why**: "Base shape" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in object-oriented design. Yinz isn't OOP and avoids the term. Golden Rule 12.
+**Why**: "Base shape" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in object-oriented design. Yinz isn't OOP and avoids the term. Golden Rule 5.
 
 `base` shapes cannot be instantiated via shape value literal — attempting `let e: Entity = { ... }` on a `base shape Entity` is a compile error. They exist purely to be extended.
 
@@ -109,7 +109,7 @@ When a function is generic over a `follows` constraint AND the concrete type at 
 
 Locked: static dispatch is the default. Dynamic dispatch requires explicit syntax.
 
-> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). That word is BANNED from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 12 — even the design doc you're reading should prefer "specialized version per type" so a jr dev contributing to Yinz isn't blocked by jargon. The internal term is documented here once and referenced in contributor-only compiler-internals docs (`crates/ynz-codegen/`); user-facing surfaces use the plain phrase.
+> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). That word is BANNED from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 5 — even the design doc you're reading should prefer "specialized version per type" so a jr dev contributing to Yinz isn't blocked by jargon. The internal term is documented here once and referenced in contributor-only compiler-internals docs (`crates/ynz-codegen/`); user-facing surfaces use the plain phrase.
 
 ### Concrete example
 
@@ -175,7 +175,7 @@ For 95% of code, the user writes generic functions and the compiler picks static
 
 ### Teaching surfaces — both directions get IDE hints
 
-Per Golden Rule 11 (compiler is teacher) and [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md), both dispatch cases get visible teaching at the call site, plus a lint when the user opted into dynamic unnecessarily.
+Per Golden Rule 3 (compiler is teacher) and [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md), both dispatch cases get visible teaching at the call site, plus a lint when the user opted into dynamic unnecessarily.
 
 #### Static dispatch — neutral muted hint
 
@@ -210,7 +210,7 @@ things.add(player2)
 
 The lint fires when the compiler can prove the `dynamic` collection only ever holds one concrete type. Suggested fix: change to `array<Player>` for the perf win.
 
-#### Compile errors when contract isn't followed (Rule 11 format)
+#### Compile errors when contract isn't followed (Rule 3 format)
 
 ```
 COMPILE ERROR: Item is not a Player.
@@ -257,7 +257,7 @@ This pattern qualifies as auto-promotion (codegen surface only):
 
 ### Dynamic dispatch — when and how
 
-Dynamic dispatch is needed when the concrete type genuinely isn't known until runtime — e.g., a heterogeneous collection of values that all satisfy a contract but are different types. Surface syntax for the opt-in is TBD at M4 implementation. Candidate: `dynamic Drawable` (matches Yinz's plain-English vocabulary; explicitly NOT `dyn Drawable` — `dyn` is Rust jargon and violates Golden Rule 12).
+Dynamic dispatch is needed when the concrete type genuinely isn't known until runtime — e.g., a heterogeneous collection of values that all satisfy a contract but are different types. Surface syntax for the opt-in is TBD at M4 implementation. Candidate: `dynamic Drawable` (matches Yinz's plain-English vocabulary; explicitly NOT `dyn Drawable` — `dyn` is Rust jargon and violates Golden Rule 5).
 
 ### Tradeoff
 
@@ -291,7 +291,7 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 No `null`. No `undefined`. Absence is expressed as `none` and tracked by the type system with `maybe<T>`.
 
-**Why**: Null references are the "billion dollar mistake" — entire categories of runtime errors exist only because null can masquerade as any type. Making absence explicit in the type system moves null errors to compile time (Golden Rule 5).
+**Why**: Null references are the "billion dollar mistake" — entire categories of runtime errors exist only because null can masquerade as any type. Making absence explicit in the type system moves null errors to compile time (Golden Rule 2).
 
 **`maybe<T>` = `T | none`**: Interchangeable syntax. `maybe<string>` is sugar for `string | none`. Both valid everywhere.
 
@@ -309,9 +309,9 @@ shape Player {
 }
 ```
 
-**Why `hidden` over `private`**: Golden Rule 12. "Hidden field" reads like English. "Private" requires knowing OOP access modifier terminology. A developer who has never seen Yinz understands what `hidden damageMultiplier` means.
+**Why `hidden` over `private`**: Golden Rule 5. "Hidden field" reads like English. "Private" requires knowing OOP access modifier terminology. A developer who has never seen Yinz understands what `hidden damageMultiplier` means.
 
-**Why require defaults**: Without a default, the caller would need to provide the hidden field during construction — which would require knowing the field name, defeating the purpose of hiding it. Requiring defaults makes the initial state explicit and visible in the type definition (Golden Rule 2 — self-documenting). The caller only provides visible fields.
+**Why require defaults**: Without a default, the caller would need to provide the hidden field during construction — which would require knowing the field name, defeating the purpose of hiding it. Requiring defaults makes the initial state explicit and visible in the type definition (Golden Rule 4 — self-documenting). The caller only provides visible fields.
 
 **Visibility scope (non-OOP framing)**: Yinz isn't object-oriented — fields don't belong to instances; functions don't live inside shapes. `hidden` means "this field is only accessible to standalone functions declared in the same file as the shape." A `hidden` field can be read and written by functions in the file; it's invisible to imports and to functions in other files. Default values cover construction (the only way an outside caller could touch a hidden field would be at construction — defaults make that path go through the shape's file).
 
@@ -323,7 +323,7 @@ shape Player {
 
 `options Status { active, inactive, banned }` instead of `enum`.
 
-**Why**: "Options" is a plain English word non-programmers understand. A non-programmer reading `options Status` knows what it means. They don't know what an enum is. Golden Rule 12.
+**Why**: "Options" is a plain English word non-programmers understand. A non-programmer reading `options Status` knows what it means. They don't know what an enum is. Golden Rule 5.
 
 **Built-in options**: `SortOrder { asc, desc }`, `Comparison { equal, greater, less }`.
 

@@ -61,7 +61,7 @@ Same bracket convention used everywhere else parameterized types appear:
 
 One syntax. Angle brackets everywhere for type parameters.
 
-**Why `<>` not `[]`**: `[]` is already used for index access (`arr[0]`, `map["key"]`). Using `[]` for type parameters too creates ambiguity — `json.parse[User](raw)` reads as array indexing, not a type parameter. `<>` is unambiguous: `<>` always means type parameter, `[]` always means index. Also consistent with TypeScript (Golden Rule 6 — borrow familiar syntax).
+**Why `<>` not `[]`**: `[]` is already used for index access (`arr[0]`, `map["key"]`). Using `[]` for type parameters too creates ambiguity — `json.parse[User](raw)` reads as array indexing, not a type parameter. `<>` is unambiguous: `<>` always means type parameter, `[]` always means index. Also consistent with TypeScript (Golden Rule 12 — borrow familiar syntax).
 
 ---
 
@@ -87,7 +87,7 @@ function sort<T>(share items: array<T>) -> array<T> where T follows Comparable {
 
 The inline form keeps the constraint visible right next to the type parameter — the reader's eyes don't have to jump to a separate location. Rust adopted `where` clauses because Rust constraints got very complex (lifetimes + multiple traits + associated types + higher-ranked bounds). Yinz won't have that complexity in v0.1 or even v1.0 — keep it inline.
 
-Golden Rule 2 (self-documenting syntax) and Golden Rule 9 (fast to read/type) both favor inline.
+Golden Rule 4 (self-documenting syntax) and Golden Rule 13 (fast to read/type) both favor inline.
 
 If/when Yinz constraints become complex enough to warrant a where clause (deep into v2+), we can revisit. Until then, inline.
 
@@ -108,7 +108,7 @@ let unique = dedupe([1, 2, 1, 3])      // T inferred as int
 let empty = createList<Player>()       // no args, T must be specified
 ```
 
-This matches Rule 4 (compiler does the hard work) — jr devs don't write `<T>` for normal calls. The angle-bracket type-param syntax exists primarily for the *function signature*, not the call site.
+This matches Rule 8 (compiler does the hard work) — jr devs don't write `<T>` for normal calls. The angle-bracket type-param syntax exists primarily for the *function signature*, not the call site.
 
 ---
 

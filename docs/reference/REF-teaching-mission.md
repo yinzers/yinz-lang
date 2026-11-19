@@ -222,7 +222,7 @@ The compiler's teaching surface area covers (at minimum):
 | **Type system** | when to use number vs float vs int, why exact decimal is the default |
 | **Idiomatic Yinz** | step-by-step over chaining, named intermediates, descriptive functions |
 | **Design patterns** | when types beat maps, when discriminated unions beat boolean flags |
-| **Convention** | naming (Rule 13), error handling style, module organization |
+| **Convention** | naming (Rule 10), error handling style, module organization |
 | **Anti-patterns** | what NOT to do and why (sparse arrays, deeply nested code, magic numbers) |
 
 Each domain provides rules in the linting system and contextual hints in the IDE. Module-specific teaching (e.g., "use path.join() not string concatenation") ships with the relevant stdlib module.
@@ -270,9 +270,9 @@ If a feature would make it HARDER for a beginner to understand programming funda
 
 ## How This Interacts with Other Rules
 
-- **Rule 2 (self-documenting)** — surface readability. Teaching mission is the LAYER ABOVE: not just readable, but actively explaining as you read.
-- **Rule 4 (compiler does the hard work)** — performance work. Teaching mission says: also tell the user WHAT you did and WHY.
-- **Rule 11 (compiler is a teacher)** — directly aligned. The teaching mission expands Rule 11 from reactive (errors explain) to proactive (suggestions teach even when code is valid).
-- **Rule 12 (human-readable over jargon)** — language surface. Teaching mission applies the same standard to diagnostic messages.
+- **Rule 4 (self-documenting)** — surface readability. Teaching mission is the LAYER ABOVE: not just readable, but actively explaining as you read.
+- **Rule 8 (compiler does the hard work)** — performance work. Teaching mission says: also tell the user WHAT you did and WHY.
+- **Rule 3 (compiler is a teacher)** — directly aligned. The teaching mission expands Rule 3 from reactive (errors explain) to proactive (suggestions teach even when code is valid).
+- **Rule 5 (human-readable over jargon)** — language surface. Teaching mission applies the same standard to diagnostic messages.
 
-The teaching mission is what ties all the readability/teaching golden rules into a coherent identity. It's the "why" behind Rules 2, 11, and 12.
+The teaching mission is what ties all the readability/teaching golden rules into a coherent identity. It's the "why" behind Rules 3, 4, and 5.

@@ -190,7 +190,7 @@ For the synchronization patterns that actually appear in user code (handoff via 
 
 ### Surface for users
 
-Per Golden Rule 12 (no jargon), Yinz does NOT expose `memory_order_seq_cst` or `memory_order_acquire` as user-visible names. The default ordering applies automatically to channel/atomic operations. Users who genuinely need the global-total-order guarantee opt in via a named API: candidate `atomic.add(n).withGlobalOrdering()` (final naming TBD when concurrency primitives ship in v0.2). The compiler does NOT expose memory ordering as a tunable parameter to non-systems users.
+Per Golden Rule 5 (no jargon), Yinz does NOT expose `memory_order_seq_cst` or `memory_order_acquire` as user-visible names. The default ordering applies automatically to channel/atomic operations. Users who genuinely need the global-total-order guarantee opt in via a named API: candidate `atomic.add(n).withGlobalOrdering()` (final naming TBD when concurrency primitives ship in v0.2). The compiler does NOT expose memory ordering as a tunable parameter to non-systems users.
 
 ### Tradeoff
 
@@ -323,7 +323,7 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 
 **Both pause the calling code for `ms`. The difference is whether the THREAD is wasted.** The win from yielding only appears when there's other work to run; in a single-purpose program doing one thing, the observable behavior is identical.
 
-**Naming history:** these shipped in M1/M2 as `sleepMs` (blocking) and `sleepAsync` (yielding). Both are mis-named: `sleepAsync` smuggles the `async` jargon the language exists to hide (Golden Rule 12 + [`.claude/rules/vocabulary.md`](../../../.claude/rules/vocabulary.md) — Yinz uses `wait`, never `async`/`await`), `wait sleepAsync` states "suspend" twice, and `sleepMs`/`sleepAsync` mix naming bases (unit vs mechanism). Renamed to `sleep` (yielding default) + `sleepBlocking` (blocking exception names its danger, per `stdlib-design.md` Rule 1). The rename is cheapest pre-external-users (M3 kickoff or standalone PR).
+**Naming history:** these shipped in M1/M2 as `sleepMs` (blocking) and `sleepAsync` (yielding). Both are mis-named: `sleepAsync` smuggles the `async` jargon the language exists to hide (Golden Rule 5 + [`.claude/rules/vocabulary.md`](../../../.claude/rules/vocabulary.md) — Yinz uses `wait`, never `async`/`await`), `wait sleepAsync` states "suspend" twice, and `sleepMs`/`sleepAsync` mix naming bases (unit vs mechanism). Renamed to `sleep` (yielding default) + `sleepBlocking` (blocking exception names its danger, per `stdlib-design.md` Rule 1). The rename is cheapest pre-external-users (M3 kickoff or standalone PR).
 
 **Symmetric teaching (the language steers you to the right tool per context):**
 

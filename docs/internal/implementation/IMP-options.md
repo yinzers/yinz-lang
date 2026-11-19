@@ -19,7 +19,7 @@ User spec: [`docs/reference/REF-options.md`](../../reference/REF-options.md)
 
 ## What `options` is
 
-`options Status { active, inactive, banned }` declares a type with a finite, named set of values. It replaces `enum` — the word "options" is plain English readable by a non-programmer (Golden Rule 12). The compiler knows every variant at compile time and enforces exhaustiveness in multi-case `if` blocks.
+`options Status { active, inactive, banned }` declares a type with a finite, named set of values. It replaces `enum` — the word "options" is plain English readable by a non-programmer (Golden Rule 5). The compiler knows every variant at compile time and enforces exhaustiveness in multi-case `if` blocks.
 
 See [`docs/reference/REF-options.md`](../../reference/REF-options.md) for the user-facing surface.
 
@@ -161,6 +161,6 @@ See [`docs/internal/implementation/IMP-unions.md`](IMP-unions.md) for the union 
 - [`docs/internal/implementation/IMP-unions.md`](IMP-unions.md) — union types (the structural-variant counterpart)
 - [`docs/internal/implementation/IMP-narrowing.md`](IMP-narrowing.md) — flow-sensitive narrowing (applied to union `is` checks; options multi-case uses exhaustiveness, not narrowing)
 - [`docs/internal/implementation/IMP-control-flow.md`](IMP-control-flow.md) — exhaustiveness enforcement for multi-case `if`; jump-table lowering
-- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 12 — why "options" over "enum"
+- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 5 — why "options" over "enum"
 - `crates/ynz-typeck/src/options_table.rs` — OptionsTable registry (M6 implementation)
 - `crates/ynz-codegen/src/options.rs` — options codegen helpers (M6 implementation)

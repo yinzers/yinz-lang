@@ -53,7 +53,7 @@ Every type is printable. `print()` never errors.
 
 Symbol-based boolean operators — same as JavaScript, TypeScript, C, Java, Go, Rust.
 
-**Why English words**: Golden Rule 12. `&&` and `||` are C-style operators that require knowing the convention. `and`, `or`, `not` are immediately readable by anyone who speaks English.
+**Why English words**: Golden Rule 5. `&&` and `||` are C-style operators that require knowing the convention. `and`, `or`, `not` are immediately readable by anyone who speaks English.
 
 **`or` disambiguation by context**: `or` serves three roles:
 1. Union type: `type Shape = Circle | Square` (type position)

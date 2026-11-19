@@ -29,7 +29,7 @@ User spec: [`docs/reference/REF-ffi.md`](../../reference/REF-ffi.md)
 
 `foreign function name(...) from "library"` — the keyword describes what the code IS, not just that it's dangerous.
 
-**Why not `unsafe`**: `unsafe` (Rust's approach) tells you something is dangerous without telling you why. `foreign` tells you why — this code comes from another language. A junior developer reading `foreign function c_sqrt(...)` immediately understands the nature of the call. Golden Rule 12.
+**Why not `unsafe`**: `unsafe` (Rust's approach) tells you something is dangerous without telling you why. `foreign` tells you why — this code comes from another language. A junior developer reading `foreign function c_sqrt(...)` immediately understands the nature of the call. Golden Rule 5.
 
 ---
 

@@ -90,7 +90,7 @@ The hint always documents what's happening. The click action varies by category 
 
 ## Hover tooltip format
 
-Every muted hint, on hover, shows a three-part tooltip in the same WHAT / WHAT-INSTEAD / WHY format Golden Rule 11 requires for compiler diagnostics.
+Every muted hint, on hover, shows a three-part tooltip in the same WHAT / WHAT-INSTEAD / WHY format Golden Rule 3 requires for compiler diagnostics.
 
 ### Canonical example — inferred `share` on a `const` binding at a call site
 
@@ -175,7 +175,7 @@ The 5 detection passes will live in `crates/ynz-typeck/src/inlay_hint_passes.rs`
 ## Cross-references
 
 - [`.claude/rules/inference.md`](../../.claude/rules/inference.md) (the uniform inference rule this protocol implements)
-- [`docs/reference/REF-golden-rules.md`](REF-golden-rules.md) Rule 11 (extended to all teaching surfaces)
+- [`docs/reference/REF-golden-rules.md`](REF-golden-rules.md) Rule 3 (extended to all teaching surfaces)
 - [`docs/reference/REF-teaching-mission.md`](REF-teaching-mission.md) "IDE as a Teaching Surface" section
 - [`docs/reference/REF-compiler-errors.md`](REF-compiler-errors.md) (the three-part diagnostic format hints inherit)
 - [`docs/internal/implementation/IMP-lsp.md`](../internal/implementation/IMP-lsp.md) "Inlay Hints" section (M5 implementation status in full-detail table)

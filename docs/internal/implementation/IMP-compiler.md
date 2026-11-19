@@ -94,7 +94,7 @@ For workloads where these specific musl limitations matter, `--dynamic-glibc` is
 
 Yinz generates a specialized version per concrete generic instantiation (each concrete type combination produces its own specialized machine code) — same model as Rust, same model as C++ templates. To prevent the compile-time scaling problem Rust hits, the compiler tracks generated instantiations in a **shared instantiation cache** keyed by `(type-path, concrete-type-arguments)` and deduplicates identical instantiations across the build graph.
 
-> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). Banned from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 12. Use "specialized version per type" in any text a Yinz user might read.
+> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). Banned from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 5. Use "specialized version per type" in any text a Yinz user might read.
 
 ### Why deduplication is the default
 
