@@ -15,7 +15,7 @@ metadata:
 
 > **Status**: Shipped — v0.1-polish.
 > **Spec**: [`docs/reference/REF-types.md`](../../reference/REF-types.md) → "Inline shapes (anonymous types)" section.
-> **Trigger**: Patrick hit verbosity friction while testing — defining a one-off shape outside a function just to type a single binding scrolled the eye too far from the use site.
+> **Motivation**: defining a one-off shape outside a function just to type a single binding scrolled the eye too far from the use site.
 
 ---
 

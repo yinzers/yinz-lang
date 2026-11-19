@@ -30,9 +30,9 @@ User spec: [`docs/reference/REF-types.md`](../../reference/REF-types.md), [`docs
 
 Single inheritance only. `extends` reuses parent's DATA FIELDS — behavior comes from standalone functions, not from inherited methods (because there are no methods on shapes to inherit). No multiple inheritance.
 
-**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; behavior polymorphism per-shape is planned to eventually work via argument-type overloading, but **that dispatch mechanism is not implemented in v0.1** — see the correction below ("No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)"). For shared behavior contracts, `follows` handles any number of contracts.
+**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; behavior polymorphism per-shape is planned to eventually work via argument-type overloading, but **that dispatch mechanism is not implemented in v0.1** — see "No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)" below. For shared behavior contracts, `follows` handles any number of contracts.
 
-**Example** (v0.1-valid — distinct function names, since same-named functions in one file are a compile error; see the correction below):
+**Example** (v0.1-valid — distinct function names, since same-named functions in one file are a compile error; see the overloading section below):
 ```ynz
 shape Entity { name: string, health: int }
 shape Warrior extends Entity { weapon: string, armor: int }

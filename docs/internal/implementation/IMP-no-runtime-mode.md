@@ -33,7 +33,7 @@ This is Yinz's equivalent of Rust's `no_std`. The difference: Yinz's default IS 
 
 ## Why Yinz needs this
 
-Patrick's stated goal: Yinz should eventually be usable for chipset code, OS kernels, and NASA-grade embedded systems. None of those environments have an OS providing `malloc`, threads, file I/O, or even `printf`. They have:
+The goal: Yinz should eventually be usable for chipset code, OS kernels, and NASA-grade embedded systems. None of those environments have an OS providing `malloc`, threads, file I/O, or even `printf`. They have:
 - A specific memory layout (sometimes mapped registers, no heap)
 - A custom allocator (kmalloc in kernels, fixed buffers in firmware)
 - A custom output device (UART, framebuffer, system log)

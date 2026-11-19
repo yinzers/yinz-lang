@@ -142,7 +142,7 @@ If `maybe<T>` were a stdlib generic (defined in `std/maybe.ynz` and imported), e
 ## Cross-References
 
 - [`docs/reference/REF-maybe.md`](../../reference/REF-maybe.md) — user-facing surface
-- [`.claude/planning/done/2026-05-17-m5-generics/plan.md`](../../../.claude/planning/done/2026-05-17-m5-generics/plan.md) — M5 implementation plan (where all of the above tables were originally locked)
+- [`.claude/planning/done/2026-05-17-m5-generics/plan.md`](../../../.claude/planning/done/2026-05-17-m5-generics/plan.md) — M5 implementation plan (where all of the above tables are locked)
 - [`docs/internal/implementation/IMP-generics.md`](IMP-generics.md) — generics engine that `maybe<T>` is built on top of
 - [`docs/internal/implementation/IMP-collections.md`](IMP-collections.md) — collections whose `.get()` returns `maybe<T>`
 - [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) — Rule 2 (compile-time safety) governs the flow-sensitive `.value` check
