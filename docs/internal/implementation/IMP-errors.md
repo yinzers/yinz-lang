@@ -74,11 +74,7 @@ function loadConfig() -> Config errors {
 //                move the .failed() check above the parseConfig() call.
 ```
 
-**Why this design wins over alternatives:**
-
-- **Pure Option A (eager auto-propagation, no `.failed()` inside errors functions):** Would break real systems code — you can't log-and-recover within an errors function. Forces every recoverable case to be a non-errors function, which pushes the complexity outward instead of containing it.
-- **Pure Option B (lazy, variables retain error-capable type until manually unwrapped):** Forces users to think about "what's the type" at every fallible call. Heavier mental load. Goes against "happy path reads like the happy path."
-- **This hybrid (lazy under the hood, eager in feel):** Pure Option B mechanics, taught to users as "auto-propagation happens by default, you can opt out by checking first." 99% of code reads as Option A; 1% gets Option B's flexibility.
+**Decided: the hybrid (lazy under the hood, eager in feel).** Auto-propagation happens by default, and you can opt out by checking first; pure eager propagation and pure lazy error-capable variables are rejected.
 
 **Implementation note:** This is flow-sensitive narrowing — the same machinery the type checker already uses for `maybe<T>` (after `if (item.exists())`, `item` narrows to `T`). Salsa handles flow-typing well. No new infrastructure needed.
 

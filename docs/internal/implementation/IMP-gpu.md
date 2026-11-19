@@ -109,4 +109,4 @@ function renderFrame(share scene: Scene) -> Frame {
 
 `gpu` as a call-site prefix keyword — consistent with `wait` (force sequential) and `background` (separate lifetime). The function itself doesn't change; the caller annotates how to run it.
 
-Alternative considered: `@gpu` annotation on the function definition. Rejected — same reason `async` on function definitions was rejected. The caller decides, not the function.
+Decided: an `@gpu` annotation on the function definition is rejected; the caller decides, not the function.
