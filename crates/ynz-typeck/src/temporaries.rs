@@ -345,6 +345,7 @@ impl Walk<'_> {
                 Type::String
                 | Type::BuiltinArray { .. }
                 | Type::BuiltinMap { .. }
+                | Type::BuiltinFixed { .. }
                 | Type::Shape { .. },
             ) => true,
             Some(ty) if is_owned_text(ty) => true,

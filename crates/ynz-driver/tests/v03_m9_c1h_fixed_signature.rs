@@ -172,3 +172,11 @@ fn a_fixed_of_zero_items_a_suspending_function_or_task_returns_is_asan_clean() {
         );
     });
 }
+
+// Bug: `received.or([`x`, `y`])` (a fallback list written in place) bound a pointer at the
+// received list while the binding and the received result each released it: a double free
+// (High: memory safety and release of a value that leaves its task).
+#[test]
+fn a_received_fixed_of_strings_read_with_an_inline_fallback_is_released_once() {
+    assert_fixture_balanced("v0_3_m9_c1h_fixed_handle_strings_inline_or.ynz", "2\nB\n");
+}

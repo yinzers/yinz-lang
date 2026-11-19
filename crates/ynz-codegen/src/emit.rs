@@ -22707,12 +22707,15 @@ fn own_read_for_store<'ctx>(
                 release_target: Some(slot),
             })
         }
-        // A `fixed<T, N>` read out of a shape field (the one place a list that stays where it is
-        // can be read): the reader owns a copy of the cells, and of the items they point at.
+        // A `fixed<T, N>` read out of a place that stays where it is (a shape field, or the list
+        // an `.or` picks: the receiver's own, or its fallback): the reader owns a copy of the
+        // cells, and of the items they point at. A read typeck judged a view never gets here as a
+        // copy (`may_point`), so this is the owned form of exactly the reads that are not views.
         Type::BuiltinFixed {
             elem,
             size: FixedLength::Known(count),
-        } if matches!(expr, Expr::FieldAccess { .. }) => {
+        } if matches!(expr, Expr::FieldAccess { .. })
+            || matches!(expr, Expr::MethodCall { method, .. } if method == "or") => {
             if may_point || cg.is_moved_cells(pointer) {
                 return Ok(kept);
             }
