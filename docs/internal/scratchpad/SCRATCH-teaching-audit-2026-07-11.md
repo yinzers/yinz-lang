@@ -98,7 +98,7 @@ each class.
 ### A5. Spec files teach `maybe T` syntax the parser rejects
 - **Where**: `docs/reference/REF-doc-comments.md:28` (`-> maybe User errors`),
   `REF-variables.md:106` ("Use `maybe string`"), `REF-iterables.md:38,42` (`-> maybe T`),
-  `REF-golden-rules.md:108`; also `.claude/rules/naming.md` + `vocabulary.md` ("`maybe T`").
+  `REF-golden-rules.md` rule 13 (Fast to type), *Why*; also `.claude/rules/naming.md` + `vocabulary.md` ("`maybe T`").
   The parser requires angle brackets: `parse_maybe_type` errors without `<`
   (`parser.rs:1041–1048`: "`maybe` requires a type argument. Write `maybe<T>`…"), and
   `REF-maybe.md` + all diagnostics consistently use `maybe<T>`.
