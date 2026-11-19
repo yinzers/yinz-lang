@@ -129,7 +129,7 @@ fn non_crossing_shape_is_never_padded() {
 #[test]
 fn sleep_blocking_fires_prefer_yielding_sleep_suggestion() {
     // WHY: the roadmap-mandated Tier 3 nudge — dismissable, never an error, with the
-    // user's own milliseconds echoed into the WHAT-INSTEAD (Golden Rule 11 context).
+    // user's own milliseconds echoed into the WHAT-INSTEAD (Golden Rule 3 context).
     let src = "function entrypoint() -> nothing { sleepBlocking(25) }";
     let out = run(src);
     assert_no_errors(&out);

@@ -65,8 +65,8 @@
 //! this AST pass is not. The floor sidesteps the entire class: treating every mutable-heap
 //! argument as a potential write is sound regardless of how the callee uses it.
 //!
-//! Golden Rule 5 (compile-time soundness — never a silent runtime miscompile) outranks Rule
-//! 10 (efficiency-first); when they conflict, soundness wins. Trivially-copyable scalars are
+//! Golden Rule 2 (compile-time soundness — never a silent runtime miscompile) outranks Rule
+//! 7 (efficiency-first); when they conflict, soundness wins. Trivially-copyable scalars are
 //! passed by copy and immutable strings cannot be mutated through a reference, so neither is
 //! a write hazard — the I/O-overlap headline (no-arg, primitive-, and string-argument
 //! suspending calls) still parallelizes.
@@ -719,8 +719,8 @@ fn write_positions_for_sig(sig: &FunctionSig) -> Vec<usize> {
     // local alias of the argument). The cost is that a genuinely read-only mutable-heap
     // argument does not parallelize — a forfeited perf capability documented in
     // `design/concurrency.md` "Design Divergences" with its reversal path (a real
-    // type+alias-aware ownership analysis re-enables it). Golden Rule 5 (compile-time
-    // soundness — no silent runtime miscompile) outranks Golden Rule 10 (efficiency-first):
+    // type+alias-aware ownership analysis re-enables it). Golden Rule 2 (compile-time
+    // soundness — no silent runtime miscompile) outranks Golden Rule 7 (efficiency-first):
     // when they conflict, soundness wins. Primitives are passed by copy and immutable strings
     // cannot be mutated through a reference, so neither is ever a write hazard (see
     // `is_mutable_heap_type`) — that preserves the I/O-overlap headline (no-arg, primitive-,
@@ -1173,7 +1173,7 @@ mod tests {
 
     #[test]
     fn bare_read_heap_pair_sequentializes_under_floor() {
-        // test-ratchet: the conservative floor (Golden Rule 5 soundness > Rule 10 perf)
+        // test-ratchet: the conservative floor (Golden Rule 2 soundness > Rule 7 perf)
         // forfeits read-only-mutable-heap parallelism. The floor treats every mutable-heap arg
         // as a potential write — it does not trust any per-form ownership classifier (that
         // approach missed five distinct write forms across three gate rounds) — so two
@@ -1209,7 +1209,7 @@ mod tests {
         // `share`-heap reads sequentialize. The assertion locks that sound behavior.
         //
         // WHY: two share-heap-arg calls sequentialize under the floor — soundness over the
-        // read-only-heap-overlap perf capability (Golden Rule 5 > Rule 10).
+        // read-only-heap-overlap perf capability (Golden Rule 2 > Rule 7).
         let table = table_only(&[("readA", vec![heap_ty()]), ("readB", vec![heap_ty()])]);
         let imported: HashMap<String, _> = HashMap::new();
         let susp = suspend_set(&["readA", "readB"]);

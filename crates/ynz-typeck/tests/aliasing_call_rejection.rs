@@ -1,7 +1,7 @@
 // WHY: v0.3-M7 Phase 2 (FRAGO 002, Patrick-directed 2026-07-16) — a call passing the
 // same value (or overlapping pieces of one value) into two parameter positions where at
 // least one position can modify it violates the ownership contract (`lend` = exclusive
-// mutable access) and MUST be a compile error (Golden Rule 5). Typeck previously
+// mutable access) and MUST be a compile error (Golden Rule 2). Typeck previously
 // accepted these calls while codegen claimed LLVM `noalias` on both parameters — a false
 // claim the optimizer exploited into a silent miscompile (RED fixture
 // `v0_3_m7_p1_share_lend_alias.ynz`). These tests lock the rejection, its scope
@@ -226,7 +226,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn rejection_diagnostic_carries_teaching_shape() {
-    // WHY: Golden Rule 11 — the error must name WHAT (both positions and their
+    // WHY: Golden Rule 3 — the error must name WHAT (both positions and their
     // meanings), WHAT-INSTEAD (a copyable fix: `.copy()`), and a non-circular WHY,
     // with no compiler jargon.
     let src = format!(

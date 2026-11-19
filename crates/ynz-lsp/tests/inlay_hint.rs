@@ -331,7 +331,7 @@ function run() -> nothing {
 
 #[test]
 fn test_inlay_hint_background_routing_tooltip_non_empty() {
-    // WHY: every firing hint must carry a hover tooltip (Golden Rule 11 — compiler
+    // WHY: every firing hint must carry a hover tooltip (Golden Rule 3 — compiler
     // is a teacher). A background_routing hint with tooltip:None is muted text
     // the user cannot learn from.
     let src = "\
@@ -349,7 +349,7 @@ function run() -> nothing {
             if label.contains("pool") {
                 assert!(
                     hint.tooltip.is_some(),
-                    "background_routing hint `{}` must have a hover tooltip (Golden Rule 11)",
+                    "background_routing hint `{}` must have a hover tooltip (Golden Rule 3)",
                     label
                 );
             }
@@ -464,7 +464,7 @@ fn test_inlay_hint_array_to_fixed_fires_when_type_is_array_and_never_grown() {
 #[test]
 fn test_inlay_hint_tooltip_populated_for_variable_type_domain() {
     // WHY: every inlay hint must carry a hover tooltip with WHAT/WHAT-INSTEAD/WHY
-    // per Golden Rule 11.  A hint with tooltip:None is muted text the user
+    // per Golden Rule 3.  A hint with tooltip:None is muted text the user
     // cannot learn from — exactly what the teaching mission exists to prevent.
     let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_tooltip.ynz", src);
@@ -474,7 +474,7 @@ fn test_inlay_hint_tooltip_populated_for_variable_type_domain() {
             if label.starts_with(": ") {
                 assert!(
                     hint.tooltip.is_some(),
-                    "type-annotation hint `{}` must have a hover tooltip (Golden Rule 11)",
+                    "type-annotation hint `{}` must have a hover tooltip (Golden Rule 3)",
                     label
                 );
                 if let Some(lsp_types::InlayHintTooltip::MarkupContent(mc)) = &hint.tooltip {
@@ -649,7 +649,7 @@ fn test_inlay_hint_channel_capacity_fires_for_default_capacity_construction() {
     // (64). The Addition-category hint must render the plain muted `64` at the
     // closing paren — same plain-text convention as every other Addition hint
     // (`": int"`, `"wait  "`), no decorative wrapping — carry a hover tooltip
-    // (Golden Rule 11), and offer a click-to-make-explicit TextEdit that inserts
+    // (Golden Rule 3), and offer a click-to-make-explicit TextEdit that inserts
     // `64` at exactly that position — producing `channel<int>(64)`, identical
     // behavior now visible in source.
     let src = "function entrypoint() -> nothing {\n  let wire: channel<int> = channel<int>()\n}\n";
@@ -674,7 +674,7 @@ fn test_inlay_hint_channel_capacity_fires_for_default_capacity_construction() {
         "hint must sit at the closing paren of the constructor call"
     );
 
-    // Hover tooltip present (Golden Rule 11 — teaching surface).
+    // Hover tooltip present (Golden Rule 3 — teaching surface).
     assert!(
         cap_hint.tooltip.is_some(),
         "channel_capacity hint must carry a WHAT/WHAT-INSTEAD/WHY hover tooltip"
@@ -834,7 +834,7 @@ fn test_inlay_hint_auto_arc_fires_once_per_group_member_with_the_task_count() {
 
 #[test]
 fn test_inlay_hint_auto_arc_tooltip_carries_the_registry_hover() {
-    // WHY: Golden Rule 11 — a muted annotation without a WHAT/WHAT-INSTEAD/WHY hover is a
+    // WHY: Golden Rule 3 — a muted annotation without a WHAT/WHAT-INSTEAD/WHY hover is a
     // teaching surface the user cannot learn from. The hover is the registry's `auto_arc`
     // text, which carries the reference-counting-has-cost caution in words (the red tint is
     // `auto-arc-cautionary-tint`, deferred).

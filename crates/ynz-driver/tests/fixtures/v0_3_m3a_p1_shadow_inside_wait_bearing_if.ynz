@@ -1,6 +1,6 @@
 // Fixture: shadowing guard — a `let x` inside a WAIT-BEARING if body shadows a
 // crossing local `x`. Yinz rejects this with a compile error because the same name
-// cannot mean two different values across a suspension boundary (Golden Rule 2).
+// cannot mean two different values across a suspension boundary (Golden Rule 4).
 // Expected: exit 1, diagnostic mentions "declared again" and "crosses a `wait`".
 function entrypoint() -> nothing {
   let x = 10

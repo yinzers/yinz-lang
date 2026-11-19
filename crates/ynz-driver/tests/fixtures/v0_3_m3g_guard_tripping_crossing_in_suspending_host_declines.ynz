@@ -12,7 +12,7 @@
 // This is a PERMANENT safety decline, not a flip candidate (unlike the Phase-2 neutrality
 // fixtures a/b): the guard-tripping crossing must decline even after Phase 3 removes the
 // temporary co-resident-suspension check, because "a suspending call inside a larger
-// expression" is a real, permanent codegen constraint (Golden Rule 7 step-by-step style), not a
+// expression" is a real, permanent codegen constraint (Golden Rule 9 step-by-step style), not a
 // milestone-scoping placeholder.
 //
 // Arithmetic: crunch(seed) = 4950 + seed.

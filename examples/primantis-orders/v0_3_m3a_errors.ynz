@@ -29,7 +29,7 @@
 // WHY: SubExprSuspendViolation — `fetchRating()` is a suspending call nested inside
 // a larger expression (`1 + fetchRating()`). Yinz compiles each suspending call as
 // its own state-machine step; the step-by-step style — one operation per line with
-// a named variable — is the language's deliberate design (Golden Rule 7) and enables
+// a named variable — is the language's deliberate design (Golden Rule 9) and enables
 // the compiler to auto-parallelize independent statements in a future release.
 // Fix: `let r = wait fetchRating()` then use `r` in the expression.
 
