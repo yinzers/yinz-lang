@@ -15,7 +15,7 @@ metadata:
 
 The 13 rules with full reasoning. This file adds the "why" behind each one.
 
-When two rules conflict, first find a design that satisfies both, usually by having the compiler do the work and show it. If none exists, the lower number wins. Readability against speed, and any safety opt-out for kernel code, need Patrick's explicit approval.
+When two rules conflict, first find a design that satisfies both, usually by having the compiler do the work and show it. If none exists, the lower number wins. Readability against speed, and any safety opt-out for kernel code, need Chief's confirmation.
 
 ---
 
