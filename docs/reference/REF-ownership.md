@@ -114,6 +114,18 @@ print(rows.count())
 
 Numbers, booleans, options, strings and ranges are copied, so storing them gives nothing away.
 
+A `for` loop can hand its rows over. When you never read the list again, not inside the loop and not after it, storing the loop variable takes the row out of the list instead of copying it, and the list frees only the rows that stayed:
+
+```ynz
+let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
+let kept: array<array<int>> = []
+for (row in matrix) {
+  kept.add(row)
+}
+```
+
+If the list is read inside or after the loop, the row still belongs to it and storing it needs `.copy()`.
+
 ---
 
 ## `const` bindings get extra protection

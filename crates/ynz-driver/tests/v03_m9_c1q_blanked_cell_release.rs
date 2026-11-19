@@ -155,7 +155,7 @@ fn patch(ir: &str, outer: &Outer) -> String {
     if !patched.contains("declare i64 @ynz_array_get(") {
         declarations.push_str("declare i64 @ynz_array_get(ptr, i64, ptr)\n");
     }
-    if matches!(outer, Outer::Array) {
+    if matches!(outer, Outer::Array) && !patched.contains("declare void @ynz_array_blank_cell(") {
         declarations.push_str("declare void @ynz_array_blank_cell(ptr, i64)\n");
     }
     // Declarations go before the first existing `declare`, after the module header lines.

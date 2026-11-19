@@ -20825,6 +20825,11 @@ fn lower_stmt_for<'ctx>(
         // stays the honest header read (len == cap, D3), so only the element
         // read below changes.
         let soa_info = cg.soa_expr_info(iter);
+        // A struct-of-arrays list has no row cell to take: the layout pass declines a list whose
+        // rows are stored (`soa.rs` "stored into a value position"), so a loop over one that
+        // typeck recorded only reads its rows, and walks them as an ordinary loop. A read recorded
+        // as a hand-over of such a loop fails loudly in `take_handover_row`.
+        let hands_rows_over = hands_rows_over && soa_info.is_none();
         let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
         let cnt = cg
             .builder
@@ -20885,11 +20890,6 @@ fn lower_stmt_for<'ctx>(
         // place (typeck's `non_owned_reads`); otherwise it owns a copy, released after its
         // iteration.
         let owned_elem = if hands_rows_over {
-            if soa_info.is_some() {
-                return Err(
-                    "internal: a loop over a struct-of-arrays list hands its rows over".to_string(),
-                );
-            }
             handed_over_row(elem_val)
         } else {
             own_loop_element(cg, iter, elem_val, &elem, "for_elem")?

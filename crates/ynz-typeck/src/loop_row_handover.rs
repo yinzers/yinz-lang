@@ -50,4 +50,9 @@ impl LoopRowHandovers {
     pub fn loop_count(&self) -> usize {
         self.loops.len()
     }
+
+    /// The number of handed-over reads in the record.
+    pub fn store_count(&self) -> usize {
+        self.stores.len()
+    }
 }
