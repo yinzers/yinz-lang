@@ -22,6 +22,7 @@ User spec: [`docs/reference/REF-types.md`](../../reference/REF-types.md), [`docs
 `shape` is the only declaration keyword. No `interface`, `struct`, `class`, `type`.
 
 **Why**: Three keywords for three overlapping concepts confuses junior developers. `shape` handles all cases: plain data shapes, shapes used as contracts (with bare-signature declarations only — no bodies), shapes that extend other shapes for data reuse. One concept, one word. The word `type` is banned at the lexer level (declaration-keyword diagnostic redirects to `shape`) because "type" is also the generic English word for a category — keeping it as a keyword would constantly conflict with that broader usage.
+
 > Yinz is **NOT object-oriented** — see [`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md). Shapes hold DATA + (optionally) CONTRACT METHOD-SIGNATURE DECLARATIONS only. Method implementations live as standalone `function` declarations at file/module level. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). The sections below describe the type system within this non-OOP model.
 
 ---
