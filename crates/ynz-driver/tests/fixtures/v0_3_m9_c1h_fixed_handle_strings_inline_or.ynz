@@ -1,0 +1,20 @@
+// v0.3-M9 C1h: a background task returns a `fixed<string>`, and the parent receives it and reads
+// it through `.or` with a fallback list written in place (not a named binding).
+// Before: the binding of the `.or` result released the received list, then the received result's own
+// release freed the same strings again: `free(): double free`.
+// Expected output: the count, then the last name.
+
+function build() -> fixed<string> {
+  wait sleep(1)
+  let names: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return names
+}
+
+function entrypoint() -> nothing {
+  let task = background build()
+  wait sleep(20)
+  let got = task.receive()
+  let list = got.or([`x`, `y`])
+  print(list.count())
+  print(list[1].or(`?`))
+}
