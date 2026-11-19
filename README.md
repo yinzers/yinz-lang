@@ -4,37 +4,7 @@ A compiled systems programming language. Rust-level performance, TypeScript-leve
 
 File extension: `.ynz`. Compiler target: LLVM native machine code.
 
-For the language specification, see [`docs/reference/REF-language-overview.md`](docs/reference/REF-language-overview.md).
-
----
-
-## Repository layout
-
-Cargo workspace of 14 crates under `crates/`:
-
-| Crate | Purpose |
-|---|---|
-| `ynz-driver` | The `ynz` compiler CLI (`build`, `run`, `fmt`, `watch`) |
-| `ynz-diagnostics` | Diagnostic types, bucket and [ariadne](https://crates.io/crates/ariadne) rendering |
-| `ynz-ast` | Abstract syntax tree node types |
-| `ynz-parser` | Lexer and parser |
-| `ynz-typeck` | Type checker and name resolver |
-| `ynz-codegen` | LLVM code generation |
-| `ynz-numerics` | IEEE 754 decimal128 implementation, no external crates |
-| `ynz-abi` | Zero-dependency frame-ABI constants shared by `ynz-codegen` and `ynz-runtime` |
-| `ynz-runtime` | C-ABI runtime shims linked into Yinz-compiled binaries: panic handlers, decimal128 bridge, int/float formatting |
-| `ynz-registry` | Parses `registry/features.toml` and generates typed Rust constants at build time |
-| `ynz-lsp` | Language server: JSON-RPC over stdio, backed by salsa queries |
-| `ynz-tmgrammar` | Generates `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from the registry |
-| `ynz-fmt` | Zero-config source formatter, used by `ynz fmt` and LSP format-on-save |
-| `ynz-watch` | Watch daemon: rebuild-on-save for Yinz programs |
-
-Outside `crates/`:
-
-- [`registry/`](registry/) — `features.toml` is the single source of truth for the feature inventories (keywords, banned jargon, intrinsics, deferred features, hint domains).
-- [`docs/`](docs/README.md) — all project documentation; start at [`docs/README.md`](docs/README.md).
-- [`examples/`](examples/README.md) — example Yinz projects.
-- [`tooling/vscode-ynz/`](tooling/vscode-ynz/README.md) — the VSCode extension; it spawns `ynz-lsp`.
+For the language specification, see [`docs/reference/REF-language-overview.md`](docs/reference/REF-language-overview.md). All project documentation starts at [`docs/README.md`](docs/README.md).
 
 ---
 
@@ -120,10 +90,6 @@ docker compose exec dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/
 # VSCode extension build
 docker compose run --rm dev bash -c "cd tooling/vscode-ynz && npm install && npm run build && npx vsce package --no-yarn"
 ```
-
-**Cargo registry cache:** stored in the named Docker volume `cargo-registry` (the compose name; Docker prefixes the project name at runtime, so `docker volume ls` shows it as `ynz_cargo-registry`). It is mounted at `/home/ubuntu/.cargo/registry`, so downloaded crates survive container rebuilds. `target/` stays on the host bind mount, never in a named volume.
-
-**`target/release` is a live consumer mount.** External projects (`trading-v4`, `backfillMarketData`) mount `target/release` read-only and run whatever binary is there, at dev time. A fix to `ynz-driver`, `ynz-watch` or `ynz-lsp` that one of those projects needs must be rebuilt with `--release`. A debug build compiles and runs, but it does not update the binary those projects run.
 
 ---
 
