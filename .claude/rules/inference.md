@@ -1,20 +1,7 @@
 ---
-name: "inference"
-description: >
-  How Yinz handles the work the compiler can figure out automatically vs. what the developer
-  types — the muted-hint IDE protocol, its three placement categories (Addition/Replacement/
-  Informational), the hover tooltip format, and the dual-audience infer/inference vocabulary
-  split (banned user-facing, correct in this rules corpus).
-tags:
-  - "yinz-compiler"
-  - "ide"
-  - "teaching"
-created_at: "2026-05-14"
-updated_at: "2026-07-16"
-status: "active"
-author: "patrick"
-metadata:
-  type: "rule"
+description: >-
+  Applies when designing IDE hints, hover tooltips or anything the compiler works out for the developer: muted-hint protocol, its three placement categories, and where infer/inference is banned (user-facing) vs allowed (internal).
+trigger: relevance
 ---
 
 # Inference Rule — Compiler Infers, IDE Teaches

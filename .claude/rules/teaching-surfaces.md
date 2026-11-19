@@ -1,20 +1,7 @@
 ---
-name: "teaching-surfaces"
-description: >
-  The consolidated checklist every user-facing diagnostic, hover tooltip, lint suggestion, and
-  muted hint must clear: the three-slot WHAT/WHAT-INSTEAD/WHY test, the 18-year-old-JS-dev
-  audience test, the banned-vocabulary pointer, in-example naming conventions, and the
-  no-internal-paths/no-milestone-tags rules. Load whenever a diff touches Diagnostic:: construction,
-  registry teaching fields, or inlay_hint/hover code.
-tags:
-  - "yinz-compiler"
-  - "teaching"
-created_at: "2026-07-16"
-updated_at: "2026-07-16"
-status: "active"
-author: "patrick"
-metadata:
-  type: "rule"
+description: >-
+  Applies when a change touches a diagnostic, hover tooltip, lint suggestion or muted hint (Diagnostic:: code, registry teaching fields, inlay_hint/hover): the WHAT / WHAT-INSTEAD / WHY checklist and audience test.
+trigger: relevance
 ---
 
 # Teaching Surfaces — The Checklist Every User-Facing Teaching String Must Clear

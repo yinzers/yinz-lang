@@ -1,19 +1,7 @@
 ---
-name: "vocabulary"
-description: >
-  The authoritative reference for Yinz user-facing terminology — the Quick Reference
-  term-mapping table, concept-level distinctions (shape vs value vs map, array vs fixed,
-  options vs union, maybe<T>), banned legacy terms, the Capital Letter Rule (GR13), the
-  constants-naming ruling, and import-path syntax.
-tags:
-  - "yinz-compiler"
-  - "vocabulary"
-created_at: "2026-05-14"
-updated_at: "2026-07-16"
-status: "active"
-author: "patrick"
-metadata:
-  type: "rule"
+description: >-
+  Applies when writing or reviewing Yinz docs, diagnostics or design text: official user-facing terms (shape, value, map, options, maybe), banned legacy terms, the capital-letter rule, constants naming, import-path syntax.
+trigger: relevance
 ---
 
 # Yinz Vocabulary — Official Terms

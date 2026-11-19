@@ -1,19 +1,7 @@
 ---
-name: "docs-checklist"
-description: >
-  Documentation structure rules and checklists for adding a language feature or making a
-  design decision within Yinz's four-bucket docs/ taxonomy (docs/reference/REF-*.md,
-  docs/internal/implementation/IMP-*.md, docs/internal/decisions/ADR-*.md,
-  docs/internal/scratchpad/SCRATCH-*.md).
-tags:
-  - "yinz-compiler"
-  - "docs"
-created_at: "2026-05-12"
-updated_at: "2026-07-16"
-status: "active"
-author: "patrick"
-metadata:
-  type: "rule"
+description: >-
+  Applies when adding a language feature or making a design decision: which docs/ bucket it goes in (REF, IMP, ADR, SCRATCH), the checklist to follow, and what each file type may contain.
+trigger: relevance
 ---
 
 # Documentation Rules & Checklist

@@ -1,3 +1,9 @@
+---
+description: >-
+  Applies when creating a branch, committing, opening a PR or merging in this repo: main is protected, work lands via feat/fix/perf branches and PRs, one checkout per branch.
+trigger: relevance
+---
+
 # Branching
 
 Where work lands in this repo. Decided by Patrick 2026-09-03, in response to `/execute-plan`'s

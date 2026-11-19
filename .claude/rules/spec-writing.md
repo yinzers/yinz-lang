@@ -1,18 +1,8 @@
 ---
-name: "spec-writing"
 description: >
   Tone, structure, audience, and code-example rules for the user-facing docs/reference/REF-*.md
   language-spec files — written for a developer who just graduated high school, knows
   JavaScript, and has never done systems programming.
-tags:
-  - "yinz-compiler"
-  - "docs"
-created_at: "2026-05-12"
-updated_at: "2026-07-16"
-status: "active"
-author: "patrick"
-metadata:
-  type: "rule"
 ---
 
 # Spec Writing Rules (docs/reference/REF-*.md language-spec files)

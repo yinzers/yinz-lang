@@ -1,18 +1,8 @@
 ---
-name: "language-design"
 description: >
   Rules for making and reviewing Yinz language design decisions — the readability, duplication,
   performance, OOP-drift, and teaching tests every proposed feature or keyword must pass before
   it ships, plus where decisions get documented.
-tags:
-  - "yinz-compiler"
-  - "language-design"
-created_at: "2026-05-12"
-updated_at: "2026-07-16"
-status: "active"
-author: "patrick"
-metadata:
-  type: "rule"
 ---
 
 # Language Design Rules

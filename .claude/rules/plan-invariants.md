@@ -1,19 +1,7 @@
 ---
-name: "plan-invariants"
-description: >
-  What every M4+ milestone plan must declare — the seven required Invariants subsections
-  (Safety, Performance, Teaching, Runtime Dependencies, Kernel-Mode Behavior, Demo & Error
-  Gallery, Feature Registry Entries), plus the Design-Doc Alignment section every plan needs
-  regardless of milestone.
-tags:
-  - "yinz-compiler"
-  - "planning"
-created_at: "2026-05-14"
-updated_at: "2026-07-16"
-status: "active"
-author: "patrick"
-metadata:
-  type: "rule"
+description: >-
+  Applies when writing or reviewing a milestone plan: the seven required Invariants subsections (M4 onward) and the Design-Doc Alignment section every plan needs.
+trigger: relevance
 ---
 
 # Plan Invariants Rule
