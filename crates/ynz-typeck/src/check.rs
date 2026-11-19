@@ -5212,7 +5212,14 @@ impl<'b> Checker<'b> {
             return false;
         }
         let items = match iter_ty {
-            Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => elem,
+            Type::BuiltinArray { elem } => elem,
+            // A `fixed` list of shapes keeps each shape in a cell of its own that a take would
+            // leak (probed: 2 allocations unfreed), so those rows keep the `.copy()` refusal.
+            Type::BuiltinFixed { elem, .. }
+                if !matches!(elem.as_ref(), Type::Shape { .. } | Type::Union { .. }) =>
+            {
+                elem
+            }
             _ => return false,
         };
         // A string row hands over through the same record (`record_string_row_handover`); any
@@ -13802,7 +13809,7 @@ fn last_ident_read_in_stmts(stmts: &[Stmt], name: &str) -> Option<SourceSpan> {
     let mut last: Option<SourceSpan> = None;
     for stmt in stmts {
         visit_ident_reads_in_stmt(stmt, name, &mut |read| {
-            if last.as_ref().is_none_or(|kept| read.start > kept.start) {
+            if last.as_ref().map_or(true, |kept| read.start > kept.start) {
                 last = Some(read.clone());
             }
         });
