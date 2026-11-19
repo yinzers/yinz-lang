@@ -59,7 +59,10 @@ pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             },
         })),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            code_action_kinds: Some(vec![lsp_types::CodeActionKind::QUICKFIX]),
+            code_action_kinds: Some(vec![
+                lsp_types::CodeActionKind::QUICKFIX,
+                lsp_types::CodeActionKind::REFACTOR_REWRITE,
+            ]),
             work_done_progress_options: WorkDoneProgressOptions {
                 work_done_progress: None,
             },

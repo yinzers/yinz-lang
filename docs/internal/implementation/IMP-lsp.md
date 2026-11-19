@@ -304,23 +304,25 @@ The following LSP capabilities were out of scope for v0.2-M2 and shipped in v0.2
 
 **Label format**: `"Replace \`<original>\` with \`<replacement>\`"` — consistent across all fixable diagnostic kinds.
 
+**Refactor action**: a promoted `array` / `let` token also offers a `refactor.rewrite` action (see Replacement surface under Inlay Hints).
+
 **What is NOT in M5**: code actions that add imports, create new functions, or do multi-file structural edits.
 
 ### `textDocument/semanticTokens` — Richer-than-TextMate Highlighting
 
-**What it will do**: emit token-type classifications (KEYWORD, TYPE, FUNCTION, VARIABLE, PARAMETER, PROPERTY, ENUM_MEMBER, NUMBER, STRING, COMMENT) for every token in the file. VSCode applies theme colors per type.
+**What it does**: emit token-type classifications (KEYWORD, TYPE, FUNCTION, VARIABLE, PARAMETER, PROPERTY, ENUM_MEMBER, NUMBER, STRING, COMMENT) for every token in the file. VSCode applies theme colors per type.
 
 **Relationship to TextMate grammar**: semantic tokens REFINE TextMate. TM grammar handles syntax structure; semantic tokens handle identifier classification (is `foo` a function or a variable? TM can't tell; semantic tokens can, using typeck data). Keyword token ranges will be kept in sync with the TM grammar's keyword rules (tested via a keyword-agreement assertion in Phase 8).
 
 **Wire format**: delta-encoded per LSP spec (`SemanticTokens.data` = array of `[deltaLine, deltaStart, length, tokenTypeIndex, tokenModifiers]` 5-tuples).
 
-**What is NOT in M5**: modifiers (readonly, deprecated, async); per-file semantic-token caching invalidation (M5 re-emits on every `didChange`).
+**Modifiers**: one, `promotable` (see Replacement surface under Inlay Hints). **What is NOT in M5**: readonly / deprecated / async modifiers; per-file semantic-token caching invalidation (M5 re-emits on every `didChange`).
 
 ---
 
 ## Inlay Hints
 
-All 9 registry `[[muted_hint_domain]]` entries will have LSP protocol handlers in M5. 5 will fire data; 4 will return empty hint lists (protocol-only, awaiting v0.3+ analysis data).
+All 9 registry `[[muted_hint_domain]]` entries have an LSP handler. 3 fire as inlay hints, 2 (the Replacement domains) mark the existing token instead, and 4 return empty hint lists (protocol-only, awaiting v0.3+ analysis data).
 
 See [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) for the three placement categories (Addition / Replacement / Informational) and the full protocol spec.
 
@@ -328,13 +330,26 @@ See [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) for the 
 |---|---|---|---|---|---|
 | `variable_type` | Firing | Addition | `: int (from 42)` after `x` in `let x = 42` | Always — every unannotated `let` | Today |
 | `ownership_call_site` | Firing | Informational | `share (matches foo's signature)` after arg | Every call site where callee signature has `share`/`lend`/`give` | Today |
-| `copy_points` | Firing | Informational | `.copy (8 bytes, trivially copyable)` | Trivially-copyable arg passed while binding still live afterward | Today |
-| `array_to_fixed_promotion` | Firing | Replacement | `// promoted to fixed — never grown` | `let x: array<T> = [...]` where no `.add()` / `.lend` found in scope | Today |
-| `let_to_const_promotion` | Firing | Replacement | `// effectively const — never reassigned` | `let x = ...` where no reassignment / `.lend` / `.give` found in scope | Today |
+| `copy_points` | Firing | Informational | `.copy() (8 bytes, trivially copyable)` | Trivially-copyable arg passed while binding still live afterward | Today |
+| `array_to_fixed_promotion` | Firing | Replacement | Dotted underline on the `array` of the annotation (token marker, no inlay hint) | `let x: array<T> = [...]` where no `.add()` / `.lend` found in scope | Today |
+| `let_to_const_promotion` | Firing | Replacement | Dotted underline on the `let` keyword (token marker, no inlay hint) | `let x = ...` where no reassignment / `.lend` / `.give` found in scope | Today |
 | `function_param_type` | Protocol-only | Addition | (empty — awaiting lambdas) | N/A until lambdas ship | v0.3+ (lambdas milestone) |
 | `wait_points` | Protocol-only | Addition | (empty — awaiting I/O suspension analysis) | N/A until `wait`-auto-insertion analysis ships | v0.3 (concurrency milestone) |
 | `lifetimes` | Protocol-only | Informational | (empty — awaiting explicit lifetime UI) | N/A until explicit lifetimes have a user-facing surface | v0.3+ (may stay fully implicit) |
 | `allocators` | Protocol-only | Addition | (empty — awaiting arena keyword) | N/A until `arena scratch { }` ships | v0.3 (per [`docs/internal/scratchpad/SCRATCH-future-arena.md`](../scratchpad/SCRATCH-future-arena.md)) |
+
+### Replacement surface (`array_to_fixed_promotion`, `let_to_const_promotion`)
+
+The compiler already uses the stricter form, so these two domains mark the token the user wrote instead of adding text (`crates/ynz-lsp/src/replacement_marker.rs`):
+
+| Surface | Behavior |
+|---|---|
+| Marker | Semantic-token modifier `promotable` (legend index 0, bit `1`) on the `array` token of the annotation / the `let` keyword. The VS Code extension draws it as a dotted underline. |
+| Hover | A marked token answers with the domain's registry WHAT / WHAT INSTEAD / WHY (`lsp_inlay_hint_hover_for`), replacing the plain `let` keyword hover for that token only. |
+| Click | Code action of kind `refactor.rewrite` (an optional improvement, not a fix) whose `TextEdit` replaces exactly the token with `fixed` / `const`. Offered when the request range touches the token (either edge). `capabilities` advertises `quickfix` and `refactor.rewrite`. |
+| Inlay hint | None for these two domains. |
+
+Source of truth: the typeck passes `array_to_fixed_promotion_hints` / `let_to_const_promotion_hints` (`PromotionHint.keyword_span`); the LSP never re-derives "never grown" or "never reassigned". A parser-synthesized `let` (the loop variables of `for ((key, value) in table)`) has no written keyword, so its `keyword_span` is `None` and it is neither marked nor rewritable.
 
 Cross-reference: [`docs/reference/REF-ide-hints.md`](../../reference/REF-ide-hints.md) for the protocol spec; [`registry/features.toml`](../../../registry/features.toml) `[[muted_hint_domain]]` entries for the canonical domain definitions.
 

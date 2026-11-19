@@ -8,10 +8,12 @@ use ynz_parser::SourceFileRegistry as _;
 
 use crate::{
     position::LineTable,
+    replacement_marker::{promotion_edit, promotion_marks},
     state::{import_path_for_file, ServerState},
 };
 
-/// Enumerate quick-fix code actions for diagnostics overlapping `range` in `uri`.
+/// Enumerate code actions for `range` in `uri`: quick-fixes for diagnostics
+/// overlapping it, plus `refactor.rewrite` actions for promoted tokens it touches.
 ///
 /// Each `BannedKeyword` diagnostic with a known single-token replacement produces
 /// one `CodeAction { kind: QuickFix, edit }`.  Diagnostics without an unambiguous
@@ -92,7 +94,50 @@ pub fn code_action_response(
         }
     }
 
+    actions.extend(
+        build_promotion_actions(state, uri, sf, text, &table, start_byte, end_byte)
+            .into_iter()
+            .map(CodeActionOrCommand::CodeAction),
+    );
+
     actions
+}
+
+/// Build a `refactor.rewrite` action for each promoted token (`array` → `fixed`,
+/// `let` → `const`) that the request range touches (cursor at either edge counts).
+///
+/// This is an optional improvement, not a fix for a problem — the compiler already
+/// uses the stricter form — so it is a refactor, never a quick-fix, and is not
+/// marked preferred.
+///
+/// Time: O(P) over promotion hints.  Space: O(P).
+fn build_promotion_actions(
+    state: &ServerState,
+    uri: &Url,
+    sf: ynz_parser::SourceFile,
+    text: &str,
+    table: &LineTable,
+    start_byte: usize,
+    end_byte: usize,
+) -> Vec<CodeAction> {
+    promotion_marks(&state.db, sf)
+        .iter()
+        .filter(|mark| mark.start <= end_byte && start_byte <= mark.end)
+        .map(|mark| {
+            let edit = promotion_edit(text, mark, table, state.encoding);
+            let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+            changes.insert(uri.clone(), vec![edit]);
+            CodeAction {
+                title: mark.action_title.to_string(),
+                kind: Some(CodeActionKind::REFACTOR_REWRITE),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 
 /// Build a quick-fix for a `BannedKeyword` diagnostic.

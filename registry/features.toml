@@ -2477,19 +2477,29 @@ description = "Shows where a trivially-copyable value is implicitly copied at a 
 example_source = "let n: int = 5"
 example_hint_rendered = ".copy() (8 bytes, trivially copyable)"
 
+# Replacement category (not an inlay hint): the compiler already uses the stricter form, so the
+# editor marks the `array` / `let` token the user wrote with a dotted underline (semantic-token
+# modifier `promotable`) instead of adding text. Hover on the token shows this WHAT / WHAT INSTEAD /
+# WHY; the `refactor.rewrite` code action on it writes the stricter keyword into the source.
 [[muted_hint_domain]]
 domain = "array_to_fixed_promotion"
 placement_category = "Replacement"
-description = "Shows when the compiler promotes array<T> to fixed<T> because the value is never grown"
+description = "Marks the `array` in an `array<T>` annotation with a dotted underline when the compiler stores the value as a fixed-size `fixed<T>` because nothing ever grows it"
 example_source = "let nums: array<int> = [1, 2, 3]"
-example_hint_rendered = "// promoted to fixed — never grown"
+example_hint_rendered = "`array` carries a dotted underline; hover shows why, and the rewrite action turns it into `fixed<int>`"
+hover_what = "The compiler stores this value as a fixed-size `fixed<T>` instead of a growable `array<T>`, because nothing in this function ever grows it."
+hover_what_instead = "Write `fixed` instead of `array` in the annotation, for example `let nums: fixed<int> = [1, 2, 3]`, or use the \"Write `fixed` instead of `array`\" action on the underlined word. If you do need to add items later, keep `array`."
+hover_why = "A fixed-size list never has to grow, so it is cheaper to create and use than a growable `array`, and writing `fixed` tells readers its size will not change."
 
 [[muted_hint_domain]]
 domain = "let_to_const_promotion"
 placement_category = "Replacement"
-description = "Shows when a let binding is effectively const because it is never reassigned, mutated, or lent"
+description = "Marks a `let` with a dotted underline when the compiler treats the binding as `const` because nothing ever reassigns, changes or lends it"
 example_source = "let count = 5"
-example_hint_rendered = "// effectively const — never reassigned"
+example_hint_rendered = "`let` carries a dotted underline; hover shows why, and the rewrite action turns it into `const count = 5`"
+hover_what = "The compiler treats this `let` as a `const`, because nothing in this function ever reassigns it, changes it, or lends it out to be changed."
+hover_what_instead = "Write `const` instead of `let`, for example `const count = 5`, or use the \"Write `const` instead of `let`\" action on the underlined word. If you do need to change it later, keep `let`."
+hover_why = "A value that never changes can be treated as fixed for the whole function, and writing `const` tells readers at a glance that it will not change."
 
 # v0.3-M4: shows the default capacity the compiler fills in for a `channel<T>()` construction with
 # no explicit capacity argument. Addition category — the plain muted `64` renders inside the empty
