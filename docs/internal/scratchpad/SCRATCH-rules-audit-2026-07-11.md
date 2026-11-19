@@ -1,7 +1,7 @@
 # Project Rules Audit — 2026-07-11
 
-Scope: the project rule corpus — all 15 files in `.claude/rules/`, plus `CLAUDE.md` as their
-always-loaded summary layer, cross-checked against each other, against the REF/IMP docs they
+Scope: the project rule corpus — all 15 files in `.claude/rules/`, plus the always-loaded
+summary layer that restated them, cross-checked against each other, against the REF/IMP docs they
 cite, against `registry/features.toml`, and against the shipped compiler behavior verified in
 the sibling teaching audit
 ([SCRATCH-teaching-audit-2026-07-11.md](./SCRATCH-teaching-audit-2026-07-11.md)).
@@ -48,18 +48,15 @@ data** — every AI session reads the contradiction and half of them follow the 
 - `language-design.md` §Documenting Decisions: "Every decision goes in **`/docs/README.md`**
   with: what was decided, alternatives, which golden rule drove it."
 - `docs-checklist.md` §One Rule No Exceptions: "**Never** add design content to
-  `docs/README.md` — that file is an **index only**." CLAUDE.md agrees (decisions → `IMP-*.md`
-  / `ADR-*.md`).
+  `docs/README.md` — that file is an **index only**."
 - `spec-writing.md` repeats the wrong pointer: "Don't explain WHY… — that belongs in
   `/docs/README.md`."
 - **Fix**: point both at `docs/internal/implementation/IMP-<feature>.md` per docs-checklist.
 
-### 1.4 Golden-rule count drift: "12" vs 13 — including inside CLAUDE.md itself
-- CLAUDE.md's Golden Rules section lists **13** (R10 capital-letter added later).
-- `language-design.md`: "check every proposed feature against all **12** golden rules" (×1,
-  plus "against all 12 golden rules" in its intro). `CLAUDE.md` §When Working on This Project:
-  "Check every proposed language feature against all **12** golden rules" — stale in the same
-  file that lists 13.
+### 1.4 Golden-rule count drift: "12" vs 13
+- `REF-golden-rules.md` lists **13** rules (R10 capital-letter added later).
+- `language-design.md` said "check every proposed feature against all **12** golden rules"
+  (once in the body, once in its intro) — stale against the 13 in the canonical list.
 - **Fix**: say "all golden rules" (count-free) everywhere except the canonical list, so the
   next added rule can't re-create this.
 
@@ -94,15 +91,15 @@ data** — every AI session reads the contradiction and half of them follow the 
   files outright — their scopes overlap ~70%.)
 
 ### 2.2 Golden Rule 10 restated in four homes
-- `REF-golden-rules.md` (canonical), CLAUDE.md header list, `naming.md` §Golden Rule 10
+- `REF-golden-rules.md` (canonical), a golden-rules summary list, `naming.md` §Golden Rule 10
   (full section with examples), `vocabulary.md` §Capital Letter Rule (another full section).
-  Four hand-maintained copies of one rule. Keep the canonical + CLAUDE.md one-liner; the two
-  rule files should state it in one line + link.
+  Four hand-maintained copies of one rule. Keep the canonical copy; the other homes should
+  state it in one line + link.
 
 ### 2.3 Non-OOP drift-signals list in three homes
 - `non-oop.md` §Banned Anti-Patterns (canonical), `language-design.md` §OOP Drift Test
-  (re-spelled bullet list), CLAUDE.md bullet (summary — acknowledged). The language-design
-  copy is long enough to drift; cut to one line + link.
+  (re-spelled bullet list), and a summary bullet. The language-design copy is long enough to
+  drift; cut to one line + link.
 
 ### 2.4 Auto-promotion surface-criterion table in two homes
 - `inference.md` §Two Surfaces for the Same Decision and `auto-promotion.md` §The Pattern both
@@ -121,11 +118,6 @@ data** — every AI session reads the contradiction and half of them follow the 
 - **Fix**: vocabulary.md keeps a handful of illustrative rows + "full list: registry
   `[[banned_jargon]]`" and corrects the mechanism pointer.
 
-### 2.6 Acknowledged duplications (keep, but mark)
-- plan-invariants §Demo & Error Gallery ↔ CLAUDE.md bullet — deliberate and self-documented
-  ("also stated in CLAUDE.md"); fine. Consider a one-line "SSOT: plan-invariants.md" marker on
-  the CLAUDE.md side so a future edit knows which to change first.
-
 ---
 
 ## Class 3 — Staleness (rot from the 2026-07-01 docs migration and shipped milestones)
@@ -133,14 +125,17 @@ data** — every AI session reads the contradiction and half of them follow the 
 ### 3.1 Pre-migration paths still cited as live
 - `vocabulary.md` line 1: "All user-facing docs (**`spec/`**), design docs (**`design/`**)…"
 - `plan-invariants.md` §Design-Doc Alignment: "checked against the governing **`/design/`**
-  docs — especially **`design/future/`**…" (the correct spellings appear in CLAUDE.md).
+  docs — especially **`design/future/`**…" (correct spellings: `docs/internal/implementation/`
+  and `docs/internal/scratchpad/`).
 - `language-design.md` §Spec Updates: "update the relevant **`/spec/`** file immediately."
 - `spec-writing.md`: "open questions live in **the design folder**."
 - `stdlib-design.md` Rule 7: "cross-referenced into a future **`design/stdlib/regex.md`**"
   (new taxonomy: `docs/internal/scratchpad/SCRATCH-stdlib-*.md`); §Cross-References cites
   `lockin-stdlib-and-syntax.md` / `lockin-build-and-crossplat.md` with no path — dead
   references (nothing by that name in the repo tree).
-- **Fix**: one mechanical sweep; the migration note in CLAUDE.md is the map.
+- **Fix**: one mechanical sweep. The map: `/spec/` → `docs/reference/`, `/design/` →
+  `docs/internal/implementation/`, `design/future/` and `design/stdlib/` →
+  `docs/internal/scratchpad/`.
 
 ### 3.2 `spec-writing.md`'s canonical example teaches banned syntax
 - Its §Compiler Error Format example: "`fixed[number]` is size-locked. Use `array[number]`…" —
@@ -207,7 +202,7 @@ data** — every AI session reads the contradiction and half of them follow the 
   - `authoritative-derivation.md` → `crates/**`
 - **Must stay always-on** (they bind chat-level design conversation, not file edits):
   `vocabulary.md`, `non-oop.md`, `language-design.md`, `naming.md` (post-merge), and the
-  golden-rules summary in CLAUDE.md. `inference.md`/`dot-postfix.md`/`auto-promotion.md` are
+  golden-rules summary. `inference.md`/`dot-postfix.md`/`auto-promotion.md` are
   arguable — they bind design talk too; if kept always-on they should be *tightened* (Class 2
   de-dup shrinks them substantially).
 - Caveat: this is a **prove-before-optimize** target (`~/.claude/rules/prove-before-optimize.md`)

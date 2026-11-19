@@ -1,6 +1,6 @@
 // WHY: Error gallery files are the hands-on review surface for compiler diagnostic
-// quality — per plan-invariants.md `### Demo & Error Gallery`. These tests assert
-// that each gallery file produces its expected diagnostic count and that key error
+// quality — each phase that adds a compile-error class extends its gallery file. These
+// tests assert that each gallery file produces its expected diagnostic count and that key error
 // classes are present by key-phrase. If this count changes, either a new diagnostic
 // class was added (update count + add a key-phrase check) or a diagnostic regressed
 // (compiler bug). Both require deliberate action, not silent drift.

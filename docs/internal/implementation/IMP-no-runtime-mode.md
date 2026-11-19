@@ -112,7 +112,7 @@ Every kernel-mode error MUST follow this format. The error is also a teaching mo
 
 ## Forward-compatibility for v0.1-v0.2 features
 
-Every NEW feature from M3 onward MUST declare its runtime dependencies and kernel-mode behavior in its milestone plan's `### Runtime Dependencies` and `### Kernel-Mode Behavior` sub-sections (per [`.claude/rules/plan-invariants.md`](../../../.claude/rules/plan-invariants.md)).
+Every NEW feature from M3 onward MUST declare its runtime dependencies and kernel-mode behavior in its milestone plan's `### Runtime Dependencies` and `### Kernel-Mode Behavior` sub-sections.
 
 Examples:
 
@@ -121,7 +121,7 @@ Examples:
 - `errors` keyword (M7): runtime-independent (just type-system flow). Always works.
 - `background` task spawning (M8 parsing-only, v0.2 implementation): requires scheduler. `--kernel` requires custom scheduler injection.
 
-If a feature lands WITHOUT declaring its runtime dependencies, the v0.3 work to add `--kernel` mode hits a wall — features have to be retroactively analyzed. The plan-invariants rule prevents this.
+If a feature lands WITHOUT declaring its runtime dependencies, the v0.3 work to add `--kernel` mode hits a wall — features have to be retroactively analyzed. Declaring both in the milestone plan prevents this.
 
 Graveyard Entry 4 (Phase 5 of the design-lockdown plan) catches plans that touch `crates/` without declaring runtime dependencies. Mechanical enforcement.
 
@@ -165,7 +165,6 @@ The v0.3 milestone plan must address:
 
 ## Cross-references
 
-- [`.claude/rules/plan-invariants.md`](../../../.claude/rules/plan-invariants.md) (M4+ plans declare runtime dependencies + kernel-mode behavior — mechanical enforcement for forward-compat)
 - [`docs/internal/implementation/IMP-no-function-coloring.md`](IMP-no-function-coloring.md) (background/wait require the scheduler, which is disabled in kernel mode unless custom-provided)
 - [`docs/internal/scratchpad/SCRATCH-future-arena.md`](../scratchpad/SCRATCH-future-arena.md) (arenas work in kernel mode with user-provided base allocator)
 - [`docs/internal/scratchpad/SCRATCH-future-packages.md`](../scratchpad/SCRATCH-future-packages.md) (binary metadata includes per-item kernel-mode compatibility flags)
