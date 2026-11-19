@@ -6253,8 +6253,8 @@ fn v03_m3d_worth_it_loop_callee_fires() {
 // admitted (FIRE) class with no live `.ynz` fixture would classify fine yet never be proven to
 // produce the right value at runtime. Both runtime matrices below hand-listed which classes
 // FIRE, so adding a newly-admitted class to `cpu_result_abi_supports` did not break the build
-// until someone manually wired a runtime test (graveyard corpse "Hand-Listed Test Over a Closed
-// Enumerable Domain"; the project bar is compile-forced exhaustiveness for this closed domain).
+// until someone manually wired a runtime test (a hand-listed test over a closed enumerable
+// domain was tried and removed; the project bar is compile-forced exhaustiveness for it).
 //
 // `runtime_axis_coverage` closes that gap for BOTH the slice-2 distinct-callee matrix
 // (`v03_m3d_return_class_*`) AND the slice-3 same-callee matrix (`v03_m3d_same_callee_*`): it is
@@ -7477,7 +7477,7 @@ fn v03_m3g_background_fused_group_detach_completes_before_exit_no_leak() {
 // (heap-pointer, wide-value decimal128, i64→i1 bool truncation, error-capable tagged pair)
 // intersects a non-trivial PLACEMENT (if-arm, match-arm) or same-callee distinctness inside an
 // arm. Those intersections are where silent miscompiles hid in this codegen area's history (the
-// Silent-Envelope and parallel-per-type-dispatch corpses). Every FIRE cell asserts 2 spawns +
+// silent envelope narrowing and parallel per-type dispatch). Every FIRE cell asserts 2 spawns +
 // byte-identical; every DECLINE cell asserts 0 spawns + byte-identical. The byte-identical check
 // plus the determinism harness (cross_impl_consistency.rs runs each fixture twice) supply the
 // multiple-run garbage detection for the frame-slot-touching cells. If you relax any
@@ -11120,9 +11120,8 @@ fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
 //
 // `prepare_bg_arg_for_ctx` used to decide "does the task need a value of its own?" by matching
 // an `Expr::` variant against a `Type::` variant — an explicit `.copy()` of an `array`, and a
-// bare `BgOwnership::Give` on a `map`. Both were wrong in the way `.claude/corpses.md`
-// "Enumerating syntactic sites instead of threading the whole-program ownership analysis"
-// predicts, and the three fixtures below are the three ways they were wrong. Each was verified
+// bare `BgOwnership::Give` on a `map`. Both were wrong in the way enumerating syntactic sites
+// instead of threading the whole-program ownership analysis always is, and the three fixtures below are the three ways they were wrong. Each was verified
 // RED against the pre-fix binary; the numbers in each WHY are that measurement.
 
 #[test]

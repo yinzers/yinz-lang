@@ -71,7 +71,7 @@ Click-to-make-explicit on a muted hint converts the source to the explicit signa
 **Why inferred-with-hints instead of inferred-only OR required-explicit**:
 
 - **Inferred-only** (compiler picks, no visibility): mutation becomes invisible to readers. `healPlayer(player)` looks identical whether the function mutates or not. Bad for jr devs.
-- **Required-explicit** (every call types ownership): too much noise; developers stop reading; the marker degrades to syntactic burden. Inverse anti-pattern — graveyard Entry 2.
+- **Required-explicit** (every call types ownership): too much noise; developers stop reading; the marker degrades to syntactic burden. Requiring explicit ownership annotations at every call was tried and removed for this reason.
 - **Inferred + muted hint** (Yinz's choice): compiler does the work; IDE shows what happened; hover teaches WHY.
 
 Consistent with type inference, lifetime inference, wait-point inference, allocator inference — one rule across all surfaces.
@@ -156,7 +156,7 @@ When M4 lands, codegen MUST emit:
 - `readonly` on every parameter inferred from a `const` binding at the call site (even if the signature is bare and the modifier was inferred from body usage)
 - `noalias` on every parameter the borrow checker has proven non-aliased (most of them for `share`/`lend`/`give` per ownership rules)
 
-Failure to emit these attributes is a perf regression even if the program is correct. The M4 plan's `### Performance` invariant subsection explicitly asserts this, and [`.claude/graveyard.md`](../../../.claude/graveyard.md) Entry 1 catches M4 plans that omit it.
+Failure to emit these attributes is a perf regression even if the program is correct. The M4 plan's `### Performance` invariant subsection explicitly asserts this.
 
 ### Forward-compatibility for shapes (M4)
 
@@ -165,7 +165,6 @@ When `shape` declarations land in M4, field assignment (`player.field = x`) beco
 Cross-references:
 - [`docs/reference/REF-variables.md`](../../reference/REF-variables.md) "What const blocks" section (user-facing)
 - [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](../../../.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) Forward-Compatibility Constraints (locked decisions for M4+)
-- [`.claude/graveyard.md`](../../../.claude/graveyard.md) Entry 1 (mechanical enforcement for M4+ plans)
 
 ---
 
@@ -187,9 +186,9 @@ Cross-references:
 
 ### The producer this section retires
 
-A list of argument shapes at call sites is unbounded — every expression form the list omits is a hole (eight probes were run against the tree; seven found a live hole, and the eighth — `dynamic Contract` — ICEs in codegen before reaching one, so it confirms zero runtime exposure rather than a hole: `.claude/corpses.md`, first entry, and `git log --grep=m8-p2`). The fix is not another shape on a list. It is one **provenance** function, defined once, with an exhaustive match the compiler enforces, whose four-valued answer every sink consumes; one **binding-event** rule, exhaustive over every statement form that can make a name denote a value; and the whole-program facts the existing `effective_ownership` fixpoint already computes, threaded to those sinks instead of re-derived.
+A list of argument shapes at call sites is unbounded — every expression form the list omits is a hole (eight probes were run against the tree; seven found a live hole, and the eighth — `dynamic Contract` — ICEs in codegen before reaching one, so it confirms zero runtime exposure rather than a hole; see `git log --grep=m8-p2`). The fix is not another shape on a list. It is one **provenance** function, defined once, with an exhaustive match the compiler enforces, whose four-valued answer every sink consumes; one **binding-event** rule, exhaustive over every statement form that can make a name denote a value; and the whole-program facts the existing `effective_ownership` fixpoint already computes, threaded to those sinks instead of re-derived.
 
-**Where this diverges from the v0.3-M8 plan, surfaced in the required form.** The plan's Phase 2 block (FRAGO 008) says the phase answers the question "by THREADING `effective_ownership` and never enumerating `Expr::` variants"; this design does ONE exhaustive `Expr` match, inside the authoritative module, because "what does this expression denote, ownership-wise" is a syntactic question by nature — it is the input the fixpoint itself consumes (`arg_is_binding`, `root_binding_name` and `place_path` are already `Expr` matches inside that module). The corpse bans a partial list re-derived at each CALL SITE; a single match with no wildcard arm, in the one owning function, is closed by the compiler's exhaustiveness check rather than by a reviewer's memory. Recorded here and in the Phase 2 sign-off packet. **Ruled** (packet item (i), 2026-09-03 — `audit.md`'s SIGN-OFF record): a single exhaustive, wildcard-free match in the owning module is the remedy for the corpse's ban on open per-site lists, not an instance of it — the plan's Phase 2 block sentence is amended to this wording under FRAGO 010 (`audit.md`).
+**Where this diverges from the v0.3-M8 plan, surfaced in the required form.** The plan's Phase 2 block (FRAGO 008) says the phase answers the question "by THREADING `effective_ownership` and never enumerating `Expr::` variants"; this design does ONE exhaustive `Expr` match, inside the authoritative module, because "what does this expression denote, ownership-wise" is a syntactic question by nature — it is the input the fixpoint itself consumes (`arg_is_binding`, `root_binding_name` and `place_path` are already `Expr` matches inside that module). The design bans a partial list re-derived at each CALL SITE (enumerating syntactic sites was tried and removed because every omitted form is a hole); a single match with no wildcard arm, in the one owning function, is closed by the compiler's exhaustiveness check rather than by a reviewer's memory. Recorded here and in the Phase 2 sign-off packet. **Ruled** (packet item (i), 2026-09-03 — `audit.md`'s SIGN-OFF record): a single exhaustive, wildcard-free match in the owning module is the remedy for the ban on open per-site lists, not an instance of it — the plan's Phase 2 block sentence is amended to this wording under FRAGO 010 (`audit.md`).
 
 ### Where the authority lives
 
@@ -377,7 +376,6 @@ function entrypoint() -> nothing {
 
 - [`IMP-concurrency.md`](IMP-concurrency.md) "Channel Close — End-of-Stream Semantics" → "`send()` gives its payload" (the channel instance of sink 1; the `ChannelElemDrop` link; the runtime release protocol this section does not replace).
 - `crates/ynz-typeck/src/effective_ownership.rs` — the module every fact above extends; [`authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md).
-- `.claude/corpses.md` "Enumerating syntactic sites instead of threading the whole-program ownership analysis" — the producer this section retires.
 - v0.3-M8 plan Phase 2 (design), Phase 4 (implementation), Future Requirements #9 and #10.
 
 ---

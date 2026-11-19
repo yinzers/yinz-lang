@@ -58,7 +58,7 @@ function polish_hidden_in_inline_shape() -> nothing {
 // (IMP-ownership.md "Teaching text" for the three transfer diagnostics — ConsumedBySend,
 // ParamNeedsGive, TransferNeedsCopy — and IMP-concurrency.md "Teaching text" for
 // HandleChannelArgNeedsBinding), plus the two existing diagnostics `.close()` extends. The
-// seven live-hole probe programs of 2026-09-03 (`.claude/corpses.md`, first entry) are here as
+// seven live-hole probe programs of 2026-09-03 are here as
 // triggers so the class that took three review rounds to name can never silently reopen.
 
 shape Bucket {

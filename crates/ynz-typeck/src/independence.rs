@@ -40,7 +40,7 @@
 //! - An explicit `wait` barrier resets the group — a `wait`-prefixed call is a sequencing
 //!   point; statements on opposite sides of it never share a parallel group.
 //!
-//! # Corpse guard (no-duct-tape.md + graveyard 2026-06-04)
+//! # One producer per answer (re-deriving a local copy was tried and removed: the copies drift)
 //!
 //! This module CONSUMES the authoritative producers:
 //! - The mutable-heap test reuses `crate::is_trivially_copyable` — never a local

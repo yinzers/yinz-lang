@@ -230,9 +230,9 @@ impl EffectiveOwnershipReport {
 // ── Provenance: what does this expression denote, ownership-wise? ─────────────
 //
 // v0.3-M8 Phase 4 (`IMP-ownership.md` "Where the authority lives", fact 1). ONE exhaustive
-// `Expr` match with NO wildcard arm, in this module — the remedy for the corpse
-// `.claude/corpses.md` "Enumerating syntactic sites instead of threading the whole-program
-// ownership analysis": a new expression form is a compile error in exactly one function
+// `Expr` match with NO wildcard arm, in this module — the remedy for enumerating syntactic
+// sites instead of threading the whole-program ownership analysis (tried and removed: every
+// omitted form is a hole): a new expression form is a compile error in exactly one function
 // until someone classifies it, and no sink inspects syntax again. Every transfer sink
 // (`check_transfer` in check.rs) consumes the four values below and nothing else.
 

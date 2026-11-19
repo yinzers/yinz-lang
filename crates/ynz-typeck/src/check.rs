@@ -356,9 +356,9 @@ pub struct TypedModule {
     /// Codegen's spawn path asks exactly one question of this record: does the task need a
     /// value of its OWN, or can it take the one that already exists? Before this, that
     /// question was answered by matching an `Expr::` variant against a `Type::` variant at the
-    /// call site (an explicit `.copy()` of an `array`, and a `Give` label on a `map`) — the
-    /// corpse `.claude/corpses.md` "Enumerating syntactic sites instead of threading the
-    /// whole-program ownership analysis", which behaved exactly as that corpse predicts: when
+    /// call site (an explicit `.copy()` of an `array`, and a `Give` label on a `map`) —
+    /// enumerating syntactic sites instead of threading the whole-program ownership analysis
+    /// was tried and removed, because it breaks as follows: when
     /// `map`, `maybe` and `fixed` started allocating, the array-shaped enumeration did not
     /// widen with them, so every one of those spawns copied a value that had already been
     /// copied and leaked the first one.
