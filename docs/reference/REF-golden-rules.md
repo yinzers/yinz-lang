@@ -1,10 +1,10 @@
 ---
 name: "REF-golden-rules"
-description: "The 13 rules with full reasoning. The rules themselves also live in CLAUDE.md (loaded every turn). This file adds the 'why' behind each one."
+description: "The 13 rules with full reasoning. This file adds the 'why' behind each one."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-16"
+updated_at: "2026-11-19"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,7 +13,9 @@ metadata:
 
 # Golden Rules — Extended Reference
 
-The 13 rules with full reasoning. The rules themselves also live in [`CLAUDE.md`](../../CLAUDE.md) (loaded every turn). This file adds the "why" behind each one.
+The 13 rules with full reasoning. This file adds the "why" behind each one.
+
+When two rules conflict, first find a design that satisfies both, usually by having the compiler do the work and show it. If none exists, the lower number wins. Readability against speed, and any safety opt-out for kernel code, need Patrick's explicit approval.
 
 ---
 
@@ -36,89 +38,21 @@ When the 13 rules below mention "method" or "dispatch," apply them with the non-
 
 ---
 
-**1. Dot-first design**
-If something can be `.method()` with autocomplete, it should be. No cryptic symbols, no keywords to memorize.
-
-*Why*: Autocomplete teaches the language. A developer who types `.` after a value sees all functions whose first parameter type matches that value (UFCS sugar — see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md)). No documentation lookup needed. Rust's `&'a mut` requires memorization; `player.heal(20)` (UFCS sugar for `heal(player, 20)`) shows up when you type `.` on a Player.
-
----
-
-**2. Self-documenting syntax**
-Every keyword, function, and pattern should be readable by a junior developer who has never seen Yinz. If someone needs docs to understand what a line does, the design failed.
-
-*Why*: The single biggest barrier to Rust adoption is its syntax. Yinz's `lend` keyword in a signature vs Rust's `&mut name`. Both express the same concept — one is guessable, one isn't. Every design decision should aim for guessable.
-
----
-
-**3. No garbage collector**
+**1. No garbage collector**
 Ownership-based memory management only. One memory model, no two-tier complexity.
 
 *Why*: GCs add unpredictable pauses, 2-3x memory overhead, and a second conceptual model ("I write the code but the GC cleans up sometimes"). Ownership is deterministic and has zero runtime overhead. It's also one of the things that makes Go and Java unsuitable for low-latency systems.
 
 ---
 
-**4. Compiler does the hard work**
-Smart defaults everywhere. Type inference inside function bodies, operation fusion, optimal memory layout.
-
-*Why*: The gap between "what you write" and "what runs" should be the compiler's job. Developers shouldn't have to hand-optimize for performance that the compiler could figure out automatically.
-
----
-
-**5. Compile-time safety**
+**2. Compile-time safety**
 Wrong code fails at compile time, never at runtime.
 
 *Why*: A runtime crash at 3am in production costs orders of magnitude more than a compile error during development. Every safety check that can be moved to compile time should be.
 
 ---
 
-**6. Familiar syntax**
-Borrow from TypeScript/JavaScript wherever possible.
-
-*Why*: There are tens of millions of JS/TS developers. If they feel at home on day one, adoption starts from a much larger base. `let`, `const`, arrow functions, backtick interpolation — free familiarity.
-
----
-
-**7. Step-by-step over chaining**
-No method chaining. Each operation gets its own line with a named variable. Compiler fuses sequential operations into a single optimized pass.
-
-*Why*: `players.filter(p => p.health > 0).sort(p => p.health).limit(10)` is undebuggable — you can't inspect the middle. `let active = ...; let ranked = ...` gives every intermediate result a name and an inspection point. The compiler eliminates any performance difference.
-
----
-
-**8. Zero-cost abstractions**
-High-level syntax compiles to the same machine code as hand-written low-level code.
-
-*Why*: If convenience costs performance, developers will bypass the readable path in hot code. Zero-cost means the right choice and the fast choice are always the same choice.
-
-**Clarification — do not interpret as relaxation**:
-
-- "Zero-cost ABSTRACTIONS" means the abstraction itself adds no overhead beyond hand-written code. It does NOT mean "no features have any cost ever."
-- Features themselves (Arc reference counting, async runtime scheduler, arena allocator bookkeeping) cost what they inherently cost. Those costs apply whether the developer writes them manually or the compiler infers them.
-- Compiler inference happens at compile time → zero RUNTIME cost from the inference itself. The compiler choosing `share` for a call site produces identical machine code to declaring the function's signature explicitly.
-- The "hand-written low-level" benchmark is "what would a careful Rust/C++/Zig programmer write," not "the absolute theoretical minimum." Memory safety has a cost — that cost is the bar; not zero.
-- **Any future design tradeoff that costs MORE than hand-written code requires Patrick's explicit approval AND documentation in [`docs/README.md`](../README.md).** This clarification block exists to prevent future drift — interpreting Rule 8 as "soften zero-cost" is wrong.
-
-This clarification was added 2026-05-14 after the design-lockdown conversation surfaced the risk that auto-inferred features (auto-Arc for cross-thread shared state, auto-wait for I/O) might be mistaken for zero-cost violations. They aren't — the cost is in the underlying feature, not the inference.
-
----
-
-**9. Fast to type**
-Quick to write without sacrificing readability.
-
-*Why*: Developer experience matters. A language that's pleasant to write gets used. `function` over `fn` is worth the extra characters because it's immediately readable — but ceremony that adds nothing (like `Optional<T>` vs `maybe T`) should be cut.
-
----
-
-**10. Efficiency first, dynamic after**
-The default behavior is always the most performant option. Developers opt INTO slower/flexible behavior explicitly.
-
-*Why*: Junior developers don't know which choices are fast. If fixed arrays are default, map lookups have a visible type change, and the compiler suggests typed objects over maps — junior code is fast by default. Experienced developers can always opt in to dynamic behavior when they need it.
-
-**Corollary — Auto-Promotion**: when the compiler can prove that a stricter or faster form of code fits the user's actual usage, it picks that form automatically AND surfaces the choice through teaching surfaces. Three things happen: (1) codegen auto-promotes silently for the perf win, (2) a muted IDE hint shows what was decided (when the explicit form is typeable), (3) a Tier 3 lint suggestion teaches the user to write the explicit form. Examples: `array<T>` never grown → `fixed<T>` codegen; `let` never reassigned → `const` enforcement; auto-SoA layout for hot field-access loops; auto-Arc for cross-thread shared state. Yinz's commitment to "fast by design even for inexperienced developers" depends on this pattern. Auto-promotion without teaching is magic; lint-suggestion without auto-promotion punishes laziness — Yinz does both. Full rule + project-creation checklist in [`.claude/rules/auto-promotion.md`](../../.claude/rules/auto-promotion.md).
-
----
-
-**11. The compiler is a teacher**
+**3. The compiler is a teacher**
 Errors and IDE teaching surfaces explain what went wrong (or what's happening) AND why. Suggestions explain why one approach is better than another — performance, clarity, or idiomatic Yinz. Every diagnostic AND every IDE tooltip answers three questions: WHAT happened (or is happening), WHAT to do instead (or how to make it explicit), and WHY. The compiler is not a checker — it's a senior developer mentoring a junior developer through every interaction.
 
 The WHY must be **specific and contextual**, not generic. The compiler knows the types, variable usage, and surrounding code — it should use that knowledge. "Avoids allocation" is generic. "scores isn't used again after this line — sortInPlace() skips the allocation because you only need the sorted version" is contextual. Generic WHYs are a fallback for when context genuinely isn't available, not the standard.
@@ -147,7 +81,14 @@ The teaching mission is a first-class language goal — see [`docs/reference/REF
 
 ---
 
-**12. Human-readable over programmer jargon**
+**4. Self-documenting syntax**
+Every keyword, function, and pattern should be readable by a junior developer who has never seen Yinz. If someone needs docs to understand what a line does, the design failed.
+
+*Why*: The single biggest barrier to Rust adoption is its syntax. Yinz's `lend` keyword in a signature vs Rust's `&mut name`. Both express the same concept — one is guessable, one isn't. Every design decision should aim for guessable.
+
+---
+
+**5. Human-readable over programmer jargon**
 `options` not `enum`. `follows` not `implements`. `nothing` not `void`. If a non-programmer could guess a keyword's meaning, the naming is right.
 
 *Why*: The stated goal is accessibility to junior developers. Every term that requires CS background knowledge is a barrier to entry. Plain English words are memorable, guessable, and require no prior knowledge.
@@ -156,7 +97,68 @@ The teaching mission is a first-class language goal — see [`docs/reference/REF
 
 ---
 
-**13. Capital letter = type. Everything else = lowercase.**
+**6. Zero-cost abstractions**
+High-level syntax compiles to the same machine code as hand-written low-level code.
+
+*Why*: If convenience costs performance, developers will bypass the readable path in hot code. Zero-cost means the right choice and the fast choice are always the same choice.
+
+**Clarification — do not interpret as relaxation**:
+
+- "Zero-cost ABSTRACTIONS" means the abstraction itself adds no overhead beyond hand-written code. It does NOT mean "no features have any cost ever."
+- Features themselves (Arc reference counting, async runtime scheduler, arena allocator bookkeeping) cost what they inherently cost. Those costs apply whether the developer writes them manually or the compiler infers them.
+- Compiler inference happens at compile time → zero RUNTIME cost from the inference itself. The compiler choosing `share` for a call site produces identical machine code to declaring the function's signature explicitly.
+- The "hand-written low-level" benchmark is "what would a careful Rust/C++/Zig programmer write," not "the absolute theoretical minimum." Memory safety has a cost — that cost is the bar; not zero.
+- **Any future design tradeoff that costs MORE than hand-written code requires Patrick's explicit approval AND documentation in [`docs/README.md`](../README.md).** This clarification block exists to prevent future drift — interpreting Rule 6 as "soften zero-cost" is wrong.
+
+This clarification was added 2026-05-14 after the design-lockdown conversation surfaced the risk that auto-inferred features (auto-Arc for cross-thread shared state, auto-wait for I/O) might be mistaken for zero-cost violations. They aren't — the cost is in the underlying feature, not the inference.
+
+---
+
+**7. Efficiency first, dynamic after**
+The default behavior is always the most performant option. Developers opt INTO slower/flexible behavior explicitly.
+
+*Why*: Junior developers don't know which choices are fast. If fixed arrays are default, map lookups have a visible type change, and the compiler suggests typed objects over maps — junior code is fast by default. Experienced developers can always opt in to dynamic behavior when they need it.
+
+**Corollary — Auto-Promotion**: when the compiler can prove that a stricter or faster form of code fits the user's actual usage, it picks that form automatically AND surfaces the choice through teaching surfaces. Three things happen: (1) codegen auto-promotes silently for the perf win, (2) a muted IDE hint shows what was decided (when the explicit form is typeable), (3) a Tier 3 lint suggestion teaches the user to write the explicit form. Examples: `array<T>` never grown → `fixed<T>` codegen; `let` never reassigned → `const` enforcement; auto-SoA layout for hot field-access loops; auto-Arc for cross-thread shared state. Yinz's commitment to "fast by design even for inexperienced developers" depends on this pattern. Auto-promotion without teaching is magic; lint-suggestion without auto-promotion punishes laziness — Yinz does both. Full rule + project-creation checklist in [`.claude/rules/auto-promotion.md`](../../.claude/rules/auto-promotion.md).
+
+---
+
+**8. Compiler does the hard work**
+Smart defaults everywhere. Type inference inside function bodies, operation fusion, optimal memory layout.
+
+*Why*: The gap between "what you write" and "what runs" should be the compiler's job. Developers shouldn't have to hand-optimize for performance that the compiler could figure out automatically.
+
+---
+
+**9. Step-by-step over chaining**
+No method chaining. Each operation gets its own line with a named variable. Compiler fuses sequential operations into a single optimized pass.
+
+*Why*: `players.filter(p => p.health > 0).sort(p => p.health).limit(10)` is undebuggable — you can't inspect the middle. `let active = ...; let ranked = ...` gives every intermediate result a name and an inspection point. The compiler eliminates any performance difference.
+
+---
+
+**10. Capital letter = type. Everything else = lowercase.**
 Scan any line of code. Capital letter = type. No capital = not a type. Modules are lowercase (`request`, `file`, `math`). Types are PascalCase (`Player`, `Response`, `Date`). Functions, variables, keywords — all lowercase. The same base name can exist in both casings: `Date` is the type, `date` is the module; `Request` is the type, `request` is the module.
 
 *Why*: Zero-cost scannability. Reading code is faster when the type system is visually encoded in casing. No context-reading required to distinguish a module call from a type annotation. Any pair of eyes — experienced or new — instantly knows what category they're looking at.
+
+---
+
+**11. Dot-first design**
+If something can be `.method()` with autocomplete, it should be. No cryptic symbols, no keywords to memorize.
+
+*Why*: Autocomplete teaches the language. A developer who types `.` after a value sees all functions whose first parameter type matches that value (UFCS sugar — see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md)). No documentation lookup needed. Rust's `&'a mut` requires memorization; `player.heal(20)` (UFCS sugar for `heal(player, 20)`) shows up when you type `.` on a Player.
+
+---
+
+**12. Familiar syntax**
+Borrow from TypeScript/JavaScript wherever possible.
+
+*Why*: There are tens of millions of JS/TS developers. If they feel at home on day one, adoption starts from a much larger base. `let`, `const`, arrow functions, backtick interpolation — free familiarity.
+
+---
+
+**13. Fast to type**
+Quick to write without sacrificing readability.
+
+*Why*: Developer experience matters. A language that's pleasant to write gets used. `function` over `fn` is worth the extra characters because it's immediately readable — but ceremony that adds nothing (like `Optional<T>` vs `maybe T`) should be cut.
