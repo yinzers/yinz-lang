@@ -2414,6 +2414,9 @@ struct Cg<'ctx, 'g> {
     /// first: a `return` or an auto-propagation inside the body leaves the iteration before its end
     /// releases them, so it releases them itself (`Cg::release_open_loop_copies`).
     open_loop_copies: Vec<(BasicValueEnum<'ctx>, Type)>,
+    /// The collections the plain `for` loops around the code being lowered walk while their own body
+    /// reassigns the iterated binding, outermost first (`Cg::begin_loop_held`).
+    loop_held: Vec<LoopHeld<'ctx>>,
     // C1f round 2: the heap values (a shape, union or `maybe` that may own boxes) the expression
     // that produced them says a store takes by MOVE (typeck's `TypedModule::heap_moves`), keyed by
     // the LLVM value: the pointer an identifier read loads (a fresh `load` per read), a literal's
@@ -8523,6 +8526,7 @@ fn plain_cg<'ctx, 'g>(
         owned_string_values: std::collections::HashSet::new(),
         temporary_frames: Vec::new(),
         open_loop_copies: Vec::new(),
+        loop_held: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         minted_maybe_copies: std::collections::HashSet::new(),
         fresh_payload_maybes: std::collections::HashSet::new(),
@@ -8985,6 +8989,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         owned_string_values: std::collections::HashSet::new(),
         temporary_frames: Vec::new(),
         open_loop_copies: Vec::new(),
+        loop_held: Vec::new(),
         moved_cell_values: std::collections::HashSet::new(),
         minted_maybe_copies: std::collections::HashSet::new(),
         fresh_payload_maybes: std::collections::HashSet::new(),
@@ -20172,6 +20177,7 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
                 }
             }
             if let Some(replaced) = replaced {
+                let replaced = cg.hold_for_walking_loops(replaced, slot)?;
                 cg.finish_assign_release(&replaced)?;
             }
         }
@@ -20672,6 +20678,8 @@ fn lower_stmt_for<'ctx>(
 
         // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
         let loop_sp = cg.loop_stack_save()?;
+        let held_before = cg.loop_held.len();
+        cg.begin_loop_held(iter, body, s_ptr, &Type::String)?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -20734,6 +20742,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.end_loop_held(held_before)?;
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
@@ -20854,6 +20863,8 @@ fn lower_stmt_for<'ctx>(
 
         // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
         let loop_sp = cg.loop_stack_save()?;
+        let held_before = cg.loop_held.len();
+        cg.begin_loop_held(iter, body, arr_ptr, &iter_ty)?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -20938,6 +20949,7 @@ fn lower_stmt_for<'ctx>(
         cg.locals.remove(var);
         end_handover_row(cg, var, outer_row);
         cg.builder.position_at_end(after_bb);
+        cg.end_loop_held(held_before)?;
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
@@ -21091,6 +21103,8 @@ fn lower_stmt_for<'ctx>(
 
         // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
         let loop_sp = cg.loop_stack_save()?;
+        let held_before = cg.loop_held.len();
+        cg.begin_loop_held(iter, body, map_ptr, &iter_ty)?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -21166,6 +21180,7 @@ fn lower_stmt_for<'ctx>(
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.end_loop_held(held_before)?;
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
@@ -30162,6 +30177,20 @@ struct TemporaryRegion {
     kind: TemporaryRegionKind,
 }
 
+/// A collection a plain `for` loop walks while its own body reassigns the iterated binding. The
+/// loop reads the collection it started with on every pass, so the assignment that replaces it
+/// must not release it: the loop takes it over (`Cg::hold_for_walking_loops`) and releases it when
+/// it exits (`Cg::release_loop_held`).
+struct LoopHeld<'ctx> {
+    /// The iterated binding's slot: an assignment to that slot replaces `collection`.
+    slot: PointerValue<'ctx>,
+    /// The collection the loop walks (a list, map or string pointer).
+    collection: PointerValue<'ctx>,
+    /// An `i1` entry-block slot, set once an assignment left `collection` for the loop to release.
+    taken_over: PointerValue<'ctx>,
+    ty: Type,
+}
+
 /// The value an assignment replaces (`Cg::begin_assign_release`).
 struct ReplacedValue<'ctx> {
     /// The slot held a value (not null: nothing took it).
@@ -32569,6 +32598,149 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(held)
     }
 
+    /// Start holding the collection a plain `for` loop over the binding `iter` walks, when the loop
+    /// body reassigns that binding (`stmt_assigns_name`): the loop reads `collection` on every
+    /// pass, and the release an assignment makes of the value it replaces (plan #17) would free it
+    /// under the loop. Any other loop is left as it was. Call after `collection` is evaluated and
+    /// before the loop's first branch; `held_before` is `self.loop_held.len()` then, for
+    /// `end_loop_held`. A resume function is not covered: its loop state lives in the frame.
+    ///
+    /// O(body) time to scan, O(1) to emit.
+    fn begin_loop_held(
+        &mut self,
+        iter: &Expr,
+        body: &ynz_ast::nodes::Block,
+        collection: PointerValue<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        let Expr::Ident(name, _) = iter else {
+            return Ok(());
+        };
+        if self.sm_frame_ptr.is_some()
+            || !body
+                .stmts
+                .iter()
+                .any(|stmt| ynz_typeck::cpu_admission::stmt_assigns_name(stmt, name))
+        {
+            return Ok(());
+        }
+        let slot = self
+            .reload_slot(name)
+            .ok_or_else(|| format!("internal: the iterated binding `{name}` has no slot"))?;
+        let taken_over = self.alloca_in_entry_llvm(self.ctx.bool_type(), "loop_held")?;
+        self.builder
+            .build_store(taken_over, self.ctx.bool_type().const_zero())
+            .map_err(|err| format!("loop held flag init: {err}"))?;
+        self.loop_held.push(LoopHeld {
+            slot,
+            collection,
+            taken_over,
+            ty: ty.clone(),
+        });
+        Ok(())
+    }
+
+    /// The loop that `begin_loop_held` registered (when `self.loop_held` grew past `held_before`)
+    /// is done: release the collection it took over, if an assignment left it. Call with the
+    /// builder at the loop's exit block.
+    fn end_loop_held(&mut self, held_before: usize) -> Result<(), String> {
+        if self.loop_held.len() > held_before {
+            let held = self.loop_held.remove(held_before);
+            self.release_loop_held(&held)?;
+        }
+        Ok(())
+    }
+
+    /// Release `held.collection` when an assignment left it to the loop.
+    fn release_loop_held(&self, held: &LoopHeld<'ctx>) -> Result<(), String> {
+        let Some(glue) = self.local_release_fn(&held.ty)? else {
+            return Ok(());
+        };
+        let taken_over = self
+            .builder
+            .build_load(self.ctx.bool_type(), held.taken_over, "loop_held_taken")
+            .map_err(|err| format!("loop held flag load: {err}"))?
+            .into_int_value();
+        let release_bb = self.append_block("loop_held_release");
+        let done_bb = self.append_block("loop_held_released");
+        self.builder
+            .build_conditional_branch(taken_over, release_bb, done_bb)
+            .map_err(|err| format!("loop held release branch: {err}"))?;
+        self.builder.position_at_end(release_bb);
+        self.builder
+            .build_call(glue, &[held.collection.into()], "")
+            .map_err(|err| format!("loop held release call: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("loop held release join: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// An assignment to the binding in `slot` replaces `replaced`: the plain `for` loops walking
+    /// that binding's old collection (`begin_loop_held`) keep it instead of seeing it released.
+    /// Returns `replaced` with `live` cleared when a loop took it over. The outermost loop that
+    /// walks the replaced pointer takes it, so two nested loops over one binding free it once; a
+    /// pointer no loop walks (a later list the binding got) is released as before.
+    ///
+    /// O(nested loops over the binding) to emit; a few instructions at run time.
+    fn hold_for_walking_loops(
+        &self,
+        mut replaced: ReplacedValue<'ctx>,
+        slot: PointerValue<'ctx>,
+    ) -> Result<ReplacedValue<'ctx>, String> {
+        let bool_type = self.ctx.bool_type();
+        let mut claimed = bool_type.const_zero();
+        for held in self.loop_held.iter().filter(|held| held.slot == slot) {
+            let same_collection = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    held.collection,
+                    replaced.held,
+                    "loop_held_same",
+                )
+                .map_err(|err| format!("loop held compare: {err}"))?;
+            let unclaimed = self
+                .builder
+                .build_not(claimed, "loop_held_unclaimed")
+                .map_err(|err| format!("loop held not: {err}"))?;
+            let walked = self
+                .builder
+                .build_and(same_collection, unclaimed, "loop_held_walked")
+                .map_err(|err| format!("loop held and: {err}"))?;
+            let takes = self
+                .builder
+                .build_and(walked, replaced.live, "loop_held_takes")
+                .map_err(|err| format!("loop held and: {err}"))?;
+            let was_taken = self
+                .builder
+                .build_load(bool_type, held.taken_over, "loop_held_was_taken")
+                .map_err(|err| format!("loop held flag load: {err}"))?
+                .into_int_value();
+            let now_taken = self
+                .builder
+                .build_or(was_taken, takes, "loop_held_now_taken")
+                .map_err(|err| format!("loop held or: {err}"))?;
+            self.builder
+                .build_store(held.taken_over, now_taken)
+                .map_err(|err| format!("loop held flag store: {err}"))?;
+            claimed = self
+                .builder
+                .build_or(claimed, takes, "loop_held_claimed")
+                .map_err(|err| format!("loop held or: {err}"))?;
+        }
+        let not_claimed = self
+            .builder
+            .build_not(claimed, "loop_held_not_claimed")
+            .map_err(|err| format!("loop held not: {err}"))?;
+        replaced.live = self
+            .builder
+            .build_and(replaced.live, not_claimed, "loop_held_release_live")
+            .map_err(|err| format!("loop held and: {err}"))?;
+        Ok(replaced)
+    }
+
     /// Release the copy every plain `for` loop around this point made for its variable, innermost
     /// first: a `return` or an auto-propagation inside a body leaves the iteration before its end
     /// releases the copy (`open_loop_copies`). The copy is an SSA value of the loop body, which
@@ -32579,6 +32751,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     fn release_open_loop_copies(&self) -> Result<(), String> {
         for (value, ty) in self.open_loop_copies.iter().rev() {
             release_owned_read(self, *value, ty, "loop_copy_early_exit")?;
+        }
+        for held in self.loop_held.iter().rev() {
+            self.release_loop_held(held)?;
         }
         Ok(())
     }
