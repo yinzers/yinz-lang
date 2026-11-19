@@ -113,15 +113,6 @@ ext install yinz-lang.yinz
 |---|---|---|
 | `yinz.server.path` | `ynz-lsp` | Path to the `ynz-lsp` binary |
 
-## Releasing
-
-Every release that touches `tooling/vscode-ynz/` attaches two `.vsix` assets to the GitHub release:
-
-1. `yinz-{version}.vsix` — the versioned artifact.
-2. `yinz-latest.vsix` — uploaded with `--clobber`, so this stable URL always points at the newest release: `https://github.com/yinzers/yinz-lang/releases/latest/download/yinz-latest.vsix`
-
-External projects pin to the extension through the stable URL, so the `yinz-latest.vsix` upload is never skipped.
-
 ## Screenshots
 
 Screenshots are tracked for a follow-up commit once the extension is installed and verified locally. Install the extension and open `examples/pirates-roster/entrypoint.ynz` to see syntax highlighting, hover docs, autocomplete, and inline diagnostics in action.
