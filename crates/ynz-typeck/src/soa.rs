@@ -545,7 +545,17 @@ impl ScanState<'_> {
         }
     }
 
-    fn whole_value_use(&mut self, binding: &str) {
+    /// A whole-element use of the loop element variable read at `read`. A read that hands a
+    /// loop row over (`TypedModule::loop_row_handovers`) takes the row out of its cell, and the
+    /// gathered row of a struct-of-arrays list has no cell to take: the list declines instead.
+    fn whole_value_use(&mut self, binding: &str, read: &SourceSpan) {
+        if self
+            .typed
+            .loop_row_handovers
+            .is_handover_store(read.start, read.end)
+        {
+            self.escape(binding, "a loop row is handed over (C1q)".to_string());
+        }
         if let Some(sig) = self.bindings.get_mut(binding) {
             sig.whole_value_uses += 1;
         }
@@ -744,10 +754,10 @@ fn scan_ident_in_value_position(e: &Expr, st: &mut ScanState<'_>, how: &str) {
 
 fn scan_expr(e: &Expr, st: &mut ScanState<'_>) {
     match e {
-        Expr::Ident(n, _) => {
+        Expr::Ident(n, span) => {
             // Innermost element context wins over a same-named tracked binding.
             if let Some(binding) = st.elem_binding(n).map(str::to_string) {
-                st.whole_value_use(&binding);
+                st.whole_value_use(&binding, span);
             } else if st.is_tracked(n) {
                 st.escape(
                     &n.clone(),
@@ -774,12 +784,12 @@ fn scan_expr(e: &Expr, st: &mut ScanState<'_>) {
                         );
                     }
                 }
-                Expr::Ident(n, _) if st.elem_binding(n).is_some() => {
+                Expr::Ident(n, span) if st.elem_binding(n).is_some() => {
                     // `v.method()` on the loop element — whole-value use
                     // (cold fan-out input), not a decline (spike semantics kept).
                     let binding = st.elem_binding(n).map(str::to_string);
                     if let Some(b) = binding {
-                        st.whole_value_use(&b);
+                        st.whole_value_use(&b, span);
                     }
                 }
                 _ => scan_expr(receiver, st),
@@ -845,9 +855,9 @@ fn scan_expr(e: &Expr, st: &mut ScanState<'_>) {
             if !matches!(receiver.as_ref(), Expr::Ident(n, _)
                 if st.elem_binding(n).is_none() && st.is_tracked(n))
             {
-                if let Expr::Ident(n, _) = receiver.as_ref() {
+                if let Expr::Ident(n, span) = receiver.as_ref() {
                     if let Some(b) = st.elem_binding(n).map(str::to_string) {
-                        st.whole_value_use(&b);
+                        st.whole_value_use(&b, span);
                         return;
                     }
                 }
@@ -897,9 +907,9 @@ fn scan_expr(e: &Expr, st: &mut ScanState<'_>) {
 /// An argument position: a tracked binding escapes; a loop element var is a
 /// whole-value use (the cold fan-out signal, not a decline).
 fn scan_arg(arg: &Expr, st: &mut ScanState<'_>, how: &str) {
-    if let Expr::Ident(n, _) = arg {
+    if let Expr::Ident(n, span) = arg {
         if let Some(b) = st.elem_binding(n).map(str::to_string) {
-            st.whole_value_use(&b);
+            st.whole_value_use(&b, span);
             return;
         }
         if st.is_tracked(n) {

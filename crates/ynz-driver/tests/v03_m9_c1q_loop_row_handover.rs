@@ -105,6 +105,12 @@ handover_case!(
     "2\n6\n",
     (8, 8, 0, 0)
 );
+handover_case!(
+    soa_candidate_list,
+    "v0_3_m9_c1q_handover_soa_list.ynz",
+    "10\n",
+    (9, 9, 0, 0)
+);
 
 #[test]
 fn a_row_given_away_while_the_list_is_read_after_the_loop_still_needs_copy() {
