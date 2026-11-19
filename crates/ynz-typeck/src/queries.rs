@@ -266,6 +266,7 @@ fn check_query_cycle_initial(
             generic_call_instances: Default::default(),
             string_moves: Default::default(),
             heap_moves: Default::default(),
+            loop_row_handovers: Default::default(),
             non_owned_reads: Default::default(),
             temporaries: Default::default(),
             callable_fns: Default::default(),

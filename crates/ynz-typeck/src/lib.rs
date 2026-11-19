@@ -51,6 +51,7 @@ pub mod fixed_length;
 pub mod fixed_length_use;
 pub mod generics;
 pub mod heap_moves;
+pub mod loop_row_handover;
 pub mod independence;
 pub mod inlay_hint_passes;
 pub mod intrinsics;

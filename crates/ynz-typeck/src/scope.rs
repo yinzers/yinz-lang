@@ -119,6 +119,11 @@ pub enum Origin {
     /// the rendered `{reason}` for `TransferNeedsCopy` ("one cell of `matrix`, which this
     /// loop is walking").
     Cell(String),
+    /// A `for` loop variable whose loop hands its rows over (`crate::loop_row_handover`): the
+    /// iterated list and every name sharing it are not read again, so a transfer of the row (a
+    /// store, a give, a send) TAKES it, consumes only the variable, and blanks the cell in the
+    /// list. Carries the rendered `{reason}` for the diagnostics of a refused transfer.
+    HandOverCell(String),
     /// Bound to a piece of something someone else still holds (a field, an index, a literal
     /// built from named values, a call that returns a piece of its argument) — never
     /// transferable; the fix is `.copy()`. Carries the rendered `{reason}`, computed at the

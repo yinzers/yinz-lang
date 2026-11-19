@@ -414,7 +414,9 @@ fn role_evidence_of(origin: &Origin) -> RoleEvidence {
     match origin {
         Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => RoleEvidence::Owner,
         Origin::Param(_) => RoleEvidence::BorrowedParam,
-        Origin::Cell(_) | Origin::Reaches(_) | Origin::Unknown => RoleEvidence::Piece,
+        Origin::Cell(_) | Origin::HandOverCell(_) | Origin::Reaches(_) | Origin::Unknown => {
+            RoleEvidence::Piece
+        }
     }
 }
 
@@ -884,6 +886,11 @@ pub enum BgOwnership {
     Arc { group: u32, first: bool, last: bool },
 }
 
+/// True when codegen takes a handed-over loop row and blanks its cell (`crate::loop_row_handover`).
+/// Typeck admits the hand-over only while this is true: an admitted row with no blank would be
+/// owned by two lists. Card #524 part B turns it on together with the codegen half.
+const LOOP_ROW_HANDOVER_BUILT: bool = false;
+
 /// The type-annotated view of a module.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedModule {
@@ -989,6 +996,10 @@ pub struct TypedModule {
     /// store's admitted transfer of a fresh value, of an owned binding it consumed, or a `return`
     /// of either (`crate::heap_moves`). Codegen deep-copies every other heap value it stores.
     pub heap_moves: crate::heap_moves::HeapMoves,
+    /// C1q: the `for` loops that hand their rows over (the iterated list is not read again) and
+    /// the stores of a loop variable that take the row and blank its cell
+    /// (`crate::loop_row_handover`). Codegen copies every row the record does not name.
+    pub loop_row_handovers: crate::loop_row_handover::LoopRowHandovers,
     /// Every non-owned read (a `let`/reassignment value, a loop variable, a call argument)
     /// judged a VIEW of its place or a MUST-COPY, by the span of the expression (`crate::non_owned_reads`).
     /// Codegen copies every read the record does not call a view, unless the store moves it.
@@ -1055,6 +1066,7 @@ impl TypedModule {
             generic_call_instances: self.generic_call_instances.clone(),
             string_moves: self.string_moves.clone(),
             heap_moves: self.heap_moves.clone(),
+            loop_row_handovers: self.loop_row_handovers.clone(),
             non_owned_reads: self.non_owned_reads.clone(),
             temporaries: self.temporaries.clone(),
             callable_fns: self.callable_fns.clone(),
@@ -1206,6 +1218,7 @@ fn check_one_pass(
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
         heap_moves: crate::heap_moves::HeapMoves::default(),
+        loop_row_handovers: Default::default(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1281,6 +1294,7 @@ fn check_one_pass(
         generic_call_instances: checker.generic_call_instances,
         string_moves,
         heap_moves: checker.heap_moves,
+        loop_row_handovers: checker.loop_row_handovers,
         non_owned_reads,
         temporaries,
         callable_fns: callable_fns_of(&checker.local_fn_names, checker.imported_fn_names),
@@ -1366,6 +1380,7 @@ pub fn check_with_kernel_mode(
         bg_sole_holder: HashMap::new(),
         stores_handed_over: HashMap::new(),
         heap_moves: crate::heap_moves::HeapMoves::default(),
+        loop_row_handovers: Default::default(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1429,6 +1444,7 @@ pub fn check_with_kernel_mode(
         generic_call_instances: checker.generic_call_instances,
         string_moves,
         heap_moves: checker.heap_moves,
+        loop_row_handovers: checker.loop_row_handovers,
         non_owned_reads,
         temporaries,
         callable_fns: callable_fns_of(&checker.local_fn_names, checker.imported_fn_names),
@@ -1893,6 +1909,8 @@ struct Checker<'b> {
     stores_handed_over: HashMap<(usize, usize), String>,
     /// The record `TypedModule::heap_moves` is moved from (`record_heap_move`).
     heap_moves: crate::heap_moves::HeapMoves,
+    /// The record `TypedModule::loop_row_handovers` is moved from.
+    loop_row_handovers: crate::loop_row_handover::LoopRowHandovers,
     /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
     union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
@@ -5100,6 +5118,7 @@ impl<'b> Checker<'b> {
             }
         };
 
+        let hands_rows_over = self.loop_hands_rows_over(iter, &iter_ty, body);
         self.scope.begin_branches(BranchKind::Loop);
         self.scope.push();
         self.scope.begin_arm();
@@ -5111,6 +5130,9 @@ impl<'b> Checker<'b> {
             .iter()
             .find_map(|(name, _)| self.scope.class_of(name))
         {
+            // A row the loop hands over is consumed on its own: handing it over must not consume
+            // the list (the persisted record below still joins it to the list as a piece).
+            _ if hands_rows_over => self.scope.new_class(),
             Some(kept) => {
                 for (name, _) in &iterated_holders {
                     if let Some(other) = self.scope.class_of(name) {
@@ -5135,11 +5157,19 @@ impl<'b> Checker<'b> {
                 is_loop_var: true,
                 consumed: None,
                 consumed_on_every_path: false,
-                origin: Origin::Cell(cell_reason),
+                origin: if hands_rows_over {
+                    Origin::HandOverCell(cell_reason)
+                } else {
+                    Origin::Cell(cell_reason)
+                },
                 alias_class,
                 defined_at: var_span.clone(),
             },
         );
+        if hands_rows_over {
+            self.loop_row_handovers
+                .insert_loop(var_span.start, var_span.end);
+        }
         if let Some(declaration) = self.declaration_of(var) {
             for (_, holder) in &iterated_holders {
                 self.transfers.join(&declaration, holder, None);
@@ -5151,6 +5181,56 @@ impl<'b> Checker<'b> {
         self.end_branch_arm(body);
         self.scope.pop();
         self.scope.end_branches(true);
+    }
+
+    /// True when the loop over `iter` hands its rows over (`crate::loop_row_handover`): `iter` is
+    /// a plain binding that owns its list (`let`, or a `give` parameter; not `const`, not
+    /// consumed, no non-`give` parameter in its alias class) of `array` or `fixed` items that own
+    /// heap, in a function that never suspends, and neither the binding nor any name sharing its
+    /// value is read inside the body or after the loop (`class_used_after`, the same answer the
+    /// `background` give inference reads). Everything else keeps `Origin::Cell`: a row there needs
+    /// `.copy()`.
+    ///
+    /// O(size of the loop body and of what follows the loop) time.
+    fn loop_hands_rows_over(&self, iter: &Expr, iter_ty: &Type, body: &Block) -> bool {
+        if !LOOP_ROW_HANDOVER_BUILT {
+            return false;
+        }
+        let Expr::Ident(name, _) = iter else {
+            return false;
+        };
+        if self.current_fn_suspends || self.possibly_cpu_promoted.contains(&self.current_fn_name) {
+            return false;
+        }
+        let items = match iter_ty {
+            Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => elem,
+            _ => return false,
+        };
+        // A string row is taken by the string store seam (`string_moves`), not by this record.
+        if crate::effective_ownership::value_like(items) {
+            return false;
+        }
+        let Some(entry) = self.scope.lookup(name) else {
+            return false;
+        };
+        let owns_list = matches!(
+            entry.origin,
+            Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
+        );
+        if entry.is_const
+            || entry.consumed.is_some()
+            || !owns_list
+            || self.non_give_param_in_class(entry.alias_class).is_some()
+        {
+            return false;
+        }
+        let members = self.scope.visible_members_of(entry.alias_class);
+        let read_in_body = body.stmts.iter().any(|stmt| {
+            members
+                .iter()
+                .any(|member| ident_read_in_stmt(stmt, member.as_str()))
+        });
+        !read_in_body && !self.class_used_after(name, &members, &[], &[])
     }
 
     /// M7 P3c: look up the element type T for iterating over a user-defined shape.
@@ -6191,7 +6271,7 @@ impl<'b> Checker<'b> {
                     string_owner: (!entry.is_param
                         || matches!(entry.origin, Origin::Param(Some(OwnershipModifier::Give))))
                         && !entry.is_loop_var
-                        && !matches!(entry.origin, Origin::Cell(_)),
+                        && !matches!(entry.origin, Origin::Cell(_) | Origin::HandOverCell(_)),
                     class: entry.alias_class,
                     moved,
                 });
@@ -7781,6 +7861,15 @@ impl<'b> Checker<'b> {
                         true
                     }
                     Origin::Param(_) => unreachable!("non-give parameter handled above"),
+                    Origin::HandOverCell(_) => {
+                        // The row is taken out of its list: only the loop variable is consumed
+                        // (it has a class of its own), and codegen blanks the cell where this
+                        // read hands the row over.
+                        let cause = sink.cause(&name);
+                        self.consume_binding(&name, cause, &span);
+                        self.loop_row_handovers.insert_store(span.start, span.end);
+                        true
+                    }
                     Origin::Cell(reason) | Origin::Reaches(reason) => {
                         self.emit_transfer_needs_copy(
                             span,
