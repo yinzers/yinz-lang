@@ -1,0 +1,16 @@
+// v0.3-M9 C10: the method form `holder.reset()` is `reset(holder)`: refused the same way.
+shape Holder {
+  rows: array<array<int>>
+}
+function reset(lend holder: Holder) -> nothing {
+  holder.rows = [[9]]
+}
+function entrypoint() -> nothing {
+  let holder: Holder = { rows: [[1], [2], [3]] }
+  let total = 0
+  for (row in holder.rows) {
+    holder.reset()
+    total = total + row[0].or(0)
+  }
+  print(total)
+}

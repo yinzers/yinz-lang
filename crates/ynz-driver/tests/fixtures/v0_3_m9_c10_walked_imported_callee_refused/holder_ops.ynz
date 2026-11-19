@@ -1,0 +1,9 @@
+// The callee lives in another module: the loop in the importer learns what it writes from the
+// summary the exported signature carries.
+export shape Holder {
+  rows: array<array<int>>
+}
+
+export function reset(lend holder: Holder) -> nothing {
+  holder.rows = [[9]]
+}

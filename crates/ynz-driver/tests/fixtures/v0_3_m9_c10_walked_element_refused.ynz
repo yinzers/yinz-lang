@@ -1,0 +1,12 @@
+// v0.3-M9 C10: the body assigns an ELEMENT of a list the loop walks through (`cube[0]` while
+// walking `cube[0]`). The assignment frees the walked list; refused.
+function entrypoint() -> nothing {
+  let cube: array<array<array<int>>> = [[[1], [2], [3]], [[4]]]
+  let empty: array<array<int>> = []
+  let total = 0
+  for (row in cube[0].or(empty)) {
+    cube[0] = [[9]]
+    total = total + row[0].or(0)
+  }
+  print(total)
+}
