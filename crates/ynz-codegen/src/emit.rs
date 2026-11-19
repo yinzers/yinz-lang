@@ -2677,6 +2677,13 @@ struct Cg<'ctx, 'g> {
     // v0.3-M9 C7 slice 2: the slots a string value, read at its last use, is taken out of if the
     // store seam takes it, by the value's LLVM reference (`Cg::note_string_last_use`).
     string_take_slots: HashMap<usize, Vec<MoveSlot<'ctx>>>,
+    // v0.3-M9 C1q: the list cell each variable of a loop that hands its rows over reads its row
+    // from (`for_handover_cell`), by variable name; the read typeck records as the hand-over
+    // blanks it (`Cg::take_handover_row`).
+    handover_rows: HashMap<String, HandoverCell<'ctx>>,
+    // v0.3-M9 C1q: the cell a handed-over string row is blanked in if the store seam takes the
+    // string, by the string's LLVM reference (`Cg::take_string_slots`).
+    string_take_cells: HashMap<usize, HandoverCell<'ctx>>,
     // v0.3-M9 C7 slice 3: a string read off an errors-capable result at its last use is the result's ok
     // word: where the store seam takes it, this word is nulled, so the result's release skips it.
     string_take_ec_words: HashMap<usize, (PointerValue<'ctx>, Option<usize>)>,
@@ -8580,6 +8587,8 @@ fn plain_cg<'ctx, 'g>(
         fused_group_fired: false,
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
+        handover_rows: HashMap::new(),
+        string_take_cells: HashMap::new(),
         string_take_ec_words: HashMap::new(),
         ec_borrowed_ok: HashSet::new(),
     }
@@ -9048,6 +9057,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         fused_group_fired: false,
         local_types: HashMap::new(),
         string_take_slots: HashMap::new(),
+        handover_rows: HashMap::new(),
+        string_take_cells: HashMap::new(),
         string_take_ec_words: HashMap::new(),
         ec_borrowed_ok: HashSet::new(),
     };
@@ -13172,7 +13183,8 @@ fn lower_sm_for<'ctx, 'g>(
     // These forms with a suspension body are unsupported — typeck should have caught them
     // via the WaitInsideLoop guard before this point. Fall back to non-SM lowering
     // (which will panic if it hits a wait, surfacing the bug cleanly).
-    lower_stmt_for(cg, var, iter, body)
+    // Typeck hands no loop of a suspending function its rows over (`loop_hands_rows_over`).
+    lower_stmt_for(cg, var, iter, body, false)
 }
 
 /// Emit state-machine codegen for a multi-case `if` (`Stmt::Match`) with a `wait`
@@ -20213,11 +20225,19 @@ fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), Strin
         }
 
         Stmt::For {
-            var, iter, body, ..
+            var,
+            var_span,
+            iter,
+            body,
+            ..
         } => {
             let locals_snapshot = cg.locals.clone();
             cg.sm_scope_depth += 1;
-            let r = lower_stmt_for(cg, var, iter, body);
+            let hands_rows_over = cg
+                .typed
+                .loop_row_handovers
+                .is_handover_loop(var_span.start, var_span.end);
+            let r = lower_stmt_for(cg, var, iter, body, hands_rows_over);
             cg.sm_scope_depth -= 1;
             // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
             for (name, &outer_alloca) in &locals_snapshot {
@@ -20612,11 +20632,16 @@ fn lower_stmt_while<'ctx>(
     Ok(())
 }
 
+/// `hands_rows_over`: typeck recorded this loop as one that hands its rows over
+/// (`TypedModule::loop_row_handovers`). Its variable is then a VIEW of the list's cell, whatever
+/// `non_owned_reads` says (a reader that stores the row is judged a copy, and the row is taken
+/// instead), and the read typeck records as the hand-over blanks the cell (`take_handover_row`).
 fn lower_stmt_for<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     var: &str,
     iter: &Expr,
     body: &ynz_ast::nodes::Block,
+    hands_rows_over: bool,
 ) -> Result<(), String> {
     let iter_ty = cg.expr_type(iter);
 
@@ -20859,12 +20884,30 @@ fn lower_stmt_for<'ctx>(
         // The loop variable points at the element when nothing in the body writes the iterated
         // place (typeck's `non_owned_reads`); otherwise it owns a copy, released after its
         // iteration.
-        let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "for_elem")?;
+        let owned_elem = if hands_rows_over {
+            if soa_info.is_some() {
+                return Err(
+                    "internal: a loop over a struct-of-arrays list hands its rows over".to_string(),
+                );
+            }
+            handed_over_row(elem_val)
+        } else {
+            own_loop_element(cg, iter, elem_val, &elem, "for_elem")?
+        };
         let elem_val = owned_elem.value;
 
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
+        let outer_row = hands_rows_over.then(|| {
+            cg.handover_rows.insert(
+                var.to_string(),
+                HandoverCell::ArrayItem {
+                    list: arr_ptr,
+                    index: i,
+                },
+            )
+        });
 
         let open_copies = cg.open_loop_copies.len();
         if owned_elem.copied {
@@ -20893,6 +20936,7 @@ fn lower_stmt_for<'ctx>(
         }
 
         cg.locals.remove(var);
+        end_handover_row(cg, var, outer_row);
         cg.builder.position_at_end(after_bb);
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
@@ -20945,11 +20989,24 @@ fn lower_stmt_for<'ctx>(
 
         cg.builder.position_at_end(body_bb);
         let elem_val = cg.fixed_cell_value(arr_ptr, i, &elem, "ff_gep")?;
-        let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "ff_elem")?;
+        let owned_elem = if hands_rows_over {
+            handed_over_row(elem_val)
+        } else {
+            own_loop_element(cg, iter, elem_val, &elem, "ff_elem")?
+        };
         let elem_val = owned_elem.value;
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
+        let outer_row = if hands_rows_over {
+            let cell = cg.fixed_cell_ptr(arr_ptr, i, &elem, "ff_handover")?;
+            Some(
+                cg.handover_rows
+                    .insert(var.to_string(), HandoverCell::FixedItem { cell }),
+            )
+        } else {
+            None
+        };
 
         let open_copies = cg.open_loop_copies.len();
         if owned_elem.copied {
@@ -20978,6 +21035,7 @@ fn lower_stmt_for<'ctx>(
         }
 
         cg.locals.remove(var);
+        end_handover_row(cg, var, outer_row);
         cg.builder.position_at_end(after_bb);
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
@@ -22955,6 +23013,35 @@ fn own_loop_element<'ctx>(
     own_read_for_store(cg, iter, element, element_type, may_point, site)
 }
 
+/// The loop variable of a hand-over loop points at the row where the list keeps it: nothing was
+/// copied and nothing is released at the end of the iteration (`lower_stmt_for`).
+fn handed_over_row<'ctx>(row: BasicValueEnum<'ctx>) -> OwnedRead<'ctx> {
+    OwnedRead {
+        value: row,
+        copied: false,
+        release_target: None,
+    }
+}
+
+/// After a loop: the variable no longer names a list cell, and a variable of the same name an
+/// enclosing hand-over loop declared does again. `outer_row` is what `lower_stmt_for` displaced
+/// when the loop registered its cell (`None` when the loop hands nothing over).
+fn end_handover_row<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    var: &str,
+    outer_row: Option<Option<HandoverCell<'ctx>>>,
+) {
+    match outer_row {
+        Some(Some(outer)) => {
+            cg.handover_rows.insert(var.to_string(), outer);
+        }
+        Some(None) => {
+            cg.handover_rows.remove(var);
+        }
+        None => {}
+    }
+}
+
 /// The key and value bits a map-iteration entry holds, and which of them the entry owns.
 struct OwnedMapEntry<'ctx> {
     key_bits: inkwell::values::IntValue<'ctx>,
@@ -23469,6 +23556,7 @@ fn lower_expr_node<'ctx>(
 
             let loaded = load(cg, slot, &ty, name)?;
             cg.null_handed_founders(ident_span)?;
+            cg.take_handover_row(name, ident_span, loaded, &ty)?;
             Ok(loaded)
         }
 
@@ -30035,6 +30123,20 @@ struct MoveSlot<'ctx> {
     moved_flag: Option<usize>,
 }
 
+/// The cell of the list a hand-over loop is walking that the current row sits in
+/// (`TypedModule::loop_row_handovers`). Blanking it (`Cg::blank_handover_cell`) leaves the list's
+/// release nothing to free for that row.
+#[derive(Clone, Copy)]
+enum HandoverCell<'ctx> {
+    /// Item `index` of the `array` at `list`.
+    ArrayItem {
+        list: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+    },
+    /// The 8-byte cell of a `fixed` list at `cell`.
+    FixedItem { cell: PointerValue<'ctx> },
+}
+
 /// One temporary of a statement: the entry-block slot that holds the value it builds (null until it
 /// is built) and the type its release is called with (`Cg::open_temporaries`).
 struct TemporarySlot<'ctx> {
@@ -30773,10 +30875,71 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .map_err(|err| format!("null a taken ok word: {err}"))?;
             self.null_frame_slot(*frame_ok_word)?;
         }
+        if let Some(cell) = self.string_take_cells.get(&(value.as_value_ref() as usize)) {
+            self.blank_handover_cell(*cell)?;
+        }
         match self.string_take_slots.get(&(value.as_value_ref() as usize)) {
             Some(slots) => self.null_slots(slots),
             None => Ok(()),
         }
+    }
+
+    /// Blank the list cell a handed-over loop row was read from: zero it, so the release of the
+    /// list skips what its new holder owns (`ynz_array_blank_cell`; an all-zero cell is the blank
+    /// of every row type, proven by `v03_m9_c1q_blanked_cell_release`).
+    ///
+    /// O(elem_size) time at run time, O(1) memory.
+    fn blank_handover_cell(&self, cell: HandoverCell<'ctx>) -> Result<(), String> {
+        match cell {
+            HandoverCell::ArrayItem { list, index } => {
+                self.builder
+                    .build_call(
+                        self.rt.ynz_array_blank_cell,
+                        &[list.into(), index.into()],
+                        "",
+                    )
+                    .map_err(|err| format!("blank a handed-over list cell: {err}"))?;
+            }
+            HandoverCell::FixedItem { cell } => {
+                self.builder
+                    .build_store(cell, self.i64().const_zero())
+                    .map_err(|err| format!("blank a handed-over fixed cell: {err}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The read of `name` at `span` is one typeck recorded as the hand-over of a loop row
+    /// (`TypedModule::loop_row_handovers`); `loaded` is the row. A string row is taken only if the
+    /// store seam takes it (`take_string_slots` blanks the cell then, and a store that copies
+    /// leaves the cell, so the list still owns the string); any other row's store always takes it
+    /// (`heap_moves`), so its cell is blanked here. A read that is not recorded changes nothing.
+    ///
+    /// O(1) time.
+    fn take_handover_row(
+        &mut self,
+        name: &str,
+        span: &ynz_diagnostics::SourceSpan,
+        loaded: BasicValueEnum<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        if !self
+            .typed
+            .loop_row_handovers
+            .is_handover_store(span.start, span.end)
+        {
+            return Ok(());
+        }
+        let cell = *self.handover_rows.get(name).ok_or_else(|| {
+            format!("internal: `{name}` is recorded as a handed-over loop row, outside its loop")
+        })?;
+        if is_string_like(&self.resolve_type(ty)) {
+            let key = loaded.as_value_ref() as usize;
+            self.owned_string_values.insert(key);
+            self.string_take_cells.insert(key, cell);
+            return Ok(());
+        }
+        self.blank_handover_cell(cell)
     }
 
     /// What the plain emitter releases of one plan entry: its type and whether its slot is null-checked

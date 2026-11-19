@@ -47,25 +47,21 @@ macro_rules! handover_case {
             use super::*;
 
             #[test]
-            #[ignore = "C1q part B: the codegen hand-over is not built yet"]
             fn counts_o2() {
                 assert_counts($fixture, false, $stdout, $counts);
             }
 
             #[test]
-            #[ignore = "C1q part B: the codegen hand-over is not built yet"]
             fn counts_o0() {
                 assert_counts($fixture, true, $stdout, $counts);
             }
 
             #[test]
-            #[ignore = "C1q part B: the codegen hand-over is not built yet"]
             fn asan_o2() {
                 assert_asan_clean_and_prints($fixture, false, $stdout);
             }
 
             #[test]
-            #[ignore = "C1q part B: the codegen hand-over is not built yet"]
             fn asan_o0() {
                 assert_asan_clean_and_prints($fixture, true, $stdout);
             }

@@ -80,6 +80,8 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_array_set(ptr arr, i64 idx, ptr src) -> void — aborts on OOB
     pub ynz_array_set: FunctionValue<'ctx>,
     pub ynz_array_count: FunctionValue<'ctx>,
+    /// `ynz_array_blank_cell(arr, idx)`: zero one cell of a list whose item a hand-over took.
+    pub ynz_array_blank_cell: FunctionValue<'ctx>,
     pub ynz_array_drop: FunctionValue<'ctx>,
     // Deep-clone for primitive-element arrays (int/float/bool — no element indirection).
     // Returns a new independent YnzArray with its own data buffer. Must be freed with
@@ -512,6 +514,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_array_count",
                 i64.fn_type(&[ptr.into()], false),
+            ),
+            ynz_array_blank_cell: declare_fn(
+                module,
+                "ynz_array_blank_cell",
+                void.fn_type(&[ptr.into(), i64.into()], false),
             ),
             ynz_array_drop: declare_fn(
                 module,

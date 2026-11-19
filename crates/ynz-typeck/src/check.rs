@@ -886,11 +886,6 @@ pub enum BgOwnership {
     Arc { group: u32, first: bool, last: bool },
 }
 
-/// True when codegen takes a handed-over loop row and blanks its cell (`crate::loop_row_handover`).
-/// Typeck admits the hand-over only while this is true: an admitted row with no blank would be
-/// owned by two lists. Card #524 part B turns it on together with the codegen half.
-const LOOP_ROW_HANDOVER_BUILT: bool = false;
-
 /// The type-annotated view of a module.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedModule {
@@ -1219,6 +1214,7 @@ fn check_one_pass(
         stores_handed_over: HashMap::new(),
         heap_moves: crate::heap_moves::HeapMoves::default(),
         loop_row_handovers: Default::default(),
+        handover_string_last_read: HashMap::new(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1381,6 +1377,7 @@ pub fn check_with_kernel_mode(
         stores_handed_over: HashMap::new(),
         heap_moves: crate::heap_moves::HeapMoves::default(),
         loop_row_handovers: Default::default(),
+        handover_string_last_read: HashMap::new(),
         union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
@@ -1911,6 +1908,9 @@ struct Checker<'b> {
     heap_moves: crate::heap_moves::HeapMoves,
     /// The record `TypedModule::loop_row_handovers` is moved from.
     loop_row_handovers: crate::loop_row_handover::LoopRowHandovers,
+    /// Per hand-over loop over `string` rows (by the span of its variable), the span of the
+    /// variable's last read in the body: the one store that may hand the row over.
+    handover_string_last_read: HashMap<(usize, usize), (usize, usize)>,
     /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
     union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
@@ -5119,6 +5119,10 @@ impl<'b> Checker<'b> {
         };
 
         let hands_rows_over = self.loop_hands_rows_over(iter, &iter_ty, body);
+        // A string row is not consumed by its store (a string store never reaches `check_transfer`):
+        // the loop variable keeps the list's class and `Origin::Cell`, and the one store that is
+        // the row's last read hands it over (`record_string_row_handover`).
+        let consumes_row = hands_rows_over && !matches!(elem_ty, Type::String);
         self.scope.begin_branches(BranchKind::Loop);
         self.scope.push();
         self.scope.begin_arm();
@@ -5132,7 +5136,7 @@ impl<'b> Checker<'b> {
         {
             // A row the loop hands over is consumed on its own: handing it over must not consume
             // the list (the persisted record below still joins it to the list as a piece).
-            _ if hands_rows_over => self.scope.new_class(),
+            _ if consumes_row => self.scope.new_class(),
             Some(kept) => {
                 for (name, _) in &iterated_holders {
                     if let Some(other) = self.scope.class_of(name) {
@@ -5157,7 +5161,7 @@ impl<'b> Checker<'b> {
                 is_loop_var: true,
                 consumed: None,
                 consumed_on_every_path: false,
-                origin: if hands_rows_over {
+                origin: if consumes_row {
                     Origin::HandOverCell(cell_reason)
                 } else {
                     Origin::Cell(cell_reason)
@@ -5169,6 +5173,14 @@ impl<'b> Checker<'b> {
         if hands_rows_over {
             self.loop_row_handovers
                 .insert_loop(var_span.start, var_span.end);
+            if !consumes_row {
+                if let Some(last_read) = last_ident_read_in_stmts(&body.stmts, var) {
+                    self.handover_string_last_read.insert(
+                        (var_span.start, var_span.end),
+                        (last_read.start, last_read.end),
+                    );
+                }
+            }
         }
         if let Some(declaration) = self.declaration_of(var) {
             for (_, holder) in &iterated_holders {
@@ -5193,9 +5205,6 @@ impl<'b> Checker<'b> {
     ///
     /// O(size of the loop body and of what follows the loop) time.
     fn loop_hands_rows_over(&self, iter: &Expr, iter_ty: &Type, body: &Block) -> bool {
-        if !LOOP_ROW_HANDOVER_BUILT {
-            return false;
-        }
         let Expr::Ident(name, _) = iter else {
             return false;
         };
@@ -5206,8 +5215,9 @@ impl<'b> Checker<'b> {
             Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => elem,
             _ => return false,
         };
-        // A string row is taken by the string store seam (`string_moves`), not by this record.
-        if crate::effective_ownership::value_like(items) {
+        // A string row hands over through the same record (`record_string_row_handover`); any
+        // other item that is bits owns nothing to hand over.
+        if crate::effective_ownership::value_like(items) && !matches!(**items, Type::String) {
             return false;
         }
         let Some(entry) = self.scope.lookup(name) else {
@@ -6131,6 +6141,7 @@ impl<'b> Checker<'b> {
     /// is a transfer like a give or a send, decided by the ONE `check_transfer`. A value that is
     /// bits is not handed over. Returns true when the value was admitted.
     fn store_value(&mut self, value: &Expr, place: &str, copy_template: &str) -> bool {
+        self.record_string_row_handover(value);
         if self.expr_is_bits(value) {
             return true;
         }
@@ -6151,6 +6162,31 @@ impl<'b> Checker<'b> {
                 .insert((span.start, span.end), place.to_string());
         }
         admitted
+    }
+
+    /// A string row of a hand-over loop (`loop_hands_rows_over`) stored at its LAST read, outside
+    /// any loop nested in the body, is the row's hand-over: record the read, and codegen takes the
+    /// string without a copy and blanks its cell in the list. A string store never reaches
+    /// `check_transfer`, and the row stays a plain `Origin::Cell` that nothing consumes, so a row
+    /// read again after the store (or stored twice) is not recorded and the store copies as before.
+    ///
+    /// O(1) time.
+    fn record_string_row_handover(&mut self, value: &Expr) {
+        let Expr::Ident(name, span) = value else {
+            return;
+        };
+        let Some(entry) = self.scope.lookup(name) else {
+            return;
+        };
+        if !entry.is_loop_var || !matches!(entry.ty, Type::String) {
+            return;
+        }
+        let loop_key = (entry.defined_at.start, entry.defined_at.end);
+        let is_last_read =
+            self.handover_string_last_read.get(&loop_key) == Some(&(span.start, span.end));
+        if is_last_read && !self.bound_outside_current_loop(name) {
+            self.loop_row_handovers.insert_store(span.start, span.end);
+        }
     }
 
     /// The stores of one collection-method call (`o.add(a)`, `m.set(k, a)`): each argument at a
@@ -13694,12 +13730,28 @@ fn expr_may_suspend_conservative(expr: &Expr, sigs: &SignatureTable) -> bool {
 }
 
 fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
+    let mut found = false;
+    visit_ident_reads_in_stmt(stmt, name, &mut |_| found = true);
+    found
+}
+
+/// Call `visit` with the span of every read of `name` in `stmt`, nested blocks included, in no
+/// particular order. THE walk `ident_read_in_stmt` and the last-read lookup of a hand-over loop
+/// row (`last_ident_read_in_stmts`) share. O(size of `stmt`) time, O(1) memory.
+fn visit_ident_reads_in_stmt(stmt: &Stmt, name: &str, visit: &mut dyn FnMut(&SourceSpan)) {
     match stmt {
-        Stmt::Expr(e) => expr_refs_ident(e, name),
-        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_refs_ident(value, name),
-        Stmt::Return { value, .. } => value.as_ref().is_some_and(|e| expr_refs_ident(e, name)),
+        Stmt::Expr(e) => visit_ident_reads_in_expr(e, name, visit),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            visit_ident_reads_in_expr(value, name, visit)
+        }
+        Stmt::Return { value, .. } => {
+            if let Some(e) = value {
+                visit_ident_reads_in_expr(e, name, visit);
+            }
+        }
         Stmt::FieldAssign { target, value, .. } => {
-            expr_refs_ident(target, name) || expr_refs_ident(value, name)
+            visit_ident_reads_in_expr(target, name, visit);
+            visit_ident_reads_in_expr(value, name, visit);
         }
         Stmt::IndexAssign {
             receiver,
@@ -13707,12 +13759,15 @@ fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
             value,
             ..
         } => {
-            expr_refs_ident(receiver, name)
-                || expr_refs_ident(index, name)
-                || expr_refs_ident(value, name)
+            visit_ident_reads_in_expr(receiver, name, visit);
+            visit_ident_reads_in_expr(index, name, visit);
+            visit_ident_reads_in_expr(value, name, visit);
         }
-        Stmt::If { cond, body, .. } => {
-            expr_refs_ident(cond, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
+            visit_ident_reads_in_expr(cond, name, visit);
+            for inner in &body.stmts {
+                visit_ident_reads_in_stmt(inner, name, visit);
+            }
         }
         Stmt::Match {
             scrutinee,
@@ -13720,21 +13775,39 @@ fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
             else_arm,
             ..
         } => {
-            expr_refs_ident(scrutinee, name)
-                || arms
-                    .iter()
-                    .any(|arm| arm.body.stmts.iter().any(|s| ident_read_in_stmt(s, name)))
-                || else_arm
-                    .as_ref()
-                    .is_some_and(|b| b.stmts.iter().any(|s| ident_read_in_stmt(s, name)))
-        }
-        Stmt::While { cond, body, .. } => {
-            expr_refs_ident(cond, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+            visit_ident_reads_in_expr(scrutinee, name, visit);
+            for arm in arms {
+                for inner in &arm.body.stmts {
+                    visit_ident_reads_in_stmt(inner, name, visit);
+                }
+            }
+            if let Some(block) = else_arm {
+                for inner in &block.stmts {
+                    visit_ident_reads_in_stmt(inner, name, visit);
+                }
+            }
         }
         Stmt::For { iter, body, .. } => {
-            expr_refs_ident(iter, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+            visit_ident_reads_in_expr(iter, name, visit);
+            for inner in &body.stmts {
+                visit_ident_reads_in_stmt(inner, name, visit);
+            }
         }
     }
+}
+
+/// The span of the read of `name` that sits last in the source of `stmts`, or `None` when
+/// nothing reads it. O(size of `stmts`) time, O(1) memory.
+fn last_ident_read_in_stmts(stmts: &[Stmt], name: &str) -> Option<SourceSpan> {
+    let mut last: Option<SourceSpan> = None;
+    for stmt in stmts {
+        visit_ident_reads_in_stmt(stmt, name, &mut |read| {
+            if last.as_ref().is_none_or(|kept| read.start > kept.start) {
+                last = Some(read.clone());
+            }
+        });
+    }
+    last
 }
 
 /// Returns `true` if `stmt` references `target` in a context where the reference
@@ -13864,44 +13937,84 @@ fn binding_read_span(expr: &Expr) -> &SourceSpan {
 /// Returns `true` if `expr` reads the binding `target`: an `Expr::Ident` of that name, or `self`
 /// when `target` is `self` (the `self` parameter is a binding like any other).
 fn expr_refs_ident(expr: &Expr, target: &str) -> bool {
+    let mut found = false;
+    visit_ident_reads_in_expr(expr, target, &mut |_| found = true);
+    found
+}
+
+/// Call `visit` with the span of every read of `target` in `expr` (`expr_refs_ident`'s walk).
+/// O(size of `expr`) time, O(1) memory.
+fn visit_ident_reads_in_expr(expr: &Expr, target: &str, visit: &mut dyn FnMut(&SourceSpan)) {
     match expr {
-        Expr::Ident(name, _) => name == target,
-        Expr::SelfValue { .. } => target == "self",
-        Expr::Wait(inner, _) | Expr::Background(inner, _) => expr_refs_ident(inner, target),
+        Expr::Ident(name, span) => {
+            if name == target {
+                visit(span);
+            }
+        }
+        Expr::SelfValue { span } => {
+            if target == "self" {
+                visit(span);
+            }
+        }
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+            visit_ident_reads_in_expr(inner, target, visit)
+        }
         Expr::Call(c) => {
-            expr_refs_ident(&c.callee, target) || c.args.iter().any(|a| expr_refs_ident(a, target))
+            visit_ident_reads_in_expr(&c.callee, target, visit);
+            for arg in &c.args {
+                visit_ident_reads_in_expr(arg, target, visit);
+            }
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            expr_refs_ident(lhs, target) || expr_refs_ident(rhs, target)
+            visit_ident_reads_in_expr(lhs, target, visit);
+            visit_ident_reads_in_expr(rhs, target, visit);
         }
-        Expr::UnaryOp { operand, .. } => expr_refs_ident(operand, target),
+        Expr::UnaryOp { operand, .. } => visit_ident_reads_in_expr(operand, target, visit),
         Expr::MethodCall { receiver, args, .. } => {
-            expr_refs_ident(receiver, target) || args.iter().any(|a| expr_refs_ident(a, target))
+            visit_ident_reads_in_expr(receiver, target, visit);
+            for arg in args {
+                visit_ident_reads_in_expr(arg, target, visit);
+            }
         }
-        Expr::FieldAccess { receiver, .. } => expr_refs_ident(receiver, target),
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
+            visit_ident_reads_in_expr(receiver, target, visit)
+        }
         Expr::IndexAccess {
             receiver, index, ..
-        } => expr_refs_ident(receiver, target) || expr_refs_ident(index, target),
-        Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_refs_ident(&f.value, target)),
-        Expr::ArrayLit { elements, .. } => elements.iter().any(|e| expr_refs_ident(e, target)),
-        Expr::MapLit { entries, .. } => entries
-            .iter()
-            .any(|(k, v)| expr_refs_ident(k, target) || expr_refs_ident(v, target)),
-        Expr::PostfixOp { receiver, .. } => expr_refs_ident(receiver, target),
-        Expr::Is { expr: inner, .. } => expr_refs_ident(inner, target),
-        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
-            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
-                expr_refs_ident(e, target)
-            } else {
-                false
+        } => {
+            visit_ident_reads_in_expr(receiver, target, visit);
+            visit_ident_reads_in_expr(index, target, visit);
+        }
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                visit_ident_reads_in_expr(&field.value, target, visit);
             }
-        }),
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for element in elements {
+                visit_ident_reads_in_expr(element, target, visit);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (key, value) in entries {
+                visit_ident_reads_in_expr(key, target, visit);
+                visit_ident_reads_in_expr(value, target, visit);
+            }
+        }
+        Expr::Is { expr: inner, .. } => visit_ident_reads_in_expr(inner, target, visit),
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(inner, _) = part {
+                    visit_ident_reads_in_expr(inner, target, visit);
+                }
+            }
+        }
         Expr::StringLit(_, _)
         | Expr::IntLit(_, _)
         | Expr::NumberLit(_, _)
         | Expr::BoolLit(_, _)
         | Expr::NoneLit { .. }
-        | Expr::Error(_) => false,
+        | Expr::Error(_) => {}
     }
 }
 
