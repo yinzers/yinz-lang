@@ -1212,7 +1212,11 @@ unsafe fn hash_stored_int_key(key: *const u8) -> u64 {
 }
 
 unsafe fn hash_stored_str_key(key: *const u8) -> u64 {
-    ynz_siphash_str(std::ptr::read_unaligned(key as *const *const u8))
+    // The slot holds the string's address as an `i64` (`ynz_map_set_str` writes `key as i64`), so
+    // it is read back as an `i64` and cast, as `find_slot_str` does. Reading the same bytes as a
+    // pointer would give a pointer that carries no provenance, and hashing it is undefined
+    // behavior (Miri: "dangling pointer (it has no provenance)").
+    ynz_siphash_str(std::ptr::read_unaligned(key as *const i64) as *const u8)
 }
 
 unsafe fn hash_stored_decimal_key(key: *const u8) -> u64 {
