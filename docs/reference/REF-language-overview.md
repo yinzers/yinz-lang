@@ -54,7 +54,7 @@ If you've written JavaScript | TypeScript before, most of this should feel famil
 Every decision in this language follows these rules. When something seems weird, one of these is why.
 
 1. **No garbage collector** — ownership handles memory; no pauses, no overhead
-2. **Compile-time safety** — wrong code fails at compile time, never at runtime
+2. **Compile-time safety** — every check that can run at compile time does; a failure that can't (I/O, division by zero) is explicit: `errors` or a task-isolated panic, never silent
 3. **The compiler is a teacher** — errors explain what went wrong and suggest fixes
 4. **Self-documenting syntax** — a jr dev who's never seen Yinz should understand any line
 5. **Human-readable over jargon** — `options` not `enum`, `nothing` not `void`, `follows` not `implements`

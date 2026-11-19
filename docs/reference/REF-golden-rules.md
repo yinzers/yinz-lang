@@ -46,7 +46,7 @@ Ownership-based memory management only. One memory model, no two-tier complexity
 ---
 
 **2. Compile-time safety**
-Wrong code fails at compile time, never at runtime.
+Every check that can run at compile time does. A failure that can't (I/O, bugs like division by zero) is explicit: `errors` or a task-isolated panic. No silent runtime failure.
 
 *Why*: A runtime crash at 3am in production costs orders of magnitude more than a compile error during development. Every safety check that can be moved to compile time should be.
 
