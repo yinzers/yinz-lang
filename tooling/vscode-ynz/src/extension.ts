@@ -36,16 +36,39 @@ const promotableRanges = (tokens: vscode.SemanticTokens, modifierBit: number): v
     return ranges;
 };
 
-const decoratePromotableTokens = (document: vscode.TextDocument, tokens: vscode.SemanticTokens): void => {
+// Decorations belong to one TextEditor, and VS Code serves cached semantic tokens
+// when a tab is shown again without asking the server, so the ranges are kept per
+// document and re-applied whenever the visible editors change.
+interface PromotableRanges {
+    documentVersion: number;
+    ranges: vscode.Range[];
+}
+const promotableRangesByDocument = new Map<string, PromotableRanges>();
+
+const applyPromotableDecorations = (editor: vscode.TextEditor): void => {
+    const cached = promotableRangesByDocument.get(editor.document.uri.toString());
+    const isCurrent = cached !== undefined && cached.documentVersion === editor.document.version;
+    editor.setDecorations(promotableDecoration, isCurrent ? cached.ranges : []);
+};
+
+const decoratePromotableTokens = (
+    document: vscode.TextDocument,
+    requestedVersion: number,
+    tokens: vscode.SemanticTokens
+): void => {
+    // The document changed while the server answered: these ranges are stale, and
+    // the edit already triggered a fresh request.
+    if (document.version !== requestedVersion) return;
     const modifierNames =
         client?.initializeResult?.capabilities.semanticTokensProvider?.legend.tokenModifiers ?? [];
     const modifierIndex = modifierNames.indexOf(PROMOTABLE_MODIFIER);
     if (modifierIndex < 0) return;
-    const ranges = promotableRanges(tokens, 1 << modifierIndex);
+    promotableRangesByDocument.set(document.uri.toString(), {
+        documentVersion: requestedVersion,
+        ranges: promotableRanges(tokens, 1 << modifierIndex),
+    });
     for (const editor of vscode.window.visibleTextEditors) {
-        if (editor.document === document) {
-            editor.setDecorations(promotableDecoration, ranges);
-        }
+        if (editor.document === document) applyPromotableDecorations(editor);
     }
 };
 
@@ -80,8 +103,9 @@ export const activate = (context: vscode.ExtensionContext): void => {
                 next(uri, transformed);
             },
             provideDocumentSemanticTokens: async (document, cancellation, next) => {
+                const requestedVersion = document.version;
                 const tokens = await next(document, cancellation);
-                if (tokens) decoratePromotableTokens(document, tokens);
+                if (tokens) decoratePromotableTokens(document, requestedVersion, tokens);
                 return tokens;
             },
         },
@@ -100,6 +124,15 @@ export const activate = (context: vscode.ExtensionContext): void => {
             `Make sure 'ynz-lsp' is on your PATH or set yinz.server.path in settings.`
         );
     });
+
+    context.subscriptions.push(
+        vscode.window.onDidChangeVisibleTextEditors(editors => {
+            editors.forEach(applyPromotableDecorations);
+        }),
+        vscode.workspace.onDidCloseTextDocument(document => {
+            promotableRangesByDocument.delete(document.uri.toString());
+        })
+    );
 
     context.subscriptions.push(promotableDecoration, {
         dispose: () => { client?.stop(); },
