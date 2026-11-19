@@ -281,7 +281,7 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 `shape DrawableShape = Circle | Square | Triangle` with `is` for type checking and narrowing.
 
-**Why `|` over `or`**: Consistency — all operators are symbols in Yinz. JS/TS developers already know `|` for union types. `or` was triple-overloaded (union types, boolean OR, `.or()` method) — switching union types to `|` eliminates the overload entirely. `is` matches plain English — "if shape is Circle."
+**Why `|` over `or`**: Golden Rule 5 exception: `or` is a prose word, while `|` is unambiguous and familiar from TypeScript. `is` matches plain English — "if shape is Circle."
 
 **`is` in union context = exact type**: `Admin` does NOT match `is User` in a union even if `Admin extends User`. Outside unions, normal subtype rules apply. This makes union discrimination predictable — each variant is always distinct.
 

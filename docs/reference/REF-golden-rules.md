@@ -93,7 +93,7 @@ Every keyword, function, and pattern should be readable by a junior developer wh
 
 *Why*: The stated goal is accessibility to junior developers. Every term that requires CS background knowledge is a barrier to entry. Plain English words are memorable, guessable, and require no prior knowledge.
 
-**Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Result = Success | Failure`, matching TypeScript convention. The `or` keyword was considered (and previously documented here) but rejected because `or` is triple-overloaded: boolean operator (`if (a or b)`), union type syntax, and the word in prose. `|` is unambiguous as a type-syntax symbol and reads naturally to TypeScript developers. Locked 2026-05-14 per Patrick's call during the design-lockdown conversation. This is the ONE place Yinz prefers a symbol over a word — every other operator/keyword stays as a word.
+**Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Result = Success | Failure`, matching TypeScript convention. `or` is a prose word, while `|` is unambiguous and familiar from TypeScript. Boolean operators are symbols too: `&&`, `||`, `!`.
 
 ---
 
