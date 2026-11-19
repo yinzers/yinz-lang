@@ -37,7 +37,7 @@ fn bignum_map_key_is_refused_with_a_teaching_diagnostic() {
     assert_refused_with(
         "v0_3_m9_c6b_map_key_bignum_refused.ynz",
         &[
-            "A `map` cannot be keyed by `number<50>`.",
+            "A `map` can't be keyed by `number<50>` yet.",
             "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits",
             "does not fit in the slot",
             "can have up to 50 digits",
@@ -82,7 +82,7 @@ fn shape_map_key_is_refused_with_a_teaching_diagnostic() {
     assert_refused_with(
         "v0_3_m9_c6b_map_key_shape_refused.ynz",
         &[
-            "A `map` cannot be keyed by `Point`.",
+            "A `map` can't be keyed by `Point` yet.",
             "Key the map by one of its fields",
             "`map<string, Point>`",
             "could hold only the address where it lives",
@@ -109,7 +109,7 @@ fn number_map_key_one_digit_past_the_widest_is_refused() {
     // accepting the wrong width. Tier: Medium.
     assert_refused_with(
         "v0_3_m9_c6b_map_key_just_past_widest_number_refused.ynz",
-        &["A `map` cannot be keyed by `number<35>`."],
+        &["A `map` can't be keyed by `number<35>` yet."],
     );
 }
 

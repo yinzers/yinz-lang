@@ -374,15 +374,15 @@ scores["alice"] = 75         // sugar for scores.set("alice", 75)
 
 **A `number` key matches the number as stored.** A map keeps a `number` key in its own slot and finds a key by comparing the stored digits, so `1.0` set twice is one key, while `1.0` and `1.00` are two (`1.0 == 1.00` is still `true`; a map key does not use `==`). A key computed to the same value and scale, such as `0.5 + 0.5` for `1.0`, is the same key. Matching `1.0` and `1.00` as one key is not decided yet. `.contains` on an `array<number>` still compares with `==`, so it finds `1.00` for `1.0`.
 
-**A map keeps each key in one slot.** The slot is 8 bytes for an `int`, a `boolean`, a `float` or a `string`, and 16 bytes for a `number` of up to 34 digits. Any other key type is refused at compile time. A `number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live. Either way a lookup with a key equal to one you stored would miss, because it lives at another address:
+**A map keeps each key in one slot.** The slot is 8 bytes for an `int`, a `boolean`, a `float` or a `string`, and 16 bytes for a `number` of up to 34 digits. Any other key type is not supported yet and is refused at compile time. A `number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live. Either way a lookup with a key equal to one you stored would miss, because it lives at another address:
 
 ```
 let totals: map<number<50>, int> = {}
-// COMPILE ERROR: A `map` cannot be keyed by `number<50>`.
+// COMPILE ERROR: A `map` can't be keyed by `number<50>` yet.
 // Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`).
 
 let labels: map<Point, string> = {}
-// COMPILE ERROR: A `map` cannot be keyed by `Point`.
+// COMPILE ERROR: A `map` can't be keyed by `Point` yet.
 // Key the map by one of its fields (an `int` id or a `string` name) and keep the `Point`
 // as the map's value: `map<string, Point>`.
 
@@ -392,7 +392,7 @@ let sessions: map<sensitive string, int> = {}
 // and keep the secret as the map's value: `map<string, sensitive string>`.
 ```
 
-A `sensitive string` is refused for a different reason than its slot: a map would free the key as an ordinary string and compare keys with a comparison that is not constant-time. A `sensitive string` key is not supported yet.
+A `sensitive string` is refused for a different reason than its slot: a map would free the key as an ordinary string and compare keys with a comparison that is not constant-time. A `sensitive string` key stays refused: that is by design, not a missing feature.
 
 **Bulk update with `.update({...})`:**
 

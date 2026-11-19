@@ -89,14 +89,15 @@ function entrypoint() -> nothing {
   box.add(moved)
   print(moved.count().toString())
 
-  // WHY: MapKeyNotStorable (shape) — a map keeps each key in one slot of 8 or 16 bytes, and a
-  // shape holds several fields, so an equal `Plain` would be looked up at another address and
-  // miss. Key the map by a field and keep the shape as the value.
+  // WHY: MapKeyNotStorable (shape) — not supported yet: a map keeps each key in one slot of 8 or
+  // 16 bytes today, and a shape holds several fields, so an equal `Plain` would be looked up at
+  // another address and miss. For now, key the map by a field and keep the shape as the value.
   let byPlain: map<Plain, int> = {}
   print(byPlain.count().toString())
 
-  // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — it is kept outside the 16-byte
-  // slot, so only its address would be the key.
+  // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — not supported yet: it is kept
+  // outside the 16-byte slot, so only its address would be the key. Key by an `int`, a `string`
+  // or a `number<34>` for now.
   let byPrice: map<number<50>, int> = {}
   print(byPrice.count().toString())
 
