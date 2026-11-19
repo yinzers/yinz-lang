@@ -61,8 +61,8 @@ Modules and types can share the same base name: `Date` is the type, `date` is th
 ## Comments Syntax
 
 ```
-// single line
-/* multi line */
+// regular comment, one line
+/// doc comment, shown in IDE hover
 ```
 
-No doc-comment syntax yet. See [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md).
+See [`REF-doc-comments.md`](REF-doc-comments.md) for the doc-comment rules.
