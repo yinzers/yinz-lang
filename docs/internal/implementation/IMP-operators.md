@@ -65,7 +65,7 @@ Bitwise operators use single symbols (`&`, `|`, `^`, `~`, `<<`, `>>`) while bool
 
 **Why symbols for bitwise**: Golden Rule 12 (familiar syntax): every language with bitwise operations spells them this way.
 
-**The split is readable**: `if (active && verified)` is a condition check. `FLAG_A | FLAG_B` is bit manipulation.
+**The split is readable**: `if (active && verified)` is a condition check. `flagA | flagB` is bit manipulation.
 
 ---
 

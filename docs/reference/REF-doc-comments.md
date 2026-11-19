@@ -101,7 +101,7 @@ Use `//` inside a function body. It is always a private implementation note — 
 ```ynz
 export function countActive(share players: array<Player>) -> int {
   // This is only visible when reading this file
-  const active = players.filter(p => p.health > 0)
+  const active = players.filter(player => player.health > 0)
   return active.count()
 }
 ```
