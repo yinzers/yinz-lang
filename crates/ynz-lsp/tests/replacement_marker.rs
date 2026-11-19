@@ -189,7 +189,7 @@ fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
     assert!(
         angle_bracket_hover["contents"]["value"]
             .as_str()
-            .map_or(true, |text| !text.contains("**WHAT INSTEAD**")),
+            .is_none_or(|text| !text.contains("**WHAT INSTEAD**")),
         "hover on the `<` after `array` must not show the `array` promotion hover, got: {angle_bracket_hover}"
     );
 

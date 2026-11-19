@@ -93,7 +93,7 @@ pub fn mark_at_offset<'marks>(
             || text
                 .get(mark.end..)
                 .and_then(|after_token| after_token.chars().next())
-                .map_or(true, char::is_whitespace)
+                .is_none_or(char::is_whitespace)
     })
 }
 
