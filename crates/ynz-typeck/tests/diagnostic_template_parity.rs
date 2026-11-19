@@ -1650,3 +1650,86 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
     assert_compiles(&program("T | nothing"));
     assert_compiles(&program("T | Tiny"));
 }
+
+// ── v0.3-M9 C10 (#387): a `for` loop whose body frees the list it is walking ────────────────
+//
+// The refusal's text comes from its registry template for both ways to free the list (an
+// assignment in the body, a call to a function that assigns), and the copy its WHAT-INSTEAD
+// suggests compiles (Golden Rule 11).
+
+#[test]
+fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment() {
+    // WHY: the text is rendered from the registry, and walking a `.copy()` of the list while the
+    // body assigns the original compiles.
+    let program = |loop_header: &str, before_loop: &str| {
+        format!(
+            "shape Inner {{ rows: array<array<int>> }}\n\
+             shape Outer {{ inner: Inner }}\n\
+             function entrypoint() -> nothing {{\n\
+               let outer: Outer = {{ inner: {{ rows: [[1], [2]] }} }}\n\
+               let total = 0\n\
+               {before_loop}\n\
+               for ({loop_header}) {{\n\
+                 let fresh: Inner = {{ rows: [[9]] }}\n\
+                 outer.inner = fresh\n\
+                 total = total + row[0].or(0)\n\
+               }}\n\
+               print(total)\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::WalkedListWrittenInLoop,
+        &program("row in outer.inner.rows", ""),
+        &[
+            ("loopVariable", "row"),
+            ("walked", "outer.inner.rows"),
+            ("write", "assigns `outer.inner`"),
+            ("released", "outer.inner"),
+            ("copyName", "rowsCopy"),
+        ],
+    );
+    assert_compiles(&program(
+        "row in rowsCopy",
+        "let rowsCopy = outer.inner.rows.copy()",
+    ));
+}
+
+#[test]
+fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
+    // WHY: the call form names the call and the place the callee assigns, in the caller's terms.
+    let program = |loop_header: &str, before_loop: &str| {
+        format!(
+            "shape Holder {{ rows: array<array<int>> }}\n\
+             function reset(lend holder: Holder) -> nothing {{ holder.rows = [[9]] }}\n\
+             function entrypoint() -> nothing {{\n\
+               let holder: Holder = {{ rows: [[1], [2]] }}\n\
+               let total = 0\n\
+               {before_loop}\n\
+               for ({loop_header}) {{\n\
+                 reset(holder)\n\
+                 total = total + row[0].or(0)\n\
+               }}\n\
+               print(total)\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::WalkedListWrittenInLoop,
+        &program("row in holder.rows", ""),
+        &[
+            ("loopVariable", "row"),
+            ("walked", "holder.rows"),
+            (
+                "write",
+                "calls `reset(holder)`, which assigns `holder.rows`",
+            ),
+            ("released", "holder.rows"),
+            ("copyName", "rowsCopy"),
+        ],
+    );
+    assert_compiles(&program(
+        "row in rowsCopy",
+        "let rowsCopy = holder.rows.copy()",
+    ));
+}
