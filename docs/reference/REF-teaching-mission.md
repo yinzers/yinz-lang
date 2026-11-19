@@ -270,9 +270,9 @@ If a feature would make it HARDER for a beginner to understand programming funda
 
 ## How This Interacts with Other Rules
 
-- **Rule 4 (self-documenting)** — surface readability. Teaching mission is the LAYER ABOVE: not just readable, but actively explaining as you read.
-- **Rule 8 (compiler does the hard work)** — performance work. Teaching mission says: also tell the user WHAT you did and WHY.
 - **Rule 3 (compiler is a teacher)** — directly aligned. The teaching mission expands Rule 3 from reactive (errors explain) to proactive (suggestions teach even when code is valid).
+- **Rule 4 (self-documenting)** — surface readability. Teaching mission is the LAYER ABOVE: not just readable, but actively explaining as you read.
 - **Rule 5 (human-readable over jargon)** — language surface. Teaching mission applies the same standard to diagnostic messages.
+- **Rule 8 (compiler does the hard work)** — performance work. Teaching mission says: also tell the user WHAT you did and WHY.
 
 The teaching mission is what ties all the readability/teaching golden rules into a coherent identity. It's the "why" behind Rules 3, 4, and 5.

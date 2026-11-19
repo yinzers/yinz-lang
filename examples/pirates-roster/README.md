@@ -39,7 +39,7 @@ When they ship, they replace the placeholder comments with real demo content.
 
 ## Why this exists
 
-[`.claude/rules/plan-invariants.md`](../../.claude/rules/plan-invariants.md) `### Demo & Error Gallery` subsection: every milestone phase that adds executable surface MUST extend this file with the new feature in context. This is the human-eyes-on layer for the language UX — Patrick reviews each phase's demo to ensure the feature feels right before it ships.
+Every milestone phase that adds executable surface extends `entrypoint.ynz` with the new feature in context. This is the human-eyes-on layer for the language UX — Patrick reviews each phase's demo to ensure the feature feels right before it ships.
 
 ## Companion: `examples/primantis-orders/`
 

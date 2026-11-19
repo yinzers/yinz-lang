@@ -16,8 +16,8 @@
 //
 // Current coverage: M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 (modules, doc comments,
 // sensitive, concurrency keywords, bignum).
-// M4+ sections are added by each milestone's phases per
-// .claude/rules/plan-invariants.md `### Demo & Error Gallery` requirement.
+// M4+ sections are added by each milestone phase that adds executable surface,
+// with the new feature shown in context.
 
 // M8 module imports — bring names from companion modules into scope.
 // Cross-file CALLS ship in v0.2; the syntax and multi-file project structure ship here in v0.1.

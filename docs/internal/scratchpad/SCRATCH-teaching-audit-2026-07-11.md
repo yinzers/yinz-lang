@@ -446,8 +446,8 @@ real weaknesses:
   (spec doctests), H2.4 (parity tests), H2.7 (rule consolidation + reviewer lens), plus the
   bulk text-fix sweep of §§A–F riding on those rails. Multi-phase; touches registry, tests,
   `.claude/rules`, and reviewer charters; front-loaded by one design decision (A1). This is a
-  standalone plan, and per plan-invariants it must itself carry a `### Teaching` subsection —
-  pleasingly recursive.
+  standalone plan, and it must itself carry a `### Teaching` subsection — pleasingly
+  recursive.
 - **Cheap and independent (could ship as an early phase or a small pre-plan fix batch, but
   should still ride the plan for review coverage)**: A4 (`\0` list), B1 rewords (two strings),
   H2.3 (audit widening), H2.6 (Bouncer regexes), the `BackgroundLargeStructCopy` template text

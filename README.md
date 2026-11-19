@@ -8,6 +8,36 @@ For the language specification, see [`docs/reference/REF-language-overview.md`](
 
 ---
 
+## Repository layout
+
+Cargo workspace of 14 crates under `crates/`:
+
+| Crate | Purpose |
+|---|---|
+| `ynz-driver` | The `ynz` compiler CLI (`build`, `run`, `fmt`, `watch`) |
+| `ynz-diagnostics` | Diagnostic types, bucket and [ariadne](https://crates.io/crates/ariadne) rendering |
+| `ynz-ast` | Abstract syntax tree node types |
+| `ynz-parser` | Lexer and parser |
+| `ynz-typeck` | Type checker and name resolver |
+| `ynz-codegen` | LLVM code generation |
+| `ynz-numerics` | IEEE 754 decimal128 implementation, no external crates |
+| `ynz-abi` | Zero-dependency frame-ABI constants shared by `ynz-codegen` and `ynz-runtime` |
+| `ynz-runtime` | C-ABI runtime shims linked into Yinz-compiled binaries: panic handlers, decimal128 bridge, int/float formatting |
+| `ynz-registry` | Parses `registry/features.toml` and generates typed Rust constants at build time |
+| `ynz-lsp` | Language server: JSON-RPC over stdio, backed by salsa queries |
+| `ynz-tmgrammar` | Generates `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from the registry |
+| `ynz-fmt` | Zero-config source formatter, used by `ynz fmt` and LSP format-on-save |
+| `ynz-watch` | Watch daemon: rebuild-on-save for Yinz programs |
+
+Outside `crates/`:
+
+- [`registry/`](registry/) — `features.toml` is the single source of truth for the feature inventories (keywords, banned jargon, intrinsics, deferred features, hint domains).
+- [`docs/`](docs/README.md) — all project documentation; start at [`docs/README.md`](docs/README.md).
+- [`examples/`](examples/README.md) — example Yinz projects.
+- [`tooling/vscode-ynz/`](tooling/vscode-ynz/README.md) — the VSCode extension; it spawns `ynz-lsp`.
+
+---
+
 ## Mental model — two compile steps
 
 There are two separate compilation steps in Yinz:
@@ -46,6 +76,8 @@ Add the `LLVM_SYS_181_PREFIX` export to your shell profile on macOS. On Linux it
 
 **Rust stable toolchain:** Install via [rustup](https://rustup.rs).
 
+**Node.js 22:** needed only to build the VSCode extension in [`tooling/vscode-ynz/`](tooling/vscode-ynz/).
+
 ### Build (do this once per compiler change)
 
 ```
@@ -61,6 +93,37 @@ This produces the compiler binary at `target/release/ynz`. Run again whenever yo
 ```
 ./target/release/ynz --version
 ```
+
+### Dev container
+
+[`docker-compose.yml`](docker-compose.yml) defines a `dev` service (image `ynz-dev`, built from [`Dockerfile`](Dockerfile)). The image holds the full toolchain: Rust (stable, plus nightly with Miri and `rust-src` for the sanitizer lanes), LLVM 18, `cargo-nextest` and Node 22. Compiler build, test and fixture work runs inside this container. The container runs as the `ubuntu` user (uid 1000), so files it writes into the project are owned by host uid 1000.
+
+The bind mount `.:/work` keeps `target/` readable on the host.
+
+```bash
+# Start the dev container (background)
+docker compose up -d dev
+
+# Or run one-shot commands (container exits after each)
+docker compose run --rm dev cargo build --workspace
+docker compose run --rm dev cargo build -p ynz-driver
+docker compose run --rm dev cargo build -p ynz-driver --release
+docker compose run --rm dev cargo build -p ynz-lsp --release
+docker compose run --rm dev cargo test --workspace
+docker compose run --rm dev cargo clippy --workspace -- -D warnings
+docker compose run --rm dev cargo fmt --all
+
+# Run the compiler directly inside a running dev container
+docker compose exec dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
+# → hello, yinz
+
+# VSCode extension build
+docker compose run --rm dev bash -c "cd tooling/vscode-ynz && npm install && npm run build && npx vsce package --no-yarn"
+```
+
+**Cargo registry cache:** stored in the named Docker volume `cargo-registry` (the compose name; Docker prefixes the project name at runtime, so `docker volume ls` shows it as `ynz_cargo-registry`). It is mounted at `/home/ubuntu/.cargo/registry`, so downloaded crates survive container rebuilds. `target/` stays on the host bind mount, never in a named volume.
+
+**`target/release` is a live consumer mount.** External projects (`trading-v4`, `backfillMarketData`) mount `target/release` read-only and run whatever binary is there, at dev time. A fix to `ynz-driver`, `ynz-watch` or `ynz-lsp` that one of those projects needs must be rebuilt with `--release`. A debug build compiles and runs, but it does not update the binary those projects run.
 
 ---
 
@@ -146,12 +209,9 @@ The extension requires the `ynz-lsp` binary on your PATH: `cargo build -p ynz-ls
 
 ## Status
 
-The compiler is in active development. See [`docs/reference/REF-mvp-scope.md`](docs/reference/REF-mvp-scope.md) for the milestone roadmap, and [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) for the (now-shipped) v0.1 implementation plan — active work has moved on to the v0.3 concurrency roadmap, [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
+The compiler is in active development. The current version is **0.3.3** (workspace [`Cargo.toml`](Cargo.toml)). See [`CHANGELOG.md`](CHANGELOG.md) for what each release ships and [`docs/reference/REF-mvp-scope.md`](docs/reference/REF-mvp-scope.md) for the roadmap.
 
-**Current shipped milestones**:
-- M1 ✓ — Hello world end-to-end (tag `v0.1.0-m1`)
-- M2 ✓ — Variables, arithmetic, decimal128 numerics (tag `v0.1.0-m2`)
-- M3 — Control flow + user-defined functions (in progress)
-- M4-M8 — see roadmap
-
-**What works today**: variables (`let`, `const`), arithmetic across `int`/`float`/`number`, `print`, three-part teaching error messages. You can write meaningful programs RIGHT NOW with M2 — try the example above.
+**Shipped so far** (per the changelog):
+- **v0.1** — the core language (M1–M8 language features).
+- **v0.2** — the feature registry, the language server and VSCode extension, `ynz fmt`, and the `ynz watch` rebuild-on-save daemon.
+- **v0.3** — `background` and `wait` concurrency, channels, auto-parallelization, and an LLVM `default<O2>` optimizer pipeline.
