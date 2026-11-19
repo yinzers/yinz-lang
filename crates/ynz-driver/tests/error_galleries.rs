@@ -728,7 +728,10 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
             "store that hands a value over (C5a)",
             "`moved` was stored in `box` and cannot be used here",
         ),
-        ("shape map key (C6)", "A `map` can't be keyed by `Plain` yet"),
+        (
+            "shape map key (C6)",
+            "A `map` can't be keyed by `Plain` yet",
+        ),
         (
             "wide number map key (C6)",
             "A `map` can't be keyed by `number<50>` yet",
