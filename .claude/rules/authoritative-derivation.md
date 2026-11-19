@@ -1,86 +1,25 @@
-# Authoritative Derivation — Thread the One Source, Don't Re-Derive It
-
-**Load when**: designing or reviewing any compiler pass, guard, or codegen path that consumes a
-DERIVED answer another pass already computes — a crossing/suspend set, an ABI/aliasing predicate, an
-admission-gate decision, a "declared-before-`wait`" membership test — or anywhere two or more code
-paths must AGREE on the same computed question.
-
-This is the project-scoped, design-time limb of the global `no-duct-tape.md` #7 / the "Parallel
-Implementation" failure (`~/.claude/docs/reference/REF-no-duct-tape.md` §5). The graveyard catches
-specific greppable *instances* after they ship; this rule stops the *class* at the moment you reach
-for a second derivation.
-
+---
+name: Yinz Authoritative Derivation Protocol
+description: "Applies when compiler or codegen code must agree with another pass on a derived answer: thread the one authoritative value, never re-derive it."
+paths:
+  - crates/ynz-codegen/src/**
+  - crates/ynz-typeck/src/**
 ---
 
-## The rule
+**When two or more code paths must agree on a derived answer, thread the same authoritative value into all of them. Never let a second surface derive its own "equivalent" answer.** Why: a copy that matches today diverges when one call site, value type or intrinsic changes and the twin does not. The failure is silent: wrong output or a wrong-sized frame, with no error at compile time.
 
-> When two or more code paths must agree on a derived question, thread the SAME authoritative
-> value/query into all of them. Never let a second surface re-derive its own "equivalent" answer.
+Before computing an answer that another pass already computes (a suspend set, a frame size, an ABI predicate, a gate decision):
 
-A fresh re-derivation that is *currently equivalent* at today's call sites is exactly what silently
-diverges tomorrow — when a third call site, a new value type, or a new intrinsic changes one
-derivation and not its twin. In this compiler the divergence is usually **silent-wrong** (no crash:
-wrong output across a suspension, or an under/over-sized frame that detonates as SIGILL later), so the
-default is one source, not two "kept in sync by hand."
+1. **Find the authoritative producer and consume its output.** Producers here include `base_suspends`, `crossing_local_names`, `locals_crossing_wait`, `flush_var_slot_to_frame` and the frame-size resolver. Why: one source cannot drift.
+2. **If it is out of reach, plumb it there** (a parameter, a seeded memo, a query), never re-derive a local copy. Why: needing to plumb it is not a reason to fork it.
+3. **If two predicates must stay separate, tie them together**: define one in terms of the other, or add a parity test that asserts they agree. Why: a later edit to one then fails loudly.
 
-## Why this earns its own rule — a four-milestone recurrence
+**Not this:** deriving an answer once, in the pass that owns it, is correct, and so is extending that one producer (a new arm in its dispatch). Forking a second producer is the bug.
 
-The same disease has shipped silent miscompiles across four consecutive milestones:
+**Mirror case:** a precise answer that is computed must be consumed. Otherwise record the coarse choice as a named, deliberate decision. Why: a consumer that quietly does the coarse unconditional thing loses the precision and no test fails.
 
-- **M3a** — two parallel per-type frame-flush dispatches drifted (`number`/`shape`/`string` branches
-  present in one, wrong in the other) → `0.000`/stack-garbage across `wait`; ~10 whack-a-mole rounds.
-- **M3d** — an admission gate re-derived its decline predicate wider than the real suspend set → 11 of
-  17 fixtures silently stopped firing while every output test stayed green.
-- **M3e** — an injected frame-size resolver was bypassed by memo ordering; the re-derived fallback (32)
-  coincided with the resolved value → dead resolver, SIGILL on any non-trivial callee frame.
-- **M3g** — three in one plan: an admission decline re-scanning the AST instead of reading the
-  authoritative `base_suspends` set; a hint pass classifying against a narrower re-derived suspend set
-  instead of codegen's real unioned set; two independently-computed ABI predicates with no
-  compile-time link between them.
+**Specific cases:**
 
-Three of these already have graveyard corpses (see Cross-references). This rule is the design-time
-guard so the fifth occurrence never gets written.
-
-## Apply it
-
-When you catch yourself about to compute "is X in the crossing set?" / "does this suspend?" / "what's
-this callee's frame size?" a SECOND time:
-
-1. **Find the authoritative producer** (`crossing_local_names` / `locals_crossing_wait` /
-   `base_suspends` / codegen's unioned suspend set / `flush_var_slot_to_frame` / the frame-size
-   resolver) and thread ITS output into your consumer.
-2. **If the authoritative value isn't reachable** from where you need it, thread it there — pass it as
-   a parameter, seed the memo before the pass runs, add a query. Do NOT re-derive a local copy because
-   plumbing the real one is inconvenient; the inconvenience is the tell, not the excuse.
-3. **If two predicates genuinely must live apart**, give them a compile-time link — one defined in
-   terms of the other, or a parity test asserting they agree — so a future edit to one breaks loudly
-   instead of drifting silently.
-
-## Not this
-
-Not "never compute a derived value" — deriving it ONCE, in its owning pass, is correct. The ban is on
-the SECOND, parallel derivation of the same question. Extending the single authoritative producer
-(adding a value-type arm inside the one dispatch, a case inside the one analysis) is right; forking a
-second producer is the bug.
-
-## The mirror case — compute the authoritative answer once, then don't ignore it
-
-The disease has a mirror: not a SECOND derivation of the same question, but the authoritative answer
-computed ONCE and then **never consumed** by the pass it was meant to steer — the consumer quietly
-does the coarser unconditional thing instead. Re-derivation drifts *wrong*; underuse forfeits the
-precision *silently* (correct-but-coarse output, so no test fails). Same predicate, both ends:
-when a pass produces a precise authoritative set, the designated downstream consumer must consume it,
-or the coarse-path choice must be a named, recorded decision (a choke-point-contract invariant + a
-tracked deferral). v0.3-M5 shipped this: `soa_candidate_query`'s `hot_fields` was computed by the
-analysis and then ignored by `soa_gather_into`/`array_elem_get_into`, which gather every field
-unconditionally (FRAGO 020 / FR#15). The greppable instance is the graveyard corpse below.
-
-## Cross-references
-
-- Global parent: `no-duct-tape.md` #7 / `REF-no-duct-tape.md` §5 "The Parallel Implementation" — this
-  compiler's analysis passes are a recurring, silent-wrong specialization worth strengthening the
-  global catalog with (flagged to Patrick from the M3g AAR).
-- [`.claude/graveyard.md`](../graveyard.md) "Parallel Per-Type Dispatch / Flat-Scan Re-Derivation in Suspension Codegen"
-- [`.claude/graveyard.md`](../graveyard.md) "Injected Resolver Dead via Memo-Cache Ordering"
-- [`.claude/graveyard.md`](../graveyard.md) "Silent Envelope Narrowing"
-- [`.claude/graveyard.md`](../graveyard.md) "Authoritative Analysis Output Computed But Never Consumed Downstream" (the mirror case — underuse rather than re-derivation)
+- **Answer ownership, escape, aliasing and liveness questions from `crates/ynz-typeck/src/effective_ownership.rs`, never by matching `Expr::` variants at call sites.** Before writing a whole-program predicate, grep `crates/ynz-typeck/src/` for an existing analysis. Why: a call-site match misses the cases the analysis handles and breaks when a variant is added.
+- **In `check.rs`, look up a callee signature in `sig_table.fns`, then `generic_fn_table.fns` (`.or_else`), or reuse `bg_call_return_type_readonly` / `bg_ufcs_return_type`.** Why: a one-table lookup misses a generic callee, so its spawn argument is not admitted and its temporary is freed while the spawned task still uses it (a use-after-free).
+- **Mirror an edit to the type match in `flush_var_slot_to_frame` in `reload_params_from_frame`, for every crossing local and loop variable, not just params.** Why: reload reads the slot in a layout the flush never wrote (a `Number` as a 2-slot i128 against an 8-byte i64), so values come back silently wrong after a `wait`.
