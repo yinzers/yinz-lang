@@ -150,7 +150,7 @@ Single source of truth for all feature inventories. [`registry/features.toml`](.
 
 ### v0.2-M3: `ynz fmt` (active — tag `v0.2.0-m3` pending)
 
-**Locked decisions (2026-05-20):**
+**Locked decisions:**
 - CLI flag set: `ynz fmt <path>`, `--all` (walk `yinz.toml` project), `--check` (CI gate), `--stdin` (editor/LSP pipe)
 - Comment handling: additive `lex_with_trivia()` re-lex pass in `ynz-parser` — captures every `//` + `///` span without altering the existing `lex()` path
 - Registry consumer only: formatter reads keyword spellings, banned-jargon, and reserved-name protection from `ynz-registry`; adds zero new registry entries
@@ -248,7 +248,7 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
-**Co-shipping: `set<T>` core collection** (committed 2026-06-13) — the unique-value collection sibling of `map<K,V>`, plus the `array.unique()` method and the `array<T> → set<T>` auto-promotion. Designed in [`docs/internal/implementation/IMP-collections.md`](../internal/implementation/IMP-collections.md). **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
+**Co-shipping: `set<T>` core collection** — the unique-value collection sibling of `map<K,V>`, plus the `array.unique()` method and the `array<T> → set<T>` auto-promotion. Designed in [`docs/internal/implementation/IMP-collections.md`](../internal/implementation/IMP-collections.md). **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
 
 **Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see [`docs/internal/scratchpad/SCRATCH-future-release-mode.md`](../internal/scratchpad/SCRATCH-future-release-mode.md). May ship in v0.4 alongside the linting work, or slip to a later perf-focused slot if scope demands.
 

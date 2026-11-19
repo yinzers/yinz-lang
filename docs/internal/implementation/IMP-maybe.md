@@ -36,7 +36,7 @@ The earlier milestone plan put `maybe T` in M6 alongside `options`, union types,
 
 Pulling `maybe<T>` into M5 produces the cleanest API: `.get()` returns `maybe<T>` from day 1; no rename, no breaking change. M6 still ships unions / options / narrowing — but `maybe<T>` is structurally a primitive of the type system, not a narrowing case.
 
-Locked 2026-05-17 in [`.claude/planning/done/2026-05-17-m5-generics/plan.md`](../../../.claude/planning/done/2026-05-17-m5-generics/plan.md).
+Locked in [`.claude/planning/done/2026-05-17-m5-generics/plan.md`](../../../.claude/planning/done/2026-05-17-m5-generics/plan.md).
 
 ---
 

@@ -72,7 +72,7 @@ Does NOT work on: shape values. Shapes use dot access for fields, and functions 
 - **Safety preserved:** The sugar still returns `maybe<T>`. The type system enforces handling. Surface looks familiar; semantics stay safe.
 - **No syntax conflict with type parameters:** Different syntax, different position. `array<Player>` is a TYPE (left of equals or in a type annotation); `players[0]` is a VALUE (right of equals or in an expression). TypeScript proved this distinction works for human readers.
 
-**Reverses an earlier decision:** the original `docs/internal/implementation/IMP-collections.md` rejected `map["key"]` notation citing visual ambiguity with `array<Player>` type syntax. That argument was weaker than originally stated — TS does both fine. Reversing for consistency: brackets work universally on all four collection types for read; on map/array/fixed for write.
+Brackets work universally on all four collection types for read; on map/array/fixed for write. Decided: `map["key"]` is allowed (TypeScript does both bracket forms fine).
 
 **Why dot doesn't work on map keys (the real reason):**
 
@@ -99,7 +99,7 @@ Sparse-array growth (JS's `arr[100] = "x"` creating `<97 empty items>`) is rejec
 
 ## Methods Added: `.set()` on `array<T>` and `fixed<T>`
 
-Originally `.set()` only existed on maps. For the bracket-write sugar to work consistently, arrays and fixed arrays also need `.set(index, value)`:
+`.set()` exists on maps, arrays and fixed arrays, so the bracket-write sugar works the same everywhere; arrays and fixed arrays take `.set(index, value)`:
 
 - `array<T>.set(lend self, index: int, value: T) -> nothing` — replace at index. Runtime error if out of bounds.
 - `fixed<T>.set(lend self, index: int, value: T) -> nothing` — same. Index out of bounds is a compile error when the index is a literal AND the size is known; runtime error otherwise.
@@ -187,7 +187,7 @@ If a user genuinely doesn't care about iteration order and wants to skip the ove
 
 ## `set<T>` — Unique-Value Collection (PLANNED — not yet implemented)
 
-> **Status**: Direction locked 2026-06-13; **co-ships with v0.4** (the linting tier) per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `map<K,V>` — NOT a stdlib module.
+> **Status**: Direction locked; **co-ships with v0.4** (the linting tier) per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `map<K,V>` — NOT a stdlib module.
 
 A `set<T>` holds unique values of one type and answers "is value `X` present?" in O(1). It is `map<K,V>` with keys only — same machinery, no values.
 
@@ -450,9 +450,7 @@ For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-S
 
 `array<Shape>` elements are stored **by value, inline** in the array's heap buffer — variable slot
 width = `sizeof(elem)`, exactly like `array<int>` stores i64 values inline. Shipped in v0.3-M5
-(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3), replacing the original uniform-8-byte-slot
-representation that stored shape elements as pointers. Graduated here from
-`SCRATCH-future-array-by-value-element-storage.md` (now a pointer stub).
+(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3); shape elements are no longer stored as pointers.
 
 ### The forcing bug
 

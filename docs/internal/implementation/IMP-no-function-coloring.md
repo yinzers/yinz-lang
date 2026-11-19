@@ -48,7 +48,7 @@ Three things Rust gave up that Yinz keeps:
 3. At every call site to a may-block function, the compiler emits a **suspension point** in the codegen. This is the no-coloring mechanism — automatic, never typed by the user.
 4. The IDE protocol shows the inferred suspension as the muted `wait_points` hint before the call expression.
 
-> **Suspension ≠ the `wait` keyword.** The auto-emitted suspension point above is about *suspension correctness* (handing the thread back to the scheduler) — the user never writes `wait` for it. The user-written `wait` keyword is a separate, additional thing: an **ordering barrier** the user adds to force a happens-before between otherwise-independent operations the compiler can't infer. Both are spelled `wait`, but suspension is automatic and ordering is the keyword's only manual job. The authoritative model is [`docs/internal/implementation/IMP-concurrency.md`](IMP-concurrency.md) → "Suspension vs. Ordering — What's Automatic and What `wait` Does (LOCKED 2026-06-05)".
+> **Suspension ≠ the `wait` keyword.** The auto-emitted suspension point above is about *suspension correctness* (handing the thread back to the scheduler) — the user never writes `wait` for it. The user-written `wait` keyword is a separate, additional thing: an **ordering barrier** the user adds to force a happens-before between otherwise-independent operations the compiler can't infer. Both are spelled `wait`, but suspension is automatic and ordering is the keyword's only manual job. The authoritative model is [`docs/internal/implementation/IMP-concurrency.md`](IMP-concurrency.md) → "Suspension vs. Ordering — What's Automatic and What `wait` Does (LOCKED)".
 
 ### Runtime
 
@@ -57,7 +57,7 @@ Three things Rust gave up that Yinz keeps:
 3. `background` spawns a new task onto the scheduler. Tasks are cheap (state-machine memory, no per-task OS stack).
 4. Cross-thread shared state crosses a `background` boundary via auto-inferred reference-counted sharing — **live since v0.3-M8 Phase 5** for a GROUP of spawns: two or more spawns in one block passing the same whole shape binding, nothing changing it between them, every spawned function proven read-only (`effective_ownership`), and a shape of `int`/`float`/`bool`/`string` fields share ONE block (`ynz_arc_new` at the first spawn, `ynz_arc_clone` per task, the caller's transient released after the last spawn, each task's reference released at retire). A single spawn, a spawn group straddling a suspension point, a spawn inside a loop, and pointer-carrying or `number`-carrying values still cross via the independent-copy path (the compiler infers `.copy`) — correct and race-free; that residual is what the registry entry `auto-arc-codegen-emission` now names. The IDE shows the `auto_arc` muted hint at every member spawn (normal muted style; the cautionary red tint stays under `auto-arc-cautionary-tint` — the caution is in the hover's words). The sharing topology, the beneficial-emission condition, the read-only proof, and the override analysis are specified in [`docs/internal/implementation/IMP-ownership.md`](IMP-ownership.md) "Auto-Arc — Sharing Topology Across `background` Boundaries" (v0.3-M8 Phase 2 design, Phase 5 implementation); the transfer rule for values that LEAVE a frame is the same document's "Transfer — Who Else Holds This Value".
 
-   **P2-6 disposition (the 2026-07-04 concurrency-release audit's "auto-Arc unwired" finding): CLOSED by v0.3-M8 Phase 5.** The emission above is live; the topology is specified (`IMP-ownership.md` "The topology, decided" — (B), one shared copy, N task references, caller keeps its original); `auto-arc-codegen-emission` (`[[deferred_language_feature]]`) is NARROWED to the residual named above rather than deferring the feature, and `auto-arc-cautionary-tint` (`[[deferred_tooling_feature]]`) still defers only the hint's red-tint styling. Anchor: the v0.3-M8 plan's `audit.md` entries `m8-p5-20260904-a1` and `m8-p5-fix2-20260904`; `git log --grep=m8-p5`.
+   **P2-6 disposition (the "auto-Arc unwired" finding): CLOSED by v0.3-M8 Phase 5.** The emission above is live; the topology is specified (`IMP-ownership.md` "The topology, decided" — (B), one shared copy, N task references, caller keeps its original); `auto-arc-codegen-emission` (`[[deferred_language_feature]]`) is NARROWED to the residual named above rather than deferring the feature, and `auto-arc-cautionary-tint` (`[[deferred_tooling_feature]]`) still defers only the hint's red-tint styling. Anchor: the v0.3-M8 plan's `audit.md` entries `m8-p5-20260904-a1` and `m8-p5-fix2-20260904`; `git log --grep=m8-p5`.
 
 ---
 
@@ -218,7 +218,7 @@ When the compiler detects that a `shape` type crosses a thread boundary at a `ba
 
 ## Scheduler Preemption Model — Locked Pre-v0.2
 
-Yinz uses **compile-time-assisted safe-point preemption**: the compiler turns loop back edges inside state-machine functions into real poll-yield suspension points, and the runtime's budget check decides at each one "should I yield to another task" — no async signal-handler infrastructure. The shipped architecture is **three-part** (v0.3-M7 Phase 6, replacing the pre-M7 stub status this section previously documented):
+Yinz uses **compile-time-assisted safe-point preemption**: the compiler turns loop back edges inside state-machine functions into real poll-yield suspension points, and the runtime's budget check decides at each one "should I yield to another task" — no async signal-handler infrastructure. The shipped architecture is **three-part** (v0.3-M7 Phase 6):
 
 ### The three-part shipped architecture (v0.3-M7)
 
@@ -314,7 +314,7 @@ This falls out of what's already locked:
 
 ---
 
-## Sleep Intrinsics — Naming & Blocking-vs-Yielding Teaching — DECIDED 2026-06-01
+## Sleep Intrinsics — Naming & Blocking-vs-Yielding Teaching — Decided
 
 There are two sleep intrinsics, distinguished by what they do to the OS thread:
 
@@ -332,7 +332,7 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 | **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`. **SHIPPED and confirmed live** (v0.3-M1, re-verified v0.3-M6): the `Expr::Wait` arm (`crates/ynz-typeck/src/check.rs:2726-2732`) rejects `wait <anything>` before recursing into the callee, so `wait sleep(ms)` produces exactly this diagnostic, with WHAT-INSTEAD "Remove the keyword or build without `--kernel`." A bare `sleep(ms)` with no `wait` (a separate, also-live arm, `check.rs:3108-3118`) gets the more specific WHAT-INSTEAD "Use `sleepBlocking` for blocking sleep." The same kernel-mode-suspension rejection also covers every bare auto-suspending user-function call (`check.rs:3234-3241`) and its UFCS dot-call form (`check.rs:4849-4857`) — under the no-coloring model, ALL suspending calls, not just explicit `wait`, are rejected under `--kernel`. See [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md). |
 | **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. **SHIPPED v0.3-M4** (rides the `[[lint_rule]]` infra built there, kernel-gated off; M4's `background` handle-form also removed the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent ([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)). |
 
-Execution was tracked in [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md) ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope); the normal-mode lint shipped in v0.3-M4, and the `--kernel` compile-error row above is likewise live (corrected v0.3-M6 — it previously read as still-reserved; direct read of `check.rs` this session confirmed the rejection arms are shipped, not pending).
+Execution was tracked in [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md) ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope); the normal-mode lint shipped in v0.3-M4, and the `--kernel` compile-error row above is likewise live (the rejection arms in `check.rs` are shipped, not pending).
 
 ---
 

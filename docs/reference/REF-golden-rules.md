@@ -32,7 +32,7 @@ Before applying the 13 rules, internalize this: **Yinz is data shapes + standalo
 
 This is a deliberate alignment with Rust/Go (zero per-instance method storage; ownership tracking simpler) and away from Java/Swift (no implicit `this` binding; no virtual dispatch by default). The TypeScript-friendly part is preserved by UFCS — `player.heal(20)` reads like a TS method call but compiles to the standalone function `heal(player, 20)`.
 
-Locked r10–r13 (2026-05-16). Full discussion: [`.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md`](../../.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md) Reviewer Disputes rounds 10–13. Canonical rule: [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md).
+Canonical rule: [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md).
 
 When the 13 rules below mention "method" or "dispatch," apply them with the non-OOP interpretation: methods are functions; today, dispatch is by function name alone (each name unique per file) plus contract-table lookup for `dynamic Foo` — overload resolution by argument type is planned but not yet implemented (v0.1), see [`IMP-type-system.md`](../internal/implementation/IMP-type-system.md#no-override-keyword-function-overloading-by-argument-type-is-not-implemented-v01).
 
@@ -110,7 +110,7 @@ High-level syntax compiles to what a careful Rust/C++ programmer would write by 
 - The "hand-written low-level" benchmark is "what would a careful Rust/C++/Zig programmer write," not "the absolute theoretical minimum." Memory safety has a cost — that cost is the bar; not zero.
 - **A design that costs more than hand-written code needs Chief's confirmation, recorded in the commit and the feature's IMP design doc.** Rule 6 is not a softer "zero-cost".
 
-This clarification was added 2026-05-14 after the design-lockdown conversation surfaced the risk that auto-inferred features (auto-Arc for cross-thread shared state, auto-wait for I/O) might be mistaken for zero-cost violations. They aren't — the cost is in the underlying feature, not the inference.
+Auto-inferred features (auto-Arc for cross-thread shared state, auto-wait for I/O) are not zero-cost violations: the cost is in the underlying feature, not the inference.
 
 ---
 

@@ -21,8 +21,7 @@ User spec: [`docs/reference/REF-types.md`](../../reference/REF-types.md), [`docs
 
 `shape` is the only declaration keyword. No `interface`, `struct`, `class`, `type`.
 
-**Why**: Three keywords for three overlapping concepts confuses junior developers. `shape` handles all cases: plain data shapes, shapes used as contracts (with bare-signature declarations only — no bodies), shapes that extend other shapes for data reuse. One concept, one word. The word `type` is banned at the lexer level (declaration-keyword diagnostic redirects to `shape`) because "type" is also the generic English word for a category — keeping it as a keyword would constantly conflict with that broader usage. Locked in design-lockdown (2026-05-14).
-
+**Why**: Three keywords for three overlapping concepts confuses junior developers. `shape` handles all cases: plain data shapes, shapes used as contracts (with bare-signature declarations only — no bodies), shapes that extend other shapes for data reuse. One concept, one word. The word `type` is banned at the lexer level (declaration-keyword diagnostic redirects to `shape`) because "type" is also the generic English word for a category — keeping it as a keyword would constantly conflict with that broader usage.
 > Yinz is **NOT object-oriented** — see [`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md). Shapes hold DATA + (optionally) CONTRACT METHOD-SIGNATURE DECLARATIONS only. Method implementations live as standalone `function` declarations at file/module level. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). The sections below describe the type system within this non-OOP model.
 
 ---
@@ -31,7 +30,7 @@ User spec: [`docs/reference/REF-types.md`](../../reference/REF-types.md), [`docs
 
 Single inheritance only. `extends` reuses parent's DATA FIELDS — behavior comes from standalone functions, not from inherited methods (because there are no methods on shapes to inherit). No multiple inheritance.
 
-**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; behavior polymorphism per-shape is planned to eventually work via argument-type overloading, but **that dispatch mechanism is not implemented in v0.1** — see the correction below ("No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)"). For shared behavior contracts, `follows` handles any number of contracts. Locked r10 (2026-05-16).
+**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; behavior polymorphism per-shape is planned to eventually work via argument-type overloading, but **that dispatch mechanism is not implemented in v0.1** — see the correction below ("No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)"). For shared behavior contracts, `follows` handles any number of contracts.
 
 **Example** (v0.1-valid — distinct function names, since same-named functions in one file are a compile error; see the correction below):
 ```ynz
@@ -76,7 +75,7 @@ w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an 
 
 ## No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)
 
-There is no `override` keyword in Yinz — methods don't live inside shapes ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), so there's nothing to "override." **Correction (2026-07-16, audit finding TS2):** earlier revisions of this doc additionally described **function overloading by argument type** ("write multiple standalone functions with the same name but different first-parameter types; the compiler picks the most specific match") as the shipped replacement mechanism. That was aspirational, not actual — the v0.1 typeck function-declaration collision check (`crates/ynz-typeck/src/signatures.rs`) keys the signature table by function **name alone** and unconditionally rejects a second same-named function in the same file, regardless of its parameter types:
+There is no `override` keyword in Yinz — methods don't live inside shapes ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), so there's nothing to "override." **Function overloading by argument type** (several standalone functions with the same name but different first-parameter types) is not implemented: the v0.1 typeck function-declaration collision check (`crates/ynz-typeck/src/signatures.rs`) keys the signature table by function **name alone** and unconditionally rejects a second same-named function in the same file, regardless of its parameter types:
 
 ```ynz
 shape Entity { name: string }
@@ -90,8 +89,6 @@ function attack(share self: Warrior) -> string { return self.name + " swings " +
 **Actual v0.1 behavior**: two functions sharing a name in the same file is a compile error no matter how their parameter types differ. `extends` gives a child shape its parent's *fields* only ([data-only inheritance](#single-inheritance-with-extends-data-only)) — it does not give call sites polymorphic dispatch over a shared function name. The polymorphism mechanisms in v0.1 are **generics** (static dispatch through monomorphization) and **`dynamic Contract`** (runtime dispatch, see [Dynamic dispatch](#dynamic-dispatch--when-and-how)).
 
 **Status**: overload-by-argument-type dispatch is now tracked as a deferred language feature, not a shipped one — see the `function-overload-by-argument-type` `[[deferred_language_feature]]` registry entry in [`registry/features.toml`](../../../registry/features.toml) for the WHY/SUBSTITUTE/SHIPS_IN/DESIGN_DOC deferral fields. Until it ships, give overload-shaped functions distinct names (e.g. `attackEntity`/`attackWarrior`) or reach for generics.
-
-Locked r10 (2026-05-16). Replaces the previously-locked `override` keyword which is now removed entirely.
 
 ---
 
