@@ -13,7 +13,7 @@ metadata:
 
 # GPU Dispatch — Vision Document
 
-**Status: MVP2+. Not in initial release. Documented here to preserve the design direction.**
+**Status: designed, not built (MVP2+). The `gpu` keyword, every `gpu` call and every function in the examples below (`matrix.correlate`, `tensor.transform`, `shader.phong` and the rest) are illustrative: none exists today.**
 
 ---
 
@@ -38,14 +38,14 @@ let prices: Array<Float> = loadMarketData()
 let signals: Array<Float> = loadSignals()
 
 // CPU operation — small data, stays on CPU
-let avg = math.average(prices.take(100))
+let avg = math.average(prices.limit(100))
 
 // GPU operation — massive data, compiler dispatches to GPU
 let correlations = gpu matrix.correlate(prices, signals)
 // compiler handles: allocate GPU memory → copy data → execute → copy back
 
 // Mix freely — compiler manages the data transfer
-let filtered = correlations.where(c => c > 0.8)    // back on CPU
+let filtered = correlations.filter(c => c > 0.8)   // back on CPU
 let ranked = filtered.sort(c => c, desc)             // CPU
 
 // Developer writes linear code. Compiler shuffles data between CPU and GPU.
@@ -75,9 +75,9 @@ The same proof that prevents data races in CPU concurrency can prevent GPU/CPU d
 function analyzeMarket(share data: MarketData) -> Array<Signal> errors {
   let correlations = gpu matrix.correlate(data.prices, data.volumes)
   let features = gpu tensor.transform(correlations, data.indicators)
-  let signals = features.where(f => f.strength > threshold)
+  let signals = features.filter(f => f.strength > threshold)
   let backtested = gpu simulate(signals, data.history)
-  return backtested.where(b => b.profitable)
+  return backtested.filter(b => b.profitable)
 }
 ```
 
