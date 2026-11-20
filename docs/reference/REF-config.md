@@ -19,6 +19,8 @@ A `yinz.toml` file in your project root names your project and says which file s
 
 ## yinz.toml
 
+The file has one `[project]` section with three fields:
+
 ```toml
 # yinz.toml
 
