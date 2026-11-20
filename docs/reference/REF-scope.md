@@ -22,7 +22,7 @@ Variables are block-scoped. File-level declarations are constants only.
 A variable lives only inside the block where it's declared. Once the block ends, the variable is gone:
 
 ```
-function process() -> nothing {
+function process() -> Nothing {
   let x = 10                         // lives for the whole function
 
   if (condition) {
@@ -55,11 +55,11 @@ const MAX_HEALTH = 100
 const MIN_HEALTH = 0
 const RESPAWN_TIME = duration.seconds(5)
 
-function heal(lend player: Player) -> nothing {
+function heal(lend player: Player) -> Nothing {
   player.health = MAX_HEALTH          // accessible
 }
 
-function isDead(share player: Player) -> boolean {
+function isDead(share player: Player) -> Boolean {
   return player.health <= MIN_HEALTH  // accessible
 }
 ```
@@ -82,7 +82,7 @@ File-level constants can use pure function calls as long as all inputs are const
 const RESPAWN_TIME = duration.seconds(5)
 const MAX_AREA = math.PI * 100 * 100
 const GREETING = `Hello world`
-const GRAVITY: float = 9.81
+const GRAVITY: Float = 9.81
 ```
 
 Calls that depend on runtime information are not valid:
@@ -104,7 +104,7 @@ Export a constant to share it across files:
 // constants.ynz
 export const MAX_HEALTH = 100
 export const API_URL = `https://api.example.com`
-export const GRAVITY: float = 9.81
+export const GRAVITY: Float = 9.81
 
 // anywhere else in the project
 import { MAX_HEALTH } from `constants`

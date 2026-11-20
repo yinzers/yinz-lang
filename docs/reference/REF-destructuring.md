@@ -45,8 +45,8 @@ Use `as` when the field name would conflict with an existing variable or when a 
 ## Nested destructuring
 
 ```
-shape Position { x: number, y: number }
-shape Player { name: string, health: number, position: Position }
+shape Position { x: Number, y: Number }
+shape Player { name: String, health: Number, position: Position }
 
 let { name, position: { x, y } } = player
 print(x)    // player.position.x
@@ -60,7 +60,7 @@ print(y)    // player.position.y
 Destructure directly in the parameter list instead of assigning inside the function body:
 
 ```
-function greet({ name, health }: Player) -> string {
+function greet({ name, health }: Player) -> String {
   return `${name} has ${health} HP`
 }
 

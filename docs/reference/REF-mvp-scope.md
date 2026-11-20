@@ -199,7 +199,7 @@ Single source of truth for all feature inventories. [`registry/features.toml`](.
 - Structured `Diagnostic.code` + `Diagnostic.data` fields; doc-comment hover enrichment
 
 **3 compiler correctness bug-fixes**:
-- Hidden-field default eval: `hidden bar: string = "default"` now evaluates the default correctly (was null-init)
+- Hidden-field default eval: `hidden bar: String = "default"` now evaluates the default correctly (was null-init)
 - Dynamic-dispatch call-site coercion: passing `ConcreteFoo` to `dynamic Foo` param now accepted + vtable-dispatches correctly (was typeck error)
 - UFCS const-lend check: `const p; p.heal(20)` where `heal: lend self` now errors (parity with function-call form which already errored)
 

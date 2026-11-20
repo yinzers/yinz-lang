@@ -20,15 +20,15 @@ Variables store values. Declare them with `let` or `const`.
 ## let — a variable you can change
 
 ```
-let name: string = `Patrick`
-let health: number = 100
-let score: number = 0
+let name: String = `Patrick`
+let health: Number = 100
+let score: Number = 0
 ```
 
 You can give a `let` variable a new value after you create it:
 
 ```
-let health: number = 100
+let health: Number = 100
 health = health - 25    // fine — health is now 75
 ```
 
@@ -37,14 +37,14 @@ health = health - 25    // fine — health is now 75
 ## const — a variable that never changes
 
 ```
-const maxPlayers: number = 10
-const serverName: string = `prod-01`
+const maxPlayers: Number = 10
+const serverName: String = `prod-01`
 ```
 
 You cannot give a `const` a new value after you create it:
 
 ```
-const maxPlayers: number = 10
+const maxPlayers: Number = 10
 maxPlayers = 20
 // COMPILE ERROR: `maxPlayers` cannot be changed — it was declared with `const`.
 ```
@@ -78,9 +78,9 @@ The compiler rejects all three at compile time. `const` is a complete promise �
 Inside a function body, you don't have to write a type when it is obvious from the value:
 
 ```
-let playerCount = 42    // the compiler knows: int
-let name = `Patrick`    // the compiler knows: string
-let active = true       // the compiler knows: boolean
+let playerCount = 42    // the compiler knows: Int
+let name = `Patrick`    // the compiler knows: String
+let active = true       // the compiler knows: Boolean
 ```
 
 The IDE still shows the type when you hover. You just don't have to write it.
@@ -88,7 +88,7 @@ The IDE still shows the type when you hover. You just don't have to write it.
 You must write types at the edges of a function: its parameters, its return type, and shape definitions. Inside the body you can leave them out:
 
 ```
-function addScores(firstScore: number, secondScore: number) -> number {
+function addScores(firstScore: Number, secondScore: Number) -> Number {
   let total = firstScore + secondScore    // no type needed — fine
   return total
 }
@@ -101,9 +101,9 @@ function addScores(firstScore: number, secondScore: number) -> number {
 You cannot declare a variable without giving it a value:
 
 ```
-let name: string
+let name: String
 // COMPILE ERROR: `name` declaration is missing `=`.
 // Write: `let name = value`
 ```
 
-If a value might not exist, use a `maybe` type — see [Maybe Types](REF-maybe.md).
+If a value might not exist, use a `Maybe` type — see [Maybe Types](REF-maybe.md).

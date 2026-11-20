@@ -35,7 +35,7 @@ There is no `else` block. Instead, handle one case and return, then let the code
 
 ```
 // Return early
-function describe(share player: Player) -> string {
+function describe(share player: Player) -> String {
   if (player.health <= 0) {
     return `dead`
   }
@@ -63,7 +63,7 @@ Two patterns, zero `else` blocks. Your code stays flat and easy to read.
 Handle the unusual cases first and return. The normal path then stays at the left edge with no extra indenting:
 
 ```
-function processPlayer(lend player: Player) -> nothing {
+function processPlayer(lend player: Player) -> Nothing {
   if (player.health <= 0) {
     return
   }

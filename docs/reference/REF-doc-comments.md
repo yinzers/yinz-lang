@@ -25,7 +25,7 @@ Regular `//` comments are for readers of the source only. The IDE ignores them.
 /// Fetches a user by their unique ID.
 /// Returns none if the user doesn't exist.
 /// Errors on database connection failure.
-export function fetchUser(id: UserId) -> maybe<User> errors {
+export function fetchUser(id: UserId) -> Maybe<User> errors {
   // This note is a regular comment — never shows in hover
 }
 ```
@@ -42,9 +42,9 @@ Put a `///` block above the shape, and above any field you want to document:
 /// Represents a player in the game world.
 export shape Player {
   /// The player's display name.
-  name: string
+  name: String
   /// Current health, from 0 to 100. Never negative.
-  health: int
+  health: Int
   /// Where the player stands in the game world, in meters.
   position: Position
 }
@@ -84,12 +84,12 @@ A blank line between the comment and the declaration breaks the association. The
 ```ynz
 /// This will NOT show as a doc comment — blank line breaks it.
 
-export function greet(share self: Player) -> string {
+export function greet(share self: Player) -> String {
 ```
 
 ```ynz
 /// This WILL show as a doc comment — immediately above with no gap.
-export function greet(share self: Player) -> string {
+export function greet(share self: Player) -> String {
 ```
 
 ---
@@ -99,7 +99,7 @@ export function greet(share self: Player) -> string {
 Use `//` inside a function body. It is always a private note for people reading the file — never a doc comment.
 
 ```ynz
-export function countActive(share players: array<Player>) -> int {
+export function countActive(share players: Array<Player>) -> Int {
   // This is only visible when reading this file
   const active = players.filter(player => player.health > 0)
   return active.count()
