@@ -20,12 +20,12 @@ Design document for the language and toolchain the Yinz compiler is built with. 
 ## Stack
 
 - **Language:** Rust (stable channel).
-- **Build:** Cargo workspace; the compiler is split into crates (`ynz-ast`, `ynz-parser`, `ynz-typeck`, `ynz-mir`, `ynz-codegen`, `ynz-driver`).
+- **Build:** Cargo workspace; the compiler is split into crates under `crates/`: `ynz-ast`, `ynz-parser`, `ynz-typeck`, `ynz-codegen`, `ynz-runtime`, `ynz-driver` (the `ynz` CLI), `ynz-lsp`, `ynz-fmt`, `ynz-watch`, `ynz-diagnostics`, `ynz-registry`, `ynz-numerics` and `ynz-abi`.
 - **Parser:** hand-written recursive descent, not a parser generator.
 - **Diagnostics:** `ariadne` renders errors with spans and suggestions.
 - **Incremental computation:** `salsa` (the framework `rust-analyzer` is built on) gives incremental builds and the LSP architecture.
 - **LLVM codegen:** `inkwell`, a safe LLVM wrapper with no runtime cost over the C++ API.
-- **Later, optional:** `cranelift` as a fast-debug-build backend.
+- **Designed, not built:** `cranelift` as an optional fast-debug-build backend.
 
 ---
 
@@ -45,7 +45,7 @@ The cost is more parser code than a declared grammar; the error-message quality 
 
 The compiler binary ships two frontends:
 
-1. **`ynz` CLI:** `ynz build`, `ynz run`, `ynz test`.
+1. **`ynz` CLI:** `ynz build`, `ynz run`, `ynz fmt` and `ynz watch` ship; `ynz test` is designed, not built ([`IMP-testing.md`](IMP-testing.md)).
 2. **`ynz-lsp`:** the language server for editors (autocomplete, hover, go-to-definition, rename, inline errors).
 
 Both run the same work (parse, type-check, analyze). Salsa is a demand-driven query framework: queries such as `parse(file_id) -> AST` and `type_of(node_id) -> Type` are memoized and their dependents are invalidated when inputs change. One code path serves both frontends, so the LSP exposes existing queries over JSON-RPC and no second pipeline exists. Salsa is in from day 1; adding it later would be a large retrofit.
