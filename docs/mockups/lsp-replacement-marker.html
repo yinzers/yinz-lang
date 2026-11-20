@@ -210,7 +210,7 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
           <div class="anchor" style="left:1ch;top:95px"><div class="caret"></div></div>
           <div class="anchor" style="left:16ch;top:57px"><svg class="ptr" width="14" height="21" viewBox="0 0 14 21" aria-hidden="true"><path d="M1 1v16l4-4 3 7 2.5-1-3-6.6H13z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg><div class="hover" role="tooltip">
   <p><strong>WHAT:</strong> The compiler stores this value as a fixed-size <code>fixed&lt;T&gt;</code> instead of a growable <code>array&lt;T&gt;</code>, because nothing in this function ever grows it.</p>
-  <p><strong>WHAT INSTEAD:</strong> Write <code>fixed</code> instead of <code>array</code> in the annotation, for example <code>let nums: fixed&lt;int&gt; = [1, 2, 3]</code>, or use the "Write 'fixed' instead of 'array'" action on the underlined word. If you do need to add items later, keep <code>array</code>.</p>
+  <p><strong>WHAT INSTEAD:</strong> Write <code>Fixed</code> instead of <code>Array</code> in the annotation, for example <code>let nums: Fixed&lt;Int&gt; = [1, 2, 3]</code>, or use the "Write 'Fixed' instead of 'Array'" action on the underlined word. If you do need to add items later, keep <code>Array</code>.</p>
   <p><strong>WHY:</strong> A fixed-size list never has to grow, so it is cheaper to create and use than a growable <code>array</code>, and writing <code>fixed</code> tells readers its size will not change.</p>
 </div></div>
         </div>
@@ -281,7 +281,7 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
           <div class="anchor" style="left:18ch;top:38px"><div class="caret"></div></div>
           <div class="anchor" style="left:16ch;top:57px"><div class="actions" role="menu">
   <div class="hdr">Rewrite</div>
-  <div class="item focused" role="menuitem"><span class="ci">&#xeb65;</span>Write &#39;fixed&#39; instead of &#39;array&#39;</div>
+  <div class="item focused" role="menuitem"><span class="ci">&#xeb65;</span>Write &#39;Fixed&#39; instead of &#39;Array&#39;</div>
 </div></div>
         </div>
       </div>
