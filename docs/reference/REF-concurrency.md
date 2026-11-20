@@ -291,7 +291,7 @@ if (late.failed()) {
 - A send that was already waiting for room when the channel closed still goes through. Close means no *new* sends. It does not throw away what was already on its way.
 - A channel you never close keeps working as before: `.receive()` waits until a value arrives.
 
-`.close()` never pauses your task and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a handle. If you started a task with `let h = background worker(commands)`, you close `commands`, not `h`. For that reason the handle form needs the channel stored in a named variable:
+`.close()` never pauses your task and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a handle. If you started a task with `let scout = background worker(commands)`, you close `commands`, not `scout`. For that reason the handle form needs the channel stored in a named variable:
 
 ```
 let h = background doubler(makeWire())
