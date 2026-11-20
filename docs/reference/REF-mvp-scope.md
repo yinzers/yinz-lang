@@ -200,7 +200,7 @@ Single source of truth for all feature inventories. [`registry/features.toml`](.
 
 **3 compiler correctness bug-fixes**:
 - Hidden-field default eval: `hidden bar: String = "default"` now evaluates the default correctly (was null-init)
-- Dynamic-dispatch call-site coercion: passing `ConcreteFoo` to `dynamic Foo` param now accepted + vtable-dispatches correctly (was typeck error)
+- Dynamic-dispatch call-site coercion: passing `ConcreteFoo` to a `dynamic Foo` parameter is now accepted by the type checker (was a type error). Calling a function through the `dynamic` value does not compile yet: codegen reports "dynamic dispatch call sites not yet lowered"
 - UFCS const-lend check: `const p; p.heal(20)` where `heal: lend self` now errors (parity with function-call form which already errored)
 
 **Tooling**:
