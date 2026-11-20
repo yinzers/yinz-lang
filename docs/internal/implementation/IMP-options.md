@@ -127,17 +127,18 @@ When the scrutinee is a union of two options types (`OptionsA | OptionsB`), the 
 
 ## Single/Empty-Variant Rejection
 
-`options Foo { }` (empty) and `options Foo { only_one }` (single variant) are compile errors:
+`options Foo { }` (empty) and `options Foo { onlyOne }` (single variant) are compile errors. The single-variant error reads:
 
 ```
-COMPILE ERROR: options types need at least 2 variants.
+`options Foo` has only 1 variant — options types need at least 2.
 
-  WHAT INSTEAD: Add a second variant, or use a const if you only need one named value:
-    const ONLY_ONE: Int = 0
+  WHAT INSTEAD: Add a second variant, or use a const if you only need one named value.
 
-  WHY: A single-variant options type has only one possible value — it carries no
-  information. It's almost always the wrong tool.
+  WHY: A single-variant options type has only one possible value and carries no
+  information. It is almost always the wrong tool.
 ```
+
+The empty form reports `` `options Foo` has no variants. `` with the hint ``Add at least 2 variants: `options Status { active, inactive }` ``. Both come from `collect_options` in `crates/ynz-typeck/src/options_table.rs`.
 
 Symmetric with single-variant union rejection (`shape S = A` is also an error).
 

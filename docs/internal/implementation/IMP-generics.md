@@ -54,14 +54,14 @@ Same bracket convention used everywhere else parameterized types appear:
 
 | Use | Syntax |
 |-----|--------|
-| Generic type | `type Pair<A, B> { ... }` |
+| Generic type | `shape Pair<A, B> { ... }` |
 | Generic function | `function pair<A, B>(...) -> Pair<A, B>` |
 | Parameterized type instance | `Array<Player>`, `Map<String, Int>`, `Number<70>` |
 | Type parameter constraint | `function sort<T follows Comparable>(...)` |
 
 One syntax. Angle brackets everywhere for type parameters.
 
-**Why `<>` not `[]`**: `[]` is already used for index access (`arr[0]`, `map["key"]`). Using `[]` for type parameters too creates ambiguity — `json.parse[User](raw)` reads as array indexing, not a type parameter. `<>` is unambiguous: `<>` always means type parameter, `[]` always means index. Also consistent with TypeScript (Golden Rule 12 — borrow familiar syntax).
+`<>` always means type parameter and `[]` always means index (`arr[0]`), so a call like `json.parse<User>(raw)` is never read as indexing. Golden Rule 12 (familiar syntax) also favours `<>`.
 
 ---
 
@@ -75,21 +75,7 @@ function sort<T follows Comparable>(share items: Array<T>) -> Array<T> { ... }
 function process<T follows Comparable, Serializable>(share item: T) -> String { ... }
 ```
 
-**Why inline over a separate `where` clause:**
-
-```ynz
-// Inline (chosen):
-function sort<T follows Comparable>(share items: Array<T>) -> Array<T> { ... }
-
-// Where clause (rejected):
-function sort<T>(share items: Array<T>) -> Array<T> where T follows Comparable { ... }
-```
-
-The inline form keeps the constraint visible right next to the type parameter — the reader's eyes don't have to jump to a separate location. Rust adopted `where` clauses because Rust constraints got very complex (lifetimes + multiple traits + associated types + higher-ranked bounds). Yinz won't have that complexity in v0.1 or even v1.0 — keep it inline.
-
-Golden Rule 4 (self-documenting syntax) and Golden Rule 13 (fast to read/type) both favor inline.
-
-If/when Yinz constraints become complex enough to warrant a where clause (deep into v2+), we can revisit. Until then, inline.
+There is no separate `where` clause: the constraint sits next to the type parameter it limits, so the reader finds it without looking elsewhere (Golden Rules 4 and 13).
 
 ---
 
@@ -102,9 +88,8 @@ The compiler infers type parameters from argument types at the call site. Users 
 let x = identity(5)                    // T inferred as Int
 let p = pair("alice", 42)              // A=String, B=Int inferred
 let sorted = sort(players)             // T inferred as Player
-let unique = dedupe([1, 2, 1, 3])      // T inferred as Int
 
-// Explicit only when ambiguous or no args:
+// Explicit only when no argument carries T (createList is a function you define):
 let empty = createList<Player>()       // no args, T must be specified
 ```
 
@@ -114,6 +99,8 @@ This matches Rule 8 (compiler does the hard work) — jr devs don't write `<T>` 
 
 ## Compile errors
 
+A constraint is checked at each call. The compiler text lives in `crates/ynz-typeck/src/check.rs` (the `follows` constraint loop, near "Verify follows constraints"):
+
 ```ynz
 function sort<T follows Comparable>(share items: Array<T>) -> Array<T> { ... }
 
@@ -121,32 +108,25 @@ shape Player { name: String, health: Number }
 
 let players: Array<Player> = [...]
 let sorted = sort(players)
-//
-// COMPILE ERROR: Type Player does not follow contract Comparable.
-//
-//   sort<T follows Comparable> requires T to follow Comparable, but Player
-//   does not implement it. To make Player sortable, add a follows clause:
-//
-//     type Player follows Comparable { ... }
-//
-//   Then implement the required compare() method. See docs/reference/REF-operators.md.
+// COMPILE ERROR: Type `Player` does not follow contract `Comparable`.
+//   WHAT INSTEAD: To use `Player` here, add `follows Comparable` to its declaration AND implement the required methods.
+//   WHY: `sort<T follows Comparable>` requires the concrete type to satisfy the `Comparable` contract.
 ```
 
+A type argument that is not a shape (for example `Array<Int>` where `T follows Comparable`) fails with ``Type `Int` does not follow contract `Comparable` — only shapes can follow contracts.``
+
+A type parameter no argument can bind is an error too:
+
 ```ynz
+function identity<T>(give value: T) -> T { return value }
+
 let x = identity()
-//
-// COMPILE ERROR: Cannot infer type parameter T for function identity.
-//
-//   identity<T>(value: T) -> T needs a value to infer T from, but no
-//   arguments were passed. Either pass a value:
-//
-//     let x = identity(5)              // T inferred as Int
-//
-//   Or specify T explicitly:
-//
-//     let x: Int = identity<Int>()     // explicit type — but identity()
-//                                       // with no args has no meaning
+// COMPILE ERROR: Cannot work out the type parameter `T` for function `identity` — pass a value or annotate explicitly.
+//   WHAT INSTEAD: Examples: `identity(5)` (T = int) or `identity<Int>()`
+//   WHY: Yinz figures out type parameters from the argument types. If there are no arguments, specify the type explicitly.
 ```
+
+The text above is copied from the compiler source; it was not run through `ynz build` in this pass (the elided `{ ... }` bodies are not compilable as written).
 
 ---
 

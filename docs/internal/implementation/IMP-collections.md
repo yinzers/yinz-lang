@@ -353,7 +353,7 @@ When stability matters in real code:
 
 When stability doesn't matter (so unstable wins on speed AND memory):
 - Sorting primitives — equal numbers are interchangeable, no original order between two `5`s
-- Sorting then immediately discarding (e.g., `.sort().first()` to find the minimum)
+- Sorting then reading only the first element (e.g., sort, then take element 0 to find the minimum)
 - Any collection where equal items are truly fungible
 
 The auto-promotion pattern (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)) applies: when the compiler can detect a sort target is a `Fixed<T>` of a primitive type AND the sorted result isn't passed to anything depending on stability, the IDE shows a Tier 3 lint suggestion `prefer-unstable-sort-for-numeric-collections` recommending `.sortUnstable()` for the perf win. No codegen auto-swap (semantics differ — different equal-keyed element ordering); user makes the call.

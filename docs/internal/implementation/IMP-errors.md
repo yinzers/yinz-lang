@@ -160,9 +160,9 @@ Example from the db module:
 shape DatabaseError {
     summary: String             // short human-readable description
     suggestions: Array<String>  // what to do about it
-    code: String | null         // raw driver error code (e.g. Postgres "23505")
-    query: String | null        // sanitized query that failed
-    detail: String | null       // full driver-level message
+    code: Maybe<String>         // raw driver error code (e.g. Postgres "23505")
+    query: Maybe<String>        // sanitized query that failed
+    detail: Maybe<String>       // full driver-level message
 }
 ```
 
