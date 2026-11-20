@@ -6,11 +6,11 @@
 // Expected output: the name, unchanged.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tag: Tag = { name: `x-${1}`, id: 1 }
   tag.name = tag.name
   print(tag.name)

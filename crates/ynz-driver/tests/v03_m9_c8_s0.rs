@@ -126,15 +126,15 @@ green_fixture!(
 /// retires the task while it is Pending. The ladder frees the `give` argument; the locals in the
 /// frame (`mine`, `label`) are freed by nobody.
 const DROPPED_AT_SHUTDOWN: &str = "
-function worker(give rows: array<int>) -> nothing {
-  let mine: array<int> = [1, 2]
-  let label: string = `x`.toUpperCase()
+function worker(give rows: Array<Int>) -> Nothing {
+  let mine: Array<Int> = [1, 2]
+  let label: String = `x`.toUpperCase()
   wait sleep(500)
   print(`child done`)
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [10, 20, 30]
   background worker(rows)
   print(`parent`)
 }
@@ -150,19 +150,19 @@ green_program!(
 /// The Pending task is parked inside a nested suspending callee, so the locals sit in a child
 /// frame the parent's drop must reach too (card step 774: "covers nested child frames").
 const DROPPED_IN_NESTED_CHILD: &str = "
-function inner() -> nothing {
-  let deep: array<int> = [7, 8, 9]
+function inner() -> Nothing {
+  let deep: Array<Int> = [7, 8, 9]
   wait sleep(500)
   print(`inner done`)
 }
 
-function worker() -> nothing {
-  let outer: array<int> = [1]
+function worker() -> Nothing {
+  let outer: Array<Int> = [1]
   inner()
   print(`worker done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   print(`parent`)
 }
@@ -181,21 +181,21 @@ green_program!(
 /// Nothing here builds a temporary (`print` takes an int), so only the scope-exit release is
 /// missing: `rows` and `label` of both calls, `inner` of the first.
 const SM_LOCALS: &str = "
-function holder(enter: boolean) -> int {
-  let rows: array<int> = [1, 2, 3]
-  let label: string = `crew`.toUpperCase()
+function holder(enter: Boolean) -> Int {
+  let rows: Array<Int> = [1, 2, 3]
+  let label: String = `crew`.toUpperCase()
   wait sleep(1)
   if (enter) {
-    let inner: array<int> = [4]
+    let inner: Array<Int> = [4]
     wait sleep(1)
     return rows.count() + label.count() + inner.count()
   }
   return rows.count()
 }
 
-function entrypoint() -> nothing {
-  let first: int = holder(true)
-  let second: int = holder(false)
+function entrypoint() -> Nothing {
+  let first: Int = holder(true)
+  let second: Int = holder(false)
   print(first)
   print(second)
 }
@@ -211,13 +211,13 @@ green_program!(
 /// P2: statement-end temporaries in a suspending function. No heap local is bound: the array
 /// `make()` returns and the interpolated string each die at the end of their statement.
 const SM_TEMPORARIES: &str = "
-function make() -> array<int> {
+function make() -> Array<Int> {
   return [1, 2, 3]
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let n: int = make().count()
+  let n: Int = make().count()
   print(n)
   print(`total ${n}`)
 }
@@ -307,28 +307,28 @@ green_fixture!(
 /// (2 strings allocated, 1 freed).
 const SM_UNION_SPAWN: &str = "
 shape Circle {
-  radius: float
+  radius: Float
 }
 shape Tag {
-  name: string
+  name: String
 }
 shape Box {
   choice: Circle | Tag
-  id: int
+  id: Int
 }
 
-function eat(held: Circle | Tag) -> nothing {
+function eat(held: Circle | Tag) -> Nothing {
   wait sleep(1)
   print(777)
 }
 
-function launch() -> nothing {
+function launch() -> Nothing {
   let tag: Tag = { name: `boxed` }
   let box: Box = { choice: tag, id: 1 }
   background eat(box.choice)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
 }
@@ -355,22 +355,22 @@ green_fixture!(
 /// counters), and it is not in `KNOWN_PLAIN_LEAKS`.
 const PLAIN_SHAPE_INTO_UNION_SPAWN: &str = "
 shape Circle {
-  radius: float
+  radius: Float
 }
 shape Tag {
-  name: string
+  name: String
 }
 
-function eat(held: Circle | Tag) -> nothing {
+function eat(held: Circle | Tag) -> Nothing {
   print(777)
 }
 
-function launch() -> nothing {
+function launch() -> Nothing {
   let tag: Tag = { name: `boxed` }
   background eat(tag)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
 }
@@ -388,12 +388,12 @@ green_program!(
 /// A suspending `for` over a fresh call result calls the function once, not once per header and
 /// body evaluation (Medium: before slice 3 `made` printed 7 times and 6 arrays leaked).
 const SM_LOOP_ITERABLE_ONCE: &str = "
-function make() -> array<int> {
+function make() -> Array<Int> {
   print(`made`)
   return [1, 2, 3]
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   for (x in make()) {
     total = total + x
@@ -413,8 +413,8 @@ green_program!(
 /// A `return` inside a suspending loop body releases the copy of the loop variable (Medium: the
 /// early exit left the entry's copy unreleased).
 const SM_LOOP_COPY_EARLY_RETURN: &str = "
-function scan() -> int {
-  let table: map<string, string> = { `k`: `v-${1}` }
+function scan() -> Int {
+  let table: Map<String, String> = { `k`: `v-${1}` }
   for (entry in table) {
     table[`k`] = `w-${2}`
     print(entry.value)
@@ -424,7 +424,7 @@ function scan() -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let found = scan()
   print(found.toString())
 }
@@ -442,15 +442,15 @@ green_program!(
 /// (High-risk class: a data-integrity pairing, Medium tier: one integration test). Before slice 3 the
 /// copy was never released.
 const SM_STAGED_ARGUMENT_COPY: &str = "
-function use(share first: array<int>, lend rows: array<array<int>>) -> int {
+function use(share first: Array<Int>, lend rows: Array<Array<Int>>) -> Int {
   wait sleep(1)
   rows.add([9])
   return first.count()
 }
 
-function entrypoint() -> nothing {
-  let rows: array<array<int>> = [[1, 2, 3]]
-  let fallback: array<int> = [0]
+function entrypoint() -> Nothing {
+  let rows: Array<Array<Int>> = [[1, 2, 3]]
+  let fallback: Array<Int> = [0]
   let counted = wait use(rows[0].or(fallback), rows)
   print(counted.toString())
 }

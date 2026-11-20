@@ -9,12 +9,12 @@
 //
 // Expected output (byte-identical default vs --no-auto-parallel): mid / a:11 / late / b:22
 
-function loadA() -> int { wait sleep(30) return 11 }
-function loadB() -> int { wait sleep(30) return 22 }
-function mid() -> nothing { wait sleep(10) print(`mid`) }
-function late() -> nothing { wait sleep(10) print(`late`) }
+function loadA() -> Int { wait sleep(30) return 11 }
+function loadB() -> Int { wait sleep(30) return 22 }
+function mid() -> Nothing { wait sleep(10) print(`mid`) }
+function late() -> Nothing { wait sleep(10) print(`late`) }
 
-function run() -> nothing {
+function run() -> Nothing {
   let a = loadA()
   let b = loadB()
   wait mid()
@@ -23,4 +23,4 @@ function run() -> nothing {
   print(`b:${b.toString()}`)
 }
 
-function entrypoint() -> nothing { run() }
+function entrypoint() -> Nothing { run() }

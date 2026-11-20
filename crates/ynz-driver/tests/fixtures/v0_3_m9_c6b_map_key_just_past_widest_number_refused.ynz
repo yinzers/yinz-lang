@@ -1,6 +1,6 @@
 // v0.3-M9 C6: one digit past the widest `number` a map can be keyed by (34) is refused.
 // Correct behavior: does not compile; the refusal names `number<35>`.
-function entrypoint() -> nothing {
-  let totals: map<number<35>, int> = {}
+function entrypoint() -> Nothing {
+  let totals: Map<Number<35>, Int> = {}
   print(totals.count())
 }

@@ -4,13 +4,13 @@
 // the local moved, so the release after the `wait` ran on a null list (a crash).
 // Expected output: the first item, and every string freed.
 
-function pick() -> fixed<string> {
+function pick() -> Fixed<String> {
   wait sleep(1)
-  let rows: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  let rows: Fixed<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   return rows
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let rows = pick()
   print(rows[0].or(`?`))
   wait sleep(1)

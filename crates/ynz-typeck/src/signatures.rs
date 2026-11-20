@@ -175,7 +175,7 @@ pub fn collect_signatures(
                         diags.push(Diagnostic::error(
                             f.span.clone(),
                             "`entrypoint` must have no parameters.",
-                            "Change the declaration to `function entrypoint() -> nothing { ... }`",
+                            "Change the declaration to `function entrypoint() -> Nothing { ... }`",
                             "`entrypoint` is where the program starts. It takes no arguments — use `process.args` to read command-line inputs (arriving in v0.7).",
                         ));
                     }
@@ -183,10 +183,10 @@ pub fn collect_signatures(
                         diags.push(Diagnostic::error(
                             f.span.clone(),
                             format!(
-                                "`entrypoint` must return `nothing`, but this declares it returns `{}`.",
+                                "`entrypoint` must return `Nothing`, but this declares it returns `{}`.",
                                 crate::types::type_name(&ret)
                             ),
-                            "Change the return type to `nothing`: `function entrypoint() -> nothing`",
+                            "Change the return type to `Nothing`: `function entrypoint() -> Nothing`",
                             "`entrypoint` is where the program starts. It runs and exits — it does not return a value to a caller.",
                         ));
                     }
@@ -232,7 +232,7 @@ pub fn collect_signatures(
         diags.push(Diagnostic::error(
             module.span.clone(),
             "This file has no `entrypoint` function.",
-            "Add an entrypoint function:\n  function entrypoint() -> nothing {\n    ...\n  }",
+            "Add an entrypoint function:\n  function entrypoint() -> Nothing {\n    ...\n  }",
             "Every Yinz program needs an `entrypoint` function — that is where execution starts.",
         ));
     }
@@ -453,7 +453,7 @@ fn resolve_sig_type_with_params(
             inner: Box::new(resolve(inner)),
         },
         AstType::Generic { name, args, .. } => {
-            if name == "fixed" {
+            if name == "Fixed" {
                 let written = crate::fixed_length::read_fixed_arguments(args);
                 let element = written.element.map(resolve).unwrap_or(Type::Error);
                 return crate::fixed_length::fixed_type(element, &written.length);
@@ -462,13 +462,13 @@ fn resolve_sig_type_with_params(
             // The built-in containers are their own types; `Generic` is a user-declared
             // generic shape. The arguments of a call have the built-in types.
             match (name.as_str(), resolved_args.len()) {
-                ("array", 1) => Type::BuiltinArray {
+                ("Array", 1) => Type::BuiltinArray {
                     elem: Box::new(resolved_args.remove(0)),
                 },
-                ("channel", 1) => Type::BuiltinChannel {
+                ("Channel", 1) => Type::BuiltinChannel {
                     elem: Box::new(resolved_args.remove(0)),
                 },
-                ("map", 2) => {
+                ("Map", 2) => {
                     let val = Box::new(resolved_args.remove(1));
                     let key = Box::new(resolved_args.remove(0));
                     Type::BuiltinMap { key, val }

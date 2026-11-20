@@ -6,13 +6,13 @@
 //
 // Regression guard: if the param guard starts firing for non-SM functions, this
 // test catches it. `describe(9)` → `5` (inner shadow) then `9` (outer param), exit 0.
-function describe(p: int) -> nothing {
+function describe(p: Int) -> Nothing {
   if (p > 0) {
-    let p: int = 5
+    let p: Int = 5
     print(p.toString())
   }
   print(p.toString())
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   describe(9)
 }

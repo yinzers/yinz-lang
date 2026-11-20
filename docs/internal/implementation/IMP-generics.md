@@ -44,7 +44,7 @@ function pair<A, B>(give first: A, give second: B) -> Pair<A, B> {
 }
 ```
 
-Both ship in v0.1. Type generics are unusable without function generics — collections (`array<T>`, `map<K,V>`) need generic methods (`.filter`, `.map`, `.sort`) that work on any T, and the stdlib needs to ship a generic `sort`, `find`, `groupBy`, etc.
+Both ship in v0.1. Type generics are unusable without function generics — collections (`Array<T>`, `Map<K,V>`) need generic methods (`.filter`, `.map`, `.sort`) that work on any T, and the stdlib needs to ship a generic `sort`, `find`, `groupBy`, etc.
 
 ---
 
@@ -56,7 +56,7 @@ Same bracket convention used everywhere else parameterized types appear:
 |-----|--------|
 | Generic type | `type Pair<A, B> { ... }` |
 | Generic function | `function pair<A, B>(...) -> Pair<A, B>` |
-| Parameterized type instance | `array<Player>`, `map<string, int>`, `number<70>` |
+| Parameterized type instance | `Array<Player>`, `Map<String, Int>`, `Number<70>` |
 | Type parameter constraint | `function sort<T follows Comparable>(...)` |
 
 One syntax. Angle brackets everywhere for type parameters.
@@ -70,19 +70,19 @@ One syntax. Angle brackets everywhere for type parameters.
 Constraints use `follows` (the same keyword as type contracts) and are written **inline** with the type parameter:
 
 ```ynz
-function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
+function sort<T follows Comparable>(share items: Array<T>) -> Array<T> { ... }
 
-function process<T follows Comparable, Serializable>(share item: T) -> string { ... }
+function process<T follows Comparable, Serializable>(share item: T) -> String { ... }
 ```
 
 **Why inline over a separate `where` clause:**
 
 ```ynz
 // Inline (chosen):
-function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
+function sort<T follows Comparable>(share items: Array<T>) -> Array<T> { ... }
 
 // Where clause (rejected):
-function sort<T>(share items: array<T>) -> array<T> where T follows Comparable { ... }
+function sort<T>(share items: Array<T>) -> Array<T> where T follows Comparable { ... }
 ```
 
 The inline form keeps the constraint visible right next to the type parameter — the reader's eyes don't have to jump to a separate location. Rust adopted `where` clauses because Rust constraints got very complex (lifetimes + multiple traits + associated types + higher-ranked bounds). Yinz won't have that complexity in v0.1 or even v1.0 — keep it inline.
@@ -99,10 +99,10 @@ The compiler infers type parameters from argument types at the call site. Users 
 
 ```ynz
 // Inference (99% of calls):
-let x = identity(5)                    // T inferred as int
-let p = pair("alice", 42)              // A=string, B=int inferred
+let x = identity(5)                    // T inferred as Int
+let p = pair("alice", 42)              // A=String, B=Int inferred
 let sorted = sort(players)             // T inferred as Player
-let unique = dedupe([1, 2, 1, 3])      // T inferred as int
+let unique = dedupe([1, 2, 1, 3])      // T inferred as Int
 
 // Explicit only when ambiguous or no args:
 let empty = createList<Player>()       // no args, T must be specified
@@ -115,11 +115,11 @@ This matches Rule 8 (compiler does the hard work) — jr devs don't write `<T>` 
 ## Compile errors
 
 ```ynz
-function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
+function sort<T follows Comparable>(share items: Array<T>) -> Array<T> { ... }
 
-shape Player { name: string, health: number }
+shape Player { name: String, health: Number }
 
-let players: array<Player> = [...]
+let players: Array<Player> = [...]
 let sorted = sort(players)
 //
 // COMPILE ERROR: Type Player does not follow contract Comparable.
@@ -140,19 +140,19 @@ let x = identity()
 //   identity<T>(value: T) -> T needs a value to infer T from, but no
 //   arguments were passed. Either pass a value:
 //
-//     let x = identity(5)              // T inferred as int
+//     let x = identity(5)              // T inferred as Int
 //
 //   Or specify T explicitly:
 //
-//     let x: int = identity<int>()     // explicit type — but identity()
+//     let x: Int = identity<Int>()     // explicit type — but identity()
 //                                       // with no args has no meaning
 ```
 
 ---
 
-## First built-in generic: `maybe<T>`
+## First built-in generic: `Maybe<T>`
 
-See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) for `maybe<T>` — the first built-in generic primitive shipped via M5's generics engine. It's the return type of `.get()` on every built-in collection (`array<T>`, `fixed<T>`, `map<K, V>`, `string`), and demonstrates how built-in generics use the same engine that user-defined generics do. M5 ships `maybe<T>` alongside the engine itself rather than waiting for M6 — the cleanest API (`.get()` returns `maybe<T>` from day 1, no rename later).
+See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) for `Maybe<T>` — the first built-in generic primitive shipped via M5's generics engine. It's the return type of `.get()` on every built-in collection (`Array<T>`, `Fixed<T>`, `Map<K, V>`, `String`), and demonstrates how built-in generics use the same engine that user-defined generics do. M5 ships `Maybe<T>` alongside the engine itself rather than waiting for M6 — the cleanest API (`.get()` returns `Maybe<T>` from day 1, no rename later).
 
 ---
 
@@ -162,7 +162,7 @@ See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) for `maybe<T>` �
 
 **Lifetime parameters** (Rust-style `'a` lifetimes): Not exposed. Ownership in Yinz is fully inferred — users write `share`/`lend`/`give`/`copy` on values, never on type parameters. The compiler handles the equivalent of lifetimes internally.
 
-**Const generics with arbitrary values:** Yinz has no general-purpose const generics in v0.1. General-purpose const generics are deferred. (Use `fixed<T>` with type inference instead.)
+**Const generics with arbitrary values:** Yinz has no general-purpose const generics in v0.1. General-purpose const generics are deferred. (Use `Fixed<T>` with type inference instead.)
 
 **Associated types:** A type contract that requires another type as part of the contract. Not in v0.1. Workaround: use explicit type parameters when needed.
 

@@ -26,30 +26,30 @@ fn a_mapentry_spawn_argument_frees_its_decimal_key_and_value_cells() {
 fn union_spawn_program(suspending: bool, given: bool, launch_body: &str) -> String {
     format!(
         "shape Circle {{
-  radius: float
+  radius: Float
 }}
 shape Tag {{
-  name: string
+  name: String
 }}
 shape Box {{
   choice: Circle | Tag
-  id: int
+  id: Int
 }}
 
 function makeTag() -> Tag {{
   return {{ name: `made` }}
 }}
 
-function eat({give}held: Circle | Tag) -> nothing {{
+function eat({give}held: Circle | Tag) -> Nothing {{
   {pause}
   print(777)
 }}
 
-function launch() -> nothing {{
+function launch() -> Nothing {{
 {launch_body}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   launch()
   wait sleep(300)
 }}
@@ -58,7 +58,7 @@ function entrypoint() -> nothing {{
         pause = if suspending {
             "wait sleep(1)"
         } else {
-            "let ready: int = 1"
+            "let ready: Int = 1"
         },
     )
 }
@@ -68,7 +68,7 @@ const SPAWN_CONSUMED_SHAPE: &str = "  let tag: Tag = { name: `boxed` }
 const SPAWN_FRESH_CALL: &str = "  background eat(makeTag())";
 const SPAWN_SHAPE_USED_AFTER: &str = "  let tag: Tag = { name: `boxed` }
   background eat(tag)
-  let size: int = tag.name.count()
+  let size: Int = tag.name.count()
   if (size == 0) {
     print(0)
   }";
@@ -133,17 +133,17 @@ fn handle_form_program(
     callee_body: &str,
 ) -> String {
     let (spawner_signature, wait_for_task, entry_call) = if suspending_spawner {
-        ("function entrypoint() -> nothing", "  wait sleep(150)", "")
+        ("function entrypoint() -> Nothing", "  wait sleep(150)", "")
     } else {
         (
-            "function launch() -> nothing",
+            "function launch() -> Nothing",
             "  sleepBlocking(150)",
-            "function entrypoint() -> nothing {\n  launch()\n}\n",
+            "function entrypoint() -> Nothing {\n  launch()\n}\n",
         )
     };
     format!(
         "{shape_preamble}
-function work(give value: {value_type}) -> nothing {{
+function work(give value: {value_type}) -> Nothing {{
   wait sleep(20)
 {callee_body}
 }}
@@ -165,8 +165,8 @@ function work(give value: {value_type}) -> nothing {{
 #[test]
 fn a_handle_form_spawn_releases_the_consumed_original_once() {
     let shape = "shape Barge {
-  name: string
-  tonnage: int
+  name: String
+  tonnage: Int
 }
 ";
     for suspending_spawner in [false, true] {
@@ -186,7 +186,7 @@ fn a_handle_form_spawn_releases_the_consumed_original_once() {
         let array_program = handle_form_program(
             suspending_spawner,
             "",
-            "array<string>",
+            "Array<String>",
             "[`a${1}`, `b${2}`]",
             "  print(value.count().toString())",
         );
@@ -209,27 +209,27 @@ fn a_fresh_shape_a_spawn_copies_has_its_original_released() {
             for fresh in ["makeTag(1)", "{ name: `lit${2}`, id: 2 }"] {
                 let source = format!(
                     "shape Tag {{
-  name: string
-  id: int
+  name: String
+  id: Int
 }}
 
-function makeTag(count: int) -> Tag {{
+function makeTag(count: Int) -> Tag {{
   let tag: Tag = {{ name: `tag-${{count}}`, id: 1 }}
   tag.name = `renamed`
   return tag
 }}
 
-function show(tag: Tag) -> nothing {{
+function show(tag: Tag) -> Nothing {{
   {pause}
   print(tag.id.toString())
 }}
 
-function launch() -> nothing {{
+function launch() -> Nothing {{
   background show({fresh})
   {hold}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   launch()
   wait sleep(150)
 }}
@@ -237,12 +237,12 @@ function entrypoint() -> nothing {{
                     pause = if suspending_callee {
                         "wait sleep(1)"
                     } else {
-                        "let ready: int = 1"
+                        "let ready: Int = 1"
                     },
                     hold = if suspending_spawner {
                         "wait sleep(1)"
                     } else {
-                        "let ready: int = 1"
+                        "let ready: Int = 1"
                     },
                 );
                 let expected = if fresh == "makeTag(1)" { "1\n" } else { "2\n" };
@@ -281,33 +281,33 @@ function entrypoint() -> nothing {{
 #[test]
 fn a_maybe_received_from_a_handle_is_owned_by_its_binding() {
     let shape = "shape Part {
-  name: string
-  qty: int
+  name: String
+  qty: Int
 }
 ";
     let cases = [
-        ("maybe<string>", "items.get(0)", "print(m.value)", "s1\n"),
+        ("Maybe<String>", "items.get(0)", "print(m.value)", "s1\n"),
         (
-            "maybe<string> errors",
+            "Maybe<String> errors",
             "items.get(0)",
             "print(m.value)",
             "s1\n",
         ),
-        ("maybe<Part>", "parts.get(0)", "print(m.value.name)", "p1\n"),
+        ("Maybe<Part>", "parts.get(0)", "print(m.value.name)", "p1\n"),
         (
-            "maybe<Part> errors",
+            "Maybe<Part> errors",
             "parts.get(0)",
             "print(m.value.name)",
             "p1\n",
         ),
         (
-            "maybe<int>",
+            "Maybe<Int>",
             "[1].get(0)",
             "print(m.value.toString())",
             "1\n",
         ),
         (
-            "maybe<int> errors",
+            "Maybe<Int> errors",
             "[1].get(0)",
             "print(m.value.toString())",
             "1\n",
@@ -318,12 +318,12 @@ fn a_maybe_received_from_a_handle_is_owned_by_its_binding() {
             "{shape}
 function pick() -> {return_type} {{
   wait sleep(5)
-  let items: array<string> = [`s${{1}}`]
-  let parts: array<Part> = [{{ name: `p${{1}}`, qty: 3 }}]
+  let items: Array<String> = [`s${{1}}`]
+  let parts: Array<Part> = [{{ name: `p${{1}}`, qty: 3 }}]
   return {returned}
 }}
 
-function consume() -> nothing errors {{
+function consume() -> Nothing errors {{
   let h = background pick()
   let m = h.receive()
   if (m.exists()) {{
@@ -332,7 +332,7 @@ function consume() -> nothing errors {{
   print(`done`)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let r = consume()
   if (r.failed()) {{
     print(`failed`)
@@ -352,17 +352,17 @@ function entrypoint() -> nothing {{
 /// it, and the program still balances (no double free of the buffer).
 #[test]
 fn a_number_received_from_a_handle_is_not_freed_by_its_binding() {
-    let source = "function pick() -> number<20> {
+    let source = "function pick() -> Number<20> {
   wait sleep(5)
   return 2.5
 }
 
-function pickFail() -> number<20> errors {
+function pickFail() -> Number<20> errors {
   wait sleep(5)
   return 3.5
 }
 
-function consume() -> nothing errors {
+function consume() -> Nothing errors {
   let h = background pick()
   let m = h.receive()
   print(m)
@@ -372,7 +372,7 @@ function consume() -> nothing errors {
   print(`done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = consume()
   if (r.failed()) {
     print(`failed`)
@@ -394,13 +394,13 @@ fn a_suspending_spawner_releases_the_array_a_spawn_consumed() {
         ("used_after", "rows", "  print(rows.count().toString())\n"),
     ] {
         let source = format!(
-            "function worker({parameter}: array<int>) -> nothing {{
+            "function worker({parameter}: Array<Int>) -> Nothing {{
   wait sleep(5)
   print(rows.count().toString())
 }}
 
-function entrypoint() -> nothing {{
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {{
+  let rows: Array<Int> = [10, 20, 30]
   background worker(rows)
 {after_spawn}  wait sleep(100)
   print(`parent`)
@@ -422,36 +422,36 @@ function entrypoint() -> nothing {{
 #[test]
 fn an_unbound_errors_temporary_of_a_suspending_statement_is_released() {
     let source = "shape Part {
-  name: string
-  qty: int
+  name: String
+  qty: Int
 }
 
-function label(n: int) -> string errors {
+function label(n: Int) -> String errors {
   return `abc${n}`
 }
 
-function listing(n: int) -> array<string> errors {
+function listing(n: Int) -> Array<String> errors {
   return [`a${n}`, `b`]
 }
 
-function table(n: int) -> map<string, string> errors {
+function table(n: Int) -> Map<String, String> errors {
   return { `k`: `v${n}` }
 }
 
-function part(n: int) -> Part errors {
+function part(n: Int) -> Part errors {
   let made: Part = { name: `p${n}`, qty: n }
   return made
 }
 
-function slow(first: int) -> int {
+function slow(first: Int) -> Int {
   wait sleep(1)
   return first
 }
 
-function entrypoint() -> nothing {
-  let fallbackText: string = `x`
-  let fallbackList: array<string> = []
-  let fallbackTable: map<string, string> = {}
+function entrypoint() -> Nothing {
+  let fallbackText: String = `x`
+  let fallbackList: Array<String> = []
+  let fallbackTable: Map<String, String> = {}
   let fallbackPart: Part = { name: `f`, qty: 0 }
   let first = wait slow(label(1).or(fallbackText).count())
   let second = wait slow(listing(2).or(fallbackList).count())
@@ -474,26 +474,26 @@ function entrypoint() -> nothing {
 #[test]
 fn a_type_parameter_copy_instantiated_as_a_maybe_is_released() {
     let source = "shape Row {
-  name: string
+  name: String
 }
 
-function burn<T>(share value: T) -> nothing {
-  let items: array<T> = []
+function burn<T>(share value: T) -> Nothing {
+  let items: Array<T> = []
   value.copy()
   items.get(0).or(value.copy())
   print(1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
-  let names: array<string> = [`a ${n}`]
-  let found: maybe<string> = names.get(0)
+  let names: Array<String> = [`a ${n}`]
+  let found: Maybe<String> = names.get(0)
   burn(found)
-  let numbers: array<int> = [n]
-  let number: maybe<int> = numbers.get(0)
+  let numbers: Array<Int> = [n]
+  let number: Maybe<Int> = numbers.get(0)
   burn(number)
-  let rows: array<Row> = [{ name: `b ${n}` }]
-  let row: maybe<Row> = rows.get(0)
+  let rows: Array<Row> = [{ name: `b ${n}` }]
+  let row: Maybe<Row> = rows.get(0)
   burn(row)
   print(2)
 }
@@ -509,11 +509,11 @@ function entrypoint() -> nothing {
 #[test]
 fn an_unbound_errors_temporary_is_released_for_every_inner_type() {
     let preamble = "shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 ";
@@ -521,36 +521,36 @@ shape Thing = Tiny | Big
     let cases = [
         (
             "string",
-            "function produce(n: int) -> string errors {
+            "function produce(n: Int) -> String errors {
   return `abc${n}`
 }",
-            "let fallback: string = `x`",
+            "let fallback: String = `x`",
             "produce(1).or(fallback)",
-            "string",
+            "String",
         ),
         (
             "decimal",
-            "function produce(n: int) -> number<20> errors {
-  let made: number<20> = 2.5
+            "function produce(n: Int) -> Number<20> errors {
+  let made: Number<20> = 2.5
   return made
 }",
-            "let fallback: number<20> = 0.5",
+            "let fallback: Number<20> = 0.5",
             "produce(1).or(fallback)",
-            "number<20>",
+            "Number<20>",
         ),
         (
             "bignum",
-            "function produce(n: int) -> number<40> errors {
-  let made: number<40> = 2.5
+            "function produce(n: Int) -> Number<40> errors {
+  let made: Number<40> = 2.5
   return made
 }",
-            "let fallback: number<40> = 0.5",
+            "let fallback: Number<40> = 0.5",
             "produce(1).or(fallback)",
-            "number<40>",
+            "Number<40>",
         ),
         (
             "union",
-            "function produce(n: int) -> Thing errors {
+            "function produce(n: Int) -> Thing errors {
   let big: Big = { label: `l${n}`, count: n }
   return big
 }",
@@ -561,16 +561,16 @@ shape Thing = Tiny | Big
         ),
         (
             "maybe_union",
-            "function produce(n: int) -> maybe<Thing> errors {
-  let things: array<Thing> = []
+            "function produce(n: Int) -> Maybe<Thing> errors {
+  let things: Array<Thing> = []
   let big: Big = { label: `l${n}`, count: n }
   things.add(big)
   let found = things.get(0)
   return found
 }",
-            "let fallback: maybe<Thing> = none",
+            "let fallback: Maybe<Thing> = none",
             "produce(1).or(fallback)",
-            "maybe<Thing>",
+            "Maybe<Thing>",
         ),
     ];
     for (name, producer, fallback, argument, parameter) in cases {
@@ -578,7 +578,7 @@ shape Thing = Tiny | Big
             let (consumer, call) = if suspending {
                 (
                     format!(
-                        "function consume(value: {parameter}) -> int {{
+                        "function consume(value: {parameter}) -> Int {{
   wait sleep(1)
   return 1
 }}"
@@ -588,7 +588,7 @@ shape Thing = Tiny | Big
             } else {
                 (
                     format!(
-                        "function consume(value: {parameter}) -> int {{
+                        "function consume(value: {parameter}) -> Int {{
   return 1
 }}"
                     ),
@@ -601,7 +601,7 @@ shape Thing = Tiny | Big
 
 {consumer}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   {fallback}
   {call}
   print(result.toString())
@@ -630,14 +630,14 @@ fn a_spawned_map_entry_owns_a_copy_of_its_key_and_value() {
     let cases = [
         (
             "string_value",
-            "map<string, string>",
+            "Map<String, String>",
             "`value${2}`",
             "print(entry.value)",
             "key1\nvalue2\n",
         ),
         (
             "array_value",
-            "map<string, array<int>>",
+            "Map<String, Array<Int>>",
             "[7, 8, 9]",
             "print(entry.value.count().toString())",
             "key1\n3\n",
@@ -651,13 +651,13 @@ fn a_spawned_map_entry_owns_a_copy_of_its_key_and_value() {
                 "sleepBlocking(150)"
             };
             let source = format!(
-                "function reader(entry: MapEntry<string, {value_type}>) -> nothing {{
+                "function reader(entry: MapEntry<String, {value_type}>) -> Nothing {{
   {pause}
   print(entry.key)
   {read_value}
 }}
 
-function launch() -> nothing {{
+function launch() -> Nothing {{
   let table: {map_type} = {{}}
   table.set(`key${{1}}`, {value})
   for (entry in table) {{
@@ -665,20 +665,20 @@ function launch() -> nothing {{
   }}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   launch()
   sleepBlocking(400)
 }}
 ",
                 value_type = map_type
-                    .trim_start_matches("map<string, ")
+                    .trim_start_matches("Map<String, ")
                     .trim_end_matches('>'),
             );
             // The array-valued map ends in `>>`, which the trim above leaves one `>` short.
             let source = if name == "array_value" {
                 source.replace(
-                    "MapEntry<string, array<int>",
-                    "MapEntry<string, array<int> >",
+                    "MapEntry<String, Array<Int>",
+                    "MapEntry<String, Array<Int> >",
                 )
             } else {
                 source
@@ -708,27 +708,27 @@ fn maybe_spawn_program(
 ) -> String {
     format!(
         "shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 
-function eat({give}held: maybe<{element_type}>) -> nothing {{
+function eat({give}held: Maybe<{element_type}>) -> Nothing {{
   {pause}
   print(held.exists())
 }}
 
-function pick() -> maybe<{element_type}> {{
-  let source: array<{element_type}> = [{element_value}]
+function pick() -> Maybe<{element_type}> {{
+  let source: Array<{element_type}> = [{element_value}]
   return source.get(0)
 }}
 
-function launch() -> nothing {{
+function launch() -> Nothing {{
   let found = pick()
   {spawn}
   {after_spawn}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   launch()
   wait sleep(300)
 }}
@@ -759,13 +759,13 @@ macro_rules! maybe_spawn_cases {
 }
 
 maybe_spawn_cases! {
-    a_consumed_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(found)", "", "true\n";
-    a_consumed_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, false, "background eat(found)", "", "true\n";
-    a_given_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, true, "background eat(found)", "", "true\n";
-    a_given_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, true, "background eat(found)", "", "true\n";
-    a_copied_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_copied_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_fresh_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
+    a_consumed_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(found)", "", "true\n";
+    a_consumed_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, false, "background eat(found)", "", "true\n";
+    a_given_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, true, "background eat(found)", "", "true\n";
+    a_given_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, true, "background eat(found)", "", "true\n";
+    a_copied_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_copied_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_fresh_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
     a_consumed_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "", "true\n";
     a_consumed_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, false, "background eat(found)", "", "true\n";
     a_copied_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
@@ -774,9 +774,9 @@ maybe_spawn_cases! {
     a_given_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, true, "background eat(found)", "", "true\n";
     a_given_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, true, "background eat(found)", "", "true\n";
     a_fresh_maybe_shape_given_to_a_given_parameter_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, true, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
-    a_given_maybe_decimal_given_to_a_plain_task_is_released_once: "number<20> ", "2.5", false, true, "background eat(found)", "", "true\n";
-    a_given_maybe_decimal_given_to_a_suspending_task_is_released_once: "number<20> ", "2.5", true, true, "background eat(found)", "", "true\n";
-    a_consumed_maybe_decimal_given_to_a_suspending_task_is_released_once: "number<20> ", "2.5", true, false, "background eat(found)", "", "true\n";
+    a_given_maybe_decimal_given_to_a_plain_task_is_released_once: "Number<20> ", "2.5", false, true, "background eat(found)", "", "true\n";
+    a_given_maybe_decimal_given_to_a_suspending_task_is_released_once: "Number<20> ", "2.5", true, true, "background eat(found)", "", "true\n";
+    a_consumed_maybe_decimal_given_to_a_suspending_task_is_released_once: "Number<20> ", "2.5", true, false, "background eat(found)", "", "true\n";
 }
 
 /// Bug caught: pre-existing, a leak found by the C8 round-2 review: a string passed at a BORROWED
@@ -792,19 +792,19 @@ macro_rules! borrowed_string_cases {
             #[test]
             fn $name() {
                 let source = format!(
-                    "function worker(give rows: array<int>, label: string) -> nothing {{
+                    "function worker(give rows: Array<Int>, label: String) -> Nothing {{
   {pause}
   print(`${{rows.count()}}${{label}}`)
 }}
 
-function launch() -> nothing {{
-  let rows: array<int> = [1, 2]
+function launch() -> Nothing {{
+  let rows: Array<Int> = [1, 2]
   let label = `abcdefghij`.toUpperCase()
   background worker(rows, label)
   {after_spawn}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   launch()
   wait sleep(300)
 }}
@@ -830,30 +830,30 @@ borrowed_string_cases! {
 fn resume_function_maybe_program(element_type: &str, element_value: &str, body: &str) -> String {
     format!(
         "shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 
-function pick() -> maybe<{element_type}> {{
-  let source: array<{element_type}> = [{element_value}]
+function pick() -> Maybe<{element_type}> {{
+  let source: Array<{element_type}> = [{element_value}]
   return source.get(0)
 }}
 
-function eat(give held: maybe<{element_type}>) -> nothing {{
+function eat(give held: Maybe<{element_type}>) -> Nothing {{
   wait sleep(1)
   print(held.exists())
 }}
 
-function forward(give held: maybe<{element_type}>) -> nothing {{
+function forward(give held: Maybe<{element_type}>) -> Nothing {{
   background eat(held)
 }}
 
-function viaWait() -> maybe<{element_type}> {{
+function viaWait() -> Maybe<{element_type}> {{
   wait sleep(1)
   return pick()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
 {body}
 }}
 "
@@ -892,14 +892,14 @@ const RETURN_THROUGH_WAIT: &str = "  let found = viaWait()
   print(found.exists())";
 
 resume_function_maybe_cases! {
-    a_resume_function_binding_a_returned_maybe_string_frees_the_call_result: "string", "`kept`.toUpperCase()", READ_THEN_WAIT, "true\n";
+    a_resume_function_binding_a_returned_maybe_string_frees_the_call_result: "String", "`kept`.toUpperCase()", READ_THEN_WAIT, "true\n";
     a_resume_function_binding_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", READ_THEN_WAIT, "true\n";
-    a_resume_function_binding_a_returned_maybe_decimal_frees_the_call_result: "number<20> ", "2.5", READ_THEN_WAIT, "true\n";
-    a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once: "string", "`kept`.toUpperCase()", GIVE_TO_PLAIN, "true\n";
+    a_resume_function_binding_a_returned_maybe_decimal_frees_the_call_result: "Number<20> ", "2.5", READ_THEN_WAIT, "true\n";
+    a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once: "String", "`kept`.toUpperCase()", GIVE_TO_PLAIN, "true\n";
     a_resume_function_giving_a_returned_maybe_shape_to_a_plain_function_frees_it_once: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", GIVE_TO_PLAIN, "true\n";
-    a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result: "string", "`kept`.toUpperCase()", SPAWN_FROM_SUSPENDING, "true\n";
+    a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result: "String", "`kept`.toUpperCase()", SPAWN_FROM_SUSPENDING, "true\n";
     a_suspending_spawner_of_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", SPAWN_FROM_SUSPENDING, "true\n";
-    a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on: "string", "`kept`.toUpperCase()", RETURN_THROUGH_WAIT, "true\n";
+    a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on: "String", "`kept`.toUpperCase()", RETURN_THROUGH_WAIT, "true\n";
     a_resume_function_returning_a_returned_maybe_shape_passes_its_payload_on: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", RETURN_THROUGH_WAIT, "true\n";
 }
 
@@ -914,27 +914,27 @@ fn suspending_launcher_program(
 ) -> String {
     format!(
         "shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 
-function pick() -> maybe<{element_type}> {{
-  let source: array<{element_type}> = [{element_value}]
+function pick() -> Maybe<{element_type}> {{
+  let source: Array<{element_type}> = [{element_value}]
   return source.get(0)
 }}
 
-function eat({give}held: maybe<{element_type}>) -> nothing {{
+function eat({give}held: Maybe<{element_type}>) -> Nothing {{
   {pause}
   print(held.exists())
 }}
 
-function launch() -> nothing {{
+function launch() -> Nothing {{
   wait sleep(1)
   let found = pick()
   background eat(found)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   launch()
   wait sleep(300)
 }}
@@ -963,11 +963,11 @@ macro_rules! suspending_launcher_cases {
 }
 
 suspending_launcher_cases! {
-    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy: "string", "`kept`.toUpperCase()", true, false;
-    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy: "string", "`kept`.toUpperCase()", false, true;
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy: "String", "`kept`.toUpperCase()", true, false;
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy: "String", "`kept`.toUpperCase()", false, true;
     a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_given_suspending_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", true, true;
     a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_borrowed_plain_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", false, false;
-    a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy: "number<20> ", "2.5", true, true;
+    a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy: "Number<20> ", "2.5", true, true;
 }
 
 /// A program whose `eat` takes the `maybe<Big>` parameter `held` (declared with `modifier`: `give `,
@@ -975,20 +975,20 @@ suspending_launcher_cases! {
 fn parameter_maybe_program(modifier: &str, body: &str, entry: &str) -> String {
     format!(
         "shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 
-function pick() -> maybe<Big> {{
-  let source: array<Big> = [{{ label: `kept`.toUpperCase(), count: 3 }}]
+function pick() -> Maybe<Big> {{
+  let source: Array<Big> = [{{ label: `kept`.toUpperCase(), count: 3 }}]
   return source.get(0)
 }}
 
-function eat({modifier}held: maybe<Big>) -> nothing {{
+function eat({modifier}held: Maybe<Big>) -> Nothing {{
 {body}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
 {entry}
 }}
 "
@@ -1047,21 +1047,21 @@ parameter_maybe_cases! {
 fn copied_maybe_program(element_type: &str, element_value: &str, read: &str) -> String {
     format!(
         "shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 
-function pick() -> maybe<{element_type}> {{
-  let source: array<{element_type}> = [{element_value}]
+function pick() -> Maybe<{element_type}> {{
+  let source: Array<{element_type}> = [{element_value}]
   return source.get(0)
 }}
 
-function eat(give held: maybe<{element_type}>) -> nothing {{
+function eat(give held: Maybe<{element_type}>) -> Nothing {{
   wait sleep(1)
 {read}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   eat(pick().copy())
 }}
 "
@@ -1087,6 +1087,6 @@ macro_rules! copied_maybe_cases {
 
 copied_maybe_cases! {
     a_copied_maybe_shape_given_to_a_suspending_callee_frees_both_cells: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", "  let fallback: Big = { label: `x`, count: 0 }\n  print(held.or(fallback).label)", "KEPT\n";
-    a_copied_maybe_decimal_given_to_a_suspending_callee_frees_both_cells: "number<20> ", "2.5", "  print(held.or(1.5))", "2.5\n";
-    a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell: "string", "`kept`.toUpperCase()", "  print(held.or(`x`))", "KEPT\n";
+    a_copied_maybe_decimal_given_to_a_suspending_callee_frees_both_cells: "Number<20> ", "2.5", "  print(held.or(1.5))", "2.5\n";
+    a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell: "String", "`kept`.toUpperCase()", "  print(held.or(`x`))", "KEPT\n";
 }

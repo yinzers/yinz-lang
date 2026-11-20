@@ -2,18 +2,18 @@
 // non-recursively. Guards that MutualSuspensionCycle does NOT false-positive —
 // a non-mutual call between two suspending fns is NOT a cycle.
 // Expected output: done
-function worker(n: int) -> nothing {
+function worker(n: Int) -> Nothing {
   if (n > 0) {
     wait sleep(2)
     worker(n - 1)
   }
 }
 
-function helper() -> nothing {
+function helper() -> Nothing {
   wait sleep(1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   worker(2)
   helper()
   print(`done`)

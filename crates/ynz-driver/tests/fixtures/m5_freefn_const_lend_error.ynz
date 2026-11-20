@@ -2,14 +2,14 @@
 /// Used by the byte-identical diagnostic parity test to verify that
 /// `heal(p, 20)` and `p.heal(20)` produce the same error message.
 shape Player {
-  health: int
+  health: Int
 }
 
-function heal(lend self: Player, amount: int) -> nothing {
+function heal(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health + amount
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { health: 100 }
   heal(p, 20)
 }

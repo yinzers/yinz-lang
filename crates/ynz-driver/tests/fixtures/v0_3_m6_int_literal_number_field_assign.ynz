@@ -2,10 +2,10 @@
 // the hinted value infer types the IntLit as number, so the field-assign
 // mismatch check never fires. Pre-fix: codegen ICE panic.
 shape Order {
-  total: number
+  total: Number
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let o: Order = { total: 1.5 }
   o.total = 5
   print(o.total)

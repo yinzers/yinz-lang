@@ -35,21 +35,21 @@ fn a_plain_errors_local_of_every_inner_type_is_released_with_its_own_form() {
 
 const SUSPENDING_MAYBE_CALLEES: &str = "
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function pickShape(index: int) -> maybe<Big> {
+function pickShape(index: Int) -> Maybe<Big> {
   wait sleep(1)
-  let items: array<Big> = [{ label: `a`, count: 1 }]
+  let items: Array<Big> = [{ label: `a`, count: 1 }]
   let found = items.get(index)
   return found
 }
 
-function pickNumber(index: int) -> maybe<number> {
+function pickNumber(index: Int) -> Maybe<Number> {
   wait sleep(1)
   let seed = 5.25
-  let fees: fixed<number> = [seed, seed]
+  let fees: Fixed<Number> = [seed, seed]
   let found = fees.get(index)
   return found
 }
@@ -59,7 +59,7 @@ function pickNumber(index: int) -> maybe<number> {
 fn a_maybe_shape_a_suspending_callee_returns_is_released_when_bound_without_crossing() {
     let source = format!(
         "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let picked = pickShape(0)
   print(picked.exists())
 }}
@@ -72,7 +72,7 @@ function entrypoint() -> nothing {{
 fn a_maybe_number_a_suspending_callee_returns_is_released_when_bound_without_crossing() {
     let source = format!(
         "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let picked = pickNumber(0)
   print(picked.exists())
 }}
@@ -85,7 +85,7 @@ function entrypoint() -> nothing {{
 fn a_maybe_shape_a_suspending_callee_returns_is_released_when_its_local_crosses_a_wait() {
     let source = format!(
         "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let picked = pickShape(0)
   print(picked.exists())
   wait sleep(1)
@@ -99,7 +99,7 @@ function entrypoint() -> nothing {{
 /// Callees every errors-path test below shares: a suspending `string errors` that succeeds or
 /// fails on request (`__testFallibleAsync` fails when given `true`).
 const FALLIBLE_CALLEES: &str = "
-function fetchName(fail: boolean) -> string errors {
+function fetchName(fail: Boolean) -> String errors {
   let status = wait __testFallibleAsync(fail)
   return `name${status}`
 }
@@ -110,8 +110,8 @@ fn an_auto_propagation_in_a_resume_function_releases_the_open_locals() {
     for (fail, expected) in [("false", "ok\n"), ("true", "failed\n")] {
         let source = format!(
             "{FALLIBLE_CALLEES}
-function work(fail: boolean) -> int errors {{
-  let rows: array<int> = [1, 2]
+function work(fail: Boolean) -> Int errors {{
+  let rows: Array<Int> = [1, 2]
   let label = `ab`.toUpperCase()
   wait sleep(1)
   let name = fetchName(fail)
@@ -119,7 +119,7 @@ function work(fail: boolean) -> int errors {{
   return rows.count() + shown.count()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let result = work({fail})
   if (result.failed()) {{
     print(`failed`)
@@ -139,7 +139,7 @@ fn a_narrowed_re_read_of_an_errors_local_in_a_resume_function_releases_what_it_o
     for (fail, expected) in [("false", "NAME42\nNAME42\n"), ("true", "failed\n")] {
         let source = format!(
             "{FALLIBLE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let tag = `t`.toUpperCase()
   let name = fetchName({fail})
   wait sleep(1)
@@ -160,7 +160,7 @@ function entrypoint() -> nothing {{
 fn a_crossing_errors_local_whose_string_is_taken_is_released_once() {
     let source = format!(
         "{FALLIBLE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let name = fetchName(false)
   wait sleep(1)
   let kept = name.or(`fallback`)
@@ -176,11 +176,11 @@ function entrypoint() -> nothing {{
 fn a_reassigned_errors_local_in_a_resume_function_releases_its_old_value() {
     let source = format!(
         "{FALLIBLE_CALLEES}
-function plainName() -> string errors {{
+function plainName() -> String errors {{
   return `plain`.toUpperCase()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let name = fetchName(false)
   name = plainName()
   wait sleep(1)
@@ -195,11 +195,11 @@ function entrypoint() -> nothing {{
 fn an_errors_local_reassigned_in_a_loop_across_waits_releases_each_old_value() {
     let source = format!(
         "{FALLIBLE_CALLEES}
-function plainName() -> string errors {{
+function plainName() -> String errors {{
   return `plain`.toUpperCase()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let name = fetchName(false)
   let pass = 0
   while (pass < 3) {{
@@ -217,20 +217,20 @@ function entrypoint() -> nothing {{
 #[test]
 fn a_given_maybe_call_result_is_staged_in_the_frame_for_a_suspending_callee() {
     let source = "
-function makeNote() -> maybe<string> {
-  let items: array<string> = [`note`.toUpperCase()]
+function makeNote() -> Maybe<String> {
+  let items: Array<String> = [`note`.toUpperCase()]
   let found = items.get(0)
   return found
 }
 
-function consume(give note: maybe<string>) -> int {
+function consume(give note: Maybe<String>) -> Int {
   wait sleep(1)
   let text = note.or(`none`)
   return text.count()
 }
 
-function entrypoint() -> nothing {
-  let size: int = wait consume(makeNote())
+function entrypoint() -> Nothing {
+  let size: Int = wait consume(makeNote())
   print(size)
 }
 ";
@@ -241,20 +241,20 @@ function entrypoint() -> nothing {
 fn a_maybe_of_a_union_temporary_of_a_suspending_statement_is_released() {
     let source = "
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function find(share things: array<Thing>, index: int) -> maybe<Thing> {
+function find(share things: Array<Thing>, index: Int) -> Maybe<Thing> {
   let found = things.get(index)
   return found
 }
 
-function later(present: boolean) -> int {
+function later(present: Boolean) -> Int {
   wait sleep(1)
   if (present) {
     return 1
@@ -262,12 +262,12 @@ function later(present: boolean) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let big: Big = { label: `kept`, count: 1 }
   things.add(big)
-  let hit: int = wait later(find(things, 0).exists())
-  let miss: int = wait later(find(things, 5).exists())
+  let hit: Int = wait later(find(things, 0).exists())
+  let miss: Int = wait later(find(things, 5).exists())
   print(hit)
   print(miss)
 }
@@ -288,11 +288,11 @@ fn a_narrowed_read_of_an_errors_local_that_crosses_only_through_its_release_stil
     // the reload after a later `wait` wrote into it: LLVM "Instruction does not dominate all
     // uses" (examples/pirates-roster, found by `examples_basics_runs_end_to_end`).
     let source = "
-function battingAverage(hits: int, atBats: int) -> int errors {
+function battingAverage(hits: Int, atBats: Int) -> Int errors {
   return (hits * 1000) / atBats
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const average = battingAverage(50, 200)
   if (average.failed()) {
     print(`failed`)
@@ -313,19 +313,19 @@ function entrypoint() -> nothing {
 fn a_number_40_errors_return_of_a_narrower_value_is_converted_to_the_declared_type() {
     for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
         let source = format!(
-            "function literal() -> number<40> errors {{
+            "function literal() -> Number<40> errors {{
   {wait_line}
   return 2.5
 }}
 
-function expression(n: int) -> number<40> errors {{
+function expression(n: Int) -> Number<40> errors {{
   {wait_line}
-  let small: number<20> = 1.25
+  let small: Number<20> = 1.25
   return small + small
 }}
 
-function entrypoint() -> nothing {{
-  let fallback: number<40> = 0.5
+function entrypoint() -> Nothing {{
+  let fallback: Number<40> = 0.5
   let first = literal()
   print(first.or(fallback))
   let second = expression(1)
@@ -351,17 +351,17 @@ function entrypoint() -> nothing {{
 fn a_plain_number_40_return_of_a_narrower_value_is_converted_to_the_declared_type() {
     for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
         let source = format!(
-            "function narrowed() -> number<40> {{
-  let small: number<20> = 1.25
+            "function narrowed() -> Number<40> {{
+  let small: Number<20> = 1.25
   return small
 }}
 
-function summed() -> number<40> {{
-  let small: number<20> = 1.25
+function summed() -> Number<40> {{
+  let small: Number<20> = 1.25
   return small + small
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   {wait_line}
   let first = narrowed()
   print(first)

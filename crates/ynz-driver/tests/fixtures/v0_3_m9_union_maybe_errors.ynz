@@ -5,15 +5,15 @@
 // AddressSanitizer at both optimization levels.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -25,24 +25,24 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function fetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+function fetch(share things: Array<Thing>, index: Int) -> Maybe<Thing> errors {
   let found = things.get(index)
   return found
 }
 
-function slowFetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+function slowFetch(share things: Array<Thing>, index: Int) -> Maybe<Thing> errors {
   wait sleep(1)
   let found = things.get(index)
   return found
 }
 
-function clobber(depth: int) -> int {
+function clobber(depth: Int) -> Int {
   let filler: Big = { label: `filler`, count: depth }
   return filler.count
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let big: Big = { label: `kept`, count: 1 }
   things.add(big)
   let tiny: Tiny = { flag: true }

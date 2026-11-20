@@ -7,22 +7,22 @@
 // and -O2.
 
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 shape Outer {
   inner: Holder
-  tag: int
+  tag: Int
 }
 
-function length(share chain: Node | End) -> int {
+function length(share chain: Node | End) -> Int {
   if (chain) {
     is Node => {
       return 1 + length(chain.next)
@@ -54,7 +54,7 @@ function shortChain() -> Node {
   return only
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let original = buildChain()
   let copied = original.copy()
   let replacement: Node | End = shortChain()
@@ -68,7 +68,7 @@ function entrypoint() -> nothing {
   rebound.chain = shorter
   print(`${length(outer.inner.chain)} ${length(rebound.chain)}`)
 
-  let holders: array<Holder> = []
+  let holders: Array<Holder> = []
   let pushed = makeHolder()
   holders.add(pushed.copy())
   holders.add(pushed)

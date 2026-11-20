@@ -4,14 +4,14 @@
 // borrow costs none; a copy per step costs O(n^2) cells).
 // Correct behavior: prints the sum of the values and the depth.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 
-function sum(share head: Node | End) -> int {
+function sum(share head: Node | End) -> Int {
   if (head) {
     is Node => {
       let rest = head.next
@@ -24,7 +24,7 @@ function sum(share head: Node | End) -> int {
   return 0
 }
 
-function depth(share head: Node | End) -> int {
+function depth(share head: Node | End) -> Int {
   if (head) {
     is Node => {
       let rest = head.next
@@ -37,7 +37,7 @@ function depth(share head: Node | End) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let stop: End = { flag: true }
   let list: Node | End = stop
   let count = 0

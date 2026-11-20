@@ -23,9 +23,9 @@ A `shape` defines the structure of your data — what fields it has and what typ
 
 ```ynz
 shape Player {
-  name: string
-  health: number
-  score: number
+  name: String
+  health: Number
+  score: Number
 }
 ```
 
@@ -65,16 +65,16 @@ In Yinz, the functions that work on a shape are normal `function` declarations a
 
 ```ynz
 shape Player {
-  name: string
-  health: number
+  name: String
+  health: Number
 }
 
 // These functions live on their own — NOT inside the shape body
-function takeDamage(lend self: Player, amount: number) -> nothing {
+function takeDamage(lend self: Player, amount: Number) -> Nothing {
   self.health = self.health - amount
 }
 
-function isAlive(share self: Player) -> boolean {
+function isAlive(share self: Player) -> Boolean {
   return self.health > 0
 }
 
@@ -97,22 +97,22 @@ The IDE understands both forms. Typing `player.` shows every function whose firs
 
 ```ynz
 shape Entity {
-  name: string
-  health: number
+  name: String
+  health: Number
 }
 
 shape Warrior extends Entity {
-  weapon: string
-  armor: number
+  weapon: String
+  armor: Number
 }
 
-function takeDamage(lend self: Entity, amount: number) -> nothing {
+function takeDamage(lend self: Entity, amount: Number) -> Nothing {
   self.health = self.health - amount
 }
 
 // Warrior version — armor absorbs damage. It needs a different name, because
 // two functions with the same name in one file are not allowed.
-function takeWarriorDamage(lend self: Warrior, amount: number) -> nothing {
+function takeWarriorDamage(lend self: Warrior, amount: Number) -> Nothing {
   self.health = self.health - (amount - self.armor)
 }
 
@@ -132,11 +132,11 @@ A shape can `extends` only one other shape. The fields are reused, but each shap
 There is no `override` keyword in Yinz. Two `function` declarations with the same name in the same file are a compile error, even when their first parameters have different types:
 
 ```ynz
-function takeDamage(lend self: Entity, amount: number) -> nothing {
+function takeDamage(lend self: Entity, amount: Number) -> Nothing {
   self.health = self.health - amount
 }
 
-function takeDamage(lend self: Warrior, amount: number) -> nothing {
+function takeDamage(lend self: Warrior, amount: Number) -> Nothing {
   self.health = self.health - (amount - self.armor)
 }
 // COMPILE ERROR: A function named `takeDamage` is already defined in this file.
@@ -153,15 +153,15 @@ Mark a shape `base` if it exists only to be extended and should never be created
 
 ```ynz
 base shape Entity {
-  name: string
-  health: number
+  name: String
+  health: Number
 }
 
 const e: Entity = { name: `test`, health: 50 }
 // COMPILE ERROR: Entity is a base shape — you can't create one directly.
 //
 //   Create a shape that extends Entity instead:
-//     shape Warrior extends Entity { weapon: string, armor: number }
+//     shape Warrior extends Entity { weapon: String, armor: Number }
 //     const w: Warrior = { name: `test`, health: 50, weapon: `axe`, armor: 10 }
 //
 //   Why: base shapes describe shared fields but aren't meant to stand alone.
@@ -179,31 +179,31 @@ If two unrelated shapes need to be used interchangeably, write a contract and us
 
 ```ynz
 shape Damageable {
-  health: number
-  takeDamage(lend self, amount: number) -> nothing      // bare signature — no body
+  health: Number
+  takeDamage(lend self, amount: Number) -> Nothing      // bare signature — no body
 }
 
 shape Player follows Damageable {
-  name: string
-  health: number
+  name: String
+  health: Number
 }
 
 shape Building follows Damageable {
-  address: string
-  health: number
+  address: String
+  health: Number
 }
 
 // Standalone functions supply the behavior.
 // The compiler checks that they match Damageable's signature.
-function takeDamage(lend self: Player, amount: number) -> nothing {
+function takeDamage(lend self: Player, amount: Number) -> Nothing {
   self.health = self.health - amount
 }
 
-function takeDamage(lend self: Building, amount: number) -> nothing {
+function takeDamage(lend self: Building, amount: Number) -> Nothing {
   self.health = self.health - (amount / 2)    // buildings take half damage
 }
 
-function dealDamage(lend target: Damageable, amount: number) -> nothing {
+function dealDamage(lend target: Damageable, amount: Number) -> Nothing {
   target.takeDamage(amount)    // dot form — works for any shape that follows Damageable
 }
 
@@ -217,8 +217,8 @@ A shape can follow multiple contracts — `extends` comes first, then `follows` 
 
 ```ynz
 shape Warrior extends Entity follows Damageable, Attackable, Renderable {
-  weapon: string
-  armor: number
+  weapon: String
+  armor: Number
 }
 // Warrior must have standalone functions matching every signature in
 // Damageable, Attackable, and Renderable.
@@ -232,11 +232,11 @@ You don't have to name the shape when you return a `{ ... }` value. Its fields o
 
 ```ynz
 shape DivResult {
-  quotient: number
-  remainder: number
+  quotient: Number
+  remainder: Number
 }
 
-function divmod(a: number, b: number) -> DivResult {
+function divmod(a: Number, b: Number) -> DivResult {
   return { quotient: a / b, remainder: a % b }    // matches DivResult — valid
 }
 ```
@@ -247,19 +247,19 @@ The compiler checks that the fields exist and have the right types.
 
 ## Hidden fields — invisible outside the same file
 
-Mark a field `hidden` to make it unreachable from code in OTHER FILES. A hidden field needs a default value, because code in other files can't provide one when it creates the shape. The default must match the field's type (`hidden note: string = 4096` is refused), and every new value starts with it, wherever the shape is created.
+Mark a field `hidden` to make it unreachable from code in OTHER FILES. A hidden field needs a default value, because code in other files can't provide one when it creates the shape. The default must match the field's type (`hidden note: String = 4096` is refused), and every new value starts with it, wherever the shape is created.
 
 ```ynz
 // File: player.ynz
 shape Player {
-  name: string
-  health: number
-  hidden damageMultiplier: number = 1.0
-  hidden internalCache: map<string, number> = {}
+  name: String
+  health: Number
+  hidden damageMultiplier: Number = 1.0
+  hidden internalCache: Map<String, Number> = {}
 }
 
 // Standalone functions in the same file CAN touch hidden fields
-function takeDamage(lend self: Player, amount: number) -> nothing {
+function takeDamage(lend self: Player, amount: Number) -> Nothing {
   const actual = amount * self.damageMultiplier    // ✅ same file, can touch hidden
   self.health = self.health - actual
 }
@@ -293,12 +293,12 @@ If a shape is used in only one place, you can write it right where you use it in
 ```ynz
 // Named shape — right when used in more than one function
 shape IntervalConfig {
-    minutes: int
+    minutes: Int
     timeframe: Timeframe
 }
 
 // Inline type — right for a one-off config that never leaves this block
-const intervals: fixed<{ minutes: int }> = [
+const intervals: Fixed<{ minutes: Int }> = [
     { minutes: 5 },
     { minutes: 15 },
     { minutes: 60 },
@@ -313,22 +313,22 @@ Inline shapes work in any type-annotation position:
 
 ```ynz
 // Variable
-let p: { x: int, y: int } = { x: 3, y: 4 }
+let p: { x: Int, y: Int } = { x: 3, y: 4 }
 
 // Function parameter
-function area(rect: { w: int, h: int }) -> int {
+function area(rect: { w: Int, h: Int }) -> Int {
     return rect.w * rect.h
 }
 
 // Inside a generic type
-const intervals: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }]
+const intervals: Fixed<{ minutes: Int }> = [{ minutes: 5 }, { minutes: 15 }]
 
 // Field type inside a named shape
 shape Bar {
-    symbol: string
+    symbol: String
     spread: {
-        bid: number
-        ask: number
+        bid: Number
+        ask: Number
     }
 }
 ```
@@ -338,7 +338,7 @@ shape Bar {
 Field access works the same as for named shapes:
 
 ```ynz
-let p: { x: int, y: int } = { x: 3, y: 4 }
+let p: { x: Int, y: Int } = { x: 3, y: 4 }
 print(`${p.x + p.y}`)  // prints 7
 ```
 
@@ -347,12 +347,12 @@ print(`${p.x + p.y}`)  // prints 7
 Two inline shapes with the same fields are the same type, wherever they appear and in whatever order the fields are listed:
 
 ```ynz
-function takesAB(p: { a: int, b: int }) -> nothing {
+function takesAB(p: { a: Int, b: Int }) -> Nothing {
     print(`${p.a}`)
 }
 
-function entrypoint() -> nothing {
-    let x: { b: int, a: int } = { a: 1, b: 2 }
+function entrypoint() -> Nothing {
+    let x: { b: Int, a: Int } = { a: 1, b: 2 }
     takesAB(x)  // OK — same fields, same type
 }
 ```
@@ -373,7 +373,7 @@ for ({ minutes } in intervals) {
 
 // Named — better when the type is used in multiple places
 shape IntervalConfig {
-    minutes: int
+    minutes: Int
     timeframe: Timeframe
 }
 ```
@@ -382,4 +382,4 @@ shape IntervalConfig {
 
 - **No `hidden` fields.** Hidden fields are file-private and require a named `shape` declaration.
 - **No `extends` or `follows`.** Inline shapes hold plain data only, so they can't share fields with a parent or follow a contract.
-- Named shapes and inline shapes with identical fields are **different types** and do not convert to each other. If you annotate a variable `let x: Foo`, you cannot assign an `{ a: int }` value to it even if `Foo` has exactly field `a: int`.
+- Named shapes and inline shapes with identical fields are **different types** and do not convert to each other. If you annotate a variable `let x: Foo`, you cannot assign an `{ a: Int }` value to it even if `Foo` has exactly field `a: Int`.

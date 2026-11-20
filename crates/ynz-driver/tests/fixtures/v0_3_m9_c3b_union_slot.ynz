@@ -8,14 +8,14 @@
 // Expected output: one value per line below.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
-shape Mixed = Circle | string
+shape Mixed = Circle | String
 shape Box {
-  held: Circle | string
+  held: Circle | String
 }
 
-function kind(share value: Mixed) -> int {
+function kind(share value: Mixed) -> Int {
   if (value) {
     is Circle => {
       return 1
@@ -26,12 +26,12 @@ function kind(share value: Mixed) -> int {
   }
 }
 
-function entrypoint() -> nothing {
-  let count: int = 1
-  let fresh: string = `a-${count}`
+function entrypoint() -> Nothing {
+  let count: Int = 1
+  let fresh: String = `a-${count}`
   let held: Mixed = fresh
   let lit: Mixed = `lit`
-  let origin: string = `b-${count}`
+  let origin: String = `b-${count}`
   let kept: Mixed = origin
   print(kind(held))
   print(kind(lit))

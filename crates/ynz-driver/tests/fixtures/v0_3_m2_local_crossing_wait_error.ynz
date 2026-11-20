@@ -1,5 +1,5 @@
-function entrypoint() -> nothing {
-  let x: int = 5
+function entrypoint() -> Nothing {
+  let x: Int = 5
   wait sleep(30)
   print(x.toString())
 }

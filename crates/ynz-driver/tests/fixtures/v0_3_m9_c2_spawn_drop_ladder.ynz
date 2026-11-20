@@ -12,18 +12,18 @@
 //
 // Expected output (one per line): 3, 7, 2, 8, 3
 
-function worker(give rows: array<int>, tag: int) -> nothing {
-  let mine: array<int> = [tag]
+function worker(give rows: Array<Int>, tag: Int) -> Nothing {
+  let mine: Array<Int> = [tag]
   wait sleep(1)
   print(rows.count().toString())
   print(mine[0].or(-1).toString())
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [10, 20, 30]
   background worker(rows.copy(), 7)
   wait sleep(50)
-  let moved: array<int> = [1, 2]
+  let moved: Array<Int> = [1, 2]
   background worker(moved, 8)
   wait sleep(50)
   print(rows.count().toString())

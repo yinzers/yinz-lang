@@ -10,13 +10,13 @@
 //   1
 //   2
 //   end
-function pusher(lend wire: channel<int>) -> nothing {
+function pusher(lend wire: Channel<Int>) -> Nothing {
   wire.send(1)
   wire.send(2)
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(1)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(1)
   background pusher(wire)
   wait sleep(30)
   wire.close()

@@ -15,23 +15,23 @@
 // (m5_p3_mapshape_literal_str / _runtime_int) and pre-wait
 // (m5_p3_mapshape_wait_get_escape).
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let pa: Part = { qty: 1, price: 10 }
   let pb: Part = { qty: 2, price: 20 }
-  let stock: map<string, Part> = { `a`: pa, `b`: pb }
+  let stock: Map<String, Part> = { `a`: pa, `b`: pb }
   wait sleep(10)
-  let hasA: boolean = stock.has(`a`)
+  let hasA: Boolean = stock.has(`a`)
   print(hasA)
   let pc: Part = { qty: 3, price: 30 }
   stock.set(`c`, pc)
-  let n: int = stock.count()
+  let n: Int = stock.count()
   print(n)
-  let qtyA: int = 0
-  let total: int = 0
+  let qtyA: Int = 0
+  let total: Int = 0
   for (entry in stock) {
     total = total + entry.value.price
     if (entry.value.qty == 1) {

@@ -1,4 +1,4 @@
-function entrypoint() -> nothing {
-  let x: number<100> = 1.0
+function entrypoint() -> Nothing {
+  let x: Number<100> = 1.0
   print(x)
 }

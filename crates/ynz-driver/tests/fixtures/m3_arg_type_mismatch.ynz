@@ -1,7 +1,7 @@
-function greet(name: string) -> nothing {
+function greet(name: String) -> Nothing {
   print(name)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   greet(42)
 }

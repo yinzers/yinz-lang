@@ -10,15 +10,15 @@
 // RED today: compiles, prints `3 3`. GREEN: refused with the use-after-give error naming
 // `other` AND `rows` (the class-mate that was given).
 shape Rows {
-  items: array<int>
+  items: Array<Int>
 }
 
-function eat2(give owner: Rows, give piece: array<int>) -> nothing {
+function eat2(give owner: Rows, give piece: Array<Int>) -> Nothing {
   print(`${owner.items.count()} ${piece.count()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let rows: Rows = { items: [1, 2, 3] }
-  let other: array<int> = rows.items
+  let other: Array<Int> = rows.items
   eat2(rows, other)
 }

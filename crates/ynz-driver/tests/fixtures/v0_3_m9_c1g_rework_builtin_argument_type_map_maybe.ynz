@@ -6,19 +6,19 @@
 // verification (a compiler-bug report).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
-  let m: map<string, Big> = {}
+  let m: Map<String, Big> = {}
   m.set(`a`, tiny)
   let got = m.get(12345)
-  let nobody: maybe<Big> = none
+  let nobody: Maybe<Big> = none
   let picked = nobody.or(tiny)
   print(got.exists().toString())
   print(picked.count.toString())

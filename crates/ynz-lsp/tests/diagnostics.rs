@@ -110,12 +110,12 @@ fn concurrent_did_change_produces_two_notifications_without_panic() {
     // stays stable under rapid successive mutations.
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    h.did_open("file:///concurrent.ynz", "let x: int = 1");
+    h.did_open("file:///concurrent.ynz", "let x: Int = 1");
     next_notif(&h); // drain didOpen diagnostic
 
     // Queue two didChange notifications before draining (back-to-back)
-    h.did_change("file:///concurrent.ynz", "let x: int = 2", 2);
-    h.did_change("file:///concurrent.ynz", "let x: int = 3", 3);
+    h.did_change("file:///concurrent.ynz", "let x: Int = 2", 2);
+    h.did_change("file:///concurrent.ynz", "let x: Int = 3", 3);
 
     // Both must produce a notification without panic; lsp-server serializes them
     let _first = next_notif(&h).expect("first didChange must produce publishDiagnostics");
@@ -135,7 +135,7 @@ fn diagnostic_message_contains_what_what_instead_why() {
         position::LineTable,
     };
 
-    let text = "let x: int = 5";
+    let text = "let x: Int = 5";
     let table = LineTable::new(text);
     let d = YnzDiag {
         severity: Severity::Error,
@@ -176,11 +176,11 @@ fn lend_cross_thread_error_flows_to_lsp_diagnostic() {
     use ynz_typeck::queries::check_query;
 
     let src = r#"
-shape Event { name: string }
-function record(lend self: Event) -> nothing {
+shape Event { name: String }
+function record(lend self: Event) -> Nothing {
     self.name = "recorded"
 }
-function main() -> nothing {
+function main() -> Nothing {
     let event: Event = { name: "login" }
     background record(event)
 }
@@ -234,7 +234,7 @@ fn wait_on_non_may_block_warning_flows_as_lsp_warning() {
     // `wait print("hi")` — print is CPU-bound, so wait has no effect.
     // This must produce a Warning, not an Error.
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     wait print("hi")
 }
 "#;

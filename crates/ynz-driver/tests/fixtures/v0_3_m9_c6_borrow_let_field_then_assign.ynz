@@ -2,10 +2,10 @@
 // The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
   let heldRows = bucket.rows
   bucket.rows = [9]

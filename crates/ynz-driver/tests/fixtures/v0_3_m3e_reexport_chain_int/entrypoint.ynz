@@ -5,7 +5,7 @@
 // Expected output: "result: 7"
 import { doWork } from `b_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const r = doWork()
   print(`result: ${r.toString()}`)
 }

@@ -2,10 +2,10 @@
 // (`toll(-5)`). Pre-fix this already rendered a CLEAN generic mismatch error via
 // the types_compatible backstop — it is unified under the shared gate so ALL
 // call forms render the byte-identical teaching diagnostic (non-oop.md).
-function toll(amount: number) -> number {
+function toll(amount: Number) -> Number {
   return amount
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(toll(-5))
 }

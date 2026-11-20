@@ -1,8 +1,8 @@
 // v0.3-M9 C6 cost fixture: a `for` over an array the body does not write copies nothing.
 // Allocations: the outer literal (header + buffer) and two inner literals (header + buffer each).
 
-function entrypoint() -> nothing {
-  let rows: array<array<int>> = [[1], [2]]
+function entrypoint() -> Nothing {
+  let rows: Array<Array<Int>> = [[1], [2]]
   for (row in rows) {
     print(row.count())
   }

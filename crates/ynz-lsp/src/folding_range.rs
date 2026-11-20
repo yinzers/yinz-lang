@@ -130,7 +130,7 @@ mod tests {
         // The source has the opening `{` on line 0 and the body statements on line 1.
         // The parser sets body.span.start to the byte after `{\n`, which is the first
         // character of line 1. So start_line == 1 and end_line == 2 (the `}` line).
-        let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+        let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
         let (state, uri) = state_single("/tmp/ynz_fold_fn.ynz", src);
         let ranges = folding_range_response(&state, &uri);
         assert_eq!(ranges.len(), 1, "one function → one fold, got: {ranges:?}");
@@ -152,7 +152,7 @@ mod tests {
         // WHY: A function whose entire declaration fits on one line has nothing to
         // fold. Returning a FoldingRange with start_line == end_line would produce
         // a zero-height fold region that clients handle inconsistently.
-        let src = "function id(x: int) -> int { return x }\n";
+        let src = "function id(x: Int) -> Int { return x }\n";
         let (state, uri) = state_single("/tmp/ynz_fold_oneline.ynz", src);
         let ranges = folding_range_response(&state, &uri);
         assert!(
@@ -166,7 +166,7 @@ mod tests {
         // WHY: A multi-line shape declaration is a common fold candidate — users
         // want to collapse the field list when reading calling code. Missing this
         // fold is a noticeable UX gap.
-        let src = "shape Player {\n  name: string\n  health: int\n}\n";
+        let src = "shape Player {\n  name: String\n  health: Int\n}\n";
         let (state, uri) = state_single("/tmp/ynz_fold_shape.ynz", src);
         let ranges = folding_range_response(&state, &uri);
         assert_eq!(ranges.len(), 1, "one shape → one fold, got: {ranges:?}");

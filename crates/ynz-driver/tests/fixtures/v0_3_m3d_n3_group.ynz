@@ -17,7 +17,7 @@
 //   4957
 //   4961
 //   14870
-function score(seed: int) -> int {
+function score(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -27,7 +27,7 @@ function score(seed: int) -> int {
   return total + seed
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = score(2)
   let b = score(7)
   let c = score(11)

@@ -16,17 +16,17 @@
 // modes, both exit 0 with no segfault.
 //
 // Expected output: a:10\nb:20
-function loadA() -> int errors {
+function loadA() -> Int errors {
   wait sleep(5)
   return 10
 }
 
-function loadB() -> int errors {
+function loadB() -> Int errors {
   wait sleep(5)
   return 20
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = loadA()
   let b = loadB()
   let av = a.or(0)

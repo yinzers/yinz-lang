@@ -12,7 +12,7 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   2165
 
-function crunchA(n: int) -> int {
+function crunchA(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -22,7 +22,7 @@ function crunchA(n: int) -> int {
   return total + n
 }
 
-function crunchB(n: int) -> int {
+function crunchB(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 30) {
@@ -32,7 +32,7 @@ function crunchB(n: int) -> int {
   return total + n
 }
 
-function crunchC(n: int) -> int {
+function crunchC(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 20) {
@@ -42,17 +42,17 @@ function crunchC(n: int) -> int {
   return total + n
 }
 
-function fetchA(n: int) -> int {
+function fetchA(n: Int) -> Int {
   wait sleep(0)
   return n + 100
 }
 
-function fetchB(n: int) -> int {
+function fetchB(n: Int) -> Int {
   wait sleep(0)
   return n + 200
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunchA(1)
   let b = crunchB(2)
   let c = crunchC(3)

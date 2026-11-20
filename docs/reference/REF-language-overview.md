@@ -23,16 +23,16 @@ You write clean, simple code. The compiler turns it into fast, safe machine code
 
 ```ynz
 shape Player {
-  name: string
-  health: number
+  name: String
+  health: Number
 }
 
 // Functions are written on their own; player.takeDamage(5) is a shortcut for takeDamage(player, 5)
-function takeDamage(lend self: Player, amount: number) -> nothing {
+function takeDamage(lend self: Player, amount: Number) -> Nothing {
   self.health = self.health - amount
 }
 
-function getTopPlayers(share players: fixed<Player>, count: number) -> array<string> {
+function getTopPlayers(share players: Fixed<Player>, count: Number) -> Array<String> {
   let active = players.filter(p => p.health > 0)
 
   if (active.count() == 0) {
@@ -55,12 +55,12 @@ Every decision in this language follows these rules. When something seems weird,
 2. **Compile-time safety** — every check that can run at compile time does; a failure that can't (file and network problems, division by zero) is explicit: `errors` or a task-isolated panic, never silent
 3. **The compiler is a teacher** — errors explain what went wrong and suggest fixes
 4. **Self-documenting syntax** — a junior developer who has never seen Yinz should understand any line
-5. **Human-readable over jargon** — `options` not `enum`, `nothing` not `void`, `follows` not `implements`
+5. **Human-readable over jargon** — `options` not `enum`, `Nothing` not `void`, `follows` not `implements`
 6. **Zero-cost abstractions** — high-level syntax compiles to what a careful Rust/C++ programmer would write by hand; the features themselves cost what they inherently cost
 7. **Efficiency first, dynamic after** — the default path is always the fastest path
 8. **Compiler does the hard work** — smart defaults, type inference, optimization
 9. **Step-by-step over chaining** — each operation gets its own line and a name
-10. **Capital letter = type** — scan any line: capital letter means type, lowercase means everything else (variable, function, keyword, module)
+10. **Capital letter = type** — scan any line: capital letter means type, built-in types included (`Int`, `String`, `Array<T>`); lowercase means everything else (variable, function, keyword, module)
 11. **Dot-first design** — if something can be `.method()` with autocomplete, it is
 12. **Familiar syntax** — borrowed from JavaScript/TypeScript where possible
 13. **Fast to type** — quick without sacrificing readability
@@ -75,7 +75,7 @@ Each section covers one part of the language. They're self-contained — start w
 - [Functions](REF-functions.md) — defining and calling functions
 - [Ownership](REF-ownership.md) — how memory works without a garbage collector
 - [Types](REF-types.md) — defining your own data shapes
-- [Numeric Types](REF-numeric-types.md) — `number`, `float`, `int`, and `number<N>` for high precision
+- [Numeric Types](REF-numeric-types.md) — `Number`, `Float`, `Int`, and `Number<N>` for high precision
 - [Options](REF-options.md) — a fixed set of named choices
 - [Collections](REF-collections.md) — fixed arrays, growable arrays, and maps
 - [Maybe Types](REF-maybe.md) — values that might not exist

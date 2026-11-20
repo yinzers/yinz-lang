@@ -2,12 +2,12 @@
 source: crates/ynz-driver/tests/integration.rs
 expression: stderr
 ---
-Error: `+` cannot be used with `int` and `number`.
+Error: `+` cannot be used with `Int` and `Number`.
    ╭─[ [FIXTURES]/m2_mixed_int_number.ynz:4:11 ]
    │
  4 │   let c = a + b
    │           ──┬──  
-   │             ╰──── Convert the `int` to `number`: `myInt.toNumber() + myNumber`
+   │             ╰──── Convert the `Int` to `Number`: `myInt.toNumber() + myNumber`
    │ 
    │ Note: Yinz does not convert between types automatically. Both sides of an expression must have the same type.
 ───╯

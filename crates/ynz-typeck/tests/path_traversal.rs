@@ -31,7 +31,7 @@ fn make_temp_project(suffix: &str) -> std::path::PathBuf {
 
 fn check_file_with_import(dir: &std::path::Path, import_path: &str) -> CheckOutput {
     let main_src =
-        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}");
+        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> Nothing {{}}");
     let main_path = dir.join("main.ynz");
     std::fs::write(&main_path, &main_src).expect("write main.ynz");
 
@@ -53,7 +53,7 @@ fn check_file_with_registered_import(
     target_src: &str,
 ) -> CheckOutput {
     let main_src =
-        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}");
+        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> Nothing {{}}");
     let main_path = dir.join("main.ynz");
     std::fs::write(&main_path, &main_src).expect("write main.ynz");
 
@@ -189,7 +189,7 @@ fn import_via_symlink_escape_blocked() {
     std::fs::create_dir_all(&elsewhere).expect("create elsewhere dir");
     std::fs::write(
         elsewhere.join("file.ynz"),
-        "export function x() -> int { return 1 }",
+        "export function x() -> Int { return 1 }",
     )
     .expect("write outside file");
 
@@ -232,7 +232,7 @@ fn normal_nested_import_resolves() {
     let sub = dir.join("subdir");
     std::fs::create_dir_all(&sub).expect("create subdir");
     let target = sub.join("file.ynz");
-    let target_src = "export function x() -> int { return 1 }";
+    let target_src = "export function x() -> Int { return 1 }";
     std::fs::write(&target, target_src).expect("write file.ynz");
 
     let output = check_file_with_registered_import(&dir, "subdir/file", &target, target_src);
@@ -262,7 +262,7 @@ fn flat_import_in_project_root_resolves() {
     // WHY: `file` (no slashes) is the simplest valid import form. Must not be blocked.
     let dir = make_temp_project("flat_import");
     let target = dir.join("file.ynz");
-    let target_src = "export function x() -> int { return 1 }";
+    let target_src = "export function x() -> Int { return 1 }";
     std::fs::write(&target, target_src).expect("write file.ynz");
 
     let output = check_file_with_registered_import(&dir, "file", &target, target_src);
@@ -293,7 +293,7 @@ fn deeply_nested_path_resolves() {
     let deep = dir.join("deeply").join("nested");
     std::fs::create_dir_all(&deep).expect("create deep dirs");
     let target = deep.join("module.ynz");
-    let target_src = "export function x() -> int { return 1 }";
+    let target_src = "export function x() -> Int { return 1 }";
     std::fs::write(&target, target_src).expect("write module.ynz");
 
     let output =
@@ -327,7 +327,7 @@ fn directory_name_with_dots_resolves() {
     let sub = dir.join("dir.with.dots");
     std::fs::create_dir_all(&sub).expect("create dir.with.dots");
     let target = sub.join("file.ynz");
-    let target_src = "export function x() -> int { return 1 }";
+    let target_src = "export function x() -> Int { return 1 }";
     std::fs::write(&target, target_src).expect("write file.ynz");
 
     let output = check_file_with_registered_import(&dir, "dir.with.dots/file", &target, target_src);
@@ -360,7 +360,7 @@ fn file_name_with_dots_resolves() {
     let sub = dir.join("subdir");
     std::fs::create_dir_all(&sub).expect("create subdir");
     let target = sub.join("file.with.dots.ynz");
-    let target_src = "export function x() -> int { return 1 }";
+    let target_src = "export function x() -> Int { return 1 }";
     std::fs::write(&target, target_src).expect("write file.with.dots.ynz");
 
     let output =

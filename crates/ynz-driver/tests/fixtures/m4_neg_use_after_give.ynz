@@ -1,12 +1,12 @@
 shape Token {
-  id: int
+  id: Int
 }
 
-function consume(give t: Token) -> nothing {
+function consume(give t: Token) -> Nothing {
   print(t.id)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let t: Token = { id: 1 }
   consume(t)
   print(t.id)

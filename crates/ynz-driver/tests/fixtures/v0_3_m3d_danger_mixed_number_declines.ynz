@@ -13,9 +13,9 @@
 //   6.0
 //   2.5
 
-function score(n: int) -> number {
-  let total: number = 0.0
-  let i: int = 0
+function score(n: Int) -> Number {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5
     i = i + 1
@@ -23,12 +23,12 @@ function score(n: int) -> number {
   return total
 }
 
-function fetch(n: int) -> number {
+function fetch(n: Int) -> Number {
   wait sleep(0)
   return 2.5
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = score(4)
   let b = fetch(4)
   print(a)

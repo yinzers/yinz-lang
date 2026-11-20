@@ -2,19 +2,19 @@
 /// `foo(p)` with share param compiles; `p.heal(20)` with lend param on const errors.
 /// Verifies the ownership check fires precisely — only the lend call should fail.
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
-function greet(share self: Player) -> nothing {
+function greet(share self: Player) -> Nothing {
   print(self.name)
 }
 
-function heal(lend self: Player, amount: int) -> nothing {
+function heal(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health + amount
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { name: `hero`, health: 100 }
   greet(p)
   p.heal(10)

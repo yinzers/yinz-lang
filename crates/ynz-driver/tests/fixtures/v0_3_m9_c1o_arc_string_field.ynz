@@ -4,25 +4,25 @@
 // Bug: the block held the spawner's pointer, so the tasks read a freed string (ASan
 // heap-use-after-free in `ynz_string_builder_append`). `churn` reuses the freed bytes.
 shape Scene {
-  name: string
-  width: int
-  height: int
+  name: String
+  width: Int
+  height: Int
 }
 
-function render(scene: Scene, results: channel<int>) -> nothing {
+function render(scene: Scene, results: Channel<Int>) -> Nothing {
   wait sleep(100)
   print(`task sees ${scene.name}`)
   results.send(scene.width * scene.height)
 }
 
-function launch(results: channel<int>) -> nothing {
+function launch(results: Channel<Int>) -> Nothing {
   let scene: Scene = { name: `three rivers`.toUpperCase(), width: 6, height: 7 }
   background render(scene, results)
   background render(scene, results)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>()
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>()
   launch(results)
   let churn = `abcdefgh`.toUpperCase()
   print(churn)

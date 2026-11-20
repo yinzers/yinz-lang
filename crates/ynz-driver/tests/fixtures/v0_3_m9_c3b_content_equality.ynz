@@ -8,24 +8,24 @@
 // Expected output: one value per line below.
 
 shape Tag {
-  name: string
+  name: String
 }
 
-function entrypoint() -> nothing {
-  let count: int = 1
-  let key: string = `k-${count}`
-  let names: array<string> = []
+function entrypoint() -> Nothing {
+  let count: Int = 1
+  let key: String = `k-${count}`
+  let names: Array<String> = []
   names.add(key)
-  let same: string = `k-${count}`
+  let same: String = `k-${count}`
   print(names.contains(key))
   print(names.contains(same))
   print(names.contains(`k-1`))
   print(names.contains(`other`))
   let first: Tag = { name: key }
   let second: Tag = { name: same }
-  let tags: array<Tag> = [first]
+  let tags: Array<Tag> = [first]
   print(tags.contains(second))
-  let table: map<string, int> = { `x`: 1 }
+  let table: Map<String, Int> = { `x`: 1 }
   table.set(key, 5)
   let bySame = table.get(same)
   print(bySame.or(-1))

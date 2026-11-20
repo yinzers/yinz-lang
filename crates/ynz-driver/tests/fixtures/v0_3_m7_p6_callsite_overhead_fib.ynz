@@ -8,7 +8,7 @@
 // once normally, once with YNZ_PREEMPT_CALLSITE_CHECKS=1 set for the compile — then run
 // each binary 5 times and compare median wall-clock.
 
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
@@ -17,7 +17,7 @@ function fib(n: int) -> int {
   return a + b
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = fib(30)
   print(`fib(30) = ${result}`)
 }

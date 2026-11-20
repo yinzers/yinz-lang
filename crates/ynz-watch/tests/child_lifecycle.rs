@@ -32,7 +32,7 @@ fn check_mode_does_not_spawn_child() {
     use ynz_watch::db::init_db;
     use ynz_watch::rebuild::rebuild_one;
 
-    let valid_src = "function entrypoint() -> nothing { print(`ok`) }\n";
+    let valid_src = "function entrypoint() -> Nothing { print(`ok`) }\n";
     let path = PathBuf::from("/tmp/ynz_watch_check_mode_test.ynz");
     let mut db = init_db(&[WatchSourceFile {
         path: path.clone(),

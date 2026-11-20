@@ -14,21 +14,21 @@
 //   task sees id: 7
 
 shape Task {
-  id: int
-  priority: int
+  id: Int
+  priority: Int
 }
 
-function process(t: Task) -> nothing {
+function process(t: Task) -> Nothing {
   sleepBlocking(80)
   print(`task sees id: ${t.id}`)
 }
 
-function spawnTask() -> nothing {
+function spawnTask() -> Nothing {
   let job: Task = { id: 7, priority: 1 }
   background process(job)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   spawnTask()
   print(`spawner returned`)
   sleepBlocking(200)

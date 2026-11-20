@@ -12,15 +12,15 @@
 //   2.5
 //   2.5
 //   end
-function producer(lend wire: channel<number>) -> nothing {
-  let price: number = 2.5
+function producer(lend wire: Channel<Number>) -> Nothing {
+  let price: Number = 2.5
   wire.send(price)
   wire.send(price)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<number> = channel<number>(4)
+function entrypoint() -> Nothing {
+  let wire: Channel<Number> = Channel<Number>(4)
   background producer(wire)
   let got = wire.receive()
   let first = got.or(0.0)

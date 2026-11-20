@@ -1,11 +1,11 @@
 // v0.3-M9 C6: a for-loop variable reads an item a lend callee overwrites
 // The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
-function clobber(lend items: array<string>) -> nothing {
+function clobber(lend items: Array<String>) -> Nothing {
   items[0] = `z-${3}`
 }
-function entrypoint() -> nothing {
-  let items: array<string> = [`a-${1}`, `b-${2}`]
+function entrypoint() -> Nothing {
+  let items: Array<String> = [`a-${1}`, `b-${2}`]
   for (item in items) {
     clobber(items)
     print(item)

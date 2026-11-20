@@ -3,19 +3,19 @@
 // nothing. Correct behavior: prints 100. The counter test compares it with the single-read fixture:
 // 99 more reads, no more cells.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 shape Outer {
   inner: Holder
-  tag: int
+  tag: Int
 }
 
 function buildChain() -> Node {
@@ -32,8 +32,8 @@ function makeHolder() -> Holder {
   return holder
 }
 
-function entrypoint() -> nothing {
-  let holders: array<Holder> = []
+function entrypoint() -> Nothing {
+  let holders: Array<Holder> = []
   holders.add(makeHolder())
   let total = 0
   let round = 0

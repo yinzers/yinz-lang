@@ -1,7 +1,7 @@
 // v0.3-M9 C6: a map keeps a key in a slot of 8 or 16 bytes. A `number` of up to 34 digits fits the
 // 16; a `number<50>` takes as much memory as its digits need, kept outside the map.
 // Correct behavior: does not compile; the refusal names the type, a key to use, and why.
-function entrypoint() -> nothing {
-  let totals: map<number<50>, int> = {}
+function entrypoint() -> Nothing {
+  let totals: Map<Number<50>, Int> = {}
   print(totals.count())
 }

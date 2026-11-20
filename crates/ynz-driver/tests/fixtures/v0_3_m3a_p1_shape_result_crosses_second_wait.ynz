@@ -14,17 +14,17 @@
 // Expected: exit code 1, diagnostic mentions the shape type.
 // Expected: no stdout (compile error, no binary produced).
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function makePoint(a: int, b: int) -> Point {
+function makePoint(a: Int, b: Int) -> Point {
   wait sleep(5)
   let p: Point = { x: a, y: b }
   return p
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = wait makePoint(3, 7)
   wait sleep(5)
   let sum = r.x + r.y

@@ -3,6 +3,6 @@
 // WHAT/WHAT-INSTEAD/WHY diagnostic, not panic with an ICE.
 import { aFunc } from `a_module`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   aFunc()
 }

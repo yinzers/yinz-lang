@@ -4,12 +4,12 @@
 // behavior: the program compiles, runs, frees every allocation (items included) and is clean
 // under AddressSanitizer at both optimization levels.
 
-function makeRows() -> fixed<string> {
-  let rows: fixed<string> = [`a`.toUpperCase(), `bb`]
+function makeRows() -> Fixed<String> {
+  let rows: Fixed<String> = [`a`.toUpperCase(), `bb`]
   return rows
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let rows = makeRows()
   print(`built`)
 }

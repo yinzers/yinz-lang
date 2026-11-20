@@ -147,16 +147,16 @@ fn m7_errors_fn_calls_errors_fn_clean() {
     // type-check cleanly. Auto-propagation fires at the use site — no diagnostic.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `hello`
 }
 
-function process() -> string errors {
+function process() -> String errors {
   let content = readFile()
   return content
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = process()
   let msg = r.or(`default`)
   print(msg)
@@ -174,11 +174,11 @@ fn m7_non_errors_fn_calls_errors_fn_emits_diagnostic() {
     // caller never knows the operation failed.
     let out = assert_errors(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `hello`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let content = readFile()
   print(content)
 }
@@ -193,14 +193,14 @@ function entrypoint() -> nothing {
 #[test]
 fn m7_failed_method_returns_bool() {
     // WHY: `.failed()` is the gate for accessing error details. It must return
-    // `bool`. If it returns something else, `if (x.failed())` won't type-check.
+    // `Boolean`. If it returns something else, `if (x.failed())` won't type-check.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `ok`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   if (r.failed()) {
     print(`failed`)
@@ -219,11 +219,11 @@ fn m7_or_method_returns_inner_type() {
     // value — not as ErrorsCapable — after the call.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `hello`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   let content = r.or(`default`)
   print(content)
@@ -237,15 +237,15 @@ function entrypoint() -> nothing {
 #[test]
 fn m7_message_method_returns_string() {
     // WHY: `.message` is the human-readable error description. It must return
-    // `string` so it can be passed to `print`. Wrong type breaks the primary
+    // `String` so it can be passed to `print`. Wrong type breaks the primary
     // diagnostic display path.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `hello`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   if (r.failed()) {
     print(r.message)
@@ -255,24 +255,24 @@ function entrypoint() -> nothing {
     );
 }
 
-// ── 7. .suggestions returns array<string> ────────────────────────────────────
+// ── 7. .suggestions returns Array<String> ────────────────────────────────────
 
 #[test]
 fn m7_suggestions_method_refused_even_when_checked() {
     // WHY: v0.3 concurrency hardening Phase 3 step 3.4 (FRAGO 002 singleton S1). This test
     // used to be `m7_suggestions_method_returns_array_of_string` and asserted the read below
-    // compiled clean, which is `.suggestions` typing correctly (`array<string>`, unchanged)
+    // compiled clean, which is `.suggestions` typing correctly (`Array<String>`, unchanged)
     // while having NO working codegen — a correct, properly `.failed()`-guarded program used
     // to reach codegen and ICE "This is a compiler bug." `ec_field_lowering` now refuses
     // `.suggestions` at THIS site, at compile time, with real teaching text, before codegen
     // ever runs. See `ynz_typeck::errors_fields`'s module doc for the full producer.
     let out = assert_errors(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `hello`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   if (r.failed()) {
     let hints = r.suggestions
@@ -301,23 +301,23 @@ function entrypoint() -> nothing {
 fn m7_errors_fn_auto_propagation_success_type() {
     // WHY: in an errors-capable function, using an ErrorsCapable binding as a
     // plain value triggers auto-propagation. The binding's type must narrow to
-    // the inner success type so it can be passed to functions expecting `string`.
+    // the inner success type so it can be passed to functions expecting `String`.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `content`
 }
 
-function processContent(share content: string) -> nothing {
+function processContent(share content: String) -> Nothing {
   print(content)
 }
 
-function process() -> nothing errors {
+function process() -> Nothing errors {
   let content = readFile()
   processContent(content)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = process()
   if (r.failed()) {
     print(`process failed`)
@@ -335,16 +335,16 @@ fn m7_errors_fn_calls_non_errors_fn_clean() {
     // valid — the callee can't fail so no error-handling is needed.
     assert_clean(
         r#"
-function greet() -> string {
+function greet() -> String {
   return `hello`
 }
 
-function process() -> string errors {
+function process() -> String errors {
   let msg = greet()
   return msg
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = process()
   print(r.or(`failed`))
 }
@@ -361,11 +361,11 @@ fn m7_or_in_non_errors_context_no_diagnostic() {
     // silently ignored.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `content`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let content = readFile().or(`default`)
   print(content)
 }
@@ -382,11 +382,11 @@ fn m7_failed_check_handles_result_no_diagnostic() {
     // compiler knows the failure was explicitly handled.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `content`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   if (r.failed()) {
     print(`error`)
@@ -405,11 +405,11 @@ fn m7_unknown_method_on_errors_capable_emits_diagnostic() {
     // would otherwise silently compile.
     let out = assert_errors(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `ok`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   let x = r.nonExistentMethod()
 }
@@ -423,16 +423,16 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m7_errors_capable_declared_fn_type_checks() {
-    // WHY: a function declared `-> int errors` must type-check cleanly when it
-    // returns a plain `int`. The declaration tells the typeck machinery this
+    // WHY: a function declared `-> Int errors` must type-check cleanly when it
+    // returns a plain `Int`. The declaration tells the typeck machinery this
     // function is errors-capable; the return value is the success type.
     assert_clean(
         r#"
-function divide(share a: int, share b: int) -> int errors {
+function divide(share a: Int, share b: Int) -> Int errors {
   return a
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = divide(10, 2)
   let n = r.or(0)
   print(n.toString())
@@ -445,16 +445,16 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m7_errors_capable_nothing_return_clean() {
-    // WHY: `-> nothing errors` is valid — a side-effectful operation that may
+    // WHY: `-> Nothing errors` is valid — a side-effectful operation that may
     // fail but has no success value. The whole point of nothing errors is to
     // express "this may fail" without returning data.
     assert_clean(
         r#"
-function writeFile() -> nothing errors {
+function writeFile() -> Nothing errors {
   print(`written`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = writeFile()
   if (r.failed()) {
     print(`write failed`)
@@ -468,16 +468,16 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m7_errors_int_or_fallback_is_int() {
-    // WHY: `.or(0)` on an `int errors` value must return `int`. If the type is
+    // WHY: `.or(0)` on an `Int errors` value must return `Int`. If the type is
     // wrong, arithmetic operations after `.or()` would fail to type-check.
     assert_clean(
         r#"
-function tryParse(share s: string) -> int errors {
+function tryParse(share s: String) -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
-  let n: int = tryParse(`42`).or(0)
+function entrypoint() -> Nothing {
+  let n: Int = tryParse(`42`).or(0)
   print(n.toString())
 }
 "#,
@@ -488,15 +488,15 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m7_errors_bool_or_false_clean() {
-    // WHY: `-> boolean errors` must type-check cleanly. Bool is a primitive just like
+    // WHY: `-> Boolean errors` must type-check cleanly. Bool is a primitive just like
     // int or string — the errors wrapper must work for all inner types.
     assert_clean(
         r#"
-function checkFile() -> boolean errors {
+function checkFile() -> Boolean errors {
   return true
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let ok = checkFile().or(false)
   print(ok.toString())
 }
@@ -510,24 +510,24 @@ function entrypoint() -> nothing {
 fn m7_errors_result_used_in_errors_fn_narrows() {
     // WHY: when an errors-capable binding is used in an errors function (auto-
     // propagation context), its type must narrow from ErrorsCapable to the inner
-    // success type. A subsequent function expecting `string` must accept it.
+    // success type. A subsequent function expecting `String` must accept it.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `content`
 }
 
-function touch(share s: string) -> nothing {
+function touch(share s: String) -> Nothing {
   print(s)
 }
 
-function process() -> string errors {
+function process() -> String errors {
   let content = readFile()
   touch(content)
   return content
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = process()
   print(r.or(`failed`))
 }
@@ -548,11 +548,11 @@ fn m7_or_fallback_wrong_type_emits_diagnostic() {
     // itself doesn't produce unexpected diagnostics when the arg matches.
     assert_clean(
         r#"
-function tryGet() -> int errors {
+function tryGet() -> Int errors {
   return 99
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = tryGet().or(0)
   print(n.toString())
 }
@@ -568,11 +568,11 @@ fn m7_chained_errors_or_clean() {
     // an errors result. Chained directly on the call without a let binding.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `ok`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(readFile().or(`default`))
 }
 "#,
@@ -588,22 +588,22 @@ fn m7_two_errors_calls_in_errors_fn() {
     // without one narrowing affecting the other.
     assert_clean(
         r#"
-function step1() -> string errors {
+function step1() -> String errors {
   return `a`
 }
 
-function step2() -> int errors {
+function step2() -> Int errors {
   return 42
 }
 
-function pipeline() -> nothing errors {
+function pipeline() -> Nothing errors {
   let a = step1()
   let b = step2()
   print(a)
   print(b.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = pipeline()
   if (r.failed()) {
     print(`pipeline failed`)
@@ -644,17 +644,17 @@ fn m7_errors_capable_type_name_format() {
 
 #[test]
 fn m7_message_method_type_checks_on_errors_capable() {
-    // WHY: `.message` must return `string` from the method dispatch — the type
+    // WHY: `.message` must return `String` from the method dispatch — the type
     // checker must handle it without cascading to a "no such method" error.
     // Accessing `.message` without a `.failed()` check is semantically wrong but
     // P3a allows it; the full flow-sensitive enforcement is a v0.2 enhancement.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `ok`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   if (r.failed()) {
     print(r.message)
@@ -672,11 +672,11 @@ fn m7_errors_in_main_with_or_clean() {
     // call inside `main` is the standard pattern — must type-check cleanly.
     assert_clean(
         r#"
-function fetchName() -> string errors {
+function fetchName() -> String errors {
   return `Alice`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let name = fetchName().or(`unknown`)
   print(name)
 }
@@ -692,21 +692,21 @@ fn m7_nested_errors_chain_clean() {
     // end-to-end without cascading diagnostics from inner calls.
     assert_clean(
         r#"
-function readRaw() -> string errors {
+function readRaw() -> String errors {
   return `raw`
 }
 
-function process() -> string errors {
+function process() -> String errors {
   let raw = readRaw()
   return raw
 }
 
-function pipeline() -> string errors {
+function pipeline() -> String errors {
   let processed = process()
   return processed
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = pipeline()
   print(r.or(`err`))
 }
@@ -721,15 +721,15 @@ fn m7_failed_if_narrowing_after_block() {
     // WHY: `if (x.failed()) { ... }` must narrow `x` to the success type for
     // code that comes AFTER the if-block. The pattern "check failed, handle it,
     // then use the success value" is the core errors-handling idiom.
-    // After the if-block, `r` is narrowed to `string` — no longer ErrorsCapable.
+    // After the if-block, `r` is narrowed to `String` — no longer ErrorsCapable.
     // Use .or() before the if-check, or just check .failed() and use it.
     assert_clean(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `content`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = readFile()
   if (r.failed()) {
     print(`error handling`)
@@ -743,9 +743,9 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m7_errors_capable_inner_maybe_type() {
-    // WHY: `-> maybe<int> errors` is a valid (if exotic) combination — a function
+    // WHY: `-> Maybe<Int> errors` is a valid (if exotic) combination — a function
     // that can either fail OR succeed with an absent value. The inner type must
-    // resolve correctly to `maybe<int>`. Testing with a concrete maybe value
+    // resolve correctly to `Maybe<Int>`. Testing with a concrete maybe value
     // to avoid the `none` literal hint-unwrapping complexity.
     let t = Type::ErrorsCapable {
         inner: Box::new(Type::Maybe {
@@ -769,11 +769,11 @@ fn m7_non_errors_context_diagnostic_lists_options() {
     // listed, the developer is left guessing about the others.
     let out = assert_errors(
         r#"
-function readFile() -> string errors {
+function readFile() -> String errors {
   return `ok`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let content = readFile()
   print(content)
 }

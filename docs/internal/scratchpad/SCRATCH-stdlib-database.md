@@ -116,10 +116,10 @@ Postgres has a `COPY` command for bulk inserts that bypasses row-by-row INSERT o
 
 The Postgres wire protocol is a public specification defining exactly how every type is encoded:
 
-- `number` → 8-byte IEEE 754 float
-- `string` → 4-byte length prefix + UTF-8 bytes
+- `Number` → 8-byte IEEE 754 float
+- `String` → 4-byte length prefix + UTF-8 bytes
 - `Date` → 8-byte microseconds since epoch
-- `boolean` → 1 byte
+- `Boolean` → 1 byte
 
 The Yinz compiler authors implement these translations once per supported database. Wire protocols don't change, so these translations never change. Given a user-defined type, the compiler generates a serializer and deserializer for that exact shape — one pass, no runtime lookups, no branching.
 
@@ -363,18 +363,18 @@ Sequelize throws untyped exceptions with string error messages that must be caug
 Yinz uses the `errors` keyword to make database errors typed at the call site:
 
 ```
-function findUser(id: number) -> User errors DatabaseError
+function findUser(id: Number) -> User errors DatabaseError
 ```
 
 `DatabaseError` is a first-class type in the stdlib:
 
 ```
 shape DatabaseError {
-    summary: string             // short human-readable: "Unique constraint violated on quotes.symbol"
-    suggestions: array<string>  // ["Check for duplicates before inserting", "Use upsert instead"]
-    code: string | null         // raw DB error code ("23505", "08006", etc.)
-    query: string | null        // sanitized query that triggered the error
-    detail: string | null       // full DB-level detail message
+    summary: String             // short human-readable: "Unique constraint violated on quotes.symbol"
+    suggestions: Array<String>  // ["Check for duplicates before inserting", "Use upsert instead"]
+    code: String | null         // raw DB error code ("23505", "08006", etc.)
+    query: String | null        // sanitized query that triggered the error
+    detail: String | null       // full DB-level detail message
 }
 ```
 
@@ -542,8 +542,8 @@ That registry entry is the SSOT — this section is a cross-reference, not the a
 
 **Planned async surface (ships with v0.10 db module)**:
 
-- `db.queryAsync(sql, params) -> array<T> errors` — non-blocking query; `wait db.queryAsync(...)` suspends the caller while the DB responds.
-- `db.findAsync(Shape, options) -> array<Shape> errors` — non-blocking structured query.
+- `db.queryAsync(sql, params) -> Array<T> errors` — non-blocking query; `wait db.queryAsync(...)` suspends the caller while the DB responds.
+- `db.findAsync(Shape, options) -> Array<Shape> errors` — non-blocking structured query.
 - All existing `db.*` methods get `*Async` variants for use inside `wait` call sites.
 
 These back onto Tokio I/O (for Postgres) or DuckDB's async query API (for DuckDB embedded). The state-machine ABI that makes `wait` work was validated in v0.3-M2 using the internal `__testFallibleAsync` intrinsic, which exercises the same errors-through-state-machine path that `db.queryAsync` will use.

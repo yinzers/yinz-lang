@@ -36,9 +36,9 @@ fn assert_one_hint(discriminator: &str, source: &str, line_up_to_value: &str, hi
 fn container_add_hints_where_the_value_went() {
     assert_one_hint(
         "add",
-        "function entrypoint() -> nothing {
-  let numbers: array<int> = [1]
-  let list: array<array<int>> = []
+        "function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
+  let list: Array<Array<Int>> = []
   list.add(numbers)
 }",
         "list.add(numbers",
@@ -50,9 +50,9 @@ fn container_add_hints_where_the_value_went() {
 fn field_store_hints_where_the_value_went() {
     assert_one_hint(
         "field",
-        "shape Bag { items: array<int> }
-function entrypoint() -> nothing {
-  let numbers: array<int> = [1]
+        "shape Bag { items: Array<Int> }
+function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
   let bag: Bag = { items: [0] }
   bag.items = numbers
 }",
@@ -65,12 +65,12 @@ function entrypoint() -> nothing {
 fn let_hints_where_the_value_went() {
     assert_one_hint(
         "let",
-        "function entrypoint() -> nothing {
-  let numbers: array<int> = [1]
-  let owner: array<int> = numbers
+        "function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
+  let owner: Array<Int> = numbers
   print(owner.count().toString())
 }",
-        "let owner: array<int> = numbers",
+        "let owner: Array<Int> = numbers",
         "handed to `owner`",
     );
 }
@@ -79,12 +79,12 @@ fn let_hints_where_the_value_went() {
 fn literal_part_hints_where_the_value_went() {
     assert_one_hint(
         "literal",
-        "function entrypoint() -> nothing {
-  let numbers: array<int> = [1]
-  let rows: array<array<int>> = [numbers]
+        "function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
+  let rows: Array<Array<Int>> = [numbers]
   print(rows.count().toString())
 }",
-        "let rows: array<array<int>> = [numbers",
+        "let rows: Array<Array<Int>> = [numbers",
         "handed to the literal `[numbers]`",
     );
 }
@@ -93,11 +93,11 @@ fn literal_part_hints_where_the_value_went() {
 fn storing_bits_hints_nothing() {
     let found = store_hints(
         "bits",
-        "function entrypoint() -> nothing {
-  let original: int = 1
-  let list: array<int> = []
+        "function entrypoint() -> Nothing {
+  let original: Int = 1
+  let list: Array<Int> = []
   list.add(original)
-  let copied: int = original
+  let copied: Int = original
   print(copied.toString())
 }",
     );

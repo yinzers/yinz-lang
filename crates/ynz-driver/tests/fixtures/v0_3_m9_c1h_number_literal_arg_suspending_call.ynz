@@ -3,16 +3,16 @@
 // `wait`, when the caller's resume function has returned and its stack is gone.
 // Prints 2.50, then 5.50.
 
-function tally(start: number) -> number {
+function tally(start: Number) -> Number {
   wait sleep(1)
   let total = start + 0.25
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let literal = tally(2.25)
   print(literal.toString())
-  let seed: number = 2.5
+  let seed: Number = 2.5
   let computed = tally(seed + 2.75)
   print(computed.toString())
 }

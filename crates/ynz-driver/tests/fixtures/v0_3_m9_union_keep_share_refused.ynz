@@ -5,20 +5,20 @@
 // Correct behavior: does not compile; the diagnostic names `t`, `keep` and `give`.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function keep(lend list: array<Thing>, share thing: Thing) -> nothing {
+function keep(lend list: Array<Thing>, share thing: Thing) -> Nothing {
   list.add(thing)
 }
 
-function entrypoint() -> nothing {
-  let list: array<Thing> = []
+function entrypoint() -> Nothing {
+  let list: Array<Thing> = []
   let big: Big = { label: `kept`, count: 3 }
   keep(list, big)
   print(`end`)

@@ -8,14 +8,14 @@
 // instead of owning the bytes. Fixed: literal fill routes through
 // value_to_stable_bits (shape bytes heap-cloned at fill time).
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
+function entrypoint() -> Nothing {
+  let seed: Int = 1
   let a: Part = { qty: seed, price: seed * 10 }
-  let pair: fixed<Part> = [a.copy(), a.copy()]
+  let pair: Fixed<Part> = [a.copy(), a.copy()]
   a.qty = 9
   a.price = 90
   let s0 = pair[0]

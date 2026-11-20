@@ -5,11 +5,11 @@
 // Correct behavior: does not compile (the refusal names the suspending call).
 // Pre-fix failure: the compiler panicked ("Yinz compiler bug" box), no diagnostic.
 shape Circle {
-  name: string
+  name: String
 }
-shape Mixed = Circle | int
+shape Mixed = Circle | Int
 
-function count() -> int {
+function count() -> Int {
   wait sleep(1)
   return 4
 }
@@ -19,7 +19,7 @@ function pick() -> Mixed {
   return wait count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let m = pick()
   if (m) {
     is Circle => {

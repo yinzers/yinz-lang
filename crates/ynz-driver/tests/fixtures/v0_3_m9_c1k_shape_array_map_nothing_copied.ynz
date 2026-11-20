@@ -3,17 +3,17 @@
 // Expected output: `A` twice (the task's, the copy's).
 
 shape Holder {
-  label: string
-  nums: array<int> | nothing
-  table: map<string, int> | nothing
+  label: String
+  nums: Array<Int> | Nothing
+  table: Map<String, Int> | Nothing
 }
 
-function show(h: Holder) -> nothing {
+function show(h: Holder) -> Nothing {
   print(h.label)
 }
 
-function entrypoint() -> nothing {
-  let table: map<string, int> = { `a`: 1 }
+function entrypoint() -> Nothing {
+  let table: Map<String, Int> = { `a`: 1 }
   let holder: Holder = { label: `a`.toUpperCase(), nums: [1, 2], table: table }
   background show(holder)
   wait sleep(50)

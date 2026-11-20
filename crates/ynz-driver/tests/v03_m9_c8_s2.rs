@@ -18,23 +18,23 @@ use support::{
 /// Array and string temporaries passed to a suspending callee, which keeps them across its own
 /// `wait`. Both die at the end of their statement, after the callee returned.
 const TEMPORARY_ACROSS_WAIT: &str = "
-function make() -> array<int> {
+function make() -> Array<Int> {
   return [1, 2, 3]
 }
 
-function measure(rows: array<int>) -> int {
+function measure(rows: Array<Int>) -> Int {
   wait sleep(1)
   return rows.count()
 }
 
-function describe(text: string) -> int {
+function describe(text: String) -> Int {
   wait sleep(1)
   return text.count()
 }
 
-function entrypoint() -> nothing {
-  let rowCount: int = wait measure(make())
-  let textCount: int = wait describe(`crew`.toUpperCase())
+function entrypoint() -> Nothing {
+  let rowCount: Int = wait measure(make())
+  let textCount: Int = wait describe(`crew`.toUpperCase())
   print(rowCount)
   print(textCount)
 }
@@ -43,20 +43,20 @@ function entrypoint() -> nothing {
 /// The same statements repeated by a loop: the frame slot of each temporary is nulled after its
 /// release, so an iteration never frees the previous iteration's value a second time.
 const TEMPORARY_ACROSS_WAIT_IN_LOOP: &str = "
-function make() -> array<int> {
+function make() -> Array<Int> {
   return [1, 2, 3]
 }
 
-function measure(rows: array<int>) -> int {
+function measure(rows: Array<Int>) -> Int {
   wait sleep(1)
   return rows.count()
 }
 
-function entrypoint() -> nothing {
-  let total: int = 0
-  let round: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
+  let round: Int = 0
   while (round < 3) {
-    let rowCount: int = wait measure(make())
+    let rowCount: Int = wait measure(make())
     total = total + rowCount
     round = round + 1
   }
@@ -66,9 +66,9 @@ function entrypoint() -> nothing {
 
 /// A frame-backed local reassigned after a `wait`: the old value is released at the assignment.
 const REASSIGN_ARRAY_AND_STRING: &str = "
-function entrypoint() -> nothing {
-  let rows: array<int> = [1, 2]
-  let label: string = `old`.toUpperCase()
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2]
+  let label: String = `old`.toUpperCase()
   wait sleep(1)
   rows = [3, 4, 5]
   label = `fresh`.toUpperCase()
@@ -148,35 +148,35 @@ fn reassign_releases_the_old_array_and_string_in_a_resume_function() {
 /// value, the old value was given away first (its slot is null, so nothing is released), and the
 /// assignment repeats in a loop that suspends.
 const REASSIGN_SHAPES: &str = "
-function fresh() -> array<int> {
+function fresh() -> Array<Int> {
   wait sleep(1)
   return [7, 8, 9, 10]
 }
 
-function consume(give rows: array<int>) -> int {
+function consume(give rows: Array<Int>) -> Int {
   wait sleep(1)
   return rows.count()
 }
 
-function entrypoint() -> nothing {
-  let awaited: array<int> = wait fresh()
+function entrypoint() -> Nothing {
+  let awaited: Array<Int> = wait fresh()
   awaited = [1]
   wait sleep(1)
   print(awaited.count())
 
-  let label: string = `ab`.toUpperCase()
+  let label: String = `ab`.toUpperCase()
   label = label.toUpperCase()
   wait sleep(1)
   print(label.count())
 
-  let handed: array<int> = [1, 2]
-  let taken: int = wait consume(handed)
+  let handed: Array<Int> = [1, 2]
+  let taken: Int = wait consume(handed)
   handed = [3, 4, 5]
   wait sleep(1)
   print(taken + handed.count())
 
-  let looped: array<int> = [0]
-  let round: int = 0
+  let looped: Array<Int> = [0]
+  let round: Int = 0
   while (round < 3) {
     wait sleep(1)
     looped = [round, round, round]
@@ -195,20 +195,20 @@ fn reassign_shapes_in_a_resume_function_balance_and_stay_asan_clean() {
 /// A map and a channel reassigned across a `wait`: the other frame-backed kinds a resume function
 /// releases at an assignment.
 const REASSIGN_MAP_AND_CHANNEL: &str = "
-function build() -> map<int, int> {
-  let built: map<int, int> = {}
+function build() -> Map<Int, Int> {
+  let built: Map<Int, Int> = {}
   built.set(2, 20)
   built.set(3, 30)
   return built
 }
 
-function entrypoint() -> nothing {
-  let table: map<int, int> = {}
+function entrypoint() -> Nothing {
+  let table: Map<Int, Int> = {}
   table.set(1, 10)
-  let wire: channel<int> = channel<int>(2)
+  let wire: Channel<Int> = Channel<Int>(2)
   wait sleep(1)
   table = build()
-  wire = channel<int>(4)
+  wire = Channel<Int>(4)
   wait sleep(1)
   print(table.count())
 }

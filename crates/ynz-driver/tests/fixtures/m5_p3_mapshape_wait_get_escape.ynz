@@ -4,14 +4,14 @@
 // only the owned Part binding crosses. Post-resume reads must see the
 // get-time bytes, not stale frame or staging memory.
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let pa: Part = { qty: 1, price: 10 }
   let pb: Part = { qty: 2, price: 20 }
-  let stock: map<int, Part> = {}
+  let stock: Map<Int, Part> = {}
   stock.set(1, pa)
   stock.set(2, pb)
   let g = stock.get(1)

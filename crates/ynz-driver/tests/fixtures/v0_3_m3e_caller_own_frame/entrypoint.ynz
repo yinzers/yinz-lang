@@ -5,14 +5,14 @@
 // Expected output: "a: 1, b: 2, c: 3, result: 100"
 import { doWork } from `io_ops`
 
-function caller() -> nothing {
-  let a: int = 1
-  let b: int = 2
-  let c: int = 3
+function caller() -> Nothing {
+  let a: Int = 1
+  let b: Int = 2
+  let c: Int = 3
   const result = doWork()
   print(`a: ${a.toString()}, b: ${b.toString()}, c: ${c.toString()}, result: ${result.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

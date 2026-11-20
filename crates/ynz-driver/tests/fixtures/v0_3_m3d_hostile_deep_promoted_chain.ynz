@@ -11,7 +11,7 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   102
 
-function leaf(n: int) -> int {
+function leaf(n: Int) -> Int {
   let t = 0
   let i = 0
   while (i < n) {
@@ -21,23 +21,23 @@ function leaf(n: int) -> int {
   return t
 }
 
-function combine() -> int {
+function combine() -> Int {
   let a = leaf(10)
   let b = leaf(11)
   return a + b
 }
 
-function middle() -> int {
+function middle() -> Int {
   let r = combine()
   return r + 1
 }
 
-function top() -> int {
+function top() -> Int {
   let r = middle()
   return r + 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = top()
   print(x)
 }

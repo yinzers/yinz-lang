@@ -114,10 +114,10 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
 </style></head>
 <body>
 <h1>Yinz VS Code extension · Replacement marker</h1>
-<p class="lede">The only new visual is the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>array</code> (line 3). Hover widget, lightbulb and code-action menu are stock VS Code, Dark Modern theme.</p>
+<p class="lede">The only new visual is the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>Array</code> (line 3). Hover widget, lightbulb and code-action menu are stock VS Code, Dark Modern theme.</p>
 
 <figure class="shot" id="rest">
-<figcaption>0 · At rest: the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>array</code> (line 3) is the only new visual</figcaption>
+<figcaption>0 · At rest: the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>Array</code> (line 3) is the only new visual</figcaption>
 <div class="win">
   <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
   <div class="body">
@@ -135,7 +135,7 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
           <div class="guide" style="top:19px;height:76px"></div>
           <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
     <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
-    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">Array</span><span class="op">&lt;</span><span class="ty">Int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
 <span class="b1">}</span></pre>
@@ -167,7 +167,7 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
           <div class="guide" style="top:19px;height:76px"></div>
           <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
     <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
-    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">Array</span><span class="op">&lt;</span><span class="ty">Int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
 <span class="b1">}</span></pre>
@@ -185,7 +185,7 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
 </div>
 </figure>
 <figure class="shot" id="hover-array">
-<figcaption>2 · Mouse over <code>array</code> (line 3): stock hover</figcaption>
+<figcaption>2 · Mouse over <code>Array</code> (line 3): stock hover</figcaption>
 <div class="win">
   <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
   <div class="body">
@@ -203,15 +203,15 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
           <div class="guide" style="top:19px;height:76px"></div>
           <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
     <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
-    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">Array</span><span class="op">&lt;</span><span class="ty">Int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
 <span class="b1">}</span></pre>
           <div class="anchor" style="left:1ch;top:95px"><div class="caret"></div></div>
           <div class="anchor" style="left:16ch;top:57px"><svg class="ptr" width="14" height="21" viewBox="0 0 14 21" aria-hidden="true"><path d="M1 1v16l4-4 3 7 2.5-1-3-6.6H13z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg><div class="hover" role="tooltip">
-  <p><strong>WHAT:</strong> The compiler stores this value as a fixed-size <code>fixed&lt;T&gt;</code> instead of a growable <code>array&lt;T&gt;</code>, because nothing in this function ever grows it.</p>
-  <p><strong>WHAT INSTEAD:</strong> Write <code>fixed</code> instead of <code>array</code> in the annotation, for example <code>let nums: fixed&lt;int&gt; = [1, 2, 3]</code>, or use the "Write 'fixed' instead of 'array'" action on the underlined word. If you do need to add items later, keep <code>array</code>.</p>
-  <p><strong>WHY:</strong> A fixed-size list never has to grow, so it is cheaper to create and use than a growable <code>array</code>, and writing <code>fixed</code> tells readers its size will not change.</p>
+  <p><strong>WHAT:</strong> The compiler stores this value as a fixed-size <code>Fixed&lt;T&gt;</code> instead of a growable <code>Array&lt;T&gt;</code>, because nothing in this function ever grows it.</p>
+  <p><strong>WHAT INSTEAD:</strong> Write <code>Fixed</code> instead of <code>Array</code> in the annotation, for example <code>let nums: Fixed&lt;Int&gt; = [1, 2, 3]</code>, or use the "Write 'Fixed' instead of 'Array'" action on the underlined word. If you do need to add items later, keep <code>Array</code>.</p>
+  <p><strong>WHY:</strong> A fixed-size list never has to grow, so it is cheaper to create and use than a growable <code>Array</code>, and writing <code>Fixed</code> tells readers its size will not change.</p>
 </div></div>
         </div>
       </div>
@@ -239,7 +239,7 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
           <div class="guide" style="top:19px;height:76px"></div>
           <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
     <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
-    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">Array</span><span class="op">&lt;</span><span class="ty">Int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
 <span class="b1">}</span></pre>
@@ -256,7 +256,7 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
 </div>
 </figure>
 <figure class="shot" id="action-array">
-<figcaption>4 · Cursor in <code>array</code>, lightbulb clicked: stock code-action menu, Rewrite group</figcaption>
+<figcaption>4 · Cursor in <code>Array</code>, lightbulb clicked: stock code-action menu, Rewrite group</figcaption>
 <div class="win">
   <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
   <div class="body">
@@ -274,14 +274,14 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
           <div class="guide" style="top:19px;height:76px"></div>
           <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
     <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
-    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">Array</span><span class="op">&lt;</span><span class="ty">Int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
     <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
 <span class="b1">}</span></pre>
           <div class="anchor" style="left:18ch;top:38px"><div class="caret"></div></div>
           <div class="anchor" style="left:16ch;top:57px"><div class="actions" role="menu">
   <div class="hdr">Rewrite</div>
-  <div class="item focused" role="menuitem"><span class="ci">&#xeb65;</span>Write &#39;fixed&#39; instead of &#39;array&#39;</div>
+  <div class="item focused" role="menuitem"><span class="ci">&#xeb65;</span>Write &#39;Fixed&#39; instead of &#39;Array&#39;</div>
 </div></div>
         </div>
       </div>

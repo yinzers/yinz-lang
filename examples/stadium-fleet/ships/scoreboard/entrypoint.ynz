@@ -5,9 +5,9 @@
 
 import { sum, max } from `shared/scoring`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   // Runs scored in the first four innings: 3, 1, 4, 1.
-  let inningRuns: fixed<int> = [3, 1, 4, 1]
+  let inningRuns: Fixed<Int> = [3, 1, 4, 1]
   let totalRuns = sum(inningRuns)
   let bigInning = max(inningRuns)
   print(`total runs = ${totalRuns}, biggest inning = ${bigInning} runs`)

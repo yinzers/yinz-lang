@@ -1200,21 +1200,21 @@ fn build_module<'ctx, 'g>(
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
-        panic_int_add: build_c_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
-        panic_int_sub: build_c_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
-        panic_int_mul: build_c_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
-        panic_int_div: build_c_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
-        panic_int_rem: build_c_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
+        panic_int_add: build_c_string_global(ctx, module, "Int overflow in '+'", ".panic.iadd"),
+        panic_int_sub: build_c_string_global(ctx, module, "Int overflow in '-'", ".panic.isub"),
+        panic_int_mul: build_c_string_global(ctx, module, "Int overflow in '*'", ".panic.imul"),
+        panic_int_div: build_c_string_global(ctx, module, "division by zero (Int)", ".panic.idiv"),
+        panic_int_rem: build_c_string_global(ctx, module, "remainder by zero (Int)", ".panic.irem"),
         panic_dec_div: build_c_string_global(
             ctx,
             module,
-            "division by zero (number)",
+            "division by zero (Number)",
             ".panic.ddiv",
         ),
         panic_dec_rem: build_c_string_global(
             ctx,
             module,
-            "remainder by zero (number)",
+            "remainder by zero (Number)",
             ".panic.drem",
         ),
         source_file: build_c_string_global(ctx, module, source_path, ".source.file"),
@@ -2229,7 +2229,7 @@ fn is_ptr_param(ty: &ynz_ast::nodes::Type, shape_table: &ShapeTable) -> bool {
             false
         }
         ynz_ast::nodes::Type::Named(n, _)
-            if !shape_table.contains(n) && n != "self" && n != "string" =>
+            if !shape_table.contains(n) && n != "self" && n != "String" =>
         {
             false
         }
@@ -15125,28 +15125,28 @@ const SPIKE_FRAME_TAG: u32 = ynz_abi::SPIKE_FRAME_TAG;
 /// auto-promotion outcome, never an error):
 /// - bare `Shape` / `Shape errors` — by-value shape needs variable-size staging
 ///   (WideValueSuspendingReturn). At the AST level a shape is a `Named` that is not `string`.
-/// - `number errors` (and any wide-value-EC inner) — the 24-byte `{i64 err + i128 ok}` pair
+/// - `Number errors` (and any wide-value-EC inner) — the 24-byte `{i64 err + i128 ok}` pair
 ///   overflows the 16-byte slot, so the ABI smuggles a pointer into the worker thread's dead
 ///   stack; join-bind would dereference it (use-after-free). Wide-EC is the parallel-path
 ///   manifestation of the staging-slot family tracked in `.claude/todos.md`; declined per the
 ///   plan's "Hotfix that isn't" rule and fixed on its own track, NOT in M3d.
-/// - `fixed<_>` — the non-suspending `fixed`-return path returns a count of 0 (a separate
+/// - `Fixed<_>` — the non-suspending `Fixed`-return path returns a count of 0 (a separate
 ///   pre-existing base-codegen bug, byte-identical in both modes so not a parallel divergence);
 ///   admitting it would be dead anyway (it never fires), so it declines here to keep both
-///   gates honest. Tracked with the `fixed`-return bug, not fixed in M3d.
-/// - `maybe` / `union` / `dynamic` / `range` / any non-(array|map) `Generic` / a `Named` that
-///   is not `string` (shape/options/union-alias) — outside this milestone's carried set.
-/// - `nothing` — no value to join-bind; `Error` — an earlier type error poisoned the sig.
+///   gates honest. Tracked with the `Fixed`-return bug, not fixed in M3d.
+/// - `Maybe` / `union` / `dynamic` / `Range` / any non-(Array|Map) `Generic` / a `Named` that
+///   is not `String` (shape/options/union-alias) — outside this milestone's carried set.
+/// - `Nothing` — no value to join-bind; `Error` — an earlier type error poisoned the sig.
 fn return_type_fits_cpu_result_abi(ret: &ynz_ast::nodes::Type) -> bool {
     use ynz_ast::nodes::Type as AstType;
     match ret {
         AstType::Int | AstType::Float | AstType::Bool | AstType::Number { .. } => true,
-        // `string` is the only `Named` that fits — every other `Named` is a user shape, an
+        // `String` is the only `Named` that fits — every other `Named` is a user shape, an
         // options type, or a union alias, all declined.
-        AstType::Named(n, _) => n == "string",
-        // Only growable/keyed heap collections return a single owning heap pointer. `fixed`
+        AstType::Named(n, _) => n == "String",
+        // Only growable/keyed heap collections return a single owning heap pointer. `Fixed`
         // declines (see doc above).
-        AstType::Generic { name, .. } => matches!(name.as_str(), "array" | "map"),
+        AstType::Generic { name, .. } => matches!(name.as_str(), "Array" | "Map"),
         // `T errors` admits only when the success word is a safe-to-carry class. A wide inner
         // (number → dead-worker-stack pointer; shape → variable-size staging) is declined.
         AstType::ErrorCapable { inner, .. } => ec_inner_fits_cpu_result_abi(inner),
@@ -15165,8 +15165,8 @@ fn ec_inner_fits_cpu_result_abi(inner: &ynz_ast::nodes::Type) -> bool {
     use ynz_ast::nodes::Type as AstType;
     match inner {
         AstType::Int | AstType::Float | AstType::Bool => true,
-        AstType::Named(n, _) => n == "string",
-        AstType::Generic { name, .. } => matches!(name.as_str(), "array" | "map"),
+        AstType::Named(n, _) => n == "String",
+        AstType::Generic { name, .. } => matches!(name.as_str(), "Array" | "Map"),
         _ => false,
     }
 }
@@ -16114,7 +16114,7 @@ fn emit_cpu_member_spawn<'ctx, 'g>(
         // number-typed trampoline would `int_to_ptr` into an invalid pointer.
         Some(Expr::IntLit(_, span)) if takes_number => {
             return Err(format!(
-                "internal: int-literal argument to a `number`-param CPU member reached \
+                "internal: int-literal argument to a `Number`-param CPU member reached \
                  codegen ({name_prefix} member {idx}, source offsets {}..{}) — typeck's \
                  int-literal-to-number call-site gate should have rejected this program",
                 span.start, span.end
@@ -19610,7 +19610,7 @@ fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type, shape_table: &ShapeTab
         ynz_ast::nodes::Type::Int => Type::Int,
         ynz_ast::nodes::Type::Float => Type::Float,
         ynz_ast::nodes::Type::Bool => Type::Bool,
-        ynz_ast::nodes::Type::Named(n, _) if n == "string" => Type::String,
+        ynz_ast::nodes::Type::Named(n, _) if n == "String" => Type::String,
         // M6: union type aliases.
         ynz_ast::nodes::Type::Named(n, _) if shape_table.union_aliases.contains_key(n) => {
             shape_table.union_aliases[n].clone()
@@ -21528,7 +21528,7 @@ fn lower_stmt_return<'ctx>(
                                                 let staging_offset = cg
                                                     .sm_number_errors_staging_offset
                                                     .ok_or_else(|| {
-                                                        "ICE: `-> number errors` SM return: \
+                                                        "ICE: `-> Number errors` SM return: \
                                                          sm_number_errors_staging_offset is None — \
                                                          build_frame_layouts must have omitted the \
                                                          staging slot for this function"
@@ -23661,7 +23661,7 @@ fn lower_expr_node<'ctx>(
                 // non-positive literal capacity and gated `--kernel` mode, so codegen only
                 // supplies the value. The suspending `.send()`/`.receive()` surface is
                 // Phase 2 (FRAGO 004).
-                "channel" => {
+                "Channel" => {
                     let capacity = match call.args.len() {
                         0 => cg
                             .i64()
@@ -24951,7 +24951,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                 !(refused
                     && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
                     && matches!(resolved, Type::BuiltinFixed { .. })),
-                "a named `fixed` with uncopyable items reached the background hand-over arm"
+                "a named `Fixed` with uncopyable items reached the background hand-over arm"
             );
             // A piece of another value (`bag.rows`, `make().rows`) that `spawn_arg_refusal`
             // refuses is refused by typeck (`Temporaries::refused_spawn_pieces`, the same
@@ -28354,7 +28354,7 @@ fn emit_owned_copy<'ctx>(
             };
             let item_count = size.known().ok_or_else(|| {
                 format!(
-                    "{site}: the length of this `fixed` list is not known here, so its copy \
+                    "{site}: the length of this `Fixed` list is not known here, so its copy \
                      cannot be sized — this is a compiler bug"
                 )
             })? as u64;
@@ -29157,7 +29157,7 @@ fn release_step(ty: &Type) -> ReleaseStep {
                 size: *size as u64,
             },
             (_, FixedLength::Unknown | FixedLength::OfParam { .. }) => ReleaseStep::Unsupported(
-                "the length of this `fixed` list is not known here, so its cells cannot be walked",
+                "the length of this `Fixed` list is not known here, so its cells cannot be walked",
             ),
         },
         Type::Shape { name } => ReleaseStep::Shape { name: name.clone() },
@@ -29388,7 +29388,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .release_fn(&ty, false)?
                 .map(|glue| (as_pointer(glue), true))),
             ReleaseStep::Fixed { .. } => Err(format!(
-                "internal: cannot release a stored `{}`: a `fixed` list is stored by value only in a shape field",
+                "internal: cannot release a stored `{}`: a `Fixed` list is stored by value only in a shape field",
                 ynz_typeck::types::type_name(&ty)
             )),
             ReleaseStep::Unsupported(reason) => Err(format!(
@@ -29737,7 +29737,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or_else(|| format!("{site}: no function to walk the cells in"))?;
         let glue = self
             .stored_release(elem, ReleaseHome::FixedCell)?
-            .ok_or_else(|| format!("{site}: the items of this `fixed` list own nothing"))?;
+            .ok_or_else(|| format!("{site}: the items of this `Fixed` list own nothing"))?;
         let counter = self
             .builder
             .build_alloca(self.i64(), "release_fixed_i")
@@ -33912,7 +33912,7 @@ mod copy_parity_tests {
         assert_eq!(
             owned_copy_plan(&bignum),
             OwnedCopy::StringClone,
-            "bignum `number` (a pointer to heap text) must be copied as text, never aliased"
+            "bignum `Number` (a pointer to heap text) must be copied as text, never aliased"
         );
         assert!(
             matches!(release_step(&bignum), ReleaseStep::String),
@@ -33920,7 +33920,7 @@ mod copy_parity_tests {
         );
         assert!(
             !ynz_typeck::types::is_trivially_copyable(&bignum),
-            "bignum `number` must not be trivially copyable — it is a pointer, not a value"
+            "bignum `Number` must not be trivially copyable — it is a pointer, not a value"
         );
     }
 }
@@ -34003,17 +34003,17 @@ fn emit_type_const<'ctx>(
         .ok_or_else(|| format!("no registry entry for {type_name}.{const_name}"))?;
 
     match entry.value_type {
-        "int" => {
+        "Int" => {
             let v: i64 = entry.value_literal.parse()
                 .map_err(|e| format!("int literal parse error for {type_name}.{const_name}: {e}"))?;
             Ok(cg.i64().const_int(v as u64, v < 0).into())
         }
-        "float" => {
+        "Float" => {
             let v: f64 = entry.value_literal.parse()
                 .map_err(|e| format!("float literal parse error for {type_name}.{const_name}: {e}"))?;
             Ok(cg.f64().const_float(v).into())
         }
-        "number" => {
+        "Number" => {
             let s = entry.value_literal;
             let bits = ynz_numerics::parse(s)
                 .ok_or_else(|| format!("failed to parse decimal128 constant `{s}`"))?;
@@ -36657,21 +36657,21 @@ mod tests {
         match variant {
             // Admitted classes: a value or single owning heap pointer fits the 16-byte slot.
             Resolved::Int => ParityCase::Reachable {
-                label: "int",
+                label: "Int",
                 ast: Ast::Int,
                 resolved: Resolved::Int,
                 bare_expected: true,
                 ec_expected: true,
             },
             Resolved::Float => ParityCase::Reachable {
-                label: "float",
+                label: "Float",
                 ast: Ast::Float,
                 resolved: Resolved::Float,
                 bare_expected: true,
                 ec_expected: true,
             },
             Resolved::Bool => ParityCase::Reachable {
-                label: "bool",
+                label: "Boolean",
                 ast: Ast::Bool,
                 resolved: Resolved::Bool,
                 bare_expected: true,
@@ -36679,8 +36679,8 @@ mod tests {
             },
             // `string` is the only `Named` that fits at the AST level; resolves to `String`.
             Resolved::String => ParityCase::Reachable {
-                label: "string",
-                ast: Ast::Named("string".to_string(), span.clone()),
+                label: "String",
+                ast: Ast::Named("String".to_string(), span.clone()),
                 resolved: Resolved::String,
                 bare_expected: true,
                 ec_expected: true,
@@ -36688,7 +36688,7 @@ mod tests {
             // bare `number` admits (heap-stable ABI ptr); `number errors` declines — the i128
             // ok-word points into the worker thread's dead staging slot (wide-EC UAF).
             Resolved::Number { .. } => ParityCase::Reachable {
-                label: "number",
+                label: "Number",
                 ast: Ast::Number { precision: 34 },
                 resolved: Resolved::Number { precision: 34 },
                 bare_expected: true,
@@ -36697,9 +36697,9 @@ mod tests {
             // `array<_>`/`map<_,_>` resolve to `BuiltinArray`/`BuiltinMap` (never `Generic`);
             // both admit bare and EC (the ok-word is the collection's owning heap pointer).
             Resolved::BuiltinArray { .. } => ParityCase::Reachable {
-                label: "array<int>",
+                label: "Array<Int>",
                 ast: Ast::Generic {
-                    name: "array".to_string(),
+                    name: "Array".to_string(),
                     name_span: span.clone(),
                     args: vec![Ast::Int],
                     span: span.clone(),
@@ -36711,9 +36711,9 @@ mod tests {
                 ec_expected: true,
             },
             Resolved::BuiltinMap { .. } => ParityCase::Reachable {
-                label: "map<int,int>",
+                label: "Map<Int,Int>",
                 ast: Ast::Generic {
-                    name: "map".to_string(),
+                    name: "Map".to_string(),
                     name_span: span.clone(),
                     args: vec![Ast::Int, Ast::Int],
                     span: span.clone(),
@@ -36733,9 +36733,9 @@ mod tests {
             // lowering is always correct. (Admitting it later — a channel IS a single owning heap
             // pointer — would extend BOTH gates together, per authoritative-derivation.md.)
             Resolved::BuiltinChannel { .. } => ParityCase::Reachable {
-                label: "channel<int>",
+                label: "Channel<Int>",
                 ast: Ast::Generic {
-                    name: "channel".to_string(),
+                    name: "Channel".to_string(),
                     name_span: span.clone(),
                     args: vec![Ast::Int],
                     span: span.clone(),
@@ -36750,9 +36750,9 @@ mod tests {
             // `fixed` lowers to `BuiltinFixed`; its non-suspending return path is a pre-existing
             // base bug, so it declines in both positions (admitting it would be dead anyway).
             Resolved::BuiltinFixed { .. } => ParityCase::Reachable {
-                label: "fixed<int>",
+                label: "Fixed<Int>",
                 ast: Ast::Generic {
-                    name: "fixed".to_string(),
+                    name: "Fixed".to_string(),
                     name_span: span.clone(),
                     args: vec![Ast::Int],
                     span: span.clone(),
@@ -36789,7 +36789,7 @@ mod tests {
             // A user-defined generic shape resolves to `Resolved::Generic` (distinct from the
             // built-in `array`/`map` paths above) — declines in both positions.
             Resolved::Generic { .. } => ParityCase::Reachable {
-                label: "user generic Pair<int,int>",
+                label: "user generic Pair<Int,Int>",
                 ast: Ast::Generic {
                     name: "Pair".to_string(),
                     name_span: span.clone(),
@@ -36804,7 +36804,7 @@ mod tests {
                 ec_expected: false,
             },
             Resolved::Maybe { .. } => ParityCase::Reachable {
-                label: "maybe<int>",
+                label: "Maybe<Int>",
                 ast: Ast::Maybe {
                     inner: Box::new(Ast::Int),
                     span: span.clone(),
@@ -36841,8 +36841,8 @@ mod tests {
             // type) and resolves to `Resolved::Range`. The bare AST form is the `Named`, not
             // `Ast::Range` (which resolves to `Error` and is never written in type position).
             Resolved::Range { .. } => ParityCase::Reachable {
-                label: "range",
-                ast: Ast::Named("range".to_string(), span.clone()),
+                label: "Range",
+                ast: Ast::Named("Range".to_string(), span.clone()),
                 resolved: Resolved::Range {
                     element: Box::new(Resolved::Int),
                     end_inclusive: false,
@@ -36862,8 +36862,8 @@ mod tests {
             },
             // `sensitive string` — wraps `string`; resolves to `Resolved::Sensitive`. Declines.
             Resolved::Sensitive { .. } => ParityCase::Reachable {
-                label: "sensitive string",
-                ast: Ast::Sensitive(Box::new(Ast::Named("string".to_string(), span.clone()))),
+                label: "sensitive String",
+                ast: Ast::Sensitive(Box::new(Ast::Named("String".to_string(), span.clone()))),
                 resolved: Resolved::Sensitive {
                     inner: Box::new(Resolved::String),
                 },
@@ -36875,7 +36875,7 @@ mod tests {
             // value to join-bind, so both decline. NOT unreachable — the R5 mis-classification
             // (marking `Nothing` unreachable) is exactly what this row prevents recurring.
             Resolved::Nothing => ParityCase::Reachable {
-                label: "nothing",
+                label: "Nothing",
                 ast: Ast::Nothing,
                 resolved: Resolved::Nothing,
                 bare_expected: false,
@@ -36897,7 +36897,7 @@ mod tests {
             // resolver arm at check.rs:3841 produces it), so `sig.ret` can be `MapEntry` — it is
             // reachable, not synthetic-only at the gate. Declines in both positions.
             Resolved::MapEntry { .. } => ParityCase::Reachable {
-                label: "MapEntry<int,int>",
+                label: "MapEntry<Int,Int>",
                 ast: Ast::Generic {
                     name: "MapEntry".to_string(),
                     name_span: span.clone(),
@@ -37543,20 +37543,20 @@ mod errors_capable_release_tests {
         static OUTCOMES: RefCell<Vec<(String, Result<bool, String>)>> = const { RefCell::new(Vec::new()) };
     }
 
-    const PROGRAM: &str = "shape Tag {\n  name: string\n  id: int\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n";
+    const PROGRAM: &str = "shape Tag {\n  name: String\n  id: Int\n}\nfunction entrypoint() -> Nothing {\n  print(`x`)\n}\n";
 
     /// The `ok` payloads an `errors` value can carry, each a stored value of its own kind.
     fn payloads() -> Vec<(&'static str, Type)> {
         vec![
-            ("string", Type::String),
+            ("String", Type::String),
             (
-                "array",
+                "Array",
                 Type::BuiltinArray {
                     elem: Box::new(Type::String),
                 },
             ),
             (
-                "map",
+                "Map",
                 Type::BuiltinMap {
                     key: Box::new(Type::String),
                     val: Box::new(Type::String),
@@ -37577,7 +37577,7 @@ mod errors_capable_release_tests {
                 },
             ),
             (
-                "channel",
+                "Channel",
                 Type::BuiltinChannel {
                     elem: Box::new(Type::String),
                 },

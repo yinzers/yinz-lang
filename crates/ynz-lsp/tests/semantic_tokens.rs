@@ -47,14 +47,14 @@ fn legend_contains_required_token_types() {
 fn test_semantic_tokens_keywords_emit_keyword_type() {
     // WHY: Every Yinz keyword must be mapped to IDX_KEYWORD (0). Any gap produces
     // "plain identifier" colors for keywords — visible regression in the editor.
-    let src = "function greet() -> nothing { return }\n";
+    let src = "function greet() -> Nothing { return }\n";
     let (state, uri) = state_single("/tmp/ynz_st_keywords.ynz", src);
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     // Verify at least one KEYWORD token (token_type == 0) is emitted.
     let keyword_count = tokens.data.iter().filter(|t| t.token_type == 0).count();
     assert!(
         keyword_count >= 2,
-        "expected at least 2 keyword tokens (function, nothing, return); got {keyword_count}"
+        "expected at least 2 keyword tokens (function, Nothing, return); got {keyword_count}"
     );
 }
 
@@ -65,7 +65,7 @@ fn test_semantic_tokens_pascalcase_identifier_is_type() {
     // WHY: Golden Rule 10 — capital letter = type. Any PascalCase identifier
     // must emit IDX_TYPE (1). Wrong classification means VSCode colors a type
     // name the same as a variable, hiding the naming-convention signal.
-    let src = "shape Player { name: string }\n";
+    let src = "shape Player { name: String }\n";
     let (state, uri) = state_single("/tmp/ynz_st_type.ynz", src);
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     // `Player` is PascalCase → must appear as TYPE (1)
@@ -83,7 +83,7 @@ fn test_semantic_tokens_function_name_is_function() {
     // WHY: sig_table lookup must classify known function names as FUNCTION (2),
     // not VARIABLE (3). If the lookup is missing, every function call site
     // shows in the wrong color category.
-    let src = "function greet() -> nothing { }\nfunction entrypoint() -> nothing { greet() }\n";
+    let src = "function greet() -> Nothing { }\nfunction entrypoint() -> Nothing { greet() }\n";
     let (state, uri) = state_single("/tmp/ynz_st_fn.ynz", src);
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     let fn_count = tokens.data.iter().filter(|t| t.token_type == 2).count();
@@ -129,7 +129,7 @@ fn test_semantic_tokens_variable_fallback() {
     // WHY: lowercase identifiers not in sig_table must fall back to VARIABLE (3).
     // This covers local variables that can't be classified more specifically
     // without a full AST-level scope walk (deferred to v0.3+).
-    let src = "function entrypoint() -> nothing { let score = 5 }\n";
+    let src = "function entrypoint() -> Nothing { let score = 5 }\n";
     let (state, uri) = state_single("/tmp/ynz_st_var.ynz", src);
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     let var_count = tokens.data.iter().filter(|t| t.token_type == 3).count();
@@ -178,7 +178,7 @@ fn test_semantic_tokens_keyword_agreement_with_tm_grammar() {
     // by TM but classified as VARIABLE by semantic tokens, colors flicker.
     // This test checks keyword-type agreement only; identifier-type disagreement
     // is expected (TM can't distinguish variables from functions).
-    let src = "function greet() -> nothing { return }\n";
+    let src = "function greet() -> Nothing { return }\n";
     let (state, uri) = state_single("/tmp/ynz_st_tm.ynz", src);
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
 

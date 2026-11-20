@@ -5,8 +5,8 @@
 // Pre-fix failure: `xs.first().or()` panicked the code generator (it reads the fallback argument
 // that was never passed).
 
-function entrypoint() -> nothing {
-  let xs: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let xs: Array<Int> = [1, 2, 3]
   let head = xs.first().or()
   let present = xs.first().exists(1)
 }

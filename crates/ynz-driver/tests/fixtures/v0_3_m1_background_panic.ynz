@@ -9,12 +9,12 @@
 // nested-spawn-inner-panic tests). This fixture tests the pipeline-level
 // isolation property: background task completing normally, main exits 0.
 
-function backgroundWork() -> nothing {
+function backgroundWork() -> Nothing {
   sleepBlocking(50)
   print(`background finished`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background backgroundWork()
   print(`main done`)
 }

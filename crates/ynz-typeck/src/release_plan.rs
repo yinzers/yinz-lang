@@ -1544,7 +1544,7 @@ impl ReleasePlan {
                 if entry.fate == Fate::Omitted(OmitReason::UnsizedFixed) {
                     if kind != ReleaseKind::Fixed {
                         violations.push(format!(
-                            "{place} is {kind:?} but omitted as an unsized `fixed`"
+                            "{place} is {kind:?} but omitted as an unsized `Fixed`"
                         ));
                     }
                     continue;

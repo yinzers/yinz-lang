@@ -3,15 +3,15 @@
 // The spawner sleeps 1000 ms so the task's line always prints first, even on a loaded machine
 // (the 60 ms of `v0_3_m4_p3_cross_give_generic.ynz` lost that race in a full-workspace run).
 shape Report {
-  label: string
-  total: int
+  label: String
+  total: Int
 }
 
-function stash<T>(give item: Report) -> nothing {
+function stash<T>(give item: Report) -> Nothing {
   print(item.label)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r: Report = { label: `q3`, total: 42 }
   background stash<Report>(r)
   sleepBlocking(1000)

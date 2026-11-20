@@ -3,10 +3,10 @@
 // The composed frame must include doSleep's sub-frame, so the total size is larger than
 // a flat frame — escape #5: transitive × caller-frame combination.
 
-function doSleep() -> nothing {
+function doSleep() -> Nothing {
   sleep(10)
 }
 
-export function runJob() -> nothing {
+export function runJob() -> Nothing {
   doSleep()
 }

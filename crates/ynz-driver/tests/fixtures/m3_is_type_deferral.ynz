@@ -3,16 +3,16 @@
 // This fixture was previously a deferral diagnostic; now it's a runnable demo.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Square {
-  side: float
+  side: Float
 }
 
 shape Figure = Circle | Square
 
-function describe(figure: Figure) -> string {
+function describe(figure: Figure) -> String {
   if (figure) {
     is Circle => {
       return `circle`
@@ -24,7 +24,7 @@ function describe(figure: Figure) -> string {
   return `unknown`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 5.0 }
   let s: Square = { side: 3.0 }
   let fig: Figure = c

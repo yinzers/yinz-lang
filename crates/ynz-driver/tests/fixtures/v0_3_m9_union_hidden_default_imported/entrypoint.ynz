@@ -6,7 +6,7 @@
 // a SIGSEGV on read.
 import { Holder, peekCount, peekExtra } from `holders`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { name: `a` }
   print(holder.peekCount().toString())
   print(holder.peekExtra())

@@ -52,9 +52,9 @@ Arena allocation:
 
 ```ynz
 arena scratch {
-  let users: array<User> = []              // allocated in 'scratch'
-  let nameMap: map<string, User> = {}      // allocated in 'scratch'
-  let buffer: string = ""                  // allocated in 'scratch'
+  let users: Array<User> = []              // allocated in 'scratch'
+  let nameMap: Map<String, User> = {}      // allocated in 'scratch'
+  let buffer: String = ""                  // allocated in 'scratch'
 
   process(users.share)
 }  // scratch (and everything in it) freed in one operation
@@ -70,8 +70,8 @@ The IDE shows muted `.in(scratch)` after each constructor — per the [uniform i
 
 ```ynz
 arena {
-  let temp: array<int> = []
-  let bigBuffer: string = ""
+  let temp: Array<Int> = []
+  let bigBuffer: String = ""
   computeStuff(temp, bigBuffer)
 }  // arena wiped here
 ```
@@ -84,8 +84,8 @@ Identical to A1 except no name. Use when no code inside the scope needs to refer
 
 ```ynz
 let scratch: Arena = Arena()                    // manually create an arena
-let users: array<User> = array<User>.in(scratch)      // explicit per-allocation
-let names: map<string, User> = map<string, User>.in(scratch)
+let users: Array<User> = Array<User>.in(scratch)      // explicit per-allocation
+let names: Map<String, User> = Map<String, User>.in(scratch)
 process(users.share)
 scratch.reset()                          // manually wipe
 ```

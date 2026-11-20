@@ -50,7 +50,6 @@ fn token_text(tok: &Token) -> String {
     match tok {
         Token::Identifier(name) => name.clone(),
         Token::Function => "function".to_string(),
-        Token::Nothing => "nothing".to_string(),
         Token::Let => "let".to_string(),
         Token::Const => "const".to_string(),
         Token::True => "true".to_string(),
@@ -446,7 +445,7 @@ mod tests {
 
     #[test]
     fn hover_keyword_returns_some() {
-        let src = "function entrypoint() -> nothing { }";
+        let src = "function entrypoint() -> Nothing { }";
         let tokens = tokenize(src);
         let table = LineTable::new(src);
         let result = hover_response(

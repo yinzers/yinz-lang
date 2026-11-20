@@ -3,15 +3,15 @@
 /// Zero-init is only correct for explicit `= 0` defaults; non-zero defaults
 /// must be evaluated from the declaration's default expression.
 shape Counter {
-  name: string
-  hidden threshold: int = 42
+  name: String
+  hidden threshold: Int = 42
 }
 
-function getThreshold(share self: Counter) -> int {
+function getThreshold(share self: Counter) -> Int {
   return self.threshold
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Counter = { name: `items` }
   print(c.getThreshold())
 }

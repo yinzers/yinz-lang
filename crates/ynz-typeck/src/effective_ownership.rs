@@ -473,7 +473,7 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             // `channel<T>()` is a constructor call — the sole reference. (`array<T>()` /
             // `map<K, V>()` are not forms the parser accepts; an empty container is a
             // literal, classified above.)
-            Expr::Ident(name, _) if name == "channel" => Provenance::Fresh,
+            Expr::Ident(name, _) if name == "Channel" => Provenance::Fresh,
             Expr::Ident(name, _)
                 if ctx.local_fns.contains(name) || ctx.imported_fn_names.contains(name) =>
             {
@@ -1097,11 +1097,11 @@ fn receiver_independent_scalar_result(method: &str) -> Option<Type> {
         return None;
     }
     match result? {
-        "int" => Some(Type::Int),
-        "float" => Some(Type::Float),
-        "boolean" | "bool" => Some(Type::Bool),
-        "string" => Some(Type::String),
-        "number" => Some(Type::Number { precision: 34 }),
+        "Int" => Some(Type::Int),
+        "Float" => Some(Type::Float),
+        "Boolean" => Some(Type::Bool),
+        "String" => Some(Type::String),
+        "Number" => Some(Type::Number { precision: 34 }),
         _ => None,
     }
 }
@@ -2279,9 +2279,9 @@ mod tests {
         // WHY: a bare parameter whose body directly assigns a field IS a write — the
         // compiler infers `lend` for it. This is the base case the fixpoint builds on.
         let src = r#"
-shape Box { v: int }
-function mutate(b: Box) -> nothing { b.v = 5 }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function mutate(b: Box) -> Nothing { b.v = 5 }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "mutate", 0), EffectiveOwnership::Writes);
     }
@@ -2291,9 +2291,9 @@ function entrypoint() -> nothing { }
         // WHY: a parameter that is only read (field access, passed to print) must stay
         // Reads — this is what lets the independence side parallelize bare-read calls.
         let src = r#"
-shape Box { v: int }
-function look(b: Box) -> int { return b.v }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function look(b: Box) -> Int { return b.v }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "look", 0), EffectiveOwnership::Reads);
     }
@@ -2305,10 +2305,10 @@ function entrypoint() -> nothing { }
         // transitively. This is the residual hole the fixpoint closes. The DECLARED modifier
         // of helper's param is None (bare) — only the effective fixpoint catches this.
         let src = r#"
-shape Box { v: int }
-function helper(b: Box) -> nothing { b.v = 999 }
-function fa(x: Box) -> nothing { helper(x) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function helper(b: Box) -> Nothing { b.v = 999 }
+function fa(x: Box) -> Nothing { helper(x) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "helper", 0), EffectiveOwnership::Writes);
         assert_eq!(
@@ -2324,11 +2324,11 @@ function entrypoint() -> nothing { }
         // where inner writes — every hop's param is Writes. A one-hop-only analysis would
         // miss `outer`.
         let src = r#"
-shape Box { v: int }
-function inner(b: Box) -> nothing { b.v = 1 }
-function mid(b: Box) -> nothing { inner(b) }
-function outer(b: Box) -> nothing { mid(b) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function inner(b: Box) -> Nothing { b.v = 1 }
+function mid(b: Box) -> Nothing { inner(b) }
+function outer(b: Box) -> Nothing { mid(b) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "inner", 0), EffectiveOwnership::Writes);
         assert_eq!(eo(src, "mid", 0), EffectiveOwnership::Writes);
@@ -2340,9 +2340,9 @@ function entrypoint() -> nothing { }
         // WHY: a parameter declared `give` is a definite write (ownership transfer). The
         // declared-write seed must classify it Writes without needing a body escalation.
         let src = r#"
-shape Box { v: int }
-function consume(give b: Box) -> nothing { }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function consume(give b: Box) -> Nothing { }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "consume", 0), EffectiveOwnership::Writes);
     }
@@ -2351,9 +2351,9 @@ function entrypoint() -> nothing { }
     fn explicit_lend_is_writes() {
         // WHY: a parameter declared `lend` is a declared write — seeded Writes.
         let src = r#"
-shape Box { v: int }
-function bump(lend b: Box) -> nothing { b.v = b.v + 1 }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function bump(lend b: Box) -> Nothing { b.v = b.v + 1 }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "bump", 0), EffectiveOwnership::Writes);
     }
@@ -2363,10 +2363,10 @@ function entrypoint() -> nothing { }
         // WHY: `.give` consumes the value — even on a bare param, passing it via give to a
         // give-position consume escalates to Writes.
         let src = r#"
-shape Box { v: int }
-function consume(give b: Box) -> nothing { }
-function passOn(b: Box) -> nothing { consume(b) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function consume(give b: Box) -> Nothing { }
+function passOn(b: Box) -> Nothing { consume(b) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(src, "passOn", 0),
@@ -2380,10 +2380,10 @@ function entrypoint() -> nothing { }
         // WHY: UFCS — `b.bump()` desugars to `bump(b)` where bump declares `lend b`. The
         // receiver flows into a write-capable self position → Writes.
         let src = r#"
-shape Box { v: int }
-function bump(lend self: Box) -> nothing { self.v = self.v + 1 }
-function caller(b: Box) -> nothing { b.bump() }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function bump(lend self: Box) -> Nothing { self.v = self.v + 1 }
+function caller(b: Box) -> Nothing { b.bump() }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(src, "caller", 0),
@@ -2397,10 +2397,10 @@ function entrypoint() -> nothing { }
         // WHY: a method whose self is share/read leaves the receiver Reads — proves the
         // method path does NOT over-escalate.
         let src = r#"
-shape Box { v: int }
-function look(share self: Box) -> int { return self.v }
-function caller(b: Box) -> int { return b.look() }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function look(share self: Box) -> Int { return self.v }
+function caller(b: Box) -> Int { return b.look() }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "caller", 0), EffectiveOwnership::Reads);
     }
@@ -2411,14 +2411,14 @@ function entrypoint() -> nothing { }
         // fixpoint and (b) classify Writes. Termination is proven by the test completing;
         // classification by the assertion.
         let src = r#"
-shape Box { v: int }
-function recur(b: Box, n: int) -> nothing {
+shape Box { v: Int }
+function recur(b: Box, n: Int) -> Nothing {
   if (n) {
     b.v = n
     recur(b, 0)
   }
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(src, "recur", 0),
@@ -2432,10 +2432,10 @@ function entrypoint() -> nothing { }
         // WHY: mutual recursion (ping → pong → ping) where one writes must converge. Both
         // bare params flow through each other; the writing path makes both Writes.
         let src = r#"
-shape Box { v: int }
-function ping(b: Box) -> nothing { pong(b) }
-function pong(b: Box) -> nothing { b.v = 7 ping(b) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function ping(b: Box) -> Nothing { pong(b) }
+function pong(b: Box) -> Nothing { b.v = 7 ping(b) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "pong", 0), EffectiveOwnership::Writes);
         assert_eq!(
@@ -2451,9 +2451,9 @@ function entrypoint() -> nothing { }
         // take args by value/share — they cannot be a hidden write. Must stay Reads so the
         // independence side can parallelize.
         let src = r#"
-shape Box { v: int }
-function show(b: Box) -> nothing { print(`${b.v.toString()}`) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function show(b: Box) -> Nothing { print(`${b.v.toString()}`) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(eo(src, "show", 0), EffectiveOwnership::Reads);
     }
@@ -2466,9 +2466,9 @@ function entrypoint() -> nothing { }
         // boundary: independence sequentializes Unknown, typeck does not error.
         let module = parse_module(
             r#"
-shape Box { v: int }
-function fa(b: Box) -> nothing { remoteOp(b) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function fa(b: Box) -> Nothing { remoteOp(b) }
+function entrypoint() -> Nothing { }
 "#,
         );
         // remoteOp is imported (in this unit only by name); it declares no write positions.
@@ -2491,9 +2491,9 @@ function entrypoint() -> nothing { }
         // lend/give is a definite write even without a body — must classify Writes.
         let module = parse_module(
             r#"
-shape Box { v: int }
-function fa(b: Box) -> nothing { remoteWrite(b) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function fa(b: Box) -> Nothing { remoteWrite(b) }
+function entrypoint() -> Nothing { }
 "#,
         );
         let imported: HashSet<String> = ["remoteWrite"].iter().map(|s| s.to_string()).collect();
@@ -2517,10 +2517,10 @@ function entrypoint() -> nothing { }
         // lattice ordering at the consumer level.
         let module = parse_module(
             r#"
-shape Box { v: int }
-function localWrite(b: Box) -> nothing { b.v = 1 }
-function fa(b: Box) -> nothing { remoteOp(b) localWrite(b) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function localWrite(b: Box) -> Nothing { b.v = 1 }
+function fa(b: Box) -> Nothing { remoteOp(b) localWrite(b) }
+function entrypoint() -> Nothing { }
 "#,
         );
         let imported: HashSet<String> = ["remoteOp"].iter().map(|s| s.to_string()).collect();
@@ -2541,12 +2541,12 @@ function entrypoint() -> nothing { }
         // WHY: per-position tracking — a function with one read param and one write param
         // must classify each independently, not collapse to a single per-function verdict.
         let src = r#"
-shape Box { v: int }
-function mixed(reader: Box, writer: Box) -> nothing {
-  let x: int = reader.v
+shape Box { v: Int }
+function mixed(reader: Box, writer: Box) -> Nothing {
+  let x: Int = reader.v
   writer.v = x
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(src, "mixed", 0),
@@ -2570,10 +2570,10 @@ function entrypoint() -> nothing { }
         // letting the independence side parallelize an aliased write. Reverting the SelfValue
         // arm makes `self` classify Reads here.
         let src = r#"
-shape Box { v: int }
-function helper(b: Box) -> nothing { b.v = 999 }
-function wrapper(self: Box) -> nothing { helper(self) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function helper(b: Box) -> Nothing { b.v = 999 }
+function wrapper(self: Box) -> Nothing { helper(self) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(src, "wrapper", 0),
@@ -2588,9 +2588,9 @@ function entrypoint() -> nothing { }
         // `root_binding_name` SelfValue arm must root a direct field write through `self` to the
         // name "self" so the fixpoint classifies it Writes, identical to a named `b.v = n`.
         let src = r#"
-shape Box { v: int }
-function bump(self: Box) -> nothing { self.v = 1 }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function bump(self: Box) -> Nothing { self.v = 1 }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(src, "bump", 0),
@@ -2608,8 +2608,8 @@ function entrypoint() -> nothing { }
         // corrects. Without it, two aliased `.set()` calls would auto-parallelize into concurrent
         // in-place writes.
         let add_src = r#"
-function grow(xs: array<int>) -> nothing { xs.add(7) }
-function entrypoint() -> nothing { }
+function grow(xs: Array<Int>) -> Nothing { xs.add(7) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(add_src, "grow", 0),
@@ -2617,8 +2617,8 @@ function entrypoint() -> nothing { }
             "xs.add(7) writes xs in place — must be Writes"
         );
         let set_src = r#"
-function put(xs: array<int>) -> nothing { xs.set(0, 9) }
-function entrypoint() -> nothing { }
+function put(xs: Array<Int>) -> Nothing { xs.set(0, 9) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(set_src, "put", 0),
@@ -2634,9 +2634,9 @@ function entrypoint() -> nothing { }
         // carve-out must NOT over-escalate these — they stay Reads so the independence side can
         // parallelize a pair of read-only collection accesses.
         let get_src = r#"
-shape Box { v: int }
-function peek(xs: array<int>) -> maybe<int> { return xs.get(0) }
-function entrypoint() -> nothing { }
+shape Box { v: Int }
+function peek(xs: Array<Int>) -> Maybe<Int> { return xs.get(0) }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(get_src, "peek", 0),
@@ -2644,8 +2644,8 @@ function entrypoint() -> nothing { }
             "xs.get(0) only reads xs — must stay Reads"
         );
         let count_src = r#"
-function size(xs: array<int>) -> int { return xs.count() }
-function entrypoint() -> nothing { }
+function size(xs: Array<Int>) -> Int { return xs.count() }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(count_src, "size", 0),
@@ -2663,10 +2663,10 @@ function entrypoint() -> nothing { }
         // receiver at Reads. If the name-based check fired unconditionally, this would wrongly
         // classify Writes and reject a legal read.
         let src = r#"
-shape MyShape { v: int }
-function set(share self: MyShape) -> int { return self.v }
-function caller(s: MyShape) -> int { return s.set() }
-function entrypoint() -> nothing { }
+shape MyShape { v: Int }
+function set(share self: MyShape) -> Int { return self.v }
+function caller(s: MyShape) -> Int { return s.set() }
+function entrypoint() -> Nothing { }
 "#;
         assert_eq!(
             eo(src, "set", 0),

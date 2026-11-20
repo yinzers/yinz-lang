@@ -37,7 +37,7 @@ fn collect_events(bytes: &[u8]) -> Vec<serde_json::Value> {
 
 /// Make a minimal compilable WatchDb and write the file to disk (rebuild_one reads from disk).
 fn make_valid_db(path: &str) -> (ynz_watch::db::WatchDb, PathBuf) {
-    let src = "function entrypoint() -> nothing { print(`hello`) }\n";
+    let src = "function entrypoint() -> Nothing { print(`hello`) }\n";
     let p = PathBuf::from(path);
     // Write to disk so rebuild_one's fs::read_to_string succeeds.
     std::fs::write(&p, src).expect("could not write test fixture");
@@ -233,7 +233,7 @@ fn diagnostic_events_emitted_on_compile_error() {
 
     // Start with valid source, then switch to broken — rebuild_one_with_emitter reads from disk.
     let path = PathBuf::from("/tmp/json_mode_diagnostic_test.ynz");
-    let broken_src = "function entrypoint() -> nothing {\n    unknownIdent\n}\n";
+    let broken_src = "function entrypoint() -> Nothing {\n    unknownIdent\n}\n";
     let (mut db, _) = make_valid_db("/tmp/json_mode_diagnostic_test.ynz");
     // Write broken source to disk so rebuild_one_with_emitter's fs::read_to_string sees it.
     std::fs::write(&path, broken_src).expect("could not write broken test fixture");

@@ -120,7 +120,7 @@ impl ShapeTable {
                 precision: *precision,
             },
             AstType::Bool => Type::Bool,
-            AstType::Named(n, _) if n == "string" => Type::String,
+            AstType::Named(n, _) if n == "String" => Type::String,
             // M6: union type aliases.
             AstType::Named(n, _) if self.union_aliases.contains_key(n) => {
                 self.union_aliases[n].clone()
@@ -131,7 +131,7 @@ impl ShapeTable {
                 Type::Shape { name: n.clone() }
             }
             // M7 P3c: first-class range type annotation.
-            AstType::Named(n, _) if n == "range" => Type::Range {
+            AstType::Named(n, _) if n == "Range" => Type::Range {
                 element: Box::new(Type::Int),
                 end_inclusive: false,
             },
@@ -164,13 +164,13 @@ impl ShapeTable {
                 let resolved_args: Vec<Type> =
                     args.iter().map(|a| self.resolve_ast_type(a)).collect();
                 match name.as_str() {
-                    "array" => {
+                    "Array" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinArray {
                             elem: Box::new(elem),
                         }
                     }
-                    "fixed" => {
+                    "Fixed" => {
                         let written = crate::fixed_length::read_fixed_arguments(args);
                         let element = written
                             .element
@@ -178,7 +178,7 @@ impl ShapeTable {
                             .unwrap_or(Type::Error);
                         crate::fixed_length::fixed_type(element, &written.length)
                     }
-                    "map" => {
+                    "Map" => {
                         let mut args = resolved_args.into_iter();
                         let key = args.next().unwrap_or(Type::Error);
                         let val = args.next().unwrap_or(Type::Error);
@@ -199,7 +199,7 @@ impl ShapeTable {
                     // v0.3-M4 Phase 2: `channel<T>` in signature/annotation position — required
                     // so a channel can be handed to a `background` task (the composed R5 shape:
                     // `function producer(lend out: channel<int>)`).
-                    "channel" => {
+                    "Channel" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinChannel {
                             elem: Box::new(elem),
@@ -332,6 +332,15 @@ pub fn collect_shapes(
     }
     for item in &module.items {
         if let Item::ShapeDecl(s) = item {
+            // A shape (or union alias) named like a built-in type would hide that type.
+            if ynz_diagnostics::builtin_type_names::is_reserved_builtin_type_name(&s.name) {
+                diags.push(
+                    ynz_diagnostics::builtin_type_names::reserved_builtin_type_name_diagnostic(
+                        s.name_span.clone(),
+                        &s.name,
+                    ),
+                );
+            }
             // M6: skip alias declarations (`shape Shape = Circle | Square`) — they're not
             // regular shapes with fields. UnionAliasTable handles them in typeck.
             if s.alias_ty.is_some() {
@@ -515,7 +524,7 @@ pub fn collect_shapes(
                              external construction would leave the field in an undefined state. \
                              If no sensible default applies here, change the type to \
                              `maybe {}` and default to `none`: \
-                             `hidden {}: maybe {} = none`. \
+                             `hidden {}: Maybe {} = none`. \
                              The type then says `sometimes absent` and same-file code reads it \
                              through `.exists()` guards.",
                             tn, field.name, tn
@@ -845,7 +854,7 @@ fn resolve_field_type_in_generic_shape(ast_ty: &AstType, type_params: &[String])
         AstType::Float => Type::Float,
         AstType::Number { .. } => Type::Number { precision: 34 },
         AstType::Bool => Type::Bool,
-        AstType::Named(n, _) if n == "string" => Type::String,
+        AstType::Named(n, _) if n == "String" => Type::String,
         AstType::Named(n, _) if type_params.contains(n) => Type::TypeParam { name: n.clone() },
         AstType::Generic { name, args, .. } => {
             let resolved_args = args
@@ -885,12 +894,12 @@ pub(crate) fn canonical_anon_name(fields: &[ynz_ast::nodes::FieldDecl]) -> Strin
 /// building canonical anon-shape names, not for user-facing output.
 fn ast_type_short_name(ty: &AstType) -> String {
     match ty {
-        AstType::Int => "int".to_string(),
-        AstType::Float => "float".to_string(),
-        AstType::Number { .. } => "number".to_string(),
-        AstType::Bool => "boolean".to_string(),
+        AstType::Int => "Int".to_string(),
+        AstType::Float => "Float".to_string(),
+        AstType::Number { .. } => "Number".to_string(),
+        AstType::Bool => "Boolean".to_string(),
         AstType::Named(n, _) => n.clone(),
-        AstType::Nothing => "nothing".to_string(),
+        AstType::Nothing => "Nothing".to_string(),
         // The length of `fixed<T, N>` is part of the type: `{ a: fixed<int, 2> }` and
         // `{ a: fixed<int, 3> }` are different shapes.
         AstType::Length { value, .. } => value.to_string(),
@@ -1003,14 +1012,14 @@ fn emit_unknown_field_type_diag(
     let known = |n: &str| -> bool {
         matches!(
             n,
-            "int"
-                | "float"
-                | "number"
-                | "boolean"
-                | "string"
-                | "nothing"
+            "Int"
+                | "Float"
+                | "Number"
+                | "Boolean"
+                | "String"
+                | "Nothing"
                 | "none"
-                | "range"
+                | "Range"
                 | "Frame"
                 | "SourceLoc"
         ) || name_table.contains(n)
@@ -1025,7 +1034,7 @@ fn emit_unknown_field_type_diag(
                 span.clone(),
                 format!("`{n}` is not a known type."),
                 format!("Field `{field_name}` on `{shape_name}` cannot use `{n}`. Use a built-in or a `shape` name defined in this file."),
-                "Built-ins: `int`, `float`, `number`, `boolean`, `string`. Collections: `array<T>`, `fixed<T>`, `map<K, V>`. Optionals: `maybe<T>`.",
+                "Built-ins: `Int`, `Float`, `Number`, `Boolean`, `String`. Collections: `Array<T>`, `Fixed<T>`, `Map<K, V>`. Optionals: `Maybe<T>`.",
             ));
         }
         AstType::Union { variants, .. } => {

@@ -6,7 +6,7 @@
 //
 // v0.2-M2 — Open this file in VSCode (with the Yinz extension installed) to see:
 //   • Hover docs on every keyword — try hovering over `function`, `let`, `shape`, etc.
-//   • Autocomplete after typing `int.` — shows all primitive int methods
+//   • Autocomplete after typing `Int.` — shows all primitive Int methods
 //   • Inline diagnostics — see examples/primantis-orders/v0_2_m2_errors.ynz for intentional triggers
 //   Install: https://github.com/yinzers/yinz-lang/releases/latest/download/yinz-latest.vsix
 //
@@ -35,7 +35,7 @@ import { fetchScoutGrade, rankRoster } from `services/scouting`
 import { ScheduleDay, Announceable, StripeDistrictEvent, SouthSideEvent } from `services/players`
 import { StatCategory } from `utils/math_extra`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   // ────── M1: hello-world end-to-end ──────
   print(`Pittsburgh Pirates Roster — Yinz v0.1 Showcase`)
   print(`==============================================`)
@@ -44,21 +44,21 @@ function entrypoint() -> nothing {
   print(`M2 — variables, arithmetic, primitives:`)
   // let vs const (M2 const-reassignment check)
   const pirateName = `Clemente`
-  let runsScored: int = 0
+  let runsScored: Int = 0
   // Primitive types — int, float, number (decimal128), boolean
-  const startCareerHits: int = 3000
-  const battingAvg: float = 0.317
-  const careerEarnings: number = 1234567.89  // decimal128, exact dollars + cents
-  const isHallOfFamer: boolean = true
+  const startCareerHits: Int = 3000
+  const battingAvg: Float = 0.317
+  const careerEarnings: Number = 1234567.89  // decimal128, exact dollars + cents
+  const isHallOfFamer: Boolean = true
   // Arithmetic, comparison, boolean
   let combo = startCareerHits + 25
   combo = combo * 2
   combo = combo - 50
   combo = combo / 3
   // Bitwise operators — encoding scouting flags
-  const flagSpeed: int = 1
-  const flagPower: int = 2
-  const flagDefense: int = 4
+  const flagSpeed: Int = 1
+  const flagPower: Int = 2
+  const flagDefense: Int = 4
   const scoutingFlags = flagSpeed | flagPower
   const hasDefense = (scoutingFlags & flagDefense) != 0
   // Polymorphic print across primitive types
@@ -111,24 +111,24 @@ function entrypoint() -> nothing {
   // Generic function — identity<T> infers T from argument
   print(identity(42))
   print(identity(`generic`))
-  // array<T>: heap-growable, batting averages in thousandths (317 = .317)
-  let battingAverages: array<int> = [317, 282, 295]
+  // Array<T>: heap-growable, batting averages in thousandths (317 = .317)
+  let battingAverages: Array<Int> = [317, 282, 295]
   battingAverages.add(308)
   print(battingAverages.count())
   let foundFirstAverage = battingAverages[0]            // a maybe: the average, or nothing
   let firstAverage = foundFirstAverage.or(-1)           // a plain int, -1 if missing
   print(firstAverage)
-  // fixed<T>: stack-allocated, size locked — three retired Pirates numbers
-  let retiredNumbers: fixed<int> = [1, 4, 8]
+  // Fixed<T>: stack-allocated, size locked — three retired Pirates numbers
+  let retiredNumbers: Fixed<Int> = [1, 4, 8]
   print(retiredNumbers.count())
   let foundRetiredNumber = retiredNumbers[2]
   let retiredNumber = foundRetiredNumber.or(-1)
   print(retiredNumber)
-  // maybe<T>: absence without null
-  let nextHitter: maybe<int> = none
+  // Maybe<T>: absence without null
+  let nextHitter: Maybe<Int> = none
   print(nextHitter.or(0))
-  // map<K,V>: hash map with string keys — Pirates career hit leaders
-  let hitLeaders: map<string, int> = { `clemente`: 3000, `wagner`: 3420 }
+  // Map<K,V>: hash map with string keys — Pirates career hit leaders
+  let hitLeaders: Map<String, Int> = { `clemente`: 3000, `wagner`: 3420 }
   let foundClementeHits = hitLeaders[`clemente`]
   let clementeHits = foundClementeHits.or(0)
   print(clementeHits)
@@ -153,16 +153,16 @@ function entrypoint() -> nothing {
   let isStarter = slot == LineupStatus.starting
   print(isStarter.toString())
   // Fallible conversions — parsing jersey numbers from strings
-  let parsedJersey: maybe<int> = `21`.toInt()
+  let parsedJersey: Maybe<Int> = `21`.toInt()
   let jerseyOrZero = parsedJersey.or(0)
   print(jerseyOrZero.toString())
-  let fromFloat: maybe<int> = 3.14.toInt()
+  let fromFloat: Maybe<Int> = 3.14.toInt()
   let wholeOrMissing = fromFloat.or(-1)
   print(wholeOrMissing.toString())
-  let fromInt: int = 99.toInt()
+  let fromInt: Int = 99.toInt()
   print(fromInt.toString())
-  // Early-return narrowing on maybe<T>
-  let scores: array<int> = [3, 5, 7]
+  // Early-return narrowing on Maybe<T>
+  let scores: Array<Int> = [3, 5, 7]
   let firstInningRuns = firstOrDefault(scores)
   print(firstInningRuns.toString())
   // ────── M7: strings, errors, iterables ──────
@@ -229,10 +229,10 @@ function entrypoint() -> nothing {
   for (n in clock) {
     print(n.toString())
   }
-  // ────── M8: bignum (number<N> for N > 34) ──────
-  let teamPayroll: number<100> = 0.1
-  let bonus: number<100> = 0.2
-  let totalCompensation: number<100> = teamPayroll + bonus
+  // ────── M8: bignum (Number<N> for N > 34) ──────
+  let teamPayroll: Number<100> = 0.1
+  let bonus: Number<100> = 0.2
+  let totalCompensation: Number<100> = teamPayroll + bonus
   print(``)
   print(`M8 — bignum (number<100>) for exact payroll math:`)
   print(`  0.1 + 0.2 = (see next line)`)
@@ -297,7 +297,7 @@ function entrypoint() -> nothing {
 
 // Classify a batting average (in thousandths — 280 = .280) into a status string.
 // Uses early return.
-function classifyBatter(avgThousandths: int) -> string {
+function classifyBatter(avgThousandths: Int) -> String {
   if (avgThousandths >= 270) {
     return `solid hitter`
   }
@@ -308,7 +308,7 @@ function classifyBatter(avgThousandths: int) -> string {
 }
 
 // Multi-case `if (value) { arms => ... else => ... }` for lineup slot description.
-function lineupSlot(spot: int) -> string {
+function lineupSlot(spot: Int) -> String {
   // Multi-case form — each arm is a value pattern; `else =>` is the catch-all
   if (spot) {
     1 => {
@@ -331,7 +331,7 @@ function lineupSlot(spot: int) -> string {
 }
 
 // Classic recursive fib — exercises user-defined function with int param + recursion.
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
@@ -339,14 +339,14 @@ function fib(n: int) -> int {
 }
 
 // Mutual recursion — isEven calls isOdd and vice versa.
-function isEven(n: int) -> boolean {
+function isEven(n: Int) -> Boolean {
   if (n == 0) {
     return true
   }
   return isOdd(n - 1)
 }
 
-function isOdd(n: int) -> boolean {
+function isOdd(n: Int) -> Boolean {
   if (n == 0) {
     return false
   }
@@ -356,15 +356,15 @@ function isOdd(n: int) -> boolean {
 // ────── M4: shapes + UFCS methods + ownership ──────
 
 shape Pirate {
-  name: string
-  careerHits: int
+  name: String
+  careerHits: Int
 }
 
-function announceBatter(share self: Pirate) -> nothing {
+function announceBatter(share self: Pirate) -> Nothing {
   print(self.name)
 }
 
-function recordHit(lend self: Pirate, count: int) -> nothing {
+function recordHit(lend self: Pirate, count: Int) -> Nothing {
   self.careerHits = self.careerHits + count
 }
 
@@ -383,20 +383,20 @@ options LineupStatus {
 }
 
 shape StartingLineup {
-  name: string
+  name: String
 }
 
 shape OnBench {
-  reason: string
+  reason: String
 }
 
 shape OnInjuredList {
-  injury: string
+  injury: String
 }
 
 shape RosterDecision = StartingLineup | OnBench | OnInjuredList
 
-function classifyRoster(decision: RosterDecision) -> string {
+function classifyRoster(decision: RosterDecision) -> String {
   if (decision) {
     is StartingLineup => {
       return `PLAYING`
@@ -411,7 +411,7 @@ function classifyRoster(decision: RosterDecision) -> string {
   return `UNKNOWN`
 }
 
-function firstOrDefault(share nums: array<int>) -> int {
+function firstOrDefault(share nums: Array<Int>) -> Int {
   let r = nums.first()
   if (!r.exists()) {
     return -1
@@ -423,23 +423,23 @@ function firstOrDefault(share nums: array<int>) -> int {
 
 // battingAverage: an errors-capable function — caller uses .or() or .failed().
 // Returns the average in thousandths (e.g., 127 hits / 400 atBats → 317).
-function battingAverage(hits: int, atBats: int) -> int errors {
+function battingAverage(hits: Int, atBats: Int) -> Int errors {
   return (hits * 1000) / atBats
 }
 
 // InningClock: user-defined iterable shape — counts outs from 3 down to 1.
 shape InningClock {
-  startOuts: int
-  hidden current: int = 0
+  startOuts: Int
+  hidden current: Int = 0
 }
 
 // next: standalone function satisfying the Iterable<int> protocol for InningClock.
 // Returns the next out count or none when the inning is over.
-function next(lend self: InningClock) -> maybe<int> {
+function next(lend self: InningClock) -> Maybe<Int> {
   if (self.current >= self.startOuts) {
     return none
   }
-  let outs: fixed<int> = [3, 2, 1]
+  let outs: Fixed<Int> = [3, 2, 1]
   let result = outs.get(self.current)
   self.current = self.current + 1
   return result
@@ -448,11 +448,11 @@ function next(lend self: InningClock) -> maybe<int> {
 // ────── v0.1-polish: inline / anonymous shape types ──────
 
 // Inline shape in a let binding — type defined at the point of use.
-function demoInlineShapes() -> nothing {
-  let seat: { row: int, number: int } = { row: 3, number: 4 }
+function demoInlineShapes() -> Nothing {
+  let seat: { row: Int, number: Int } = { row: 3, number: 4 }
   print(`seat row=${seat.row} number=${seat.number}`)
-  // Inline shape in fixed<T> + for-loop destructuring — game intermission lengths.
-  const intermissions: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }, { minutes: 60 }]
+  // Inline shape in Fixed<T> + for-loop destructuring — game intermission lengths.
+  const intermissions: Fixed<{ minutes: Int }> = [{ minutes: 5 }, { minutes: 15 }, { minutes: 60 }]
   for (__shape in intermissions) {
     let minutes = __shape.minutes
     print(`intermission: ${minutes} minutes`)
@@ -466,7 +466,7 @@ function demoInlineShapes() -> nothing {
 // The function below is scheduled on a separate thread; main continues
 // immediately. Watch the print order — `main done with v0.3-M1` appears
 // BEFORE `background analytics done`.
-function m3m1_demo() -> nothing {
+function m3m1_demo() -> Nothing {
   print(``)
   print(`v0.3-M1 — background runs on a separate thread:`)
   const event = `pirate_seventh_inning_stretch`
@@ -486,7 +486,7 @@ function m3m1_demo() -> nothing {
 
 // pausePirate — a suspending function. The `wait` is explicit; the IDE shows
 // it as a real suspension point via the muted `wait` hint at the call site.
-function pausePirate(name: string) -> nothing {
+function pausePirate(name: String) -> Nothing {
   wait sleep(100)
   print(`${name}: done`)
 }
@@ -495,13 +495,13 @@ function pausePirate(name: string) -> nothing {
 // may-block analysis sees that pausePirate() suspends, so announcePirate() is
 // also a state machine. The IDE shows a muted `wait` hint before pausePirate().
 // This demonstrates v0.3-M2's inference model: no function coloring required.
-function announcePirate(name: string) -> nothing {
+function announcePirate(name: String) -> Nothing {
   pausePirate(name)
 }
 
 // waitForRosterSlot — a value-returning state machine.
 // Demonstrates: a function can return a value AND suspend.
-function waitForRosterSlot(n: int) -> int {
+function waitForRosterSlot(n: Int) -> Int {
   wait sleep(10)
   return n + 1
 }
@@ -512,7 +512,7 @@ function waitForRosterSlot(n: int) -> int {
 // Step-by-step style (Golden Rule 9) keeps each local's use within a single
 // suspension segment — the clearest form. Frame-backed crossing locals, which
 // span suspension points, are also supported for cases that need them.
-function scheduleCheck(name: string) -> nothing {
+function scheduleCheck(name: String) -> Nothing {
   let slot = waitForRosterSlot(7)
   let slotStr = slot.toString()
   print(`${name} roster slot: ${slotStr}`)
@@ -522,12 +522,12 @@ function scheduleCheck(name: string) -> nothing {
 // fetchTicketPrice — suspending fallible function returning exact decimal128 price.
 // Uses a frame staging slot for the 16-byte i128 value so the EC ok-pointer
 // remains valid after the resume function returns (no separate heap allocation).
-function fetchTicketPrice() -> number errors {
+function fetchTicketPrice() -> Number errors {
   wait sleep(5)
   return 24.50
 }
 
-function m3m2_demo() -> nothing {
+function m3m2_demo() -> Nothing {
   print(``)
   print(`v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):`)
   print(`scheduling 8 pirates...`)
@@ -565,7 +565,7 @@ function m3m2_demo() -> nothing {
   print(`v0.3-M2 — nested state machines (inline poll-and-yield):`)
   scheduleCheck(`Sanguillen`)
 
-  // Suspending `-> number errors` demo (v0.3-M3a Phase 1).
+  // Suspending `-> Number errors` demo (v0.3-M3a Phase 1).
   // fetchTicketPrice suspends (wait sleep) and returns an exact decimal128 price.
   // The 16-byte decimal is stored in the composed frame's staging slot — no leak.
   print(``)
@@ -585,7 +585,7 @@ function m3m2_demo() -> nothing {
 // Cmd+click `greet` to jump to its function declaration.
 // Right-click `Player` → "Find All References" to see every use across files.
 // Press F2 on `greet` → type a new name → atomic rename across all files.
-// Note the muted `: int (from 42)` hint after `let score = 42`.
+// Note the muted `: Int (from 42)` hint after `let score = 42`.
 // Note the muted `share` hint after `player` in `greet(player)`.
 // Format on save rewrites the file to canonical Yinz style via ynz-fmt.
 // Code actions offer quick-fixes for any diagnostic with a WHAT-INSTEAD.
@@ -593,7 +593,7 @@ function m3m2_demo() -> nothing {
 
 // ────── v0.3-M1 helper ──────
 
-function recordPittsburghAnalytics(event: string) -> nothing {
+function recordPittsburghAnalytics(event: String) -> Nothing {
   // Sleep 200ms (simulating slow disk write) so the main thread visibly
   // gets ahead of us.
   // NOTE: `sleepBlocking` (NOT `wait`) — `wait` is the keyword and stays
@@ -648,7 +648,7 @@ function recordPittsburghAnalytics(event: string) -> nothing {
 // that triggered the false positive before check_options_value was patched.
 // The variant is accessed in a body expression (not a function parameter) because
 // options types as function parameter types are not yet codegen-lowered in v0.1.
-function showOpeningDay() -> nothing {
+function showOpeningDay() -> Nothing {
   let openingSlot = ScheduleDay.home
   print(openingSlot.toString())
   if (openingSlot == ScheduleDay.doubleHeader) {
@@ -661,12 +661,12 @@ function showOpeningDay() -> nothing {
 // A local shape provides the other union arm; StripeDistrictEvent is the arm
 // whose name is tracked via check_is_arm_pattern (the fixed path).
 shape LocalVenueEvent {
-  venue: string
+  venue: String
 }
 
 shape PghMarketEvent = StripeDistrictEvent | LocalVenueEvent
 
-function describeMarketEvent(e: PghMarketEvent) -> string {
+function describeMarketEvent(e: PghMarketEvent) -> String {
   if (e) {
     is StripeDistrictEvent => {
       return `Strip District vendor stand`
@@ -689,7 +689,7 @@ shape RiverEvent = SouthSideEvent | LocalVenueEvent
 // Pattern 7 — dynamic contract (Bug 2.4).
 // Announceable is imported and used as `dynamic Announceable` in a parameter
 // type. This exercises the AstType::Dynamic branch fixed in check.rs.
-function runAnnouncement(a: dynamic Announceable) -> nothing {
+function runAnnouncement(a: dynamic Announceable) -> Nothing {
   print(`announcing`)
 }
 
@@ -700,8 +700,8 @@ function runAnnouncement(a: dynamic Announceable) -> nothing {
 // so fixing the field-type path fixed all three positions in one patch.
 shape ScheduleSlot {
   day: ScheduleDay
-  runsScored: int
-  opponent: string
+  runsScored: Int
+  opponent: String
 }
 
 // Pattern 6 — module-const type annotation (Bug 2.3).
@@ -719,7 +719,7 @@ export const OPENING_DAY_SLOT: ScheduleDay = ScheduleDay.home
 shape StatBook<T> {
   entry: T
   category: StatCategory
-  seasonYear: int
+  seasonYear: Int
 }
 
 // ── v0.3-M3a Phase 4: for-loop + crossing-local suspension ───────────────────
@@ -734,11 +734,11 @@ shape StatBook<T> {
 // suspensions, and read after the loop ends. ONE `ynz_alloc` covers the whole
 // task — no per-iteration allocation.
 
-function tallyScouts(ratings: array<int>) -> int {
+function tallyScouts(ratings: Array<Int>) -> Int {
   // `total` is a crossing local — declared before the loop, accumulated across
   // each `wait sleep`, read after the loop. The compiler frame-backs it so each
   // resumed iteration sees the correct running total.
-  let total: int = 0
+  let total: Int = 0
   for (rating in ratings) {
     // Simulate an async scout-report fetch between ratings.
     wait sleep(5)
@@ -750,10 +750,10 @@ function tallyScouts(ratings: array<int>) -> int {
 // m3a_p4_demo — called from entrypoint() to show for-loop + crossing-local
 // suspension in realistic context. Each rating is processed with a pause;
 // the accumulated total crosses every suspension boundary unscathed.
-function m3a_p4_demo() -> nothing {
+function m3a_p4_demo() -> Nothing {
   print(``)
   print(`v0.3-M3a Phase 4 — for-loop + crossing-local suspension (5 scouts, ~25ms total):`)
-  let pirateRatings: array<int> = [85, 92, 78, 95, 88]
+  let pirateRatings: Array<Int> = [85, 92, 78, 95, 88]
   let scoutTotal = wait tallyScouts(pirateRatings)
   let scoutStr = scoutTotal.toString()
   print(`scout total: ${scoutStr}`)
@@ -774,9 +774,9 @@ function m3a_p4_demo() -> nothing {
 // boundary and prints a verdict based on the result. The `summary` variable is a
 // crossing local: it is bound before the suspension and read again after resume
 // to build the printed line.
-function reviewTopProspect(name: string, atBats: int) -> nothing {
+function reviewTopProspect(name: String, atBats: Int) -> Nothing {
   let summary = wait fetchScoutGrade(name, atBats)
-  let verdict: string = `average`
+  let verdict: String = `average`
   if (summary.endsWith(`A`)) {
     verdict = `elite`
   }
@@ -786,7 +786,7 @@ function reviewTopProspect(name: string, atBats: int) -> nothing {
 // m3e_demo calls the cross-module suspending functions in two realistic contexts:
 //   1. A direct cross-module suspending call whose result drives a verdict.
 //   2. A full-roster ranking via rankRoster — cross-module suspension in a loop.
-function m3e_demo() -> nothing {
+function m3e_demo() -> Nothing {
   print(``)
   print(`v0.3-M3e — cross-module suspension (scouting grades from services/scouting):`)
 
@@ -796,8 +796,8 @@ function m3e_demo() -> nothing {
 
   // Cross-module suspension driving a count: rankRoster suspends per player
   // to fetch each grade, accumulates A grades, and returns the total.
-  let names: array<string> = [`Stargell`, `Mazeroski`, `Wagner`, `Kiner`]
-  let atBats: array<int> = [380, 290, 420, 310]
+  let names: Array<String> = [`Stargell`, `Mazeroski`, `Wagner`, `Kiner`]
+  let atBats: Array<Int> = [380, 290, 420, 310]
   let aCount = wait rankRoster(names, atBats)
   let aStr = aCount.toString()
   print(`roster A-grade count: ${aStr}`)
@@ -813,9 +813,9 @@ function m3e_demo() -> nothing {
 // checks. The counter `i` and accumulator `ready` are loop-carried crossing locals:
 // each suspension preserves them in the composed frame so the next iteration sees
 // the correct values. One `ynz_alloc` for the entire loop — no per-iteration alloc.
-function awaitCrewReady(checks: int) -> int {
-  let ready: int = 0
-  let i: int = 0
+function awaitCrewReady(checks: Int) -> Int {
+  let ready: Int = 0
+  let i: Int = 0
   while (i < checks) {
     wait sleep(5)
     ready = ready + 1
@@ -828,10 +828,10 @@ function awaitCrewReady(checks: int) -> int {
 // Counts down pirate slot availability with a pause between each roster check.
 // The loop counter and accumulator survive each `wait` via the frame-backed locals
 // mechanism from Phase 1 — no extra allocation, sequential execution order.
-function m3a_p2_demo() -> nothing {
+function m3a_p2_demo() -> Nothing {
   print(``)
   print(`v0.3-M3a Phase 2 — while-loop suspension (3 roster checks, ~15ms total):`)
-  let crewCount: int = wait awaitCrewReady(3)
+  let crewCount: Int = wait awaitCrewReady(3)
   let crewStr = crewCount.toString()
   print(`crew ready: ${crewStr}`)
 }
@@ -848,13 +848,13 @@ function m3a_p2_demo() -> nothing {
 // lookups. Each pauses ~60ms simulating a slow ticket-server round-trip, then
 // returns an exact decimal128 price.
 
-function fetchLowerBowlPrice() -> number {
+function fetchLowerBowlPrice() -> Number {
   // IDE shows: wait (fetchLowerBowlPrice suspends on the sleep below)
   wait sleep(60)
   return 24.50
 }
 
-function fetchUpperDeckPrice() -> number {
+function fetchUpperDeckPrice() -> Number {
   // IDE shows: wait (fetchUpperDeckPrice suspends on the sleep below)
   wait sleep(60)
   return 31.75
@@ -862,7 +862,7 @@ function fetchUpperDeckPrice() -> number {
 
 // recordPromoNight runs on a background thread (fire-and-forget). It pauses to
 // simulate a slow analytics write, then prints. Main never waits for it.
-function recordPromoNight(promo: string) -> nothing {
+function recordPromoNight(promo: String) -> Nothing {
   sleepBlocking(40)
   print(`promo logged: ${promo}`)
 }
@@ -871,7 +871,7 @@ function recordPromoNight(promo: string) -> nothing {
 //   (a) independent suspending fetches OVERLAP (≈ max, not sum);
 //   (b) `wait` orders two otherwise-independent side effects;
 //   (c) `background` infers give/copy for fire-and-forget work.
-function m3b_demo() -> nothing {
+function m3b_demo() -> Nothing {
   print(``)
   print(`v0.3-M3b — auto-parallel: two independent price fetches overlap (~60ms, not ~120ms):`)
 
@@ -921,7 +921,7 @@ function m3b_demo() -> nothing {
 // M3f closed two silent-miscompile bugs in the state-machine codegen:
 //
 // Bug 1 — Same-callee wide-`errors` staging-slot aliasing: when the same
-// `-> number errors` function was called twice, both bindings silently held the
+// `-> Number errors` function was called twice, both bindings silently held the
 // SECOND call's value. Fixed by copy-on-bind: each binding now gets its own
 // per-binding stable storage before the next call can reuse the callee's staging slot.
 //
@@ -937,7 +937,7 @@ function m3b_demo() -> nothing {
 // fetchScoutRating returns an arg-dependent decimal128 scouting rating.
 // Two calls with distinct args (scoringWeight 0 and 1) must hold distinct values
 // — demonstrating Bug-1's fix: each binding owns its own copy of the wide-EC ok-value.
-function fetchScoutRating(scoringWeight: int) -> number errors {
+function fetchScoutRating(scoringWeight: Int) -> Number errors {
   wait sleep(5)
   if (scoringWeight == 0) {
     return 87.50
@@ -949,14 +949,14 @@ function fetchScoutRating(scoringWeight: int) -> number errors {
 // Used with fetchScoutRating in a parallel group to demonstrate Bug-2's fix:
 // the boolean result and the int result both survive a subsequent `wait` with
 // their correct values — no frame-slot corruption.
-function checkAvailability() -> boolean {
+function checkAvailability() -> Boolean {
   wait sleep(5)
   return true
 }
 
 // fetchDraftSlot returns the int draft slot for a prospect.
 // Paired with checkAvailability in an independent parallel group.
-function fetchDraftSlot() -> int {
+function fetchDraftSlot() -> Int {
   wait sleep(5)
   return 14
 }
@@ -964,7 +964,7 @@ function fetchDraftSlot() -> int {
 // m3f_demo — demonstrates both M3f codegen correctness fixes in a realistic
 // scouting-week context: (a) two same-callee wide-EC ratings stay distinct;
 // (b) a parallel-group int + bool both survive a wait barrier with correct values.
-function m3f_demo() -> nothing {
+function m3f_demo() -> Nothing {
   print(``)
   print(`v0.3-M3f — codegen correctness fixes:`)
 
@@ -1002,7 +1002,7 @@ function m3f_demo() -> nothing {
 // crunchStat loops over a season's worth of games to roll up one counting stat for a
 // player. It does enough work to be worth running alongside the others.
 
-function crunchStat(perGame: int) -> int {
+function crunchStat(perGame: Int) -> Int {
   let total = 0
   let game = 0
   while (game < 162) {
@@ -1015,7 +1015,7 @@ function crunchStat(perGame: int) -> int {
 // m3d_demo — three independent stat crunches over the roster run at the same time as one
 // group. Each call is independent (no result feeds another), so the compiler runs all three
 // on separate cores; the season totals are added after all three finish.
-function m3d_demo() -> nothing {
+function m3d_demo() -> Nothing {
   print(``)
   print(`v0.3-M3d — pure-CPU: three independent season crunches run at the same time:`)
 
@@ -1042,7 +1042,7 @@ function m3d_demo() -> nothing {
 // crunchSeasonTotal rolls up a season's worth of per-game production for a player — real,
 // measurable CPU work. fetchLatestScoutingReport simulates a slow scouting-database round-trip.
 
-function crunchSeasonTotal(perGame: int) -> int {
+function crunchSeasonTotal(perGame: Int) -> Int {
   let total = 0
   let game = 0
   while (game < 162) {
@@ -1052,7 +1052,7 @@ function crunchSeasonTotal(perGame: int) -> int {
   return total
 }
 
-function fetchLatestScoutingReport() -> string {
+function fetchLatestScoutingReport() -> String {
   // IDE shows: wait (fetchLatestScoutingReport may suspend on I/O)
   wait sleep(60)
   return `grade: A-`
@@ -1063,7 +1063,7 @@ function fetchLatestScoutingReport() -> string {
 // single shared continuation: the crunch runs on a separate thread while the report fetch
 // suspends, at the same time. `--no-auto-parallel` turns the fusion off; the output is
 // byte-identical either way (only the overlap — not the printed result — differs).
-function m3g_demo() -> nothing {
+function m3g_demo() -> Nothing {
   print(``)
   print(`v0.3-M3g — mixed CPU+I/O: a season crunch overlaps a scouting report fetch:`)
 
@@ -1083,8 +1083,8 @@ function m3g_demo() -> nothing {
 //
 // Bounded task-communication channels, live:
 //
-//     let orders: channel<int> = channel<int>()      // default capacity 64 (IDE shows 64)
-//     let names:  channel<string> = channel<string>(8)   // explicit capacity
+//     let orders: Channel<Int> = Channel<Int>()      // default capacity 64 (IDE shows 64)
+//     let names:  Channel<String> = Channel<String>(8)   // explicit capacity
 //
 // Channels are bounded by construction (there is no unbounded channel). When a producer outruns
 // the channel, `send()` SUSPENDS the producer until the reader drains a slot — that is
@@ -1093,7 +1093,7 @@ function m3g_demo() -> nothing {
 // relayScores — a background task pushing three innings' scores into a capacity-1 channel.
 // The second send finds the channel FULL, so the task suspends (backpressure) and only resumes
 // after m4_demo's receive below frees the slot. Real producer/consumer flow, not a snippet.
-function relayScores(lend wire: channel<int>) -> nothing {
+function relayScores(lend wire: Channel<Int>) -> Nothing {
   wire.send(2)
   wire.send(5)
   wire.send(3)
@@ -1102,8 +1102,8 @@ function relayScores(lend wire: channel<int>) -> nothing {
 // gradeProspect — a communicating task for the handle form: reads ONE command from its
 // channel parameter (fed by `scout.send(...)` through the handle), evaluates it, and its
 // completion value is delivered back through the SAME handle via `scout.receive()`.
-function gradeProspect(lend requests: channel<int>) -> int errors {
-  // A bare channel's `receive()` is `maybe<int>` (v0.3-M8): `none` means the channel was
+function gradeProspect(lend requests: Channel<Int>) -> Int errors {
+  // A bare channel's `receive()` is `Maybe<Int>` (v0.3-M8): `none` means the channel was
   // closed and drained. One command is always sent here, so `.or(0)` is never taken.
   let command = requests.receive()
   let jerseyNumber = command.or(0)
@@ -1125,25 +1125,25 @@ function gradeProspect(lend requests: channel<int>) -> int errors {
 // examples/primantis-orders/v0_3_m4_errors.ynz). Under --no-auto-parallel the layout stays
 // natural (unpadded) and the output is byte-identical — padding is pure layout.
 shape InningTally {
-  hits: int
-  outs: int
+  hits: Int
+  outs: Int
 }
 
 // tallyInning — takes OWNERSHIP of the inning tally (give: the caller doesn't read it
 // after the spawn) and reports the derived total back over the wire.
-function tallyInning(give tally: InningTally, lend wire: channel<int>) -> nothing {
+function tallyInning(give tally: InningTally, lend wire: Channel<Int>) -> Nothing {
   wire.send(tally.hits + tally.outs)
 }
 
-function m4_demo() -> nothing {
+function m4_demo() -> Nothing {
   print(``)
   print(`v0.3-M4 — channels + the background handle-form:`)
 
   // Bare channel round-trip: a fire-and-forget producer feeds a bounded channel while this
   // function drains it. Capacity 1 forces genuine backpressure inside relayScores.
-  let wire: channel<int> = channel<int>(1)
+  let wire: Channel<Int> = Channel<Int>(1)
   background relayScores(wire)
-  // Each `receive()` hands back a `maybe<int>` (v0.3-M8) — narrow it right away; this
+  // Each `receive()` hands back a `Maybe<Int>` (v0.3-M8) — narrow it right away; this
   // producer never closes the wire, so the fallback is never taken.
   let first = wire.receive()
   let firstRuns = first.or(0)
@@ -1156,8 +1156,8 @@ function m4_demo() -> nothing {
 
   // Handle form: STORE the spawn to communicate with it (don't store = fire-and-forget —
   // same keyword, two patterns). `scout.send(21)` feeds gradeProspect's channel parameter;
-  // `scout.receive()` delivers the task's completion value, typed `int errors`.
-  let requests: channel<int> = channel<int>(4)
+  // `scout.receive()` delivers the task's completion value, typed `Int errors`.
+  let requests: Channel<Int> = Channel<Int>(4)
   let scout = background gradeProspect(requests)
   scout.send(21)
   let graded = scout.receive()
@@ -1172,7 +1172,7 @@ function m4_demo() -> nothing {
   // observable, but it's the mechanism on display here, not a live contention win.
   // Same values, same output either way.
   let inning: InningTally = { hits: 4, outs: 3 }
-  let tallyWire: channel<int> = channel<int>(2)
+  let tallyWire: Channel<Int> = Channel<Int>(2)
   background tallyInning(inning, tallyWire)
   let inningReply = tallyWire.receive()
   let inningTotal = inningReply.or(0)
@@ -1183,7 +1183,7 @@ function m4_demo() -> nothing {
   // When a read-only value is shared across a `background` boundary (used after the spawn),
   // it crosses SAFELY today via an independent copy — the task reads its own copy, the caller
   // keeps its own. A borrow across the boundary (`share`/`lend`) is a compile error (the value
-  // could dangle once the task runs); a `channel<T>` is the one exempt conduit. Those boundary
+  // could dangle once the task runs); a `Channel<T>` is the one exempt conduit. Those boundary
   // rules ship and are proven in `v0_3_m4_errors.ynz` (the auto-Arc boundary reject) and the
   // R3 boundary matrix.
   //
@@ -1201,13 +1201,13 @@ function m4_demo() -> nothing {
 // whatever was already buffered, then returns `none`. That `none` is how a consumer loop ends —
 // no counting, no timeouts, no special error. Closing twice is a safe no-op.
 //
-// Sending an owned-heap value (an `array<T>` or a `map<K, V>`) GIVES it away: the sender's
+// Sending an owned-heap value (an `Array<T>` or a `Map<K, V>`) GIVES it away: the sender's
 // binding can't be read afterward (use it before the send, or send `.copy()`), so the receiver
 // is the value's only holder — two tasks never share one changing value.
 
 // relayInnings — sends one run total per inning, then closes the wire so tallyRuns knows
 // the game is over. A second close() is harmless.
-function relayInnings(lend wire: channel<int>) -> nothing {
+function relayInnings(lend wire: Channel<Int>) -> Nothing {
   wire.send(2)
   wire.send(0)
   wire.send(5)
@@ -1215,9 +1215,9 @@ function relayInnings(lend wire: channel<int>) -> nothing {
   wire.close()
 }
 
-// tallyRuns — the canonical consumer loop: `receive()` is `maybe<int>`; the loop runs while
+// tallyRuns — the canonical consumer loop: `receive()` is `Maybe<Int>`; the loop runs while
 // values keep arriving and stops on the first `none`.
-function tallyRuns(lend wire: channel<int>) -> int {
+function tallyRuns(lend wire: Channel<Int>) -> Int {
   let total = 0
   let innings = 0
   let stillOpen = true
@@ -1236,27 +1236,27 @@ function tallyRuns(lend wire: channel<int>) -> int {
 // shipLineup — sends a whole lineup (an array) across the wire. `send()` gives the array
 // away: `lineup` is not usable after this line (the compiler refuses a read — see the m8
 // error gallery), so the receiving side is its only holder.
-function shipLineup(lend wire: channel<array<int>>) -> nothing {
-  let lineup: array<int> = [21, 7, 13]
+function shipLineup(lend wire: Channel<Array<Int>>) -> Nothing {
+  let lineup: Array<Int> = [21, 7, 13]
   wire.send(lineup)
   wire.close()
 }
 
-function m8_demo() -> nothing {
+function m8_demo() -> Nothing {
   print(``)
   print(`v0.3-M8 — closing a channel:`)
-  let wire: channel<int> = channel<int>(2)
+  let wire: Channel<Int> = Channel<Int>(2)
   background relayInnings(wire)
   let runs = tallyRuns(wire)
   print(`  runs after the wire closed: ${runs.toString()}`)
   // The consumer loop ended, so close() has happened: a send now is refused with the typed
-  // channel-closed error on the usual `send() -> nothing errors` surface.
+  // channel-closed error on the usual `send() -> Nothing errors` surface.
   let late = wire.send(1)
   if (late.failed()) {
     print(`  a run sent after close() is refused — the scorer already went home`)
   }
 
-  let lineupWire: channel<array<int>> = channel<array<int>>(1)
+  let lineupWire: Channel<Array<Int>> = Channel<Array<Int>>(1)
   background shipLineup(lineupWire)
   let delivered = lineupWire.receive()
   if (delivered.exists()) {
@@ -1284,23 +1284,23 @@ function m8_demo() -> nothing {
 // give that one scout an independent copy instead.
 
 shape ScoutingFile {
-  prospect: string
-  contactGrade: int
-  powerGrade: int
-  speedGrade: int
+  prospect: String
+  contactGrade: Int
+  powerGrade: Int
+  speedGrade: Int
 }
 
 // A scout reads every grade of the shared file (read-only) and reports a weighted total.
-function scoutFile(file: ScoutingFile, reports: channel<int>) -> nothing {
+function scoutFile(file: ScoutingFile, reports: Channel<Int>) -> Nothing {
   wait sleep(5)
   let total = file.contactGrade * 3 + file.powerGrade * 2 + file.speedGrade
   reports.send(total)
 }
 
-function m8_arc_demo() -> nothing {
+function m8_arc_demo() -> Nothing {
   print(``)
   print(`v0.3-M8 — one shared copy for three background scouts:`)
-  let reports: channel<int> = channel<int>()
+  let reports: Channel<Int> = Channel<Int>()
   let file: ScoutingFile = { prospect: `Paul Skenes`, contactGrade: 60, powerGrade: 70, speedGrade: 45 }
   background scoutFile(file, reports)
   background scoutFile(file, reports)
@@ -1336,13 +1336,13 @@ function m8_arc_demo() -> nothing {
 
 // watchTheRiver — a lookout who waits 40 ms for a barge to show up, then reports it.
 // The report line is the last thing the task does, so a task that was stopped never prints it.
-function watchTheRiver(post: string) -> int errors {
+function watchTheRiver(post: String) -> Int errors {
   wait sleep(40)
   print(`  ${post}: spotted a barge on the Allegheny`)
   return 3
 }
 
-function m9_demo() -> nothing {
+function m9_demo() -> Nothing {
   print(``)
   print(`v0.3-M9 — a task handle leaving its scope stops its task:`)
 
@@ -1372,7 +1372,7 @@ function m9_demo() -> nothing {
 // ────── v0.3-M5: per-field array layout — cannonball volley from Fort Pitt ──────
 //
 // The repo's FIRST layout-qualifying array example. `volley` below is a
-// 128-element literal `array<Cannonball>` whose loops read only `x` and `y`, so
+// 128-element literal `Array<Cannonball>` whose loops read only `x` and `y`, so
 // the compiler stores it as separate per-field arrays (one block of memory per
 // field) instead of each element's fields sitting side by side. Build this
 // project and the compiler prints the `array-using-soa-layout` SUGGESTION
@@ -1398,19 +1398,19 @@ function m9_demo() -> nothing {
 // expected_stdout.txt.
 
 shape Cannonball {
-  x: number
-  y: number
-  vx: number
-  vy: number
-  ship: string
+  x: Number
+  y: Number
+  vx: Number
+  vy: Number
+  ship: String
 }
 
-function m5_soa_demo() -> nothing {
+function m5_soa_demo() -> Nothing {
   print(``)
   print(`v0.3-M5 — per-field array layout: 128-cannonball volley, hot loop on x/y:`)
   // A literal initializer is what makes the length compile-time provable
   // (128 > the 64-element threshold) — one requirement for the per-field layout.
-  let volley: array<Cannonball> = [
+  let volley: Array<Cannonball> = [
     { x: 0.0, y: 0.0, vx: 1.0, vy: 10.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 1.05, vy: 10.1, ship: `Duquesne` },
     { x: 0.0, y: 0.0, vx: 1.1, vy: 10.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 1.15, vy: 10.3, ship: `Mon Wharf` },
     { x: 0.0, y: 0.0, vx: 1.2, vy: 10.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 1.25, vy: 10.5, ship: `Duquesne` },
@@ -1477,15 +1477,15 @@ function m5_soa_demo() -> nothing {
     { x: 0.0, y: 0.0, vx: 7.3, vy: 22.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 7.35, vy: 22.7, ship: `Mon Wharf` }
   ]
   let grounded: Cannonball = { x: 0.0, y: 0.0, vx: 0.0, vy: 0.0, ship: `dry dock` }
-  let gravity: number = 0.25
-  let heightSum: number = 0.0
-  let step: int = 0
+  let gravity: Number = 0.25
+  let heightSum: Number = 0.0
+  let step: Int = 0
   while (step < 64) {
     // Physics step: read each ball out by value (`volley[i]` returns
-    // `maybe<Cannonball>`; `.or(grounded)` unwraps it), write the advanced
+    // `Maybe<Cannonball>`; `.or(grounded)` unwraps it), write the advanced
     // ball back. Element mutation keeps the per-field layout — only growth
     // (`.add`) or letting the array escape this function would turn it off.
-    let i: int = 0
+    let i: Int = 0
     while (i < 128) {
       let foundBall = volley[i]
       let b = foundBall.or(grounded)
@@ -1501,8 +1501,8 @@ function m5_soa_demo() -> nothing {
   }
   // Second hot sweep: reads only `x` and `y` — the loops over `volley` touch
   // at most 2 distinct fields total, which is what qualifies it.
-  let rangeSum: number = 0.0
-  let finalHeightSum: number = 0.0
+  let rangeSum: Number = 0.0
+  let finalHeightSum: Number = 0.0
   for (ball in volley) {
     rangeSum = rangeSum + ball.x
     finalHeightSum = finalHeightSum + ball.y
@@ -1523,13 +1523,13 @@ function m5_soa_demo() -> nothing {
   print(lead.y)
 
   // The suppression filter, on display: `recordHit(lend self: Pirate, ...)`
-  // exists in this file (M4 section above), so ANY `array<Pirate>` keeps the
+  // exists in this file (M4 section above), so ANY `Array<Pirate>` keeps the
   // normal side-by-side layout — a lend-self function expects each Pirate's
   // fields together in memory, and splitting them per-field would break that.
   // `crew` otherwise fully qualifies (66 > 64, literal, 1-field loop): the
   // decline below is exactly the lend-self filter firing. No lint prints for
   // it — declining to the normal layout is always safe and silent.
-  let crew: array<Pirate> = [
+  let crew: Array<Pirate> = [
     { name: `Mate 1`, careerHits: 1 }, { name: `Mate 2`, careerHits: 2 }, { name: `Mate 3`, careerHits: 3 },
     { name: `Mate 4`, careerHits: 4 }, { name: `Mate 5`, careerHits: 5 }, { name: `Mate 6`, careerHits: 6 },
     { name: `Mate 7`, careerHits: 7 }, { name: `Mate 8`, careerHits: 8 }, { name: `Mate 9`, careerHits: 9 },
@@ -1553,7 +1553,7 @@ function m5_soa_demo() -> nothing {
     { name: `Mate 61`, careerHits: 61 }, { name: `Mate 62`, careerHits: 62 }, { name: `Mate 63`, careerHits: 63 },
     { name: `Mate 64`, careerHits: 64 }, { name: `Mate 65`, careerHits: 65 }, { name: `Mate 66`, careerHits: 66 }
   ]
-  let careerTotal: int = 0
+  let careerTotal: Int = 0
   for (mate in crew) {
     careerTotal = careerTotal + mate.careerHits
   }
@@ -1568,17 +1568,17 @@ function m5_soa_demo() -> nothing {
   // This used to be a one-level copy: you got a fresh manifest whose holds were
   // still the captain's, and the quartermaster's edit silently landed in the
   // captain's book. Nothing warned you.
-  let foreHold: array<int> = [12, 8, 3]
+  let foreHold: Array<Int> = [12, 8, 3]
   // Putting `foreHold` in the manifest hands it over: the manifest holds the hold now, so
   // the lookups below name an empty hold as their "nothing there" answer instead.
-  let noHold: array<int> = []
-  let captainsManifest: array<array<int>> = [foreHold]
-  let quartermastersManifest: array<array<int>> = captainsManifest.copy()
+  let noHold: Array<Int> = []
+  let captainsManifest: Array<Array<Int>> = [foreHold]
+  let quartermastersManifest: Array<Array<Int>> = captainsManifest.copy()
   let foundQuartermastersFore = quartermastersManifest[0]
-  let quartermastersFore: array<int> = foundQuartermastersFore.or(noHold)
+  let quartermastersFore: Array<Int> = foundQuartermastersFore.or(noHold)
   quartermastersFore.set(0, 99)
   let foundCaptainsFore = captainsManifest[0]
-  let captainsFore: array<int> = foundCaptainsFore.or(noHold)
+  let captainsFore: Array<Int> = foundCaptainsFore.or(noHold)
   let foundCaptainsFirstCrate = captainsFore[0]
   let captainsFirstCrate = foundCaptainsFirstCrate.or(-1)
   print(`  captain's fore hold, first crate: ${captainsFirstCrate.toString()}`)
@@ -1586,10 +1586,10 @@ function m5_soa_demo() -> nothing {
   let quartermastersFirstCrate = foundQuartermastersFirstCrate.or(-1)
   print(`  quartermaster's fore hold, first crate: ${quartermastersFirstCrate.toString()}`)
 
-  // The same rule at a fixed-size list: `fixed<T>` holds its items in one block
+  // The same rule at a fixed-size list: `Fixed<T>` holds its items in one block
   // of cells, so copying the cells copies the list.
-  let watchBell: fixed<int> = [4, 8, 12]
-  let sparebell: fixed<int> = watchBell.copy()
+  let watchBell: Fixed<Int> = [4, 8, 12]
+  let sparebell: Fixed<Int> = watchBell.copy()
   sparebell.set(0, 1)
   let foundWatchFirstBell = watchBell[0]
   let watchFirstBell = foundWatchFirstBell.or(-1)
@@ -1602,7 +1602,7 @@ function m5_soa_demo() -> nothing {
   // compile time instead of handing back the same thing. A channel is the line
   // two tasks talk over, so there is nothing to copy:
   //   let secondLine = orders.copy()
-  //   COMPILE ERROR: `.copy()` cannot make a separate `channel<int>` value —
+  //   COMPILE ERROR: `.copy()` cannot make a separate `Channel<Int>` value —
   //   a channel is the line two tasks talk over, not a value you hold.
   // The same goes for a task handle, a union, a map entry from a loop, and an
   // `errors` value you have not checked yet. See

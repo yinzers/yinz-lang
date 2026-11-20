@@ -75,10 +75,10 @@ fn offset_of(src: &str, needle: &str) -> usize {
 #[test]
 fn test_resolve_symbol_at_same_file_function_returns_function_kind() {
     let src = r#"
-function greet(name: string) -> string {
+function greet(name: String) -> String {
   return name
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let msg = greet(`hello`)
 }
 "#;
@@ -94,10 +94,10 @@ function entrypoint() -> nothing {
 fn test_resolve_symbol_at_same_file_shape_returns_shape_kind() {
     let src = r#"
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { name: `Pat`, health: 100 }
 }
 "#;
@@ -112,7 +112,7 @@ function entrypoint() -> nothing {
 #[test]
 fn test_resolve_symbol_at_local_let_returns_local_let_kind() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
   let doubled = count + count
 }
@@ -128,7 +128,7 @@ function entrypoint() -> nothing {
 #[test]
 fn test_resolve_symbol_at_local_const_returns_local_const_kind() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const limit = 10
   let x = limit
 }
@@ -143,7 +143,7 @@ function entrypoint() -> nothing {
 #[test]
 fn test_resolve_symbol_at_parameter_returns_parameter_kind() {
     let src = r#"
-function add(a: int, b: int) -> int {
+function add(a: Int, b: Int) -> Int {
   return a + b
 }
 "#;
@@ -159,7 +159,7 @@ function add(a: int, b: int) -> int {
 fn test_resolve_symbol_at_options_type_returns_options_kind() {
     let src = r#"
 options Status { active, inactive, banned }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.active
 }
 "#;
@@ -176,7 +176,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn test_resolve_symbol_at_out_of_bounds_returns_none() {
-    let src = "function entrypoint() -> nothing {}";
+    let src = "function entrypoint() -> Nothing {}";
     let (db, sf) = single_file("test.ynz", src);
     // Way past end of file.
     assert!(resolve_symbol_at(&db, sf, src.len() + 100).is_none());
@@ -184,7 +184,7 @@ fn test_resolve_symbol_at_out_of_bounds_returns_none() {
 
 #[test]
 fn test_resolve_symbol_at_whitespace_offset_returns_none() {
-    let src = "function entrypoint() -> nothing {  }";
+    let src = "function entrypoint() -> Nothing {  }";
     let (db, sf) = single_file("test.ynz", src);
     // The spaces inside the braces.
     let offset = src.find("{  }").unwrap() + 1;
@@ -194,7 +194,7 @@ fn test_resolve_symbol_at_whitespace_offset_returns_none() {
 #[test]
 fn test_resolve_symbol_at_integer_literal_returns_none() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = 42
 }
 "#;
@@ -210,8 +210,8 @@ function entrypoint() -> nothing {
 #[test]
 fn test_def_site_for_offset_same_file_function() {
     let src = r#"
-function greet() -> string { return `hi` }
-function entrypoint() -> nothing {
+function greet() -> String { return `hi` }
+function entrypoint() -> Nothing {
   let msg = greet()
 }
 "#;
@@ -224,7 +224,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn test_def_site_for_offset_whitespace_returns_none() {
-    let src = "function entrypoint() -> nothing { }";
+    let src = "function entrypoint() -> Nothing { }";
     let (db, sf) = single_file("test.ynz", src);
     assert!(def_site_for_offset(&db, sf, 0).is_none()); // 'f' in 'function' is a keyword, not resolvable
 }
@@ -235,8 +235,8 @@ fn test_def_site_for_offset_whitespace_returns_none() {
 
 #[test]
 fn test_resolve_symbol_at_cross_file_imported_function() {
-    let dep_src = "export function newPirate(name: string) -> string {\n  return name\n}\n";
-    let main_src = "import { newPirate } from `services/players`\nfunction entrypoint() -> nothing {\n  let p = newPirate(`Roberto`)\n}\n";
+    let dep_src = "export function newPirate(name: String) -> String {\n  return name\n}\n";
+    let main_src = "import { newPirate } from `services/players`\nfunction entrypoint() -> Nothing {\n  let p = newPirate(`Roberto`)\n}\n";
     let (db, main_sf, _dir) = two_files_on_disk("players", dep_src, main_src);
 
     let call_offset = main_src.rfind("newPirate(`Roberto`)").unwrap();
@@ -251,8 +251,8 @@ fn test_resolve_symbol_at_cross_file_imported_function() {
 
 #[test]
 fn test_resolve_symbol_at_cross_file_imported_shape() {
-    let dep_src = "export shape Pirate {\n  name: string\n  careerHits: int\n}\n";
-    let main_src = "import { Pirate } from `services/players`\nfunction entrypoint() -> nothing {\n  let p: Pirate = { name: `Roberto`, careerHits: 3000 }\n}\n";
+    let dep_src = "export shape Pirate {\n  name: String\n  careerHits: Int\n}\n";
+    let main_src = "import { Pirate } from `services/players`\nfunction entrypoint() -> Nothing {\n  let p: Pirate = { name: `Roberto`, careerHits: 3000 }\n}\n";
     let (db, main_sf, _dir) = two_files_on_disk("players", dep_src, main_src);
 
     let type_offset = main_src.rfind(": Pirate").unwrap() + 2;
@@ -271,8 +271,8 @@ fn test_resolve_symbol_at_cross_file_imported_shape() {
 #[test]
 fn test_references_for_offset_same_file_include_decl_false_excludes_decl() {
     let src = r#"
-function greet() -> string { return `hi` }
-function entrypoint() -> nothing {
+function greet() -> String { return `hi` }
+function entrypoint() -> Nothing {
   let a = greet()
   let b = greet()
   let c = greet()
@@ -288,8 +288,8 @@ function entrypoint() -> nothing {
 #[test]
 fn test_references_for_offset_include_decl_true_includes_decl() {
     let src = r#"
-function greet() -> string { return `hi` }
-function entrypoint() -> nothing {
+function greet() -> String { return `hi` }
+function entrypoint() -> Nothing {
   let a = greet()
 }
 "#;
@@ -305,7 +305,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn test_references_for_offset_whitespace_returns_empty() {
-    let src = "function entrypoint() -> nothing {   }";
+    let src = "function entrypoint() -> Nothing {   }";
     let (db, sf) = single_file("test.ynz", src);
     let refs = references_for_offset(&db, sf, src.find("{   }").unwrap() + 2, false);
     assert!(refs.is_empty());
@@ -313,8 +313,8 @@ fn test_references_for_offset_whitespace_returns_empty() {
 
 #[test]
 fn test_references_for_offset_symbol_used_in_multiple_files() {
-    let dep_src = "export function announce(name: string) -> string {\n  return name\n}\n";
-    let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> nothing {\n  let a = announce(`Roberto`)\n  let b = announce(`Willie`)\n}\n";
+    let dep_src = "export function announce(name: String) -> String {\n  return name\n}\n";
+    let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> Nothing {\n  let a = announce(`Roberto`)\n  let b = announce(`Willie`)\n}\n";
     let (db, main_sf, _dir) = two_files_on_disk("players", dep_src, main_src);
     let call_offset = main_src.find("announce(`Roberto`)").unwrap();
     let refs = references_for_offset(&db, main_sf, call_offset, false);
@@ -338,7 +338,7 @@ fn test_references_for_offset_symbol_used_in_multiple_files() {
 fn test_references_shadowing_inner_binding_does_not_contaminate_outer() {
     // outer `let foo = 1` — used in `let bar = foo + 1`
     // inner `let foo = 2` (shadow) — used in `let x = foo` inside the if-block
-    let src = "function f() -> nothing {\n  let foo = 1\n  let bar = foo + 1\n  if (true) {\n    let foo = 2\n    let x = foo\n  }\n}\n";
+    let src = "function f() -> Nothing {\n  let foo = 1\n  let bar = foo + 1\n  if (true) {\n    let foo = 2\n    let x = foo\n  }\n}\n";
     let (db, sf) = single_file("test.ynz", src);
 
     let outer_offset = src.find("let foo = 1").unwrap() + "let ".len();
@@ -377,7 +377,7 @@ fn test_references_shadowing_inner_binding_does_not_contaminate_outer() {
 #[test]
 fn test_rename_locations_local_let_returns_ok_with_locations() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
   let doubled = count + count
 }
@@ -392,7 +392,7 @@ function entrypoint() -> nothing {
 #[test]
 fn test_rename_locations_rejects_reserved_keyword_let() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
 }
 "#;
@@ -410,7 +410,7 @@ function entrypoint() -> nothing {
 #[test]
 fn test_rename_locations_rejects_banned_jargon_class() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
 }
 "#;
@@ -428,7 +428,7 @@ function entrypoint() -> nothing {
 #[test]
 fn test_rename_locations_rejects_invalid_identifier_starts_with_digit() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
 }
 "#;
@@ -446,7 +446,7 @@ function entrypoint() -> nothing {
 #[test]
 fn test_rename_locations_rejects_empty_name() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
 }
 "#;
@@ -460,8 +460,8 @@ function entrypoint() -> nothing {
 
 #[test]
 fn test_rename_locations_rejects_imported_symbol_at_use_site() {
-    let dep_src = "export function greet() -> string { return `hi` }\n";
-    let main_src = "import { greet } from `services/players`\nfunction entrypoint() -> nothing {\n  let msg = greet()\n}\n";
+    let dep_src = "export function greet() -> String { return `hi` }\n";
+    let main_src = "import { greet } from `services/players`\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
     let (db, main_sf, _dir) = two_files_on_disk("players", dep_src, main_src);
 
     let call_offset = main_src.find("greet()").unwrap();
@@ -476,7 +476,7 @@ fn test_rename_locations_rejects_imported_symbol_at_use_site() {
 
 #[test]
 fn test_rename_locations_at_non_symbol_returns_not_a_renameable() {
-    let src = r#"function entrypoint() -> nothing { }"#;
+    let src = r#"function entrypoint() -> Nothing { }"#;
     let (db, sf) = single_file("test.ynz", src);
     // Offset 0 = 'f' in the `function` keyword — not a resolvable identifier.
     let err = rename_locations(&db, sf, 0, "foo".to_string())
@@ -495,7 +495,7 @@ fn test_rename_locations_at_non_symbol_returns_not_a_renameable() {
 #[test]
 fn test_cross_file_reference_count_estimate_local_returns_one() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = 5
 }
 "#;
@@ -508,8 +508,8 @@ function entrypoint() -> nothing {
 
 #[test]
 fn test_cross_file_reference_count_estimate_exported_symbol_counts_importers() {
-    let dep_src = "export function greet() -> string { return `hi` }\n";
-    let main_src = "import { greet } from `services/players`\nfunction entrypoint() -> nothing {\n  let msg = greet()\n}\n";
+    let dep_src = "export function greet() -> String { return `hi` }\n";
+    let main_src = "import { greet } from `services/players`\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
     let (db, _main_sf, _dir) = two_files_on_disk("players", dep_src, main_src);
 
     // Get the dep SourceFile to measure from the declaration.

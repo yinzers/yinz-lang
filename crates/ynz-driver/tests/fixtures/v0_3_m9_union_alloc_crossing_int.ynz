@@ -1,11 +1,11 @@
 // v0.3-M9 C1f (#423): the int baseline of v0_3_m9_union_alloc_crossing.ynz.
 
-function slowWeigh(seed: int) -> int {
+function slowWeigh(seed: Int) -> Int {
   wait sleep(0)
   return seed + 2
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let count1 = 1
   wait sleep(0)

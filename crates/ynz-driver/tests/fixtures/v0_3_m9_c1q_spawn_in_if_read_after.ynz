@@ -4,7 +4,7 @@
 // as "given away".
 // Correct behavior: prints 3.
 
-function total(rows: array<int>) -> int {
+function total(rows: Array<Int>) -> Int {
   wait sleep(20)
   let sum = 0
   for (value in rows) {
@@ -13,8 +13,8 @@ function total(rows: array<int>) -> int {
   return sum
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   if (rows.count() > 0) {
     background total(rows)
   }

@@ -4,12 +4,12 @@
 // real escape hatch for the cross-module origin too. Expected output: "7"
 import { makeChannel } from `chan_ops`
 
-function feed(out: channel<int>) -> nothing {
+function feed(out: Channel<Int>) -> Nothing {
   let r = out.send(7)
 }
 
-function entrypoint() -> nothing {
-  let ch: channel<int> = makeChannel()
+function entrypoint() -> Nothing {
+  let ch: Channel<Int> = makeChannel()
   background feed(ch)
   let first = ch.receive()
   let value = first.or(0)

@@ -37,9 +37,9 @@ fn assert_no_errors(out: &CheckOutput) {
 }
 
 // A module-local shape given across a `background` spawn — the paddable case.
-const LOCAL_CROSSING: &str = "shape Tally { hits: int\n outs: int }\n\
-     function record(give t: Tally) -> nothing { wait sleep(1)\n print(t.hits.toString()) }\n\
-     function entrypoint() -> nothing { let t: Tally = { hits: 3, outs: 1 }\n background record(t) }";
+const LOCAL_CROSSING: &str = "shape Tally { hits: Int\n outs: Int }\n\
+     function record(give t: Tally) -> Nothing { wait sleep(1)\n print(t.hits.toString()) }\n\
+     function entrypoint() -> Nothing { let t: Tally = { hits: 3, outs: 1 }\n background record(t) }";
 
 #[test]
 fn module_local_crossing_shape_lands_in_padded_set_with_no_lint() {
@@ -112,9 +112,9 @@ fn exported_crossing_shape_declines_padding_and_fires_lint() {
 fn non_crossing_shape_is_never_padded() {
     // WHY: padding costs memory (64 bytes per field) — a shape that never crosses a
     // spawn boundary must keep its natural layout even when background exists nearby.
-    let src = "shape Tally { hits: int\n outs: int }\n\
-         function ping() -> nothing { wait sleep(1) }\n\
-         function entrypoint() -> nothing { let t: Tally = { hits: 3, outs: 1 }\n\
+    let src = "shape Tally { hits: Int\n outs: Int }\n\
+         function ping() -> Nothing { wait sleep(1) }\n\
+         function entrypoint() -> Nothing { let t: Tally = { hits: 3, outs: 1 }\n\
          background ping()\n print(t.hits.toString()) }";
     let out = run(src);
     assert_no_errors(&out);
@@ -130,7 +130,7 @@ fn non_crossing_shape_is_never_padded() {
 fn sleep_blocking_fires_prefer_yielding_sleep_suggestion() {
     // WHY: the roadmap-mandated Tier 3 nudge — dismissable, never an error, with the
     // user's own milliseconds echoed into the WHAT-INSTEAD (Golden Rule 3 context).
-    let src = "function entrypoint() -> nothing { sleepBlocking(25) }";
+    let src = "function entrypoint() -> Nothing { sleepBlocking(25) }";
     let out = run(src);
     assert_no_errors(&out);
     let lints = lint_diags(&out, "prefer-yielding-sleep");
@@ -154,7 +154,7 @@ fn kernel_mode_does_not_fire_prefer_yielding_sleep() {
     // WHY: kernel mode has no scheduler to yield to — `sleepBlocking` is the RIGHT
     // call there (the design doc's kernel row steers TOWARD it); a lint would be a
     // false positive nagging correct code.
-    let src = "function entrypoint() -> nothing { sleepBlocking(25) }";
+    let src = "function entrypoint() -> Nothing { sleepBlocking(25) }";
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), src.to_string());
     let parse = ynz_parser::parse_query(&db, sf);

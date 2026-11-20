@@ -1,13 +1,13 @@
 // A second, unrelated 1-byte shape named `Big`, the variant of `HolderB`'s union field.
 shape Big {
-  flag: boolean
+  flag: Boolean
 }
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 export shape HolderB {
   slot: Big | Tiny
-  id: int
+  id: Int
 }
 export function makeB() -> HolderB {
   let tiny: Tiny = { flag: true }

@@ -6,21 +6,21 @@
 // Expected output: `tiny`, `end`.
 
 shape Big {
-  label: string
-  items: array<int>
+  label: String
+  items: Array<Int>
 }
 shape Other {
-  count: int
+  count: Int
 }
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 
 function withTiny<T>(share first: T, give tiny: Tiny) -> T | Tiny {
   return tiny
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `x`.toUpperCase(), items: [1] }
   let either: Big | Other = big
   let tiny: Tiny = { flag: true }

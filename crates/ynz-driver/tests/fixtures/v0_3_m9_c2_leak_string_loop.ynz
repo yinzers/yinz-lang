@@ -8,13 +8,13 @@
 //
 // Expected output: 24000
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
-  let stem: string = `item`
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
+  let stem: String = `item`
   while (i < 2000) {
-    let joined: string = `${stem}-suffix`
-    let loud: string = joined.toUpperCase()
+    let joined: String = `${stem}-suffix`
+    let loud: String = joined.toUpperCase()
     total = total + joined.count() - 5 + loud.count() - 5
     i = i + 1
   }

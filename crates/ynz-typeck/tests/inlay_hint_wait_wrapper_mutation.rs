@@ -60,9 +60,9 @@ fn wait_wrapper_lend_call_suppresses_let_to_const_hint() {
     // `buf` (incorrectly claiming it is effectively const).
     // Expected after fix: no `let→const` hint for `buf`.
     let src = r#"
-function slowFill(lend buf: int) -> nothing { }
+function slowFill(lend buf: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let buf = 0
   wait slowFill(buf)
 }
@@ -79,7 +79,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn interpolated_string_lend_call_suppresses_let_to_const_hint() {
-    // WHY: `` `count is ${bump(buf)}` `` where `bump` takes `lend x: int` is a
+    // WHY: `` `count is ${bump(buf)}` `` where `bump` takes `lend x: Int` is a
     // mutation of `buf` inside a `StringPart::Expr` embedded in an
     // `Expr::InterpolatedString`.  The InterpolatedString arm in
     // `collect_maybe_mutated_expr` must recurse into each StringPart::Expr.
@@ -90,9 +90,9 @@ fn interpolated_string_lend_call_suppresses_let_to_const_hint() {
     // `msg` is the only let binding that should get a hint here (assigned once,
     // never mutated); `buf` must be absent from hints.
     let src = r#"
-function bump(lend x: int) -> int { 0 }
+function bump(lend x: Int) -> Int { 0 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let buf = 0
   let msg = `count is ${bump(buf)}`
 }
@@ -120,8 +120,8 @@ function entrypoint() -> nothing {
 
 #[test]
 fn wait_wrapper_lend_call_suppresses_array_to_fixed_hint() {
-    // WHY: `let nums: array<int> = [1,2,3]; wait growIt(nums)` where `growIt`
-    // takes `lend arr: int` is a mutation of `nums` (the array binding) hidden
+    // WHY: `let nums: Array<Int> = [1,2,3]; wait growIt(nums)` where `growIt`
+    // takes `lend arr: Int` is a mutation of `nums` (the array binding) hidden
     // behind a `wait` wrapper.
     //
     // The `array→fixed` hint must not fire on `nums` because `growIt` may
@@ -129,10 +129,10 @@ fn wait_wrapper_lend_call_suppresses_array_to_fixed_hint() {
     // collector, `nums` looks unmutated → WRONG `array→fixed` hint fires.
     // After fix: no `array→fixed` hint.
     let src = r#"
-function growIt(lend arr: int) -> nothing { }
+function growIt(lend arr: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
-  let nums: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [1, 2, 3]
   wait growIt(nums)
 }
 "#;
@@ -150,15 +150,15 @@ function entrypoint() -> nothing {
 fn wait_wrapper_share_call_does_not_suppress_let_to_const_hint() {
     // WHY: The fix must only suppress hints for bindings that are actually mutated
     // (lend/give ownership).  A `wait readOnly(x)` where `readOnly` takes
-    // `share x: int` is NOT a mutation.  The `let→const` hint must still fire.
+    // `share x: Int` is NOT a mutation.  The `let→const` hint must still fire.
     //
     // This guards against over-suppression: the Wait arm must recurse into the
     // inner expression and apply the same ownership-aware logic as the Call arm —
     // NOT blanket-suppress everything wrapped in `wait`.
     let src = r#"
-function readOnly(share x: int) -> nothing { }
+function readOnly(share x: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
   wait readOnly(count)
 }

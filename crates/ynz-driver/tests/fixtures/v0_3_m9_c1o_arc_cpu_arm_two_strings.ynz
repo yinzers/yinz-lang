@@ -5,23 +5,23 @@
 // `entrypoint` returns at once: the runtime's shutdown drain waits for the tasks, so no sleep
 // orders the output.
 shape Scene {
-  name: string
-  river: string
-  width: int
+  name: String
+  river: String
+  width: Int
 }
 
-function tally(scene: Scene) -> nothing {
+function tally(scene: Scene) -> Nothing {
   sleepBlocking(100)
   print(`cpu task sees ${scene.name} on ${scene.river}`)
 }
 
-function launch() -> nothing {
+function launch() -> Nothing {
   let scene: Scene = { name: `point park`.toUpperCase(), river: `allegheny`.toUpperCase(), width: 3 }
   background tally(scene)
   background tally(scene)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   let churn = `abcdefgh`.toUpperCase()
   print(churn)

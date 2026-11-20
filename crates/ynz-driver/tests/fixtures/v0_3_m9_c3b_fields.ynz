@@ -5,16 +5,16 @@
 // Expected output: one value per line below.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function entrypoint() -> nothing {
-  let count: int = 7
-  let label: string = `label-${count}`
+function entrypoint() -> Nothing {
+  let count: Int = 7
+  let label: String = `label-${count}`
   let first: Tag = { name: label, id: 1 }
   print(label)
-  let other: string = `other-${count}`
+  let other: String = `other-${count}`
   let second: Tag = { name: other, id: 2 }
   second.name = `fixed`
   first.name = second.name

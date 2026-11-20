@@ -1,5 +1,5 @@
-function entrypoint() -> nothing {
-  let a: int = 1
-  let b: number = 2.0
+function entrypoint() -> Nothing {
+  let a: Int = 1
+  let b: Number = 2.0
   let c = a + b
 }

@@ -10,29 +10,29 @@
 // gate's scope) — the false-positive cases here are the ARG slots, which do
 // not depend on the return path.
 shape Order {
-  total: number
-  count: int
+  total: Number
+  count: Int
 }
 
-function toll(amount: number) -> nothing {
+function toll(amount: Number) -> Nothing {
   print(`toll-ok`)
 }
 
-function addTo(n: int, m: int) -> int {
+function addTo(n: Int, m: Int) -> Int {
   return n + m
 }
 
-function five() -> int {
+function five() -> Int {
   return 5
 }
 
-function entrypoint() -> nothing {
-  let x: number = 5.0
+function entrypoint() -> Nothing {
+  let x: Number = 5.0
   print(x)
   toll(5.0)
   toll(x)
   print(addTo(5, 2))
-  let nums: array<int> = [1, 2]
+  let nums: Array<Int> = [1, 2]
   nums.add(5)
   print(nums.count())
   nums[0] = 5
@@ -42,11 +42,11 @@ function entrypoint() -> nothing {
   let o: Order = { total: 5.0, count: 5 }
   print(o.count)
   print(five())
-  let tags: map<string, int> = {`a`: 5}
+  let tags: Map<String, Int> = {`a`: 5}
   tags.set(`b`, 5)
   let t = tags.get(`b`)
   print(t.or(0))
-  let k: int = 5
+  let k: Int = 5
   if (k) {
     5 => { print(`match-int-ok`) }
     else => { print(`no`) }

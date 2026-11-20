@@ -5,25 +5,25 @@
 // Expected: a compile error naming the type and the line.
 
 shape Bag {
-  rows: fixed<array<string>, 2>
-  id: int
+  rows: Fixed<Array<String>, 2>
+  id: Int
 }
 
-function f(rows: fixed<array<string>, 2>) -> nothing {
+function f(rows: Fixed<Array<String>, 2>) -> Nothing {
   wait sleep(100)
   for (row in rows) {
     print(row.count())
   }
 }
 
-function launch() -> nothing {
-  let first: array<string> = [`a`.toUpperCase()]
-  let second: array<string> = [`b`.toUpperCase(), `c`.toUpperCase()]
+function launch() -> Nothing {
+  let first: Array<String> = [`a`.toUpperCase()]
+  let second: Array<String> = [`b`.toUpperCase(), `c`.toUpperCase()]
   let bag: Bag = { rows: [first, second], id: 1 }
   background f(bag.rows)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
   print(`done`)

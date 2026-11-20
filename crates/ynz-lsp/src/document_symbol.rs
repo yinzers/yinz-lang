@@ -339,7 +339,7 @@ mod tests {
     // with the correct name. Verifies the basic happy-path of the outline pipeline.
     #[test]
     fn function_decl_maps_to_function_symbol() {
-        let src = "function greet() -> nothing { }";
+        let src = "function greet() -> Nothing { }";
         let (state, uri) = state_single("/tmp/ds_fn.ynz", src);
         let symbols = document_symbol_response(&state, &uri);
         assert_eq!(symbols.len(), 1, "one function = one symbol");
@@ -351,7 +351,7 @@ mod tests {
     // SymbolKind mapping table is correct for shapes.
     #[test]
     fn shape_decl_maps_to_class_symbol() {
-        let src = "shape Player { name: string\n health: int }";
+        let src = "shape Player { name: String\n health: Int }";
         let (state, uri) = state_single("/tmp/ds_shape.ynz", src);
         let symbols = document_symbol_response(&state, &uri);
         assert_eq!(symbols.len(), 1);
@@ -375,7 +375,7 @@ mod tests {
     // across all registered files. Verifies that the empty-query fast-path works.
     #[test]
     fn workspace_symbol_empty_query_returns_all() {
-        let src = "function entrypoint() -> nothing { }";
+        let src = "function entrypoint() -> Nothing { }";
         let (state, _uri) = state_single("/tmp/ws_all.ynz", src);
         let results = workspace_symbol_response(&state, "");
         assert!(
@@ -388,7 +388,7 @@ mod tests {
     // A query of "ENTRY" must match a function named "entrypoint".
     #[test]
     fn workspace_symbol_case_insensitive_filter() {
-        let src = "function entrypoint() -> nothing { }";
+        let src = "function entrypoint() -> Nothing { }";
         let (state, _uri) = state_single("/tmp/ws_filter.ynz", src);
         let matched = workspace_symbol_response(&state, "ENTRY");
         assert!(

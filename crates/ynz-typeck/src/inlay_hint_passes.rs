@@ -105,7 +105,7 @@ pub(crate) fn primitive_intrinsic_method_is_readonly(method: &str) -> bool {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypeHint {
     pub position: usize,
-    /// The inferred type as a Yinz type-name string, e.g. `"int"` or `"Player"`.
+    /// The inferred type as a Yinz type-name string, e.g. `"Int"` or `"Player"`.
     pub type_text: String,
 }
 
@@ -259,7 +259,7 @@ fn copy_size_text(ty: &Type) -> &'static str {
 
 /// Check whether the AST type annotation (`ynz_ast::nodes::Type`) is `array<T>`.
 fn ast_ty_is_array(ty: &ynz_ast::nodes::Type) -> bool {
-    matches!(ty, ynz_ast::nodes::Type::Generic { name, .. } if name == "array")
+    matches!(ty, ynz_ast::nodes::Type::Generic { name, .. } if name == "Array")
 }
 
 /// Compute the byte offset where a Replacement-category promotion hint should be
@@ -1754,7 +1754,7 @@ fn collect_channel_capacity_hints_expr(expr: &Expr, out: &mut Vec<ChannelCapacit
                 // missing-element-type suppression.
                 // `c.span.end` is the byte AFTER the closing `)` (parse_call builds
                 // the span through the RParen token), so `end - 1` is the `)` itself.
-                if name == "channel"
+                if name == "Channel"
                     && c.type_args.as_ref().is_some_and(|ta| ta.len() == 1)
                     && c.args.is_empty()
                 {

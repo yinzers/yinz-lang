@@ -10,13 +10,13 @@
 //
 // Expected output (one per line): 5, 3, 5, 3
 
-function early(stopAt: int) -> int {
-  let anchor: array<int> = [1, 2, 3]
-  let i: int = 0
+function early(stopAt: Int) -> Int {
+  let anchor: Array<Int> = [1, 2, 3]
+  let i: Int = 0
   while (i < 3) {
-    let per: array<int> = [i, i]
+    let per: Array<Int> = [i, i]
     if (i == stopAt) {
-      let marker: array<int> = [7]
+      let marker: Array<Int> = [7]
       return per.count() + anchor.count() + marker.count() - 1
     }
     i = i + 1
@@ -24,11 +24,11 @@ function early(stopAt: int) -> int {
   return anchor.count()
 }
 
-function earlySuspending(stopAt: int) -> int {
-  let anchor: array<int> = [1, 2, 3]
-  let i: int = 0
+function earlySuspending(stopAt: Int) -> Int {
+  let anchor: Array<Int> = [1, 2, 3]
+  let i: Int = 0
   while (i < 3) {
-    let per: array<int> = [i, i]
+    let per: Array<Int> = [i, i]
     wait sleep(1)
     if (i == stopAt) {
       return per.count() + anchor.count()
@@ -38,11 +38,11 @@ function earlySuspending(stopAt: int) -> int {
   return anchor.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(early(1).toString())
   print(early(9).toString())
-  let hit: int = earlySuspending(2)
+  let hit: Int = earlySuspending(2)
   print(hit.toString())
-  let miss: int = earlySuspending(9)
+  let miss: Int = earlySuspending(9)
   print(miss.toString())
 }

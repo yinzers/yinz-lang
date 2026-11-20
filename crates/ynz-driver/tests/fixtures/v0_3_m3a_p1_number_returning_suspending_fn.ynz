@@ -8,13 +8,13 @@
 // The value 0.1 + 0.2 in decimal128 = 0.3 exactly (no IEEE-754 float rounding error).
 // A truncation to 8 bytes would produce the LOWER 64 bits of the 128-bit BID encoding —
 // a completely wrong value, not 0.3 — catching any hi-word truncation silently.
-function sleepingNumber() -> number {
+function sleepingNumber() -> Number {
   wait sleep(5)
   let v = 0.1 + 0.2
   return v
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = sleepingNumber()
   print(r)
 }

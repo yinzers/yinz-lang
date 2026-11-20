@@ -4,9 +4,9 @@
 // the only value read after wait — entry.* is NOT accessed, avoiding the MapEntry
 // two-field limitation. See design/concurrency.md 'map-entry-fields-after-wait'
 // for the deferral covering entry.key/entry.value reads after a wait.
-function entrypoint() -> nothing {
-  let scores: map<string, int> = { `alice`: 90, `bob`: 85, `carol`: 95 }
-  let count: int = 0
+function entrypoint() -> Nothing {
+  let scores: Map<String, Int> = { `alice`: 90, `bob`: 85, `carol`: 95 }
+  let count: Int = 0
   for (entry in scores) {
     count = count + 1
     wait sleep(5)

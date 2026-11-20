@@ -12,15 +12,15 @@
 // covers the constructible half of the element-across-suspension story; the
 // maybe half belongs to Phase 3's guard-lift matrix.)
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 }
   ]

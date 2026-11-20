@@ -14,7 +14,7 @@
 //   sum       = 9907
 //
 // Expected output (both modes — default and --no-auto-parallel): 9907
-function crunch(seed: int) -> int {
+function crunch(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -24,7 +24,7 @@ function crunch(seed: int) -> int {
   return total + seed
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunch(3)
   let b = crunch(4)
   wait sleep(0)

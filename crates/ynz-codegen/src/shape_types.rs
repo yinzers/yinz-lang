@@ -332,7 +332,7 @@ impl<'a, 'ctx> ShapeTypeBuilder<'a, 'ctx> {
                 size: ynz_typeck::FixedLength::Known(count),
             } => {
                 let cells = u32::try_from(*count).map_err(|_| {
-                    format!("shape layout: a `fixed` field of {count} items is too long")
+                    format!("shape layout: a `Fixed` field of {count} items is too long")
                 })?;
                 match **elem {
                     Type::Number { precision } if precision <= 34 => {

@@ -1,8 +1,8 @@
 // v0.3-M9 C1f (#423): the int baseline of v0_3_m9_union_alloc_container.ynz.
 
-function entrypoint() -> nothing {
-  let things: array<int> = []
-  let held: map<int, int> = {}
+function entrypoint() -> Nothing {
+  let things: Array<Int> = []
+  let held: Map<Int, Int> = {}
   let round = 0
   while (round < 300) {
     things.add(round)

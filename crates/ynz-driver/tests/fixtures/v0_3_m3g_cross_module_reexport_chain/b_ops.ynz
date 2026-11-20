@@ -6,7 +6,7 @@
 
 import { getValue } from `a_ops`
 
-export function doWork(n: int) -> int {
+export function doWork(n: Int) -> Int {
   let v = getValue()
   return v + n
 }

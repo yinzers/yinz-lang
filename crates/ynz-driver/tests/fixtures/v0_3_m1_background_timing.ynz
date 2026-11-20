@@ -10,12 +10,12 @@
 // in v0.3-M2). sleepBlocking is the v0.3-M1 Yinz intrinsic that calls the blocking
 // sleep helper on the background thread pool.
 
-function recordEvent() -> nothing {
+function recordEvent() -> Nothing {
   sleepBlocking(200)
   print(`background done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background recordEvent()
   print(`main done`)
 }

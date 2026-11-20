@@ -1,6 +1,6 @@
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let price = 0.1 + 0.2
-  let count: int = 42
+  let count: Int = 42
   let active = true
   print(price)
   print(count * count - 1)

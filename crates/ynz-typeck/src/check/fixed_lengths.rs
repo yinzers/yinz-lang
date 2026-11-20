@@ -98,9 +98,9 @@ impl<'b> Checker<'b> {
             self.diags.push(fixed_length_not_usable_diag(
                 span.clone(),
                 written_text,
-                "`fixed` takes an element type and a length, and no more",
+                "`Fixed` takes an element type and a length, and no more",
                 &format!(
-                    "Write the element type and, if you want one, a length: `fixed<{element_text}, 4>`. To keep values of different types together, declare a shape with a named field for each"
+                    "Write the element type and, if you want one, a length: `Fixed<{element_text}, 4>`. To keep values of different types together, declare a shape with a named field for each"
                 ),
             ));
         }
@@ -111,9 +111,9 @@ impl<'b> Checker<'b> {
                     span.clone(),
                     written_text,
                     &format!(
-                        "{value} is more than the {MAX_FIXED_LENGTH} items a `fixed` list can hold"
+                        "{value} is more than the {MAX_FIXED_LENGTH} items a `Fixed` list can hold"
                     ),
-                    &format!("Use an `array<{element_text}>`, which has no fixed length"),
+                    &format!("Use an `Array<{element_text}>`, which has no fixed length"),
                 ));
             }
             WrittenLength::NotANumber(argument) => {
@@ -122,7 +122,7 @@ impl<'b> Checker<'b> {
                     written_text,
                     &format!("`{}` is not a whole number", render_ast_type(argument)),
                     &format!(
-                        "Write a whole number, such as `fixed<{element_text}, 4>`, or leave the length out: `fixed<{element_text}>`. To keep values of different types together, declare a shape with a named field for each"
+                        "Write a whole number, such as `Fixed<{element_text}, 4>`, or leave the length out: `Fixed<{element_text}>`. To keep values of different types together, declare a shape with a named field for each"
                     ),
                 ));
             }
@@ -144,13 +144,13 @@ impl<'b> Checker<'b> {
         let element = match written.element {
             Some(element_ast) => self.ast_type_to_type(element_ast),
             None => {
-                self.report_missing_type_arguments("fixed", 1, span);
+                self.report_missing_type_arguments("Fixed", 1, span);
                 Type::Error
             }
         };
         let element_text = match written.element {
             Some(element_ast) => render_ast_type(element_ast),
-            None => "int".to_string(),
+            None => "Int".to_string(),
         };
         self.report_unusable_fixed_arguments(&written, &written_text, &element_text, span);
         match &written.length {
@@ -160,11 +160,11 @@ impl<'b> Checker<'b> {
                     let place = self.fixed_length_place();
                     let alternative = if self.in_signature_resolution {
                         format!(
-                            "Write the length on the whole parameter or return type, or leave it out: `fixed<{element_text}>`"
+                            "Write the length on the whole parameter or return type, or leave it out: `Fixed<{element_text}>`"
                         )
                     } else {
                         format!(
-                            "Leave the length out: `fixed<{element_text}>`. The list you assign gives it its length"
+                            "Leave the length out: `Fixed<{element_text}>`. The list you assign gives it its length"
                         )
                     };
                     self.diags.push(fixed_length_not_allowed_here_diag(
@@ -226,7 +226,7 @@ impl<'b> Checker<'b> {
             self.report_lengths_in_nested_field_type(ast_ty);
             return;
         };
-        if name != "fixed" {
+        if name != "Fixed" {
             self.report_lengths_in_nested_field_type(ast_ty);
             return;
         }
@@ -235,7 +235,7 @@ impl<'b> Checker<'b> {
         let element_text = written
             .element
             .map(render_ast_type)
-            .unwrap_or_else(|| "int".to_string());
+            .unwrap_or_else(|| "Int".to_string());
         self.report_unusable_fixed_arguments(&written, &written_text, &element_text, span);
         if written.length == WrittenLength::Absent {
             self.diags.push(fixed_field_length_missing_diag(
@@ -291,17 +291,17 @@ impl<'b> Checker<'b> {
                     .iter()
                     .any(|argument| matches!(argument, AstType::Length { .. }))
                 {
-                    if name == "fixed" {
+                    if name == "Fixed" {
                         let element_text = read_fixed_arguments(args)
                             .element
                             .map(render_ast_type)
-                            .unwrap_or_else(|| "int".to_string());
+                            .unwrap_or_else(|| "Int".to_string());
                         self.diags.push(fixed_length_not_allowed_here_diag(
                             span.clone(),
                             &render_ast_type(ast_ty),
                             "inside another type",
                             &format!(
-                                "Write the length on the whole type of the field, or leave it out: `fixed<{element_text}>`"
+                                "Write the length on the whole type of the field, or leave it out: `Fixed<{element_text}>`"
                             ),
                         ));
                     } else {
@@ -390,7 +390,7 @@ impl<'b> Checker<'b> {
                                     items(*expected)
                                 ),
                                 &format!(
-                                    "Pass a list of {}, or change `{parameter}` to `fixed<{element}>` so `{callee}` takes a list of any length",
+                                    "Pass a list of {}, or change `{parameter}` to `Fixed<{element}>` so `{callee}` takes a list of any length",
                                     items(*expected)
                                 ),
                                 &element,
@@ -405,7 +405,7 @@ impl<'b> Checker<'b> {
                                     items(*expected)
                                 ),
                                 &format!(
-                                    "Pass a `fixed<{element}>` list written out in this function, so its length is known"
+                                    "Pass a `Fixed<{element}>` list written out in this function, so its length is known"
                                 ),
                                 &element,
                                 *expected,
@@ -469,7 +469,7 @@ impl<'b> Checker<'b> {
                     items(*expected)
                 ),
                 format!(
-                    "Use a `fixed<{element}>` list written out in this function, so its length is known"
+                    "Use a `Fixed<{element}>` list written out in this function, so its length is known"
                 ),
             ),
         };
@@ -519,7 +519,7 @@ impl<'b> Checker<'b> {
                                 items(*count)
                             ),
                             &format!(
-                                "Return a list of {}, or change the return type to `fixed<{element}, {count}>`",
+                                "Return a list of {}, or change the return type to `Fixed<{element}, {count}>`",
                                 items(*expected)
                             ),
                             &element,
@@ -534,7 +534,7 @@ impl<'b> Checker<'b> {
                                 items(*expected)
                             ),
                             &format!(
-                                "Return a `fixed<{element}>` list written out in this function, so its length is known"
+                                "Return a `Fixed<{element}>` list written out in this function, so its length is known"
                             ),
                             &element,
                             *expected,
@@ -636,7 +636,7 @@ impl<'b> Checker<'b> {
             else {
                 continue;
             };
-            if name != "fixed" {
+            if name != "Fixed" {
                 continue;
             }
             let written = read_fixed_arguments(args);
@@ -646,13 +646,13 @@ impl<'b> Checker<'b> {
             let element_text = written
                 .element
                 .map(render_ast_type)
-                .unwrap_or_else(|| "int".to_string());
+                .unwrap_or_else(|| "Int".to_string());
             self.diags.push(fixed_length_missing_in_export_diag(
                 span.clone(),
                 &function.name,
                 &part,
                 &render_ast_type(ast_ty),
-                &format!("fixed<{element_text}, 4>"),
+                &format!("Fixed<{element_text}, 4>"),
             ));
         }
     }

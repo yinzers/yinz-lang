@@ -92,9 +92,9 @@ let halved = value >> 1              // shift right — move bits right, which h
 
 **Permissions example:**
 ```
-const readPermission: int = 1
-const writePermission: int = 2
-const executePermission: int = 4
+const readPermission: Int = 1
+const writePermission: Int = 2
+const executePermission: Int = 4
 
 let permissions = readPermission | writePermission     // 3 — has read and write
 let canRead = (permissions & readPermission) != 0      // true — read is one of the permissions
@@ -173,15 +173,15 @@ shape Addable {
 }
 
 shape Equatable {
-  equals(share self, share other: Self) -> boolean
+  equals(share self, share other: Self) -> Boolean
 }
 
 shape Comparable follows Equatable {
-  compareTo(share self, share other: Self) -> int
+  compareTo(share self, share other: Self) -> Int
 }
 
 shape Printable {
-  toString(share self) -> string
+  toString(share self) -> String
 }
 ```
 
@@ -192,8 +192,8 @@ shape Printable {
 ```ynz
 // The shape lists its fields and the contracts it follows; no function bodies here
 shape Vector2D follows Addable, Equatable, Printable {
-  x: number
-  y: number
+  x: Number
+  y: Number
 }
 
 // Standalone functions supply the behavior
@@ -202,11 +202,11 @@ function add(share self: Vector2D, share other: Vector2D) -> Vector2D {
   return { x: self.x + other.x, y: self.y + other.y }
 }
 
-function equals(share self: Vector2D, share other: Vector2D) -> boolean {
+function equals(share self: Vector2D, share other: Vector2D) -> Boolean {
   return self.x == other.x && self.y == other.y
 }
 
-function toString(share self: Vector2D) -> string {
+function toString(share self: Vector2D) -> String {
   return `(${self.x}, ${self.y})`
 }
 
@@ -258,10 +258,10 @@ print(Timeframe.daily)      // Daily    (if declared as daily: `Daily`)
 print(Status.active)        // active   (no display text declared)
 ```
 
-To change how a shape prints, write a standalone `toString(share self: YourShape) -> string` function and use `${...}` in a backtick string:
+To change how a shape prints, write a standalone `toString(share self: YourShape) -> String` function and use `${...}` in a backtick string:
 
 ```ynz
-function toString(share self: Player) -> string {
+function toString(share self: Player) -> String {
     return `${self.name} (HP: ${self.health})`
 }
 print(player)    // Alice (HP: 100)
@@ -274,15 +274,15 @@ print(player)    // Alice (HP: 100)
 `==` checks the types as well as the values. Comparing two different types is a compile error:
 
 ```
-let input: string = `5`
-let count: int = 5
+let input: String = `5`
+let count: Int = 5
 if (input == count) { print(1) }
 ```
 
 The compiler stops with this error:
 
 ```
-Error: `==` cannot be used with `string` and `int`.
+Error: `==` cannot be used with `String` and `Int`.
  4 │   if (input == count) { print(1) }
    │       ───────┬──────
    │              ╰──────── Check that both sides have the same type.

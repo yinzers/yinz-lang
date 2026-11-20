@@ -8,14 +8,14 @@
 // this dispatch. Both diagnostics were correct about their own rule and wrong about
 // this program: nothing crosses.
 
-function consume(n: int) -> int {
+function consume(n: Int) -> Int {
   wait sleep(10)
   return n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let f: fixed<int> = [1, 2, 3]
+  let f: Fixed<Int> = [1, 2, 3]
   const v = wait consume(f[2].or(0))
   print(v.toString())
 }

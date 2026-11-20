@@ -9,7 +9,7 @@
 //
 // Expected (both modes — default and --no-auto-parallel): the program stops with a
 // "division by zero" error and a non-zero exit. No number is printed.
-function crunch(seed: int) -> int {
+function crunch(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -20,13 +20,13 @@ function crunch(seed: int) -> int {
   return guard + seed
 }
 
-function combine() -> int {
+function combine() -> Int {
   let lo = crunch(0)
   let hi = crunch(4)
   return lo + hi
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = combine()
   print(result)
 }

@@ -4,15 +4,15 @@
 // the caller keeps its own value (prints 42). Auto-Arc is the deferred perf-form that
 // would refcount-share this same read-only crossing; the SAFE floor is proven here.
 shape Report {
-  label: string
-  total: int
+  label: String
+  total: Int
 }
 
-function summarize(report: Report) -> nothing {
+function summarize(report: Report) -> Nothing {
   print(report.label)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r: Report = { label: `q3`, total: 42 }
   background summarize(r)
   sleepBlocking(60)

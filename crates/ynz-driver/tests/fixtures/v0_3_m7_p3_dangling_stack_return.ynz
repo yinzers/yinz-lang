@@ -16,21 +16,21 @@
 // (infinite `3`s / garbage) when built with the optimized-by-default pipeline.
 
 shape InningClock {
-  startOuts: int
-  hidden current: int = 0
+  startOuts: Int
+  hidden current: Int = 0
 }
 
-function next(lend self: InningClock) -> maybe<int> {
+function next(lend self: InningClock) -> Maybe<Int> {
   if (self.current >= self.startOuts) {
     return none
   }
-  let outs: fixed<int> = [3, 2, 1]
+  let outs: Fixed<Int> = [3, 2, 1]
   let result = outs.get(self.current)
   self.current = self.current + 1
   return result
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let clock: InningClock = { startOuts: 3, current: 0 }
   for (n in clock) {
     print(n.toString())

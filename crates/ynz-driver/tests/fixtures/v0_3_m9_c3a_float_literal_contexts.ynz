@@ -6,24 +6,24 @@
 // Expected output (one per line): 0.317 0.75 0.5 0.125 2
 
 shape Sample {
-  ratio: float
+  ratio: Float
 }
 
-function double(value: float) -> float {
+function double(value: Float) -> Float {
   return value + value
 }
 
-function eighth() -> float {
+function eighth() -> Float {
   return 0.125
 }
 
-function entrypoint() -> nothing {
-  let annotated: float = 0.317
+function entrypoint() -> Nothing {
+  let annotated: Float = 0.317
   let sample: Sample = { ratio: 0.75 }
   print(annotated)
   print(sample.ratio)
   print(double(0.25))
   print(eighth())
-  let whole: float = 2.0
+  let whole: Float = 2.0
   print(whole)
 }

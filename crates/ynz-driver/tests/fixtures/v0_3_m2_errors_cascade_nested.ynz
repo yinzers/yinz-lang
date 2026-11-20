@@ -2,17 +2,17 @@
 // middle() calls fallibleStep() via inline poll-and-yield.
 // The error from __testFallibleAsync must surface through both SM boundaries.
 
-function fallibleStep() -> int errors {
+function fallibleStep() -> Int errors {
   let v = wait __testFallibleAsync(true)
   return v
 }
 
-function middle() -> int errors {
+function middle() -> Int errors {
   let r = fallibleStep()
   return r
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = middle()
   let safe = result.or(99)
   print(`safe: ${safe.toString()}`)

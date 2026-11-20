@@ -2,6 +2,6 @@
 // Expected: compiler exits 1 with a clean circular-import error, not a panic.
 import { bFunc } from `b_module`
 
-export function aFunc() -> nothing {
+export function aFunc() -> Nothing {
   print(`a`)
 }

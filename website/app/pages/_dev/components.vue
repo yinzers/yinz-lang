@@ -5,12 +5,12 @@ useHead({ meta: [{ name: 'robots', content: 'noindex' }] })
 // Code examples for YCode gallery
 const yinzSnippet = `// pirates-roster/entrypoint.ynz — M4 demo
 shape Player {
-  name: string
-  health: int
-  active: bool
+  name: String
+  health: Int
+  active: Boolean
 }
 
-function greet(share self: Player) -> string {
+function greet(share self: Player) -> String {
   // returns a greeting string using template literal
   const msg = \`Hello, I am \` + self.name
   return msg

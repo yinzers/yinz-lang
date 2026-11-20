@@ -6,13 +6,13 @@
 // are sequential by design (design/concurrency.md "Loop Iterations — Sequential by Default").
 //
 // Expected output: step:0\nstep:1\nstep:2\ndone
-function step(n: int) -> nothing {
+function step(n: Int) -> Nothing {
   wait sleep(10)
   print(`step:${n}`)
 }
 
-function entrypoint() -> nothing {
-  let items: array<int> = [0, 1, 2]
+function entrypoint() -> Nothing {
+  let items: Array<Int> = [0, 1, 2]
   for (n in items) {
     step(n)
   }

@@ -4,15 +4,15 @@
 //
 // Expected: -2.5 / 2.5 / -12.5 / 0
 
-function entrypoint() -> nothing {
-  let big: number<50> = 2.5
-  let negated: number<50> = -big
+function entrypoint() -> Nothing {
+  let big: Number<50> = 2.5
+  let negated: Number<50> = -big
   print(negated)
-  let negatedTwice: number<50> = -negated
+  let negatedTwice: Number<50> = -negated
   print(negatedTwice)
-  let negativeLarge: number<50> = -12.5
+  let negativeLarge: Number<50> = -12.5
   print(negativeLarge)
-  let zero: number<50> = 0.0
-  let negatedZero: number<50> = -zero
+  let zero: Number<50> = 0.0
+  let negatedZero: Number<50> = -zero
   print(negatedZero)
 }

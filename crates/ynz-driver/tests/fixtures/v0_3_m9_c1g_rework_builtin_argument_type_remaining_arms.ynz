@@ -6,23 +6,23 @@
 // as a `Big` (16 bytes) or a `string` as an `int`.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let fs: fixed<Big> = [big]
+  let fs: Fixed<Big> = [big]
   fs.set(`zero`, big)
   let fixedGot = fs.get(`zero`)
   let fixedHas = fs.contains(tiny)
-  let xs: array<Big> = [big]
+  let xs: Array<Big> = [big]
   xs.remove(tiny)
-  let m: map<string, Big> = {}
+  let m: Map<String, Big> = {}
   let mapHas = m.has(7)
   m.remove(8)
   let text = `hello world`

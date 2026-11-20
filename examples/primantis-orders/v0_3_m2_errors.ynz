@@ -21,12 +21,12 @@
 // block_on from inside a Tokio worker thread → non-unwinding abort, exit 0.
 // Now typeck rejects it before codegen fires, producing a clean teaching error.
 
-function pauseThenReturn() -> int {
+function pauseThenReturn() -> Int {
     wait sleep(50)
     return 7
 }
 
-function triggerSubExprSuspend() -> nothing {
+function triggerSubExprSuspend() -> Nothing {
     // WHY: SubExpressionSuspendPosition — pauseThenReturn() is a suspending
     // call inside an arithmetic expression; give it its own line first.
     let doubled = 2 * pauseThenReturn()
@@ -44,14 +44,14 @@ function triggerSubExprSuspend() -> nothing {
 // self-recursive form. Structuring as self-recursion (one function calling itself)
 // or removing `wait` from the cycle are the supported alternatives.
 
-function orderPing(n: int) -> nothing {
+function orderPing(n: Int) -> Nothing {
     wait sleep(10)
     // WHY: MutualRecursionSuspendingCycle — orderPing calls orderPong which calls
     // orderPing back, forming a mutual cycle where both functions suspend.
     orderPong(n - 1)
 }
 
-function orderPong(n: int) -> nothing {
+function orderPong(n: Int) -> Nothing {
     wait sleep(10)
     orderPing(n - 1)
 }
@@ -62,7 +62,7 @@ function orderPong(n: int) -> nothing {
 // A primitive value (int, string, bool) is not a call and cannot be a suspension
 // point. Write `wait someFn()` to wait for a function to complete.
 
-function triggerWaitNonCall() -> nothing {
+function triggerWaitNonCall() -> Nothing {
     // WHY: WaitOnNonCallExpression — `wait` applied to a literal integer, not a call.
     wait 42
     print(`order fulfilled`)
@@ -75,7 +75,7 @@ function triggerWaitNonCall() -> nothing {
 // The compiler emits a warning (not an error) and the program still runs.
 // Remove the `wait` for clarity.
 
-function triggerRedundantWait() -> nothing {
+function triggerRedundantWait() -> Nothing {
     // WHY: WaitOnNonMayBlock — print() is CPU-bound; wait has no effect here.
     wait print(`order received`)
 }
@@ -89,18 +89,18 @@ function triggerRedundantWait() -> nothing {
 // version.
 
 shape Vendor {
-    processOrder(share self) -> nothing
+    processOrder(share self) -> Nothing
 }
 
 shape PrimantisVendor follows Vendor {
-    name: string
+    name: String
 }
 
-function processOrder(share self: PrimantisVendor) -> nothing {
+function processOrder(share self: PrimantisVendor) -> Nothing {
     print(`Primantis order processed`)
 }
 
-function triggerCantInferDynamic(v: dynamic Vendor) -> nothing {
+function triggerCantInferDynamic(v: dynamic Vendor) -> Nothing {
     sleep(10)
     // WHY: CantInferDynamicDispatch — v.processOrder() is a dynamic-dispatch
     // call from a suspending function; concrete callee unknown at compile time.
@@ -123,18 +123,18 @@ function triggerCantInferDynamic(v: dynamic Vendor) -> nothing {
 // -- Happy-path (correct v0.3-M2 forms) --
 
 // Direct-statement form — no sub-expression nesting.
-function validSuspendingHelper() -> int {
+function validSuspendingHelper() -> Int {
     wait sleep(10)
     return 42
 }
 
-function validDirectStatementCall() -> nothing {
+function validDirectStatementCall() -> Nothing {
     let result = validSuspendingHelper()
     print(`result: ${result}`)
 }
 
 // Self-recursion — single function calling itself is the M2-supported form.
-function countdown(n: int) -> nothing {
+function countdown(n: Int) -> Nothing {
     if (n <= 0) {
         print(`done`)
         return
@@ -143,7 +143,7 @@ function countdown(n: int) -> nothing {
     countdown(n - 1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     // All the trigger functions above will cause compile errors, so entrypoint
     // is here as a placeholder for the gallery runner.
     print(`v0.3-M2 error gallery loaded`)

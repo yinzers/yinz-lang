@@ -28,11 +28,6 @@ token = "Function"
 since = "M1"
 
 [[keyword]]
-name = "nothing"
-token = "Nothing"
-since = "M1"
-
-[[keyword]]
 name = "let"
 token = "Let"
 since = "M1"
@@ -204,25 +199,25 @@ since = "M3"
 # M4 banned OOP declaration keywords
 [[banned_declaration_keyword]]
 name = "type"
-what_instead = "Use `shape` to declare a data type: `shape Player { name: string, health: int }`"
+what_instead = "Use `shape` to declare a data type: `shape Player { name: String, health: Int }`"
 why = "`type` is common in TypeScript, but Yinz uses `shape` — one unambiguous keyword for all data type declarations."
 since = "M4"
 
 [[banned_declaration_keyword]]
 name = "struct"
-what_instead = "Use `shape` to declare a data type: `shape Player { name: string, health: int }`"
+what_instead = "Use `shape` to declare a data type: `shape Player { name: String, health: Int }`"
 why = "Yinz uses `shape` for all data type declarations, whether they would be called structs, classes, or interfaces in other languages."
 since = "M4"
 
 [[banned_declaration_keyword]]
 name = "class"
-what_instead = "Use `shape` for data and standalone functions for behavior: `shape Player { name: string }` then `function greet(share self: Player) -> string`"
+what_instead = "Use `shape` for data and standalone functions for behavior: `shape Player { name: String }` then `function greet(share self: Player) -> String`"
 why = "Yinz is not object-oriented — there are no classes. Data lives in shapes; behavior lives in standalone functions called via dot-call syntax."
 since = "M4"
 
 [[banned_declaration_keyword]]
 name = "interface"
-what_instead = "For contracts, declare a `shape` with bare method signatures and use `follows`: `shape Damageable { takeDamage(lend self, amount: int) -> nothing }` then `shape Player follows Damageable { ... }`"
+what_instead = "For contracts, declare a `shape` with bare method signatures and use `follows`: `shape Damageable { takeDamage(lend self, amount: Int) -> Nothing }` then `shape Player follows Damageable { ... }`"
 why = "Yinz uses `shape` for both data types and contracts. A contract shape holds bare-signature declarations; implementing shapes use the `follows` keyword."
 since = "M4"
 
@@ -234,7 +229,7 @@ since = "M4"
 
 [[banned_declaration_keyword]]
 name = "abstract"
-what_instead = "Use `base shape` for a shape that cannot be instantiated directly: `base shape Entity { name: string }`"
+what_instead = "Use `base shape` for a shape that cannot be instantiated directly: `base shape Entity { name: String }`"
 why = "`base shape` names what the type is before saying it cannot be instantiated — the constraint is part of the declaration, not a separate modifier."
 since = "M4"
 
@@ -489,8 +484,8 @@ reason = "Rust-specific type name — Yinz uses the `errors` keyword instead"
 
 [[banned_jargon]]
 name = "Option"
-replacement = "`maybe<T>` — a value that might not be present"
-reason = "Rust-specific type name — Yinz uses `maybe<T>`"
+replacement = "`Maybe<T>` — a value that might not be present"
+reason = "Rust-specific type name — Yinz uses `Maybe<T>`"
 
 [[banned_jargon]]
 name = "Either"
@@ -588,27 +583,27 @@ reason = "formal methods jargon"
 
 # --- print_type: types that print() accepts ---
 [[primitive_intrinsic]]
-name = "string"
+name = "String"
 kind = "print_type"
 since = "M3"
 
 [[primitive_intrinsic]]
-name = "int"
+name = "Int"
 kind = "print_type"
 since = "M3"
 
 [[primitive_intrinsic]]
-name = "float"
+name = "Float"
 kind = "print_type"
 since = "M3"
 
 [[primitive_intrinsic]]
-name = "number"
+name = "Number"
 kind = "print_type"
 since = "M3"
 
 [[primitive_intrinsic]]
-name = "bool"
+name = "Boolean"
 kind = "print_type"
 since = "M3"
 
@@ -616,15 +611,15 @@ since = "M3"
 [[primitive_intrinsic]]
 name = "range"
 kind = "free_fn"
-param_types = ["int"]
-return_type = "range<int>"
+param_types = ["Int"]
+return_type = "Range<Int>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "range"
 kind = "free_fn"
-param_types = ["int", "int"]
-return_type = "range<int>"
+param_types = ["Int", "Int"]
+return_type = "Range<Int>"
 since = "M3"
 
 # --- free_fn: sleepBlocking (v0.3-M1, renamed from sleepMs at v0.3-M3a) ---
@@ -638,8 +633,8 @@ since = "M3"
 [[primitive_intrinsic]]
 name = "sleepBlocking"
 kind = "free_fn"
-param_types = ["int"]
-return_type = "nothing"
+param_types = ["Int"]
+return_type = "Nothing"
 since = "v0.3-M1"
 
 # --- free_fn: sleep (v0.3-M2, renamed from sleepAsync at v0.3-M3a) ---
@@ -651,363 +646,363 @@ since = "v0.3-M1"
 [[primitive_intrinsic]]
 name = "sleep"
 kind = "free_fn"
-param_types = ["int"]
-return_type = "nothing"
+param_types = ["Int"]
+return_type = "Nothing"
 since = "v0.3-M2"
 
-# --- methods: int conversions ---
+# --- methods: Int conversions ---
 [[primitive_intrinsic]]
 name = "toNumber"
 kind = "method"
-receiver_type = "int"
+receiver_type = "Int"
 param_types = []
-return_type = "number"
+return_type = "Number"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toFloat"
 kind = "method"
-receiver_type = "int"
+receiver_type = "Int"
 param_types = []
-return_type = "float"
+return_type = "Float"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toString"
 kind = "method"
-receiver_type = "int"
+receiver_type = "Int"
 param_types = []
-return_type = "string"
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toInt"
 kind = "method"
-receiver_type = "int"
+receiver_type = "Int"
 param_types = []
-return_type = "int"
+return_type = "Int"
 since = "M6"
 
-# --- methods: float conversions ---
+# --- methods: Float conversions ---
 [[primitive_intrinsic]]
 name = "toNumber"
 kind = "method"
-receiver_type = "float"
+receiver_type = "Float"
 param_types = []
-return_type = "number"
+return_type = "Number"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toString"
 kind = "method"
-receiver_type = "float"
+receiver_type = "Float"
 param_types = []
-return_type = "string"
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toInt"
 kind = "method"
-receiver_type = "float"
+receiver_type = "Float"
 param_types = []
-return_type = "maybe<int>"
+return_type = "Maybe<Int>"
 since = "M6"
 
-# --- methods: number conversions ---
+# --- methods: Number conversions ---
 [[primitive_intrinsic]]
 name = "toFloat"
 kind = "method"
-receiver_type = "number"
+receiver_type = "Number"
 param_types = []
-return_type = "float"
+return_type = "Float"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toString"
 kind = "method"
-receiver_type = "number"
+receiver_type = "Number"
 param_types = []
-return_type = "string"
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toInt"
 kind = "method"
-receiver_type = "number"
+receiver_type = "Number"
 param_types = []
-return_type = "maybe<int>"
+return_type = "Maybe<Int>"
 since = "M6"
 
-# --- methods: bool conversions ---
+# --- methods: Boolean conversions ---
 [[primitive_intrinsic]]
 name = "toString"
 kind = "method"
-receiver_type = "bool"
+receiver_type = "Boolean"
 param_types = []
-return_type = "string"
+return_type = "String"
 since = "M3"
 
-# --- method_1arg: int wrapping/saturating arithmetic ---
+# --- method_1arg: Int wrapping/saturating arithmetic ---
 [[primitive_intrinsic]]
 name = "wrappingAdd"
 kind = "method_1arg"
-receiver_type = "int"
-param_types = ["int"]
-return_type = "int"
+receiver_type = "Int"
+param_types = ["Int"]
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "wrappingSub"
 kind = "method_1arg"
-receiver_type = "int"
-param_types = ["int"]
-return_type = "int"
+receiver_type = "Int"
+param_types = ["Int"]
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "wrappingMul"
 kind = "method_1arg"
-receiver_type = "int"
-param_types = ["int"]
-return_type = "int"
+receiver_type = "Int"
+param_types = ["Int"]
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "saturatingAdd"
 kind = "method_1arg"
-receiver_type = "int"
-param_types = ["int"]
-return_type = "int"
+receiver_type = "Int"
+param_types = ["Int"]
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "saturatingSub"
 kind = "method_1arg"
-receiver_type = "int"
-param_types = ["int"]
-return_type = "int"
+receiver_type = "Int"
+param_types = ["Int"]
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "saturatingMul"
 kind = "method_1arg"
-receiver_type = "int"
-param_types = ["int"]
-return_type = "int"
+receiver_type = "Int"
+param_types = ["Int"]
+return_type = "Int"
 since = "M4"
 
-# --- methods: string --- (16 entries from builtins.rs STRING_METHODS + M6 fallible conversions)
+# --- methods: String --- (16 entries from builtins.rs STRING_METHODS + M6 fallible conversions)
 [[primitive_intrinsic]]
 name = "contains"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["string"]
-return_type = "bool"
+receiver_type = "String"
+param_types = ["String"]
+return_type = "Boolean"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "indexOf"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["string"]
-return_type = "maybe<int>"
+receiver_type = "String"
+param_types = ["String"]
+return_type = "Maybe<Int>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "startsWith"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["string"]
-return_type = "bool"
+receiver_type = "String"
+param_types = ["String"]
+return_type = "Boolean"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "endsWith"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["string"]
-return_type = "bool"
+receiver_type = "String"
+param_types = ["String"]
+return_type = "Boolean"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toUpperCase"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "string"
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toLowerCase"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "string"
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "trim"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "string"
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "count"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "int"
+return_type = "Int"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "byteCount"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "int"
+return_type = "Int"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "graphemeCount"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "int"
+return_type = "Int"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "get"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["int"]
-return_type = "maybe<string>"
+receiver_type = "String"
+param_types = ["Int"]
+return_type = "Maybe<String>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "graphemeAt"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["int"]
-return_type = "maybe<string>"
+receiver_type = "String"
+param_types = ["Int"]
+return_type = "Maybe<String>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "byteAt"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["int"]
-return_type = "maybe<int>"
+receiver_type = "String"
+param_types = ["Int"]
+return_type = "Maybe<Int>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "substring"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["int"]
-return_type = "string"
+receiver_type = "String"
+param_types = ["Int"]
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "split"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["string"]
-return_type = "array<string>"
+receiver_type = "String"
+param_types = ["String"]
+return_type = "Array<String>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "replace"
 kind = "method_1arg"
-receiver_type = "string"
-param_types = ["string"]
-return_type = "string"
+receiver_type = "String"
+param_types = ["String"]
+return_type = "String"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toInt"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "maybe<int>"
+return_type = "Maybe<Int>"
 since = "M6"
 
 [[primitive_intrinsic]]
 name = "toFloat"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "maybe<float>"
+return_type = "Maybe<Float>"
 since = "M6"
 
 [[primitive_intrinsic]]
 name = "toNumber"
 kind = "method"
-receiver_type = "string"
+receiver_type = "String"
 param_types = []
-return_type = "maybe<number>"
+return_type = "Maybe<Number>"
 since = "M6"
 
 # ---------------------------------------------------------------------------
-# [[type_attached_constant]] — constants accessed as Type.name (e.g. int.max).
+# [[type_attached_constant]] — constants accessed as Type.name (e.g. Int.max).
 # Required fields: type_name, const_name, value_type, value_literal, since
 # value_literal is a string (to avoid TOML precision loss for large integers).
 # ---------------------------------------------------------------------------
 
 [[type_attached_constant]]
-type_name = "int"
+type_name = "Int"
 const_name = "max"
-value_type = "int"
+value_type = "Int"
 value_literal = "9223372036854775807"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "int"
+type_name = "Int"
 const_name = "min"
-value_type = "int"
+value_type = "Int"
 value_literal = "-9223372036854775808"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "float"
+type_name = "Float"
 const_name = "max"
-value_type = "float"
+value_type = "Float"
 value_literal = "1.7976931348623157e308"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "float"
+type_name = "Float"
 const_name = "min"
-value_type = "float"
+value_type = "Float"
 value_literal = "-1.7976931348623157e308"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "float"
+type_name = "Float"
 const_name = "epsilon"
-value_type = "float"
+value_type = "Float"
 value_literal = "2.220446049250313e-16"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "number"
+type_name = "Number"
 const_name = "max"
-value_type = "number"
+value_type = "Number"
 value_literal = "9.999999999999999999999999999999999e+6144"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "number"
+type_name = "Number"
 const_name = "min"
-value_type = "number"
+value_type = "Number"
 value_literal = "1e-6143"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "number"
+type_name = "Number"
 const_name = "epsilon"
-value_type = "number"
+value_type = "Number"
 value_literal = "1e-33"
 since = "M4"
 
@@ -1019,16 +1014,16 @@ since = "M4"
 # --- Sized float variants (ship in v2+ with GPU/embedded targets) ---
 [[deferred_language_feature]]
 name = "f32"
-substitute = "Use `float` (f64) for floating-point math. Sized floats ship in v2+ for GPU and embedded work."
-why = "Yinz keeps the numeric type system small in v0.1: `int` (i64), `float` (f64), `number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Float` (f64) for floating-point math. Sized floats ship in v2+ for GPU and embedded work."
+why = "Yinz keeps the numeric type system small in v0.1: `Int` (i64), `Float` (f64), `Number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `f32` or `f64` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "f64"
-substitute = "Use `float` (f64) for floating-point math. `float` in Yinz is already f64."
-why = "Yinz keeps the numeric type system small in v0.1: `int` (i64), `float` (f64), `number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Float` (f64) for floating-point math. `Float` in Yinz is already f64."
+why = "Yinz keeps the numeric type system small in v0.1: `Int` (i64), `Float` (f64), `Number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `f64` as a type annotation in Yinz source"
@@ -1036,64 +1031,64 @@ triggers = "Writing `f64` as a type annotation in Yinz source"
 # --- Sized integer variants (ship in v2+) ---
 [[deferred_language_feature]]
 name = "i8"
-substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i8` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "i16"
-substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i16` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "i32"
-substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i32` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "i64"
-substitute = "Use `int` for whole numbers. `int` in Yinz is already i64."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for whole numbers. `Int` in Yinz is already i64."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i64` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "u8"
-substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u8` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "u16"
-substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u16` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "u32"
-substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u32` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
 name = "u64"
-substitute = "Use `int` for non-negative whole numbers. `int` in Yinz covers 0 to 9.2 × 10^18 — bigger than any count a human writes by hand."
-why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+substitute = "Use `Int` for non-negative whole numbers. `Int` in Yinz covers 0 to 9.2 × 10^18 — bigger than any count a human writes by hand."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`Int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u64` as a type annotation in Yinz source"
@@ -1140,13 +1135,13 @@ design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "Two cases both trigger the error: (1) a `let x` inside a nested scope (if/while/for/match body) when an outer `let x` declared before a `wait` is read after the `wait` at the outer scope; (2) a second top-level `let x` in the function body after a suspension when a first top-level `let x` was declared before the suspension. Both produce a silent slot-collision miscompile if allowed. Parameters count as an outer binding for both shapes."
 
 # --- Wide-value shape returns from suspending functions (docs/internal/implementation/IMP-concurrency.md) ---
-# Note: `-> number errors` (decimal128 EC) is SUPPORTED as of M3a Phase 1 — a 16-byte
+# Note: `-> Number errors` (decimal128 EC) is SUPPORTED as of M3a Phase 1 — a 16-byte
 # staging slot in the composed frame stores the i128 and is freed with the frame (alloc=1/free=1).
 # This entry covers only the remaining deferred cases: `-> Shape` and `-> Shape errors`.
 [[deferred_language_feature]]
 name = "wide-value-suspending-return"
-substitute = "For `-> Shape`: return the shape's fields individually as primitives, or bind the shape to a crossing local and return a primitive derived from it. For `-> Shape errors`: return the shape's fields individually (e.g. `-> int errors`) or compute a primitive value inside the function and return that."
-why = "Returning a Shape value from a suspending function needs a variable-size frame staging slot entangled with the pre-existing non-suspending shape-return base bug (shapes returned by value produce garbage for int fields even without suspension). Without it: `-> Shape` clobbers child sub-frames (staging bytes at FRAME_OFFSET_LOCALS_START=32 overwrites the sleep sub-frame's resume_point → SIGSEGV); `-> Shape errors` needs the same variable-size staging. The shape base bug must be fixed first. `-> number errors` is fully supported (16-byte fixed staging slot, alloc=1/free=1)."
+substitute = "For `-> Shape`: return the shape's fields individually as primitives, or bind the shape to a crossing local and return a primitive derived from it. For `-> Shape errors`: return the shape's fields individually (e.g. `-> Int errors`) or compute a primitive value inside the function and return that."
+why = "Returning a Shape value from a suspending function needs a variable-size frame staging slot entangled with the pre-existing non-suspending shape-return base bug (shapes returned by value produce garbage for Int fields even without suspension). Without it: `-> Shape` clobbers child sub-frames (staging bytes at FRAME_OFFSET_LOCALS_START=32 overwrites the sleep sub-frame's resume_point → SIGSEGV); `-> Shape errors` needs the same variable-size staging. The shape base bug must be fixed first. `-> Number errors` is fully supported (16-byte fixed staging slot, alloc=1/free=1)."
 ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A suspending function (one whose body contains a `wait`) whose return type is `Shape` or `Shape errors` — these trigger the WideValueSuspendingReturn compile error."
@@ -1154,17 +1149,17 @@ triggers = "A suspending function (one whose body contains a `wait`) whose retur
 # --- union/maybe/dynamic crossing locals (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "unsupported-crossing-local-type"
-substitute = "Extract the inner value before the `wait`, or restructure so the `union`, `maybe`, or `dynamic` value is not needed after the suspension."
-why = "The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. `union`, `maybe<T>`, and `dynamic Contract` values are internally represented as pointers to {tag, payload} allocas on the resume function's stack — stack frames that are destroyed between suspension and resume. Flushing the alloca pointer to the frame and reloading it after resume produces undefined behavior (reading a dangling stack address). The UnsupportedCrossingLocalType guard in typeck/check.rs rejects these crossing locals at compile time, converting what was previously a raw LLVM ICE into a clean teaching diagnostic."
+substitute = "Extract the inner value before the `wait`, or restructure so the `union`, `Maybe`, or `dynamic` value is not needed after the suspension."
+why = "The frame-slot classifier in codegen handles Int, Boolean, Float, Number, String, Array, Map, Shape, and ErrorsCapable crossing locals. `union`, `Maybe<T>`, and `dynamic Contract` values are internally represented as pointers to {tag, payload} allocas on the resume function's stack — stack frames that are destroyed between suspension and resume. Flushing the alloca pointer to the frame and reloading it after resume produces undefined behavior (reading a dangling stack address). The UnsupportedCrossingLocalType guard in typeck/check.rs rejects these crossing locals at compile time, converting what was previously a raw LLVM ICE into a clean teaching diagnostic."
 ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it — any of these triggers the UnsupportedCrossingLocalType compile error."
+triggers = "A local binding of type `union`, `Maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it — any of these triggers the UnsupportedCrossingLocalType compile error."
 
 # --- EC wrapper collect-on-completion — SHIPPED in v0.3-M4 Phase 2. ---
 # The deferred_language_feature entry (`ec-wrapper-collect-on-completion`) has been retired —
 # the copy-before-free fix is live: a handle spawn (`let h = background worker()`) extracts the
 # completion value from the frame's return slot BEFORE the frame is freed, copying a wide
-# (`-> number errors`) ok-value to a handle-owned buffer; the bare fire-and-forget spawn path is
+# (`-> Number errors`) ok-value to a handle-owned buffer; the bare fire-and-forget spawn path is
 # byte-for-byte unchanged. Spawn-form-keyed at COMPILE time — never a runtime
 # "was receive called" conditional. See docs/internal/implementation/IMP-concurrency.md
 # ("ECWrapperResultCollection") and crates/ynz-runtime/src/handle.rs for the design record.
@@ -1190,11 +1185,11 @@ triggers = "`let h = background crunch()` where `crunch` never suspends - reject
 # --- Channel element-type restriction: per-type heap-upgrade (v0.3-M4 Phase 2 restriction) ---
 [[deferred_language_feature]]
 name = "channel-element-heap-upgrade"
-substitute = "Use one of the supported element types: int, float, boolean, string, number, array<T>, map<K, V>. For a `shape`, send its fields as separate values (or pack them into an array or map) and rebuild the shape on the receiving side. Alternatively, put the value in a heap-allocated container you manage (an `array<T>` of one element) and send that."
-why = "Channel values travel between tasks as a single 64-bit slot: scalars by value (int, float, boolean), heap-stable pointers (string, array, map), and a `number` as a 16-byte heap cell the send mints and the receive frees (the sender's binding stays usable; `number` is copy-through, never given away). What is still deferred is narrower: a `shape` element, and a bignum `number` (more than 34 digits of precision). A `shape` value is backed by the SENDING task's stack frame, which can be freed while the value still sits in the channel — the receiver would read freed memory — and an inline copy of it would share any pointer-cell field (an `array` field) between sender and receiver, which is a question of handing over a value that holds other values, not a marshalling question. Until that ships, shape and bignum elements are rejected at channel construction with a clean teaching error, never a silent dangling read."
+substitute = "Use one of the supported element types: Int, Float, Boolean, String, Number, Array<T>, Map<K, V>. For a `shape`, send its fields as separate values (or pack them into an Array or Map) and rebuild the shape on the receiving side. Alternatively, put the value in a heap-allocated container you manage (an `Array<T>` of one element) and send that."
+why = "Channel values travel between tasks as a single 64-bit slot: scalars by value (Int, Float, Boolean), heap-stable pointers (String, Array, Map), and a `Number` as a 16-byte heap cell the send mints and the receive frees (the sender's binding stays usable; `Number` is copy-through, never given away). What is still deferred is narrower: a `shape` element, and a bignum `Number` (more than 34 digits of precision). A `shape` value is backed by the SENDING task's stack frame, which can be freed while the value still sits in the channel — the receiver would read freed memory — and an inline copy of it would share any pointer-cell field (an `Array` field) between sender and receiver, which is a question of handing over a value that holds other values, not a marshalling question. Until that ships, shape and bignum elements are rejected at channel construction with a clean teaching error, never a silent dangling read."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "`channel<Player>()` - a channel construction whose element type is a shape (or a bignum `number`) - rejected today with a teaching error (crates/ynz-typeck/src/check.rs, channel-construction element check, derived from `ynz_typeck::types::channel_elem_supported`). Lift when the depth-two transfer rule for container stores lands and a shape's pointer-cell fields can be handed over soundly."
+triggers = "`Channel<Player>()` - a channel construction whose element type is a shape (or a bignum `Number`) - rejected today with a teaching error (crates/ynz-typeck/src/check.rs, channel-construction element check, derived from `ynz_typeck::types::channel_elem_supported`). Lift when the depth-two transfer rule for container stores lands and a shape's pointer-cell fields can be handed over soundly."
 
 # --- Channel auto-close on last-producer drop (IMP-concurrency.md "Deferred: auto-close on last-producer drop") ---
 [[deferred_language_feature]]
@@ -1208,7 +1203,7 @@ triggers = "A real workload where forgetting close() produced a hang in practice
 # --- Handle-side close (IMP-concurrency.md "The gap that decision leaves") ---
 [[deferred_language_feature]]
 name = "background-handle-close"
-substitute = "Bind the channel first, then spawn — `let commands = channel<int>(4)` and `let h = background worker(commands)` — and call `commands.close()` when you are done sending. The compiler requires the binding on the handle form (HandleChannelArgNeedsBinding), so the channel binding is always there to close."
+substitute = "Bind the channel first, then spawn — `let commands = Channel<Int>(4)` and `let h = background worker(commands)` — and call `commands.close()` when you are done sending. The compiler requires the binding on the handle form (HandleChannelArgNeedsBinding), so the channel binding is always there to close."
 why = "A handle is a message line TO the child (`h.send`), not the channel's lifecycle; a task can finish with its channel open and a channel can close with its task still running, so `h.close()` would make two lifetimes read as one. With the binding guard, every handle spawn's command channel has a spawner binding, so `commands.close()` is always available and `h.close()` would add only that conflation for the common case. Cost to add later: small — one non-suspending conduit method on the handle receiver forwarding to the channel's close entry, its typeck arm and one fixture."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
@@ -1217,11 +1212,11 @@ triggers = "A real program for which binding the channel first is genuinely the 
 # --- Consuming move-out-of-maybe (IMP-ownership.md "Deferred (four fields, packet item (g))") ---
 [[deferred_language_feature]]
 name = "maybe-move-out"
-substitute = "Call `.copy()` on the accessed value at the relay site instead — e.g. `other.send(got.value.copy())`. `got.value` reaches through the `maybe` envelope, so it cannot be given away whole."
-why = "A consuming accessor on `maybe<T>` — a form that yields the wrapped value as the sole holder, moving it out of the `maybe` rather than reaching through it — is a language-wide `maybe` semantics addition outside a concurrency milestone's charter: `maybe<T>` is used everywhere in the language, not only at channel receives, so the accessor's naming, what happens to the `maybe` binding afterward, and whether it generalizes to every `maybe`-producing site is its own design pass, not a corollary of the transfer rule. Cost to add later: a `maybe` design addendum (name and semantics), one new provenance arm for it, and one codegen path to move the wrapped value out instead of reading through the envelope."
+substitute = "Call `.copy()` on the accessed value at the relay site instead — e.g. `other.send(got.value.copy())`. `got.value` reaches through the `Maybe` envelope, so it cannot be given away whole."
+why = "A consuming accessor on `Maybe<T>` — a form that yields the wrapped value as the sole holder, moving it out of the `Maybe` rather than reaching through it — is a language-wide `Maybe` semantics addition outside a concurrency milestone's charter: `Maybe<T>` is used everywhere in the language, not only at channel receives, so the accessor's naming, what happens to the `Maybe` binding afterward, and whether it generalizes to every `Maybe`-producing site is its own design pass, not a corollary of the transfer rule. Cost to add later: a `Maybe` design addendum (name and semantics), one new provenance arm for it, and one codegen path to move the wrapped value out instead of reading through the envelope."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-ownership.md"
-triggers = "A measured relay workload where the extra `.copy()` per hop is a real cost, or the general move/drop story (Track 3 / FR 7(2)) landing and settling what 'consuming' means for `maybe<T>` alongside every other heap type."
+triggers = "A measured relay workload where the extra `.copy()` per hop is a real cost, or the general move/drop story (Track 3 / FR 7(2)) landing and settling what 'consuming' means for `Maybe<T>` alongside every other heap type."
 
 # --- Sequential-consistency atomic-ordering opt-in (docs/internal/implementation/IMP-no-function-coloring.md "Atomic Ordering Default") ---
 [[deferred_language_feature]]
@@ -1238,7 +1233,7 @@ triggers = "A real workload whose correctness contract requires a global total o
 #
 # The emission is LIVE: two or more `background` spawns in one block that pass the same
 # whole shape binding, with nothing changing it between them, every spawned function only
-# reading it, and a shape made of `int`/`float`/`bool`/`string` fields, share ONE
+# reading it, and a shape made of `Int`/`Float`/`Boolean`/`String` fields, share ONE
 # reference-counted block (`ynz_arc_new(size, glue)` at the first spawn, with one deep copy of
 # the shape's strings that the block owns; `ynz_arc_clone` per task, the caller's transient
 # released after the last spawn, each task's reference released when it retires; the last
@@ -1247,8 +1242,8 @@ triggers = "A real workload whose correctness contract requires a global total o
 # residual the design names — this entry now describes THAT, nothing wider.
 [[deferred_language_feature]]
 name = "auto-arc-codegen-emission"
-substitute = "In the three shapes the shared block does not yet cover, each `background` task takes its own independent copy — the same safe, race-free path every `background` argument used before sharing existed: (1) `background` statements passing the same value but separated by a suspension point (`wait`, a suspending call, a channel `send`/`receive`); (2) a `background` statement inside a loop body (one statement, run once per iteration); (3) `array`/`map` values, and shapes with a `number`, `array`, `map`, `maybe`, union, `channel`, or nested-shape field. Nothing is unsafe in the meantime; only the per-task copy is paid."
-why = "Sharing one block across a group of `background` statements is sound only while the caller's transient reference is a straight-line temporary: it is minted at the first `background` statement of the group and released right after the last, and never lives in a state-machine frame. (1) A suspension between the `background` statements would have to carry that temporary across a frame boundary — the frame-layout plumbing for a compiler-owned temporary does not exist yet, and the shape-copy path is correct there. (2) A loop runs ONE `background` statement many times, so no group of statements forms; sharing across iterations needs a caller-held reference that outlives the statement, which needs the scope-exit cleanup mechanism the language does not have yet. (3) The block is one allocation: a 16-byte header (an 8-byte refcount, then an 8-byte drop-glue slot) in front of a byte copy of the shape, so the data is 8-byte aligned. A `number` field needs 16-byte alignment. A `string` field is covered: the block owns one deep copy of the shape's strings per spawn group, and the last `ynz_arc_free` runs the glue once to release them and then frees the block. A field that is any other pointer (an array, a map, a maybe, a union, a channel, a nested shape) has no copy the block could own, so sharing it would let tasks share the inner allocation with no count on it; an `array`/`map` value is a header-plus-buffer pair, a different sharing substrate. Each of these declines to the copy path by construction rather than sharing unsoundly."
+substitute = "In the three shapes the shared block does not yet cover, each `background` task takes its own independent copy — the same safe, race-free path every `background` argument used before sharing existed: (1) `background` statements passing the same value but separated by a suspension point (`wait`, a suspending call, a channel `send`/`receive`); (2) a `background` statement inside a loop body (one statement, run once per iteration); (3) `Array`/`Map` values, and shapes with a `Number`, `Array`, `Map`, `Maybe`, union, `Channel`, or nested-shape field. Nothing is unsafe in the meantime; only the per-task copy is paid."
+why = "Sharing one block across a group of `background` statements is sound only while the caller's transient reference is a straight-line temporary: it is minted at the first `background` statement of the group and released right after the last, and never lives in a state-machine frame. (1) A suspension between the `background` statements would have to carry that temporary across a frame boundary — the frame-layout plumbing for a compiler-owned temporary does not exist yet, and the shape-copy path is correct there. (2) A loop runs ONE `background` statement many times, so no group of statements forms; sharing across iterations needs a caller-held reference that outlives the statement, which needs the scope-exit cleanup mechanism the language does not have yet. (3) The block is one allocation: a 16-byte header (an 8-byte refcount, then an 8-byte drop-glue slot) in front of a byte copy of the shape, so the data is 8-byte aligned. A `Number` field needs 16-byte alignment. A `String` field is covered: the block owns one deep copy of the shape's strings per spawn group, and the last `ynz_arc_free` runs the glue once to release them and then frees the block. A field that is any other pointer (an array, a map, a maybe, a union, a channel, a nested shape) has no copy the block could own, so sharing it would let tasks share the inner allocation with no count on it; an `Array`/`Map` value is a header-plus-buffer pair, a different sharing substrate. Each of these declines to the copy path by construction rather than sharing unsoundly."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-ownership.md"
 triggers = "(1) The compiler gains frame-backed storage for compiler-owned temporaries across a suspension point, so a group's transient can straddle a `wait`; (2) the language-wide scope-exit cleanup mechanism lands, so a caller-held reference can outlive one loop iteration; (3) a counted sharing substrate for pointer-carrying values (arrays, maps, shapes with pointer or 16-byte-aligned fields) is designed. Each slice widens the admission independently; the copy path stays the fallback for whatever remains."
@@ -1262,14 +1257,14 @@ ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for` loop whose body contains a `wait` and whose iterator is an identifier with `Type::Range` — e.g. `let r = range(0,3); for (i in r) { wait sleep(1) }`"
 
-# --- fixed<T> array iterator in a suspending for-loop (docs/internal/implementation/IMP-concurrency.md) ---
+# --- Fixed<T> array iterator in a suspending for-loop (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "fixed-array-iter-with-wait"
-substitute = "Use `array<T>` instead: `let items: array<T> = [...]`. An `array<T>` is heap-allocated so its pointer survives suspension."
-why = "fixed<T> arrays are stack-allocated using LLVM allocas in the current resume-function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds the pointer to the old stack-allocated array — a dangling pointer. Reading it is undefined behavior. Two fix paths: (a) heap-allocating fixed arrays (changing their semantics), or (b) a different frame-embedding strategy (store the fixed-array bytes directly in the composed heap frame, similar to how Shape crossing locals work)."
+substitute = "Use `Array<T>` instead: `let items: Array<T> = [...]`. An `Array<T>` is heap-allocated so its pointer survives suspension."
+why = "Fixed<T> arrays are stack-allocated using LLVM allocas in the current resume-function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds the pointer to the old stack-allocated array — a dangling pointer. Reading it is undefined behavior. Two fix paths: (a) heap-allocating fixed arrays (changing their semantics), or (b) a different frame-embedding strategy (store the fixed-array bytes directly in the composed heap frame, similar to how Shape crossing locals work)."
 ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "A `for` loop whose body contains a `wait` and whose iterator resolves to a `fixed<T>` variable or literal — e.g. `let flags: fixed<boolean> = [true,false]; for (b in flags) { wait sleep(1) }`"
+triggers = "A `for` loop whose body contains a `wait` and whose iterator resolves to a `Fixed<T>` variable or literal — e.g. `let flags: Fixed<Boolean> = [true,false]; for (b in flags) { wait sleep(1) }`"
 
 # --- Call-expression iterator in a suspending for-loop (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
@@ -1280,14 +1275,14 @@ ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for` loop whose body contains a `wait` and whose iterator is a call expression — e.g. `for (x in makeArray()) { wait sleep(1) }`"
 
-# --- fixed<T> binding (not iter) as a crossing local across a wait (docs/internal/implementation/IMP-concurrency.md) ---
+# --- Fixed<T> binding (not iter) as a crossing local across a wait (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "fixed-crossing-local-with-wait"
-substitute = "Declare the variable as `array<T>` instead of `fixed<T>`. An `array<T>` is heap-allocated so its pointer survives suspension across a `wait`."
-why = "fixed<T> values are stack-allocated allocas (LLVM build_alloca) in the resume function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume call, the crossing-local frame slot holds a dangling pointer to the old stack-allocated array. Reading elements after resume is undefined behavior — silently wrong values or memory corruption. This guard catches `let arr: fixed<T> = ...; wait ...; use(arr)` (the variable itself is the crossing local); the for-loop-iterator form is caught separately by fixed-array-iter-with-wait."
+substitute = "Declare the variable as `Array<T>` instead of `Fixed<T>`. An `Array<T>` is heap-allocated so its pointer survives suspension across a `wait`."
+why = "Fixed<T> values are stack-allocated allocas (LLVM build_alloca) in the resume function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume call, the crossing-local frame slot holds a dangling pointer to the old stack-allocated array. Reading elements after resume is undefined behavior — silently wrong values or memory corruption. This guard catches `let arr: Fixed<T> = ...; wait ...; use(arr)` (the variable itself is the crossing local); the for-loop-iterator form is caught separately by fixed-array-iter-with-wait."
 ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "A `fixed<T>` binding declared before a `wait` and used after — e.g. `let arr: fixed<int> = [1,2,3]; wait sleep(1); for (v in arr) { print(v) }`"
+triggers = "A `Fixed<T>` binding declared before a `wait` and used after — e.g. `let arr: Fixed<Int> = [1,2,3]; wait sleep(1); for (v in arr) { print(v) }`"
 
 # --- Range binding (not iter) as a crossing local across a wait (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
@@ -1302,22 +1297,22 @@ triggers = "A `range` binding declared before a top-level `wait` and used as a `
 [[deferred_language_feature]]
 name = "map-entry-fields-after-wait"
 substitute = "Read `entry.key` and `entry.value` before the `wait` and bind them to separate primitive crossing locals (e.g. `let k = entry.key; let v = entry.value`), then use `k` and `v` after the suspension. An outer counter or accumulator that does not access entry fields can cross the wait freely."
-why = "A for-loop variable over a map (`for (entry in m)`) is a {key, value} pair (MapEntry<K,V>). The current frame-slot mechanism assigns one i64 slot per crossing local — sufficient for scalar types (int, bool, float) and pointer types (string, array, map) but not for a two-field pair. Only the first field (entry.key via field[0]) would survive suspension; entry.value (field[1]) would read garbage from an uninitialized frame slot. Full MapEntry frame-backing (two consecutive frame slots, mirroring the ErrorsCapable 2-slot path) ships in a later milestone."
+why = "A for-loop variable over a map (`for (entry in m)`) is a {key, value} pair (MapEntry<K,V>). The current frame-slot mechanism assigns one i64 slot per crossing local — sufficient for scalar types (Int, Boolean, Float) and pointer types (String, Array, Map) but not for a two-field pair. Only the first field (entry.key via field[0]) would survive suspension; entry.value (field[1]) would read garbage from an uninitialized frame slot. Full MapEntry frame-backing (two consecutive frame slots, mirroring the ErrorsCapable 2-slot path) ships in a later milestone."
 ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for (entry in map)` loop whose body contains a `wait` and reads `entry.key` or `entry.value` after the suspension — e.g. `for (entry in m) { wait sleep(1); total = total + entry.value }`"
 
 # NOTE: the `array-shape-runtime-field-with-wait` deferred_language_feature entry that
 # lived here was RETIRED by v0.3-M5 Phase 3 — by-value inline element storage made
-# runtime-field array<Shape> crossings safe and the ArrayShapeRuntimeFieldWithWait
+# runtime-field Array<Shape> crossings safe and the ArrayShapeRuntimeFieldWithWait
 # typeck guard was removed. Acceptance coverage:
 # crates/ynz-driver/tests/integration.rs `m5_p3_array_shape_*_runs`.
 
 # --- Self-referential shapes (docs/internal/scratchpad/SCRATCH-future-self-references.md) ---
 [[deferred_language_feature]]
 name = "self-referential-shape"
-substitute = "Self-referential shapes are not yet supported. Use a `maybe T` field or restructure the data to avoid cycles."
-why = "Self-referential shapes (e.g. a `Node` with a `children: array<Node>` field) require relative/offset pointers. The compiler will detect these automatically in v0.3+ using Approach A (relative pointers) — no user-visible keyword needed."
+substitute = "Self-referential shapes are not yet supported. Use a `Maybe T` field or restructure the data to avoid cycles."
+why = "Self-referential shapes (e.g. a `Node` with a `children: Array<Node>` field) require relative/offset pointers. The compiler will detect these automatically in v0.3+ using Approach A (relative pointers) — no user-visible keyword needed."
 ships_in = "v0.3+"
 design_doc = "docs/internal/scratchpad/SCRATCH-future-self-references.md"
 triggers = "Declaring a shape with a field whose type is the same shape — not yet enforced at compile time"
@@ -1486,7 +1481,7 @@ triggers = "`arena scratch { }` keyword ships in the v0.3 concurrency/memory mil
 # background handle-form — SHIPPED in v0.3-M4 Phase 2.
 # The deferred_tooling_feature entry (`background-handle-form`) has been retired — the feature
 # is live: `let h = background worker()` yields a task handle supporting `h.send(v)` (feeds the
-# callee's first `channel<T>` parameter) and repeated `h.receive()` (message replies AND the
+# callee's first `Channel<T>` parameter) and repeated `h.receive()` (message replies AND the
 # task's own completion value as its final delivery — one surface). The typeck rejection that
 # pointed at this entry was lifted at check.rs (v0.3-M4 Phase 2). Remaining scoped-out slices
 # have their own entries: `background-handle-nonsuspending-callee`,
@@ -1699,7 +1694,7 @@ why_template = "A `{union}` is a box with a tag saying which variant is inside. 
 # so the WHAT-INSTEAD only ever names code that compiles today (Golden Rule 3). They have no
 # `DiagnosticKind` variant of their own: the diagnostic carries `UnionWhereVariantExpected`.
 # `{value}`, `{union}`, `{variant}` and `{needs}` are the base template's slots; `{others}` is the
-# union's other variants, backticked and comma-separated ("`nothing`", "`int`, `string`").
+# union's other variants, backticked and comma-separated ("`Nothing`", "`Int`, `String`").
 #
 # `...NameIt`: the value is not a bare name (`holder.inner`, `pick()`); an `is` arm checks a
 # named binding only. The union has a shape variant and the slot expects exactly that shape.
@@ -1723,7 +1718,7 @@ why_template = "A `{union}` might hold any one of its variants, not only a `{var
 # correct program never reaches codegen's refusal of the same case ("This is a compiler bug").
 # `{value}` is the value as source text, `{union}` the union's type, `{variant}` the variant that
 # takes it. The union box keeps one small value next to the tag: shapes, strings, arrays, maps,
-# `int`, `float`, `boolean` and a `number` of more than 34 digits fit; every other variant does not.
+# `Int`, `Float`, `Boolean` and a `Number` of more than 34 digits fit; every other variant does not.
 # Decided v0.3-M9 C1e round 2: `git log --grep=UnionVariantNotStorable`.
 [[diagnostic_template]]
 kind_name = "UnionVariantNotStorable"
@@ -1731,15 +1726,15 @@ what_template = "`{value}` would be stored in the `{variant}` part of a `{union}
 what_instead_template = "Put the `{variant}` inside a shape and use that shape as the union's variant instead: `shape Boxed { value: {variant} }`, then build it with `let boxed: Boxed = { value: {value} }` and use `boxed` here."
 why_template = "A `{union}` is a box with a tag saying which variant is inside, and the box has room for one small value next to the tag. A `{variant}` is not stored that way yet, so the compiler can't build the box for it. It stops here, because storing it anyway would make the code that reads the union get the wrong data. A shape works because the box then holds the shape's location."
 
-# The same slot when the variant is a `number` of more than 34 digits and the value is a shorter
-# `number`: the two are stored differently and typeck accepts one where the other is declared, but
+# The same slot when the variant is a `Number` of more than 34 digits and the value is a shorter
+# `Number`: the two are stored differently and typeck accepts one where the other is declared, but
 # the union box has no conversion yet. Selected by `union_variant_refusal_diag`; the diagnostic
-# carries `UnionVariantNotStorable`. `{value_ty}` is the value's type (`number<10>`).
+# carries `UnionVariantNotStorable`. `{value_ty}` is the value's type (`Number<10>`).
 [[diagnostic_template]]
 kind_name = "UnionVariantNotStorableNumberPrecision"
 what_template = "`{value}` is a `{value_ty}`, but the `{variant}` part of `{union}` needs a `{variant}`, and a union can't convert a `{value_ty}` into one yet."
 what_instead_template = "Create the value as a `{variant}` where you declare it, for example `let amount: {variant} = 5.0`, then use `amount` here."
-why_template = "A `number` with more digits is stored differently from one with fewer, and putting a number into a union does not convert between the two. Storing the `{value_ty}` as it is would make the code that reads the union misread its digits, so the compiler refuses instead of storing wrong digits."
+why_template = "A `Number` with more digits is stored differently from one with fewer, and putting a number into a union does not convert between the two. Storing the `{value_ty}` as it is would make the code that reads the union misread its digits, so the compiler refuses instead of storing wrong digits."
 
 # v0.3-M9 C1e (#421): `let m: Mixed = wait count()` and `let m: Mixed = count()` with a suspending
 # `count`. The state-machine `let` binds a call's result without the step that tags a plain value
@@ -1783,43 +1778,43 @@ what_template = "`{value}` has type `{actual}`, but `{callee}` needs `{bound}` f
 what_instead_template = "Pass a value of type `{bound}` for `{param}`. {alternative}."
 why_template = "`{callee}` is compiled once for each type `{typeParam}` stands for, and this call makes it `{bound}`, so `{callee}` handles `{param}` as `{bound}`. A `{actual}` is laid out differently, so reading it as `{bound}` gives wrong values, or goes past the end of the `{actual}` and can crash."
 
-# v0.3-M9 C6 follow-up (Product Manager ruling, card #383): a `map<K, V>` whose key type `K` has no
-# key slot. A map keeps a key in a slot of 8 bytes (`int`, `boolean`, `float`, and a `string`'s
-# address, compared by text) or 16 bytes (a `number` of up to 34 digits, kept inline); a shape, an
+# v0.3-M9 C6 follow-up (Product Manager ruling, card #383): a `Map<K, V>` whose key type `K` has no
+# key slot. A map keeps a key in a slot of 8 bytes (`Int`, `Boolean`, `Float`, and a `String`'s
+# address, compared by text) or 16 bytes (a `Number` of up to 34 digits, kept inline); a shape, an
 # array or any other type is not one such value, so its slot would hold only an address, and an
 # equal key would be found at another address and miss. Rendered by `check_map_key_type`; `{key}`
 # is the key type, `{key_is}` says why it is not one 8- or 16-byte value, `{recovery}` is the way
-# out (a shape's names the compiling `map<string, Shape>`). The `number<N>` of more than 34 digits
+# out (a shape's names the compiling `Map<String, Shape>`). The `Number<N>` of more than 34 digits
 # has its own text below, because its reason is its size, not its layout, and that refusal is
 # permanent. Only this shape / array / other-type refusal is temporary (support is built on card
 # #518): its text says "yet", and its WHY states how a map stores keys today.
 # Decided v0.3-M9 C6 follow-up: `git log --grep=MapKeyNotStorable`; temporary, Chief's 2026-11-19
-# ruling: `git log --grep="mark map-key refusals temporary"`; the wide `number` stays refused,
+# ruling: `git log --grep="mark map-key refusals temporary"`; the wide `Number` stays refused,
 # Chief's 2026-11-19 ruling: `git log --grep="settle remaining refusals"`.
 [[diagnostic_template]]
 kind_name = "MapKeyNotStorable"
-what_template = "A `map` can't be keyed by `{key}` yet."
+what_template = "A `Map` can't be keyed by `{key}` yet."
 what_instead_template = "{recovery}"
-why_template = "Today a map keeps each key in one slot of 8 bytes (for an `int`, a `boolean`, a `float`, or a `string`, which is compared by its text) or of 16 bytes (for a `number` of up to 34 digits). A `{key}` {key_is}, so its slot could hold only the address where it lives, and looking up a `{key}` equal to one you stored would miss, because it lives at another address. Keys like this are not supported yet."
+why_template = "Today a map keeps each key in one slot of 8 bytes (for an `Int`, a `Boolean`, a `Float`, or a `String`, which is compared by its text) or of 16 bytes (for a `Number` of up to 34 digits). A `{key}` {key_is}, so its slot could hold only the address where it lives, and looking up a `{key}` equal to one you stored would miss, because it lives at another address. Keys like this are not supported yet."
 
-# The same refusal for a `number` of more than 34 digits (`number<50>`): selected by
+# The same refusal for a `Number` of more than 34 digits (`Number<50>`): selected by
 # `check_map_key_type`; the diagnostic carries `MapKeyNotStorable`. `{key}` is the type
-# (`number<50>`), `{digits}` its digit count (`50`).
+# (`Number<50>`), `{digits}` its digit count (`50`).
 [[diagnostic_template]]
 kind_name = "MapKeyNotStorableWideNumber"
-what_template = "A `map` cannot be keyed by `{key}`."
-what_instead_template = "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`)."
-why_template = "A map keeps a `number` key inside its own 16-byte slot, which holds up to 34 digits. A `{key}` can have up to {digits} digits and takes as much memory as its digits need, kept outside the map, so it does not fit in the slot. The slot could hold only its address, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
+what_template = "A `Map` cannot be keyed by `{key}`."
+what_instead_template = "Key the map by an `Int` or a `String` id, or by a `Number` of at most 34 digits (`Number<34>`)."
+why_template = "A map keeps a `Number` key inside its own 16-byte slot, which holds up to 34 digits. A `{key}` can have up to {digits} digits and takes as much memory as its digits need, kept outside the map, so it does not fit in the slot. The slot could hold only its address, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
 
-# The same refusal for a `sensitive string` key: selected by `check_map_key_type`; the diagnostic
-# carries `MapKeyNotStorable`. `{key}` is the type (`sensitive string`). The reason is the secret
+# The same refusal for a `sensitive String` key: selected by `check_map_key_type`; the diagnostic
+# carries `MapKeyNotStorable`. `{key}` is the type (`sensitive String`). The reason is the secret
 # handling, not the slot: a map would release the key as an ordinary string and compare keys with
 # a comparison that is not constant-time. Decided v0.3-M9 C7 review r1 (Product Manager ruling A):
-# `git log --grep="refuse map<sensitive string, V> again"`.
+# `git log --grep="refuse Map<sensitive String, V> again"`.
 [[diagnostic_template]]
 kind_name = "MapKeyNotStorableSensitive"
-what_template = "A `map` cannot be keyed by `{key}`."
-what_instead_template = "Key the map by a plain `string` or an `int` that is not a secret, such as an id or a name, and keep the secret as the map's value: `map<string, sensitive string>`."
+what_template = "A `Map` cannot be keyed by `{key}`."
+what_instead_template = "Key the map by a plain `String` or an `Int` that is not a secret, such as an id or a name, and keep the secret as the map's value: `Map<String, sensitive String>`."
 why_template = "A `{key}` is a secret. A map would free a key as an ordinary string and would compare keys with a comparison that is not constant-time: it takes longer the more leading bytes two keys share, so how long a lookup takes could reveal part of a secret."
 
 # v0.3-M9 C6 (parked 71): `background eat(choice)` with `choice` a union and `function eat<T>(held:
@@ -1833,9 +1828,9 @@ what_template = "Cannot give the union `{union}` to `{callee}`'s generic paramet
 what_instead_template = "Declare `{parameter}` as `{union}` in `{callee}`'s signature instead of a type parameter, or put the union in a field of a shape and pass the shape."
 why_template = "A `background` task keeps its own copy of every argument, because it can still be running after the function that spawned it has returned. It can only copy a union when `{callee}` declares the union type. A generic parameter gives it no union slot to copy into, so the task would read the spawner's memory after the spawner returned."
 
-# v0.3-M9 C1n (card #387): `carry(choice)` with `function carry<T>(give item: T) -> nothing | T` and
+# v0.3-M9 C1n (card #387): `carry(choice)` with `function carry<T>(give item: T) -> Nothing | T` and
 # `choice` a `Big | Tiny` (also `-> Tiny | T`). The function returns the box it was given, tagged as
-# `Big | Tiny` is; the declared union numbers its variants from `nothing` (or `Tiny`), so the caller
+# `Big | Tiny` is; the declared union numbers its variants from `Nothing` (or `Tiny`), so the caller
 # would read the wrong variant. No conversion between two unions' tags exists (a union value is not
 # accepted where a wider union is declared), so typeck refuses the call; `main` refused it too (at the
 # caller's `is Big` arm) or, for `Tiny | T`, read a `Big` as a `Tiny`. Rendered by
@@ -1904,17 +1899,17 @@ what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a ba
 what_instead_template = "{fix}"
 why_template = "{why}"
 
-# `SpawnArgNotIndependent` for a `fixed` value the spawn CONSUMES (nothing reads it afterwards). The
+# `SpawnArgNotIndependent` for a `Fixed` value the spawn CONSUMES (nothing reads it afterwards). The
 # row above says "this line still reads it" and "hand it over instead", both false here: the value is
-# already handed over, and handing a `fixed` over does not move its items, because they are kept
-# with the function that made it. Only a `fixed` whose items cannot be copied reaches this (the
-# owned-copy table refuses it); a `fixed` of strings or shapes is copied for the task. `{items}` is
+# already handed over, and handing a `Fixed` over does not move its items, because they are kept
+# with the function that made it. Only a `Fixed` whose items cannot be copied reaches this (the
+# owned-copy table refuses it); a `Fixed` of strings or shapes is copied for the task. `{items}` is
 # the item type, `{detail}` the same per-type fill the row above uses.
 [[diagnostic_template]]
 kind_name = "SpawnArgNotIndependentHandedOver"
 what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a background task{detail}."
-what_instead_template = "Declare `{name}` as an `array<{items}>` instead, or give the task each item as an argument of its own."
-why_template = "A `fixed` value is kept with the function that made it, and a background task keeps running after that function has finished. To give the task a value of its own, the compiler copies the items out for it. That works for items that can be copied, such as a `string` or a shape, and not for items that cannot, such as an `array` or a `map`. So the call is refused, rather than letting the task read something that is gone."
+what_instead_template = "Declare `{name}` as an `Array<{items}>` instead, or give the task each item as an argument of its own."
+why_template = "A `Fixed` value is kept with the function that made it, and a background task keeps running after that function has finished. To give the task a value of its own, the compiler copies the items out for it. That works for items that can be copied, such as a `String` or a shape, and not for items that cannot, such as an `Array` or a `Map`. So the call is refused, rather than letting the task read something that is gone."
 
 # `SpawnArgNotIndependent` for a PIECE of a value (`background crunch(make().rows)`, `background
 # f(bag.rows)`), of a type the spawn cannot give the task a value of its own of (the same
@@ -2016,7 +2011,7 @@ why_template = "`.give` transfers ownership without copying. Auto-detection of u
 [[diagnostic_template]]
 kind_name = "WaitInsideLoop"
 what_template = "`wait` inside a loop is not supported yet."
-what_instead_template = "Move the `wait` to a standalone function called inside the loop: `function step() -> nothing { wait sleep(100) }`, then call `step()` from the loop body."
+what_instead_template = "Move the `wait` to a standalone function called inside the loop: `function step() -> Nothing { wait sleep(100) }`, then call `step()` from the loop body."
 why_template = "v0.3-M2 can only pause at the top level of a function or inside an `if` block. Pausing inside a loop requires saving and restoring the loop counter across the pause point — that transform ships in v0.3-M3a."
 
 [[diagnostic_template]]
@@ -2090,504 +2085,504 @@ retired_since = "v0.3-M2-Phase6"
 # messages stay in code, not in the registry.
 
 # ---------------------------------------------------------------------------
-# [[primitive_intrinsic]] — maybe<T> methods
-# receiver_type = "maybe" matches any maybe<T> via prefix stripping in lsp_adapter.
+# [[primitive_intrinsic]] — Maybe<T> methods
+# receiver_type = "Maybe" matches any Maybe<T> via prefix stripping in lsp_adapter.
 # ---------------------------------------------------------------------------
 
 [[primitive_intrinsic]]
 name = "exists"
 kind = "method"
-receiver_type = "maybe"
+receiver_type = "Maybe"
 param_types = []
-return_type = "boolean"
+return_type = "Boolean"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "or"
 kind = "method_1arg"
-receiver_type = "maybe"
+receiver_type = "Maybe"
 param_types = ["T"]
 return_type = "T"
 since = "M4"
 
 # ---------------------------------------------------------------------------
-# [[primitive_intrinsic]] — map<K,V> methods
-# receiver_type = "map" matches any map<K,V> via prefix stripping in lsp_adapter.
+# [[primitive_intrinsic]] — Map<K,V> methods
+# receiver_type = "Map" matches any Map<K,V> via prefix stripping in lsp_adapter.
 # ---------------------------------------------------------------------------
 
 [[primitive_intrinsic]]
 name = "get"
 kind = "method_1arg"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = ["K"]
-return_type = "maybe<V>"
+return_type = "Maybe<V>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "find"
 kind = "method_1arg"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = ["K"]
-return_type = "maybe<V>"
+return_type = "Maybe<V>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "has"
 kind = "method_1arg"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = ["K"]
-return_type = "boolean"
+return_type = "Boolean"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "set"
 kind = "method_1arg"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = ["K"]
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "remove"
 kind = "method_1arg"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = ["K"]
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "clear"
 kind = "method"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = []
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "count"
 kind = "method"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = []
-return_type = "int"
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "keys"
 kind = "method"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = []
-return_type = "array<K>"
+return_type = "Array<K>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "values"
 kind = "method"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = []
-return_type = "array<V>"
+return_type = "Array<V>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "entries"
 kind = "method"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = []
-return_type = "array<{key: K, value: V}>"
+return_type = "Array<{key: K, value: V}>"
 since = "M4"
 
 # ---------------------------------------------------------------------------
-# [[primitive_intrinsic]] — array<T> methods (gaps: find, set, map)
-# receiver_type = "array" matches any array<T> via prefix stripping in lsp_adapter.
+# [[primitive_intrinsic]] — Array<T> methods (gaps: find, set, map)
+# receiver_type = "Array" matches any Array<T> via prefix stripping in lsp_adapter.
 # ---------------------------------------------------------------------------
 
 [[primitive_intrinsic]]
 name = "add"
 kind = "method_1arg"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = ["T"]
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "remove"
 kind = "method_1arg"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = ["T"]
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "removeFirst"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "removeLast"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "clear"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "nothing"
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "get"
 kind = "method_1arg"
-receiver_type = "array"
-param_types = ["int"]
-return_type = "maybe<T>"
+receiver_type = "Array"
+param_types = ["Int"]
+return_type = "Maybe<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "first"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "maybe<T>"
+return_type = "Maybe<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "last"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "maybe<T>"
+return_type = "Maybe<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "count"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "int"
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "contains"
 kind = "method_1arg"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = ["T"]
-return_type = "boolean"
+return_type = "Boolean"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "sort"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "array<T>"
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "sortFast"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "array<T>"
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "sortStrict"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "array<T>"
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "filter"
 kind = "method_1arg"
-receiver_type = "array"
-param_types = ["T -> boolean"]
-return_type = "array<T>"
+receiver_type = "Array"
+param_types = ["T -> Boolean"]
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "unique"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "array<T>"
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "limit"
 kind = "method_1arg"
-receiver_type = "array"
-param_types = ["int"]
-return_type = "array<T>"
+receiver_type = "Array"
+param_types = ["Int"]
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "copy"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "array<T>"
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "append"
 kind = "method_1arg"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = ["T"]
-return_type = "array<T>"
+return_type = "Array<T>"
 since = "M4"
 doc = "Returns a new array with the item added at the end — the original is unchanged. To grow the array in-place (no copy), use `.add()` instead."
 
 [[primitive_intrinsic]]
 name = "prepend"
 kind = "method_1arg"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = ["T"]
-return_type = "array<T>"
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "concat"
 kind = "method_1arg"
-receiver_type = "array"
-param_types = ["array<T>"]
-return_type = "array<T>"
+receiver_type = "Array"
+param_types = ["Array<T>"]
+return_type = "Array<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "freeze"
 kind = "method"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = []
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "find"
 kind = "method_1arg"
-receiver_type = "array"
-param_types = ["T -> boolean"]
-return_type = "maybe<T>"
+receiver_type = "Array"
+param_types = ["T -> Boolean"]
+return_type = "Maybe<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "set"
 kind = "method_1arg"
-receiver_type = "array"
-param_types = ["int"]
-return_type = "nothing"
+receiver_type = "Array"
+param_types = ["Int"]
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "map"
 kind = "method_1arg"
-receiver_type = "array"
+receiver_type = "Array"
 param_types = ["T -> U"]
-return_type = "array<U>"
+return_type = "Array<U>"
 since = "M4"
 
 # ---------------------------------------------------------------------------
-# [[primitive_intrinsic]] — fixed<T> methods
-# receiver_type = "fixed" matches any fixed<T> via prefix stripping in lsp_adapter.
+# [[primitive_intrinsic]] — Fixed<T> methods
+# receiver_type = "Fixed" matches any Fixed<T> via prefix stripping in lsp_adapter.
 # ---------------------------------------------------------------------------
 
 [[primitive_intrinsic]]
 name = "get"
 kind = "method_1arg"
-receiver_type = "fixed"
-param_types = ["int"]
-return_type = "maybe<T>"
+receiver_type = "Fixed"
+param_types = ["Int"]
+return_type = "Maybe<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "first"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "maybe<T>"
+return_type = "Maybe<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "last"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "maybe<T>"
+return_type = "Maybe<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "count"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "int"
+return_type = "Int"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "contains"
 kind = "method_1arg"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = ["T"]
-return_type = "boolean"
+return_type = "Boolean"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "set"
 kind = "method_1arg"
-receiver_type = "fixed"
-param_types = ["int"]
-return_type = "nothing"
+receiver_type = "Fixed"
+param_types = ["Int"]
+return_type = "Nothing"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "sort"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "sortFast"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "sortStrict"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "filter"
 kind = "method_1arg"
-receiver_type = "fixed"
-param_types = ["T -> boolean"]
-return_type = "fixed<T>"
+receiver_type = "Fixed"
+param_types = ["T -> Boolean"]
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "unique"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "limit"
 kind = "method_1arg"
-receiver_type = "fixed"
-param_types = ["int"]
-return_type = "fixed<T>"
+receiver_type = "Fixed"
+param_types = ["Int"]
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "copy"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
-# ── channel<T> methods (v0.3-M8 Phase 4) ──
+# ── Channel<T> methods (v0.3-M8 Phase 4) ──
 # `send`/`receive` shipped in v0.3-M4 but lived only as typeck's CHANNEL_SUSPENDING_METHODS
 # — a pre-existing SSOT gap the feature-registry rule closes at the moment of discovery, so
 # all three conduit methods are registered together (IMP-concurrency.md "Registry entries
 # this design needs"). `param_ownership` is the optional per-parameter ownership list
-# (FRAGO 003): `send` GIVES its value for an owned-heap element kind (`array`/`map`); the
+# (FRAGO 003): `send` GIVES its value for an owned-heap element kind (`Array`/`Map`); the
 # transfer rule in IMP-ownership.md is the authority on what that consumes.
 [[primitive_intrinsic]]
 name = "send"
 kind = "method_1arg"
-receiver_type = "channel"
+receiver_type = "Channel"
 param_types = ["T"]
 param_ownership = ["give"]
-return_type = "nothing errors"
+return_type = "Nothing errors"
 since = "v0.3-M4"
 doc = "Puts one value into the channel, waiting for room when it is full (backpressure). Fails with the channel-closed error after close(). Sending an array or a map gives it away — the binding cannot be read afterward; send `.copy()` to keep it."
 
 [[primitive_intrinsic]]
 name = "receive"
 kind = "method"
-receiver_type = "channel"
+receiver_type = "Channel"
 param_types = []
-return_type = "maybe<T>"
+return_type = "Maybe<T>"
 since = "v0.3-M4"
 doc = "Takes the next value out of the channel, waiting until one arrives. After close(), delivers whatever was already sent and then returns none — that none is how a consumer loop knows the stream ended."
 
 [[primitive_intrinsic]]
 name = "close"
 kind = "method"
-receiver_type = "channel"
+receiver_type = "Channel"
 param_types = []
-return_type = "nothing"
+return_type = "Nothing"
 since = "v0.3-M8"
 doc = "Marks the channel finished: no more values will be sent. Later sends are refused with the channel-closed error; receive() drains what is buffered and then returns none. Never waits, cannot fail, and closing twice is a safe no-op."
 
-# v0.3-M8 Phase 4 step 3a (Patrick's ruling, 2026-09-03): `.copy()` on `map<K, V>` is a
-# one-level deep copy (`ynz_map_clone`), the same shape as the `array`/`fixed` entries above,
+# v0.3-M8 Phase 4 step 3a (Patrick's ruling, 2026-09-03): `.copy()` on `Map<K, V>` is a
+# one-level deep copy (`ynz_map_clone`), the same shape as the `Array`/`Fixed` entries above,
 # so the ConsumedBySend advice `{channel}.send({name}.copy())` is executable for every
 # element kind the transfer rule names.
 [[primitive_intrinsic]]
 name = "copy"
 kind = "method"
-receiver_type = "map"
+receiver_type = "Map"
 param_types = []
-return_type = "map<K, V>"
+return_type = "Map<K, V>"
 since = "v0.3-M8"
 doc = "A new map with the same keys and values. Changing the original afterward does not change the copy (and the other way round). Values that are themselves heap values are copied one level deep."
 
 [[primitive_intrinsic]]
 name = "append"
 kind = "method_1arg"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = ["T"]
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "prepend"
 kind = "method_1arg"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = ["T"]
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "concat"
 kind = "method_1arg"
-receiver_type = "fixed"
-param_types = ["fixed<T>"]
-return_type = "fixed<T>"
+receiver_type = "Fixed"
+param_types = ["Fixed<T>"]
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "freeze"
 kind = "method"
-receiver_type = "fixed"
+receiver_type = "Fixed"
 param_types = []
-return_type = "fixed<T>"
+return_type = "Fixed<T>"
 since = "M4"
 
 [[primitive_intrinsic]]
 name = "find"
 kind = "method_1arg"
-receiver_type = "fixed"
-param_types = ["T -> boolean"]
-return_type = "maybe<T>"
+receiver_type = "Fixed"
+param_types = ["T -> Boolean"]
+return_type = "Maybe<T>"
 since = "M4"
 
 # ---------------------------------------------------------------------------
@@ -2602,14 +2597,14 @@ domain = "variable_type"
 placement_category = "Addition"
 description = "Shows the type the compiler figures out for a variable from its initializer expression"
 example_source = "let x = 42"
-example_hint_rendered = ": int (from 42)"
+example_hint_rendered = ": Int (from 42)"
 
 [[muted_hint_domain]]
 domain = "function_param_type"
 placement_category = "Addition"
 description = "Shows the function parameter type the compiler figures out from the call-site argument"
 example_source = "foo(x => x + 1)"
-example_hint_rendered = ": int"
+example_hint_rendered = ": Int"
 
 [[muted_hint_domain]]
 domain = "ownership_call_site"
@@ -2670,36 +2665,36 @@ active_since = "v0.3-M3d"
 domain = "lifetimes"
 placement_category = "Informational"
 description = "Shows lifetimes the compiler tracks automatically (shown only on user request — usually noise)"
-example_source = "function foo(x: string) -> string { x }"
+example_source = "function foo(x: String) -> String { x }"
 example_hint_rendered = "'caller_scope"
 
 [[muted_hint_domain]]
 domain = "allocators"
 placement_category = "Addition"
 description = "Shows the allocator the compiler picks for a new value inside an arena scope"
-example_source = "let temp = array<int>()"
+example_source = "let temp = Array<Int>()"
 example_hint_rendered = ".in(scratch) — current arena"
 
 [[muted_hint_domain]]
 domain = "copy_points"
 placement_category = "Addition"
 description = "Shows where a trivially-copyable value is implicitly copied at a call site"
-example_source = "let n: int = 5"
+example_source = "let n: Int = 5"
 example_hint_rendered = ".copy() (8 bytes, trivially copyable)"
 
 # Replacement category (not an inlay hint): the compiler already uses the stricter form, so the
-# editor marks the `array` / `let` token the user wrote with a dotted underline (semantic-token
+# editor marks the `Array` / `let` token the user wrote with a dotted underline (semantic-token
 # modifier `promotable`) instead of adding text. Hover on the token shows this WHAT / WHAT INSTEAD /
 # WHY; the `refactor.rewrite` code action on it writes the stricter keyword into the source.
 [[muted_hint_domain]]
 domain = "array_to_fixed_promotion"
 placement_category = "Replacement"
-description = "Marks the `array` in an `array<T>` annotation with a dotted underline when the compiler stores the value as a fixed-size `fixed<T>` because nothing ever grows it"
-example_source = "let nums: array<int> = [1, 2, 3]"
-example_hint_rendered = "`array` carries a dotted underline; hover shows why, and the rewrite action turns it into `fixed<int>`"
-hover_what = "The compiler stores this value as a fixed-size `fixed<T>` instead of a growable `array<T>`, because nothing in this function ever grows it."
-hover_what_instead = "Write `fixed` instead of `array` in the annotation, for example `let nums: fixed<int> = [1, 2, 3]`, or use the \"Write 'fixed' instead of 'array'\" action on the underlined word. If you do need to add items later, keep `array`."
-hover_why = "A fixed-size list never has to grow, so it is cheaper to create and use than a growable `array`, and writing `fixed` tells readers its size will not change."
+description = "Marks the `Array` in an `Array<T>` annotation with a dotted underline when the compiler stores the value as a fixed-size `Fixed<T>` because nothing ever grows it"
+example_source = "let nums: Array<Int> = [1, 2, 3]"
+example_hint_rendered = "`Array` carries a dotted underline; hover shows why, and the rewrite action turns it into `Fixed<Int>`"
+hover_what = "The compiler stores this value as a fixed-size `Fixed<T>` instead of a growable `Array<T>`, because nothing in this function ever grows it."
+hover_what_instead = "Write `Fixed` instead of `Array` in the annotation, for example `let nums: Fixed<Int> = [1, 2, 3]`, or use the \"Write 'Fixed' instead of 'Array'\" action on the underlined word. If you do need to add items later, keep `Array`."
+hover_why = "A fixed-size list never has to grow, so it is cheaper to create and use than a growable `Array`, and writing `Fixed` tells readers its size will not change."
 
 [[muted_hint_domain]]
 domain = "let_to_const_promotion"
@@ -2711,7 +2706,7 @@ hover_what = "The compiler treats this `let` as a `const`, because nothing in th
 hover_what_instead = "Write `const` instead of `let`, for example `const count = 5`, or use the \"Write 'const' instead of 'let'\" action on the underlined word. If you do need to change it later, keep `let`."
 hover_why = "A value that never changes can be treated as fixed for the whole function, and writing `const` tells readers at a glance that it will not change."
 
-# v0.3-M4: shows the default capacity the compiler fills in for a `channel<T>()` construction with
+# v0.3-M4: shows the default capacity the compiler fills in for a `Channel<T>()` construction with
 # no explicit capacity argument. Addition category — the plain muted `64` renders inside the empty
 # parens (same plain-text convention as every other Addition hint); the hover shows the capacity
 # AND that it is the default (an explicit user-set capacity leaves nothing to add, so no hint
@@ -2724,11 +2719,11 @@ hover_why = "A value that never changes can be treated as fixed for the whole fu
 [[muted_hint_domain]]
 domain = "channel_capacity"
 placement_category = "Addition"
-description = "Shows the default capacity (64) the compiler fills in for a `channel<T>()` construction with no explicit capacity argument"
-example_source = "let ch: channel<int> = channel<int>()"
+description = "Shows the default capacity (64) the compiler fills in for a `Channel<T>()` construction with no explicit capacity argument"
+example_source = "let ch: Channel<Int> = Channel<Int>()"
 example_hint_rendered = "64"
 hover_what = "This channel uses the default capacity of 64 — how many values it can hold before send() makes the producer wait."
-hover_what_instead = "Write the capacity yourself to make it visible: channel<int>(64)."
+hover_what_instead = "Write the capacity yourself to make it visible: Channel<Int>(64)."
 hover_why = "64 is the locked default. A channel is always bounded, so send() makes a fast producer wait for a slow consumer instead of letting the buffer grow without limit."
 
 # v0.3-M4 Phase 3: shows where the compiler shares a read-only value across a `background`
@@ -2804,7 +2799,7 @@ since = "v0.3-M4"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 
 # v0.3-M5 Phase 7: fires when the one layout authority (`layout_decisions_query`)
-# applies the per-field array layout to an admitted `array<Shape>` binding; anchored
+# applies the per-field array layout to an admitted `Array<Shape>` binding; anchored
 # on the array's declaration. The rule NAME is roadmap-locked (plan decision D9):
 # "soa" is a registry-internal identifier convention, never user-facing text — all
 # hover/template prose below stays jargon-free ("separate per-field arrays").
@@ -2826,26 +2821,26 @@ why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only 
 since = "v0.3-M5"
 design_doc = "docs/internal/implementation/IMP-collections.md"
 
-# v0.3-M9 C1h (card #433): `fixed<T, N>` in function signatures. A `fixed` list costs what Rust's
+# v0.3-M9 C1h (card #433): `Fixed<T, N>` in function signatures. A `Fixed` list costs what Rust's
 # `[T; N]` costs, so its length is a compile-time number. Six refusals; each text is rendered by
 # the emit sites in check.rs through `registry_diag`. Slot names are per template below.
-# Decided v0.3-M9 C1h: `git log --grep="fixed<T, N>"`.
+# Decided v0.3-M9 C1h: `git log --grep="Fixed<T, N>"`.
 
-# `{written}` is the type as written (`fixed<int, N>`), `{problem}` says what is wrong with the length
+# `{written}` is the type as written (`Fixed<Int, N>`), `{problem}` says what is wrong with the length
 # in it, `{alternative}` is the way out (names only code that compiles), `{limit}` is 4294967295.
 [[diagnostic_template]]
 kind_name = "FixedLengthNotUsable"
 what_template = "`{written}` does not give a usable length: {problem}."
 what_instead_template = "{alternative}."
-why_template = "A `fixed` list is laid out when the program is compiled, so its length has to be a whole number written in the source, such as `4`, no larger than {limit}. A name, or a value worked out while the program runs, cannot be one."
+why_template = "A `Fixed` list is laid out when the program is compiled, so its length has to be a whole number written in the source, such as `4`, no larger than {limit}. A name, or a value worked out while the program runs, cannot be one."
 
 # `{written}` is the type as written, `{place}` says where (`on a local variable`, `inside another
-# type`, or `on `array`, which takes none`), `{alternative}` the way out.
+# type`, or `on `Array`, which takes none`), `{alternative}` the way out.
 [[diagnostic_template]]
 kind_name = "FixedLengthNotAllowedHere"
 what_template = "`{written}` writes a length {place}."
 what_instead_template = "{alternative}."
-why_template = "Only the whole type of a function parameter, a return value or a shape field can write a length: the compiler checks every call, every `return` and every list stored in a field against it. Anywhere else the length of a `fixed` list comes from the list that is built, such as `[1, 2, 3]`, so a length written there would have nothing to check, and no other type takes one."
+why_template = "Only the whole type of a function parameter, a return value or a shape field can write a length: the compiler checks every call, every `return` and every list stored in a field against it. Anywhere else the length of a `Fixed` list comes from the list that is built, such as `[1, 2, 3]`, so a length written there would have nothing to check, and no other type takes one."
 
 # `{what_is}` is the whole first sentence (an argument or a `return` with another length, or one
 # whose length the compiler cannot tell), `{alternative}` the way out, `{element}` and `{expected}`
@@ -2854,7 +2849,7 @@ why_template = "Only the whole type of a function parameter, a return value or a
 kind_name = "FixedLengthMismatch"
 what_template = "{what_is}."
 what_instead_template = "{alternative}."
-why_template = "A list written `fixed<{element}, {expected}>` holds exactly {expected} items, and the code compiled for it reads exactly that many. A list of another length would be read past its end, or leave items unread, so the compiler checks the length at every call, every `return` and every place a list is stored."
+why_template = "A list written `Fixed<{element}, {expected}>` holds exactly {expected} items, and the code compiled for it reads exactly that many. A list of another length would be read past its end, or leave items unread, so the compiler checks the length at every call, every `return` and every place a list is stored."
 
 # `{function}` the exported function, `{part}` `parameter `xs`` or `return type`, `{written}` the
 # type as written, `{suggested}` the same type with a length.
@@ -2862,7 +2857,7 @@ why_template = "A list written `fixed<{element}, {expected}>` holds exactly {exp
 kind_name = "FixedLengthMissingInExport"
 what_template = "`{function}` is exported, but its {part} `{written}` does not say how many items it holds."
 what_instead_template = "Write the length, as in `{suggested}`, using the number of items the callers pass."
-why_template = "A `fixed` list without a written length is compiled once for each length the code that uses it passes, and a returned list takes its length from the function's `return` statements. A file that imports `{function}` sees only its signature, so it could ask for neither. A written length is the same in every file."
+why_template = "A `Fixed` list without a written length is compiled once for each length the code that uses it passes, and a returned list takes its length from the function's `return` statements. A file that imports `{function}` sees only its signature, so it could ask for neither. A written length is the same in every file."
 
 # `{function}`, `{lengths}` (`3 and 2`), `{first}` the first length, `{element}` the element type.
 [[diagnostic_template]]
@@ -2875,7 +2870,7 @@ why_template = "A list comes back from a function with its items inside it, so i
 [[diagnostic_template]]
 kind_name = "FixedReturnLengthUnknown"
 what_template = "The number of items `{function}` returns cannot be worked out: {reason}."
-what_instead_template = "Write the length in the return type of `{function}`, such as `fixed<{element}, 4>`, and make every `return` give that many items."
+what_instead_template = "Write the length in the return type of `{function}`, such as `Fixed<{element}, 4>`, and make every `return` give that many items."
 why_template = "A list comes back from a function with its items inside it, so its size has to be known when the program is compiled. The compiler reads it from the `return` statements; where it cannot, the signature has to say it."
 
 # `{shape}` the shape, `{field}` the field, `{written}` the field's type as written, `{element}` the
@@ -2883,8 +2878,8 @@ why_template = "A list comes back from a function with its items inside it, so i
 [[diagnostic_template]]
 kind_name = "FixedFieldLengthMissing"
 what_template = "The field `{field}` of `{shape}` is written `{written}`, which does not say how many items it holds."
-what_instead_template = "Write the length in the field's type, as in `{field}: {suggested}`, using the number of items every `{shape}` holds. If that number changes from one `{shape}` to the next, hold the items in an `array<{element}>` field instead."
-why_template = "A shape keeps a `fixed` list inside its own bytes, so the size of the list is part of the size of the shape, and both have to be known when the program is compiled. A field written without a length has no size, so the compiler cannot lay the shape out or copy it."
+what_instead_template = "Write the length in the field's type, as in `{field}: {suggested}`, using the number of items every `{shape}` holds. If that number changes from one `{shape}` to the next, hold the items in an `Array<{element}>` field instead."
+why_template = "A shape keeps a `Fixed` list inside its own bytes, so the size of the list is part of the size of the shape, and both have to be known when the program is compiled. A field written without a length has no size, so the compiler cannot lay the shape out or copy it."
 
 # `{function}` the function, `{parameter}` its parameter, `{written}` the parameter's type as written,
 # `{suggested}` the same type with a length, `{reason}` why the function is built once (`pauses at a
@@ -2893,7 +2888,7 @@ why_template = "A shape keeps a `fixed` list inside its own bytes, so the size o
 kind_name = "FixedLengthMissingInTaskFunction"
 what_template = "`{function}` takes `{parameter}` as `{written}`, which has no length, but `{function}` {reason} and needs to know how many items `{parameter}` holds."
 what_instead_template = "Write the length of `{parameter}`, as in `{parameter}: {suggested}`, using the number of items the callers pass."
-why_template = "A `fixed` parameter without a length makes the compiler build one copy of the function for each length its callers pass. A function that {reason} is built only once, so it needs one length, written in its signature."
+why_template = "A `Fixed` parameter without a length makes the compiler build one copy of the function for each length its callers pass. A function that {reason} is built only once, so it needs one length, written in its signature."
 
 # v0.3-M9 C10 (card #387, plan #17): a `for` loop whose body frees the list it is walking. An
 # assignment releases the value it replaces; the loop reads its list straight from that value, so a
@@ -2903,7 +2898,7 @@ why_template = "A `fixed` parameter without a length makes the compiler build on
 # `check_walked_list_kept`; `{loopVariable}` the loop variable, `{walked}` the walked place as
 # written, `{write}` the assignment or call that frees it ("assigns `outer.inner`" or "calls
 # `reset(holder)`, which assigns `holder.rows`"), `{released}` the place that is assigned,
-# `{copyName}` a name for the copy, `{walkedKind}` what the loop walks: `list`, `map` or `string`.
+# `{copyName}` a name for the copy, `{walkedKind}` what the loop walks: `list`, `Map` or `String`.
 # Decided v0.3-M9 C10 (#387): `git log --grep=WalkedListWrittenInLoop`.
 [[diagnostic_template]]
 kind_name = "WalkedListWrittenInLoop"

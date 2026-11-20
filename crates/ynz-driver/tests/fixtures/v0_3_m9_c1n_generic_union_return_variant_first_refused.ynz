@@ -5,16 +5,16 @@
 // Expected: the build is refused with `GenericUnionBoundOutOfOrder`; the program is not run.
 
 shape Big {
-  label: string
-  items: array<int>
+  label: String
+  items: Array<Int>
 }
 shape Tiny {
-  count: int
+  count: Int
 }
 function carry<T>(give item: T) -> Tiny | T {
   return item
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`.toUpperCase(), items: [1] }
   let choice: Big | Tiny = big
   let got = carry(choice)

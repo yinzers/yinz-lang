@@ -7,10 +7,10 @@
 // Post-fix: the SAME teaching error the plain `-> number` return emits
 // (`Write it as a decimal literal: 5.0`), routed through the one shared gate
 // after unwrapping the ErrorsCapable wrapper.
-function toll() -> number errors {
+function toll() -> Number errors {
   return 5
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(`unreachable`)
 }

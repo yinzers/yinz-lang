@@ -6,20 +6,20 @@
 // ladder releases the last one: 3 released.
 // Expected output: the item count and the item.
 
-function build(count: int) -> array<string> {
-  let first: string = `first-${count}`
-  let items: array<string> = [first]
+function build(count: Int) -> Array<String> {
+  let first: String = `first-${count}`
+  let items: Array<String> = [first]
   items.set(0, `second`)
   items[0] = `third`
   return items
 }
 
-function show(items: array<string>) -> nothing {
+function show(items: Array<String>) -> Nothing {
   print(items.count())
   print(items[0].or(`none`))
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background show(build(1))
   wait sleep(80)
 }

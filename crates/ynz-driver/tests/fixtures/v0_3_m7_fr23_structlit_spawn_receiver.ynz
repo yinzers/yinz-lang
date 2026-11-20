@@ -36,27 +36,27 @@
 // be picked up by whichever round makes that decision, never shipped silently.
 
 shape Cargo {
-  weight: int
-  tag: int
+  weight: Int
+  tag: Int
 }
 
-function haul(self: Cargo) -> nothing {
+function haul(self: Cargo) -> Nothing {
   sleepBlocking(150)
   print(`haul: ${self.weight}/${self.tag}`)
 }
 
-function spawner() -> nothing {
+function spawner() -> Nothing {
   background haul({ weight: 111, tag: 222 })
 }
 
-function stomp() -> nothing {
+function stomp() -> Nothing {
   let junkA: Cargo = { weight: 777777, tag: 777888 }
   let junkB: Cargo = { weight: 888777, tag: 888888 }
-  let sum: int = junkA.weight + junkB.tag
+  let sum: Int = junkA.weight + junkB.tag
   print(`stomp: ${sum}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   spawner()
   stomp()
   stomp()

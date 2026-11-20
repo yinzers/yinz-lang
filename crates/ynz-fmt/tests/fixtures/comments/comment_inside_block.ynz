@@ -1,4 +1,4 @@
-function logic(x: int) -> int {
+function logic(x: Int) -> Int {
   // Check for zero
   if (x == 0) {
     return 0

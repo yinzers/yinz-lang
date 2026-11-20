@@ -47,13 +47,13 @@ The table and the traps below follow this list, in this order:
 | Variables | `let health = 100`<br>`const maxPlayers = 10` | `let health = 100`<br>`const maxPlayers = 10` |
 | Text | `'Hi'`, `"Hi"`, `` `Hi ${name}` `` | `` `Hi ${name}` `` (backticks only) |
 | Comments and line endings | `/* note */` and `;` | `// note`, `/// doc comment`, no `;` |
-| Data structures | `interface Player { name: string }`<br>`class Player { name: string }` | `shape Player { name: string }` |
-| Functions | `function heal(p: Player): void { }` | `function heal(lend player: Player) -> nothing { }` |
-| Missing values | `string \| null`, `undefined` | `maybe<string>`, `none` |
-| Failures | `throw new Error('no file')`<br>`try { } catch (e) { }` | `function load() -> string errors { }`<br>`content.failed()`, `content.or(...)` |
+| Data structures | `interface Player { name: string }`<br>`class Player { name: string }` | `shape Player { name: String }` |
+| Functions | `function heal(p: Player): void { }` | `function heal(lend player: Player) -> Nothing { }` |
+| Missing values | `string \| null`, `undefined` | `Maybe<String>`, `none` |
+| Failures | `throw new Error('no file')`<br>`try { } catch (e) { }` | `function load() -> String errors { }`<br>`content.failed()`, `content.or(...)` |
 | Choosing between kinds of values | `type Shape = Circle \| Square`<br>`if (shape instanceof Circle)` | `shape Shape = Circle \| Square`<br>`if (shape) { is Circle => ... }` |
 | Named value sets | `enum Status { Active, Banned }` | `options Status { active, banned }` |
-| Collections and reading by position | `string[]`, `Array<string>`<br>`Record<string, number>`<br>`scores[3]` is a number | `array<string>`, `fixed<string>`<br>`map<string, number>`<br>`scores[3]` is a `maybe<number>` |
+| Collections and reading by position | `string[]`, `Array<string>`<br>`Record<string, number>`<br>`scores[3]` is a number | `Array<String>`, `Fixed<String>`<br>`Map<String, Number>`<br>`scores[3]` is a `Maybe<Number>` |
 | Numbers | `0.1 + 0.2` is `0.30000000000000004` | `0.1 + 0.2` is `0.3` |
 | Operators | `===`, `score += 5`, `count++` | `==`, `score = score + 5`, `count = count + 1` |
 | Branching | `if () { } else { }`<br>`switch (code) { case 200: }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
@@ -114,11 +114,11 @@ A `shape` holds data. Behavior lives in standalone functions, and `player.heal(2
 
 ```
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
-function heal(lend self: Player, amount: int) -> nothing {
+function heal(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health + amount
 }
 
@@ -131,12 +131,12 @@ print(player.health)    // 70
 
 ### Missing values: `null` and `undefined` do not exist
 
-A value that might be missing has the type `maybe<T>`. You cannot use it until you handle the `none` case.
+A value that might be missing has the type `Maybe<T>`. You cannot use it until you handle the `none` case.
 
 ```
-let nickname: maybe<string> = none
+let nickname: Maybe<String> = none
 print(nickname.value)
-// COMPILE ERROR: `maybe.value` requires you to first check `m.exists()`.
+// COMPILE ERROR: `Maybe.value` requires you to first check `m.exists()`.
 // Add a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.
 ```
 
@@ -153,9 +153,9 @@ if (nickname.exists()) {
 A `?` after a type is not valid either:
 
 ```
-let score: int? = none
+let score: Int? = none
 // COMPILE ERROR: The `?` optional suffix is not valid in Yinz.
-// Use `maybe<T>` instead: `maybe<int>` not `int?`.
+// Use `Maybe<T>` instead: `Maybe<Int>` not `Int?`.
 ```
 
 ### Failures: Yinz has no `throw` and no `try`/`catch`
@@ -163,11 +163,11 @@ let score: int? = none
 A function that can fail says so in its signature with `errors`. The caller either passes the failure up, supplies a fallback, or checks it.
 
 ```
-function readFile(path: string) -> string errors {
+function readFile(path: String) -> String errors {
   return `file contents`
 }
 
-function loadConfig() -> string {
+function loadConfig() -> String {
   let content = readFile(`config.txt`)
   let text = content.or(`{}`)       // `{}` if the file can't be read
   return text
@@ -183,7 +183,7 @@ A union uses `|`, as in TypeScript. You check the kind with `is` inside an `if` 
 ```
 shape Shape = Circle | Square | Triangle
 
-function describe(share outline: Shape) -> nothing {
+function describe(share outline: Shape) -> Nothing {
   if (outline) {
     is Circle => print(`circle`)
     is Square => print(`square`)
@@ -201,20 +201,21 @@ If you forget a kind, the compiler names it:
 
 Write unions with `|`. Words such as `or` do not work.
 
-### Collections: lowercase names, and reading returns a `maybe`
+### Collections: capitalized names, and reading returns a `Maybe`
 
-Built-in collection names are lowercase.
-
-```
-let scores: Array<int> = []
-// COMPILE ERROR: `Array` is not a type — built-in collection types are lowercase in Yinz.
-// Use `array` (lowercase): `array<...>`
-```
-
-Reading by position never crashes. `scores[3]` gives a `maybe`, so you handle the missing case:
+Every type starts with a capital letter, built-in collections included.
 
 ```
-let scores: array<int> = [70, 85, 92]
+let scores: array<Int> = []
+// COMPILE ERROR: `array` is not a type name.
+//   Write `Array`.
+//   Why: Every type in Yinz starts with a capital letter, built-ins included.
+```
+
+Reading by position never crashes. `scores[3]` gives a `Maybe`, so you handle the missing case:
+
+```
+let scores: Array<Int> = [70, 85, 92]
 let found = scores[5]
 let score = found.or(0)
 print(score)    // 0
@@ -224,35 +225,35 @@ A shape value is not a collection. Use `[...]` to make one:
 
 ```
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
-let team: array<Player> = { name: `Alice`, health: 100 }
-// COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `array<Player>`.
+let team: Array<Player> = { name: `Alice`, health: 100 }
+// COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `Array<Player>`.
 // Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
-### Numbers: `number` is exact
+### Numbers: `Number` is exact
 
-In TypeScript, `0.1 + 0.2` gives `0.30000000000000004`. In Yinz, `number` stores decimal digits exactly, so you get the answer you expect:
+In TypeScript, `0.1 + 0.2` gives `0.30000000000000004`. In Yinz, `Number` stores decimal digits exactly, so you get the answer you expect:
 
 ```
 let total = 0.1 + 0.2
 print(total)    // 0.3
 ```
 
-Use `int` for whole numbers and `float` only when you want fast binary arithmetic and can accept tiny rounding differences.
+Use `Int` for whole numbers and `Float` only when you want fast binary arithmetic and can accept tiny rounding differences.
 
 ### Operators: `==` only, and no shortcuts
 
 `==` compares values and never converts types silently. Comparing different types is an error:
 
 ```
-let label: string = `5`
-let count: number = 5.0
+let label: String = `5`
+let count: Number = 5.0
 if (label == count) { }
-// COMPILE ERROR: `==` cannot be used with `string` and `number`.
+// COMPILE ERROR: `==` cannot be used with `String` and `Number`.
 // Check that both sides have the same type.
 ```
 
@@ -274,7 +275,7 @@ score = score + 5
 Handle one case with an early `return`, then carry on:
 
 ```
-function describe(share player: Player) -> string {
+function describe(share player: Player) -> String {
   if (player.health <= 0) {
     return `dead`
   }
@@ -357,11 +358,11 @@ In TypeScript, an array and a variable can point at the same object. In Yinz, `a
 
 ```
 shape Position {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-let path: array<Position> = []
+let path: Array<Position> = []
 let spot: Position = { x: 1, y: 2 }
 path.add(spot)
 spot.x = 99

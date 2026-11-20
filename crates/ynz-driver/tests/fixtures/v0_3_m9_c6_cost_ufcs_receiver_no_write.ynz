@@ -7,20 +7,20 @@
 // receiver; the scope exit releases all 7 (C7 slice 3: nested shapes are released).
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
 shape World {
   bucket: Bucket
-  owners: array<Bucket>
+  owners: Array<Bucket>
 }
 
-function total(share bucket: Bucket, share owners: array<Bucket>) -> int {
+function total(share bucket: Bucket, share owners: Array<Bucket>) -> Int {
   return bucket.rows.count() + owners.count() - 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Bucket = { rows: [4], id: 1 }
   let world: World = { bucket: { rows: [1, 2, 3], id: 1 }, owners: [first] }
   print(world.bucket.total(world.owners))

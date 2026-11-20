@@ -105,7 +105,7 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                     sort_priority: 150,
                 });
             }
-            // Primitive type names (int, float, string, etc.) — kind "print_type"
+            // Primitive type names (Int, Float, String, etc.) — kind "print_type"
             // entries are type constructors, not free functions; excluded from completion
             // because they appear as keywords/type-annotations, not as call expressions.
         }
@@ -113,8 +113,8 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
         CompletionContext::AfterDot { receiver_type } => {
             match receiver_type {
                 Some(rtype) => {
-                    // Strip generic params for matching: "array<int>" → "array".
-                    // Registry entries use the base type name (e.g. "array", "fixed")
+                    // Strip generic params for matching: "Array<Int>" → "Array".
+                    // Registry entries use the base type name (e.g. "Array", "Fixed")
                     // so they match any concrete instantiation.
                     let base_type = rtype.split('<').next().unwrap_or(rtype);
 
@@ -124,7 +124,7 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                             && (e.kind == "method" || e.kind == "method_1arg")
                     }) {
                         // For generic collections, replace placeholder "T" with the
-                        // concrete element type extracted from the receiver (e.g. "int").
+                        // concrete element type extracted from the receiver (e.g. "Int").
                         let elem = rtype
                             .strip_prefix(&format!("{base_type}<"))
                             .and_then(|s| s.strip_suffix('>'))
@@ -276,7 +276,7 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
         });
     }
 
-    // Type-attached constants — token may be "int.max" or just "max"
+    // Type-attached constants — token may be "Int.max" or just "max"
     // Try both forms.
     let type_const_match = crate::type_attached_constants()
         .find(|e| e.const_name == name || format!("{}.{}", e.type_name, e.const_name) == name);
@@ -343,8 +343,8 @@ mod tests {
             .map(|i| i.label.as_str())
             .collect();
         assert!(
-            kw_labels.len() >= 29,
-            "expected ≥29 keywords, got {}",
+            kw_labels.len() >= 28,
+            "expected ≥28 keywords, got {}",
             kw_labels.len()
         );
         assert!(
@@ -377,11 +377,11 @@ mod tests {
     #[test]
     fn after_dot_int_returns_int_methods() {
         let items = lsp_completion_items(&CompletionContext::AfterDot {
-            receiver_type: Some("int"),
+            receiver_type: Some("Int"),
         });
-        assert!(!items.is_empty(), "int should have primitive methods");
+        assert!(!items.is_empty(), "Int should have primitive methods");
         let has_to_string = items.iter().any(|i| i.label.starts_with("toString"));
-        assert!(has_to_string, "int should have toString method");
+        assert!(has_to_string, "Int should have toString method");
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(h.kind, HoverKind::TypeAttachedConstant);
         assert!(
             h.markdown_body.contains("9223372036854775807"),
-            "int.max value must appear in hover"
+            "Int.max value must appear in hover"
         );
     }
 

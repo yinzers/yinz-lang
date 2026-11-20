@@ -150,6 +150,9 @@ pub enum DiagnosticKind {
     /// carried so the LSP code-action handler can build a quick-fix without
     /// re-parsing the source text.
     BannedJargon { term: String },
+    /// An old lowercase built-in type spelling (`int`) written where a type goes; the LSP
+    /// quick-fix replaces it with the PascalCase name from `builtin_type_names`.
+    OldBuiltinTypeName { old_name: String },
     /// An imported name is never referenced in the file.
     UnusedImport { name: String },
     /// A Tier 3 lint rule fired. `rule` is the kebab-case `[[lint_rule]]` registry name
@@ -208,6 +211,7 @@ impl DiagnosticKind {
             DiagnosticKind::MissingReturn => "MissingReturn",
             DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
             DiagnosticKind::BannedJargon { .. } => "BannedJargon",
+            DiagnosticKind::OldBuiltinTypeName { .. } => "OldBuiltinTypeName",
             DiagnosticKind::UnusedImport { .. } => "UnusedImport",
             DiagnosticKind::LintRule { rule } => rule,
         }
@@ -315,6 +319,12 @@ impl DiagnosticKind {
             DiagnosticKind::MissingReturn => "missing return".to_string(),
             DiagnosticKind::BannedKeyword { keyword } => format!("`{keyword}` not valid here"),
             DiagnosticKind::BannedJargon { term } => format!("`{term}` is programmer jargon"),
+            DiagnosticKind::OldBuiltinTypeName { old_name } => {
+                match crate::builtin_type_names::pascal_case_name_for_old_builtin_type(old_name) {
+                    Some(new_name) => format!("write `{new_name}`"),
+                    None => format!("`{old_name}` is not a type name"),
+                }
+            }
             DiagnosticKind::UnusedImport { name } => format!("`{name}` never used"),
             DiagnosticKind::LintRule { rule } => format!("lint: {rule}"),
         }

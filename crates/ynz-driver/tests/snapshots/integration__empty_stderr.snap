@@ -8,7 +8,7 @@ Error: This file has no `entrypoint` function.
  1 │ 
    │ │ 
    │ ╰─ Add an entrypoint function:
-  function entrypoint() -> nothing {
+  function entrypoint() -> Nothing {
     ...
   }
    │ 

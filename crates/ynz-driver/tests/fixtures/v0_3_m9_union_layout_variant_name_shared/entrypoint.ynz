@@ -4,7 +4,7 @@
 // AddressSanitizer at -O0 and -O2.
 import { Holder, Tiny, Big, show, fillHolder } from `lib`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let holder: Holder = { slot: tiny, id: 7 }
   fillHolder(holder)

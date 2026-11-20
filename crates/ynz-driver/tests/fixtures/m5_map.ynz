@@ -1,5 +1,5 @@
-function entrypoint() -> nothing {
-  let scores: map<string, int> = { `alice`: 90, `bob`: 85 }
+function entrypoint() -> Nothing {
+  let scores: Map<String, Int> = { `alice`: 90, `bob`: 85 }
   print(scores[`alice`].or(0))
   print(scores[`bob`].or(0))
   scores[`alice`] = 95

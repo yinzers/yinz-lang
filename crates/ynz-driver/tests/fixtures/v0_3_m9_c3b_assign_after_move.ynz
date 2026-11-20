@@ -6,10 +6,10 @@
 // Total 2.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let count: int = 5
-  let source: string = `first-${count}`
-  let moved: string = source
+function entrypoint() -> Nothing {
+  let count: Int = 5
+  let source: String = `first-${count}`
+  let moved: String = source
   source = `again`
   print(moved)
 }

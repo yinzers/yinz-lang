@@ -59,10 +59,10 @@ fn share_param_call_does_not_suppress_let_to_const_hint() {
     // functions with `share` params — correct suppression is the highest-impact case for
     // the auto-promotion teaching surface reaching real code.
     let src = r#"
-function report(share val: int) -> nothing { }
-function logger(share msg: int) -> nothing { }
+function report(share val: Int) -> Nothing { }
+function logger(share msg: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
   report(count)
   logger(count)
@@ -80,9 +80,9 @@ fn share_param_direct_ident_arg_does_not_suppress_hint() {
     // This variant uses an int directly (no method call) to confirm the fix
     // handles the `Expr::Ident` arg path in Expr::Call.
     let src = r#"
-function display(share val: int) -> nothing { }
+function display(share val: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let score = 42
   display(score)
 }
@@ -99,14 +99,14 @@ function entrypoint() -> nothing {
 
 #[test]
 fn lend_param_call_suppresses_let_to_const_hint() {
-    // WHY: This is the CORRECT suppress guard.  `consume` takes `lend x: int`, meaning
+    // WHY: This is the CORRECT suppress guard.  `consume` takes `lend x: Int`, meaning
     // it may mutate the argument in place.  The binding should never receive a
     // `let→const` hint.  Both before and after the fix, this case must be suppressed —
     // but confirming it still works after the fix guards against over-narrowing.
     let src = r#"
-function consume(lend x: int) -> nothing { }
+function consume(lend x: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 0
   consume(count)
 }
@@ -122,9 +122,9 @@ fn give_param_call_suppresses_let_to_const_hint() {
     // WHY: `give` transfers ownership — the binding is consumed.  A binding whose
     // ownership is transferred is definitely not const-only.  Must be suppressed.
     let src = r#"
-function take(give x: int) -> nothing { }
+function take(give x: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let val = 7
   take(val)
 }
@@ -148,7 +148,7 @@ fn unresolvable_callee_conservatively_suppresses_hint() {
     // unknown.  Named tradeoff: imported-fn args get no hint (acceptable — never
     // produces a wrong const claim).
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = 10
   unknownFn(x)
 }
@@ -171,9 +171,9 @@ fn share_param_plus_reassign_still_suppresses_hint() {
     // must win.  The ownership-aware callee resolution must not interfere with the
     // assignment-target tracking that records direct reassignment.
     let src = r#"
-function display(share val: int) -> nothing { }
+function display(share val: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = 5
   display(x)
   x = 9
@@ -195,10 +195,10 @@ fn mixed_params_only_share_gets_hint() {
     // and `b` is passed to a `lend` param (must not get hint).  Confirms per-binding
     // accuracy — the fix doesn't blanket-suppress or blanket-allow.
     let src = r#"
-function readOnly(share val: int) -> nothing { }
-function mutating(lend val: int) -> nothing { }
+function readOnly(share val: Int) -> Nothing { }
+function mutating(lend val: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = 1
   let b = 2
   readOnly(a)
@@ -228,13 +228,13 @@ fn mutation_inside_array_literal_arg_is_tracked() {
     // `a`, `c`, `_nums` are never mutated → 3 hints.
     // The critical invariant: `b` must be absent from hints (< 4 total).
     let src = r#"
-function consume(lend x: int) -> nothing { }
+function consume(lend x: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = 1
   let b = 2
   let c = 3
-  let _nums: array<int> = [a, b, c]
+  let _nums: Array<Int> = [a, b, c]
   consume(b)
 }
 "#;
@@ -260,9 +260,9 @@ fn mutation_nested_in_struct_literal_is_tracked() {
     // walker must not miss it just because the call is nested inside the literal.
     // Fixture: exactly 2 non-const `let` bindings so count is unambiguous.
     let src = r#"
-function mutate(lend x: int) -> nothing { }
+function mutate(lend x: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = 10
   let b = 20
   mutate(b)
@@ -285,17 +285,17 @@ fn mutation_call_inside_struct_literal_field_is_tracked() {
     // struct-literal field value; a `lend`-param call found there counts as a mutation
     // of its argument, preventing a false `let→const` hint on that binding.
     let src = r#"
-function identity_lend(lend x: int) -> int { 0 }
-function make_thing(share a: int, share b: int) -> int { 0 }
+function identity_lend(lend x: Int) -> Int { 0 }
+function make_thing(share a: Int, share b: Int) -> Int { 0 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = 10
   let b = 20
   let _result = make_thing(a, identity_lend(b))
 }
 "#;
-    // `b` is passed to `identity_lend` which takes `lend b: int` → b is mutated.
-    // `a` is passed to `make_thing` which takes `share a: int` → a is NOT mutated → hint fires.
+    // `b` is passed to `identity_lend` which takes `lend b: Int` → b is mutated.
+    // `a` is passed to `make_thing` which takes `share a: Int` → a is NOT mutated → hint fires.
     // `_result` is let, assigned to an int → also gets a hint.
     // Total hints: a, _result → 2.  b must have no hint.
     let count = let_to_const_hint_count(src);
@@ -319,9 +319,9 @@ fn const_binding_gets_no_let_to_const_hint() {
     // regardless of what operations they're involved in.  Guards against a regression where
     // the ownership-aware fix accidentally fires on const bindings.
     let src = r#"
-function display(share val: int) -> nothing { }
+function display(share val: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const x = 99
   display(x)
 }
@@ -346,7 +346,7 @@ fn print_call_does_not_suppress_let_to_const_hint() {
     // Without this, `let count = 5; print(count)` — the most common Yinz beginner
     // pattern — would never show the auto-promotion hint, defeating the teaching surface.
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 5
   print(count)
 }
@@ -368,7 +368,7 @@ fn intrinsic_method_call_does_not_suppress_receiver_hint() {
     // `s` is deliberately `const` (not `let`) so it cannot contribute a spurious passing
     // hint.  This ensures the assertion specifically measures `score`'s hint.
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let score = 5
   const s = score.toString()
 }

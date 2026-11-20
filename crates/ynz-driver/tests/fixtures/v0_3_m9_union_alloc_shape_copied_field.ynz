@@ -2,19 +2,19 @@
 // the copy's four cells, then the field cell takes it by move. Correct behavior: prints 300.
 // The counter test pins 400 cells more than the moved-field fixture.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 shape Outer {
   inner: Holder
-  tag: int
+  tag: Int
 }
 
 function buildChain() -> Node {
@@ -31,7 +31,7 @@ function makeHolder() -> Holder {
   return holder
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let round = 0
   while (round < 100) {

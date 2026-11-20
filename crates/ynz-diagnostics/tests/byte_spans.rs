@@ -18,14 +18,14 @@ const FILE: &str = "gallery.ynz";
 /// gallery file.
 const SOURCE: &str = "\
 // ────── section one ──────
-function first() -> nothing {
+function first() -> Nothing {
   print(`one`)
 }
 
 // WHY: the second function — its trigger is `wire.send(rows)` → the read afterward.
 // ────── section two ──────
-function second() -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function second() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   wire.send(rows)
   print(rows.count())
 }

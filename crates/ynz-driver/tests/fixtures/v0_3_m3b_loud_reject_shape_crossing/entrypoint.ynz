@@ -3,6 +3,6 @@
 // NOT a silent abort.
 import { processItem } from `shape_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   processItem()
 }

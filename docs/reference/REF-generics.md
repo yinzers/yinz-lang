@@ -22,9 +22,9 @@ Sometimes you want a type that works with any type. That's what generics are for
 You've been using generics this whole time:
 
 ```
-array<Player>           // an array that holds Players
-map<string, number>     // a map with string keys and number values
-fixed<string>           // a fixed array of strings
+Array<Player>           // an array that holds Players
+Map<String, Number>     // a map with string keys and number values
+Fixed<String>           // a fixed array of strings
 ```
 
 The `<T>` part is the generic parameter — it says what type the collection holds.
@@ -41,10 +41,10 @@ shape Box<T> {
 }
 
 let playerBox: Box<Player> = { value: somePlayer }
-let numberBox: Box<number> = { value: 42 }
+let numberBox: Box<Number> = { value: 42 }
 ```
 
-`Box<Player>` is a Box that holds a `Player`. `Box<number>` holds a `number`. One definition, works with any type.
+`Box<Player>` is a Box that holds a `Player`. `Box<Number>` holds a `Number`. One definition, works with any type.
 
 ---
 
@@ -56,8 +56,8 @@ shape Pair<A, B> {
   second: B
 }
 
-let coord: Pair<number, number> = { first: 10, second: 20 }
-let entry: Pair<string, number> = { first: "score", second: 100 }
+let coord: Pair<Number, Number> = { first: 10, second: 20 }
+let entry: Pair<String, Number> = { first: "score", second: 100 }
 ```
 
 ---
@@ -67,10 +67,10 @@ let entry: Pair<string, number> = { first: "score", second: 100 }
 The pattern is the same everywhere — your types and the built-in types work the same way:
 
 ```
-array<Player>           // built-in — holds Players
+Array<Player>           // built-in — holds Players
 Box<Player>             // yours — holds a Player
-Pair<string, number>    // yours — holds a string and a number
-map<string, number>     // built-in — maps strings to numbers
+Pair<String, Number>    // yours — holds a string and a number
+Map<String, Number>     // built-in — maps strings to numbers
 ```
 
 One pattern. No special cases.
@@ -86,8 +86,8 @@ function identity<T>(give value: T) -> T {
   return value
 }
 
-let n = identity(5)            // T inferred as int
-let s = identity("hello")      // T inferred as string
+let n = identity(5)            // T inferred as Int
+let s = identity("hello")      // T inferred as String
 ```
 
 The compiler picks `T` from the argument you pass. You almost never write it explicitly.
@@ -99,8 +99,8 @@ The compiler picks `T` from the argument you pass. You almost never write it exp
 When two parameters share a type parameter, every argument for them must have that one type. The first argument that fixes `T` (or the explicit `<Type>` you wrote) decides it:
 
 ```
-shape Tiny { flag: boolean }
-shape Big { label: string, count: int }
+shape Tiny { flag: Boolean }
+shape Big { label: String, count: Int }
 
 function same<T>(share first: T, share second: T) -> T {
   return second
@@ -131,8 +131,8 @@ function pair<A, B>(give first: A, give second: B) -> Pair<A, B> {
   return { first, second }
 }
 
-let coord = pair(10, 20)            // A=int, B=int — Pair<int, int>
-let entry = pair("score", 100)      // A=string, B=int — Pair<string, int>
+let coord = pair(10, 20)            // A=Int, B=Int — Pair<Int, Int>
+let entry = pair("score", 100)      // A=String, B=Int — Pair<String, Int>
 ```
 
 ---
@@ -142,7 +142,7 @@ let entry = pair("score", 100)      // A=string, B=int — Pair<string, int>
 If your function needs the type to support certain operations, use `follows` right inside the angle brackets:
 
 ```
-function sort<T follows Comparable>(share items: array<T>) -> array<T> {
+function sort<T follows Comparable>(share items: Array<T>) -> Array<T> {
   // T is guaranteed to follow Comparable, so .compare() works
   // ...
 }
@@ -153,7 +153,7 @@ let sorted = sort(players)         // works because Player follows Comparable
 Multiple constraints — separate with commas:
 
 ```
-function process<T follows Comparable, Serializable>(share item: T) -> string {
+function process<T follows Comparable, Serializable>(share item: T) -> String {
   // T follows both Comparable AND Serializable
 }
 ```
@@ -161,7 +161,7 @@ function process<T follows Comparable, Serializable>(share item: T) -> string {
 If you try to call the function with a type that doesn't follow the contract, the compiler tells you exactly what's missing:
 
 ```
-shape Player { name: string, health: number }   // no follows clause
+shape Player { name: String, health: Number }   // no follows clause
 
 let sorted = sort(players)
 // COMPILE ERROR: Type Player does not follow contract Comparable.
@@ -181,7 +181,7 @@ let sorted = sort(players)
 In rare cases the compiler can't infer `T` (usually when no arguments use the type). Specify it manually with angle brackets at the call site:
 
 ```
-function createList<T>() -> array<T> {
+function createList<T>() -> Array<T> {
   return []
 }
 

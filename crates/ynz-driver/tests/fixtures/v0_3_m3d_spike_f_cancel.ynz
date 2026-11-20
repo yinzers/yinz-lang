@@ -1,16 +1,16 @@
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function will_panic(n: int) -> int {
+function will_panic(n: Int) -> Int {
   let x = 100 / n
   return x
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(35)
   let b = will_panic(0)
   print(a)

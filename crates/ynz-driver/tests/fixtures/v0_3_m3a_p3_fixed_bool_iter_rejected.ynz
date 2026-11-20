@@ -3,8 +3,8 @@
 // fixed<T> arrays are stack-allocated; their pointer becomes dangling after suspension.
 // See design/concurrency.md 'FixedArrayIterWithWait'.
 // Workaround: use array<boolean> instead.
-function entrypoint() -> nothing {
-  let flags: fixed<boolean> = [true, false, true]
+function entrypoint() -> Nothing {
+  let flags: Fixed<Boolean> = [true, false, true]
   for (b in flags) {
     wait sleep(5)
     print(b.toString())

@@ -7,11 +7,11 @@
 // wrong variant / SIGSEGV, and an AddressSanitizer stack-buffer-overflow READ past `Tiny`.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 shape Reversed = Big | Tiny
@@ -23,7 +23,7 @@ shape Flipped {
   inner: Big | Tiny
 }
 
-function describe(share t: Thing) -> string {
+function describe(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -35,7 +35,7 @@ function describe(share t: Thing) -> string {
   return `none`
 }
 
-function describeReversed(share t: Reversed) -> string {
+function describeReversed(share t: Reversed) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -47,7 +47,7 @@ function describeReversed(share t: Reversed) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let big: Big = { label: `hello`, count: 3 }
   let holder: Holder = { inner: tiny }

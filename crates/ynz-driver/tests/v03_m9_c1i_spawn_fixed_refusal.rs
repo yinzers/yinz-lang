@@ -20,7 +20,7 @@ fn assert_refused_as_a_handed_over_fixed(fixture_name: &str, fixed_type: &str, a
         format!(
             "`xs` is a `{fixed_type}`, and a `{fixed_type}` cannot be handed to a background task"
         ),
-        format!("Declare `xs` as an `array<{array_type}>` instead"),
+        format!("Declare `xs` as an `Array<{array_type}>` instead"),
         "kept with the function that made it".to_string(),
     ];
     for fragment in &fragments {
@@ -55,8 +55,8 @@ fn assert_refused_as_a_handed_over_fixed(fixture_name: &str, fixed_type: &str, a
 fn a_handed_over_fixed_of_arrays_is_refused_for_a_task() {
     assert_refused_as_a_handed_over_fixed(
         "v0_3_m9_c1i_spawn_fixed_array_refused.ynz",
-        "fixed<array<string>>",
-        "array<string>",
+        "Fixed<Array<String>>",
+        "Array<String>",
     );
 }
 
@@ -64,8 +64,8 @@ fn a_handed_over_fixed_of_arrays_is_refused_for_a_task() {
 fn a_handed_over_fixed_of_maps_is_refused_for_a_task() {
     assert_refused_as_a_handed_over_fixed(
         "v0_3_m9_c1i_spawn_fixed_map_refused.ynz",
-        "fixed<map<string, int>>",
-        "map<string, int>",
+        "Fixed<Map<String, Int>>",
+        "Map<String, Int>",
     );
 }
 

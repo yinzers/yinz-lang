@@ -3,21 +3,21 @@
 // leaves the other's default intact, and the default is inherited through `extends`.
 
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 shape Base {
-  id: int
-  hidden slot: Big | int = 4096
+  id: Int
+  hidden slot: Big | Int = 4096
 }
 
 shape Derived extends Base {
-  name: string
-  hidden own: Big | int = 7
+  name: String
+  hidden own: Big | Int = 7
 }
 
-function describe(share value: Big | int) -> string {
+function describe(share value: Big | Int) -> String {
   if (value) {
     is Big => {
       return `big ${value.label}`
@@ -29,26 +29,26 @@ function describe(share value: Big | int) -> string {
   return `none`
 }
 
-function showSlot(share self: Derived) -> string {
-  let slot: Big | int = self.slot
+function showSlot(share self: Derived) -> String {
+  let slot: Big | Int = self.slot
   return describe(slot)
 }
 
-function showOwn(share self: Derived) -> string {
-  let own: Big | int = self.own
+function showOwn(share self: Derived) -> String {
+  let own: Big | Int = self.own
   return describe(own)
 }
 
-function replaceSlot(lend self: Derived, give replacement: Big | int) -> nothing {
+function replaceSlot(lend self: Derived, give replacement: Big | Int) -> Nothing {
   self.slot = replacement
 }
 
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Derived = { id: 1, name: `first` }
   let second: Derived = { id: 1, name: `second` }
   let big: Big = { label: `replacement`, count: 3 }
-  let replacement: Big | int = big
+  let replacement: Big | Int = big
   first.replaceSlot(replacement)
   print(first.showSlot())
   print(second.showSlot())

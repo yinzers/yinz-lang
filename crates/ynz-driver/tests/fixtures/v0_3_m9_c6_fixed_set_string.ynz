@@ -7,11 +7,11 @@
 // (C7 slice 2): 3 released.
 // Expected output: the two names the list holds at the end.
 
-function entrypoint() -> nothing {
-  let value: fixed<string> = [`a-${1}`, `b-${2}`]
+function entrypoint() -> Nothing {
+  let value: Fixed<String> = [`a-${1}`, `b-${2}`]
   value.set(0, `c-${3}`)
   value[1] = `d-${4}`
-  let fallback: string = `none`
+  let fallback: String = `none`
   print(value[0].or(fallback))
   print(value[1].or(fallback))
 }

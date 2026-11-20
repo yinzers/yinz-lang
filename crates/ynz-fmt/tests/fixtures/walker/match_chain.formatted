@@ -1,4 +1,4 @@
-function describe(x: int) -> string {
+function describe(x: Int) -> String {
   if (x) {
     1 => {
       return `one`

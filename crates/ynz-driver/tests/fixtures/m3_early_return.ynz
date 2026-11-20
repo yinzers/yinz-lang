@@ -1,4 +1,4 @@
-function sign(x: int) -> int {
+function sign(x: Int) -> Int {
   if (x > 0) {
     return 1
   }
@@ -8,7 +8,7 @@ function sign(x: int) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(sign(42))
   print(sign(-7))
   print(sign(0))

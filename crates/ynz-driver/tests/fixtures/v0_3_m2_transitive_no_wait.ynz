@@ -2,12 +2,12 @@
 // The dev5 adversarial case: bar→sleep (no wait), entrypoint→bar (no wait).
 // Was: "no reactor running" crash. After P7: runs correctly.
 
-function bar() -> nothing {
+function bar() -> Nothing {
   sleep(10)
   print(`bar done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   bar()
   print(`done`)
 }

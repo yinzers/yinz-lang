@@ -1,7 +1,7 @@
 // WHY: int literal into `map<string, number>.set(k, 5)` VALUE slot (arg 1).
 // Pre-fix: codegen ICE panic (IntValue where PointerValue expected).
-function entrypoint() -> nothing {
-  let prices: map<string, number> = {`a`: 1.5}
+function entrypoint() -> Nothing {
+  let prices: Map<String, Number> = {`a`: 1.5}
   prices.set(`b`, 5)
   let got = prices.get(`b`)
   print(got.or(0.0))

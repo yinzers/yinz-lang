@@ -3,11 +3,11 @@
 // If errors-capable return ABI or .or() codegen is broken, the output would be
 // `fallback` instead of `ok`.
 
-function readConfig() -> string errors {
+function readConfig() -> String errors {
   return `ok`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = readConfig()
   print(result.or(`fallback`))
 }

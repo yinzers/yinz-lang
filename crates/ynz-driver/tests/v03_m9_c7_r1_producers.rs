@@ -36,9 +36,9 @@ fn assert_heap_balanced_and_clean(label: &str, program: &str, expected: &str) {
 // ── Group 3: a built-in that builds a fresh heap value is an owner's value ──────────────────
 
 const SPLIT_BOUND_BY_LET: &str = "
-function entrypoint() -> nothing {
-  let s: string = `a, b, c`
-  let parts: array<string> = s.split(`, `)
+function entrypoint() -> Nothing {
+  let s: String = `a, b, c`
+  let parts: Array<String> = s.split(`, `)
   print(parts.count())
 }
 ";
@@ -52,17 +52,17 @@ fn a_split_result_bound_by_let_is_an_owner_and_is_released() {
 }
 
 const SPLIT_TEMPORARIES: &str = "
-function countOf(share cells: array<string>) -> int {
+function countOf(share cells: Array<String>) -> Int {
   return cells.count()
 }
-function entrypoint() -> nothing {
-  let s: string = `a,b,c`
-  let total: int = s.split(`,`).count()
+function entrypoint() -> Nothing {
+  let s: String = `a,b,c`
+  let total: Int = s.split(`,`).count()
   total = total + countOf(s.split(`,`))
   for (part in s.split(`,`)) {
     total = total + part.count()
   }
-  let upper: array<string> = s.toUpperCase().split(`,`)
+  let upper: Array<String> = s.toUpperCase().split(`,`)
   total = total + upper.count()
   print(total)
 }
@@ -77,17 +77,17 @@ fn a_split_result_nothing_binds_is_released_at_the_end_of_its_statement() {
 
 const SPLIT_HANDED_OVER: &str = "
 shape Row {
-  cells: array<string>
+  cells: Array<String>
 }
-function pieces(share s: string) -> array<string> {
+function pieces(share s: String) -> Array<String> {
   return s.split(`,`)
 }
-function entrypoint() -> nothing {
-  let s: string = `a,b,c`
-  let parts: array<string> = s.split(`,`)
+function entrypoint() -> Nothing {
+  let s: String = `a,b,c`
+  let parts: Array<String> = s.split(`,`)
   let row: Row = { cells: parts }
-  let nested: array<array<string>> = [s.split(`,`).copy()]
-  let again: array<string> = pieces(s)
+  let nested: Array<Array<String>> = [s.split(`,`).copy()]
+  let again: Array<String> = pieces(s)
   again = s.split(`,`)
   print(row.cells.count() + nested.count() + again.count())
 }
@@ -104,19 +104,19 @@ fn a_split_result_stored_copied_returned_or_reassigned_is_released_once() {
 
 const MAYBE_COPY_BOUND: &str = "
 shape Part {
-  qty: int
+  qty: Int
 }
-function entrypoint() -> nothing {
-  let parts: array<Part> = [{qty: 1}, {qty: 2}]
-  let first: maybe<Part> = parts.get(0)
-  let saved: maybe<Part> = first.copy()
-  let again: maybe<Part> = parts.get(1)
+function entrypoint() -> Nothing {
+  let parts: Array<Part> = [{qty: 1}, {qty: 2}]
+  let first: Maybe<Part> = parts.get(0)
+  let saved: Maybe<Part> = first.copy()
+  let again: Maybe<Part> = parts.get(1)
   again = first.copy()
-  let numbers: array<int> = [4, 5]
-  let held: maybe<int> = numbers.get(1)
-  let heldCopy: maybe<int> = held.copy()
-  let missing: maybe<Part> = parts.get(9)
-  let missingCopy: maybe<Part> = missing.copy()
+  let numbers: Array<Int> = [4, 5]
+  let held: Maybe<Int> = numbers.get(1)
+  let heldCopy: Maybe<Int> = held.copy()
+  let missing: Maybe<Part> = parts.get(9)
+  let missingCopy: Maybe<Part> = missing.copy()
   print(saved.or({qty: 9}).qty + again.or({qty: 9}).qty + heldCopy.or(0) + missingCopy.or({qty: 7}).qty)
 }
 ";
@@ -131,17 +131,17 @@ fn a_maybe_copy_bound_by_let_or_assignment_is_taken_not_copied_again() {
 
 const MAYBE_COPY_PERSISTED: &str = "
 shape Tag {
-  name: string
+  name: String
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{name: `x`}, {name: `yy`}]
-  let first: maybe<Tag> = tags.get(1)
-  let boxed: array<maybe<Tag> > = [first.copy()]
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{name: `x`}, {name: `yy`}]
+  let first: Maybe<Tag> = tags.get(1)
+  let boxed: Array<Maybe<Tag> > = [first.copy()]
   boxed.set(0, first.copy())
   boxed.add(first.copy())
-  let numbers: array<int> = [1, 2]
-  let held: maybe<int> = numbers.get(1)
-  let heldBoxed: array<maybe<int> > = [held.copy()]
+  let numbers: Array<Int> = [1, 2]
+  let held: Maybe<Int> = numbers.get(1)
+  let heldBoxed: Array<Maybe<Int> > = [held.copy()]
   print(boxed.count() + heldBoxed.count())
 }
 ";
@@ -156,20 +156,20 @@ fn a_maybe_copy_stored_into_an_array_is_kept_by_the_array() {
 
 const MAYBE_COPY_TEMPORARY_AND_RETURNED: &str = "
 shape Tag {
-  name: string
+  name: String
 }
-function nameLength(share found: maybe<Tag>) -> int {
+function nameLength(share found: Maybe<Tag>) -> Int {
   return found.or({name: `none`}).name.count()
 }
-function copyOf(share found: maybe<Tag>) -> maybe<Tag> {
+function copyOf(share found: Maybe<Tag>) -> Maybe<Tag> {
   return found.copy()
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{name: `x`}, {name: `yy`}]
-  let first: maybe<Tag> = tags.get(1)
-  let total: int = first.copy().or({name: `z`}).name.count()
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{name: `x`}, {name: `yy`}]
+  let first: Maybe<Tag> = tags.get(1)
+  let total: Int = first.copy().or({name: `z`}).name.count()
   total = total + nameLength(first.copy())
-  let back: maybe<Tag> = copyOf(first)
+  let back: Maybe<Tag> = copyOf(first)
   total = total + nameLength(back)
   print(total)
 }
@@ -190,14 +190,14 @@ fn a_maybe_copy_nothing_binds_or_a_function_returns_is_released_once() {
 
 const FIXED_OF_FLAT_SHAPES: &str = "
 shape Part {
-  qty: int
+  qty: Int
 }
-function entrypoint() -> nothing {
-  let pair: fixed<Part> = [{qty: 1}, {qty: 2}]
-  let copied: fixed<Part> = pair.copy()
+function entrypoint() -> Nothing {
+  let pair: Fixed<Part> = [{qty: 1}, {qty: 2}]
+  let copied: Fixed<Part> = pair.copy()
   pair.set(0, {qty: 5})
   pair[1] = {qty: 7}
-  let boxes: fixed<maybe<int> > = [none, none]
+  let boxes: Fixed<Maybe<Int> > = [none, none]
   print(pair.count() + copied.count() + boxes.count())
 }
 ";
@@ -222,14 +222,14 @@ fn assert_strings_balanced_and_clean(label: &str, program: &str, expected: &str)
 // ── Group 3 (string character reads): `get` and `graphemeAt` build a fresh string ───────────
 
 const STRING_CHARACTER_READS: &str = "
-function entrypoint() -> nothing {
-  let s: string = `hello`
+function entrypoint() -> Nothing {
+  let s: String = `hello`
   let first = s.get(0)
   let grapheme = s.graphemeAt(1)
   let outside = s.get(100)
-  let total: int = first.or(`z`).count() + grapheme.or(`z`).count() + outside.or(`z`).count()
+  let total: Int = first.or(`z`).count() + grapheme.or(`z`).count() + outside.or(`z`).count()
   total = total + s.get(2).or(`z`).count() + s.graphemeAt(3).or(`z`).count()
-  let i: int = 0
+  let i: Int = 0
   while (i < 3) {
     let each = s.get(i)
     total = total + each.or(`z`).count()
@@ -251,21 +251,21 @@ fn a_string_character_read_frees_the_string_it_built() {
 
 const SHAPE_WITH_A_MAYBE_FIELD: &str = "
 shape Part {
-  qty: int
+  qty: Int
 }
 shape Holder {
-  found: maybe<Part>
+  found: Maybe<Part>
 }
 shape Slot {
-  count: maybe<int>
+  count: Maybe<Int>
 }
-function entrypoint() -> nothing {
-  let parts: array<Part> = [{qty: 1}, {qty: 2}]
-  let current: maybe<Part> = parts.get(0)
-  let missing: maybe<Part> = parts.get(9)
+function entrypoint() -> Nothing {
+  let parts: Array<Part> = [{qty: 1}, {qty: 2}]
+  let current: Maybe<Part> = parts.get(0)
+  let missing: Maybe<Part> = parts.get(9)
   let holder: Holder = { found: missing.copy() }
   holder.found = current.copy()
-  let rows: array<Holder> = [{ found: current.copy() }, { found: current.copy() }]
+  let rows: Array<Holder> = [{ found: current.copy() }, { found: current.copy() }]
   let slot: Slot = { count: none }
   print(rows.count() + holder.found.or({qty: 0}).qty)
 }
@@ -284,32 +284,32 @@ fn a_shape_with_a_maybe_field_releases_the_fields_envelope_cell() {
 
 const MAYBE_RETURNED: &str = "
 shape Tag {
-  name: string
+  name: String
 }
-function firstTag(share list: array<Tag>) -> maybe<Tag> {
+function firstTag(share list: Array<Tag>) -> Maybe<Tag> {
   let found = list.get(0)
   return found
 }
-function ownedTag(share list: array<Tag>) -> maybe<Tag> {
-  let found: maybe<Tag> = list.get(0)
-  let mine: maybe<Tag> = found.copy()
+function ownedTag(share list: Array<Tag>) -> Maybe<Tag> {
+  let found: Maybe<Tag> = list.get(0)
+  let mine: Maybe<Tag> = found.copy()
   return mine
 }
-function passThrough(share found: maybe<Tag>) -> maybe<Tag> {
+function passThrough(share found: Maybe<Tag>) -> Maybe<Tag> {
   return found
 }
-function firstWord(share list: array<string>) -> maybe<string> {
+function firstWord(share list: Array<String>) -> Maybe<String> {
   let found = list.get(0)
   return found
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{name: `n`}]
-  let words: array<string> = [`aa`, `b`]
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{name: `n`}]
+  let words: Array<String> = [`aa`, `b`]
   let first = firstTag(tags)
   let owned = ownedTag(tags)
   let through = passThrough(first)
   let word = firstWord(words)
-  let again: maybe<Tag> = firstTag(tags)
+  let again: Maybe<Tag> = firstTag(tags)
   again = ownedTag(tags)
   print(first.or({name: `z`}).name.count() + owned.or({name: `z`}).name.count()
     + through.or({name: `z`}).name.count() + word.or(`z`).count() + again.or({name: `z`}).name.count())
@@ -327,27 +327,27 @@ fn a_maybe_a_function_returns_is_copied_once_and_its_local_released() {
 
 const MAYBE_PERSISTED_AND_GIVEN: &str = "
 shape Tag {
-  name: string
+  name: String
 }
-function firstTag(share list: array<Tag>) -> maybe<Tag> {
+function firstTag(share list: Array<Tag>) -> Maybe<Tag> {
   let found = list.get(0)
   return found
 }
-function findFirst(share text: string) -> maybe<string> {
+function findFirst(share text: String) -> Maybe<String> {
   return text.get(0)
 }
-function eatTag(give found: maybe<Tag>) -> int {
+function eatTag(give found: Maybe<Tag>) -> Int {
   return found.or({name: `z`}).name.count()
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{name: `n`}]
-  let text: string = `hello`
-  let boxed: array<maybe<Tag> > = [firstTag(tags)]
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{name: `n`}]
+  let text: String = `hello`
+  let boxed: Array<Maybe<Tag> > = [firstTag(tags)]
   boxed.add(firstTag(tags))
-  let words: array<maybe<string> > = [findFirst(text)]
+  let words: Array<Maybe<String> > = [findFirst(text)]
   words.add(text.get(1))
-  let current: maybe<Tag> = tags.get(0)
-  let total: int = eatTag(current.copy()) + eatTag(firstTag(tags))
+  let current: Maybe<Tag> = tags.get(0)
+  let total: Int = eatTag(current.copy()) + eatTag(firstTag(tags))
   print(boxed.count() + words.count() + total)
 }
 ";

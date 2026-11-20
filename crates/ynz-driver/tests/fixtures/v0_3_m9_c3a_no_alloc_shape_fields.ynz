@@ -4,15 +4,15 @@
 // Expected last line: 1000
 
 shape Reading {
-  count: int
-  ratio: float
-  price: number
+  count: Int
+  ratio: Float
+  price: Number
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let ratio: float = (3).toFloat()
-  let price: number = 9.5
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let ratio: Float = (3).toFloat()
+  let price: Number = 9.5
   while (i < 1000) {
     let reading: Reading = { count: i, ratio: ratio, price: price }
     print(reading)

@@ -3,8 +3,8 @@
 // fixed<T> arrays are stack-allocated; their pointer becomes dangling after suspension.
 // See design/concurrency.md 'FixedArrayIterWithWait'.
 // Workaround: use array<string> instead.
-function entrypoint() -> nothing {
-  let names: fixed<string> = [`amy`, `bob`, `carol`]
+function entrypoint() -> Nothing {
+  let names: Fixed<String> = [`amy`, `bob`, `carol`]
   for (n in names) {
     wait sleep(5)
     print(n)

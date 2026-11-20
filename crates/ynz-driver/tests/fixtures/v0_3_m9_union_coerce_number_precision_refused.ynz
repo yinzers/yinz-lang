@@ -4,14 +4,14 @@
 // Correct behavior: does not compile (the refusal names the precision mismatch).
 // Pre-fix failure: compiled, and the callee read the wrong layout.
 shape Circle {
-  radius: int
+  radius: Int
 }
 
-function describe(share value: Circle | number<40>) -> string {
+function describe(share value: Circle | Number<40>) -> String {
   return `ok`
 }
 
-function entrypoint() -> nothing {
-  let small: number<10> = 5.0
+function entrypoint() -> Nothing {
+  let small: Number<10> = 5.0
   print(describe(small))
 }

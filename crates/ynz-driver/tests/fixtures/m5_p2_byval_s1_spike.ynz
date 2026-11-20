@@ -16,31 +16,31 @@
 // The .toFloat()-seeded floats are real runtime f64 values, so the float-field
 // byval round-trip is still fully proven.
 shape Part {
-  qty: int
-  price: float
+  qty: Int
+  price: Float
 }
 
-function entrypoint() -> nothing {
-  let baseQty: int = 10
-  let qtyA: int = baseQty + 1
-  let qtyB: int = baseQty + 2
-  let qtyC: int = baseQty + 3
-  let priceAInt: int = qtyA * 3
-  let priceBInt: int = qtyB * 3
-  let priceCInt: int = qtyC * 3
-  let priceA: float = priceAInt.toFloat()
-  let priceB: float = priceBInt.toFloat()
-  let priceC: float = priceCInt.toFloat()
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let baseQty: Int = 10
+  let qtyA: Int = baseQty + 1
+  let qtyB: Int = baseQty + 2
+  let qtyC: Int = baseQty + 3
+  let priceAInt: Int = qtyA * 3
+  let priceBInt: Int = qtyB * 3
+  let priceCInt: Int = qtyC * 3
+  let priceA: Float = priceAInt.toFloat()
+  let priceB: Float = priceBInt.toFloat()
+  let priceC: Float = priceCInt.toFloat()
+  let parts: Array<Part> = [
     { qty: qtyA, price: priceA },
     { qty: qtyB, price: priceB },
     { qty: qtyC, price: priceC }
   ]
-  let qtyS: int = baseQty * 10
-  let priceSInt: int = qtyS * 7
-  let priceS: float = priceSInt.toFloat()
+  let qtyS: Int = baseQty * 10
+  let priceSInt: Int = qtyS * 7
+  let priceS: Float = priceSInt.toFloat()
   parts[1] = { qty: qtyS, price: priceS }
-  let totalQty: int = 0
+  let totalQty: Int = 0
   for (p in parts) {
     totalQty = totalQty + p.qty
     print(p.qty.toString())

@@ -2,6 +2,6 @@ function identity<T>(give value: T) -> T {
   return value
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(identity(42))
 }

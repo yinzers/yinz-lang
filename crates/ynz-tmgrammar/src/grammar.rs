@@ -1,5 +1,12 @@
 use serde_json::{json, Value};
 
+/// Built-in type names, all PascalCase. `Nothing` is an ordinary type name, not a keyword
+/// (card #573: every built-in type is PascalCase).
+const BUILT_IN_TYPES: [&str; 12] = [
+    "Int", "Float", "Number", "Boolean", "String", "Range", "Maybe", "Array", "Fixed", "Map",
+    "Channel", "Nothing",
+];
+
 /// Build the TextMate grammar as a JSON value, sourced entirely from the SSOT registry.
 ///
 /// Grammar structure:
@@ -28,6 +35,11 @@ pub fn build_grammar() -> Value {
     let kw_pattern = build_word_boundary_regex(&keywords);
     let banned_pattern = build_word_boundary_regex(&banned);
     let deferred_pattern = build_word_boundary_regex(&deferred);
+    let built_in_type_names: Vec<String> = BUILT_IN_TYPES
+        .iter()
+        .map(|type_name| type_name.to_string())
+        .collect();
+    let built_in_type_pattern = build_word_boundary_regex(&built_in_type_names);
 
     json!({
         "name": "Yinz",
@@ -39,7 +51,8 @@ pub fn build_grammar() -> Value {
             { "include": "#literals" },
             { "include": "#banned-keywords" },
             { "include": "#deferred-features" },
-            { "include": "#keywords" }
+            { "include": "#keywords" },
+            { "include": "#built-in-types" }
         ],
         "repository": {
             "comments": {
@@ -78,6 +91,10 @@ pub fn build_grammar() -> Value {
             "keywords": {
                 "name": "keyword.control.ynz",
                 "match": kw_pattern
+            },
+            "built-in-types": {
+                "name": "support.type.builtin.ynz",
+                "match": built_in_type_pattern
             },
             "banned-keywords": {
                 "name": "invalid.deprecated",
@@ -169,6 +186,37 @@ mod tests {
             deferred.contains("gpu"),
             "deferred pattern must include 'gpu'"
         );
+    }
+
+    #[test]
+    fn built_in_types_highlighted_and_nothing_is_not_a_keyword() {
+        let g = build_grammar();
+        let type_pattern = g["repository"]["built-in-types"]["match"]
+            .as_str()
+            .unwrap_or("");
+        for type_name in BUILT_IN_TYPES {
+            assert!(
+                type_pattern.contains(type_name),
+                "built-in type {type_name} must be highlighted"
+            );
+        }
+        let kw_pattern = g["repository"]["keywords"]["match"].as_str().unwrap_or("");
+        assert!(
+            !kw_pattern.to_lowercase().contains("nothing"),
+            "`Nothing` is a type name, not a keyword"
+        );
+    }
+
+    #[test]
+    fn every_registry_receiver_type_is_highlighted() {
+        for entry in ynz_registry::primitive_intrinsics() {
+            if let Some(receiver_type) = entry.receiver_type {
+                assert!(
+                    BUILT_IN_TYPES.contains(&receiver_type),
+                    "registry receiver_type {receiver_type} is missing from BUILT_IN_TYPES"
+                );
+            }
+        }
     }
 
     #[test]

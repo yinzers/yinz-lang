@@ -14,20 +14,20 @@
 //   13
 //   21
 //   34
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function work(n: int) -> int {
+function work(n: Int) -> Int {
   let lo = fib(n)
   let hi = fib(n + 1)
   return lo + hi
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let work5 = work(5)
   let work6 = work(6)
   let total = work5 + work6

@@ -3,12 +3,12 @@
 // holder still owns it, so typeck refuses it (`TransferNeedsCopy`) and advises `.copy()`.
 // Kept as a refusal over a hidden copy (Golden Rules 1 and 7), decided by the Chief 2026-11-18.
 
-function mkm() -> maybe<array<int>> {
-  let rows: array<array<int>> = [[1, 2], [3]]
+function mkm() -> Maybe<Array<Int>> {
+  let rows: Array<Array<Int>> = [[1, 2], [3]]
   return rows.first()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let wrapped = [mkm()]
   print(wrapped.count())
 }

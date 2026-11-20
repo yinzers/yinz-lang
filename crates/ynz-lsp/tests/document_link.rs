@@ -24,7 +24,7 @@ fn import_link_range_covers_path_string() {
     // Source: import { foo } from `services/users`
     // The path string `services/users` starts after "from " — the link range
     // start/end must be non-equal (it covers real bytes).
-    let src = "import { foo } from `services/users`\nfunction entrypoint() -> nothing { }\n";
+    let src = "import { foo } from `services/users`\nfunction entrypoint() -> Nothing { }\n";
     let (state, uri) = state_with_root("/tmp/dl_test_range.ynz", src, "/tmp/nonexistent_root");
     let links = document_link_response(&state, &uri);
     assert_eq!(links.len(), 1, "one import → one link; got: {links:?}");
@@ -43,7 +43,7 @@ fn no_links_when_no_imports() {
     // WHY: A file with no import declarations must return an empty list — not
     // a panic or a default link.  This is the common case (most files don't
     // import from other files) and must be handled cleanly.
-    let src = "function entrypoint() -> nothing { }\n";
+    let src = "function entrypoint() -> Nothing { }\n";
     let (state, uri) = state_with_root("/tmp/dl_test_empty.ynz", src, "/tmp/nonexistent_root");
     let links = document_link_response(&state, &uri);
     assert!(links.is_empty(), "no imports → no links; got: {links:?}");
@@ -55,7 +55,7 @@ fn import_link_tooltip_contains_path() {
     // It must contain the import path so the user can confirm which file the link
     // points to before clicking.  A missing or wrong tooltip erodes trust in
     // the editor integration.
-    let src = "import { foo } from `services/users`\nfunction entrypoint() -> nothing { }\n";
+    let src = "import { foo } from `services/users`\nfunction entrypoint() -> Nothing { }\n";
     let (state, uri) = state_with_root("/tmp/dl_test_tooltip.ynz", src, "/tmp/nonexistent_root");
     let links = document_link_response(&state, &uri);
     assert_eq!(links.len(), 1);
@@ -71,7 +71,7 @@ fn single_file_mode_returns_empty() {
     // WHY: In single-file mode (no yinz.toml found, project_root is None),
     // there is no project root to resolve relative paths against. The handler
     // must return [] rather than panic or produce garbage URLs.
-    let src = "import { foo } from `services/users`\nfunction entrypoint() -> nothing { }\n";
+    let src = "import { foo } from `services/users`\nfunction entrypoint() -> Nothing { }\n";
     let mut state = ServerState::new(PositionEncoding::Utf8);
     let uri = lsp_types::Url::from_file_path("/tmp/dl_single_file.ynz").expect("valid");
     state.open_document(uri.clone(), src.to_string());

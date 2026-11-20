@@ -3,14 +3,14 @@
 // exactly once.
 // Expected output: the count, the first name, then `done`.
 
-function crunch(xs: fixed<string, 2>) -> nothing {
+function crunch(xs: Fixed<String, 2>) -> Nothing {
   wait sleep(1)
   print(xs.count())
   print(xs[0].or(`?`))
 }
 
-function entrypoint() -> nothing {
-  let xs: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+function entrypoint() -> Nothing {
+  let xs: Fixed<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   let task = background crunch(xs)
   wait sleep(50)
   print(`done`)

@@ -2,10 +2,10 @@
 // payload while nothing writes the list.
 // Allocations: the outer literal and its one inner literal (4) and the fallback literal (2).
 
-function entrypoint() -> nothing {
-  let rows: array<array<int>> = [[10, 20, 30]]
+function entrypoint() -> Nothing {
+  let rows: Array<Array<Int>> = [[10, 20, 30]]
   let picked = rows.get(0)
-  let fallback: array<int> = []
+  let fallback: Array<Int> = []
   let found = picked.or(fallback)
   print(found.count())
 }

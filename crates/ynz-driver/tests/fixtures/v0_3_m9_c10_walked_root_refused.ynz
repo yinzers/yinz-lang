@@ -1,9 +1,9 @@
 // v0.3-M9 C10: the body assigns the ROOT binding of the walked place (`holder` while walking
 // `holder.rows`). The assignment frees the walked list; refused.
 shape Holder {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { rows: [[1], [2], [3]] }
   let total = 0
   for (row in holder.rows) {

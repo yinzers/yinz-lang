@@ -2,15 +2,15 @@
 // Expected output: 1, 99, B, 11, 16
 
 shape Bag {
-  items: fixed<int, 3>
-  names: fixed<string, 2>
+  items: Fixed<Int, 3>
+  names: Fixed<String, 2>
 }
 
-function bump(lend bag: Bag) -> nothing {
+function bump(lend bag: Bag) -> Nothing {
   bag.items.set(0, bag.items[0].or(0) + 10)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bag: Bag = { items: [1, 2, 3], names: [`a`.toUpperCase(), `b`.toUpperCase()] }
   let alias = bag.items
   alias.set(0, 99)
@@ -20,7 +20,7 @@ function entrypoint() -> nothing {
   print(aliasNames[1].or(`?`))
   bump(bag)
   print(bag.items[0].or(-1))
-  let total: int = 0
+  let total: Int = 0
   for (n in bag.items) {
     total = total + n
   }

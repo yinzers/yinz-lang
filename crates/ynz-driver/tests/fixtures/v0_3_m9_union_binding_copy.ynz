@@ -5,15 +5,15 @@
 // (previous, then current, each iteration); clean under AddressSanitizer at both levels.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -25,7 +25,7 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Tiny = { flag: true }
   let current: Thing = first
   let step = 0

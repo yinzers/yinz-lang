@@ -1,18 +1,18 @@
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function fib2(n: int) -> int {
+function fib2(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib2(n - 1) + fib2(n - 2)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(20)
   let b = fib2(21)
   print(a)

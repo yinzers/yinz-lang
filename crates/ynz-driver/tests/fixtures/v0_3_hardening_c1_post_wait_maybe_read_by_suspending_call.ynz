@@ -12,14 +12,14 @@
 // Regression lock for `collect_crossings_in_stmts`'s `declared_since_suspension`
 // staging list (crates/ynz-typeck/src/check.rs).
 
-function consume(n: int) -> int {
+function consume(n: Int) -> Int {
   wait sleep(10)
   return n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let m: maybe<int> = `42`.toInt()
+  let m: Maybe<Int> = `42`.toInt()
   const v = wait consume(m.or(0))
   print(v.toString())
 }

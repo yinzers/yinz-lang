@@ -1,7 +1,7 @@
 // Scoring helpers shared between every ship in the stadium fleet.
 // Currently used by ships/scoreboard/entrypoint.ynz to tally runs per inning.
 
-export function sum(share nums: fixed<int, 4>) -> int {
+export function sum(share nums: Fixed<Int, 4>) -> Int {
   let total = 0
   for (n in nums) {
     total = total + n
@@ -9,7 +9,7 @@ export function sum(share nums: fixed<int, 4>) -> int {
   return total
 }
 
-export function max(share nums: fixed<int, 4>) -> int {
+export function max(share nums: Fixed<Int, 4>) -> Int {
   let biggest = nums[0].or(0)
   for (n in nums) {
     if (n > biggest) {

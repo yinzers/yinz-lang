@@ -1,4 +1,4 @@
-function tokenLike() -> nothing {
+function tokenLike() -> Nothing {
   // const x = 5
   // function foo() -> nothing {}
   // shape Bar {}

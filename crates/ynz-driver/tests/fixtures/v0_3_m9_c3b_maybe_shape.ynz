@@ -8,17 +8,17 @@
 // Expected output: one value per line below.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function pick(tags: array<Tag>) -> maybe<Tag> {
+function pick(tags: Array<Tag>) -> Maybe<Tag> {
   return tags.get(0)
 }
 
-function entrypoint() -> nothing {
-  let count: int = 1
-  let tags: array<Tag> = [{ name: `t-${count}`, id: 1 }]
+function entrypoint() -> Nothing {
+  let count: Int = 1
+  let tags: Array<Tag> = [{ name: `t-${count}`, id: 1 }]
   let found = tags.get(0)
   if (found.exists()) {
     print(found.value.name)

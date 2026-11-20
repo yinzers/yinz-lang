@@ -41,10 +41,10 @@ fn free_fn_call_emits_lend_hint() {
     // this fix.  Confirms the test helper and data format are correct before checking the
     // UFCS form in the next test.  If this breaks, the underlying sig resolution broke.
     let src = r#"
-shape Player { health: int }
-function heal(lend self: Player, amount: int) -> nothing { }
+shape Player { health: Int }
+function heal(lend self: Player, amount: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let player: Player = { health: 100 }
     heal(player, 20)
 }
@@ -81,10 +81,10 @@ fn ufcs_method_call_emits_lend_hint_on_receiver() {
     // which is the `lend` parameter.  Before the fix, MethodCall fell through the `if
     // let Expr::Call` guard entirely — no hint ever fired for UFCS form.
     let src = r#"
-shape Player { health: int }
-function heal(lend self: Player, amount: int) -> nothing { }
+shape Player { health: Int }
+function heal(lend self: Player, amount: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let player: Player = { health: 100 }
     player.heal(20)
 }
@@ -119,10 +119,10 @@ fn ufcs_share_receiver_emits_share_hint() {
     // Tests that the modifier is correctly read from the param_ownerships vector for UFCS
     // and is not hardcoded to a particular modifier.
     let src = r#"
-shape Player { health: int }
-function greet(share self: Player) -> nothing { }
+shape Player { health: Int }
+function greet(share self: Player) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let player: Player = { health: 100 }
     player.greet()
 }
@@ -144,11 +144,11 @@ fn ufcs_arg_hint_emitted_for_non_receiver_arg() {
     // to params 1.. in the sig.  A `lend` arg should get its own hint.  Ensures the arg
     // loop in the MethodCall arm works, not just the receiver check.
     let src = r#"
-shape Player { health: int }
-shape Weapon { damage: int }
-function equip(share self: Player, lend w: Weapon) -> nothing { }
+shape Player { health: Int }
+shape Weapon { damage: Int }
+function equip(share self: Player, lend w: Weapon) -> Nothing { }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let player: Player = { health: 100 }
     let sword: Weapon = { damage: 10 }
     player.equip(sword)
@@ -185,8 +185,8 @@ fn generic_fn_call_emits_ownership_hint() {
     let src = r#"
 function identity<T>(share x: T) -> T { return x }
 
-function entrypoint() -> nothing {
-    let n: int = 42
+function entrypoint() -> Nothing {
+    let n: Int = 42
     identity(n)
 }
 "#;
@@ -206,11 +206,11 @@ fn generic_fn_lend_param_emits_lend_hint() {
     // WHY: Generic functions with `lend` params must emit a `lend` hint, not `share`.
     // Tests the full modifier resolution path through `generic_fn_table`.
     let src = r#"
-function swap<T>(lend a: T, lend b: T) -> nothing { }
+function swap<T>(lend a: T, lend b: T) -> Nothing { }
 
-function entrypoint() -> nothing {
-    let x: int = 1
-    let y: int = 2
+function entrypoint() -> Nothing {
+    let x: Int = 1
+    let y: Int = 2
     swap(x, y)
 }
 "#;
@@ -236,10 +236,10 @@ fn background_unused_after_spawn_emits_give_hint() {
     // `give` hint (inferred `.give` — zero-copy ownership transfer). The hint
     // teaches the user what the compiler decided without requiring explicit syntax.
     let src = r#"
-function worker(id: int) -> nothing { }
+function worker(id: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
-    let taskId: int = 42
+function entrypoint() -> Nothing {
+    let taskId: Int = 42
     background worker(taskId)
 }
 "#;
@@ -272,10 +272,10 @@ fn background_used_after_spawn_emits_copy_hint() {
     // Incorrect inference to `.give` would be a use-after-move bug — this hint proves
     // the safe direction was chosen.
     let src = r#"
-function worker(id: int) -> nothing { }
+function worker(id: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
-    let taskId: int = 42
+function entrypoint() -> Nothing {
+    let taskId: Int = 42
     background worker(taskId)
     print(taskId.toString())
 }
@@ -312,9 +312,9 @@ fn unresolved_method_call_yields_no_hint_and_no_panic() {
     // or intrinsic set) must gracefully produce no hint — not panic.  Verifies the quality
     // gate "no panic on unresolved generic/UFCS callee."
     let src = r#"
-shape Gadget { charge: int }
+shape Gadget { charge: Int }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let g: Gadget = { charge: 50 }
     g.unknownMethod()
 }

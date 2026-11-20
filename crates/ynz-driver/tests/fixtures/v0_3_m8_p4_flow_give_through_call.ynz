@@ -9,14 +9,14 @@
 // Expected output:
 //   3
 //   end
-function producer(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+function producer(lend wire: Channel<Array<Int>>, give rows: Array<Int>) -> Nothing {
   wire.send(rows)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(2)
-  let rows: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(2)
+  let rows: Array<Int> = [1, 2, 3]
   wait producer(wire, rows)
   let got = wire.receive()
   if (got.exists()) {

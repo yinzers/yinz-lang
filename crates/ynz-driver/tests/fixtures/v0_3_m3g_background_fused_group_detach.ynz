@@ -18,7 +18,7 @@
 // result discarded" regime (main thread waits long enough for the background group to finish
 // before exiting), so the resource-cleanup proof covers both limbs rather than only this one.
 
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -28,18 +28,18 @@ function crunch(n: int) -> int {
   return total + n
 }
 
-function fetchSlow(n: int) -> int {
+function fetchSlow(n: Int) -> Int {
   wait sleep(5)
   return n + 1
 }
 
-function fusedHost() -> nothing {
+function fusedHost() -> Nothing {
   let a = crunch(1)
   let b = fetchSlow(2)
   print(a + b)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background fusedHost()
   print(`main-done`)
 }

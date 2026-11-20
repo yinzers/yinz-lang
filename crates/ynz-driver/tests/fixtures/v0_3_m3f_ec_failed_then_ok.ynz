@@ -13,7 +13,7 @@
 //   true
 //   0.0
 //   99.9
-function fetchPrice(fail: boolean) -> number errors {
+function fetchPrice(fail: Boolean) -> Number errors {
   wait sleep(1)
   if (fail) {
     let v = wait __testFallibleAsync(true)
@@ -23,7 +23,7 @@ function fetchPrice(fail: boolean) -> number errors {
   return 99.9
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let errored = fetchPrice(true)
   let ok = fetchPrice(false)
   print(errored.failed().toString())

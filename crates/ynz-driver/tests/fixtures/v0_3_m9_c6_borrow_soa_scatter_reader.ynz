@@ -1,10 +1,10 @@
 // v0.3-M9 C6 borrow probe: a reader of an SoA element while a scatter overwrites that element
 shape Part {
-  name: string
-  x: int
+  name: String
+  x: Int
 }
-function entrypoint() -> nothing {
-  let pts: array<Part> = [
+function entrypoint() -> Nothing {
+  let pts: Array<Part> = [
     { name: `n-${0}`, x: 0 }, { name: `n-${1}`, x: 1 }, { name: `n-${2}`, x: 2 }, { name: `n-${3}`, x: 3 },
     { name: `n-${4}`, x: 4 }, { name: `n-${5}`, x: 5 }, { name: `n-${6}`, x: 6 }, { name: `n-${7}`, x: 7 },
     { name: `n-${8}`, x: 8 }, { name: `n-${9}`, x: 9 }, { name: `n-${10}`, x: 10 }, { name: `n-${11}`, x: 11 },
@@ -28,7 +28,7 @@ function entrypoint() -> nothing {
   let reader = pts[0].or(fallback)
   pts[0] = { name: `z-${9}`, x: 100 }
   print(reader.name)
-  let total: int = 0
+  let total: Int = 0
   for (part in pts) {
     total = total + part.x
   }

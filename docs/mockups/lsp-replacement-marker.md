@@ -23,7 +23,7 @@ The only new visual is a **dotted cyan underline on the existing token**, in a c
 ## Interaction
 - Hover on the underlined word: three paragraphs, **WHAT:**, **WHAT INSTEAD:**, **WHY:** (bold labels, code in inline code). No signature block, no hover status bar.
 - Lightbulb / Ctrl+.: one action per marker under the **Rewrite** group (`refactor.rewrite`, wrench icon).
-- Action titles are plain text with single quotes (Chief's choice): `Write 'const' instead of 'let'`, `Write 'fixed' instead of 'array'`. The hover quotes them in the same form.
+- Action titles are plain text with single quotes (Chief's choice): `Write 'const' instead of 'let'`, `Write 'Fixed' instead of 'Array'`. The hover quotes them in the same form.
 
 ## Assumptions
 - The hover opens below the word (VS Code puts it below when there is no room above), so in panel 1 it covers line 3. Panel 0 shows both markers unobscured.

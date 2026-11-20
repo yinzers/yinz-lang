@@ -5,13 +5,13 @@
 // Return").
 // Expected output: the count, then the last item.
 
-function buildSized() -> fixed<int, 2> {
+function buildSized() -> Fixed<Int, 2> {
   wait sleep(1)
-  let xs: fixed<int> = [5, 6]
+  let xs: Fixed<Int> = [5, 6]
   return xs
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let list = wait buildSized()
   print(list.count())
   print(list[1].or(-1))

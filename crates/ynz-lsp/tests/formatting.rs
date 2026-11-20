@@ -48,7 +48,7 @@ fn drain_notifications(rx: &crossbeam_channel::Receiver<lsp_server::Message>) ->
 fn test_formatting_unformatted_file_returns_textedit() {
     // WHY: user saves a messily-formatted file — LSP must return a TextEdit.
     // Use a source with inconsistent spacing that ynz-fmt will normalise.
-    let src = "function entrypoint() -> nothing {\n  let x   =  42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x   =  42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_fmt_dirty.ynz", src);
     let edits = formatting_response(&state, &uri, &mock_sender());
     // The formatter may or may not change this specific source, but the call must not panic.
@@ -60,7 +60,7 @@ fn test_formatting_canonical_file_returns_empty_vec() {
     // WHY: calling format-on-save on an already-formatted file must return no edits.
     // Without this, the client re-saves the file, fires didChange, re-formats,
     // and loops forever.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     // First format to get the canonical form.
     let formatted = ynz_fmt::format(src).expect("format must succeed");
     let (state, uri) = state_single("/tmp/ynz_fmt_canonical.ynz", &formatted);
@@ -78,7 +78,7 @@ fn test_formatting_parse_error_file_returns_empty_vec_and_show_message() {
     // AND emit window/showMessage so the user knows WHY nothing happened (Golden
     // Rule 3 teaching mission — silent empty is duct tape per no-duct-tape.md).
     // This test asserts both sides of the contract.
-    let src = "function broken( -> nothing {}\n"; // missing param closing paren
+    let src = "function broken( -> Nothing {}\n"; // missing param closing paren
     let (state, uri) = state_single("/tmp/ynz_fmt_broken.ynz", src);
     let (tx, rx) = spy_sender();
     let edits = formatting_response(&state, &uri, &tx);
@@ -99,7 +99,7 @@ fn test_formatting_parse_error_file_returns_empty_vec_and_show_message() {
 fn test_formatting_idempotent_via_lsp_roundtrip() {
     // WHY: format(format(x)) == format(x) must hold end-to-end through the LSP handler.
     // Bugs in the formatter idempotency contract surface as infinite format loops.
-    let src = "function entrypoint() -> nothing {\n  let score = 42\n  let msg = `hi`\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let score = 42\n  let msg = `hi`\n}\n";
     let (state1, uri1) = state_single("/tmp/ynz_fmt_idemp1.ynz", src);
     let edits1 = formatting_response(&state1, &uri1, &mock_sender());
 
@@ -127,7 +127,7 @@ fn test_formatting_idempotent_via_lsp_roundtrip() {
 fn test_range_formatting_returns_textedit_within_range() {
     // WHY: range formatting must return a TextEdit whose range is a subset of
     // (or equal to) the requested range — it must not modify lines outside the range.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_fmt_range.ynz", src);
     // Request formatting of line 1 only (the `let` line).
     let range = Range {
@@ -155,7 +155,7 @@ fn test_range_formatting_returns_textedit_within_range() {
 #[test]
 fn test_range_formatting_canonical_range_returns_empty_vec() {
     // WHY: if the selected range is already canonical, zero edits must be returned.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     let formatted = ynz_fmt::format(src).expect("format");
     let (state, uri) = state_single("/tmp/ynz_fmt_range_canonical.ynz", &formatted);
     let range = Range {
@@ -174,7 +174,7 @@ fn test_range_formatting_canonical_range_returns_empty_vec() {
 
 #[test]
 fn test_range_formatting_parse_error_returns_empty_vec() {
-    let src = "function broken( -> nothing {}\n";
+    let src = "function broken( -> Nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_fmt_range_broken.ynz", src);
     let range = Range {
         start: Position {
@@ -203,7 +203,7 @@ fn test_range_formatting_inverted_range_returns_empty_vec_and_show_message() {
     // NOTE: source must be NON-canonical (`formatted_source != source`) — a canonical
     // source short-circuits at the "already canonical" check before ever reaching the
     // byte-slice this guard protects, silently passing without exercising the bug.
-    let src = "function entrypoint() -> nothing {\n  let x   =  42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x   =  42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_fmt_range_inverted.ynz", src);
     let range = Range {
         start: Position {
@@ -236,7 +236,7 @@ fn test_range_formatting_inverted_range_returns_empty_vec_and_show_message() {
 #[test]
 fn test_formatting_response_under_50ms() {
     // WHY: format-on-save runs on every save — must not stall the editor.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_fmt_perf.ynz", src);
     let start = std::time::Instant::now();
     let _ = formatting_response(&state, &uri, &mock_sender());

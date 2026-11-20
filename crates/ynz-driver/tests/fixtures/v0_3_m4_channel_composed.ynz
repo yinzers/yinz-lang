@@ -7,7 +7,7 @@
 // capacity) — that ordering is the composed-suspension proof. A deadlocked substrate hangs;
 // this must run to completion with the receiver observing BOTH values.
 
-function producer(lend out: channel<int>) -> nothing {
+function producer(lend out: Channel<Int>) -> Nothing {
   // First send fills the capacity-1 channel.
   out.send(10)
   // Second send finds the channel FULL — the task SUSPENDS here (backpressure), and stays
@@ -15,9 +15,9 @@ function producer(lend out: channel<int>) -> nothing {
   out.send(20)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   // Capacity-1 bounded channel — small enough to force the composed backpressure interaction.
-  let ch: channel<int> = channel<int>(1)
+  let ch: Channel<Int> = Channel<Int>(1)
 
   // Spawn the producer as an independent joinable background task, handing it the channel.
   let worker = background producer(ch)

@@ -1,18 +1,18 @@
 // v0.3-M9 C1f (#423) round 2: baseline of `v0_3_m9_union_view_suspension_nap.ynz`: builds the holder and
 // waits, without reading the chain. Correct behavior: prints `done`.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 
-function sum(share head: Node | End) -> int {
+function sum(share head: Node | End) -> Int {
   if (head) {
     is Node => {
       let rest = head.next
@@ -25,7 +25,7 @@ function sum(share head: Node | End) -> int {
   return 0
 }
 
-function makeHolder(count: int) -> Holder {
+function makeHolder(count: Int) -> Holder {
   let stop: End = { flag: true }
   let list: Node | End = stop
   let index = 0
@@ -39,12 +39,12 @@ function makeHolder(count: int) -> Holder {
   return holder
 }
 
-function napThenNothing(share holder: Holder) -> int {
+function napThenNothing(share holder: Holder) -> Int {
   wait sleep(1)
   return holder.id
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder = makeHolder(100)
   let id = wait napThenNothing(holder)
   print(`done`)

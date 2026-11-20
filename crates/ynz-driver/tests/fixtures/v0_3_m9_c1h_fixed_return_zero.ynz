@@ -2,11 +2,11 @@
 // written. Nothing is read or written for it, so the emitted code must not touch memory for it.
 // Expected output: the count, 0.
 
-function noInts() -> fixed<int, 0> {
-  let nothingYet: fixed<int> = []
+function noInts() -> Fixed<Int, 0> {
+  let nothingYet: Fixed<Int> = []
   return nothingYet
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(noInts().count())
 }

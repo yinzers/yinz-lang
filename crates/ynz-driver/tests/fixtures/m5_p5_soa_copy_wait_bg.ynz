@@ -34,27 +34,27 @@
 //   caller: 119
 //   bg: 30
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
 shape Part {
-  id: int
-  qty: int
+  id: Int
+  qty: Int
 }
 
-function tally(items: array<Part>) -> nothing {
+function tally(items: Array<Part>) -> Nothing {
   sleepBlocking(60)
-  let total: int = 0
+  let total: Int = 0
   for (p in items) {
     total = total + p.qty
   }
   print(`bg: ${total}`)
 }
 
-function entrypoint() -> nothing {
-  let parts: array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
-  let pts: array<Point> = [
+function entrypoint() -> Nothing {
+  let parts: Array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+  let pts: Array<Point> = [
     { x: 1, y: 2 },
     { x: 2, y: 4 },
     { x: 3, y: 6 },

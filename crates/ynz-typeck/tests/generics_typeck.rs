@@ -49,7 +49,7 @@ fn m5_generic_fn_single_type_param_typechecks() {
     check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
     );
 }
@@ -61,7 +61,7 @@ fn m5_generic_fn_two_type_params_typechecks() {
     check_no_diags(
         r#"
 function pair<A, B>(give first: A, give second: B) -> A { return first }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
     );
 }
@@ -73,7 +73,7 @@ fn m5_generic_fn_body_uses_type_param() {
     check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let x = identity(5) }
+function entrypoint() -> Nothing { let x = identity(5) }
 "#,
     );
 }
@@ -88,7 +88,7 @@ fn m5_inference_identity_int() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let n = identity(5) }
+function entrypoint() -> Nothing { let n = identity(5) }
 "#,
     );
     let key = out
@@ -106,7 +106,7 @@ fn m5_inference_identity_string() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let s = identity(`hello`) }
+function entrypoint() -> Nothing { let s = identity(`hello`) }
 "#,
     );
     let key = out
@@ -124,7 +124,7 @@ fn m5_inference_two_type_params() {
     let out = check_no_diags(
         r#"
 function pair<A, B>(give first: A, give second: B) -> A { return first }
-function entrypoint() -> nothing { let p = pair(5, `hello`) }
+function entrypoint() -> Nothing { let p = pair(5, `hello`) }
 "#,
     );
     let key = out
@@ -144,7 +144,7 @@ fn m5_multiple_distinct_instantiations_both_recorded() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = identity(5)
   let s = identity(`hello`)
 }
@@ -159,7 +159,7 @@ function entrypoint() -> nothing {
     assert_eq!(
         entries.len(),
         2,
-        "Expected two identity instantiations (int + string)"
+        "Expected two identity instantiations (Int + String)"
     );
 }
 
@@ -170,7 +170,7 @@ fn m5_same_instantiation_deduped() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = identity(5)
   let b = identity(10)
 }
@@ -198,7 +198,7 @@ fn m5_explicit_type_arg_int() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let n = identity<int>(5) }
+function entrypoint() -> Nothing { let n = identity<Int>(5) }
 "#,
     );
     let key = out
@@ -216,7 +216,7 @@ fn m5_explicit_type_arg_string() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let s = identity<string>(`hello`) }
+function entrypoint() -> Nothing { let s = identity<String>(`hello`) }
 "#,
     );
     let key = out
@@ -237,7 +237,7 @@ fn m5_generic_call_wrong_arity_produces_error() {
     check_diag_count(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let n = identity(5, 6) }
+function entrypoint() -> Nothing { let n = identity(5, 6) }
 "#,
         1,
     );
@@ -249,7 +249,7 @@ fn m5_generic_call_too_few_args_produces_error() {
     check_diag_count(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let n = identity() }
+function entrypoint() -> Nothing { let n = identity() }
 "#,
         1,
     );
@@ -264,7 +264,7 @@ fn m5_cannot_infer_type_param_when_no_args() {
     check_diag_count(
         r#"
 function createEmpty<T>(give dummy: T) -> T { return dummy }
-function entrypoint() -> nothing { let x = createEmpty() }
+function entrypoint() -> Nothing { let x = createEmpty() }
 "#,
         1,
     );
@@ -280,17 +280,17 @@ fn m5_constraint_satisfied_no_error() {
     check_no_diags(
         r#"
 shape Comparable {
-  compare(share self, share other: Self) -> int
+  compare(share self, share other: Self) -> Int
 }
 shape Player follows Comparable {
-  name: string
-  score: int
+  name: String
+  score: Int
 }
-function compare(share self: Player, share other: Player) -> int {
+function compare(share self: Player, share other: Player) -> Int {
   return self.score
 }
 function sort<T follows Comparable>(share item: T) -> T { return item }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { name: `Alice`, score: 100 }
   let q = sort(p)
 }
@@ -305,13 +305,13 @@ fn m5_constraint_violated_produces_error() {
     check_diag_count(
         r#"
 shape Comparable {
-  compare(share self, share other: Self) -> int
+  compare(share self, share other: Self) -> Int
 }
 shape Player {
-  name: string
+  name: String
 }
 function sort<T follows Comparable>(share item: T) -> T { return item }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { name: `Alice` }
   let q = sort(p)
 }
@@ -327,11 +327,11 @@ fn m5_constraint_error_mentions_contract_name() {
     let out = check(
         r#"
 shape Comparable {
-  compare(share self, share other: Self) -> int
+  compare(share self, share other: Self) -> Int
 }
-shape Player { name: string }
+shape Player { name: String }
 function sort<T follows Comparable>(share item: T) -> T { return item }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { name: `Alice` }
   let q = sort(p)
 }
@@ -354,7 +354,7 @@ fn m5_generic_shape_decl_typechecks() {
     check_no_diags(
         r#"
 shape Pair<A, B> { first: A  second: B }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
     );
 }
@@ -366,10 +366,10 @@ fn m5_generic_shape_appears_in_generic_shape_table() {
     let out = check_no_diags(
         r#"
 shape Pair<A, B> { first: A  second: B }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
     );
-    // Indirect verification: a Pair<int, string> binding must resolve cleanly.
+    // Indirect verification: a Pair<Int, String> binding must resolve cleanly.
     // If the shape table is wrong, this would have produced a diagnostic.
     let _ = out;
 }
@@ -378,14 +378,14 @@ function entrypoint() -> nothing { }
 
 #[test]
 fn m5_field_access_through_generic_shape() {
-    // WHY: acceptance criterion — `p.first` where `p: Pair<int, string>` must
-    // resolve to `int`. Without substitution, it would stay as `TypeParam("A")`
+    // WHY: acceptance criterion — `p.first` where `p: Pair<Int, String>` must
+    // resolve to `Int`. Without substitution, it would stay as `TypeParam("A")`
     // and typeck would fail to verify downstream uses.
     check_no_diags(
         r#"
 shape Pair<A, B> { first: A  second: B }
 function mkPair<A, B>(give first: A, give second: B) -> A { return first }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = mkPair(5, `hello`)
 }
 "#,
@@ -400,8 +400,8 @@ fn m5_field_access_wrong_field_on_generic_shape_error() {
     let out = check(
         r#"
 shape Pair<A, B> { first: A  second: B }
-function entrypoint() -> nothing {
-  let p: Pair<int, string> = { first: 5, second: `hi` }
+function entrypoint() -> Nothing {
+  let p: Pair<Int, String> = { first: 5, second: `hi` }
   let x = p.third
 }
 "#,
@@ -421,8 +421,8 @@ fn m5_non_generic_fn_not_in_mono_table() {
     // emit a second copy of every function.
     let out = check_no_diags(
         r#"
-function add(a: int, b: int) -> int { return a }
-function entrypoint() -> nothing { let x = add(1, 2) }
+function add(a: Int, b: Int) -> Int { return a }
+function entrypoint() -> Nothing { let x = add(1, 2) }
 "#,
     );
     assert!(
@@ -437,8 +437,8 @@ fn m5_non_generic_fn_still_typechecks() {
     // type-checking. This is the basic M4 regression guard.
     check_no_diags(
         r#"
-function greet(name: string) -> string { return name }
-function entrypoint() -> nothing { let s = greet(`Alice`) }
+function greet(name: String) -> String { return name }
+function entrypoint() -> Nothing { let s = greet(`Alice`) }
 "#,
     );
 }
@@ -452,12 +452,12 @@ fn m5_m4_shapes_and_follows_still_work() {
     // stealing entries from the concrete shape table.
     check_no_diags(
         r#"
-shape Damageable { takeDamage(lend self, amount: int) -> nothing }
-shape Player follows Damageable { name: string  health: int }
-function takeDamage(lend self: Player, amount: int) -> nothing {
+shape Damageable { takeDamage(lend self, amount: Int) -> Nothing }
+shape Player follows Damageable { name: String  health: Int }
+function takeDamage(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { name: `Bob`, health: 100 }
   p.takeDamage(10)
 }
@@ -472,7 +472,7 @@ fn m5_m4_ownership_still_enforced() {
     let out = check(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const x = 5
   let y = identity(x)
 }
@@ -495,8 +495,8 @@ fn m5_generic_and_non_generic_coexist() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function add(a: int, b: int) -> int { return a }
-function entrypoint() -> nothing {
+function add(a: Int, b: Int) -> Int { return a }
+function entrypoint() -> Nothing {
   let x = identity(5)
   let y = add(1, 2)
 }
@@ -517,7 +517,7 @@ fn m5_mono_entry_has_correct_ret_type() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let n = identity(5) }
+function entrypoint() -> Nothing { let n = identity(5) }
 "#,
     );
     let key = out
@@ -530,7 +530,7 @@ function entrypoint() -> nothing { let n = identity(5) }
     assert_eq!(
         sig.ret_type,
         Type::Int,
-        "Monomorphized identity<int> must have ret_type = int"
+        "Monomorphized identity<Int> must have ret_type = Int"
     );
 }
 
@@ -541,7 +541,7 @@ fn m5_mono_entry_has_correct_param_types() {
     let out = check_no_diags(
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> nothing { let n = identity(5) }
+function entrypoint() -> Nothing { let n = identity(5) }
 "#,
     );
     let key = out
@@ -554,7 +554,7 @@ function entrypoint() -> nothing { let n = identity(5) }
     assert_eq!(
         sig.param_types,
         vec![Type::Int],
-        "Monomorphized identity<int> must have param_type = int"
+        "Monomorphized identity<Int> must have param_type = Int"
     );
 }
 
@@ -595,13 +595,13 @@ fn assert_one_error_saying(source: &str, expected_what: &str) {
 
 #[test]
 fn v03_m9_unknown_generic_name_in_a_let_annotation_is_reported() {
-    // BUG (High: type validation): `Nope<int>` resolved to an unreported error type, so the
+    // BUG (High: type validation): `Nope<Int>` resolved to an unreported error type, so the
     // annotation passed the checker with no diagnostic. The resolver serves every annotation, so
     // this guards the ordinary `let` path, not only a hidden default.
     assert_one_error_saying(
         r#"
-function entrypoint() -> nothing {
-  let slot: Nope<int> = 4096
+function entrypoint() -> Nothing {
+  let slot: Nope<Int> = 4096
 }
 "#,
         "`Nope` is not a known type.",
@@ -610,18 +610,18 @@ function entrypoint() -> nothing {
 
 #[test]
 fn v03_m9_type_arguments_on_a_plain_shape_in_a_parameter_are_reported() {
-    // BUG (High: type validation): `Big<int>` on a shape declared without type parameters
+    // BUG (High: type validation): `Big<Int>` on a shape declared without type parameters
     // resolved to an unreported error type. Guards the parameter-annotation path and the
     // "declared but not generic" wording.
     assert_one_error_saying(
         r#"
 shape Big {
-  label: string
+  label: String
 }
 
-function show(share value: Big<int>) -> nothing { }
+function show(share value: Big<Int>) -> Nothing { }
 
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         "`Big` does not take type arguments.",
     );
@@ -629,35 +629,35 @@ function entrypoint() -> nothing { }
 
 #[test]
 fn v03_m9_map_missing_its_value_type_in_a_let_annotation_is_reported() {
-    // BUG (High: type validation): `map<int>` filled the missing value type with an unreported
+    // BUG (High: type validation): `Map<Int>` filled the missing value type with an unreported
     // error type. Guards the `let` path for a built-in generic missing an argument.
     assert_one_error_saying(
         r#"
-function entrypoint() -> nothing {
-  let scores: map<int> = {}
+function entrypoint() -> Nothing {
+  let scores: Map<Int> = {}
 }
 "#,
-        "`map` takes 2 type arguments.",
+        "`Map` takes 2 type arguments.",
     );
 }
 
 #[test]
 fn v03_m9_type_arguments_on_a_built_in_or_type_parameter_name_say_it_takes_none() {
-    // BUG (teaching surface): `string<int>` and `T<int>` name a type that exists, but the
-    // resolver's fall-through said "`string` is not a known type", which misstates the mistake.
+    // BUG (teaching surface): `String<Int>` and `T<Int>` name a type that exists, but the
+    // resolver's fall-through said "`String` is not a known type", which misstates the mistake.
     assert_one_error_saying(
         r#"
-function entrypoint() -> nothing {
-  let label: string<int> = `a`
+function entrypoint() -> Nothing {
+  let label: String<Int> = `a`
 }
 "#,
-        "`string` does not take type arguments.",
+        "`String` does not take type arguments.",
     );
     assert_one_error_saying(
         r#"
-function hold<T>(give value: T<int>) -> nothing { }
+function hold<T>(give value: T<Int>) -> Nothing { }
 
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         "`T` does not take type arguments.",
     );

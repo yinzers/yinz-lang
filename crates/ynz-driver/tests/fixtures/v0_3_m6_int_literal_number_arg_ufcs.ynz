@@ -11,15 +11,15 @@
 // breaking non-oop.md's identical-diagnostics-between-call-forms convention.
 
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
-function scale(share self: Player, factor: number) -> number {
+function scale(share self: Player, factor: Number) -> Number {
   return factor
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { name: `Pat`, health: 100 }
   let scaled = p.scale(5)
   print(scaled.toString())

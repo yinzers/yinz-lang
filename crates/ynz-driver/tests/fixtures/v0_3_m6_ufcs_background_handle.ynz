@@ -14,17 +14,17 @@
 // zero diagnostics.
 
 shape Barge {
-  name: string
-  tonnage: int
+  name: String
+  tonnage: Int
 }
 
-function haul(give self: Barge) -> nothing {
+function haul(give self: Barge) -> Nothing {
   wait sleep(20)
   print(self.name)
   print(self.tonnage.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let barge: Barge = { name: `Mon`, tonnage: 7 }
   let h = background barge.haul()
   wait sleep(120)

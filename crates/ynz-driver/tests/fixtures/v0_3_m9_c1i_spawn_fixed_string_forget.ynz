@@ -4,13 +4,13 @@
 // Before: 2 of the 4 strings leaked.
 // Expected output: the count, the first name, then `done`.
 
-function crunch(xs: fixed<string>) -> nothing {
+function crunch(xs: Fixed<String>) -> Nothing {
   print(xs.count())
   print(xs[0].or(`?`))
 }
 
-function entrypoint() -> nothing {
-  let xs: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+function entrypoint() -> Nothing {
+  let xs: Fixed<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   background crunch(xs)
   wait sleep(50)
   print(`done`)

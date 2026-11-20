@@ -42,7 +42,7 @@ pub struct PrimitiveIntrinsicEntry {
     pub name: &'static str,
     /// `"print_type"` | `"free_fn"` | `"method"` | `"method_1arg"`
     pub kind: &'static str,
-    /// `Some("int")` for method/method_1arg kinds; `None` for print_type/free_fn.
+    /// `Some("Int")` for method/method_1arg kinds; `None` for print_type/free_fn.
     pub receiver_type: Option<&'static str>,
     pub param_types: &'static [&'static str],
     /// The ownership word of each parameter, aligned with `param_types` (`"share"` |
@@ -58,7 +58,7 @@ pub struct PrimitiveIntrinsicEntry {
     pub doc: Option<&'static str>,
 }
 
-/// A constant accessible as `Type.name` (e.g. `int.max`, `number.epsilon`).
+/// A constant accessible as `Type.name` (e.g. `Int.max`, `Number.epsilon`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TypeAttachedConstantEntry {

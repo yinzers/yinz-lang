@@ -1,11 +1,11 @@
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(40)
   let b = fib(41)
   print(a)

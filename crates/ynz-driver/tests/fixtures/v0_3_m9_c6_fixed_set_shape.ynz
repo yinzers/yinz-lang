@@ -9,16 +9,16 @@
 // Expected output: the name the list holds at index 0 at the end, and the untouched one.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Tag = { name: `a-${1}`, id: 1 }
   let second: Tag = { name: `b-${2}`, id: 2 }
   let replacement: Tag = { name: `c-${3}`, id: 3 }
   let fallback: Tag = { name: `none`, id: 0 }
-  let value: fixed<Tag> = [first, second]
+  let value: Fixed<Tag> = [first, second]
   value.set(0, replacement)
   let firstItem: Tag = value[0].or(fallback)
   let secondItem: Tag = value[1].or(fallback)

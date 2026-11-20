@@ -18,31 +18,31 @@
 //
 // Expected output (any order of leaf lines): leaf_a\nleaf_b\nleaf_c\ndone
 // (inner_a and inner_b are outer group members; inner_a completes leaf_a + leaf_b internally)
-function leaf_a() -> nothing {
+function leaf_a() -> Nothing {
   wait sleep(10)
   print(`leaf_a`)
 }
 
-function leaf_b() -> nothing {
+function leaf_b() -> Nothing {
   wait sleep(10)
   print(`leaf_b`)
 }
 
-function leaf_c() -> nothing {
+function leaf_c() -> Nothing {
   wait sleep(10)
   print(`leaf_c`)
 }
 
-function inner_a() -> nothing {
+function inner_a() -> Nothing {
   leaf_a()
   leaf_b()
 }
 
-function inner_b() -> nothing {
+function inner_b() -> Nothing {
   leaf_c()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   inner_a()
   inner_b()
   print(`done`)

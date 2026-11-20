@@ -10,15 +10,15 @@
 //   3. Byte-identical stdout under --no-auto-parallel (consistency oracle).
 //
 // Expected output: done
-function worker() -> nothing {
+function worker() -> Nothing {
   wait sleep(200)
 }
 
-function helper() -> nothing {
+function helper() -> Nothing {
   wait sleep(200)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   worker()
   helper()
   print(`done`)

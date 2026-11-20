@@ -8,12 +8,12 @@
 // value — the pointer-ABI's element-pointer bit-compare has no by-value analogue.
 // Recorded decision in the P2 execution record.
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let parts: Array<Part> = [
     { qty: 1, price: 10 },
     { qty: 2, price: 20 },
     { qty: 3, price: 30 }
@@ -58,7 +58,7 @@ function entrypoint() -> nothing {
   if (s2.exists()) {
     print(s2.value.price)
   }
-  let total: int = 0
+  let total: Int = 0
   for (p in parts) {
     total = total + p.qty
   }

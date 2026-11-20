@@ -7,6 +7,6 @@
 // Try --json for structured-event output, --check to skip the execute step,
 // --no-clear to preserve scrollback.
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(`Duquesne Incline — current elevation: 200 feet (edit this line and save)`)
 }

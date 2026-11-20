@@ -7,7 +7,7 @@ source_filename = "ynz-m4_player.ynz"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
-@.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
+@.panic.iadd = private unnamed_addr constant [20 x i8] c"Int overflow in '+'\00"
 @.source.file = private unnamed_addr constant [14 x i8] c"m4_player.ynz\00"
 @bts = private unnamed_addr constant { i64, [8 x i8] } { i64 0, [8 x i8] c"Patrick\00" }, align 8
 

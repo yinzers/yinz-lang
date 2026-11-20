@@ -5,34 +5,34 @@
 // it. One print per element type, including a shape array — locks the repr path
 // against the elem_size-aware ABI.
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let a: int = seed * 5
-  let b: int = seed * 6
-  let c: int = seed * 7
-  let nums: array<int> = [a, b, c]
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let a: Int = seed * 5
+  let b: Int = seed * 6
+  let c: Int = seed * 7
+  let nums: Array<Int> = [a, b, c]
   print(nums)
-  let n: int = 7
-  let t1: boolean = n > 3
-  let f1: boolean = n > 100
-  let flags: array<boolean> = [t1, f1]
+  let n: Int = 7
+  let t1: Boolean = n > 3
+  let f1: Boolean = n > 100
+  let flags: Array<Boolean> = [t1, f1]
   print(flags)
-  let fa: float = a.toFloat()
-  let fb: float = b.toFloat()
-  let vals: array<float> = [fa, fb]
+  let fa: Float = a.toFloat()
+  let fb: Float = b.toFloat()
+  let vals: Array<Float> = [fa, fb]
   print(vals)
-  let suffix: string = `-x`
-  let sa: string = `alpha${suffix}`
-  let sb: string = `beta${suffix}`
-  let names: array<string> = [sa, sb]
+  let suffix: String = `-x`
+  let sa: String = `alpha${suffix}`
+  let sb: String = `beta${suffix}`
+  let names: Array<String> = [sa, sb]
   print(names)
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let parts: array<Part> = [
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 }
   ]

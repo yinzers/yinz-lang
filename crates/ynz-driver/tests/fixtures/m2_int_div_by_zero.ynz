@@ -1,6 +1,6 @@
-function entrypoint() -> nothing {
-  let x: int = 10
-  let y: int = 0
+function entrypoint() -> Nothing {
+  let x: Int = 10
+  let y: Int = 0
   let z = x / y
   print(z)
 }

@@ -6,31 +6,31 @@
 // this fixture keeps them from regressing when the call forms are changed.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function useBig(share first: Big, share second: Big) -> int {
+function useBig(share first: Big, share second: Big) -> Int {
   return second.count
 }
-function useString(share text: string) -> int {
+function useString(share text: String) -> Int {
   return 1
 }
-function useInt(share number: int) -> int {
+function useInt(share number: Int) -> Int {
   return number
 }
-function useBigs(share items: array<Big>) -> int {
+function useBigs(share items: Array<Big>) -> Int {
   return items.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let tinies: array<Tiny> = [tiny.copy()]
-  let numbers: array<int> = [5]
+  let tinies: Array<Tiny> = [tiny.copy()]
+  let numbers: Array<Int> = [5]
   let maybeCount = numbers.first()
   print(useBig(big, tiny).toString())
   print(useString(5).toString())

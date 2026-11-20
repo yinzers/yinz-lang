@@ -14,7 +14,7 @@
 //
 // Expected output (both modes — default and --no-auto-parallel):
 //   4958
-function score(seed: int) -> int {
+function score(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -24,12 +24,12 @@ function score(seed: int) -> int {
   return total + seed
 }
 
-function fetch(seed: int) -> int {
+function fetch(seed: Int) -> Int {
   wait sleep(0)
   return seed + 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = score(3)
   let b = fetch(4)
   print(a + b)

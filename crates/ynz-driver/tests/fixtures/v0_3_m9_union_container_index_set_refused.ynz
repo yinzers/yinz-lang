@@ -4,18 +4,18 @@
 // compiled bare store.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let big: Big = { label: `hello`, count: 3 }
-  let things: array<Thing> = []
+  let things: Array<Thing> = []
   things.add(tiny)
   things[0] = big
   print(`end`)

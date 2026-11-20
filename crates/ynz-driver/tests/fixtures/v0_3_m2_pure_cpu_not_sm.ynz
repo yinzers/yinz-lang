@@ -3,11 +3,11 @@
 // The analysis must NOT mark it as suspending; it compiles to straight-line code.
 // Expected: compiles clean; prints "result: 42" and exits 0.
 
-function compute(n: int) -> int {
+function compute(n: Int) -> Int {
   return n * 6
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const result = compute(7)
   print(`result: ${result.toString()}`)
 }

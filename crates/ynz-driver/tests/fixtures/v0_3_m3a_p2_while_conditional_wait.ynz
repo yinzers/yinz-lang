@@ -5,9 +5,9 @@
 // Guards that resume re-enters at the correct sub-position and that crossing
 // locals (i and x) are correctly preserved whether or not a given iteration suspends.
 // Expected output: 0\n1\n2\n3
-function entrypoint() -> nothing {
-  let i: int = 0
-  let x: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let x: Int = 0
   while (i < 4) {
     print(i.toString())
     if (x == 0) {

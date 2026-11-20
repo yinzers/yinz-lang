@@ -37,7 +37,7 @@ Every `options` type lowers to an `i8` tag (or smallest fitting type for the var
 
 `==` between two values of the same options type lowers to `icmp eq i8` — no vtable, no string comparison, no hash. Near-zero cost.
 
-Multi-case `if` over an options scrutinee lowers to LLVM `switch` on the tag byte — the same dense jump-table optimization used for `int` multi-case (per [`docs/internal/implementation/IMP-control-flow.md`](IMP-control-flow.md)).
+Multi-case `if` over an options scrutinee lowers to LLVM `switch` on the tag byte — the same dense jump-table optimization used for `Int` multi-case (per [`docs/internal/implementation/IMP-control-flow.md`](IMP-control-flow.md)).
 
 `.toString()` on an options value: the compiler emits a per-type LLVM global `[N x *const u8]` array of string literals indexed by tag. The `.toString()` method indexes by tag and calls `ynz_string_from_static(ptr, len)` to return a heap-owned Yinz string.
 
@@ -99,7 +99,7 @@ players.sort(p => p.health, desc)    // shorthand — compiler infers SortOrder.
 **Function vs options-shorthand priority**: when a bare identifier resolves to BOTH a function in scope AND an options variant via shorthand, **the function wins**. If the function's type doesn't match the expected parameter type, the resulting type error names both candidates:
 
 ```
-COMPILE ERROR: Type mismatch at call site — `desc` resolves to function `desc(int) -> string`,
+COMPILE ERROR: Type mismatch at call site — `desc` resolves to function `desc(Int) -> String`,
 not a SortOrder variant.
 
   WHAT INSTEAD: To use the options variant, write `SortOrder.desc` explicitly.
@@ -133,7 +133,7 @@ When the scrutinee is a union of two options types (`OptionsA | OptionsB`), the 
 COMPILE ERROR: options types need at least 2 variants.
 
   WHAT INSTEAD: Add a second variant, or use a const if you only need one named value:
-    const ONLY_ONE: int = 0
+    const ONLY_ONE: Int = 0
 
   WHY: A single-variant options type has only one possible value — it carries no
   information. It's almost always the wrong tool.

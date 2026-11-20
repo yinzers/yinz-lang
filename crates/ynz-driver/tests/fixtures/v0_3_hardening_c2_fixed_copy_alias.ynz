@@ -16,8 +16,8 @@
 // refusal side, because its cells hold the items outright, so copying the cells into
 // fresh storage genuinely separates the two lists. Silent aliasing is the wrong answer
 // this fixture exists to catch, and a "99" here means it came back.
-function entrypoint() -> nothing {
-  let a: fixed<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let a: Fixed<Int> = [1, 2, 3]
   let b = a.copy()
   b.set(0, 99)
   print(a[0].or(-1).toString())

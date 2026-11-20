@@ -69,7 +69,7 @@ release_case!(
     "first-1\n",
     2,
     2,
-    "releasing an `array<string>` frees the buffer and header but not the strings its cells point at (High)"
+    "releasing an `Array<String>` frees the buffer and header but not the strings its cells point at (High)"
 );
 
 release_case!(
@@ -78,7 +78,7 @@ release_case!(
     "2\n",
     4,
     4,
-    "releasing a `map<string, string>` frees its buffers but not its values, nor its keys, which sit in the map as raw pointers (High)"
+    "releasing a `Map<String, String>` frees its buffers but not its values, nor its keys, which sit in the map as raw pointers (High)"
 );
 
 release_case!(

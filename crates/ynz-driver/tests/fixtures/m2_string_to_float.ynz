@@ -1,16 +1,16 @@
 // M6 P5 catch-up: string.toFloat() fallible conversion.
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   // Basic float — check existence
-  let a: maybe<float> = `1.5`.toFloat()
+  let a: Maybe<Float> = `1.5`.toFloat()
   print(a.exists().toString())
   // Non-numeric → none
-  let b: maybe<float> = `abc`.toFloat()
+  let b: Maybe<Float> = `abc`.toFloat()
   print(b.exists().toString())
   // Hex prefix → none
-  let c: maybe<float> = `0x1A`.toFloat()
+  let c: Maybe<Float> = `0x1A`.toFloat()
   print(c.exists().toString())
   // Negative with whitespace → some
-  let d: maybe<float> = `  -1.5  `.toFloat()
+  let d: Maybe<Float> = `  -1.5  `.toFloat()
   print(d.exists().toString())
 }

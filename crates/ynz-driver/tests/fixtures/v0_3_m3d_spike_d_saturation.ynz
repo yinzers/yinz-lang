@@ -12,14 +12,14 @@
 // Expected output:
 //   832040
 //   1346269
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(30)
   let b = fib(31)
   print(a)

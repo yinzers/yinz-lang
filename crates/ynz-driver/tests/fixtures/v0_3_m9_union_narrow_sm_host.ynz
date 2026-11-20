@@ -17,23 +17,23 @@
 // Fields are `number` (a plain `float` prints `0.000...` — separate pre-existing bug).
 
 shape Circle {
-  radius: number
-  label: string
+  radius: Number
+  label: String
 }
 shape Square {
-  side: number
+  side: Number
 }
 shape Figure = Circle | Square
 
-function describe(share c: Circle) -> string {
+function describe(share c: Circle) -> String {
   return c.label
 }
 
-function area(share self: Circle) -> number {
+function area(share self: Circle) -> Number {
   return self.radius
 }
 
-function showSuspending(share fig: Figure) -> nothing {
+function showSuspending(share fig: Figure) -> Nothing {
   if (fig) {
     is Circle => {
       print(describe(fig))
@@ -53,7 +53,7 @@ function showSuspending(share fig: Figure) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(5)
   let c: Circle = { radius: 5.0, label: `round` }
   let fig: Figure = c

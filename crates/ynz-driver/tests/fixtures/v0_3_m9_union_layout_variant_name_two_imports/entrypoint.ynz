@@ -8,7 +8,7 @@
 import { HolderA, Tiny, fillA, showA } from `a`
 import { HolderB, makeB } from `b`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let holder: HolderA = { slot: tiny, id: 5 }
   fillA(holder)

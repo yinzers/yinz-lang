@@ -9,15 +9,15 @@
 // Expected output (both modes):
 //   30
 //   42
-function add(a: int, b: int) -> int {
+function add(a: Int, b: Int) -> Int {
   return a + b
 }
 
-function getval() -> int {
+function getval() -> Int {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = add(10, 20)
   let b = getval()
   wait sleep(0)

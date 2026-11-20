@@ -20,7 +20,7 @@ fn document_symbol_returns_function_entry() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
     let uri = "file:///ds_test.ynz";
-    h.did_open(uri, "function greet() -> nothing { }");
+    h.did_open(uri, "function greet() -> Nothing { }");
     // Drain any diagnostic notification the server pushes.
     h.try_recv_timeout(std::time::Duration::from_millis(100));
 
@@ -92,7 +92,7 @@ fn document_symbol_shape_decl_returns_class_kind() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
     let uri = "file:///ds_shape.ynz";
-    h.did_open(uri, "shape Player { name: string\n health: int }");
+    h.did_open(uri, "shape Player { name: String\n health: Int }");
     h.try_recv_timeout(std::time::Duration::from_millis(100));
 
     h.conn
@@ -131,7 +131,7 @@ fn workspace_symbol_empty_query_returns_symbols() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
     let uri = "file:///ws_all.ynz";
-    h.did_open(uri, "function entrypoint() -> nothing { }");
+    h.did_open(uri, "function entrypoint() -> Nothing { }");
     h.try_recv_timeout(std::time::Duration::from_millis(100));
 
     h.conn
@@ -162,7 +162,7 @@ fn workspace_symbol_no_match_returns_empty_array() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
     let uri = "file:///ws_nomatch.ynz";
-    h.did_open(uri, "function entrypoint() -> nothing { }");
+    h.did_open(uri, "function entrypoint() -> Nothing { }");
     h.try_recv_timeout(std::time::Duration::from_millis(100));
 
     h.conn
@@ -196,7 +196,7 @@ fn workspace_symbol_case_insensitive_query() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
     let uri = "file:///ws_case.ynz";
-    h.did_open(uri, "function entrypoint() -> nothing { }");
+    h.did_open(uri, "function entrypoint() -> Nothing { }");
     h.try_recv_timeout(std::time::Duration::from_millis(100));
 
     h.conn

@@ -73,4 +73,4 @@ Bitwise operators use single symbols (`&`, `|`, `^`, `~`, `<<`, `>>`) while bool
 
 `==` is always type-safe. Comparing incompatible types is a compile error.
 
-**Why**: `===` exists in JavaScript to compensate for `==` doing implicit type coercion (`"5" == 5` is `true`). Yinz has no implicit coercion. The type system prevents comparing a `string` to a `number` at compile time. `===` solves a problem that doesn't exist in a statically-typed language.
+**Why**: `===` exists in JavaScript to compensate for `==` doing implicit type coercion (`"5" == 5` is `true`). Yinz has no implicit coercion. The type system prevents comparing a `String` to a `Number` at compile time. `===` solves a problem that doesn't exist in a statically-typed language.

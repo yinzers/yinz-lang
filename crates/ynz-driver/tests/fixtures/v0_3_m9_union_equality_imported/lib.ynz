@@ -1,18 +1,18 @@
 // v0.3-M9 C1f (#423) code round 1: `Holder` keeps `Big | Tiny` inline; `Big` and `Tiny` are
 // NOT exported, so an importer knows them only as layout.
 shape Big {
-  first: int
-  second: int
-  label: string
+  first: Int
+  second: Int
+  label: String
 }
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 export shape Holder {
   slot: Big | Tiny
-  id: int
+  id: Int
 }
-export function makeBig(first: int) -> Holder {
+export function makeBig(first: Int) -> Holder {
   let big: Big = { first: first, second: 2, label: `lib` }
   let holder: Holder = { slot: big, id: 1 }
   return holder

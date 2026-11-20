@@ -9,17 +9,17 @@
 // Expected output (correct):
 //   42
 //   true
-function slowCall() -> int {
+function slowCall() -> Int {
   wait sleep(40)
   return 42
 }
 
-function other() -> boolean {
+function other() -> Boolean {
   wait sleep(40)
   return true
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = slowCall()
   let cond = other()
   wait sleep(1)

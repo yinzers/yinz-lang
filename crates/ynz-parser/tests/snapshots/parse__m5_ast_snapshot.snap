@@ -255,7 +255,7 @@ Module {
                             Share,
                         ),
                         ty: Generic {
-                            name: "array",
+                            name: "Array",
                             name_span: SourceSpan {
                                 file: "test.ynz",
                                 start: 156,
@@ -362,7 +362,7 @@ Module {
                             },
                             ty: Some(
                                 Generic {
-                                    name: "array",
+                                    name: "Array",
                                     name_span: SourceSpan {
                                         file: "test.ynz",
                                         start: 255,

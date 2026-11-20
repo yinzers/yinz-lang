@@ -9,10 +9,10 @@
 import { Holder, Tiny, show, fillHolder } from `lib`
 
 shape Big {
-  flag: boolean
+  flag: Boolean
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let holder: Holder = { slot: tiny, id: 7 }
   fillHolder(holder)

@@ -24,7 +24,7 @@ User spec: [`docs/reference/REF-doc-comments.md`](../../reference/REF-doc-commen
 ```ynz
 /// Fetches a user by their unique ID.
 /// Returns none if the user doesn't exist.
-export function fetchUser(id: UserId) -> maybe<User> errors {
+export function fetchUser(id: UserId) -> Maybe<User> errors {
   // implementation note — never appears in hover
 }
 ```
@@ -47,9 +47,9 @@ A `///` block directly above a shape field documents that field.
 ```ynz
 export shape Player {
   /// The player's display name.
-  name: string
+  name: String
   /// Current HP, clamped 0–100. Never negative.
-  health: int
+  health: Int
 }
 ```
 

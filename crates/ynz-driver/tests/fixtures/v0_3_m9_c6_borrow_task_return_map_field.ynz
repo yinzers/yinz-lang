@@ -2,19 +2,19 @@
 // The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Bucket {
-  table: map<string, string>
-  id: int
+  table: Map<String, String>
+  id: Int
 }
-function pick(bucket: Bucket) -> map<string, string> {
+function pick(bucket: Bucket) -> Map<String, String> {
   wait sleep(1)
   return bucket.table
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bucket: Bucket = { table: { `k`: `v-${1}` }, id: 1 }
   let handle = background pick(bucket)
   wait sleep(50)
   let got = handle.receive()
-  let fallback: map<string, string> = {}
+  let fallback: Map<String, String> = {}
   let heldTable = got.or(fallback)
   let maybeValue = heldTable.get(`k`)
   print(maybeValue.or(`none`))

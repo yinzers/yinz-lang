@@ -15,16 +15,16 @@
 // The caller's frame outlives the task — the stack copy remains valid throughout.
 
 shape Task {
-  id: int
-  priority: int
+  id: Int
+  priority: Int
 }
 
-function process(t: Task) -> nothing {
+function process(t: Task) -> Nothing {
   sleepBlocking(80)
   print(`task sees id: ${t.id}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let job: Task = { id: 7, priority: 1 }
   background process(job)
   // job IS read after the spawn (job.id assignment below) — compiler infers .copy.

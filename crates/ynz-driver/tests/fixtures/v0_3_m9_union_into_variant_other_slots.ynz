@@ -3,18 +3,18 @@
 // with `UnionWhereVariantExpected`. Pre-fix failure: both compiled (same symmetric check).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 shape Holder {
   inner: Big
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let thing: Thing = big.copy()
   let other: Thing = big

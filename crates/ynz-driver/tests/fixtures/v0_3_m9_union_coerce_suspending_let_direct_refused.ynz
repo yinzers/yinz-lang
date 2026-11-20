@@ -6,11 +6,11 @@
 // Pre-fix failure: compiled; the raw int 4 became the envelope pointer and the `is` arm read
 // its tag through address 0x4 (SIGSEGV, ASan SEGV at both optimization levels).
 shape Circle {
-  name: string
+  name: String
 }
-shape Mixed = Circle | int
+shape Mixed = Circle | Int
 
-function show(share m: Mixed) -> string {
+function show(share m: Mixed) -> String {
   if (m) {
     is Circle => {
       return `circle ${m.name}`
@@ -21,12 +21,12 @@ function show(share m: Mixed) -> string {
   }
 }
 
-function count() -> int {
+function count() -> Int {
   wait sleep(1)
   return 4
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let m: Mixed = count()
   print(show(m))
 }

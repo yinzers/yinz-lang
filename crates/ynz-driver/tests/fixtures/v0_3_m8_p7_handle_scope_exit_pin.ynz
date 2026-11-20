@@ -4,7 +4,7 @@
 // scope-exit release of the block calls `ynz_handle_free`, which stops the child at its next
 // suspension: `child: after first sleep` and `child: done` are lost, the parent's three lines
 // are not (`v03_m8_handle_scope_pin.rs`).
-function worker() -> int errors {
+function worker() -> Int errors {
   wait sleep(20)
   print(`child: after first sleep`)
   wait sleep(20)
@@ -12,7 +12,7 @@ function worker() -> int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   if (true) {
     let h = background worker()
     print(`parent: leaving block`)

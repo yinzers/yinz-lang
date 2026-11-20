@@ -3,7 +3,7 @@
 // `frame_layouts_query(b_ops)` recursively queries `frame_layouts_query(a_ops)` (the M3e
 // mechanism, unmodified) so `doWork`'s total_size correctly includes `getValue`'s sub-frame.
 
-export function getValue() -> int {
+export function getValue() -> Int {
   wait sleep(0)
   return 7
 }

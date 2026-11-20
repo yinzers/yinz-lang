@@ -4,20 +4,20 @@
 /// A Pittsburgh Pirate. Tracks display name and career hit total.
 export shape Pirate {
   /// The player's display name (e.g., "Roberto Clemente").
-  name: string
+  name: String
   /// Career hits at the major-league level. Starts at 0 for rookies.
-  careerHits: int
+  careerHits: Int
 }
 
-export function newPirate(name: string) -> Pirate {
+export function newPirate(name: String) -> Pirate {
   return { name: name, careerHits: 0 }
 }
 
-export function announce(player: Pirate) -> string {
+export function announce(player: Pirate) -> String {
   return `Now batting: ${player.name}!`
 }
 
-export function recordHits(player: Pirate, count: int) -> Pirate {
+export function recordHits(player: Pirate, count: Int) -> Pirate {
   return { name: player.name, careerHits: player.careerHits + count }
 }
 
@@ -35,23 +35,23 @@ export options ScheduleDay {
 
 /// Contract for shapes that can be announced over PA at PNC Park.
 export shape Announceable {
-  announce(share self) -> string
+  announce(share self) -> String
 }
 
 /// Base record for any single-game outcome at PNC Park.
 export shape GameRecord {
-  gameId: int
-  opponent: string
+  gameId: Int
+  opponent: String
 }
 
 /// A street-market vendor event in the Strip District (union left arm).
 export shape StripeDistrictEvent {
-  vendor: string
-  stand: int
+  vendor: String
+  stand: Int
 }
 
 /// A South Side pub event (union right arm for is-narrowing demo).
 export shape SouthSideEvent {
-  bar: string
-  capacity: int
+  bar: String
+  capacity: Int
 }

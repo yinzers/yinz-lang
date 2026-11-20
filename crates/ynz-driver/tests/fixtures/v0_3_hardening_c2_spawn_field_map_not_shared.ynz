@@ -6,15 +6,15 @@
 //
 // The task must get its own map: 99 in the task, 1 in the parent.
 shape Box {
-  items: map<string, int>
+  items: Map<String, Int>
 }
 
-function eat(counts: map<string, int>) -> nothing {
+function eat(counts: Map<String, Int>) -> Nothing {
   counts.set(`k`, 99)
   print(counts.get(`k`).or(0))
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let b: Box = { items: { `k`: 1 } }
   background eat(b.items)
   wait sleep(120)

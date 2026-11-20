@@ -56,61 +56,61 @@ macro_rules! move_cases {
     };
 }
 
-const PRELUDE: &str = "shape Inner {\n  id: int\n}\nshape Outer {\n  inner: Inner\n  tag: int\n}\n";
+const PRELUDE: &str = "shape Inner {\n  id: Int\n}\nshape Outer {\n  inner: Inner\n  tag: Int\n}\n";
 
 move_cases! {
     a_binding_moved_into_a_field_is_a_move:
-        "function entrypoint() -> nothing {\n  let inner: Inner = { id: 1 }\n  let outer: Outer = { inner: inner, tag: 2 }\n  print(outer.tag)\n}\n",
+        "function entrypoint() -> Nothing {\n  let inner: Inner = { id: 1 }\n  let outer: Outer = { inner: inner, tag: 2 }\n  print(outer.tag)\n}\n",
         [("inner", 4, true)],
         "a stored binding deep-copied where Rust moves (cost, Rule 6), or a store whose source is still readable moved (double free, High)";
 
     a_binding_moved_into_a_binding_is_a_move:
-        "function entrypoint() -> nothing {\n  let inner: Inner = { id: 1 }\n  let moved = inner\n  print(moved.id)\n}\n",
+        "function entrypoint() -> Nothing {\n  let inner: Inner = { id: 1 }\n  let moved = inner\n  print(moved.id)\n}\n",
         [("inner", 3, true)],
         "a `let` of an owned binding that clones it where Rust moves (cost)";
 
     a_fresh_literal_stored_is_a_move:
-        "function entrypoint() -> nothing {\n  let outer: Outer = { inner: { id: 1 }, tag: 2 }\n  print(outer.tag)\n}\n",
+        "function entrypoint() -> Nothing {\n  let outer: Outer = { inner: { id: 1 }, tag: 2 }\n  print(outer.tag)\n}\n",
         [("{ id: 1 }", 1, true)],
         "a literal nobody names cloned when stored (cost)";
 
     an_explicit_copy_is_fresh_and_its_receiver_is_not_moved:
-        "function entrypoint() -> nothing {\n  let inner: Inner = { id: 1 }\n  let again = inner.copy()\n  print(again.id + inner.id)\n}\n",
+        "function entrypoint() -> Nothing {\n  let inner: Inner = { id: 1 }\n  let again = inner.copy()\n  print(again.id + inner.id)\n}\n",
         [("inner.copy()", 1, true), ("inner", 3, false)],
         "a `.copy()` receiver treated as consumed (its boxes taken by the copy, a double free when both are released, High)";
 
     a_field_read_stored_is_never_a_move:
-        "function entrypoint() -> nothing {\n  let inner: Inner = { id: 1 }\n  let outer: Outer = { inner: inner, tag: 2 }\n  let alias = outer.inner\n  print(alias.id + outer.tag)\n}\n",
+        "function entrypoint() -> Nothing {\n  let inner: Inner = { id: 1 }\n  let outer: Outer = { inner: inner, tag: 2 }\n  let alias = outer.inner\n  print(alias.id + outer.tag)\n}\n",
         [("outer.inner", 1, false)],
         "a binding made from a field that takes the field's boxes while the field still owns them (double free, High)";
 
     a_returned_local_is_a_move_and_a_returned_parameter_is_not:
-        "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
+        "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> Nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
         [("inner", 3, true), ("held", 2, false)],
         "a returned parameter whose boxes the caller also holds treated as moved (double free, High), or a returned local cloned (cost)";
 
     a_call_result_of_a_function_returning_a_shape_is_a_move_because_return_copies:
-        "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
+        "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> Nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
         [("make()", 2, true), ("pass(first)", 1, true)],
         "a call result cloned a second time where the callee already returned an owned copy (a `return` of a parameter copies, so the result is fresh: cost, Rule 6), or the returned parameter not copied (double free, High: `v03_m9_c6_borrow_return_param_echo`)";
 
     a_returned_fresh_literal_is_a_move:
-        "function make() -> Inner {\n  return { id: 1 }\n}\nfunction entrypoint() -> nothing {\n  print(make().id)\n}\n",
+        "function make() -> Inner {\n  return { id: 1 }\n}\nfunction entrypoint() -> Nothing {\n  print(make().id)\n}\n",
         [("{ id: 1 }", 1, true)],
         "a returned literal cloned on return where Rust moves (cost, Rule 6)";
 
     a_returned_field_read_is_not_a_move:
-        "function pick(share outer: Outer) -> Inner {\n  return outer.inner\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
+        "function pick(share outer: Outer) -> Inner {\n  return outer.inner\n}\nfunction entrypoint() -> Nothing {\n  print(`x`)\n}\n",
         [("outer.inner", 1, false)],
         "a returned field whose boxes the shape still owns taken by the caller (double free, High)";
 
     a_returned_const_is_not_a_move:
-        "function make() -> Inner {\n  const inner: Inner = { id: 1 }\n  return inner\n}\nfunction entrypoint() -> nothing {\n  print(make().id)\n}\n",
+        "function make() -> Inner {\n  const inner: Inner = { id: 1 }\n  return inner\n}\nfunction entrypoint() -> Nothing {\n  print(make().id)\n}\n",
         [("inner", 3, false)],
         "a returned `const` taken by move although a `const` stays readable to whatever holds it (double free, High)";
 
     a_returned_give_parameter_is_a_move:
-        "function own(give held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let second = own(first)\n  print(second.id)\n}\n",
+        "function own(give held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> Nothing {\n  let first: Inner = { id: 1 }\n  let second = own(first)\n  print(second.id)\n}\n",
         [("held", 2, true)],
         "a returned `give` parameter cloned where the callee owns it and Rust moves (cost, Rule 6)";
 }

@@ -10,9 +10,9 @@
 //   first=3
 //   second=5
 
-function buildLabel(n: int) -> string {
-  let count: int = 0
-  let i: int = 0
+function buildLabel(n: Int) -> String {
+  let count: Int = 0
+  let i: Int = 0
   while (i < n) {
     count = count + 1
     i = i + 1
@@ -20,9 +20,9 @@ function buildLabel(n: int) -> string {
   return `first=${count}`
 }
 
-function buildLabel2(n: int) -> string {
-  let count: int = 0
-  let i: int = 0
+function buildLabel2(n: Int) -> String {
+  let count: Int = 0
+  let i: Int = 0
   while (i < n) {
     count = count + 1
     i = i + 1
@@ -30,8 +30,8 @@ function buildLabel2(n: int) -> string {
   return `second=${count}`
 }
 
-function combine() -> string {
-  let result: string = ``
+function combine() -> String {
+  let result: String = ``
   let go = true
   if (go) {
     let lo = buildLabel(3)
@@ -41,7 +41,7 @@ function combine() -> string {
   return result
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

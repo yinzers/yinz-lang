@@ -102,7 +102,7 @@ fn cpu_loop_checksum(reps: i64) -> i64 {
 
 fn cpu_loop_source(reps: i64) -> String {
     format!(
-        "function entrypoint() -> nothing {{\n  let reps: int = {reps}\n  let i: int = 0\n  let acc: int = 0\n  while (i < reps) {{\n    acc = acc + (i % 7) + 1\n    i = i + 1\n  }}\n  print(acc.toString())\n}}\n"
+        "function entrypoint() -> Nothing {{\n  let reps: Int = {reps}\n  let i: Int = 0\n  let acc: Int = 0\n  while (i < reps) {{\n    acc = acc + (i % 7) + 1\n    i = i + 1\n  }}\n  print(acc.toString())\n}}\n"
     )
 }
 
@@ -113,7 +113,7 @@ fn shape_alloc_checksum(reps: i64) -> i64 {
 
 fn shape_alloc_source(reps: i64) -> String {
     format!(
-        "shape Point {{\n  x: int\n  y: int\n  z: int\n}}\n\nfunction entrypoint() -> nothing {{\n  let reps: int = {reps}\n  let i: int = 1\n  let acc: int = 0\n  while (i <= reps) {{\n    let p: Point = {{ x: i, y: i + i, z: 3 }}\n    acc = acc + p.x + p.y + p.z\n    i = i + 1\n  }}\n  print(acc.toString())\n}}\n"
+        "shape Point {{\n  x: Int\n  y: Int\n  z: Int\n}}\n\nfunction entrypoint() -> Nothing {{\n  let reps: Int = {reps}\n  let i: Int = 1\n  let acc: Int = 0\n  while (i <= reps) {{\n    let p: Point = {{ x: i, y: i + i, z: 3 }}\n    acc = acc + p.x + p.y + p.z\n    i = i + 1\n  }}\n  print(acc.toString())\n}}\n"
     )
 }
 
@@ -125,7 +125,7 @@ fn soa_physics_checksum(n: i64, reps: i64) -> i64 {
 fn soa_physics_source(n: i64, reps: i64) -> String {
     let mut src = String::with_capacity(96 * n as usize + 512);
     src.push_str(
-        "shape Player {\n  x: int\n  y: int\n  dx: int\n  dy: int\n  health: int\n  stamina: int\n  gold: int\n  level: int\n}\n\nfunction entrypoint() -> nothing {\n  let players: array<Player> = [\n",
+        "shape Player {\n  x: Int\n  y: Int\n  dx: Int\n  dy: Int\n  health: Int\n  stamina: Int\n  gold: Int\n  level: Int\n}\n\nfunction entrypoint() -> Nothing {\n  let players: Array<Player> = [\n",
     );
     for i in 1..=n {
         let sep = if i == n { "" } else { "," };
@@ -138,7 +138,7 @@ fn soa_physics_source(n: i64, reps: i64) -> String {
     }
     write!(
         src,
-        "  ]\n  let reps: int = {reps}\n  let r: int = 0\n  let acc: int = 0\n  while (r < reps) {{\n    for (p in players) {{\n      acc = acc + p.x + p.y\n    }}\n    r = r + 1\n  }}\n  print(acc.toString())\n}}\n"
+        "  ]\n  let reps: Int = {reps}\n  let r: Int = 0\n  let acc: Int = 0\n  while (r < reps) {{\n    for (p in players) {{\n      acc = acc + p.x + p.y\n    }}\n    r = r + 1\n  }}\n  print(acc.toString())\n}}\n"
     )
     .expect("string write");
     src

@@ -5,13 +5,13 @@
 // Expected output: one value per line below.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function entrypoint() -> nothing {
-  let count: int = 1
-  let tags: array<Tag> = [{ name: `t-${count}`, id: 1 }, { name: `u-${count}`, id: 2 }]
+function entrypoint() -> Nothing {
+  let count: Int = 1
+  let tags: Array<Tag> = [{ name: `t-${count}`, id: 1 }, { name: `u-${count}`, id: 2 }]
   let copied = tags.copy()
   for (tag in tags) {
     print(tag.name)

@@ -12,8 +12,8 @@
 //   copy b: 20
 //   original count: 3
 //   copy count: 2
-function entrypoint() -> nothing {
-  let table: map<string, int> = { `a`: 10, `b`: 20 }
+function entrypoint() -> Nothing {
+  let table: Map<String, Int> = { `a`: 10, `b`: 20 }
   let snapshot = table.copy()
   table.set(`b`, 99)
   table.set(`c`, 30)

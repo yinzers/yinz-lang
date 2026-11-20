@@ -1,5 +1,5 @@
 // Test: just print a literal number<100> value (no arithmetic)
-function entrypoint() -> nothing {
-  let a: number<100> = 0.1
+function entrypoint() -> Nothing {
+  let a: Number<100> = 0.1
   print(a)
 }

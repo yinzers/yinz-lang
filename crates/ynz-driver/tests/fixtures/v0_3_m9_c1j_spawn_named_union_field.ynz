@@ -5,19 +5,19 @@
 // Expected output: the payload's name, then `done`.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Tag {
-  name: string
+  name: String
 }
 
 shape Bag {
   choice: Circle | Tag
-  id: int
+  id: Int
 }
 
-function f(choice: Circle | Tag) -> nothing {
+function f(choice: Circle | Tag) -> Nothing {
   wait sleep(100)
   if (choice) {
     is Circle => {
@@ -29,13 +29,13 @@ function f(choice: Circle | Tag) -> nothing {
   }
 }
 
-function launch() -> nothing {
+function launch() -> Nothing {
   let tag: Tag = { name: `boxed`.toUpperCase() }
   let bag: Bag = { choice: tag, id: 1 }
   background f(bag.choice)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
   print(`done`)

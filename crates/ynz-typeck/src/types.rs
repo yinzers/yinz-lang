@@ -202,14 +202,14 @@ pub enum Type {
 /// Returns `String` (not `&'static str`) to handle dynamic shape names.
 pub fn type_name(t: &Type) -> String {
     match t {
-        Type::Nothing => "nothing".into(),
-        Type::String => "string".into(),
+        Type::Nothing => "Nothing".into(),
+        Type::String => "String".into(),
         Type::Error => "unknown".into(),
-        Type::Int => "int".into(),
-        Type::Float => "float".into(),
-        Type::Number { .. } => "number".into(),
-        Type::Bool => "boolean".into(),
-        Type::Range { .. } => "range".into(),
+        Type::Int => "Int".into(),
+        Type::Float => "Float".into(),
+        Type::Number { .. } => "Number".into(),
+        Type::Bool => "Boolean".into(),
+        Type::Range { .. } => "Range".into(),
         Type::Shape { name } if name.starts_with("__anon__") => {
             // Render canonical anon-shape names as `{ field: type, ... }` for diagnostics.
             // Format: `__anon__fieldname__typename__fieldname__typename...`
@@ -234,14 +234,14 @@ pub fn type_name(t: &Type) -> String {
             let arg_str = args.iter().map(type_name).collect::<Vec<_>>().join(", ");
             format!("{name}<{arg_str}>")
         }
-        Type::BuiltinArray { elem } => format!("array<{}>", type_name(elem)),
-        Type::BuiltinFixed { elem, .. } => format!("fixed<{}>", type_name(elem)),
-        Type::Maybe { inner } => format!("maybe<{}>", type_name(inner)),
-        Type::BuiltinMap { key, val } => format!("map<{}, {}>", type_name(key), type_name(val)),
+        Type::BuiltinArray { elem } => format!("Array<{}>", type_name(elem)),
+        Type::BuiltinFixed { elem, .. } => format!("Fixed<{}>", type_name(elem)),
+        Type::Maybe { inner } => format!("Maybe<{}>", type_name(inner)),
+        Type::BuiltinMap { key, val } => format!("Map<{}, {}>", type_name(key), type_name(val)),
         Type::MapEntry { key, val } => format!("MapEntry<{}, {}>", type_name(key), type_name(val)),
-        Type::BuiltinChannel { elem } => format!("channel<{}>", type_name(elem)),
-        // Inferred-only in v0.3 (not typeable source syntax); lowercase per the
-        // built-in-types-are-lowercase convention (`array`, `map`, `channel`).
+        Type::BuiltinChannel { elem } => format!("Channel<{}>", type_name(elem)),
+        // Inferred-only in v0.3 (not typeable source syntax); PascalCase like
+        // other built-in types.
         Type::BackgroundHandle { result, .. } => {
             format!("background handle<{} errors>", type_name(result))
         }
@@ -295,7 +295,7 @@ pub fn type_name_with_length(ty: &Type) -> String {
         Type::BuiltinFixed {
             elem,
             size: FixedLength::Known(count),
-        } => format!("fixed<{}, {count}>", type_name(elem)),
+        } => format!("Fixed<{}, {count}>", type_name(elem)),
         other => type_name(other),
     }
 }
@@ -413,13 +413,13 @@ pub fn channel_elem_supported(elem: &Type) -> bool {
 /// `channel_elem_supported_names_match_the_predicate` below — the prose list at the
 /// construction check is rendered FROM this constant, never typed a second time.
 pub const CHANNEL_ELEM_SUPPORTED_NAMES: &[&str] = &[
-    "int",
-    "float",
-    "boolean",
-    "string",
-    "number",
-    "array<T>",
-    "map<K, V>",
+    "Int",
+    "Float",
+    "Boolean",
+    "String",
+    "Number",
+    "Array<T>",
+    "Map<K, V>",
 ];
 
 /// Is `.copy()` on a value of this type a genuinely INDEPENDENT copy (a value nobody else
@@ -581,19 +581,19 @@ mod channel_elem_tests {
     #[test]
     fn channel_elem_supported_names_match_the_predicate() {
         let supported: Vec<(&str, Type)> = vec![
-            ("int", Type::Int),
-            ("float", Type::Float),
-            ("boolean", Type::Bool),
-            ("string", Type::String),
-            ("number", Type::Number { precision: 34 }),
+            ("Int", Type::Int),
+            ("Float", Type::Float),
+            ("Boolean", Type::Bool),
+            ("String", Type::String),
+            ("Number", Type::Number { precision: 34 }),
             (
-                "array<T>",
+                "Array<T>",
                 Type::BuiltinArray {
                     elem: Box::new(Type::Int),
                 },
             ),
             (
-                "map<K, V>",
+                "Map<K, V>",
                 Type::BuiltinMap {
                     key: Box::new(Type::String),
                     val: Box::new(Type::Int),
@@ -634,7 +634,7 @@ mod channel_elem_tests {
         // supported) — the registry deferral (`channel-element-heap-upgrade`) still rejects it.
         assert!(
             !channel_elem_supported(&Type::Number { precision: 40 }),
-            "bignum `number` (precision > 34) must stay rejected per the \
+            "bignum `Number` (precision > 34) must stay rejected per the \
              channel-element-heap-upgrade deferral"
         );
     }
@@ -655,17 +655,17 @@ mod type_name_with_length_tests {
         };
         assert_eq!(
             type_name_with_length(&list(FixedLength::Known(4))),
-            "fixed<int, 4>"
+            "Fixed<Int, 4>"
         );
         assert_eq!(
             type_name_with_length(&list(FixedLength::Unknown)),
-            "fixed<int>"
+            "Fixed<Int>"
         );
         assert_eq!(
             type_name_with_length(&list(FixedLength::OfParam {
                 parameter: "xs".to_string()
             })),
-            "fixed<int>"
+            "Fixed<Int>"
         );
     }
 }

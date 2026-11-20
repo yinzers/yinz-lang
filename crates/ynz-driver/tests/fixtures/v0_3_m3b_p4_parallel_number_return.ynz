@@ -16,17 +16,17 @@
 // correctness; the fixture exists to prove the i128 return path does not panic.)
 //
 // Expected output: a:1.5\nb:2.5
-function priceA() -> number {
+function priceA() -> Number {
   wait sleep(5)
   return 1.5
 }
 
-function priceB() -> number {
+function priceB() -> Number {
   wait sleep(5)
   return 2.5
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = priceA()
   let b = priceB()
   print(`a:${a}`)

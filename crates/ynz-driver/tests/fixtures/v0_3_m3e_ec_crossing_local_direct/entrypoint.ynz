@@ -5,8 +5,8 @@
 // Expected output: "before: 5\nresult: 99\nafter: 5"
 import { compute } from `ec_ops`
 
-function caller() -> nothing {
-  let x: int = 5
+function caller() -> Nothing {
+  let x: Int = 5
   print(`before: ${x.toString()}`)
   const result = compute()
   const v = result.or(0)
@@ -14,6 +14,6 @@ function caller() -> nothing {
   print(`after: ${x.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

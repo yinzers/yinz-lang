@@ -79,9 +79,9 @@ fn v03_m9_c1g_rework_background_generic_two_types_for_one_type_parameter_is_reje
     assert_rejected_with(
         "v0_3_m9_c1g_rework_background_generic_one_type_parameter.ynz",
         &[
-            "`label` has type `string`, but `pick` needs `int` for `second`",
-            "the argument `count` for `first` already made it `int`",
-            "Pass a value of type `int` for `second`",
+            "`label` has type `String`, but `pick` needs `Int` for `second`",
+            "the argument `count` for `first` already made it `Int`",
+            "Pass a value of type `Int` for `second`",
         ],
     );
 }
@@ -270,7 +270,7 @@ fn v03_m9_c1g_rework_builtin_array_method_with_wrong_argument_type_is_rejected()
             "This argument is `Tiny`, but `add` expects `Big` here.",
             "This argument is `Tiny`, but `set` expects `Big` here.",
             "This argument is `Tiny`, but `contains` expects `Big` here.",
-            "This argument is `string`, but `get` expects `int` here.",
+            "This argument is `String`, but `get` expects `Int` here.",
             "Pass a `Big` value.",
         ],
     );
@@ -285,7 +285,7 @@ fn v03_m9_c1g_rework_builtin_map_and_maybe_method_with_wrong_argument_type_is_re
         "v0_3_m9_c1g_rework_builtin_argument_type_map_maybe.ynz",
         &[
             "This argument is `Tiny`, but `set` expects `Big` here.",
-            "This argument is `int`, but `get` expects `string` here.",
+            "This argument is `Int`, but `get` expects `String` here.",
             "This argument is `Tiny`, but `or` expects `Big` here.",
         ],
     );
@@ -299,8 +299,8 @@ fn v03_m9_c1g_rework_builtin_string_and_errors_method_with_wrong_argument_type_i
     assert_rejected_with(
         "v0_3_m9_c1g_rework_builtin_argument_type_string_errors.ynz",
         &[
-            "This argument is `string`, but `substring` expects `int` here.",
-            "This argument is `int`, but `contains` expects `string` here.",
+            "This argument is `String`, but `substring` expects `Int` here.",
+            "This argument is `Int`, but `contains` expects `String` here.",
             "This argument is `Tiny`, but `or` expects `Big` here.",
         ],
     );
@@ -316,13 +316,13 @@ fn v03_m9_c1g_rework_builtin_fixed_array_remove_map_lookup_and_replace_with_wron
     assert_rejected_with(
         "v0_3_m9_c1g_rework_builtin_argument_type_remaining_arms.ynz",
         &[
-            "This argument is `string`, but `set` expects `int` here.",
-            "This argument is `string`, but `get` expects `int` here.",
+            "This argument is `String`, but `set` expects `Int` here.",
+            "This argument is `String`, but `get` expects `Int` here.",
             "This argument is `Tiny`, but `contains` expects `Big` here.",
             "This argument is `Tiny`, but `remove` expects `Big` here.",
-            "This argument is `int`, but `has` expects `string` here.",
-            "This argument is `int`, but `remove` expects `string` here.",
-            "This argument is `int`, but `replace` expects `string` here.",
+            "This argument is `Int`, but `has` expects `String` here.",
+            "This argument is `Int`, but `remove` expects `String` here.",
+            "This argument is `Int`, but `replace` expects `String` here.",
         ],
     );
 }

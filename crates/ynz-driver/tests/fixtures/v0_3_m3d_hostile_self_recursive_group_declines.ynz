@@ -12,7 +12,7 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   100
 
-function leaf(n: int) -> int {
+function leaf(n: Int) -> Int {
   let t = 0
   let i = 0
   while (i < n) {
@@ -22,7 +22,7 @@ function leaf(n: int) -> int {
   return t
 }
 
-function recwork(depth: int) -> int {
+function recwork(depth: Int) -> Int {
   if (depth < 1) {
     let a = leaf(10)
     let b = leaf(11)
@@ -31,7 +31,7 @@ function recwork(depth: int) -> int {
   return recwork(depth - 1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = recwork(3)
   print(x)
 }

@@ -12,23 +12,23 @@
 //
 // Expected output: final:30
 shape Acc {
-  value: int
+  value: Int
 }
 
-function mid(lend c: Acc, n: int) -> nothing {
+function mid(lend c: Acc, n: Int) -> Nothing {
   wait sleep(20)
   c.value = n
 }
 
-function outerA(lend c: Acc, n: int) -> nothing {
+function outerA(lend c: Acc, n: Int) -> Nothing {
   mid(c, n)
 }
 
-function outerB(lend c: Acc, n: int) -> nothing {
+function outerB(lend c: Acc, n: Int) -> Nothing {
   mid(c, n)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Acc = { value: 0 }
   outerA(c, 10)
   outerB(c, 30)

@@ -4,10 +4,10 @@
 /// An API credential with a secret key.
 export shape ApiCred {
   /// The secret API key — auto-redacted in print output.
-  key: sensitive string
+  key: sensitive String
 }
 
 /// Validate a credential (stub: always succeeds in M8).
-export function validateCred(share self: ApiCred) -> boolean {
+export function validateCred(share self: ApiCred) -> Boolean {
   return true
 }

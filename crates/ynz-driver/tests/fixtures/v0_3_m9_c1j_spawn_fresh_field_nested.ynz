@@ -4,14 +4,14 @@
 // Expected output: the count, the first name, then `done`.
 
 shape Inner {
-  items: array<string>
+  items: Array<String>
 }
 
 shape Outer {
   inner: Inner
 }
 
-function crunch(xs: array<string>) -> nothing {
+function crunch(xs: Array<String>) -> Nothing {
   print(xs.count())
   print(xs[0].or(`?`))
 }
@@ -21,7 +21,7 @@ function make() -> Outer {
   return outer
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background crunch(make().inner.items)
   wait sleep(50)
   print(`done`)

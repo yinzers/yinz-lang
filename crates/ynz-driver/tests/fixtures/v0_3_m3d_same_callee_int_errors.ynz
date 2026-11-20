@@ -7,9 +7,9 @@
 // This fixture exercises the success path of an `int errors` callee. The failing path is not
 // expressible: Yinz has no error-raising syntax, so a `compute` call cannot fail here.
 
-function compute(n: int) -> int errors {
-  let total: int = 0
-  let i: int = 0
+function compute(n: Int) -> Int errors {
+  let total: Int = 0
+  let i: Int = 0
   while (i < n) {
     total = total + i
     i = i + 1
@@ -17,7 +17,7 @@ function compute(n: int) -> int errors {
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = compute(4)
   let b = compute(5)
   print(a.or(-1))

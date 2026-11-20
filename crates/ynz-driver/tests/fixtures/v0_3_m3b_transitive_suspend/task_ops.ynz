@@ -4,12 +4,12 @@
 // The importer's build_frame_layouts must embed runTask's sub-frame at the real
 // composed size, not FRAME_HEADER_SIZE (32 bytes). Getting it wrong causes SIGILL.
 
-function innerDelay() -> nothing {
+function innerDelay() -> Nothing {
   sleep(10)
   print(`delay done`)
 }
 
-export function runTask() -> nothing {
+export function runTask() -> Nothing {
   innerDelay()
   print(`task done`)
 }

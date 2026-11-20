@@ -6,17 +6,17 @@
 // (2); the call copies no argument.
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
-function total(share bucket: Bucket) -> int {
+function total(share bucket: Bucket) -> Int {
   return bucket.rows.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Bucket = { rows: [1, 2], id: 1 }
-  let buckets: array<Bucket> = [first]
+  let buckets: Array<Bucket> = [first]
   let fallback: Bucket = { rows: [], id: 0 }
   print(total(buckets[0].or(fallback)))
 }

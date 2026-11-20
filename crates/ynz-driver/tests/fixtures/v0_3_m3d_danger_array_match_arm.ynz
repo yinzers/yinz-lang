@@ -9,9 +9,9 @@
 //   3
 //   5
 
-function buildArr(n: int) -> array<int> {
-  let arr: array<int> = []
-  let i: int = 0
+function buildArr(n: Int) -> Array<Int> {
+  let arr: Array<Int> = []
+  let i: Int = 0
   while (i < n) {
     arr.add(i)
     i = i + 1
@@ -19,9 +19,9 @@ function buildArr(n: int) -> array<int> {
   return arr
 }
 
-function buildArr2(n: int) -> array<int> {
-  let arr: array<int> = []
-  let i: int = 0
+function buildArr2(n: Int) -> Array<Int> {
+  let arr: Array<Int> = []
+  let i: Int = 0
   while (i < n) {
     arr.add(i * 2)
     i = i + 1
@@ -29,7 +29,7 @@ function buildArr2(n: int) -> array<int> {
   return arr
 }
 
-function combine() -> int {
+function combine() -> Int {
   let pick = 1
   let loCount = 0
   let hiCount = 0
@@ -49,7 +49,7 @@ function combine() -> int {
   return hiCount
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

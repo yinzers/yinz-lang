@@ -13,12 +13,12 @@ expression: tokens
     ),
     Colon,
     Identifier(
-        "int",
+        "Int",
     ),
     RParen,
     Arrow,
     Identifier(
-        "int",
+        "Int",
     ),
     LBrace,
     If,
@@ -71,7 +71,9 @@ expression: tokens
     LParen,
     RParen,
     Arrow,
-    Nothing,
+    Identifier(
+        "Nothing",
+    ),
     LBrace,
     Let,
     Identifier(

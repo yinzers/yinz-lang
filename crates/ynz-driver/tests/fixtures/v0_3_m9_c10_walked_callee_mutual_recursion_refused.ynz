@@ -2,20 +2,20 @@
 // summary of what each function writes is a fixpoint over the call graph, so the loop's call to
 // `ping` is refused though `ping` has no assignment of its own that the call can see.
 shape Holder {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
-function ping(lend holder: Holder, depth: int) -> nothing {
+function ping(lend holder: Holder, depth: Int) -> Nothing {
   if (depth > 0) {
     pong(holder, depth - 1)
   }
 }
-function pong(lend holder: Holder, depth: int) -> nothing {
+function pong(lend holder: Holder, depth: Int) -> Nothing {
   if (depth > 1) {
     ping(holder, depth - 1)
   }
   holder.rows = [[9]]
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { rows: [[1], [2], [3]] }
   let total = 0
   for (row in holder.rows) {

@@ -5,8 +5,8 @@
 // NOTE: `contains` on array<string> compares element POINTER bits (the current lowered
 // semantics), not string content — the goldens pin whatever the current compiler
 // produces so the cut provably does not change it.
-function entrypoint() -> nothing {
-  let names: array<string> = [`alpha`, `beta`, `gamma`]
+function entrypoint() -> Nothing {
+  let names: Array<String> = [`alpha`, `beta`, `gamma`]
   names.add(`delta`)
   print(names.count())
   print(names[0].or(`none`))

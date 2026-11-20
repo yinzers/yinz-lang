@@ -16,20 +16,20 @@
 // the group declines to the copy path: no `ynz_arc_*` call anywhere in the IR, each task gets
 // its own heap copy of `scene`, and the caller's own read after the spawns sees the original.
 shape Scene {
-  name: string
-  width: int
-  height: int
-  ratio: number
+  name: String
+  width: Int
+  height: Int
+  ratio: Number
 }
 
-function render(scene: Scene, results: channel<int>) -> nothing {
+function render(scene: Scene, results: Channel<Int>) -> Nothing {
   wait sleep(10)
   let area = scene.width * scene.height
   results.send(area)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>()
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>()
   let scene: Scene = { name: `Three Rivers`, width: 6, height: 7, ratio: 1.5 }
   background render(scene, results)
   background render(scene, results)

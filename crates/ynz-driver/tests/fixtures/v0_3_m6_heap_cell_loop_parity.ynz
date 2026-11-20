@@ -19,21 +19,21 @@
 // step 3d; a change in the gap = a new leak class or a landed drop story.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Square {
-  side: float
+  side: Float
 }
 
 shape Figure = Circle | Square
 
-function pick(m: maybe<int>) -> int {
+function pick(m: Maybe<Int>) -> Int {
   wait sleep(2)
   return m.or(0)
 }
 
-function describe(figure: Figure) -> string {
+function describe(figure: Figure) -> String {
   wait sleep(2)
   if (figure) {
     is Circle => {
@@ -46,18 +46,18 @@ function describe(figure: Figure) -> string {
   return `unknown`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let total: int = 0
-  let i: int = 0
+  let total: Int = 0
+  let i: Int = 0
   while (i < 5) {
-    let m: maybe<int> = `40`.toInt()
+    let m: Maybe<Int> = `40`.toInt()
     const v = wait pick(m)
     total = total + v
     i = i + 1
   }
   print(total.toString())
-  let j: int = 0
+  let j: Int = 0
   while (j < 3) {
     let s: Square = { side: 2.0 }
     let fig: Figure = s

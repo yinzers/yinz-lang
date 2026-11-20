@@ -9,12 +9,12 @@
 // truncation to 8 bytes would produce the wrong value.
 //
 // Expected: stdout = "9999999999.000000001", exit 0.
-function sleepingNumberErrors() -> number errors {
+function sleepingNumberErrors() -> Number errors {
   wait sleep(5)
   return 9999999999.000000001
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const r = sleepingNumberErrors()
   const v = r.or(0.0)
   print(v.toString())

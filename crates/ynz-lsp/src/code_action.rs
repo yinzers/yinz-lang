@@ -72,6 +72,14 @@ pub fn code_action_response(
             DiagnosticKind::BannedJargon { term } => {
                 build_banned_jargon_action(uri, text, &table, diag, term, state.encoding)
             }
+            DiagnosticKind::OldBuiltinTypeName { old_name } => build_old_builtin_type_name_action(
+                uri,
+                text,
+                &table,
+                diag,
+                old_name,
+                state.encoding,
+            ),
             DiagnosticKind::NotDefined => {
                 let name = text
                     .get(diag.span.start..diag.span.end.min(text.len()))
@@ -172,6 +180,44 @@ fn build_banned_keyword_action(
 
     Some(CodeAction {
         title: label,
+        kind: Some(CodeActionKind::QUICKFIX),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }),
+        is_preferred: Some(true),
+        ..Default::default()
+    })
+}
+
+/// Build a quick-fix for an `OldBuiltinTypeName` diagnostic: replace the lowercase spelling
+/// (`int`) with its PascalCase name (`Int`). The pair comes from the same table the
+/// compiler's teaching error reads, so the fix always writes what the error asks for.
+///
+/// Returns `None` when `old_name` is not an old built-in spelling.
+fn build_old_builtin_type_name_action(
+    uri: &Url,
+    text: &str,
+    table: &LineTable,
+    diag: &ynz_diagnostics::Diagnostic,
+    old_name: &str,
+    encoding: crate::capabilities::PositionEncoding,
+) -> Option<CodeAction> {
+    let new_name =
+        ynz_diagnostics::builtin_type_names::pascal_case_name_for_old_builtin_type(old_name)?;
+    let diag_range = {
+        let start = table.byte_offset_to_position(text, diag.span.start, encoding);
+        let end = table.byte_offset_to_position(text, diag.span.end.min(text.len()), encoding);
+        lsp_types::Range { start, end }
+    };
+    let edit = TextEdit {
+        range: diag_range,
+        new_text: new_name.to_string(),
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: format!("Write `{new_name}` instead of `{old_name}`"),
         kind: Some(CodeActionKind::QUICKFIX),
         edit: Some(WorkspaceEdit {
             changes: Some(changes),

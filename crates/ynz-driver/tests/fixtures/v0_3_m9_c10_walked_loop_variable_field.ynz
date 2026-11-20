@@ -1,12 +1,12 @@
 // v0.3-M9 C10, stays legal: the body assigns a field of the loop variable (one cell of the
 // walked list) that has the walked field's name: that frees the cell's list, not the walked one.
 shape Leaf {
-  rows: array<int>
+  rows: Array<Int>
 }
 shape Tree {
-  rows: array<Leaf>
+  rows: Array<Leaf>
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tree: Tree = { rows: [{ rows: [1] }, { rows: [2] }] }
   let total = 0
   for (leaf in tree.rows) {

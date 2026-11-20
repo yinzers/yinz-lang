@@ -1,8 +1,8 @@
 base shape Entity {
-  name: string
+  name: String
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let e: Entity = { name: `ghost` }
   print(e.name)
 }

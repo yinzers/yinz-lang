@@ -33,21 +33,21 @@ Named `shape Foo { ... }` declarations are the right tool when a type is used in
 
 ```ynz
 // Allowed positions:
-let point: { x: int, y: int } = { x: 3, y: 4 }
-function area(rect: { w: int, h: int }) -> int { return rect.w * rect.h }
-const intervals: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }]
-shape Bar { spread: { bid: number, ask: number } }
+let point: { x: Int, y: Int } = { x: 3, y: 4 }
+function area(rect: { w: Int, h: Int }) -> Int { return rect.w * rect.h }
+const intervals: Fixed<{ minutes: Int }> = [{ minutes: 5 }, { minutes: 15 }]
+shape Bar { spread: { bid: Number, ask: Number } }
 ```
 
 ## Design decisions (locked)
 
 ### 1. Structural typing for anonymous shapes only
 
-Two `{ a: int, b: string }` in different files are the same type. Field order does not matter for equivalence.
+Two `{ a: Int, b: String }` in different files are the same type. Field order does not matter for equivalence.
 
-**Why**: The use case is one-off data definitions. Users expect `{ a: int, b: int }` annotated on a `let` to accept any value whose fields match — that's TypeScript's model and the natural expectation. Nominal typing for anonymous shapes would force users to write `shape` declarations anyway to make the types interchangeable.
+**Why**: The use case is one-off data definitions. Users expect `{ a: Int, b: Int }` annotated on a `let` to accept any value whose fields match — that's TypeScript's model and the natural expectation. Nominal typing for anonymous shapes would force users to write `shape` declarations anyway to make the types interchangeable.
 
-**Named shapes remain nominal**: `shape Foo { a: int }` and `{ a: int }` are different types. The user picks one or the other; they don't interconvert.
+**Named shapes remain nominal**: `shape Foo { a: Int }` and `{ a: Int }` are different types. The user picks one or the other; they don't interconvert.
 
 ### 2. Implementation: canonical-name hoisting
 
@@ -55,7 +55,7 @@ Anonymous shapes are NOT a new `Type` variant. Instead, they are **hoisted to sy
 
 Canonical name format: `__anon__fieldname__typename__fieldname__typename__...` (fields sorted by name, joined by `__`).
 
-Example: `{ bid: number, ask: number }` → `__anon__ask__number__bid__number`.
+Example: `{ bid: Number, ask: Number }` → `__anon__ask__number__bid__number`.
 
 This keeps the rest of the compiler (codegen, type checker, vtable) handling anon shapes identically to named shapes — no new code paths needed.
 
@@ -65,7 +65,7 @@ This keeps the rest of the compiler (codegen, type checker, vtable) handling ano
 
 ### 4. Nested inline shapes work
 
-`{ outer: { inner: int } }` is valid. The inner anon shape is hoisted to its own synthetic named shape and the outer field type resolves to `Type::Shape { name: "__anon__inner__int" }`.
+`{ outer: { inner: Int } }` is valid. The inner anon shape is hoisted to its own synthetic named shape and the outer field type resolves to `Type::Shape { name: "__anon__inner__int" }`.
 
 ### 5. Extends and follows not allowed
 

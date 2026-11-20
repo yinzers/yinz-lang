@@ -5,16 +5,16 @@
 // If the crossing-local slot is corrupted (zeroed), temp drops to 0.0 and the comparison fails.
 import { fetchReading } from `io_ops`
 
-function caller() -> nothing {
-  let temp: float = 3.14
-  let threshold: float = 3.0
-  let bigBefore: boolean = temp > threshold
+function caller() -> Nothing {
+  let temp: Float = 3.14
+  let threshold: Float = 3.0
+  let bigBefore: Boolean = temp > threshold
   print(`big_before: ${bigBefore.toString()}`)
   fetchReading()
-  let bigAfter: boolean = temp > threshold
+  let bigAfter: Boolean = temp > threshold
   print(`big_after: ${bigAfter.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

@@ -24,9 +24,9 @@ The rule: every value has exactly one owner. When the owner goes out of scope, t
 When a function takes a value, its signature says one of three things:
 
 ```ynz
-function greet(share name: string) -> nothing { ... }      // share — read-only; caller keeps ownership
-function rename(lend player: Player) -> nothing { ... }    // lend — function modifies it; caller keeps ownership
-function consume(give data: Data) -> nothing { ... }       // give — function takes it; caller loses it
+function greet(share name: String) -> Nothing { ... }      // share — read-only; caller keeps ownership
+function rename(lend player: Player) -> Nothing { ... }    // lend — function modifies it; caller keeps ownership
+function consume(give data: Data) -> Nothing { ... }       // give — function takes it; caller loses it
 ```
 
 That's the contract. Anyone reading the signature knows what happens to the value.
@@ -68,7 +68,7 @@ print(data)
 A loop runs its body again and again, so a value given away on one pass is gone on the next. The compiler refuses it:
 
 ```ynz
-let rows: array<int> = [1, 2, 3]
+let rows: Array<Int> = [1, 2, 3]
 for (turn in [1, 2]) {
   consume(rows)
   // COMPILE ERROR: `rows` was already given away and cannot be used here, because the previous
@@ -103,8 +103,8 @@ After an `if`, a `match` or a loop, `rows` is usable again only if every arm ass
 Putting a list, a map or a shape into a place hands it over, just like giving it to a function. That covers `bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`, a list or shape built from named values (`[rows, more]`) and `let moved = rows`. The place owns the value from then on, and reading `rows` afterwards is an error:
 
 ```ynz
-let rows: array<int> = [1, 2, 3]
-let bucket: array<array<int>> = []
+let rows: Array<Int> = [1, 2, 3]
+let bucket: Array<Array<Int>> = []
 bucket.add(rows)
 print(rows.count())
 // COMPILE ERROR: `rows` was stored in `bucket` and cannot be used here — storing a value hands it over.
@@ -117,8 +117,8 @@ Numbers, booleans, options, strings and ranges are copied, so storing them gives
 A `for` loop can hand its rows over. When you never read the list again, not inside the loop and not after it, storing the loop variable takes the row out of the list instead of copying it:
 
 ```ynz
-let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
-let kept: array<array<int>> = []
+let matrix: Array<Array<Int>> = [[1, 2], [3, 4], [5, 6]]
+let kept: Array<Array<Int>> = []
 for (row in matrix) {
   kept.add(row)
 }
@@ -127,8 +127,8 @@ for (row in matrix) {
 If you read the list inside the loop or after it, each row still belongs to the list, so the compiler asks for a copy:
 
 ```ynz
-let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
-let kept: array<array<int>> = []
+let matrix: Array<Array<Int>> = [[1, 2], [3, 4], [5, 6]]
+let kept: Array<Array<Int>> = []
 for (row in matrix) {
   kept.add(row)
   // COMPILE ERROR: This line gives `row` away — it is handed to `kept` — but `row` is one cell of
@@ -163,31 +163,31 @@ saveForever(backup)                // backup is given to saveForever; original i
 
 `.copy()` gives you a value nobody else can reach. Change the copy and the original does not move; change the original and the copy does not move.
 
-For a list, that includes the items. Copying an `array<array<int>>` gives you a new outer list holding new inner lists, so writing into the copy's first row leaves the original's first row alone:
+For a list, that includes the items. Copying an `Array<Array<Int>>` gives you a new outer list holding new inner lists, so writing into the copy's first row leaves the original's first row alone:
 
 ```ynz
-let inner: array<int> = [1, 2, 3]
-let outer: array<array<int>> = [inner]
-let clone: array<array<int>> = outer.copy()
+let inner: Array<Int> = [1, 2, 3]
+let outer: Array<Array<Int>> = [inner]
+let clone: Array<Array<Int>> = outer.copy()
 let foundRow = clone[0]                        // a maybe: the row, or nothing
-let cloneRow: array<int> = foundRow.or(inner)  // a plain list, `inner` if missing
+let cloneRow: Array<Int> = foundRow.or(inner)  // a plain list, `inner` if missing
 cloneRow.set(0, 99)
 // outer's first row still starts at 1
 ```
 
-`.copy()` works on every simple value (numbers, strings, booleans, an `options` value, a `sensitive` value — a copied `sensitive` value stays hidden when it is printed, same as the original), on a shape, on an `array<T>`, and on a `map<K, V>`.
+`.copy()` works on every simple value (numbers, strings, booleans, an `options` value, a `sensitive` value — a copied `sensitive` value stays hidden when it is printed, same as the original), on a shape, on an `Array<T>`, and on a `Map<K, V>`.
 
 For the three that hold other values inside them, it depends on what is inside:
 
-- **`array<T>`** copies its items too, however deep they go — unless an item is something that cannot be copied at all (a `channel`, say), and then the whole copy is refused.
-- **`fixed<T>`** holds its items in one block with no separate piece to follow, so it copies lists of simple values and shapes, and refuses a `fixed` of lists or maps.
-- **`maybe<T>`** copies when what is inside is a simple value, a number, or a shape. `maybe<array<int>>`, `maybe<map<string, int>>`, `maybe<fixed<int>>` and a `maybe` of a `maybe` are refused today — those are the natural things to wrap, so you will meet this. Copy the piece instead:
+- **`Array<T>`** copies its items too, however deep they go — unless an item is something that cannot be copied at all (a `Channel`, say), and then the whole copy is refused.
+- **`Fixed<T>`** holds its items in one block with no separate piece to follow, so it copies lists of simple values and shapes, and refuses a `Fixed` of lists or maps.
+- **`Maybe<T>`** copies when what is inside is a simple value, a number, or a shape. `Maybe<Array<Int>>`, `Maybe<Map<String, Int>>`, `Maybe<Fixed<Int>>` and a `Maybe` of a `Maybe` are refused today — those are the natural things to wrap, so you will meet this. Copy the piece instead:
 
 ```ynz
-let rows: maybe<array<int>> = loadRows()
+let rows: Maybe<Array<Int>> = loadRows()
 // let backup = rows.copy()          // COMPILE ERROR — see below
-let theRows: array<int> = rows.or([])
-let backup: array<int> = theRows.copy()   // copy the list itself
+let theRows: Array<Int> = rows.or([])
+let backup: Array<Int> = theRows.copy()   // copy the list itself
 ```
 
 For a shape that holds arrays or maps inside it, `.copy()` copies the shape's own fields and the inner list stays shared. Write a standalone `copy()` function that copies those pieces and call it as a normal function — that keeps an expensive copy visible in your code.
@@ -197,13 +197,13 @@ For a shape that holds arrays or maps inside it, `.copy()` copies the shape's ow
 Some things cannot be copied, and Yinz says so while you build rather than handing you back the same thing and letting you find out later:
 
 ```ynz
-let orders: channel<int> = channel<int>(4)
+let orders: Channel<Int> = Channel<Int>(4)
 let secondLine = orders.copy()
-// COMPILE ERROR: `.copy()` cannot make a separate `channel<int>` value — a channel is the
+// COMPILE ERROR: `.copy()` cannot make a separate `Channel<Int>` value — a channel is the
 // line two tasks talk over, not a value you hold.
 //   Pass the channel itself to the task and every task holding it reads and writes the same
 //   line. If you want a second, separate line, make one:
-//     let replies: channel<int> = channel<int>()
+//     let replies: Channel<Int> = Channel<Int>()
 //   Why: a second channel holding the same messages would not help you — the task on the
 //   other end is listening on the first one. Anything you sent into the copy would go
 //   nowhere, and nothing would tell you.

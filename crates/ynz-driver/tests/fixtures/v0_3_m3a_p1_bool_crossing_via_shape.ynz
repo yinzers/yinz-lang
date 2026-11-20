@@ -4,12 +4,12 @@
 // as v0_3_m3a_p1_bool_crossing_local.ynz but with the bool sourced from a struct GEP.
 // Expected output: true
 shape Flag {
-  on: boolean
+  on: Boolean
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result: Flag = { on: true }
-  let check: boolean = result.on
+  let check: Boolean = result.on
   wait sleep(5)
   print(check.toString())
 }

@@ -5,15 +5,15 @@
 // "cannot yet cross a `wait`".
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -25,13 +25,13 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function slowFetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+function slowFetch(share things: Array<Thing>, index: Int) -> Maybe<Thing> errors {
   wait sleep(1)
   let found = things.get(index)
   return found
 }
 
-function work(share things: array<Thing>) -> nothing {
+function work(share things: Array<Thing>) -> Nothing {
   let slow = wait slowFetch(things, 0)
   wait sleep(1)
   let slowValue = slow.or(none)
@@ -41,8 +41,8 @@ function work(share things: array<Thing>) -> nothing {
   print(`end`)
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let big: Big = { label: `kept`, count: 1 }
   things.add(big)
   wait work(things)

@@ -27,8 +27,8 @@ fn make_db_with_program(path: &str, text: &str) -> WatchDb {
 #[test]
 fn error_then_fix_recovers_cleanly() {
     let path = "/tmp/test_watch_errors.ynz";
-    let valid_src = "function entrypoint() -> nothing {\n    print(`hello`)\n}\n";
-    let broken_src = "function entrypoint() -> nothing {\n    unknownIdent\n}\n";
+    let valid_src = "function entrypoint() -> Nothing {\n    print(`hello`)\n}\n";
+    let broken_src = "function entrypoint() -> Nothing {\n    unknownIdent\n}\n";
 
     let mut db = make_db_with_program(path, valid_src);
     let entry = Path::new(path);
@@ -70,7 +70,7 @@ fn error_then_fix_recovers_cleanly() {
 #[test]
 fn diagnostic_output_is_nonempty_on_error() {
     let path = "/tmp/test_watch_diag.ynz";
-    let broken_src = "function entrypoint() -> nothing {\n    noSuchThing\n}\n";
+    let broken_src = "function entrypoint() -> Nothing {\n    noSuchThing\n}\n";
 
     let mut db = make_db_with_program(path, broken_src);
     let outcome = db.run_codegen(Path::new(path));

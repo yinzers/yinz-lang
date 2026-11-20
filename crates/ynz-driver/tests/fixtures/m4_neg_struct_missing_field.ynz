@@ -1,9 +1,9 @@
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { name: `Alice` }
   print(p.name)
 }

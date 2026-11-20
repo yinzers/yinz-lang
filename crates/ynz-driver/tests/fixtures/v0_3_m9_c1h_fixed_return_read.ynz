@@ -3,12 +3,12 @@
 // length was not carried, so `count()` printed 0 and every index read `none`.
 // Expected output: the count, the first item and the last item.
 
-function makeInts() -> fixed<int> {
-  let numbers: fixed<int> = [10, 20, 30]
+function makeInts() -> Fixed<Int> {
+  let numbers: Fixed<Int> = [10, 20, 30]
   return numbers
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let numbers = makeInts()
   print(numbers.count())
   print(numbers[0].or(-1))

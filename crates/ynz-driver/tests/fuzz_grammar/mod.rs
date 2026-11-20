@@ -92,15 +92,15 @@ impl ElemKind {
 
     fn type_name(self) -> &'static str {
         match self {
-            ElemKind::Int => "int",
-            ElemKind::Array => "array<int>",
-            ElemKind::Map => "map<string, int>",
-            ElemKind::Number => "number",
+            ElemKind::Int => "Int",
+            ElemKind::Array => "Array<Int>",
+            ElemKind::Map => "Map<String, Int>",
+            ElemKind::Number => "Number",
         }
     }
 
     fn channel_type(self) -> String {
-        format!("channel<{}>", self.type_name())
+        format!("Channel<{}>", self.type_name())
     }
 }
 
@@ -351,7 +351,7 @@ impl Builder {
                 let v = self.fresh("price");
                 let whole = self.rng.range(0, 9);
                 let frac = self.rng.range(0, 9);
-                let mut lines = vec![format!("let {v}: number = {whole}.{frac}")];
+                let mut lines = vec![format!("let {v}: Number = {whole}.{frac}")];
                 for _ in 0..count {
                     lines.push(format!("wire.send({v})"));
                 }
@@ -636,7 +636,7 @@ impl Builder {
                 let v = self.fresh("price");
                 let whole = self.rng.range(0, 9);
                 let frac = self.rng.range(0, 9);
-                self.push(format!("let {v}: number = {whole}.{frac}"));
+                self.push(format!("let {v}: Number = {whole}.{frac}"));
                 let sends = 1 + self.rng.below(cap.min(2));
                 for _ in 0..sends {
                     self.push(format!("{c}.send({v})"));
@@ -709,7 +709,7 @@ impl Builder {
         let a = self.fresh("rows");
         let n = 1 + self.rng.below(4);
         let elems: Vec<String> = (0..n).map(|_| self.int_lit()).collect();
-        let line = format!("let {a}: array<int> = [{}]", elems.join(", "));
+        let line = format!("let {a}: Array<Int> = [{}]", elems.join(", "));
         (a, line, n)
     }
 
@@ -726,7 +726,7 @@ impl Builder {
             let v = self.int_lit();
             entries.push(format!("`{k}`: {v}"));
         }
-        let line = format!("let {m}: map<string, int> = {{ {} }}", entries.join(", "));
+        let line = format!("let {m}: Map<String, Int> = {{ {} }}", entries.join(", "));
         (m, line)
     }
 
@@ -909,7 +909,7 @@ impl Builder {
         self.push(format!(
             "let {s}: {shape} = {{ {int_field}: {w}, {str_field}: `primanti` }}"
         ));
-        self.push(format!("let {c}: channel<int> = channel<int>(4)"));
+        self.push(format!("let {c}: Channel<Int> = Channel<Int>(4)"));
         self.push(format!("background {reader}({s}, {c})"));
         self.push(format!("background {reader}({s}, {c})"));
         let total = self.fresh("total");
@@ -945,24 +945,24 @@ impl Builder {
 
         for s in &self.shapes {
             out.push_str(&format!(
-                "shape {} {{\n  {}: int\n  {}: string\n}}\n\n",
+                "shape {} {{\n  {}: Int\n  {}: String\n}}\n\n",
                 s.name, s.int_field, s.str_field
             ));
         }
         for (name, k) in &self.cpu_fns {
             out.push_str(&format!(
-                "function {name}(a: int, b: int) -> int {{\n  return a + b + {k}\n}}\n\n"
+                "function {name}(a: Int, b: Int) -> Int {{\n  return a + b + {k}\n}}\n\n"
             ));
         }
         for (name, k) in &self.io_fns {
             out.push_str(&format!(
-                "function {name}(n: int) -> int {{\n  wait sleep(1)\n  return n + {k}\n}}\n\n"
+                "function {name}(n: Int) -> Int {{\n  wait sleep(1)\n  return n + {k}\n}}\n\n"
             ));
         }
         let io_fn_names: Vec<String> = self.io_fns.iter().map(|(n, _)| n.clone()).collect();
         for f in &self.feed_fns {
             out.push_str(&format!(
-                "function {}(lend wire: {}) -> nothing {{\n",
+                "function {}(lend wire: {}) -> Nothing {{\n",
                 f.name,
                 f.kind.channel_type()
             ));
@@ -978,12 +978,12 @@ impl Builder {
                 .find(|s| s.name == r.shape)
                 .expect("reader references a declared shape");
             out.push_str(&format!(
-                "function {}(item: {}, out: channel<int>) -> nothing {{\n  out.send(item.{} + {})\n}}\n\n",
+                "function {}(item: {}, out: Channel<Int>) -> Nothing {{\n  out.send(item.{} + {})\n}}\n\n",
                 r.name, r.shape, sd.int_field, r.bump
             ));
         }
 
-        out.push_str("function entrypoint() -> nothing {\n");
+        out.push_str("function entrypoint() -> Nothing {\n");
         for line in &self.body {
             out.push_str(line);
             out.push('\n');
@@ -1086,7 +1086,7 @@ mod generator_contract {
         for seed in 0..64u64 {
             let p = generate(seed);
             assert!(
-                p.source.contains("function entrypoint() -> nothing {"),
+                p.source.contains("function entrypoint() -> Nothing {"),
                 "seed {seed} emitted no entrypoint"
             );
             // `build_body` GUARANTEES `stmt_count` is `10..=19` (the seed `let` plus a
@@ -1213,7 +1213,7 @@ mod generator_contract {
         floor(
             map_decl,
             40,
-            "standalone map<string, int> declaration (arm 7)",
+            "standalone Map<String, Int> declaration (arm 7)",
         );
         floor(
             array_intrinsic,
@@ -1226,7 +1226,7 @@ mod generator_contract {
         floor(
             owned_heap_channel,
             25,
-            "a channel<array<int>>/channel<map<string,int>>/channel<number> composite actually ran",
+            "a Channel<Array<Int>>/Channel<Map<String,Int>>/Channel<Number> composite actually ran",
         );
         // v0.3-M8 Phase 8 fix round 4, BLOCKER 1: this construct was dead code then (see
         // `take_or_make_array`'s doc comment) — a raw-count floor here, not a percentage one, is

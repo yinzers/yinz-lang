@@ -8,29 +8,29 @@
 // Expected output: one value per line below.
 
 shape Item {
-  id: int
-  hidden label: string = `default`
+  id: Int
+  hidden label: String = `default`
 }
 
 shape Special extends Item {
-  name: string
-  hidden note: string = `note`
+  name: String
+  hidden note: String = `note`
 }
 
-function showLabel(share self: Item) -> string {
+function showLabel(share self: Item) -> String {
   return self.label
 }
 
-function showInherited(share self: Special) -> string {
+function showInherited(share self: Special) -> String {
   return self.label
 }
 
-function showNote(share self: Special) -> string {
+function showNote(share self: Special) -> String {
   return self.note
 }
 
-function entrypoint() -> nothing {
-  let count: int = 1
+function entrypoint() -> Nothing {
+  let count: Int = 1
   let first: Item = { id: 1 }
   let second: Item = { id: 2 }
   let special: Special = { id: 3, name: `n-${count}` }

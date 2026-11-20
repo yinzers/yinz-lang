@@ -5,14 +5,14 @@
 // at O0) and nothing released the arrays.
 // Expected: a compile error naming `xs`, why, and the `array` recovery.
 
-function crunch(xs: fixed<array<string>>) -> nothing {
+function crunch(xs: Fixed<Array<String>>) -> Nothing {
   print(xs.count())
 }
 
-function entrypoint() -> nothing {
-  let first: array<string> = [`a`.toUpperCase()]
-  let second: array<string> = [`b`.toUpperCase()]
-  let xs: fixed<array<string>> = [first, second]
+function entrypoint() -> Nothing {
+  let first: Array<String> = [`a`.toUpperCase()]
+  let second: Array<String> = [`b`.toUpperCase()]
+  let xs: Fixed<Array<String>> = [first, second]
   background crunch(xs)
   wait sleep(50)
   print(`done`)

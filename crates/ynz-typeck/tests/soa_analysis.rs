@@ -69,7 +69,7 @@ fn qualifying_admits_with_exact_len_and_hot_fields() {
     assert_eq!(
         rows.len(),
         1,
-        "exactly one array<Shape> binding; got: {rows:?}"
+        "exactly one Array<Shape> binding; got: {rows:?}"
     );
     assert_eq!(rows[0].array_name, "pts");
     assert_eq!(rows[0].shape_name, "Point");
@@ -140,7 +140,7 @@ fn threefield_union_declines_field_union_too_wide() {
 #[test]
 fn escaping_declines_binding_and_records_param_row() {
     // WHY: D4 — an array passed as a call argument declines (the analysis cannot
-    // see all accesses), and the callee's array<Shape> PARAMETER is its own
+    // see all accesses), and the callee's Array<Shape> PARAMETER is its own
     // declined row (S2 finding 5: params are recorded, never silently absent).
     let _guard = env_guard();
     let rows = candidates_for("m5_p4_soa_escaping.ynz");
@@ -295,7 +295,7 @@ fn let_shadowed_binding_declines_as_rebound() {
 #[test]
 fn no_field_access_loop_declines_no_per_field_loop_access() {
     // WHY: closing-round finding 2 — an above-threshold array iterated by a
-    // count-only loop has an EMPTY per-field union: nothing to segment for, AoS
+    // count-only loop has an EMPTY per-field union: Nothing to segment for, AoS
     // stays optimal. This is the one live SoaDeclineReason branch the original
     // step-4 fixture table never covered; the exact-reason assertion closes it.
     let _guard = env_guard();

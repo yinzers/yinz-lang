@@ -1,7 +1,7 @@
 // Q1: two sequential for-loops with the same loop var name, both suspending.
-function entrypoint() -> nothing {
-  let a: array<string> = [`a1`, `a2`]
-  let b: array<string> = [`b1`, `b2`]
+function entrypoint() -> Nothing {
+  let a: Array<String> = [`a1`, `a2`]
+  let b: Array<String> = [`b1`, `b2`]
   for (v in a) {
     wait sleep(5)
     print(v)

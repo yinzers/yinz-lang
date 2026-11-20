@@ -3,10 +3,10 @@
 // and survive the suspension correctly. This must compile and run cleanly,
 // printing the original parameter value.
 // Expected: exit 0, stdout = "7".
-function f(x: int) -> nothing {
+function f(x: Int) -> Nothing {
   wait sleep(5)
   print(x.toString())
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   f(7)
 }

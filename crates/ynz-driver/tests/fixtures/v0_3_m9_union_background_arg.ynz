@@ -6,15 +6,15 @@
 // -O0, SIGSEGV at -O2.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -26,12 +26,12 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function slowDescribe(give thing: Thing) -> string {
+function slowDescribe(give thing: Thing) -> String {
   wait sleep(1)
   return describe(thing)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `spawned`, count: 7 }
   let handle = background slowDescribe(big)
   wait sleep(50)

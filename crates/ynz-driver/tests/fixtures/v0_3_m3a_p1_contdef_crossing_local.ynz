@@ -3,7 +3,7 @@
 // so it survives the second suspension. If the alloca for `b` were created in the
 // continuation state block instead of sm_entry, LLVM would reject it for dominance.
 // Expected output: 3  (a=1, b=a+2=3)
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = 1
   wait sleep(5)
   let b = a + 2

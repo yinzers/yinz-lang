@@ -16,20 +16,20 @@
 //   3
 //   9
 //   end
-function buildAndSend(lend wire: channel<map<string, int>>) -> nothing {
-  let table: map<string, int> = {}
+function buildAndSend(lend wire: Channel<Map<String, Int>>) -> Nothing {
+  let table: Map<String, Int> = {}
   table.set(`a`, 1)
   table.set(`b`, 2)
   wire.send(table)
 }
 
-function forward(lend wire: channel<map<string, int>>, give table: map<string, int>) -> nothing {
+function forward(lend wire: Channel<Map<String, Int>>, give table: Map<String, Int>) -> Nothing {
   wire.send(table)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<map<string, int>> = channel<map<string, int>>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Map<String, Int>> = Channel<Map<String, Int>>(2)
   background buildAndSend(wire)
   let first = wire.receive()
   if (first.exists()) {
@@ -38,7 +38,7 @@ function entrypoint() -> nothing {
     let b = built.get(`b`).or(-1)
     print(b.toString())
   }
-  let table: map<string, int> = {}
+  let table: Map<String, Int> = {}
   table.set(`x`, 7)
   table.set(`y`, 8)
   table.set(`z`, 9)

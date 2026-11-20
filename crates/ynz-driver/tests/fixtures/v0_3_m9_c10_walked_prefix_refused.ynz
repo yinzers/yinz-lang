@@ -1,12 +1,12 @@
 // v0.3-M9 C10: the body assigns a PREFIX of the place the loop walks (`outer.inner` while
 // walking `outer.inner.rows`). The assignment frees the walked list; refused with a copy suggestion.
 shape Inner {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
 shape Outer {
   inner: Inner
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let outer: Outer = { inner: { rows: [[1], [2], [3]] } }
   let total = 0
   for (row in outer.inner.rows) {

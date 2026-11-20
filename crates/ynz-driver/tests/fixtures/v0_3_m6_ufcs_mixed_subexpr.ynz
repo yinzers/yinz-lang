@@ -8,21 +8,21 @@
 // silently mis-lower through the synchronous wrapper.
 
 shape Ship {
-  name: string
-  cargo: int
+  name: String
+  cargo: Int
 }
 
-function fetchBase() -> int {
+function fetchBase() -> Int {
   wait sleep(5)
   return 3
 }
 
-function crew(share self: Ship) -> int {
+function crew(share self: Ship) -> Int {
   wait sleep(5)
   return self.cargo
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const ship: Ship = { name: `Mon`, cargo: 10 }
   const total = fetchBase() + ship.crew()
   print(total.toString())

@@ -6,7 +6,7 @@
 // `number` parameter is not supported yet") — never the generic "compiler bug" ICE
 // banner, never a segfault from staging a raw i64 as a heap-cell pointer.
 
-function heavyGrow(n: number) -> number {
+function heavyGrow(n: Number) -> Number {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -16,7 +16,7 @@ function heavyGrow(n: number) -> number {
   return n
 }
 
-function heavyShrink(m: number) -> number {
+function heavyShrink(m: Number) -> Number {
   let total = 0
   let i = 0
   while (i < 40) {
@@ -26,8 +26,8 @@ function heavyShrink(m: number) -> number {
   return m
 }
 
-function entrypoint() -> nothing {
-  let y: number = 4.5
+function entrypoint() -> Nothing {
+  let y: Number = 4.5
   let a = heavyGrow(5)
   let b = heavyShrink(y)
   print(a.toString())

@@ -5,7 +5,7 @@
 // Expected output: "total: 3.5"
 import { calcTotal } from `b_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const result = calcTotal()
   const v = result.or(0.0)
   print(`total: ${v.toString()}`)

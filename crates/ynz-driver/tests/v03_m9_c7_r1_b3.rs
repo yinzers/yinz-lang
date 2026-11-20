@@ -14,21 +14,21 @@ use support::{
 
 const PRINTED_SHAPES: &str = "
 shape R {
-  count: int
+  count: Int
 }
 shape Outer {
   inner: R
-  name: string
+  name: String
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r: R = { count: 1 }
   print(r)
   let inner: R = { count: 2 }
   let o: Outer = { inner: inner, name: `box` }
   print(o)
-  let rows: array<R> = [{ count: 3 }, { count: 4 }]
+  let rows: Array<R> = [{ count: 3 }, { count: 4 }]
   print(rows)
-  let i: int = 0
+  let i: Int = 0
   while (i < 10) {
     print(r)
     i = i + 1
@@ -38,15 +38,15 @@ function entrypoint() -> nothing {
 
 const PRINTED_CONTAINERS: &str = "
 shape R {
-  count: int
-  tags: array<string>
+  count: Int
+  tags: Array<String>
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r: R = { count: 1, tags: [`a`, `b`] }
   print(r)
-  let rows: array<array<int>> = [[1], [2, 3]]
+  let rows: Array<Array<Int>> = [[1], [2, 3]]
   print(rows)
-  let words: array<string> = [`p`, `q`]
+  let words: Array<String> = [`p`, `q`]
   print(words)
   print(`n is ${r.count}`)
 }
@@ -89,12 +89,12 @@ fn the_debug_text_a_print_builds_is_released() {
 }
 
 const STRING_LOOP: &str = "
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (c in `hello`) {
     total = total + c.count()
   }
-  let word: string = `wor`.toUpperCase()
+  let word: String = `wor`.toUpperCase()
   for (letter in word) {
     if (letter == `O`) {
       total = total + 10
@@ -115,30 +115,30 @@ fn a_string_loops_per_character_string_is_released() {
 }
 
 const BIGNUM_LOCAL: &str = "
-function entrypoint() -> nothing {
-  let a: number<100> = 1.5
-  let b: number<100> = 2.25
-  let c: number<100> = a + b
+function entrypoint() -> Nothing {
+  let a: Number<100> = 1.5
+  let b: Number<100> = 2.25
+  let c: Number<100> = a + b
   print(c)
 }
 ";
 
 const BIGNUM_TEMPORARY: &str = "
-function entrypoint() -> nothing {
-  let a: number<100> = 1.5
-  let b: number<100> = 2.25
+function entrypoint() -> Nothing {
+  let a: Number<100> = 1.5
+  let b: Number<100> = 2.25
   print(a + b)
 }
 ";
 
 const BIGNUM_LOOP: &str = "
-function entrypoint() -> nothing {
-  let a: number<100> = 1.5
-  let b: number<100> = 2.25
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let a: Number<100> = 1.5
+  let b: Number<100> = 2.25
+  let i: Int = 0
   while (i < 100) {
     print(a + b)
-    let c: number<100> = a + b
+    let c: Number<100> = a + b
     print(c)
     i = i + 1
   }
@@ -164,7 +164,7 @@ fn a_bignum_local_and_a_bignum_temporary_are_released() {
 }
 
 const STRING_LOOP_KEEPS: &str = "
-function firstVowel(word: string) -> string {
+function firstVowel(word: String) -> String {
   for (letter in word) {
     if (letter == `e` || letter == `o`) {
       return letter
@@ -173,11 +173,11 @@ function firstVowel(word: string) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
-  let kept: array<string> = []
-  let last: string = `-`
+function entrypoint() -> Nothing {
+  let kept: Array<String> = []
+  let last: String = `-`
   for (c in `abc`) {
-    let same: string = c
+    let same: String = c
     kept.add(c)
     last = c
     print(same)
@@ -213,31 +213,31 @@ fn a_string_loop_variable_that_is_kept_is_copied_not_released_twice() {
 
 const BIGNUM_HOLDERS: &str = "
 shape Money {
-  amount: number<100>
-  label: string
+  amount: Number<100>
+  label: String
 }
-function twice(share x: number<100>) -> number<100> {
-  let y: number<100> = x + x
+function twice(share x: Number<100>) -> Number<100> {
+  let y: Number<100> = x + x
   return y
 }
-function pass(x: number<100>) -> number<100> {
+function pass(x: Number<100>) -> Number<100> {
   return x
 }
-function entrypoint() -> nothing {
-  let a: number<100> = 1.5
-  let b: number<100> = 2.25
-  let c: number<100> = a + b
-  let d: number<100> = c
+function entrypoint() -> Nothing {
+  let a: Number<100> = 1.5
+  let b: Number<100> = 2.25
+  let c: Number<100> = a + b
+  let d: Number<100> = c
   print(d)
   c = c + a
   print(c)
   print(twice(c))
-  let e: number<100> = pass(d)
+  let e: Number<100> = pass(d)
   print(e)
   let m: Money = { amount: c, label: `x` }
   print(m)
   if (a < b) {
-    let f: number<100> = a * b
+    let f: Number<100> = a * b
     print(f)
   }
 }
@@ -266,23 +266,23 @@ fn a_bignum_copied_into_a_let_a_field_and_a_return_is_released_once_each() {
 }
 
 const ERRORS_NUMBER: &str = "
-function price(n: int) -> number errors {
-  let total: number = 1.5
+function price(n: Int) -> Number errors {
+  let total: Number = 1.5
   return total
 }
 
-function priceTwo(n: int) -> number errors {
+function priceTwo(n: Int) -> Number errors {
   return 2.5
 }
 
-function relayPrice(n: int) -> number errors {
+function relayPrice(n: Int) -> Number errors {
   let inner = price(n)
   return inner
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let sum: number = 0.0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let sum: Number = 0.0
   while (i < 50) {
     let a = price(i)
     let b = priceTwo(i)
@@ -307,25 +307,25 @@ fn an_errors_result_of_number_releases_its_payload_cell() {
 
 const ERRORS_SHAPE: &str = "
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function makeBig(count: int) -> Big errors {
+function makeBig(count: Int) -> Big errors {
   let big: Big = { label: `made`, count: count }
   return big
 }
 
-function makeThing(count: int) -> Thing errors {
+function makeThing(count: Int) -> Thing errors {
   let big: Big = { label: `made`, count: count }
   return big
 }
 
-function describe(share thing: Thing) -> int {
+function describe(share thing: Thing) -> Int {
   if (thing) {
     is Tiny => {
       return 0
@@ -337,17 +337,17 @@ function describe(share thing: Thing) -> int {
   return -1
 }
 
-function relayBig(count: int) -> Big errors {
+function relayBig(count: Int) -> Big errors {
   let inner = makeBig(count)
   return inner
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let fallback: Big = { label: `none`, count: 0 }
   let seed: Big = { label: `seed`, count: 0 }
   let fallbackThing: Thing = seed
-  let i: int = 0
-  let total: int = 0
+  let i: Int = 0
+  let total: Int = 0
   while (i < 50) {
     let one = makeBig(i)
     let two = makeThing(i)
@@ -374,22 +374,22 @@ fn a_shape_returned_through_an_errors_result_is_moved_not_copied_twice() {
 }
 
 const ERRORS_MAYBE: &str = "
-function pick(n: int) -> maybe<int> errors {
-  let items: array<int> = [4, 5]
+function pick(n: Int) -> Maybe<Int> errors {
+  let items: Array<Int> = [4, 5]
   let got = items.get(n)
   return got
 }
 
-function pickWord(n: int) -> maybe<string> errors {
-  let words: array<string> = [`a`, `b`]
+function pickWord(n: Int) -> Maybe<String> errors {
+  let words: Array<String> = [`a`, `b`]
   let got = words.get(n)
   return got
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
-  let none_int: maybe<int> = none
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
+  let none_int: Maybe<Int> = none
   while (i < 30) {
     let one = pick(i % 3)
     let word = pickWord(1)
@@ -416,13 +416,13 @@ const OPTIONS_TEXT: &str = "
 options Level { low, high }
 
 shape Reading {
-  count: int
+  count: Int
   level: Level
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let level: Level = Level.high
-  let name: string = `yinz`
+  let name: String = `yinz`
   print(level.toString())
   print(`${name}-${level}`)
   let reading: Reading = { count: 2, level: Level.low }
@@ -445,11 +445,11 @@ fn the_text_of_an_options_value_is_released() {
 
 const UNION_ARGUMENTS: &str = "
 shape Circle {
-  radius: float
+  radius: Float
 }
-shape Mixed = Circle | string
+shape Mixed = Circle | String
 
-function kindShare(share value: Mixed) -> int {
+function kindShare(share value: Mixed) -> Int {
   if (value) {
     is Circle => {
       return 1
@@ -460,7 +460,7 @@ function kindShare(share value: Mixed) -> int {
   }
 }
 
-function kindBare(value: Mixed) -> int {
+function kindBare(value: Mixed) -> Int {
   if (value) {
     is Circle => {
       return 1
@@ -471,7 +471,7 @@ function kindBare(value: Mixed) -> int {
   }
 }
 
-function kindGive(give value: Mixed) -> int {
+function kindGive(give value: Mixed) -> Int {
   if (value) {
     is Circle => {
       return 1
@@ -482,11 +482,11 @@ function kindGive(give value: Mixed) -> int {
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let circle: Circle = { radius: 1.5 }
-  let name: string = `yinz`.toUpperCase()
-  let i: int = 0
-  let total: int = 0
+  let name: String = `yinz`.toUpperCase()
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + kindShare(`literal`)
     total = total + kindBare(`literal`)

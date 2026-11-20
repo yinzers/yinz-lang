@@ -14,13 +14,13 @@
 // `fuzz_grammar/mod.rs::take_or_make_array`'s doc comment claim is false).
 //
 // When C1's fix lands: exit 0, stdout exactly "3\nend\n".
-function useRows(rows: array<int>) -> nothing {
+function useRows(rows: Array<Int>) -> Nothing {
   wait sleep(1)
   print(rows.count().toString())
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [10, 20, 30]
   wait sleep(20)
   useRows(rows)
   print(`end`)

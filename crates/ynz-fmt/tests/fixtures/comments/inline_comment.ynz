@@ -1,4 +1,4 @@
-function compute(x: int) -> int {
+function compute(x: Int) -> Int {
   const doubled = x + x  // twice the input
   return doubled
 }

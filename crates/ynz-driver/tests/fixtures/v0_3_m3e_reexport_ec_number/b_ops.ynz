@@ -8,7 +8,7 @@
 
 import { fetchPrice } from `a_ops`
 
-export function calcTotal() -> number errors {
+export function calcTotal() -> Number errors {
   let offset = 1.0
   const price = fetchPrice()
   const p = price.or(0.0)

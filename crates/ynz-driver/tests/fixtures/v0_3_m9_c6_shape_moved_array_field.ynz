@@ -5,17 +5,17 @@
 // Expected output: the list count.
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
-function wrap(give bucket: Bucket) -> array<Bucket> {
-  let list: array<Bucket> = [bucket]
+function wrap(give bucket: Bucket) -> Array<Bucket> {
+  let list: Array<Bucket> = [bucket]
   return list
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   let bucket: Bucket = { rows: rows, id: 1 }
   let list = wrap(bucket)
   print(list.count())

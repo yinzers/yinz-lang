@@ -3,9 +3,9 @@
 // sumExceeds(6) (true) — the two results stay separate, so the prints differ. Both print the
 // same lines whether or not the two calls run at the same time.
 
-function sumExceeds(n: int) -> boolean {
-  let sum: int = 0
-  let i: int = 0
+function sumExceeds(n: Int) -> Boolean {
+  let sum: Int = 0
+  let i: Int = 0
   while (i < n) {
     sum = sum + i
     i = i + 1
@@ -13,7 +13,7 @@ function sumExceeds(n: int) -> boolean {
   return sum > 10
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = sumExceeds(4)
   let b = sumExceeds(6)
   print(a)

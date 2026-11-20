@@ -16,7 +16,7 @@
 // Expected (both modes): the program stops with a "division by zero" error and a non-zero exit.
 // No number is printed.
 
-function crunchBig(seed: int) -> int {
+function crunchBig(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 150000000) {
@@ -26,13 +26,13 @@ function crunchBig(seed: int) -> int {
   return total + seed
 }
 
-function fetchFast(seed: int) -> int {
+function fetchFast(seed: Int) -> Int {
   wait sleep(0)
   let guard = 10 / seed
   return guard + seed
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunchBig(1)
   let b = fetchFast(0)
   print(a + b)

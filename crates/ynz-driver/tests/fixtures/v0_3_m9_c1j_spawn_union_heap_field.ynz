@@ -5,20 +5,20 @@
 // Expected output: the payload's item count, first item and label, then `done`.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Names {
-  items: array<string>
-  label: string
+  items: Array<String>
+  label: String
 }
 
 shape Bag {
   choice: Circle | Names
-  id: int
+  id: Int
 }
 
-function f(choice: Circle | Names) -> nothing {
+function f(choice: Circle | Names) -> Nothing {
   wait sleep(100)
   if (choice) {
     is Circle => {
@@ -32,13 +32,13 @@ function f(choice: Circle | Names) -> nothing {
   }
 }
 
-function launch() -> nothing {
+function launch() -> Nothing {
   let names: Names = { items: [`a`.toUpperCase(), `b`.toUpperCase()], label: `l`.toUpperCase() }
   let bag: Bag = { choice: names, id: 1 }
   background f(bag.choice)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
   print(`done`)

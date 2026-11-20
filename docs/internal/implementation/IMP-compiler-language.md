@@ -33,7 +33,7 @@ Design document for the language and toolchain the Yinz compiler is built with. 
 
 Golden Rule 3 says the compiler is a teacher, so error messages are a first-class feature. A hand-written parser gives:
 
-- **Position-specific suggestions.** After a parameter list with no return type, the parser can suggest `-> nothing` or a type at that exact span.
+- **Position-specific suggestions.** After a parameter list with no return type, the parser can suggest `-> Nothing` or a type at that exact span.
 - **Error recovery.** It skips to the next sensible boundary (next `}`, next statement) and keeps parsing, so one compile reports all errors.
 - **Multi-error reporting.** Errors accumulate instead of stopping at the first.
 

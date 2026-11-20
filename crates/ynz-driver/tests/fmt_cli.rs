@@ -106,7 +106,7 @@ fn check_noncanonical_exits_1_and_prints_would_reformat() {
 #[test]
 fn stdin_happy_path_exits_0_and_writes_stdout() {
     // WHY: --stdin reads from stdin and writes formatted output to stdout.
-    let source = "function  f( )  ->  nothing  { }\n";
+    let source = "function  f( )  ->  Nothing  { }\n";
     let out = ynz()
         .arg("fmt")
         .arg("--stdin")
@@ -127,7 +127,7 @@ fn stdin_happy_path_exits_0_and_writes_stdout() {
 #[test]
 fn stdin_parse_error_exits_1() {
     // WHY: stdin parse errors exit 1 and print diagnostics to stderr.
-    let broken = "function broken() -> nothing {\n  let x = 1\n";
+    let broken = "function broken() -> Nothing {\n  let x = 1\n";
     ynz()
         .arg("fmt")
         .arg("--stdin")
@@ -143,7 +143,7 @@ fn stdin_parse_error_no_internal_source_label_leak() {
     // internal name used by the formatting library).  The `<fmt>` label also
     // caused ariadne to print "Unable to fetch source '<fmt>'" to stderr, which
     // is confusing user-facing noise.
-    let broken = "function broken() -> nothing {\n  let x = 1\n";
+    let broken = "function broken() -> Nothing {\n  let x = 1\n";
     let out = ynz()
         .arg("fmt")
         .arg("--stdin")
@@ -213,11 +213,11 @@ fn all_with_one_broken_file_continues_and_exits_1() {
 
     // Add a broken file to the project
     let broken = dir.path().join("broken.ynz");
-    std::fs::write(&broken, "function broken() -> nothing {\n  let x = 1\n").unwrap();
+    std::fs::write(&broken, "function broken() -> Nothing {\n  let x = 1\n").unwrap();
 
     // Add a non-canonical good file
     let good = dir.path().join("reformat_me.ynz");
-    std::fs::write(&good, "function  g()  ->  nothing  { }\n").unwrap();
+    std::fs::write(&good, "function  g()  ->  Nothing  { }\n").unwrap();
 
     ynz()
         .arg("fmt")
@@ -247,7 +247,7 @@ fn check_plus_stdin_rejected_by_clap() {
         .arg("fmt")
         .arg("--check")
         .arg("--stdin")
-        .write_stdin("function f() -> nothing { }")
+        .write_stdin("function f() -> Nothing { }")
         .assert()
         .failure();
 }

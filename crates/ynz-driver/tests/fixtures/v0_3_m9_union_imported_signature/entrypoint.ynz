@@ -3,7 +3,7 @@
 // Correct behavior: prints `big 4`, `tiny`, `end`; clean under AddressSanitizer at -O0 and -O2.
 import { make, describe } from `lib`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first = make(true)
   let second = make(false)
   print(describe(first))

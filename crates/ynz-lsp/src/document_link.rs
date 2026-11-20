@@ -117,7 +117,7 @@ mod tests {
         // WHY: In single-file mode there is no project root, so relative import
         // paths cannot be resolved. The handler must return [] rather than panic
         // or guess a path — callers would see garbage URLs.
-        let src = "import { foo } from \"services/users\"\nfunction entrypoint() -> nothing { }\n";
+        let src = "import { foo } from \"services/users\"\nfunction entrypoint() -> Nothing { }\n";
         let (state, uri) = state_single("/tmp/ynz_dl_no_root.ynz", src);
         // state.project_root is None — single-file mode
         let links = document_link_response(&state, &uri);
@@ -133,7 +133,7 @@ mod tests {
         // a broken link, which is worse than no target.
         //
         // Uses backtick syntax — the canonical Yinz import path delimiter.
-        let src = "import { foo } from `services/users`\nfunction entrypoint() -> nothing { }\n";
+        let src = "import { foo } from `services/users`\nfunction entrypoint() -> Nothing { }\n";
         let mut state = ServerState::new(PositionEncoding::Utf8);
         let uri = lsp_types::Url::from_file_path("/tmp/ynz_dl_nofile.ynz").expect("valid");
         state.project_root = Some(std::path::PathBuf::from("/tmp/nonexistent_project_root"));

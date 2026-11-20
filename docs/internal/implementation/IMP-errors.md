@@ -25,7 +25,7 @@ Decided: try/catch, Result types and the `?` operator rejected.
 
 **Why `errors` works**: Keeps the contract at the function boundary with zero boilerplate inside `errors` functions. Auto-propagation handles the common case (let failures cascade to the caller). Explicit handling is required when the function doesn't auto-propagate, enforced at compile time.
 
-**`maybe` vs `errors`**: Distinct concepts. `maybe<T>` = value might not exist (absence, not failure). `-> T errors` = function might fail (failure with a message and call trace). A function can have both: `-> maybe<User> errors` means "might fail AND might not find a user."
+**`Maybe` vs `errors`**: Distinct concepts. `Maybe<T>` = value might not exist (absence, not failure). `-> T errors` = function might fail (failure with a message and call trace). A function can have both: `-> Maybe<User> errors` means "might fail AND might not find a user."
 
 ---
 
@@ -42,10 +42,10 @@ Inside an `errors` function, calls to other `errors` functions return the error-
 ```ynz
 // Happy path — auto-propagation, error-capable type invisible
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")           // raw briefly: string errors-capable
+  let raw = readFile("config.txt")           // raw briefly: String errors-capable
   let parsed = parseConfig(raw)              // ← first use of success value
                                              //   compiler auto-propagates raw here
-                                             //   from this point: raw is plain string
+                                             //   from this point: raw is plain String
   return parsed
 }
 
@@ -56,7 +56,7 @@ function loadConfigWithLog() -> Config errors {
     log.warn("config missing: " + raw.message)
     return Config.default()
   }
-  return parseConfig(raw)                    // raw narrowed to string after the if
+  return parseConfig(raw)                    // raw narrowed to String after the if
 }
 ```
 
@@ -69,14 +69,14 @@ function loadConfig() -> Config errors {
   if (raw.failed()) { ... }                  // ← compile error
 }
 // COMPILE ERROR: raw was auto-propagated on line 3 (parseConfig(raw)).
-//                After auto-propagation, raw is narrowed to string and no
+//                After auto-propagation, raw is narrowed to String and no
 //                longer has .failed(). To handle the error before propagating,
 //                move the .failed() check above the parseConfig() call.
 ```
 
 **Decided: the hybrid (lazy under the hood, eager in feel).** Auto-propagation happens by default, and you can opt out by checking first; pure eager propagation and pure lazy error-capable variables are rejected.
 
-**Implementation note:** This is flow-sensitive narrowing — the same machinery the type checker already uses for `maybe<T>` (after `if (item.exists())`, `item` narrows to `T`). Salsa handles flow-typing well. No new infrastructure needed.
+**Implementation note:** This is flow-sensitive narrowing — the same machinery the type checker already uses for `Maybe<T>` (after `if (item.exists())`, `item` narrows to `T`). Salsa handles flow-typing well. No new infrastructure needed.
 
 **Same method set everywhere:** `.failed()`, `.message`, `.or(default)` work both inside and outside `errors` functions. One mental model, two contexts. The compiler picks behavior based on what the user wrote, not based on where they wrote it.
 
@@ -86,10 +86,10 @@ function loadConfig() -> Config errors {
 
 When an error reaches a custom handler (`setErrorHandler`) or propagates to the top, it carries:
 
-- `.message` — human-readable description (string)
-- `.suggestions` — array of human-readable next steps (array<string>, may be empty)
-- `.trace` — call path as structured data (`array<Frame>`)
-- `.source` — a `SourceLoc` value (`{ file: string, line: maybe<int> }`) of the originating failure
+- `.message` — human-readable description (String)
+- `.suggestions` — array of human-readable next steps (Array<String>, may be empty)
+- `.trace` — call path as structured data (`Array<Frame>`)
+- `.source` — a `SourceLoc` value (`{ file: String, line: Maybe<Int> }`) of the originating failure
 
 `suggestions` is part of the base shape because the teaching-compiler philosophy applies at runtime too — not just compile time. An error that can tell you what to do next is better than one that just tells you what went wrong. Stdlib modules are expected to populate suggestions where the cause is known. User-defined errors may leave it empty.
 
@@ -99,13 +99,13 @@ When an error reaches a custom handler (`setErrorHandler`) or propagates to the 
 
 ```ynz
 shape Frame {
-  file: string
-  line: maybe<int>
-  function: string
+  file: String
+  line: Maybe<Int>
+  function: String
 }
 ```
 
-**`line` is `maybe<int>`** — real frames carry a one-based positive int; the truncation-sentinel frame uses `none` to avoid a magic-number sentinel. ONE-BASED: matches compiler diagnostic line numbering exactly. Tools integrating with `.trace` must treat this as one-based; convert to zero-based at the tool boundary (e.g., LSP) rather than in the Frame value.
+**`line` is `Maybe<Int>`** — real frames carry a one-based positive Int; the truncation-sentinel frame uses `none` to avoid a magic-number sentinel. ONE-BASED: matches compiler diagnostic line numbering exactly. Tools integrating with `.trace` must treat this as one-based; convert to zero-based at the tool boundary (e.g., LSP) rather than in the Frame value.
 
 **Truncation sentinel**: when the frame stack overflows 1024 entries, an additional sentinel Frame is appended: `Frame { file: "<trace truncated at depth 1024>", line: none, function: "<...>" }`. The real frames before it are still present and useful.
 
@@ -115,8 +115,8 @@ shape Frame {
 
 ```ynz
 shape SourceLoc {
-  file: string
-  line: maybe<int>
+  file: String
+  line: Maybe<Int>
 }
 ```
 
@@ -126,7 +126,7 @@ shape SourceLoc {
 
 ## M7 Frame Stack Mechanism (Locked)
 
-**Thread-local `array<Frame>` capped at 1024 frames.**
+**Thread-local `Array<Frame>` capped at 1024 frames.**
 
 At the start of every `errors` function body: `ynz_frame_push(file, line, function_name)`.
 Before every return path (success or early return): `ynz_frame_pop()`.
@@ -138,7 +138,7 @@ Auto-propagation re-uses the snapshot — no re-capture at each propagation site
 
 **Trace capture is compile-time emitted, NOT libunwind.** Each `errors` function gets a `static FRAME_INFO: FrameInfo = { file: __FILE__, line: __LINE__, function: __NAME__ }` global at the IR level; entry emits `ynz_frame_push(&FRAME_INFO)`. This keeps M7 hermetic from the system unwinder ABI.
 
-**LLVM IR representation of Frame:** `{ file: *u8, line: { tag: i8, padding: 7 bytes, value: i64 }, function: *u8 }` = 32 bytes total (16-byte aligned). Uses M5's existing `maybe<int>` lowering `{ tag: i8, padding: 7 bytes, value: i64 }` — no new representation.
+**LLVM IR representation of Frame:** `{ file: *u8, line: { tag: i8, padding: 7 bytes, value: i64 }, function: *u8 }` = 32 bytes total (16-byte aligned). Uses M5's existing `Maybe<Int>` lowering `{ tag: i8, padding: 7 bytes, value: i64 }` — no new representation.
 
 ---
 
@@ -146,7 +146,7 @@ Auto-propagation re-uses the snapshot — no re-capture at each propagation site
 
 `.message` (and `.suggestions`, `.trace`, `.source`) access requires the binding to be flow-narrowed to the "failed" state — i.e., inside the true-branch of an `if (x.failed())` check, or after an early-return on `!x.failed()`. Direct `err.message` without flow-narrowing is a compile error.
 
-This uses M6's narrowing infrastructure extended with a new "errors-capable" narrowing fact (parallel to `maybe<T>`'s exists-fact). See [`docs/internal/implementation/IMP-narrowing.md`](IMP-narrowing.md) for the added rows.
+This uses M6's narrowing infrastructure extended with a new "errors-capable" narrowing fact (parallel to `Maybe<T>`'s exists-fact). See [`docs/internal/implementation/IMP-narrowing.md`](IMP-narrowing.md) for the added rows.
 
 ---
 
@@ -158,11 +158,11 @@ Example from the db module:
 
 ```
 shape DatabaseError {
-    summary: string             // short human-readable description
-    suggestions: array<string>  // what to do about it
-    code: string | null         // raw driver error code (e.g. Postgres "23505")
-    query: string | null        // sanitized query that failed
-    detail: string | null       // full driver-level message
+    summary: String             // short human-readable description
+    suggestions: Array<String>  // what to do about it
+    code: String | null         // raw driver error code (e.g. Postgres "23505")
+    query: String | null        // sanitized query that failed
+    detail: String | null       // full driver-level message
 }
 ```
 

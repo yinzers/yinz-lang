@@ -20,16 +20,16 @@ fn parse_within_timeout(source: &str) {
 #[test]
 fn stmt_boundary_token_inside_block_does_not_hang() {
     // Token::Function inside a body — the original reproducer from v0.2-M1/v0.3-M1.
-    parse_within_timeout("function outer() -> nothing {\n  function inner() -> nothing { }\n}");
+    parse_within_timeout("function outer() -> Nothing {\n  function inner() -> Nothing { }\n}");
     // Token::Options inside a body — same mechanism.
-    parse_within_timeout("function test() -> nothing {\n  options Foo { a, b }\n}");
+    parse_within_timeout("function test() -> Nothing {\n  options Foo { a, b }\n}");
     // Nested function-inside-block inside another block.
     parse_within_timeout(
-        "function test() -> nothing {\n  if (true) {\n    function nested() -> nothing { }\n  }\n}",
+        "function test() -> Nothing {\n  if (true) {\n    function nested() -> Nothing { }\n  }\n}",
     );
     // The async-banned-keyword trigger from v0_2_m1_errors.ynz gallery.
     parse_within_timeout(
-        "function asyncExample() -> nothing {\n  async function inner() -> nothing { }\n}",
+        "function asyncExample() -> Nothing {\n  async function inner() -> Nothing { }\n}",
     );
 }
 

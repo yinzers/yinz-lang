@@ -15,8 +15,8 @@ fn bare_identifier_contains_all_keywords() {
         .filter(|i| i.kind == CompletionKind::Keyword)
         .count();
     assert!(
-        count >= 29,
-        "BareIdentifier must include all {count} keywords (expected ≥29)"
+        count >= 28,
+        "BareIdentifier must include all {count} keywords (expected ≥28)"
     );
 }
 
@@ -42,15 +42,15 @@ fn deferred_features_are_deprecated_in_bare_identifier() {
 #[test]
 fn after_dot_int_returns_int_methods() {
     let items = lsp_completion_items(&CompletionContext::AfterDot {
-        receiver_type: Some("int"),
+        receiver_type: Some("Int"),
     });
-    assert!(!items.is_empty(), "AfterDot{{int}} must return methods");
+    assert!(!items.is_empty(), "AfterDot{{Int}} must return methods");
     for item in &items {
-        // Every item must be a method/constant for int
+        // Every item must be a method/constant for Int
         assert!(
             item.kind == CompletionKind::PrimitiveMethod
                 || item.kind == CompletionKind::TypeAttachedConstant,
-            "unexpected item kind {:?} for int receiver: {}",
+            "unexpected item kind {:?} for Int receiver: {}",
             item.kind,
             item.label
         );

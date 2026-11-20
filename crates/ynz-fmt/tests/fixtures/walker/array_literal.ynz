@@ -1,4 +1,4 @@
-function makeList() -> array<int> {
-  let nums: array<int> = [1, 2, 3]
+function makeList() -> Array<Int> {
+  let nums: Array<Int> = [1, 2, 3]
   return nums
 }

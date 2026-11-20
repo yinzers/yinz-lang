@@ -5,20 +5,20 @@
 // The fresh group must NOT join pre-barrier work — it is a new group.
 //
 // Expected output: barrier\ndone
-function barrier() -> nothing {
+function barrier() -> Nothing {
   wait sleep(5)
   print(`barrier`)
 }
 
-function fresh1() -> nothing {
+function fresh1() -> Nothing {
   wait sleep(10)
 }
 
-function fresh2() -> nothing {
+function fresh2() -> Nothing {
   wait sleep(10)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait barrier()
   fresh1()
   fresh2()

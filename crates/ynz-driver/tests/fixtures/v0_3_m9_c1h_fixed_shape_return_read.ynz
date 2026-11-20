@@ -5,17 +5,17 @@
 // Expected output: the count, then both names.
 
 shape Part {
-  name: string
+  name: String
 }
 
-function makeParts() -> fixed<Part> {
+function makeParts() -> Fixed<Part> {
   let first: Part = { name: `a`.toUpperCase() }
   let second: Part = { name: `bb` }
-  let parts: fixed<Part> = [first, second]
+  let parts: Fixed<Part> = [first, second]
   return parts
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let parts = makeParts()
   let nobody: Part = { name: `none` }
   let firstPart: Part = parts[0].or(nobody)

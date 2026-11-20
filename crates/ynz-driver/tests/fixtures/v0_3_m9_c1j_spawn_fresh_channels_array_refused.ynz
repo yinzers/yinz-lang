@@ -4,21 +4,21 @@
 // Expected: a compile error naming the type and the line.
 
 shape Bus {
-  lines: array<channel<int>>
+  lines: Array<Channel<Int>>
 }
 
-function ping(lines: array<channel<int>>) -> nothing {
+function ping(lines: Array<Channel<Int>>) -> Nothing {
   print(lines.count())
 }
 
 function make() -> Bus {
-  let first: channel<int> = channel<int>(1)
-  let lines: array<channel<int>> = [first]
+  let first: Channel<Int> = Channel<Int>(1)
+  let lines: Array<Channel<Int>> = [first]
   let bus: Bus = { lines: lines }
   return bus
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background ping(make().lines)
   wait sleep(50)
   print(`done`)

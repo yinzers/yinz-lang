@@ -77,7 +77,7 @@ const MODES: &[&str] = &["aos", "soa"];
 fn workload_source(n: i64, reps: i64) -> String {
     let mut src = String::with_capacity(96 * n as usize + 512);
     src.push_str(
-        "shape Player {\n  x: int\n  y: int\n  dx: int\n  dy: int\n  health: int\n  stamina: int\n  gold: int\n  level: int\n}\n\nfunction entrypoint() -> nothing {\n  let players: array<Player> = [\n",
+        "shape Player {\n  x: Int\n  y: Int\n  dx: Int\n  dy: Int\n  health: Int\n  stamina: Int\n  gold: Int\n  level: Int\n}\n\nfunction entrypoint() -> Nothing {\n  let players: Array<Player> = [\n",
     );
     for i in 1..=n {
         let sep = if i == n { "" } else { "," };
@@ -90,7 +90,7 @@ fn workload_source(n: i64, reps: i64) -> String {
     }
     write!(
         src,
-        "  ]\n  let reps: int = {reps}\n  let r: int = 0\n  let acc: int = 0\n  while (r < reps) {{\n    for (p in players) {{\n      acc = acc + p.x + p.y\n    }}\n    r = r + 1\n  }}\n  print(acc.toString())\n}}\n"
+        "  ]\n  let reps: Int = {reps}\n  let r: Int = 0\n  let acc: Int = 0\n  while (r < reps) {{\n    for (p in players) {{\n      acc = acc + p.x + p.y\n    }}\n    r = r + 1\n  }}\n  print(acc.toString())\n}}\n"
     )
     .expect("string write");
     src

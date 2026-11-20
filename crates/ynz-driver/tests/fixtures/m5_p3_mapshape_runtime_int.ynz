@@ -4,21 +4,21 @@
 // must NOT change the stored value — insertion memcpys the bytes), the
 // re-set-over-key overwrite, and an index-assign insert.
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let qc: int = seed * 3
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let qc: Int = seed * 3
   let pa: Part = { qty: qa, price: qa * 10 }
   let pb: Part = { qty: qb, price: qb * 10 }
-  let stock: map<int, Part> = {}
+  let stock: Map<Int, Part> = {}
   stock.set(100, pa.copy())
   stock.set(200, pb)
-  let n1: int = stock.count()
+  let n1: Int = stock.count()
   print(n1)
   let g1 = stock.get(100)
   if (g1.exists()) {
@@ -28,9 +28,9 @@ function entrypoint() -> nothing {
   if (i2.exists()) {
     print(i2.value.price)
   }
-  let has100: boolean = stock.has(100)
+  let has100: Boolean = stock.has(100)
   print(has100)
-  let has999: boolean = stock.has(999)
+  let has999: Boolean = stock.has(999)
   print(has999)
   // D13 snapshot cell: mutate the source binding AFTER insertion; the map
   // must keep the insertion-time bytes (qty 1), not see 99.
@@ -46,9 +46,9 @@ function entrypoint() -> nothing {
     print(i1.value.qty)
   }
   stock[300] = pc
-  let n2: int = stock.count()
+  let n2: Int = stock.count()
   print(n2)
-  let total: int = 0
+  let total: Int = 0
   for (entry in stock) {
     total = total + entry.value.qty
   }

@@ -8,8 +8,8 @@ function same<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function entrypoint() -> nothing {
-  let count: int = 5
-  let label: string = `x`
+function entrypoint() -> Nothing {
+  let count: Int = 5
+  let label: String = `x`
   print(same(count, label))
 }

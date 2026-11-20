@@ -5,27 +5,27 @@
 // LeakSanitizer.
 import { same } from `helpers`
 
-function passOn(share ch: channel<array<int>>) -> channel<array<int>> {
+function passOn(share ch: Channel<Array<Int>>) -> Channel<Array<Int>> {
   return ch
 }
 
-function throughImport(condition: boolean) -> nothing {
-  let held: channel<array<int>> = channel<array<int>>()
+function throughImport(condition: Boolean) -> Nothing {
+  let held: Channel<Array<Int>> = Channel<Array<Int>>()
   if (condition) {
-    let local: channel<array<int>> = channel<array<int>>()
+    let local: Channel<Array<Int>> = Channel<Array<Int>>()
     held = same(local)
   }
 }
 
-function throughLocal(condition: boolean) -> nothing {
-  let held: channel<array<int>> = channel<array<int>>()
+function throughLocal(condition: Boolean) -> Nothing {
+  let held: Channel<Array<Int>> = Channel<Array<Int>>()
   if (condition) {
-    let local: channel<array<int>> = channel<array<int>>()
+    let local: Channel<Array<Int>> = Channel<Array<Int>>()
     held = passOn(local)
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   throughImport(true)
   throughImport(false)
   throughLocal(true)

@@ -1,5 +1,5 @@
 // Q1: two disjoint sibling scopes, each a crossing `let x` (string).
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let flag1 = true
   let flag2 = true
   if (flag1) {

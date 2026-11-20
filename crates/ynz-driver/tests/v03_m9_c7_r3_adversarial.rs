@@ -18,16 +18,16 @@ fn assert_balanced_and_clean(label: &str, program: &str, expected: &str) {
 }
 
 const ERRORS_TEMPORARY_ACROSS_EXITS: &str = "
-function make(n: int) -> string errors {
-  let a: string = `ab`
+function make(n: Int) -> String errors {
+  let a: String = `ab`
   return a.toUpperCase()
 }
-function makeList(n: int) -> array<string> errors {
-  let list: array<string> = [`a`, `bb`, `ccc`]
+function makeList(n: Int) -> Array<String> errors {
+  let list: Array<String> = [`a`, `bb`, `ccc`]
   return list
 }
-function scan(limit: int) -> int {
-  let i: int = 0
+function scan(limit: Int) -> Int {
+  let i: Int = 0
   while (make(i).failed() == false) {
     if (make(i).or(`z`).count() > 1) {
       if (i > limit) {
@@ -38,9 +38,9 @@ function scan(limit: int) -> int {
   }
   return 0
 }
-function walk(limit: int) -> int {
-  let fallback: array<string> = []
-  let total: int = 0
+function walk(limit: Int) -> Int {
+  let fallback: Array<String> = []
+  let total: Int = 0
   for (word in makeList(limit).or(fallback)) {
     if (word.count() > limit) {
       return total + word.count()
@@ -49,8 +49,8 @@ function walk(limit: int) -> int {
   }
   return total
 }
-function entrypoint() -> nothing {
-  let t: int = 0
+function entrypoint() -> Nothing {
+  let t: Int = 0
   for (k in range(0, 5)) {
     t = t + scan(k) + walk(k)
   }
@@ -64,23 +64,23 @@ fn an_errors_temporary_is_released_at_every_exit_of_the_statement_that_holds_it(
 }
 
 const GIVE_THROUGH_TEMPORARY: &str = "
-function eatText(give text: string) -> int {
+function eatText(give text: String) -> Int {
   return text.count()
 }
-function eatPair(give first: string, give second: string) -> int {
+function eatPair(give first: String, give second: String) -> Int {
   return first.count() + second.count()
 }
-function findText(share rows: array<string>, index: int) -> maybe<string> {
+function findText(share rows: Array<String>, index: Int) -> Maybe<String> {
   return rows.get(index)
 }
-function make(n: int) -> string errors {
-  let a: string = `ab`
+function make(n: Int) -> String errors {
+  let a: String = `ab`
   return a.toUpperCase()
 }
-function entrypoint() -> nothing {
-  let rows: array<string> = [`abc`]
-  let emptyRows: array<string> = []
-  let t: int = 0
+function entrypoint() -> Nothing {
+  let rows: Array<String> = [`abc`]
+  let emptyRows: Array<String> = []
+  let t: Int = 0
   for (i in range(0, 5)) {
     t = t + eatText(findText(rows, 0).or(`z`))
     t = t + eatText(findText(emptyRows, 0).or(`zz`))
@@ -99,33 +99,33 @@ fn a_give_of_a_place_read_through_a_temporary_hands_the_callee_a_copy() {
 
 const ERRORS_TEMPORARY_IN_EXPRESSIONS: &str = "
 shape Tag {
-  name: string
+  name: String
 }
-function make(n: int) -> string errors {
-  let a: string = `ab`
+function make(n: Int) -> String errors {
+  let a: String = `ab`
   return a.toUpperCase()
 }
-function makeTag(n: int) -> Tag errors {
+function makeTag(n: Int) -> Tag errors {
   let tag: Tag = { name: `abc` }
   return tag
 }
-function join(first: string, second: string) -> string {
+function join(first: String, second: String) -> String {
   return `${first}${second}`
 }
-function broken(n: int) -> boolean {
+function broken(n: Int) -> Boolean {
   return make(n).failed()
 }
-function both(n: int) -> boolean {
+function both(n: Int) -> Boolean {
   return make(n).failed() == false && makeTag(n).failed() == false
 }
-function pick(n: int) -> int {
+function pick(n: Int) -> Int {
   if (make(n).failed() == false && makeTag(n).or({ name: `z` }).name.count() == 3) {
     return make(n).or(`q`).count()
   }
   return 0
 }
-function entrypoint() -> nothing {
-  let t: int = 0
+function entrypoint() -> Nothing {
+  let t: Int = 0
   for (i in range(0, 5)) {
     t = t + join(make(i).or(`y`), join(make(i).or(`x`), make(i).or(`w`))).count()
     if (broken(i)) {

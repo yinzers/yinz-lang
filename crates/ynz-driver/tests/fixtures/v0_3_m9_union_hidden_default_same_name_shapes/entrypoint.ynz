@@ -6,7 +6,7 @@
 import { Thing, readThing, runA } from `a`
 import { runB } from `b`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let own: Thing = { id: 3 }
   print(own.readThing())
   print(runA())

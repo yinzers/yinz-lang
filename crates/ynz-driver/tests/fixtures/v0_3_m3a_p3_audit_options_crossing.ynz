@@ -3,7 +3,7 @@
 // The tag survives suspension: the match arm fires correctly after the wait.
 options Status { active, inactive }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.active
   wait sleep(5)
   if (s) {

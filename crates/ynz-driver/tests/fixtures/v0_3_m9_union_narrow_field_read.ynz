@@ -7,16 +7,16 @@
 // (printed a zero value for a `radius: 5.0` circle).
 
 shape Circle {
-  radius: number
+  radius: Number
 }
 
 shape Square {
-  side: number
+  side: Number
 }
 
 shape Figure = Circle | Square
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 5.0 }
   let fig: Figure = c
   if (fig) {
