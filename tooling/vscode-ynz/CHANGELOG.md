@@ -8,10 +8,12 @@ All notable changes to the Yinz Language extension are documented here.
 
 - **Dotted underline on promoted tokens** — when the compiler already uses a stricter form
   than the one you wrote, the `array` of `array<int>` (never grown) or the `let` keyword
-  (never reassigned) gets a blue dotted underline (the theme's `editorInfo.foreground` colour, so it follows
-  your theme) instead of an end-of-line comment. Hover it for the WHAT / WHAT INSTEAD / WHY
+  (never reassigned) gets a cyan dotted underline instead of an end-of-line comment. Hover it for the WHAT / WHAT INSTEAD / WHY
   explanation; the lightbulb offers the optional rewrite to `fixed` / `const` (refactor
   action).
+- New theme colour `yinz.lessonUnderline` for the underline: `#4FD1E8` (cyan) in dark and
+  high-contrast themes, `#0E7490` in light and high-contrast-light themes. Override it in
+  `workbench.colorCustomizations`.
 - New semantic-token modifier `promotable`, so themes can restyle the marked tokens.
 
 ### Changed

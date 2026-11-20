@@ -16,13 +16,16 @@ const PROMOTABLE_MODIFIER = 'promotable';
 // (colour and font style only), so the extension draws it from the very ranges the
 // client already receives as semantic tokens.
 //
-// Blue, in the theme's info colour so it follows the user's theme: red is for errors
-// and yellow for lint, so these lesson hints get a colour of their own. The
-// decoration API takes a ThemeColor only for border/outline/background/colour, not
-// for `textDecoration`, so the underline is a dotted bottom border.
+// Cyan, from the extension's own theme colour `yinz.lessonUnderline` (declared in
+// package.json under `contributes.colors`, so users can override it with
+// `workbench.colorCustomizations`). Red is for errors and yellow for lint, so these
+// lesson hints get a colour of their own. The decoration API takes a ThemeColor only
+// for border/outline/background/colour, not for `textDecoration`, so the underline is
+// a dotted bottom border. Colour and style live here, in one place.
+const LESSON_UNDERLINE_COLOR_ID = 'yinz.lessonUnderline';
 const promotableDecoration = vscode.window.createTextEditorDecorationType({
     border: '0 0 1px 0 dotted',
-    borderColor: new vscode.ThemeColor('editorInfo.foreground'),
+    borderColor: new vscode.ThemeColor(LESSON_UNDERLINE_COLOR_ID),
 });
 
 const promotableRanges = (tokens: vscode.SemanticTokens, modifierBit: number): vscode.Range[] => {

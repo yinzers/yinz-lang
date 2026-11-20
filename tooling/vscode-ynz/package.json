@@ -47,6 +47,18 @@
         "description": "A token the compiler already promoted to a stricter form (`array` to `fixed`, `let` to `const`). Shown with a dotted underline; hover explains why."
       }
     ],
+    "colors": [
+      {
+        "id": "yinz.lessonUnderline",
+        "description": "Dotted underline on code the Yinz compiler suggests writing in a stricter form.",
+        "defaults": {
+          "dark": "#4FD1E8",
+          "light": "#0E7490",
+          "highContrast": "#4FD1E8",
+          "highContrastLight": "#0E7490"
+        }
+      }
+    ],
     "configuration": {
       "title": "Yinz",
       "properties": {
