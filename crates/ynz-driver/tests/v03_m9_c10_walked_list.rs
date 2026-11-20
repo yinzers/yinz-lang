@@ -158,3 +158,9 @@ legal_case!(
     "v0_3_m9_c10_walked_loop_variable_field.ynz",
     "10\n"
 );
+// A write through a `let view = outer.inner` copy changes the copy, not the walked list.
+legal_case!(
+    a_callee_that_writes_through_a_view_binding_stays_legal,
+    "v0_3_m9_c10_walked_callee_view_write.ynz",
+    "6\n3\n"
+);

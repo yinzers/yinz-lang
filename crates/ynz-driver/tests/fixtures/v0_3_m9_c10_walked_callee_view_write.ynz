@@ -1,0 +1,23 @@
+// v0.3-M9 C10, stays legal: the callee writes through `let view = outer.inner`. A read that is
+// written is a copy of `outer.inner`, so the caller's `outer.inner.rows` (the walked list) is
+// untouched. Prints 6 (every pass reads the list it started with) and 3 (the list is unchanged).
+shape Inner {
+  rows: array<array<int>>
+}
+shape Outer {
+  inner: Inner
+}
+function writeThroughView(lend outer: Outer) -> nothing {
+  let view = outer.inner
+  view.rows = [[9]]
+}
+function entrypoint() -> nothing {
+  let outer: Outer = { inner: { rows: [[1], [2], [3]] } }
+  let total = 0
+  for (row in outer.inner.rows) {
+    writeThroughView(outer)
+    total = total + row[0].or(0)
+  }
+  print(total)
+  print(outer.inner.rows.count())
+}

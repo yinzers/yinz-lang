@@ -485,28 +485,27 @@ fn summarize_function(
     functions: &[&FunctionDecl],
 ) -> Vec<BTreeSet<WrittenPlace>> {
     let mut written: Vec<BTreeSet<WrittenPlace>> = vec![BTreeSet::new(); function.params.len()];
-    // `let view = holder.inner` names the same memory: a write through `view` is a write through
-    // `holder`. Flow is ignored (a later shadowing `let` keeps the alias), which only adds places.
-    let mut aliases: HashMap<&str, (usize, Vec<WrittenStep>)> = function
+    // `let view = holder.inner` is not an alias a write can travel through: a read that is
+    // written is a copy (`non_owned_reads`, rule (a)), so `view.rows = ...` changes the view's own
+    // value and never `holder.inner.rows`. Only the parameter names are roots of a written place.
+    let parameter_position: HashMap<&str, usize> = function
         .params
         .iter()
         .enumerate()
-        .map(|(position, parameter)| (parameter.name.as_str(), (position, Vec::new())))
+        .map(|(position, parameter)| (parameter.name.as_str(), position))
         .collect();
-    collect_aliases(&function.body, &mut aliases);
 
     let record = |steps: &[PlaceStep<'_>], written: &mut Vec<BTreeSet<WrittenPlace>>| {
         let Some((PlaceStep::Root(root), tail)) = steps.split_first() else {
             return;
         };
-        let Some((position, prefix)) = aliases.get(root) else {
+        let Some(position) = parameter_position.get(root) else {
             return;
         };
-        let mut place: WrittenPlace = prefix.clone();
-        place.extend(
-            tail.iter()
-                .filter_map(|step| WrittenStep::from_place_step(*step)),
-        );
+        let mut place: WrittenPlace = tail
+            .iter()
+            .filter_map(|step| WrittenStep::from_place_step(*step))
+            .collect();
         place.truncate(MAX_WRITTEN_PLACE_STEPS);
         written[*position].insert(place);
     };
@@ -579,43 +578,6 @@ fn callee_ownerships(
         );
     }
     imported.get(name).map(|sig| sig.param_ownerships.clone())
-}
-
-/// Record `let view = <place rooted at an aliased name>` bindings, nested ones included.
-fn collect_aliases<'a>(
-    block: &'a Block,
-    aliases: &mut HashMap<&'a str, (usize, Vec<WrittenStep>)>,
-) {
-    for stmt in &block.stmts {
-        match stmt {
-            Stmt::Let { name, value, .. } => {
-                if let Some((PlaceStep::Root(root), tail)) =
-                    place_steps(value).as_deref().and_then(<[_]>::split_first)
-                {
-                    if let Some((position, prefix)) = aliases.get(root).cloned() {
-                        let mut place = prefix;
-                        place.extend(
-                            tail.iter()
-                                .filter_map(|step| WrittenStep::from_place_step(*step)),
-                        );
-                        aliases.entry(name.as_str()).or_insert((position, place));
-                    }
-                }
-            }
-            Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                collect_aliases(body, aliases)
-            }
-            Stmt::Match { arms, else_arm, .. } => {
-                for arm in arms {
-                    collect_aliases(&arm.body, aliases);
-                }
-                if let Some(block) = else_arm {
-                    collect_aliases(block, aliases);
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Push the statements directly inside `stmt`'s blocks.
