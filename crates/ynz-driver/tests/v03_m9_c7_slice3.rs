@@ -51,22 +51,22 @@ macro_rules! case {
 
 const NESTED_SHAPE_LOCAL: &str = "
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
 shape Wrap {
   inner: Tag
-  label: string
+  label: String
 }
 
-function make(index: int) -> Wrap {
+function make(index: Int) -> Wrap {
   let tag: Tag = { name: `t`, id: index }
   return { inner: tag, label: `l` }
 }
 
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (index in range(0, 100)) {
     let wrap: Wrap = make(index)
     total = total + wrap.inner.id
@@ -339,9 +339,9 @@ fn soa_program() -> String {
         .map(|item| format!("{{ x: {item}, y: 1, label: `l${{round}}-{item}`, extra: [{item}] }}"))
         .collect();
     format!(
-        "shape Part {{\n  x: int\n  y: int\n  label: string\n  extra: array<int>\n}}\n\n\
-         function entrypoint() -> nothing {{\n  let total: int = 0\n  for (round in range(0, 10)) {{\n    \
-         let parts: array<Part> = [{items}]\n    for (part in parts) {{\n      total = total + part.x + part.y\n    }}\n  }}\n  \
+        "shape Part {{\n  x: Int\n  y: Int\n  label: String\n  extra: Array<Int>\n}}\n\n\
+         function entrypoint() -> Nothing {{\n  let total: Int = 0\n  for (round in range(0, 10)) {{\n    \
+         let parts: Array<Part> = [{items}]\n    for (part in parts) {{\n      total = total + part.x + part.y\n    }}\n  }}\n  \
          print(total)\n}}\n",
         items = items.join(", ")
     )

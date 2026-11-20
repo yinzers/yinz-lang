@@ -37,8 +37,8 @@ fn bignum_map_key_is_refused_with_a_teaching_diagnostic() {
     assert_refused_with(
         "v0_3_m9_c6b_map_key_bignum_refused.ynz",
         &[
-            "A `map` cannot be keyed by `number<50>`.",
-            "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits",
+            "A `Map` cannot be keyed by `Number<50>`.",
+            "Key the map by an `Int` or a `String` id, or by a `Number` of at most 34 digits",
             "does not fit in the slot",
             "can have up to 50 digits",
         ],
@@ -53,9 +53,9 @@ fn sensitive_string_map_key_is_refused_with_a_teaching_diagnostic() {
     assert_refused_with(
         "v0_3_m9_c6b_map_key_sensitive_refused.ynz",
         &[
-            "A `map` cannot be keyed by `sensitive string`.",
-            "Key the map by a plain `string` or an `int` that is not a secret",
-            "`map<string, sensitive string>`",
+            "A `Map` cannot be keyed by `sensitive String`.",
+            "Key the map by a plain `String` or an `Int` that is not a secret",
+            "`Map<String, sensitive String>`",
             "not constant-time",
         ],
     );
@@ -64,11 +64,11 @@ fn sensitive_string_map_key_is_refused_with_a_teaching_diagnostic() {
     let in_shape = "v0_3_m9_c7_map_key_sensitive_in_shape_refused.ynz";
     assert_refused_with(
         in_shape,
-        &["A `map` cannot be keyed by `sensitive string`."],
+        &["A `Map` cannot be keyed by `sensitive String`."],
     );
     let refusals = compile(in_shape)
         .diagnostics
-        .matches("A `map` cannot be keyed by `sensitive string`.")
+        .matches("A `Map` cannot be keyed by `sensitive String`.")
         .count();
     assert_eq!(
         refusals, 3,
@@ -82,9 +82,9 @@ fn shape_map_key_is_refused_with_a_teaching_diagnostic() {
     assert_refused_with(
         "v0_3_m9_c6b_map_key_shape_refused.ynz",
         &[
-            "A `map` can't be keyed by `Point` yet.",
+            "A `Map` can't be keyed by `Point` yet.",
             "Key the map by one of its fields",
-            "`map<string, Point>`",
+            "`Map<String, Point>`",
             "could hold only the address where it lives",
         ],
     );
@@ -109,7 +109,7 @@ fn number_map_key_one_digit_past_the_widest_is_refused() {
     // accepting the wrong width. Tier: Medium.
     assert_refused_with(
         "v0_3_m9_c6b_map_key_just_past_widest_number_refused.ynz",
-        &["A `map` cannot be keyed by `number<35>`."],
+        &["A `Map` cannot be keyed by `Number<35>`."],
     );
 }
 
@@ -121,6 +121,6 @@ fn number_map_key_of_the_widest_width_is_found_by_an_identical_number() {
         "v0_3_m9_c6b_map_key_widest_number_accepted.ynz",
         false,
         "7\n",
-        "a `number<34>` map key must be accepted and found by an identical number",
+        "a `Number<34>` map key must be accepted and found by an identical number",
     );
 }

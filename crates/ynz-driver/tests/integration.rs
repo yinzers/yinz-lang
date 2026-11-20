@@ -162,7 +162,7 @@ fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
     // WHY: a source file with invalid UTF-8 must produce a clear error,
     // not a panic or garbled output.
     let tmp = std::env::temp_dir().join("ynz-bad-utf8.ynz");
-    std::fs::write(&tmp, b"function entrypoint() -> nothing { \xff }").expect("write bad file");
+    std::fs::write(&tmp, b"function entrypoint() -> Nothing { \xff }").expect("write bad file");
 
     let (_, stderr, code) = ynz_run_stdout(&tmp);
     let _ = std::fs::remove_file(&tmp);
@@ -235,11 +235,11 @@ fn m8_bignum_number100_runs() {
     // test-ratchet: M8 P6 flips this from "expect non-zero exit" to "expect success".
     // The fixture (m2_bignum_deferral.ynz) contains `let x: number<100> = 1.0; print(x)`.
     let (stdout, _stderr, code) = ynz_run_stdout(&fixture("m2_bignum_deferral.ynz"));
-    assert_eq!(code, 0, "number<100> must compile and run in M8");
+    assert_eq!(code, 0, "Number<100> must compile and run in M8");
     assert_eq!(
         stdout.trim(),
         "1.0",
-        "number<100> literal 1.0 must print 1.0"
+        "Number<100> literal 1.0 must print 1.0"
     );
 }
 
@@ -304,7 +304,7 @@ fn m4_p5_wrapping_add_closes_m2_catchup() {
     assert_eq!(code, 0, "wrapping add must succeed; stderr:\n{stderr}");
     assert_eq!(
         stdout, "-9223372036854775808\n",
-        "int.max + 1 must wrap to int.min"
+        "Int.max + 1 must wrap to Int.min"
     );
 }
 
@@ -315,10 +315,10 @@ fn m4_p5_int_max_constant_closes_m2_catchup() {
     // If the type-attached constant interception in typeck/codegen is broken,
     // this produces a compile error ("int is not defined").
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_int_max_deferred.ynz"));
-    assert_eq!(code, 0, "int.max constant must compile; stderr:\n{stderr}");
+    assert_eq!(code, 0, "Int.max constant must compile; stderr:\n{stderr}");
     assert_eq!(
         stdout, "9223372036854775807\n-9223372036854775808\n",
-        "int.max and int.min must print the correct i64 extremes"
+        "Int.max and Int.min must print the correct i64 extremes"
     );
 }
 
@@ -472,7 +472,7 @@ fn m4_neg_struct_wrong_field_type_is_error() {
     assert_ne!(code, 0, "wrong field type must be rejected");
     assert!(stdout.is_empty());
     assert!(
-        stderr.contains("int") || stderr.contains("expects"),
+        stderr.contains("Int") || stderr.contains("expects"),
         "error must name the expected type; got:\n{stderr}"
     );
 }
@@ -673,7 +673,7 @@ fn m3_return_value_in_nothing_fn_produces_diagnostic() {
     assert_ne!(code, 0, "return value in nothing fn must exit non-zero");
     assert!(stdout.is_empty());
     assert!(
-        stderr.contains("return") && stderr.contains("nothing"),
+        stderr.contains("return") && stderr.contains("Nothing"),
         "diagnostic must name the return-in-`nothing` contradiction, got:\n{stderr}"
     );
 }
@@ -727,7 +727,7 @@ fn m3_arg_type_mismatch_produces_diagnostic() {
     assert_ne!(code, 0, "arg type mismatch must exit non-zero");
     assert!(stdout.is_empty());
     assert!(
-        stderr.contains("int") || stderr.contains("string"),
+        stderr.contains("Int") || stderr.contains("String"),
         "diagnostic must mention the types, got:\n{stderr}"
     );
 }
@@ -3393,7 +3393,7 @@ fn v03_m3a_p1_number_errors_returning_suspending_fn_success() {
     ));
     assert_eq!(
         code, 0,
-        "suspending `-> number errors` must compile and run (exit 0); stderr:\n{stderr}"
+        "suspending `-> Number errors` must compile and run (exit 0); stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
@@ -3481,7 +3481,7 @@ fn v03_m3a_p1_anon_shape_returning_suspending_fn_rejected() {
     ));
     assert_eq!(
         code, 1,
-        "suspending `-> {{ health: int }}` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+        "suspending `-> {{ health: Int }}` must be rejected at compile time (exit 1); stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("cannot yet return"),
@@ -3510,7 +3510,7 @@ fn v03_m3a_p1_maybe_crossing_local_rejected() {
         ynz_run_stdout(&fixture("v0_3_m3a_p1_maybe_crossing_local_rejected.ynz"));
     assert_eq!(
         code, 1,
-        "maybe<int> crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
+        "Maybe<Int> crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("cannot yet cross a `wait`"),
@@ -4291,11 +4291,11 @@ fn v03_m3a_p3_fixed_bool_iter_wait_rejected() {
     let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_bool_iter_rejected.ynz"));
     assert_eq!(
         code, 1,
-        "fixed<boolean> iter with wait must be rejected at compile time; stderr:\n{stderr}"
+        "Fixed<Boolean> iter with wait must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("fixed<T>") || stderr.contains("fixed"),
-        "error must mention fixed<T>; stderr:\n{stderr}"
+        stderr.contains("Fixed<T>") || stderr.contains("Fixed"),
+        "error must mention Fixed<T>; stderr:\n{stderr}"
     );
 }
 
@@ -4307,11 +4307,11 @@ fn v03_m3a_p3_fixed_string_iter_wait_rejected() {
     let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_string_iter_rejected.ynz"));
     assert_eq!(
         code, 1,
-        "fixed<string> iter with wait must be rejected at compile time; stderr:\n{stderr}"
+        "Fixed<String> iter with wait must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("fixed<T>") || stderr.contains("fixed"),
-        "error must mention fixed<T>; stderr:\n{stderr}"
+        stderr.contains("Fixed<T>") || stderr.contains("Fixed"),
+        "error must mention Fixed<T>; stderr:\n{stderr}"
     );
 }
 
@@ -4327,7 +4327,7 @@ fn v03_m3a_p3_stored_range_iter_wait_rejected() {
         "stored range iter with wait must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("stored range") || stderr.contains("range"),
+        stderr.contains("stored Range") || stderr.contains("Range"),
         "error must mention range; stderr:\n{stderr}"
     );
 }
@@ -4358,7 +4358,7 @@ fn v03_m3a_p3_array_int_loop_var_survives_wait() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_int_array_loop_var.ynz"));
     assert_eq!(
         code, 0,
-        "array<int> loop var must survive wait and print correctly; stderr:\n{stderr}"
+        "Array<Int> loop var must survive wait and print correctly; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
@@ -4396,7 +4396,7 @@ fn v03_m3a_p3_number_loop_var_survives_wait() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_number_loop_var.ynz"));
     assert_eq!(
         code, 0,
-        "array<number> loop var must survive wait; stderr:\n{stderr}"
+        "Array<Number> loop var must survive wait; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
@@ -4416,10 +4416,10 @@ fn v03_m3a_p3_fixed_crossing_local_rejected() {
         ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_crossing_local_rejected.ynz"));
     assert_eq!(
         code, 1,
-        "fixed<int> crossing local must be rejected at compile time; stderr:\n{stderr}"
+        "Fixed<Int> crossing local must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("fixed<T>") || stderr.contains("fixed<int>") || stderr.contains("fixed"),
+        stderr.contains("Fixed<T>") || stderr.contains("Fixed<Int>") || stderr.contains("Fixed"),
         "error must mention fixed type; stderr:\n{stderr}"
     );
 }
@@ -4438,7 +4438,7 @@ fn v03_m3a_p3_map_entry_after_wait_rejected() {
         "map entry.* read after wait must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("MapEntry") || stderr.contains("entry") || stderr.contains("map"),
+        stderr.contains("MapEntry") || stderr.contains("entry") || stderr.contains("Map"),
         "error must mention the MapEntry or map iteration; stderr:\n{stderr}"
     );
 }
@@ -4451,7 +4451,7 @@ fn v03_m3a_p3_string_array_loop_var_survives_wait() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_string_array_wait.ynz"));
     assert_eq!(
         code, 0,
-        "array<string> loop var must survive wait; stderr:\n{stderr}"
+        "Array<String> loop var must survive wait; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
@@ -4625,7 +4625,7 @@ fn v03_m3a_p3_audit_maybe_crossing_loud_rejected() {
         "maybe crossing local must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("maybe") || stderr.contains("union") || stderr.contains("dynamic"),
+        stderr.contains("Maybe") || stderr.contains("union") || stderr.contains("dynamic"),
         "error must mention the unsupported type; stderr:\n{stderr}"
     );
 }
@@ -4641,7 +4641,7 @@ fn v03_m3a_p3_audit_fixed_crossing_loud_rejected() {
         "fixed crossing local must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("fixed"),
+        stderr.contains("Fixed"),
         "error must mention fixed type; stderr:\n{stderr}"
     );
 }
@@ -4659,7 +4659,7 @@ fn v03_m3a_p3_audit_map_nested_wait_field_rejected() {
         "map entry.* after nested if-wait must be rejected; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("entry") || stderr.contains("map") || stderr.contains("MapEntry"),
+        stderr.contains("entry") || stderr.contains("Map") || stderr.contains("MapEntry"),
         "error must mention map entry; stderr:\n{stderr}"
     );
 }
@@ -4678,12 +4678,12 @@ fn v03_m3a_p3_audit_array_number_sm_no_leak() {
     let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3a_p3_audit_array_number_no_leak.ynz");
     assert_eq!(
         alloc, 3,
-        "exactly 3 allocs (task frame + array header + buffer) for array<number> SM \
+        "exactly 3 allocs (task frame + array header + buffer) for Array<Number> SM \
          function — any growth with element count = decimal128 element leak; got alloc={alloc}"
     );
     assert_eq!(
         free, 3,
-        "exactly 3 frees (task frame + the local array's header and buffer) for array<number> SM \
+        "exactly 3 frees (task frame + the local array's header and buffer) for Array<Number> SM \
          function; got free={free}"
     );
 }
@@ -4703,7 +4703,7 @@ fn v03_m3a_p3_for_shape_loop_var_survives_wait() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_shape_loop_var.ynz"));
     assert_eq!(
         code, 0,
-        "array<Shape> loop var + wait must compile and run; stderr:\n{stderr}"
+        "Array<Shape> loop var + wait must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
@@ -4724,12 +4724,12 @@ fn v03_m3a_p3_for_shape_loop_var_alloc_one() {
     let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3a_p3_for_shape_loop_var.ynz");
     assert_eq!(
         alloc, 3,
-        "array<Shape> loop var must use exactly 3 allocs (frame + array header + \
+        "Array<Shape> loop var must use exactly 3 allocs (frame + array header + \
          buffer, element-count-independent); got alloc={alloc}"
     );
     assert_eq!(
         free, 3,
-        "exactly 3 frees (task frame + the local array's header and buffer) for array<Shape> loop \
+        "exactly 3 frees (task frame + the local array's header and buffer) for Array<Shape> loop \
          var; got free={free}"
     );
 }
@@ -4744,7 +4744,7 @@ fn v03_m3a_p3_for_nested_shape_loop_var_rejected() {
     let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_nested_shape_rejected.ynz"));
     assert_eq!(
         code, 1,
-        "array<NestedShape> loop var must be rejected at compile time; stderr:\n{stderr}"
+        "Array<NestedShape> loop var must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("nested-shape field"),
@@ -4813,12 +4813,12 @@ fn m5_p3_array_shape_runtime_field_crossing_runs() {
         ynz_run_stdout(&fixture("m5_p3_array_shape_runtime_field_runs.ynz"));
     assert_eq!(
         code, 0,
-        "runtime-field array<Shape> crossing a wait must compile and run (guard lifted); stderr:\n{stderr}"
+        "runtime-field Array<Shape> crossing a wait must compile and run (guard lifted); stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
         "30",
-        "runtime-field array<Shape> must survive suspension with correct element \
+        "runtime-field Array<Shape> must survive suspension with correct element \
          values (10+20=30); got:\n{stdout}"
     );
 }
@@ -4837,12 +4837,12 @@ fn v03_m3a_p3_array_shape_literal_crossing_still_works() {
     ));
     assert_eq!(
         code, 0,
-        "array<Shape> with all-literal fields crossing a wait must compile and run; stderr:\n{stderr}"
+        "Array<Shape> with all-literal fields crossing a wait must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
         "30",
-        "all-literal array<Shape> must survive suspension and sum correctly (10+20=30); got:\n{stdout}"
+        "all-literal Array<Shape> must survive suspension and sum correctly (10+20=30); got:\n{stdout}"
     );
 }
 
@@ -4856,12 +4856,12 @@ fn m5_p3_array_shape_between_waits_runs() {
         ynz_run_stdout(&fixture("m5_p3_array_shape_between_waits_runs.ynz"));
     assert_eq!(
         code, 0,
-        "runtime-field array<Shape> declared between two waits must compile and run; stderr:\n{stderr}"
+        "runtime-field Array<Shape> declared between two waits must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
         "30",
-        "between-waits array<Shape> must survive the second suspension with correct \
+        "between-waits Array<Shape> must survive the second suspension with correct \
          element values (10+20=30); got:\n{stdout}"
     );
 }
@@ -4875,12 +4875,12 @@ fn m5_p3_array_shape_nested_if_runs() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_array_shape_nested_if_runs.ynz"));
     assert_eq!(
         code, 0,
-        "runtime-field array<Shape> nested in an if body crossing a wait must compile and run; stderr:\n{stderr}"
+        "runtime-field Array<Shape> nested in an if body crossing a wait must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
         "30",
-        "nested-if array<Shape> must survive suspension with correct element values \
+        "nested-if Array<Shape> must survive suspension with correct element values \
          (10+20=30); got:\n{stdout}"
     );
 }
@@ -5686,7 +5686,7 @@ fn v03_m3d_cpu_child_panic_fires_byte_identical() {
     // error became mode-dependent — fix the codegen/runtime, not this test.
     m3d_assert_panic_fires_byte_identical(
         "v0_3_m3d_cpu_child_panic.ynz",
-        "RUNTIME ERROR: division by zero (int)",
+        "RUNTIME ERROR: division by zero (Int)",
     );
 }
 
@@ -5704,7 +5704,7 @@ fn v03_m3g_panic_cpu_member_with_io_in_flight_fires_byte_identical() {
     // proving the re-raise path under genuine concurrency.
     m3d_assert_panic_fires_n_byte_identical(
         "v0_3_m3g_panic_cpu_member_with_io_in_flight.ynz",
-        "RUNTIME ERROR: division by zero (int)",
+        "RUNTIME ERROR: division by zero (Int)",
         1,
     );
 }
@@ -5726,7 +5726,7 @@ fn v03_m3g_panic_io_member_with_cpu_in_flight_fires_byte_identical() {
     // concurrency.
     m3d_assert_panic_fires_n_byte_identical(
         "v0_3_m3g_panic_io_member_with_cpu_in_flight.ynz",
-        "RUNTIME ERROR: division by zero (int)",
+        "RUNTIME ERROR: division by zero (Int)",
         1,
     );
 }
@@ -10679,7 +10679,7 @@ fn m5_p3_e8_gate_visibility_arrays() {
     assert_eq!(
         (alloc, free),
         (2, 2),
-        "1 array<int> (cap 8, no growth on .add(4)) = header+buffer, released at the scope end \
+        "1 Array<Int> (cap 8, no growth on .add(4)) = header+buffer, released at the scope end \
          (C7); alloc={alloc} free={free}"
     );
 }
@@ -10700,7 +10700,7 @@ fn m5_p3_e8_gate_visibility_maps() {
     assert_eq!(
         (alloc, free),
         (5, 5),
-        "1 map<int,Part> (cap 16, 4 keys, no growth) = 5 buffers released at the scope end (C7), shape values \
+        "1 Map<Int,Part> (cap 16, 4 keys, no growth) = 5 buffers released at the scope end (C7), shape values \
          inline (0 heap cells); alloc={alloc} free={free}"
     );
 }

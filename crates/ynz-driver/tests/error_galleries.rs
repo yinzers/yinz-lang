@@ -447,12 +447,12 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
     );
     // Wrong capacity type.
     assert!(
-        stderr.contains("capacity must be an `int`"),
+        stderr.contains("capacity must be an `Int`"),
         "v0_3_m4 gallery must include wrong-capacity-type diagnostic; got:\n{stderr}"
     );
     // Missing element type.
     assert!(
-        stderr.contains("`channel` needs an element type"),
+        stderr.contains("`Channel` needs an element type"),
         "v0_3_m4 gallery must include missing-element-type diagnostic; got:\n{stderr}"
     );
     // Too many arguments.
@@ -470,7 +470,7 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
     // Send with the wrong element type — AND the mandated backpressure teaching text
     // (IMP-no-function-coloring: a suspended producer is backpressure working, not a deadlock).
     assert!(
-        stderr.contains("carries `int` values, but you're sending `string`"),
+        stderr.contains("carries `Int` values, but you're sending `String`"),
         "v0_3_m4 gallery must include send-wrong-element-type diagnostic; got:\n{stderr}"
     );
     assert!(
@@ -631,7 +631,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
             "unchecked `errors` value",
             "it has not been checked for failure yet",
         ),
-        ("`nothing`", "there is no value here to copy"),
+        ("`Nothing`", "there is no value here to copy"),
         (
             "`background` argument the spawner keeps reading",
             "this line still reads it after the task starts",
@@ -641,7 +641,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         // so a reuse of the row above would have taught the reader something that does not work.
         (
             "`background` argument kept with the frame",
-            "a `range` cannot be handed to a background task",
+            "a `Range` cannot be handed to a background task",
         ),
         (
             "shadowed `.failed()`-checked binding (FRAGO 002 C3, parked 33)",
@@ -663,7 +663,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
     // things the six refusals tell the reader to do instead; a refusal that loses its fix is
     // a dead end, which is the failure mode Golden Rule 3 exists to prevent.
     for phrase in [
-        "let replies: channel<int> = channel<int>()",
+        "let replies: Channel<Int> = Channel<Int>()",
         "let second = background worker(orders)",
         "if (order is Delivery) { const backup = order.copy() }",
         "const savedKey = entry.key",
@@ -674,7 +674,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         // trigger).
         "Drop the `.copy()` and call the function on its own",
         "move every later read of `pings` above the `background` line",
-        "for a `range`, its start and end as two `int` values",
+        "for a `Range`, its start and end as two `Int` values",
         "Check `.failed()` on `count` first",
         "Use `.message` to read what went wrong",
     ] {
@@ -715,11 +715,11 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
         ("why", "is a box with a tag saying which variant is inside"),
         (
             "hidden field default of another type",
-            "Hidden field `note` expects `string`, but its default is `int`",
+            "Hidden field `note` expects `String`, but its default is `Int`",
         ),
         (
             "non-shape variant left unhandled",
-            "1 variant is not handled: int",
+            "1 variant is not handled: Int",
         ),
         (
             "argument that conflicts with its type parameter",
@@ -731,15 +731,15 @@ fn v0_3_m9_gallery_fires_union_diagnostics() {
         ),
         (
             "shape map key (C6)",
-            "A `map` can't be keyed by `Plain` yet",
+            "A `Map` can't be keyed by `Plain` yet",
         ),
         (
             "wide number map key (C6)",
-            "A `map` cannot be keyed by `number<50>`",
+            "A `Map` cannot be keyed by `Number<50>`",
         ),
         (
-            "sensitive string map key (C7)",
-            "A `map` cannot be keyed by `sensitive string`",
+            "sensitive String map key (C7)",
+            "A `Map` cannot be keyed by `sensitive String`",
         ),
         (
             "union given to a generic task parameter (C6)",

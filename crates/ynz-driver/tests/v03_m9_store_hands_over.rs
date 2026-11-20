@@ -67,7 +67,7 @@ fn bg_arg_alias_container_add_is_refused() {
         &[
             "`rows` is a parameter of `stash` that has no ownership word",
             "it is handed to `bucket`",
-            "function stash(give rows: array<int>, …)",
+            "function stash(give rows: Array<Int>, …)",
         ],
     );
 }

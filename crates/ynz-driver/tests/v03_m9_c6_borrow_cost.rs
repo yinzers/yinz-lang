@@ -230,7 +230,7 @@ cost_case!(
     "3\n",
     6,
     6,
-    "a `let` of a `maybe<array>` and of its `.or` copying the payload array although the list is never written (cost, Rule 6)"
+    "a `let` of a `Maybe<Array>` and of its `.or` copying the payload array although the list is never written (cost, Rule 6)"
 );
 cost_case!(
     a_let_of_a_maybe_map_element_nobody_writes_copies_no_payload,
@@ -238,7 +238,7 @@ cost_case!(
     "1\n",
     12,
     12,
-    "a `let` of a `maybe<map>` and of its `.or` copying the payload map although the list is never written (cost, Rule 6)"
+    "a `let` of a `Maybe<Map>` and of its `.or` copying the payload map although the list is never written (cost, Rule 6)"
 );
 cost_case!(
     an_argument_of_a_suspending_call_nobody_writes_is_staged_without_a_copy,

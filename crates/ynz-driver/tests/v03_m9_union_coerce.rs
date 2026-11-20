@@ -116,7 +116,7 @@ fn v03_m9_union_coerce_channel_union_element_is_refused() {
     // wrap through the one coercion point and this test becomes a run fixture. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_coerce_channel_refused.ynz",
-        "`channel<Tiny | Big>` is not supported yet",
+        "`Channel<Tiny | Big>` is not supported yet",
     );
 }
 
@@ -126,7 +126,7 @@ fn v03_m9_union_coerce_number_precision_mismatch_is_refused() {
     // representation, so the callee read the narrow slot as a wide decimal. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_coerce_number_precision_refused.ynz",
-        "a union can't convert a `number<10>` into one yet",
+        "a union can't convert a `Number<10>` into one yet",
     );
 }
 
@@ -331,11 +331,11 @@ fn v03_m9_union_coerce_suspending_return_direct_is_refused() {
 /// teaching text.
 fn assert_non_shape_variant_return_refused(variant: &str, literal: &str) {
     let program = format!(
-        "shape Circle {{\n  name: string\n}}\n\
+        "shape Circle {{\n  name: String\n}}\n\
          shape Mixed = Circle | {variant}\n\n\
          function later() -> {variant} {{\n  wait sleep(1)\n  return {literal}\n}}\n\n\
          function pick() -> Mixed {{\n  wait sleep(1)\n  return later()\n}}\n\n\
-         function entrypoint() -> nothing {{\n  let m = pick()\n  print(`done`)\n}}\n"
+         function entrypoint() -> Nothing {{\n  let m = pick()\n  print(`done`)\n}}\n"
     );
     assert_return_refused(&format!("return later() as {variant}"), &program, "later()");
 }

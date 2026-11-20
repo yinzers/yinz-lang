@@ -43,7 +43,7 @@ fn assert_prints(source: &str, expected: &str) {
 }
 
 fn program(functions: &str, entrypoint_body: &str) -> String {
-    format!("{functions}\n{CLOBBER}function entrypoint() -> nothing {{\n{entrypoint_body}}}\n")
+    format!("{functions}\n{CLOBBER}function entrypoint() -> Nothing {{\n{entrypoint_body}}}\n")
 }
 
 #[test]
@@ -53,8 +53,8 @@ fn array_of_numbers_returned_from_its_producer() {
         "function make(amount: Number) -> Array<Number> {\n  \
          let doubled: Number = amount * 2.0\n  let values: Array<Number> = [amount, doubled]\n  \
          return values\n}\n",
-        "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let values = make(amount)\n  \
-         let scratch = clobber(5)\n  let fallback: number = 0.0\n  \
+        "  let seed: Number = 1.5\n  let amount: Number = seed + 1.0\n  let values = make(amount)\n  \
+         let scratch = clobber(5)\n  let fallback: Number = 0.0\n  \
          print(`${values[0].or(fallback)} ${values[1].or(fallback)} ${scratch}`)\n",
     );
     assert_prints(&source, "2.5 5.00 54\n");
@@ -66,10 +66,10 @@ fn array_of_numbers_filled_in_a_loop_body() {
     // read the last value and `contains` found nothing. Tier: High.
     let source = program(
         "",
-        "  let seed: number = 1.5\n  let values: array<number> = []\n  \
-         for (round in range(0, 5)) {\n    let step: number = seed * 2.0\n    seed = seed + 1.0\n    \
-         values.add(step)\n  }\n  let total: number = 0.0\n  for (item in values) {\n    \
-         total = total + item\n  }\n  let target: number = 5.0\n  \
+        "  let seed: Number = 1.5\n  let values: Array<Number> = []\n  \
+         for (round in range(0, 5)) {\n    let step: Number = seed * 2.0\n    seed = seed + 1.0\n    \
+         values.add(step)\n  }\n  let total: Number = 0.0\n  for (item in values) {\n    \
+         total = total + item\n  }\n  let target: Number = 5.0\n  \
          print(`${total} ${values.count()} ${values.contains(target)}`)\n",
     );
     assert_prints(&source, "35.00 5 true\n");
@@ -81,10 +81,10 @@ fn copy_of_an_array_of_numbers_is_independent_of_a_later_set() {
     // it still views. Tier: High.
     let source = program(
         "",
-        "  let seed: number = 1.5\n  let doubled: number = seed * 2.0\n  \
-         let values: array<number> = [seed, doubled]\n  let copy: array<number> = values.copy()\n  \
-         let fallback: number = 0.0\n  let before: number = values[0].or(fallback)\n  \
-         let replacement: number = 100.0\n  values.set(0, replacement)\n  \
+        "  let seed: Number = 1.5\n  let doubled: Number = seed * 2.0\n  \
+         let values: Array<Number> = [seed, doubled]\n  let copy: Array<Number> = values.copy()\n  \
+         let fallback: Number = 0.0\n  let before: Number = values[0].or(fallback)\n  \
+         let replacement: Number = 100.0\n  values.set(0, replacement)\n  \
          print(`${before} ${copy[0].or(fallback)} ${values[0].or(fallback)}`)\n",
     );
     assert_prints(&source, "1.5 1.5 100.0\n");
@@ -97,8 +97,8 @@ fn map_of_numbers_returned_from_its_producer() {
         "function make(amount: Number) -> Map<Int, Number> {\n  \
          let doubled: Number = amount * 2.0\n  let table: Map<Int, Number> = {}\n  \
          table.set(1, amount)\n  table.set(2, doubled)\n  return table\n}\n",
-        "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let table = make(amount)\n  \
-         let scratch = clobber(5)\n  let fallback: number = 0.0\n  \
+        "  let seed: Number = 1.5\n  let amount: Number = seed + 1.0\n  let table = make(amount)\n  \
+         let scratch = clobber(5)\n  let fallback: Number = 0.0\n  \
          print(`${table[1].or(fallback)} ${table[2].or(fallback)} ${scratch}`)\n",
     );
     assert_prints(&source, "2.5 5.00 54\n");
@@ -112,8 +112,8 @@ fn array_of_arrays_of_numbers_returned_from_its_producer() {
         "function make(amount: Number) -> Array<Array<Number>> {\n  \
          let doubled: Number = amount * 2.0\n  let inner: Array<Number> = [amount, doubled]\n  \
          let outer: Array<Array<Number>> = [inner]\n  return outer\n}\n",
-        "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let outer = make(amount)\n  \
-         let scratch = clobber(5)\n  let fallback: number = 0.0\n  let row = outer[0].or([])\n  \
+        "  let seed: Number = 1.5\n  let amount: Number = seed + 1.0\n  let outer = make(amount)\n  \
+         let scratch = clobber(5)\n  let fallback: Number = 0.0\n  let row = outer[0].or([])\n  \
          print(`${row[1].or(fallback)} ${scratch}`)\n",
     );
     assert_prints(&source, "5.00 54\n");
@@ -129,11 +129,11 @@ fn maybe_number_read_from_an_element_survives_its_array_and_the_next_read() {
          function make(amount: Number) -> Array<Number> {\n  \
          let doubled: Number = amount * 2.0\n  let values: Array<Number> = [amount, doubled]\n  \
          return values\n}\n",
-        "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let values = make(amount)\n  \
+        "  let seed: Number = 1.5\n  let amount: Number = seed + 1.0\n  let values = make(amount)\n  \
          let first = pick(values, 0)\n  let second = pick(values, 1)\n  \
-         let latest: maybe<number> = values.get(0)\n  for (position in range(0, 2)) {\n    \
+         let latest: Maybe<Number> = values.get(0)\n  for (position in range(0, 2)) {\n    \
          let found = values.get(position)\n    latest = found\n  }\n  let scratch = clobber(5)\n  \
-         let fallback: number = 0.0\n  \
+         let fallback: Number = 0.0\n  \
          print(`${first.or(fallback)} ${second.or(fallback)} ${scratch} ${latest.or(fallback)}`)\n",
     );
     assert_prints(&source, "2.5 5.00 54 5.00\n");
@@ -146,10 +146,10 @@ fn fixed_of_numbers_holds_its_own_decimals() {
     // garbage at -O0. Tier: High.
     let source = program(
         "",
-        "  let seed: number = 1.5\n  let cells: fixed<number> = [seed, seed * 2.0]\n  seed = 9.0\n  \
-         let fallback: number = 0.0\n  print(`${cells[0].or(fallback)}`)\n  \
-         for (round in range(0, 2)) {\n    let step: number = seed * 2.0\n    cells.set(round, step)\n    \
-         seed = seed + 1.0\n  }\n  let total: number = 0.0\n  for (cell in cells) {\n    \
+        "  let seed: Number = 1.5\n  let cells: Fixed<Number> = [seed, seed * 2.0]\n  seed = 9.0\n  \
+         let fallback: Number = 0.0\n  print(`${cells[0].or(fallback)}`)\n  \
+         for (round in range(0, 2)) {\n    let step: Number = seed * 2.0\n    cells.set(round, step)\n    \
+         seed = seed + 1.0\n  }\n  let total: Number = 0.0\n  for (cell in cells) {\n    \
          total = total + cell\n  }\n  \
          print(`${cells[0].or(fallback)} ${cells[1].or(fallback)} ${total}`)\n",
     );
@@ -164,8 +164,8 @@ fn channel_of_numbers_delivers_each_sent_value() {
         "function produce(line: Channel<Number>) -> Nothing {\n  let seed: Number = 1.5\n  \
          for (round in range(0, 3)) {\n    let step: Number = seed * 2.0\n    seed = seed + 1.0\n    \
          line.send(step)\n  }\n}\n",
-        "  let line: channel<number> = channel<number>(4)\n  produce(line)\n  \
-         let fallback: number = 0.0\n  for (round in range(0, 3)) {\n    let got = line.receive()\n    \
+        "  let line: Channel<Number> = Channel<Number>(4)\n  produce(line)\n  \
+         let fallback: Number = 0.0\n  for (round in range(0, 3)) {\n    let got = line.receive()\n    \
          print(got.or(fallback))\n  }\n",
     );
     assert_prints(&source, "3.00\n5.00\n7.00\n");
@@ -179,9 +179,9 @@ fn map_entry_values_copied_out_of_a_loop_survive_the_loop() {
         "function make(seed: Number) -> Map<String, Number> {\n  \
          let doubled: Number = seed * 2.0\n  let table: Map<String, Number> = {}\n  \
          table.set(`a`, seed)\n  table.set(`b`, doubled)\n  return table\n}\n",
-        "  let seed: number = 1.5\n  let table = make(seed)\n  let kept: array<number> = []\n  \
+        "  let seed: Number = 1.5\n  let table = make(seed)\n  let kept: Array<Number> = []\n  \
          for (entry in table) {\n    kept.add(entry.value)\n  }\n  let scratch = clobber(5)\n  \
-         let fallback: number = 0.0\n  print(`${kept[0].or(fallback)} ${kept[1].or(fallback)} ${scratch}`)\n",
+         let fallback: Number = 0.0\n  print(`${kept[0].or(fallback)} ${kept[1].or(fallback)} ${scratch}`)\n",
     );
     assert_prints(&source, "1.5 3.00 54\n");
 }
@@ -197,15 +197,15 @@ fn spawned_numbers_program(suspending_callee: bool) -> String {
          if (mixed < 0) {\n    print(mixed)\n  }\n"
     };
     format!(
-        "function show(values: array<number>) -> nothing {{\n{wait_for_the_spawner}  \
-         let fallback: number = 0.0\n  let first: number = values[0].or(fallback)\n  \
-         let second: number = values[1].or(fallback)\n  print(`${{first}} ${{second}}`)\n}}\n\n\
-         function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \
-         let values: array<number> = [amount, doubled]\n  \
+        "function show(values: Array<Number>) -> Nothing {{\n{wait_for_the_spawner}  \
+         let fallback: Number = 0.0\n  let first: Number = values[0].or(fallback)\n  \
+         let second: Number = values[1].or(fallback)\n  print(`${{first}} ${{second}}`)\n}}\n\n\
+         function launch(amount: Number) -> Nothing {{\n  let doubled: Number = amount * 2.0\n  \
+         let values: Array<Number> = [amount, doubled]\n  \
          for (round in range(0, 3)) {{\n    background show(values)\n  }}\n  \
          print(values.count())\n}}\n\n{CLOBBER}\
-         function entrypoint() -> nothing {{\n  let seed: number = 1.5\n  \
-         let amount: number = seed + 1.0\n  launch(amount)\n  let scratch = clobber(5)\n  \
+         function entrypoint() -> Nothing {{\n  let seed: Number = 1.5\n  \
+         let amount: Number = seed + 1.0\n  launch(amount)\n  let scratch = clobber(5)\n  \
          print(scratch)\n  wait sleep(1500)\n}}\n"
     )
 }
@@ -261,12 +261,12 @@ fn spawns_of_an_array_of_numbers_in_a_loop_balance() {
     // the spawner. Three more spawns must add as many frees as allocations. Tier: High.
     let counts = |tasks: usize| {
         let source = format!(
-            "function show(values: array<number>) -> nothing {{\n  print(777)\n}}\n\n\
-             function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \
-             let values: array<number> = [amount, doubled]\n  \
+            "function show(values: Array<Number>) -> Nothing {{\n  print(777)\n}}\n\n\
+             function launch(amount: Number) -> Nothing {{\n  let doubled: Number = amount * 2.0\n  \
+             let values: Array<Number> = [amount, doubled]\n  \
              for (round in range(0, {tasks})) {{\n    background show(values)\n  }}\n  \
-             print(values.count())\n}}\n\nfunction entrypoint() -> nothing {{\n  \
-             let seed: number = 1.5\n  let amount: number = seed + 1.0\n  launch(amount)\n  \
+             print(values.count())\n}}\n\nfunction entrypoint() -> Nothing {{\n  \
+             let seed: Number = 1.5\n  let amount: Number = seed + 1.0\n  launch(amount)\n  \
              wait sleep(300)\n}}\n"
         );
         let built = build_source(&source, "c6 number spawn counts", false);
@@ -294,7 +294,7 @@ fn storing_numbers_allocates_nothing_per_element() {
         let source = program(
             "",
             &format!(
-                "  let values: array<number> = []\n  let step: number = 1.5\n  \
+                "  let values: Array<Number> = []\n  let step: Number = 1.5\n  \
                  for (round in range(0, {count})) {{\n    values.add(step)\n  }}\n  \
                  print(values.count())\n"
             ),
@@ -332,7 +332,7 @@ fn union_variant_holding_a_number_survives_container_return_and_spawn() {
          function launch(seed: Number) -> Nothing {\n  let doubled: Number = seed * 2.0\n  \
          let boxed: Boxed = { value: doubled }\n  let wrapped: Thing = boxed\n  \
          background slow(wrapped)\n}\n",
-        "  let seed: number = 1.5\n  let items = make(seed)\n  let single = produce(seed)\n  \
+        "  let seed: Number = 1.5\n  let items = make(seed)\n  let single = produce(seed)\n  \
          launch(seed)\n  let scratch = clobber(5)\n  let spare: Boxed = { value: 0.0 }\n  \
          let fallback: Thing = spare\n  let one = items[1].or(fallback)\n  \
          print(`${describe(one)} ${describe(single)} ${scratch}`)\n  wait sleep(400)\n",
@@ -367,7 +367,7 @@ fn map_keyed_by_numbers_returned_from_its_producer() {
         "function keyed() -> Map<Number, String> {\n  let table: Map<Number, String> = {}\n  \
          let price: Number = 2.5\n  table.set(price, `two and a half`)\n  return table\n}\n",
         "  let table = keyed()\n  let scratch = clobber(3)\n  for (entry in table) {\n    \
-         print(entry.key)\n  }\n  let probe: number = 2.5\n  \
+         print(entry.key)\n  }\n  let probe: Number = 2.5\n  \
          print(table[probe].or(`missing`))\n  print(scratch)\n",
     );
     assert_prints(&source, "2.5\ntwo and a half\n36\n");
@@ -386,10 +386,10 @@ fn number_key_is_found_by_an_identical_computed_key() {
     // Tier: High.
     let source = program(
         "",
-        "  let table: map<number, string> = {}\n  let stored: number = 1.0\n  \
-         table.set(stored, `one`)\n  let half: number = 0.5\n  let computed: number = half + half\n  \
+        "  let table: Map<Number, String> = {}\n  let stored: Number = 1.0\n  \
+         table.set(stored, `one`)\n  let half: Number = 0.5\n  let computed: Number = half + half\n  \
          print(table[computed].or(`missing`))\n  print(table.has(computed))\n  \
-         print(table.get(computed).or(`missing`))\n  let other: number = 1.5\n  \
+         print(table.get(computed).or(`missing`))\n  let other: Number = 1.5\n  \
          print(table.has(other))\n  print(table[other].or(`missing`))\n",
     );
     assert_prints(&source, "one\ntrue\none\nfalse\nmissing\n");
@@ -402,8 +402,8 @@ fn number_key_identical_overwrites_and_another_scale_is_another_key() {
     // Tier: High.
     let source = program(
         "",
-        "  let table: map<number, string> = {}\n  let first: number = 1.0\n  \
-         let second: number = 0.5 + 0.5\n  let third: number = 1.00\n  \
+        "  let table: Map<Number, String> = {}\n  let first: Number = 1.0\n  \
+         let second: Number = 0.5 + 0.5\n  let third: Number = 1.00\n  \
          table.set(first, `first`)\n  table.set(second, `second`)\n  print(table.count())\n  \
          table[third] = `third`\n  print(table.count())\n  for (entry in table) {\n    \
          print(`${entry.key} ${entry.value}`)\n  }\n",
@@ -418,13 +418,13 @@ fn number_keys_survive_growth_past_several_rehashes() {
     // here, and the insertion-order buffer holds 64). Tier: High.
     let source = program(
         "",
-        "  let table: map<number, int> = {}\n  let step: number = 0.5\n  let key: number = 0.0\n  \
+        "  let table: Map<Number, Int> = {}\n  let step: Number = 0.5\n  let key: Number = 0.0\n  \
          for (round in range(0, 200)) {\n    table.set(key, round)\n    key = key + step\n  }\n  \
-         let probe: number = 0.0\n  let total = 0\n  let missing = 0\n  \
+         let probe: Number = 0.0\n  let total = 0\n  let missing = 0\n  \
          for (round in range(0, 200)) {\n    total = total + table[probe].or(0 - 1)\n    \
-         probe = probe + 0.5\n  }\n  let beyond: number = 100.0\n  \
+         probe = probe + 0.5\n  }\n  let beyond: Number = 100.0\n  \
          print(`${table.count()} ${total} ${table[beyond].or(0 - 1)}`)\n  \
-         let key_total: number = 0.0\n  let value_total = 0\n  for (entry in table) {\n    \
+         let key_total: Number = 0.0\n  let value_total = 0\n  for (entry in table) {\n    \
          key_total = key_total + entry.key\n    value_total = value_total + entry.value\n  }\n  \
          print(`${key_total} ${value_total}`)\n  print(missing)\n",
     );
@@ -438,11 +438,11 @@ fn copy_of_a_number_keyed_map_is_independent_of_a_later_set() {
     // runs the nested-value deep copy, which reads each key back and sets it again. Tier: High.
     let source = program(
         "",
-        "  let table: map<number, array<int>> = {}\n  let low: number = 1.5\n  let high: number = 2.5\n  \
-         let one: array<int> = [1]\n  let two: array<int> = [2, 2]\n  table.set(low, one)\n  \
-         table.set(high, two)\n  let copy = table.copy()\n  let probe: number = 1.5\n  \
-         let replacement: array<int> = [7, 7, 7]\n  table.set(probe, replacement)\n  \
-         let extra: number = 3.5\n  table.set(extra, [4, 4, 4, 4])\n  let absent: array<int> = []\n  \
+        "  let table: Map<Number, Array<Int>> = {}\n  let low: Number = 1.5\n  let high: Number = 2.5\n  \
+         let one: Array<Int> = [1]\n  let two: Array<Int> = [2, 2]\n  table.set(low, one)\n  \
+         table.set(high, two)\n  let copy = table.copy()\n  let probe: Number = 1.5\n  \
+         let replacement: Array<Int> = [7, 7, 7]\n  table.set(probe, replacement)\n  \
+         let extra: Number = 3.5\n  table.set(extra, [4, 4, 4, 4])\n  let absent: Array<Int> = []\n  \
          print(`${copy.count()} ${table.count()}`)\n  \
          let copied_row = copy[probe].or(absent)\n  let table_row = table[probe].or(absent)\n  \
          print(`${copied_row.count()} ${table_row.count()}`)\n  \
@@ -456,9 +456,9 @@ fn number_keyed_map_literal_and_channel_round_trip() {
     // Bug caught: a literal or a channel hop (a copy of the map) keeping 8-byte keys. Tier: High.
     let source = program(
         "",
-        "  let literal: map<number, string> = {1.5: `a`, 2.5: `b`}\n  let probe: number = 2.5\n  \
-         let line: channel<map<number, string>> = channel<map<number, string>>(2)\n  \
-         line.send(literal.copy())\n  let empty: map<number, string> = {}\n  \
+        "  let literal: Map<Number, String> = {1.5: `a`, 2.5: `b`}\n  let probe: Number = 2.5\n  \
+         let line: Channel<Map<Number, String>> = Channel<Map<Number, String>>(2)\n  \
+         line.send(literal.copy())\n  let empty: Map<Number, String> = {}\n  \
          let got = line.receive()\n  let received = got.or(empty)\n  print(received[probe].or(`missing`))\n  \
          for (entry in received) {\n    print(entry.key)\n  }\n",
     );
@@ -476,17 +476,17 @@ fn spawned_number_keys_program(suspending_callee: bool) -> String {
          if (mixed < 0) {\n    print(mixed)\n  }\n"
     };
     format!(
-        "function show(table: map<number, string>) -> nothing {{\n{wait_for_the_spawner}  \
-         let probe: number = 5.00\n  let key_total: number = 0.0\n  let names = ``\n  \
+        "function show(table: Map<Number, String>) -> Nothing {{\n{wait_for_the_spawner}  \
+         let probe: Number = 5.00\n  let key_total: Number = 0.0\n  let names = ``\n  \
          for (entry in table) {{\n    key_total = key_total + entry.key\n    names = `${{names}}${{entry.value}} `\n  }}\n  \
          print(`${{table[probe].or(`missing`)}} ${{names}}${{key_total}}`)\n}}\n\n\
-         function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \
-         let table: map<number, string> = {{}}\n  table.set(amount, `two`)\n  \
+         function launch(amount: Number) -> Nothing {{\n  let doubled: Number = amount * 2.0\n  \
+         let table: Map<Number, String> = {{}}\n  table.set(amount, `two`)\n  \
          table.set(doubled, `four`)\n  \
          for (round in range(0, 3)) {{\n    background show(table)\n  }}\n  \
          print(table.count())\n}}\n\n{CLOBBER}\
-         function entrypoint() -> nothing {{\n  let seed: number = 1.5\n  \
-         let amount: number = seed + 1.0\n  launch(amount)\n  let scratch = clobber(5)\n  \
+         function entrypoint() -> Nothing {{\n  let seed: Number = 1.5\n  \
+         let amount: Number = seed + 1.0\n  launch(amount)\n  let scratch = clobber(5)\n  \
          print(scratch)\n  wait sleep(1500)\n}}\n"
     )
 }
@@ -539,13 +539,13 @@ fn spawns_of_a_number_keyed_map_in_a_loop_balance() {
     // many frees as allocations. Tier: High.
     let counts = |tasks: usize| {
         let source = format!(
-            "function show(table: map<number, array<int>>) -> nothing {{\n  print(777)\n}}\n\n\
-             function launch(amount: number) -> nothing {{\n  let doubled: number = amount * 2.0\n  \
-             let items: array<int> = [1, 2]\n  let table: map<number, array<int>> = {{}}\n  \
+            "function show(table: Map<Number, Array<Int>>) -> Nothing {{\n  print(777)\n}}\n\n\
+             function launch(amount: Number) -> Nothing {{\n  let doubled: Number = amount * 2.0\n  \
+             let items: Array<Int> = [1, 2]\n  let table: Map<Number, Array<Int>> = {{}}\n  \
              table.set(amount, items.copy())\n  table.set(doubled, items)\n  \
              for (round in range(0, {tasks})) {{\n    background show(table)\n  }}\n  \
-             print(table.count())\n}}\n\nfunction entrypoint() -> nothing {{\n  \
-             let seed: number = 1.5\n  let amount: number = seed + 1.0\n  launch(amount)\n  \
+             print(table.count())\n}}\n\nfunction entrypoint() -> Nothing {{\n  \
+             let seed: Number = 1.5\n  let amount: Number = seed + 1.0\n  launch(amount)\n  \
              wait sleep(300)\n}}\n"
         );
         let built = build_source(&source, "c6 number key spawn counts", false);

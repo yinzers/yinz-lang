@@ -64,13 +64,13 @@ fn union_spawn_program(callee: Callee, argument: Argument, tasks: usize) -> Stri
         ),
     };
     format!(
-        "{DECLARATIONS}\nfunction eat(held: Circle | Tag) -> nothing {{\n{wait_for_the_spawner}  \
+        "{DECLARATIONS}\nfunction eat(held: Circle | Tag) -> Nothing {{\n{wait_for_the_spawner}  \
          if (held) {{\n    is Tag => {{\n      print(`task sees ${{held.name}}`)\n    }}\n    \
          is Circle => {{\n      print(`task sees circle`)\n    }}\n  }}\n}}\n\n\
-         function clobber(seed: int) -> int {{\n  let plusOne = seed + 1\n  \
+         function clobber(seed: Int) -> Int {{\n  let plusOne = seed + 1\n  \
          let doubled = plusOne * 2\n  return doubled + plusOne\n}}\n\n\
-         function launch() -> nothing {{\n{spawn_and_overwrite}}}\n\n\
-         function entrypoint() -> nothing {{\n  launch()\n  let scratch = clobber(5)\n  \
+         function launch() -> Nothing {{\n{spawn_and_overwrite}}}\n\n\
+         function entrypoint() -> Nothing {{\n  launch()\n  let scratch = clobber(5)\n  \
          print(scratch)\n  wait sleep(1500)\n}}\n"
     )
 }
@@ -157,11 +157,11 @@ fn counted_union_loop_run(suspending_callee: bool, tasks: usize) -> (u64, u64, u
         ""
     };
     let source = format!(
-        "{DECLARATIONS}\nfunction eat(held: Circle | Tag) -> nothing {{\n{callee_wait}  \
-         print(777)\n}}\n\nfunction launch() -> nothing {{\n  \
+        "{DECLARATIONS}\nfunction eat(held: Circle | Tag) -> Nothing {{\n{callee_wait}  \
+         print(777)\n}}\n\nfunction launch() -> Nothing {{\n  \
          let tag: Tag = {{ name: `boxed` }}\n  let box: Box = {{ choice: tag, id: 1 }}\n  \
          for (round in range(0, {tasks})) {{\n    background eat(box.choice)\n  }}\n  \
-         print(box.id)\n}}\n\nfunction entrypoint() -> nothing {{\n  launch()\n  \
+         print(box.id)\n}}\n\nfunction entrypoint() -> Nothing {{\n  launch()\n  \
          wait sleep(300)\n}}\n"
     );
     let built = build_source(&source, "c6 union loop counts", false);
@@ -229,15 +229,15 @@ fn chain_loop_program(suspending_callee: bool, tasks: usize) -> String {
         ""
     };
     format!(
-        "shape End {{\n  flag: boolean\n}}\nshape Node {{\n  value: int\n  next: Node | End\n}}\n\n\
-         function build(length: int) -> Node {{\n  let stop: End = {{ flag: true }}\n  \
+        "shape End {{\n  flag: Boolean\n}}\nshape Node {{\n  value: Int\n  next: Node | End\n}}\n\n\
+         function build(length: Int) -> Node {{\n  let stop: End = {{ flag: true }}\n  \
          let head: Node = {{ value: 0, next: stop }}\n  let round = 1\n  \
          while (round < length) {{\n    let node: Node = {{ value: round, next: head }}\n    \
          head = node\n    round = round + 1\n  }}\n  return head\n}}\n\n\
-         function show(chain: Node) -> nothing {{\n{callee_wait}  print(777)\n}}\n\n\
-         function launch() -> nothing {{\n  let head = build({CHAIN_LENGTH})\n  \
+         function show(chain: Node) -> Nothing {{\n{callee_wait}  print(777)\n}}\n\n\
+         function launch() -> Nothing {{\n  let head = build({CHAIN_LENGTH})\n  \
          for (round in range(0, {tasks})) {{\n    background show(head)\n  }}\n  \
-         print(head.value)\n}}\n\nfunction entrypoint() -> nothing {{\n  launch()\n  \
+         print(head.value)\n}}\n\nfunction entrypoint() -> Nothing {{\n  launch()\n  \
          wait sleep(300)\n}}\n"
     )
 }

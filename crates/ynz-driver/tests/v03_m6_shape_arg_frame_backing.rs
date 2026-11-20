@@ -493,7 +493,7 @@ fn v03_m6_fixed_arg_to_suspending_callee_is_rejected() {
     );
     assert_ne!(
         code, 0,
-        "a fixed<int> passed to a suspending callee must be a compile error — pre-fix it \
+        "a Fixed<Int> passed to a suspending callee must be a compile error — pre-fix it \
          compiles and runs with a dangling stack pointer; stdout:\n{stdout}"
     );
     assert!(
@@ -501,8 +501,8 @@ fn v03_m6_fixed_arg_to_suspending_callee_is_rejected() {
         "the UnsupportedCrossingLocalType teaching error must fire; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("array<T>"),
-        "the teaching error must suggest the heap-backed `array<T>` alternative; \
+        stderr.contains("Array<T>"),
+        "the teaching error must suggest the heap-backed `Array<T>` alternative; \
          stderr:\n{stderr}"
     );
 }

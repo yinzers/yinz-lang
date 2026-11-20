@@ -260,12 +260,12 @@ fn assert_int_literal_number_teaching_error(fixture_name: &str, call_form: &str)
     );
     assert_ne!(
         code, 0,
-        "an int literal into a `number` param through the {call_form} form must be \
+        "an int literal into a `Number` param through the {call_form} form must be \
          REJECTED at compile time (coercion doesn't exist yet — Future-Req #14); \
          stdout:\n{stdout}"
     );
     assert!(
-        stderr.contains("passing an int literal to a `number` parameter is not supported yet"),
+        stderr.contains("passing an int literal to a `Number` parameter is not supported yet"),
         "the {call_form} form must render the SAME teaching diagnostic as the plain \
          call form (non-oop.md dual-style convention); stderr:\n{stderr}"
     );
@@ -465,11 +465,11 @@ fn assert_int_literal_number_slot_teaching_error(fixture_name: &str, slot: &str,
     );
     assert_ne!(
         code, 0,
-        "an int literal into a `number` {slot} slot must be REJECTED at compile \
+        "an int literal into a `Number` {slot} slot must be REJECTED at compile \
          time (coercion doesn't exist yet — Future-Req #14); stdout:\n{stdout}"
     );
     assert!(
-        stderr.contains("is an int literal — passing an int literal to a `number`"),
+        stderr.contains("is an int literal — passing an int literal to a `Number`"),
         "the {slot} slot must render the shared teaching-diagnostic core \
          (one gate, byte-identical core text across slots); stderr:\n{stderr}"
     );

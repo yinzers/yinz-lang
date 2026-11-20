@@ -125,7 +125,7 @@ fn a_row_given_away_while_the_list_is_read_after_the_loop_still_needs_copy() {
     for fragment in [
         "`row` is one cell of `matrix`, which this loop is walking",
         "Give away a copy instead: `row.copy()`",
-        "Whoever receives a `array<int>` will eventually free it",
+        "Whoever receives a `Array<Int>` will eventually free it",
     ] {
         assert!(
             compiled.diagnostics.contains(fragment),

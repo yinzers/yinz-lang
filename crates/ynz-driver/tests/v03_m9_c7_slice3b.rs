@@ -363,9 +363,9 @@ fn build_result(program: &str, label: &str) -> (bool, String) {
 /// A `for (entry in table)` body that keeps `entry` somewhere that outlives the iteration.
 fn entry_escape(body: &str) -> String {
     format!(
-        "shape Holder {{\n  entry: MapEntry<number<10>, int>\n}}\n\
-         function entrypoint() -> nothing {{\n  let table: map<number<10>, int> = {{ 1.5: 1 }}\n  \
-         let list: array<MapEntry<number<10>, int>> = []\n  let wire: channel<MapEntry<number<10>, int>> = channel<MapEntry<number<10>, int>>()\n  \
+        "shape Holder {{\n  entry: MapEntry<Number<10>, Int>\n}}\n\
+         function entrypoint() -> Nothing {{\n  let table: Map<Number<10>, Int> = {{ 1.5: 1 }}\n  \
+         let list: Array<MapEntry<Number<10>, Int>> = []\n  let wire: Channel<MapEntry<Number<10>, Int>> = Channel<MapEntry<Number<10>, Int>>()\n  \
          for (entry in table) {{\n    {body}\n  }}\n}}\n"
     )
 }

@@ -121,7 +121,7 @@ fn v03_m9_union_hidden_default_wrong_type_is_refused() {
     // SIGSEGVed reading the raw int as a string. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_hidden_default_string_refused.ynz",
-        "Hidden field `extra` expects `string`, but its default is `int`",
+        "Hidden field `extra` expects `String`, but its default is `Int`",
     );
 }
 
@@ -190,6 +190,6 @@ fn v03_m9_union_hidden_default_missing_type_argument_is_refused() {
     // compile-then-SIGSEGV as an unknown generic name. Tier: High.
     assert_build_refused(
         "v0_3_m9_union_hidden_default_missing_type_argument.ynz",
-        "`map` takes 2 type arguments",
+        "`Map` takes 2 type arguments",
     );
 }

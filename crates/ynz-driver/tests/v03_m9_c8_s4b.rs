@@ -59,7 +59,7 @@ function pickNumber(index: Int) -> Maybe<Number> {
 fn a_maybe_shape_a_suspending_callee_returns_is_released_when_bound_without_crossing() {
     let source = format!(
         "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let picked = pickShape(0)
   print(picked.exists())
 }}
@@ -72,7 +72,7 @@ function entrypoint() -> nothing {{
 fn a_maybe_number_a_suspending_callee_returns_is_released_when_bound_without_crossing() {
     let source = format!(
         "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let picked = pickNumber(0)
   print(picked.exists())
 }}
@@ -85,7 +85,7 @@ function entrypoint() -> nothing {{
 fn a_maybe_shape_a_suspending_callee_returns_is_released_when_its_local_crosses_a_wait() {
     let source = format!(
         "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let picked = pickShape(0)
   print(picked.exists())
   wait sleep(1)
@@ -110,8 +110,8 @@ fn an_auto_propagation_in_a_resume_function_releases_the_open_locals() {
     for (fail, expected) in [("false", "ok\n"), ("true", "failed\n")] {
         let source = format!(
             "{FALLIBLE_CALLEES}
-function work(fail: boolean) -> int errors {{
-  let rows: array<int> = [1, 2]
+function work(fail: Boolean) -> Int errors {{
+  let rows: Array<Int> = [1, 2]
   let label = `ab`.toUpperCase()
   wait sleep(1)
   let name = fetchName(fail)
@@ -119,7 +119,7 @@ function work(fail: boolean) -> int errors {{
   return rows.count() + shown.count()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let result = work({fail})
   if (result.failed()) {{
     print(`failed`)
@@ -139,7 +139,7 @@ fn a_narrowed_re_read_of_an_errors_local_in_a_resume_function_releases_what_it_o
     for (fail, expected) in [("false", "NAME42\nNAME42\n"), ("true", "failed\n")] {
         let source = format!(
             "{FALLIBLE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let tag = `t`.toUpperCase()
   let name = fetchName({fail})
   wait sleep(1)
@@ -160,7 +160,7 @@ function entrypoint() -> nothing {{
 fn a_crossing_errors_local_whose_string_is_taken_is_released_once() {
     let source = format!(
         "{FALLIBLE_CALLEES}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let name = fetchName(false)
   wait sleep(1)
   let kept = name.or(`fallback`)
@@ -176,11 +176,11 @@ function entrypoint() -> nothing {{
 fn a_reassigned_errors_local_in_a_resume_function_releases_its_old_value() {
     let source = format!(
         "{FALLIBLE_CALLEES}
-function plainName() -> string errors {{
+function plainName() -> String errors {{
   return `plain`.toUpperCase()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let name = fetchName(false)
   name = plainName()
   wait sleep(1)
@@ -195,11 +195,11 @@ function entrypoint() -> nothing {{
 fn an_errors_local_reassigned_in_a_loop_across_waits_releases_each_old_value() {
     let source = format!(
         "{FALLIBLE_CALLEES}
-function plainName() -> string errors {{
+function plainName() -> String errors {{
   return `plain`.toUpperCase()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let name = fetchName(false)
   let pass = 0
   while (pass < 3) {{
@@ -313,19 +313,19 @@ function entrypoint() -> Nothing {
 fn a_number_40_errors_return_of_a_narrower_value_is_converted_to_the_declared_type() {
     for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
         let source = format!(
-            "function literal() -> number<40> errors {{
+            "function literal() -> Number<40> errors {{
   {wait_line}
   return 2.5
 }}
 
-function expression(n: int) -> number<40> errors {{
+function expression(n: Int) -> Number<40> errors {{
   {wait_line}
-  let small: number<20> = 1.25
+  let small: Number<20> = 1.25
   return small + small
 }}
 
-function entrypoint() -> nothing {{
-  let fallback: number<40> = 0.5
+function entrypoint() -> Nothing {{
+  let fallback: Number<40> = 0.5
   let first = literal()
   print(first.or(fallback))
   let second = expression(1)
@@ -351,17 +351,17 @@ function entrypoint() -> nothing {{
 fn a_plain_number_40_return_of_a_narrower_value_is_converted_to_the_declared_type() {
     for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
         let source = format!(
-            "function narrowed() -> number<40> {{
-  let small: number<20> = 1.25
+            "function narrowed() -> Number<40> {{
+  let small: Number<20> = 1.25
   return small
 }}
 
-function summed() -> number<40> {{
-  let small: number<20> = 1.25
+function summed() -> Number<40> {{
+  let small: Number<20> = 1.25
   return small + small
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   {wait_line}
   let first = narrowed()
   print(first)

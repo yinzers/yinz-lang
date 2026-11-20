@@ -26,7 +26,7 @@ function later(value: Int) -> Int {
 fn shape_local_crossing_a_wait_is_released() {
     let source = format!(
         "{CREW}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let crew: Crew = {{ name: `ab`.toUpperCase(), size: 3 }}
   print(crew.size)
   wait sleep(1)
@@ -45,8 +45,8 @@ function makeCrew() -> Crew {{
   return {{ name: `ab`.toUpperCase(), size: 3 }}
 }}
 
-function entrypoint() -> nothing {{
-  let size: int = wait later(makeCrew().size)
+function entrypoint() -> Nothing {{
+  let size: Int = wait later(makeCrew().size)
   print(size)
 }}
 "
@@ -73,7 +73,7 @@ function later(value: Int) -> Int {
 fn nested_shape_local_crossing_a_wait_is_released() {
     let source = format!(
         "{PIRATE}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pirate: Pirate = {{ badge: {{ label: `ab`.toUpperCase() }}, rank: 2 }}
   print(pirate.rank)
   wait sleep(1)
@@ -92,8 +92,8 @@ function makePirate() -> Pirate {{
   return {{ badge: {{ label: `ab`.toUpperCase() }}, rank: 2 }}
 }}
 
-function entrypoint() -> nothing {{
-  let rank: int = wait later(makePirate().rank)
+function entrypoint() -> Nothing {{
+  let rank: Int = wait later(makePirate().rank)
   print(rank)
 }}
 "
@@ -116,9 +116,9 @@ function firstName(names: Array<String>) -> Maybe<String> {
 fn maybe_of_a_string_local_crossing_a_wait_is_released() {
     let source = format!(
         "{NAMES}
-function entrypoint() -> nothing {{
-  let names: array<string> = [`a-${{1}}`, `b-${{2}}`]
-  let found: maybe<string> = names.get(0)
+function entrypoint() -> Nothing {{
+  let names: Array<String> = [`a-${{1}}`, `b-${{2}}`]
+  let found: Maybe<String> = names.get(0)
   print(found.or(`none`))
   wait sleep(1)
   print(`done`)
@@ -132,9 +132,9 @@ function entrypoint() -> nothing {{
 fn maybe_of_a_string_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{NAMES}
-function entrypoint() -> nothing {{
-  let names: array<string> = [`a-${{1}}`, `b-${{2}}`]
-  let length: int = wait later(firstName(names).or(`none`).count())
+function entrypoint() -> Nothing {{
+  let names: Array<String> = [`a-${{1}}`, `b-${{2}}`]
+  let length: Int = wait later(firstName(names).or(`none`).count())
   print(length)
 }}
 "
@@ -157,8 +157,8 @@ function makeList() -> Fixed<String> {
 fn fixed_of_strings_local_crossing_a_wait_is_released() {
     let source = format!(
         "{LISTS}
-function entrypoint() -> nothing {{
-  let list: fixed<string> = [`p-${{1}}`, `q-${{2}}`]
+function entrypoint() -> Nothing {{
+  let list: Fixed<String> = [`p-${{1}}`, `q-${{2}}`]
   print(list.count())
   wait sleep(1)
   print(`done`)
@@ -172,9 +172,9 @@ function entrypoint() -> nothing {{
 fn fixed_of_strings_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{LISTS}
-function entrypoint() -> nothing {{
-  let list: fixed<string> = [`p-${{1}}`, `q-${{2}}`]
-  let count: int = wait later(list.copy().count())
+function entrypoint() -> Nothing {{
+  let list: Fixed<String> = [`p-${{1}}`, `q-${{2}}`]
+  let count: Int = wait later(list.copy().count())
   print(count)
 }}
 "
@@ -219,7 +219,7 @@ function makeThing() -> Thing {
 fn union_local_crossing_a_wait_is_released() {
     let source = format!(
         "{THINGS}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let big: Big = {{ label: `ab`.toUpperCase(), count: 3 }}
   let thing: Thing = big
   print(describe(thing))
@@ -235,8 +235,8 @@ function entrypoint() -> nothing {{
 fn union_temporary_of_a_suspending_statement_is_released() {
     let source = format!(
         "{THINGS}
-function entrypoint() -> nothing {{
-  let length: int = wait later(describe(makeThing()).count())
+function entrypoint() -> Nothing {{
+  let length: Int = wait later(describe(makeThing()).count())
   print(length)
 }}
 "
@@ -308,14 +308,14 @@ function entrypoint() -> Nothing {
 fn union_given_away_on_one_path_is_released_once_across_a_wait() {
     let source = format!(
         "{THINGS}
-function consume(give thing: Thing) -> int {{
+function consume(give thing: Thing) -> Int {{
   return describe(thing).count()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let big: Big = {{ label: `ab`.toUpperCase(), count: 3 }}
   let thing: Thing = big
-  let flag: int = `1`.toInt().or(0)
+  let flag: Int = `1`.toInt().or(0)
   if (flag == 1) {{
     print(consume(thing))
   }}
@@ -334,9 +334,9 @@ function entrypoint() -> nothing {{
 fn maybe_of_a_shape_local_with_a_payload_region_is_released_and_reassigned() {
     let source = format!(
         "{CREW}
-function entrypoint() -> nothing {{
-  let crews: array<Crew> = [{{ name: `ab`.toUpperCase(), size: 3 }}, {{ name: `cd`.toUpperCase(), size: 4 }}]
-  let found: maybe<Crew> = crews.get(0)
+function entrypoint() -> Nothing {{
+  let crews: Array<Crew> = [{{ name: `ab`.toUpperCase(), size: 3 }}, {{ name: `cd`.toUpperCase(), size: 4 }}]
+  let found: Maybe<Crew> = crews.get(0)
   found = crews.get(1)
   let fallback: Crew = {{ name: `zz`.toUpperCase(), size: 0 }}
   let chosen: Crew = found.or(fallback)
@@ -402,7 +402,7 @@ function makePirate() -> Pirate {{
   return {{ badge: {{ label: `ab`.toUpperCase() }}, rank: 2 }}
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let badge: Badge = makePirate().badge
   wait sleep(1)
   print(badge.label)
@@ -450,8 +450,8 @@ function readTinyLater(share tiny: Tiny) -> Int {
 fn shape_call_result_given_to_a_suspending_callee_survives_the_callee_wait() {
     let source = format!(
         "{STAGED_CREW}
-function entrypoint() -> nothing {{
-  let size: int = wait takeLater(makeCrew())
+function entrypoint() -> Nothing {{
+  let size: Int = wait takeLater(makeCrew())
   print(size)
 }}
 "
@@ -465,8 +465,8 @@ function entrypoint() -> nothing {{
 fn shape_literal_given_to_a_suspending_callee_leaves_no_cell() {
     let source = format!(
         "{STAGED_CREW}
-function entrypoint() -> nothing {{
-  let size: int = wait takeLater({{ name: `cd`.toUpperCase(), size: 4 }})
+function entrypoint() -> Nothing {{
+  let size: Int = wait takeLater({{ name: `cd`.toUpperCase(), size: 4 }})
   print(size)
 }}
 "
@@ -480,8 +480,8 @@ function entrypoint() -> nothing {{
 fn heap_free_shape_call_result_survives_a_suspending_callee_wait() {
     let source = format!(
         "{STAGED_CREW}
-function entrypoint() -> nothing {{
-  let flag: int = wait readTinyLater(makeTiny())
+function entrypoint() -> Nothing {{
+  let flag: Int = wait readTinyLater(makeTiny())
   print(flag)
 }}
 "
@@ -496,14 +496,14 @@ function entrypoint() -> nothing {{
 fn shape_given_to_a_suspending_callees_union_parameter_is_released_once() {
     let source = format!(
         "{THINGS}
-function slowTake(give thing: Thing) -> int {{
+function slowTake(give thing: Thing) -> Int {{
   wait sleep(1)
   return describe(thing).count()
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let big: Big = {{ label: `ab`.toUpperCase(), count: 3 }}
-  let length: int = wait slowTake(big)
+  let length: Int = wait slowTake(big)
   print(length)
 }}
 "
@@ -520,24 +520,24 @@ function entrypoint() -> nothing {{
 fn maybe_of_a_union_local_crossing_a_wait_is_released_and_reassigned() {
     let source = format!(
         "{THINGS}
-function slowFetch(share things: array<Thing>, index: int) -> maybe<Thing> {{
+function slowFetch(share things: Array<Thing>, index: Int) -> Maybe<Thing> {{
   wait sleep(1)
   let found = things.get(index)
   return found
 }}
 
-function entrypoint() -> nothing {{
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {{
+  let things: Array<Thing> = []
   let tiny: Tiny = {{ flag: true }}
   things.add(tiny)
   let big: Big = {{ label: `ab`.toUpperCase(), count: 3 }}
   things.add(big)
-  let found: maybe<Thing> = things.get(0)
+  let found: Maybe<Thing> = things.get(0)
   found = things.get(1)
   if (found.exists()) {{
     print(describe(found.value))
   }}
-  let later: maybe<Thing> = wait slowFetch(things, 1)
+  let later: Maybe<Thing> = wait slowFetch(things, 1)
   if (later.exists()) {{
     print(describe(later.value))
   }}

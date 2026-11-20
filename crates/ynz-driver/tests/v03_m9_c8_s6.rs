@@ -435,7 +435,7 @@ function takeShape(give kept: Maybe<Big>) -> Int {
 fn a_parked_task_releases_errors_and_maybe_locals_and_skips_a_given_one() {
     let source = format!(
         "{PARKED_HOLDERS}
-function worker() -> nothing {{
+function worker() -> Nothing {{
   let name = fetchName(false)
   let big = pickShape(0)
   let given = pickShape(0)
@@ -445,7 +445,7 @@ function worker() -> nothing {{
   print(`${{count}}`)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -520,7 +520,7 @@ fn unreceived_after_finish(result_function: &str) -> String {
     format!(
         "{result_function}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(100)
   print(`parent`)
@@ -981,7 +981,7 @@ fn a_task_dropped_while_a_frame_sleeps_frees_that_frames_sleep_box_once() {
     ] {
         let source = format!(
             "{worker}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   background {spawn}
   wait sleep(100)
   print(`parent`)
@@ -1004,11 +1004,11 @@ function entrypoint() -> nothing {{
 fn finished_member_program(return_type: &str, body: &str) -> String {
     format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1017,18 +1017,18 @@ function quick() -> {return_type} {{
 {body}
 }}
 
-function slow() -> int {{
+function slow() -> Int {{
   wait sleep(500)
   return 1
 }}
 
-function worker() -> nothing {{
+function worker() -> Nothing {{
   let a = quick()
   let b = slow()
   print(`${{b}}`)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -1050,22 +1050,22 @@ macro_rules! finished_member_cases {
 }
 
 finished_member_cases! {
-    a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped: "maybe<string>",
-        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped: "maybe<Big>",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped: "maybe<number<20> >",
-        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped: "Maybe<String>",
+        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped: "Maybe<Big>",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped: "Maybe<Number<20> >",
+        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
     a_finished_member_returning_a_union_is_released_when_the_task_is_dropped: "Thing",
         "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
-    a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped: "maybe<string> errors",
-        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped: "maybe<Big> errors",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped: "Maybe<String> errors",
+        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped: "Maybe<Big> errors",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
     a_finished_member_returning_a_union_errors_is_released_when_the_task_is_dropped: "Thing errors",
         "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
-    a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped: "number<40> errors",
-        "  let made: number<40> = 2.5\n  return made";
+    a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped: "Number<40> errors",
+        "  let made: Number<40> = 2.5\n  return made";
 }
 
 /// Bug caught: pre-existing, a leak found by the C8 round-2 review: `handle_result_release_fn`
@@ -1076,11 +1076,11 @@ finished_member_cases! {
 fn unreceived_result_program(return_type: &str, body: &str) -> String {
     unreceived_after_finish(&format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1104,18 +1104,18 @@ macro_rules! unreceived_result_cases {
 }
 
 unreceived_result_cases! {
-    an_unreceived_maybe_shape_result_is_released_with_the_handle: "maybe<Big>",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    an_unreceived_maybe_decimal_result_is_released_with_the_handle: "maybe<number<20> >",
-        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
-    an_unreceived_maybe_string_errors_result_is_released_with_the_handle: "maybe<string> errors",
-        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
-    an_unreceived_maybe_shape_errors_result_is_released_with_the_handle: "maybe<Big> errors",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle: "maybe<number<20> > errors",
-        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
-    an_unreceived_bignum_errors_result_is_released_with_the_handle: "number<40> errors",
-        "  let made: number<40> = 2.5\n  return made";
+    an_unreceived_maybe_shape_result_is_released_with_the_handle: "Maybe<Big>",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    an_unreceived_maybe_decimal_result_is_released_with_the_handle: "Maybe<Number<20> >",
+        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
+    an_unreceived_maybe_string_errors_result_is_released_with_the_handle: "Maybe<String> errors",
+        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
+    an_unreceived_maybe_shape_errors_result_is_released_with_the_handle: "Maybe<Big> errors",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle: "Maybe<Number<20> > errors",
+        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
+    an_unreceived_bignum_errors_result_is_released_with_the_handle: "Number<40> errors",
+        "  let made: Number<40> = 2.5\n  return made";
 }
 
 // ── a union a task returns through its handle ───────────────────────────────────────────────
@@ -1130,11 +1130,11 @@ unreceived_result_cases! {
 fn union_handle_program(return_type: &str, receive_lines: &str) -> String {
     format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1144,7 +1144,7 @@ function make() -> {return_type} {{
   return big
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(50)
 {receive_lines}
@@ -1244,11 +1244,11 @@ fn a_failed_union_errors_task_delivers_its_error_and_no_cell() {
     ] {
         let source = format!(
             "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1258,7 +1258,7 @@ function make() -> Thing errors {{
   return tiny
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(50)
 {receive}
@@ -1280,17 +1280,17 @@ fn a_received_bignum_errors_result_is_released_with_its_binding() {
         ("failed", "print(got.failed())"),
         (
             "or",
-            "let fallback: number<40> = 0.5\n  print(got.or(fallback))",
+            "let fallback: Number<40> = 0.5\n  print(got.or(fallback))",
         ),
     ] {
         let source = format!(
-            "function make() -> number<40> errors {{
+            "function make() -> Number<40> errors {{
   wait sleep(1)
-  let made: number<40> = 1.5
+  let made: Number<40> = 1.5
   return made
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(20)
   let got = pending.receive()
@@ -1314,15 +1314,15 @@ function entrypoint() -> nothing {{
 fn maybe_union_program(return_type: &str, body: &str, entry: &str) -> String {
     format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
-function make(flag: boolean) -> {return_type} {{
+function make(flag: Boolean) -> {return_type} {{
   wait sleep(1)
 {body}
 }}
@@ -1331,22 +1331,22 @@ function makeBig() -> {return_type} {{
   wait sleep(1)
   let big: Big = {{ label: `abc`.toUpperCase(), count: 7 }}
   let wrapped: Thing = big
-  let items: array<Thing> = [wrapped]
+  let items: Array<Thing> = [wrapped]
   return items.get(0)
 }}
 
-function slow() -> int {{
+function slow() -> Int {{
   wait sleep(500)
   return 1
 }}
 
-function worker() -> nothing {{
+function worker() -> Nothing {{
   let first = makeBig()
   let second = slow()
   print(`${{second}}`)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
 {entry}
 }}
 "
@@ -1356,21 +1356,21 @@ function entrypoint() -> nothing {{
 const MAYBE_UNION_SOME: &str = "  if (flag) {
     let tiny: Tiny = { flag: true }
     let wrapped: Thing = tiny
-    let items: array<Thing> = [wrapped]
+    let items: Array<Thing> = [wrapped]
     return items.get(0)
   }
   let big: Big = { label: `abc`.toUpperCase(), count: 7 }
   let wrapped: Thing = big
-  let items: array<Thing> = [wrapped]
+  let items: Array<Thing> = [wrapped]
   return items.get(0)";
 
-const MAYBE_UNION_NONE: &str = "  let items: array<Thing> = []
+const MAYBE_UNION_NONE: &str = "  let items: Array<Thing> = []
   return items.get(0)";
 
 const RECEIVE_MAYBE_UNION: &str = "  let pending = background make(false)
   wait sleep(50)
   let got = pending.receive()
-  let fallback: maybe<Thing> = none
+  let fallback: Maybe<Thing> = none
   let held = got.or(fallback)
   print(held.exists())
   if (held.exists()) {
@@ -1407,13 +1407,13 @@ macro_rules! maybe_union_handle_cases {
 }
 
 maybe_union_handle_cases! {
-    a_maybe_union_a_task_returns_is_received_and_read_once: "maybe<Thing>", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
-    a_maybe_union_errors_a_task_returns_is_received_and_read_once: "maybe<Thing> errors", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
-    a_none_maybe_union_a_task_returns_is_received_once: "maybe<Thing>", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
-    a_none_maybe_union_errors_a_task_returns_is_received_once: "maybe<Thing> errors", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
-    an_unreceived_maybe_union_result_is_released_with_the_handle: "maybe<Thing>", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    an_unreceived_maybe_union_errors_result_is_released_with_the_handle: "maybe<Thing> errors", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    an_unreceived_none_maybe_union_result_is_released_with_the_handle: "maybe<Thing>", MAYBE_UNION_NONE, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped: "maybe<Thing>", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
-    a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped: "maybe<Thing> errors", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
+    a_maybe_union_a_task_returns_is_received_and_read_once: "Maybe<Thing>", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
+    a_maybe_union_errors_a_task_returns_is_received_and_read_once: "Maybe<Thing> errors", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
+    a_none_maybe_union_a_task_returns_is_received_once: "Maybe<Thing>", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
+    a_none_maybe_union_errors_a_task_returns_is_received_once: "Maybe<Thing> errors", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
+    an_unreceived_maybe_union_result_is_released_with_the_handle: "Maybe<Thing>", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    an_unreceived_maybe_union_errors_result_is_released_with_the_handle: "Maybe<Thing> errors", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    an_unreceived_none_maybe_union_result_is_released_with_the_handle: "Maybe<Thing>", MAYBE_UNION_NONE, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped: "Maybe<Thing>", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
+    a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped: "Maybe<Thing> errors", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
 }

@@ -111,24 +111,24 @@ fn a_type_parameter_returned_or_stored_is_released_once_by_its_new_holder() {
 function same<T>(give value: T) -> T {
   return value
 }
-function wrap<T>(give value: T) -> array<T> {
-  let items: array<T> = []
+function wrap<T>(give value: T) -> Array<T> {
+  let items: Array<T> = []
   items.add(value)
   return items
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
-  let back: string = same(`a ${n}`)
+  let back: String = same(`a ${n}`)
   print(back)
-  let name: string = `b ${n}`
-  let again: string = same(name)
+  let name: String = `b ${n}`
+  let again: String = same(name)
   print(again)
-  let rows: array<string> = wrap(`c ${n}`)
+  let rows: Array<String> = wrap(`c ${n}`)
   print(rows.count())
   print(same(5))
-  let nums: array<int> = wrap(6)
+  let nums: Array<Int> = wrap(6)
   print(nums.count())
-  let lists: array<array<int>> = wrap([n, 1])
+  let lists: Array<Array<Int>> = wrap([n, 1])
   print(lists.count())
 }
 ",
