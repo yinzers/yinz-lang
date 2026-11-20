@@ -363,7 +363,11 @@ fn arrow_still_works() {
     // first so `->` beats the new `Minus` token.
     assert_eq!(
         lex_tokens("-> Nothing"),
-        vec![Token::Arrow, Token::Identifier("nothing".into()), Token::Eof]
+        vec![
+            Token::Arrow,
+            Token::Identifier("Nothing".into()),
+            Token::Eof
+        ]
     );
 }
 
@@ -1710,11 +1714,11 @@ fn dollar_prefix_produces_teaching_error() {
 
 #[test]
 fn question_mark_produces_teaching_error() {
-    // WHY: `int?` from Swift/Kotlin must redirect to `maybe<T>`, not generic.
-    let diags = lex_diags("int?");
+    // WHY: `Int?` from Swift/Kotlin must redirect to `Maybe<T>`, not generic.
+    let diags = lex_diags("Int?");
     assert!(!diags.is_empty(), "? must produce a diagnostic");
     assert!(
-        diags[0].what_instead.contains("maybe") || diags[0].why.contains("maybe"),
+        diags[0].what_instead.contains("Maybe") || diags[0].why.contains("Maybe"),
         "Must redirect to Maybe<T>, got: {:?}",
         diags[0]
     );

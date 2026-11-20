@@ -10,7 +10,8 @@
 // Expected counts — pin these; update both when adding keywords
 // ---------------------------------------------------------------------------
 
-const EXPECTED_KEYWORD_COUNT: usize = 29;
+// test-ratchet: `Nothing` is an ordinary type name, not a keyword: 29 - 1 = 28.
+const EXPECTED_KEYWORD_COUNT: usize = 28;
 const EXPECTED_BANNED_DECL_KEYWORD_COUNT: usize = 17;
 
 // ---------------------------------------------------------------------------
@@ -32,8 +33,7 @@ fn keyword_count_matches_lexer() {
 fn all_m1_keywords_in_registry() {
     let names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
     for kw in &[
-        "function", "nothing", "let", "const", "true", "false", "if", "else", "while", "for", "in",
-        "return",
+        "function", "let", "const", "true", "false", "if", "else", "while", "for", "in", "return",
     ] {
         assert!(
             names.contains(kw),

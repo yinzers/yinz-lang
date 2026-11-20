@@ -10,7 +10,9 @@ expression: tokens
     LParen,
     RParen,
     Arrow,
-    Nothing,
+    Identifier(
+        "Nothing",
+    ),
     LBrace,
     Identifier(
         "print",

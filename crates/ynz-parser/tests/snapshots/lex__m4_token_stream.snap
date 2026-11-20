@@ -14,7 +14,7 @@ expression: tokens
     ),
     Colon,
     Identifier(
-        "string",
+        "String",
     ),
     RBrace,
     Shape,
@@ -36,7 +36,7 @@ expression: tokens
     ),
     Colon,
     Identifier(
-        "int",
+        "Int",
     ),
     RBrace,
     Function,
@@ -55,7 +55,7 @@ expression: tokens
     RParen,
     Arrow,
     Identifier(
-        "string",
+        "String",
     ),
     LBrace,
     Return,
@@ -72,7 +72,9 @@ expression: tokens
     LParen,
     RParen,
     Arrow,
-    Nothing,
+    Identifier(
+        "Nothing",
+    ),
     LBrace,
     Let,
     Identifier(

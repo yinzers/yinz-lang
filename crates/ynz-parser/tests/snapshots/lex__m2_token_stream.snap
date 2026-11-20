@@ -10,7 +10,9 @@ expression: tokens
     LParen,
     RParen,
     Arrow,
-    Nothing,
+    Identifier(
+        "Nothing",
+    ),
     LBrace,
     Let,
     Identifier(
@@ -30,7 +32,7 @@ expression: tokens
     ),
     Colon,
     Identifier(
-        "int",
+        "Int",
     ),
     Eq,
     IntLit(

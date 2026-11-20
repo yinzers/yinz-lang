@@ -53,8 +53,8 @@ pub fn promotion_marks(db: &dyn SourceFileRegistry, sf: SourceFile) -> Vec<Promo
             let (domain, replacement, action_title) = match hint.kind {
                 PromotionKind::ArrayToFixed => (
                     ARRAY_TO_FIXED_DOMAIN,
-                    "fixed",
-                    "Write 'fixed' instead of 'array'",
+                    "Fixed",
+                    "Write 'Fixed' instead of 'Array'",
                 ),
                 PromotionKind::LetToConst => (
                     LET_TO_CONST_DOMAIN,

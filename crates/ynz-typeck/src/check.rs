@@ -6967,10 +6967,12 @@ impl<'b> Checker<'b> {
             // `channel<Int>(8)`: the constructor is a type now, so the old lowercase spelling gets
             // the same teaching error as any other built-in type name.
             "channel" if call.type_args.is_some() => {
-                if let Some(teaching_error) = ynz_diagnostics::builtin_type_names::old_builtin_type_name_diagnostic(
-                    call.callee.span().clone(),
-                    "channel",
-                ) {
+                if let Some(teaching_error) =
+                    ynz_diagnostics::builtin_type_names::old_builtin_type_name_diagnostic(
+                        call.callee.span().clone(),
+                        "channel",
+                    )
+                {
                     self.diags.push(teaching_error);
                 }
                 for arg in &call.args {

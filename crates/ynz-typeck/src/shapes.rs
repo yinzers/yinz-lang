@@ -332,6 +332,15 @@ pub fn collect_shapes(
     }
     for item in &module.items {
         if let Item::ShapeDecl(s) = item {
+            // A shape (or union alias) named like a built-in type would hide that type.
+            if ynz_diagnostics::builtin_type_names::is_reserved_builtin_type_name(&s.name) {
+                diags.push(
+                    ynz_diagnostics::builtin_type_names::reserved_builtin_type_name_diagnostic(
+                        s.name_span.clone(),
+                        &s.name,
+                    ),
+                );
+            }
             // M6: skip alias declarations (`shape Shape = Circle | Square`) — they're not
             // regular shapes with fields. UnionAliasTable handles them in typeck.
             if s.alias_ty.is_some() {
