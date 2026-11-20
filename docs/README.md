@@ -88,6 +88,12 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Open questions | [`docs/internal/scratchpad/SCRATCH-open-questions.md`](internal/scratchpad/SCRATCH-open-questions.md) | Unresolved design decisions |
 | MVP Scope | [`docs/reference/REF-mvp-scope.md`](reference/REF-mvp-scope.md) | Per-version feature breakdown v0.1–v1.2 + v2+, including deferred features with substitutes and triggers |
 
+## Guides
+
+| Topic | File | What's in it |
+|-------|------|--------------|
+| Coming from TypeScript | [`docs/guides/coming-from-typescript.md`](guides/coming-from-typescript.md) | What changes if you already write TypeScript: a side-by-side table and the habits the compiler corrects (quotes, semicolons, `null`, `throw`, `else`, `async`, imports) |
+
 ## Future Designs (locked, awaiting implementation milestone)
 
 | Topic | File | What's in it |

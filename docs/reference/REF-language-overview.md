@@ -1,6 +1,6 @@
 ---
 name: "REF-language-overview"
-description: "A programming language that's as fast as Rust and as readable as JavaScript."
+description: "A programming language that is fast, safe and easy to read."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -13,7 +13,7 @@ metadata:
 
 # Yinz
 
-A programming language that's as fast as Rust and as readable as JavaScript.
+A programming language that is fast, safe and easy to read.
 
 You write clean, simple code. The compiler turns it into fast, safe machine code. No garbage collector. No runtime crashes from null. No mystery memory bugs.
 
@@ -44,8 +44,6 @@ function getTopPlayers(share players: fixed<Player>, count: number) -> array<str
   return top.map(p => p.name)
 }
 ```
-
-If you've written JavaScript | TypeScript before, most of this should feel familiar.
 
 ---
 
@@ -94,7 +92,7 @@ Each section covers one part of the language. They're self-contained — start w
 - [Main Function](REF-main.md) — program entry point
 - [Doc Comments](REF-doc-comments.md) — documenting your public API with `///`
 - [Configuration](REF-config.md) — yinz.toml, .env, and runtime set functions
-- [Common Mistakes](REF-common-mistakes.md) — syntax from other languages and how Yinz does it instead
+- [Coming from TypeScript](../guides/coming-from-typescript.md) — a guide to what changes if you already write TypeScript
 - [Tooling](REF-tooling.md) — ynz build, ynz run, ynz watch, ynz test, ynz add
 - [Testing](REF-testing.md) — writing and running tests
 - [Packages](REF-packages.md) — adding and publishing packages
