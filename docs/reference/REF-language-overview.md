@@ -4,7 +4,7 @@ description: "A programming language that is fast, safe and easy to read."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -32,16 +32,10 @@ function takeDamage(lend self: Player, amount: Number) -> Nothing {
   self.health = self.health - amount
 }
 
-function getTopPlayers(share players: Fixed<Player>, count: Number) -> Array<String> {
-  let active = players.filter(p => p.health > 0)
-
-  if (active.count() == 0) {
-    return []
-  }
-
-  let ranked = active.sort(p => p.health, desc)
-  let top = ranked.limit(count)
-  return top.map(p => p.name)
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Alice`, health: 100 }
+  player.takeDamage(5)
+  print(player.health)
 }
 ```
 
@@ -58,7 +52,7 @@ Every decision in this language follows these rules. When something seems weird,
 5. **Human-readable over jargon** — `options` not `enum`, `Nothing` not `void`, `follows` not `implements`
 6. **Zero-cost abstractions** — high-level syntax compiles to what a careful Rust/C++ programmer would write by hand; the features themselves cost what they inherently cost
 7. **Efficiency first, dynamic after** — the default path is always the fastest path
-8. **Compiler does the hard work** — smart defaults, type inference, optimization
+8. **Compiler does the hard work** — smart defaults, types the compiler works out for you, optimization
 9. **Step-by-step over chaining** — each operation gets its own line and a name
 10. **Capital letter = type** — scan any line: capital letter means type, built-in types included (`Int`, `String`, `Array<T>`); lowercase means everything else (variable, function, keyword, module)
 11. **Dot-first design** — if something can be `.method()` with autocomplete, it is
@@ -91,11 +85,11 @@ Each section covers one part of the language. They're self-contained — start w
 - [Scope](REF-scope.md) — block scoping and file-level constants
 - [Main Function](REF-main.md) — program entry point
 - [Doc Comments](REF-doc-comments.md) — documenting your public API with `///`
-- [Configuration](REF-config.md) — yinz.toml, .env, and runtime set functions
+- [Configuration](REF-config.md) — the `yinz.toml` project file
 - [Coming from TypeScript](../guides/coming-from-typescript.md) — a guide to what changes if you already write TypeScript
-- [Tooling](REF-tooling.md) — ynz build, ynz run, ynz watch, ynz test, ynz add
-- [Testing](REF-testing.md) — writing and running tests
-- [Packages](REF-packages.md) — adding and publishing packages
+- [Tooling](REF-tooling.md) — ynz build, ynz run, ynz watch, ynz fmt
+- [Testing](REF-testing.md) — checking your code
+- [Packages](REF-packages.md) — sharing code
 - [Operators](REF-operators.md) — math, comparison, boolean operators (`&&` `||` `!`), bitwise operators
 - [Sensitive Values](REF-sensitive.md) — hiding secrets automatically with the `sensitive` modifier
 - [Iterables](REF-iterables.md) — making your own shapes work in `for` loops with `follows Iterable`
