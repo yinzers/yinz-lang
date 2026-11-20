@@ -1,6 +1,6 @@
 ---
 name: "REF-ownership"
-description: "Yinz manages memory automatically — without a garbage collector. No malloc. No free. No unpredictable pauses."
+description: "Yinz manages memory automatically, without a garbage collector. You never reserve or free memory by hand, and there are no unpredictable pauses."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -13,7 +13,7 @@ metadata:
 
 # Ownership
 
-Yinz manages memory automatically — without a garbage collector. No `malloc`. No `free`. No unpredictable pauses.
+Yinz manages memory automatically, without a garbage collector (a background process that hunts for unused memory and can pause your program). You never reserve or free memory by hand, and there are no unpredictable pauses.
 
 The rule: every value has exactly one owner. When the owner goes out of scope, the memory is freed automatically.
 

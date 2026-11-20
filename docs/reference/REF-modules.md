@@ -52,7 +52,7 @@ Two states: exported or private. Write `export` to share something, or nothing t
 The standard library is always available. You don't import it. Just use it:
 
 ```ynz
-let x = math.sqrt(16)
+let squareRoot = math.sqrt(16)
 let content = file.read(`data.txt`)
 let response = request.get(`https://api.example.com`)
 let now = date.now()
