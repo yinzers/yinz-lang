@@ -4,22 +4,23 @@ description: "Applies when designing IDE hints, hover tooltips or anything the c
 trigger: relevance
 ---
 
-**If the compiler can figure it out from context, the developer does not type it; the IDE shows it as a muted hint with a hover that says what was decided and why.** Why: forcing everything explicit is noise that developers learn to ignore, hiding it is magic, and hints let them learn the rules by reading.
+**If the compiler can figure it out from context, the developer does not type it; the IDE shows it as a hint with a hover that says what was decided and why.** Why: forcing everything explicit is noise that developers learn to ignore, hiding it is magic, and hints let them learn the rules by reading.
 
 - **Make each hint informative at a glance:** what the compiler decided plus a one-clause why, short enough not to clutter. Why: the developer should not have to hover to learn from it.
-- **Make click do the useful thing.** Where the hint has typeable Yinz source, click inserts it. Where it has none, click jumps to the relevant declaration (for call-site ownership, the function signature). Why: ownership modifiers exist only in signatures, so there is nothing to insert at a call site.
+- **Make click do the useful thing.** Where the hint has typeable Yinz source, click inserts it (for a replacement, a rewrite action converts the token). Where it has none, click jumps to the relevant declaration (for call-site ownership, the function signature). Why: ownership modifiers exist only in signatures, so there is nothing to insert at a call site.
 
 ## Placement categories
 
 Ask once at design time: "could the user have typed something to make this explicit?" The answer fixes the surface. Why: one renderer per category stays learnable, so never mix surfaces within a category.
 
 - **Addition** (a specific position): muted text appears at that position, and click types it into source. Examples: `: Int` after a variable name, `wait` before a call, the capacity `64` inside empty `Channel<T>()` parens. Why: it has zero source-versus-render ambiguity and is visible without hovering.
-- **Replacement** (replaces existing text): a dotted-underline decoration sits on the existing token, with the alternative form in the hover and click converting it. Examples: `let` to `const`, `Array<T>` to `Fixed<T>`. Why: inline replacement breaks cursor position and makes the screen differ from the file.
+- **Replacement** (replaces existing text): the existing token gets the lesson underline (the extension's own colour `yinz.lessonUnderline`, which users can override). The alternative form is in the hover, and a rewrite action titled like "Write 'const' instead of 'let'" converts it. Never add an end-of-line comment for a replacement. Examples: `let` to `const`, `Array<T>` to `Fixed<T>`. Why: inline replacement breaks cursor position and makes the screen differ from the file.
 - **Informational** (no source form): a muted comment-style annotation near the expression. Examples: static dispatch, scheduler routing, call-site `share`/`lend`/`give`, auto-`Arc`. Why: these carry multi-clause reasoning that a hover would hide.
 
 ## Styling
 
-- **Style benign decisions neutral gray** (types, lifetimes, allocators) **and decisions about mutation, ownership transfer or thread crossing red-tinted.** Why: the higher-stakes ones should stand out.
+- **Let colour carry the kind of message:** red squiggle = error, yellow squiggle = lint, cyan dotted underline = lesson (the compiler decided this for you). Why: a reader can tell a stop, a suggestion and a lesson apart at a glance.
+- **Style benign Addition and Informational decisions neutral gray** (types, lifetimes, allocators) **and those about mutation, ownership transfer or thread crossing red-tinted.** Why: the higher-stakes ones should stand out.
 - **Never style a compile error as a hint.** Errors keep standard error styling. Why: a hint is information and an error is a stop.
 
 ## Hover and call sites
