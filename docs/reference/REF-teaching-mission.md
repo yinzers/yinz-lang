@@ -37,8 +37,6 @@ A language can teach you its syntax. Yinz also wants to teach you to be a BETTER
 
 Yinz combines four things: **easy syntax**, **real systems skills** (ownership, no garbage collector, native compilation), **compile-time safety** (the compiler catches errors before you run the program), and an **editor that explains everything**. The teaching mission ties them together.
 
-**Long-term hope:** Yinz becomes a language for a first computer science course, because it is both easy to start with AND strong enough for real products. Students learn real systems ideas (ownership, type safety, exact arithmetic) and finish with a language they can ship code in.
-
 ---
 
 ## What teaching looks like in practice
@@ -53,9 +51,8 @@ let scores: Map<String, Number> = { alice: 90, bob: 85, charlie: 78 }
 //   let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
 //
 // Why: Reading a shape field is one step: the computer jumps straight to it.
-//      Reading a map key means searching for it, which takes roughly 10 to 50
-//      steps. For keys that never change, a shape is about 10x faster AND you
-//      get dot access with autocomplete.
+//      Reading a map key means searching for it. For keys that never change,
+//      a shape is faster AND you get dot access with autocomplete.
 ```
 
 ### Pattern 2 — Speed suggestions
@@ -125,10 +122,7 @@ So a developer learns even when their code is **completely correct**:
 ```ynz
 let maxHealth = 42            // IDE shows muted ": Int" → teaches how the compiler picks types
 heal(player)                  // IDE shows muted "share" → teaches ownership at call sites
-db.fetch(`users`)             // IDE shows muted "wait" → teaches that the call pauses for the network
-arena scratch {
-  let temp: Array<Int> = []     // IDE shows muted ".in(scratch)" → teaches that memory comes from the arena
-}
+sleep(100)                    // IDE shows muted "wait" → teaches that the call pauses
 ```
 
 Each muted hint shows a tooltip when you hover. The tooltip uses the same WHAT / WHAT-INSTEAD / WHY format as compiler messages, with the same wording, so the explanation is the same whether you meet it as a hint or as a compile error.
@@ -142,8 +136,7 @@ Both are required. Error messages fix misunderstandings; muted hints prevent the
 
 **How hints look**:
 
-- Neutral muted (gray): harmless choices — types, how long a value lives, where memory comes from
-- Cautionary muted (red-tinted): choices that change data or affect ownership — `lend`, `give`, and automatic sharing of a value across tasks
+- Muted text: choices the compiler made for you — types, `share`, `lend`, `give`, `wait`
 - Compile errors use the normal error look (red squiggly line plus a message panel), so they never look like muted hints
 
 The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
@@ -171,8 +164,6 @@ This applies to:
 - Compile warnings (Tier 2)
 - IDE suggestions (Tier 3)
 - Lint messages (all tiers)
-- Test failure output
-- Even `panic()` messages from production code (a panic should say what state caused it)
 
 ---
 
@@ -210,21 +201,7 @@ The compiler's teaching covers at least these areas:
 | **Conventions** | naming (Rule 10), how to handle errors, how to organize modules |
 | **Habits to avoid** | what NOT to do and why (arrays with gaps, deeply nested code, unexplained numbers) |
 
-Each area has rules in the linter and hints in the IDE. Hints for one module, such as "use `path.join()` instead of joining strings with `+`", arrive with that module.
-
----
-
-## Spotting habits to avoid
-
-Beyond pointing at single lines, the compiler should recognize whole patterns of code that cause trouble and explain why:
-
-- **Values changed all over the place** — "you changed this shape in 4 different functions; consider returning a new value instead, which is easier to follow"
-- **Functions that do too much** — "this function does 5 separate things; consider splitting it"
-- **Unexplained numbers** — "what does 3600 mean here? Consider `60 * 60` or `const secondsPerHour = 3600`"
-- **Deeply nested conditions** — "5 levels of nesting; consider returning early"
-- **Yes/no flags as parameters** — "a boolean flag suggests two different jobs; consider two functions or an `options` type"
-
-Each pattern is a chance to teach. The IDE and compiler don't FORBID these patterns, because sometimes they are right. They suggest the alternative and explain the reasoning.
+Each area has rules in the linter and hints in the IDE.
 
 ---
 
@@ -235,21 +212,6 @@ The teaching mission applies to these docs too:
 - They are written for a developer who just finished high school, knows JavaScript, and has never done systems programming
 - Examples use realistic code (Player, User, score, health), not foo/bar/x/y
 - Compiler error messages are SHOWN, not just described
-- Each design choice comes with the reason a curious reader would ask about
-
-The docs are a teacher too, not just a reference.
-
----
-
-## Success: schools choose Yinz
-
-Yinz's success isn't measured by GitHub stars or hiring posts. The measure is:
-
-> **Schools choose Yinz for a first programming course, because students learn real systems ideas in their first semester AND finish with a language they can ship real code in.**
-
-That is the bar. Every error message, lint rule and doc example should move toward it.
-
-If a feature would make it HARDER for a beginner to learn programming basics, it doesn't fit Yinz. If a feature actively TEACHES a basic idea, it is exactly what Yinz should have.
 
 ---
 
