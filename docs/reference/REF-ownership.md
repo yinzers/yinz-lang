@@ -181,7 +181,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-After an `if`, a `match` or a loop, `rows` is usable again only if every arm assigned it (a match needs an `else` arm, or to cover every variant). A loop body may run zero times, so a reassignment inside it does not count after the loop.
+After an `if` or a loop, `rows` is usable again only if every arm assigned it (a multi-case `if` needs an `else =>` arm, or has to cover every case). A loop body may run zero times, so a reassignment inside it does not count after the loop.
 
 Putting a list, a map or a shape into a place hands it over, just like giving it to a function. That covers `bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`, a list or shape built from named values (`[rows, more]`) and `let moved = rows`. The place owns the value from then on, and reading `rows` afterwards is an error:
 

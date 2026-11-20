@@ -176,7 +176,7 @@ function entrypoint() -> Nothing {
     let result = wait fetchPage(page)     // finish each fetch before starting the next
     results.add(result)
   }
-  print(results.count().toString())
+  print(results.count())
 }
 ```
 
@@ -444,7 +444,7 @@ function entrypoint() -> Nothing {
   let wire: Channel<Array<Int>> = Channel<Array<Int>>(4)
   let rows: Array<Int> = [1, 2, 3]
   wire.send(rows)
-  print(rows.count().toString())
+  print(rows.count())
 }
 ```
 

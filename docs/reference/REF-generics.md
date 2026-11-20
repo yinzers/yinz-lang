@@ -221,7 +221,7 @@ function createList<T>() -> Array<T> {
 
 function entrypoint() -> Nothing {
   let empty = createList<Int>()       // explicit — there's nothing to work it out from
-  print(empty.count().toString())
+  print(empty.count())
 }
 ```
 
@@ -234,7 +234,7 @@ function createList<T>() -> Array<T> {
 
 function entrypoint() -> Nothing {
   let empty = createList()
-  print(empty.count().toString())
+  print(empty.count())
 }
 ```
 
