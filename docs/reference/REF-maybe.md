@@ -4,7 +4,7 @@ description: "Some values might not exist. Maybe lets you say that in the type s
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -40,10 +40,11 @@ let nickname: Maybe<String> = none       // might not have a value
 
 ```
 let name: String = none
-// COMPILE ERROR: String cannot be none.
-// Use Maybe<String> if the value is optional.
+// COMPILE ERROR: `none` cannot be a `String` value.
+// Use `Maybe<T>` for optional values: `let x: Maybe<Int> = none`.
+// `none` is only valid as the absent value of `Maybe<T>`. It cannot be used where a concrete type is expected.
 
-let name: Maybe<String> = none    // fine
+let nickname: Maybe<String> = none    // fine
 ```
 
 ---
@@ -70,8 +71,9 @@ let display = nickname.or(`Anonymous`)    // get the value or a fallback
 
 ```
 print(nickname.value)
-// COMPILE ERROR: nickname is Maybe<String> — value might be none.
-// Use nickname.or(default) or check nickname.exists() first.
+// COMPILE ERROR: `Maybe.value` requires you to first check `m.exists()`.
+// Add a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.
+// The compiler cannot prove this `Maybe` has a value here. `.value` without a prior `.exists()` check is a compile error.
 ```
 
 ---
@@ -79,39 +81,25 @@ print(nickname.value)
 ## In function signatures
 
 ```
-function findPlayer(share roster: Fixed<Player>, name: String) -> Maybe<Player> {
-  return roster.find(player => player.name == name)    // .find() returns Maybe<T>
+function firstScore(share scores: Array<Int>) -> Maybe<Int> {
+  return scores.first()    // .first() returns Maybe<T>
 }
 ```
 
 The caller must handle the `Maybe`:
 
 ```
-let player = findPlayer(roster, `Alice`)
+let scores: Array<Int> = [3, 5, 7]
+let best = firstScore(scores)
 
 // Option 1 — use a fallback
-let foundPlayer = player.or(defaultPlayer)
-let name = foundPlayer.name
+let bestOrZero = best.or(0)
 
 // Option 2 — check first
-if (player.exists()) {
-  print(player.value.name)
+if (best.exists()) {
+  print(best.value)
 }
 ```
-
----
-
-## `Maybe<T>` and `T | none`
-
-`Maybe<String>` is the same type as `String | none`. They're interchangeable:
-
-```
-let a: Maybe<String> = none
-let b: String | none = none
-// a and b are the same type — either works
-```
-
-`Maybe` exists because it's shorter and reads more naturally. See [Unions](REF-unions.md).
 
 ---
 
@@ -130,11 +118,11 @@ value.value         // get the value (compile error without an exists() check)
 After an early return, the compiler also knows `.value` is safe. You don't need to put the rest of your code inside the `if` block:
 
 ```
-function firstOr(nums: share Array<Int>) -> Int {
+function firstOr(share nums: Array<Int>) -> Int {
   let r = nums.first()               // Maybe<Int>
   if (!r.exists()) { return -1 }     // leaves the function — below this line r must have a value
   return r.value                     // safe: you only get here if r.exists() was true
 }
 ```
 
-The early exit must use `return`, `panic`, or an endless `loop`. Those are the only ways the compiler can be sure the function never continues. A normal call to a function that returns `Nothing` doesn't count.
+The early exit must be a `return`. A call to a function that returns `Nothing` doesn't count, because the function carries on after it.
