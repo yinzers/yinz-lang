@@ -364,7 +364,7 @@ let name = player[`name`]
 // Bracket access works on `Array<T>`, `Fixed<T>`, `Map<K, V>`, and `String`.
 // Use `.get(index)` on built-in collections or access shape fields with dot notation.
 
-let scores: Map<String, Int> = { alice: 50 }
+let scores: Map<String, Int> = { `alice`: 50 }
 let aliceScore = scores.alice
 // COMPILE ERROR: Cannot use `.alice` to look up a map key.
 // Map keys are runtime values — use `m["alice"]` to look up a key. For checking existence, use `m.has("alice")`.
@@ -381,7 +381,7 @@ If you know all the keys when you write the code, use a `shape`. Reading a field
 
 ```
 // Known fields in a map
-let mapStats: Map<String, Int> = { health: 100, attack: 50 }
+let mapStats: Map<String, Int> = { `health`: 100, `attack`: 50 }
 
 // A shape
 shape Stats {
@@ -404,8 +404,8 @@ shape PlayerScores {
   assists: Int
 }
 let scoreboard: Map<String, PlayerScores> = {
-  alice: { kills: 10, deaths: 3, assists: 7 },
-  bob: { kills: 5, deaths: 8, assists: 12 }
+  `alice`: { kills: 10, deaths: 3, assists: 7 },
+  `bob`: { kills: 5, deaths: 8, assists: 12 }
 }
 ```
 
