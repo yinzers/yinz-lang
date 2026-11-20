@@ -344,21 +344,21 @@ fn assert_non_shape_variant_return_refused(variant: &str, literal: &str) {
 fn v03_m9_union_coerce_suspending_return_string_variant_is_refused() {
     // Bug: `return later()` with a `string` variant gave the compiler-bug panic of the `int` case.
     // Tier: High.
-    assert_non_shape_variant_return_refused("string", "`text`");
+    assert_non_shape_variant_return_refused("String", "`text`");
 }
 
 #[test]
 fn v03_m9_union_coerce_suspending_return_float_variant_is_refused() {
     // Bug: `return later()` with a `float` variant gave the compiler-bug panic of the `int` case.
     // Tier: High.
-    assert_non_shape_variant_return_refused("float", "1.5");
+    assert_non_shape_variant_return_refused("Float", "1.5");
 }
 
 #[test]
 fn v03_m9_union_coerce_suspending_return_boolean_variant_is_refused() {
     // Bug: `return later()` with a `boolean` variant gave the compiler-bug panic of the `int` case.
     // Tier: High.
-    assert_non_shape_variant_return_refused("boolean", "true");
+    assert_non_shape_variant_return_refused("Boolean", "true");
 }
 
 #[test]

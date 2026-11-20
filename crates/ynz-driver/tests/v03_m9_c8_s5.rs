@@ -526,7 +526,7 @@ shape Thing = Tiny | Big
 }",
             "let fallback: String = `x`",
             "produce(1).or(fallback)",
-            "string",
+            "String",
         ),
         (
             "decimal",
@@ -759,13 +759,13 @@ macro_rules! maybe_spawn_cases {
 }
 
 maybe_spawn_cases! {
-    a_consumed_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(found)", "", "true\n";
-    a_consumed_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, false, "background eat(found)", "", "true\n";
-    a_given_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, true, "background eat(found)", "", "true\n";
-    a_given_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, true, "background eat(found)", "", "true\n";
-    a_copied_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_copied_maybe_string_given_to_a_suspending_task_is_released_once: "string", "`kept`.toUpperCase()", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_fresh_maybe_string_given_to_a_plain_task_is_released_once: "string", "`kept`.toUpperCase()", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
+    a_consumed_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(found)", "", "true\n";
+    a_consumed_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, false, "background eat(found)", "", "true\n";
+    a_given_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, true, "background eat(found)", "", "true\n";
+    a_given_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, true, "background eat(found)", "", "true\n";
+    a_copied_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_copied_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
+    a_fresh_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
     a_consumed_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "", "true\n";
     a_consumed_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, false, "background eat(found)", "", "true\n";
     a_copied_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
@@ -892,14 +892,14 @@ const RETURN_THROUGH_WAIT: &str = "  let found = viaWait()
   print(found.exists())";
 
 resume_function_maybe_cases! {
-    a_resume_function_binding_a_returned_maybe_string_frees_the_call_result: "string", "`kept`.toUpperCase()", READ_THEN_WAIT, "true\n";
+    a_resume_function_binding_a_returned_maybe_string_frees_the_call_result: "String", "`kept`.toUpperCase()", READ_THEN_WAIT, "true\n";
     a_resume_function_binding_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", READ_THEN_WAIT, "true\n";
     a_resume_function_binding_a_returned_maybe_decimal_frees_the_call_result: "Number<20> ", "2.5", READ_THEN_WAIT, "true\n";
-    a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once: "string", "`kept`.toUpperCase()", GIVE_TO_PLAIN, "true\n";
+    a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once: "String", "`kept`.toUpperCase()", GIVE_TO_PLAIN, "true\n";
     a_resume_function_giving_a_returned_maybe_shape_to_a_plain_function_frees_it_once: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", GIVE_TO_PLAIN, "true\n";
-    a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result: "string", "`kept`.toUpperCase()", SPAWN_FROM_SUSPENDING, "true\n";
+    a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result: "String", "`kept`.toUpperCase()", SPAWN_FROM_SUSPENDING, "true\n";
     a_suspending_spawner_of_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", SPAWN_FROM_SUSPENDING, "true\n";
-    a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on: "string", "`kept`.toUpperCase()", RETURN_THROUGH_WAIT, "true\n";
+    a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on: "String", "`kept`.toUpperCase()", RETURN_THROUGH_WAIT, "true\n";
     a_resume_function_returning_a_returned_maybe_shape_passes_its_payload_on: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", RETURN_THROUGH_WAIT, "true\n";
 }
 
@@ -963,8 +963,8 @@ macro_rules! suspending_launcher_cases {
 }
 
 suspending_launcher_cases! {
-    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy: "string", "`kept`.toUpperCase()", true, false;
-    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy: "string", "`kept`.toUpperCase()", false, true;
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy: "String", "`kept`.toUpperCase()", true, false;
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy: "String", "`kept`.toUpperCase()", false, true;
     a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_given_suspending_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", true, true;
     a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_borrowed_plain_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", false, false;
     a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy: "Number<20> ", "2.5", true, true;
@@ -1088,5 +1088,5 @@ macro_rules! copied_maybe_cases {
 copied_maybe_cases! {
     a_copied_maybe_shape_given_to_a_suspending_callee_frees_both_cells: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", "  let fallback: Big = { label: `x`, count: 0 }\n  print(held.or(fallback).label)", "KEPT\n";
     a_copied_maybe_decimal_given_to_a_suspending_callee_frees_both_cells: "Number<20> ", "2.5", "  print(held.or(1.5))", "2.5\n";
-    a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell: "string", "`kept`.toUpperCase()", "  print(held.or(`x`))", "KEPT\n";
+    a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell: "String", "`kept`.toUpperCase()", "  print(held.or(`x`))", "KEPT\n";
 }

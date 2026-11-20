@@ -10,7 +10,7 @@ Error: This file has no `entrypoint` function.
  3 │ ├─▶ }
    │ │       
    │ ╰─────── Add an entrypoint function:
-  function entrypoint() -> nothing {
+  function entrypoint() -> Nothing {
     ...
   }
    │     
@@ -21,9 +21,9 @@ Error: Missing return type on `entrypoint`.
    │
  1 │ function entrypoint() {
    │                       ┬  
-   │                       ╰── Add `-> nothing` after the parentheses: `function entrypoint() -> nothing`
+   │                       ╰── Add `-> Nothing` after the parentheses: `function entrypoint() -> Nothing`
    │ 
-   │ Note: Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.
+   │ Note: Every function in Yinz declares what it returns. Use `-> Nothing` for functions that don't return a value.
 ───╯
 Error: Unexpected `}` at the top level.
    ╭─[ [FIXTURES]/broken_main.ynz:3:1 ]

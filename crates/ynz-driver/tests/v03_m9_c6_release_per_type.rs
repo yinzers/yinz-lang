@@ -369,7 +369,7 @@ release_cases!(
     "a plain `string` argument's spawn-time clone is freed by nobody, so every spawn leaks one string (High)",
     Case {
         declarations: "",
-        value_type: "string",
+        value_type: "String",
         setup: "  let labels: Array<String> = [`heap string`]\n  let maybeLabel: Maybe<String> = labels.get(0)\n  let value: String = maybeLabel.or(`none`)\n",
         read: "  print(value)\n",
     }

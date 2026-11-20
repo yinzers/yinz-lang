@@ -153,7 +153,7 @@ pub fn range_formatting_response(
             show_message(
                 sender,
                 MessageType::INFO,
-                "ynz-fmt: Range formatting: start position out of bounds — try reloading the file.",
+                "ynz-fmt: range formatting: start position out of bounds — try reloading the file.",
             );
             return Vec::new();
         }
@@ -164,7 +164,7 @@ pub fn range_formatting_response(
             show_message(
                 sender,
                 MessageType::INFO,
-                "ynz-fmt: Range formatting: end position out of bounds — try reloading the file.",
+                "ynz-fmt: range formatting: end position out of bounds — try reloading the file.",
             );
             return Vec::new();
         }
@@ -179,7 +179,7 @@ pub fn range_formatting_response(
         show_message(
             sender,
             MessageType::INFO,
-            "ynz-fmt: Range formatting: the selection's end is before its start — try reloading the file.",
+            "ynz-fmt: range formatting: the selection's end is before its start — try reloading the file.",
         );
         return Vec::new();
     }
@@ -200,7 +200,7 @@ pub fn range_formatting_response(
             show_message(
                 sender,
                 MessageType::WARNING,
-                &format!("ynz-fmt: Range formatting failed — {msg}"),
+                &format!("ynz-fmt: range formatting failed — {msg}"),
             );
             return Vec::new();
         }
