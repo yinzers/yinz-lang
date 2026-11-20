@@ -9571,7 +9571,7 @@ fn spike_cpu_candidates(
     // `ynz_typeck::cpu_admission::admitted_cpu_group` — the single authority the
     // `parallel_groups` inlay-hint pass also reads. Codegen does NOT re-decide it here: a
     // second composition of the same gate sequence would drift from the hint's composition (the
-    // hint↔binary silent-drift class — see .claude/graveyard.md "Silent Envelope Narrowing").
+    // hint↔binary silent-drift class: a gate narrowed in one place and not the other).
     // When the authority declines (`None`), the whole function lowers sequentially, byte-
     // identical to `--no-auto-parallel`. When it admits, this function maps the admitted group
     // to its representative (first) callee — an EXTRACTION step, not a re-decision.

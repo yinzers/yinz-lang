@@ -413,8 +413,7 @@ real weaknesses:
    Replace `d.what.starts_with("Copying ")` (`inlay_hint.rs:300`) with a
    `DiagnosticKind::BackgroundLargeCopy`. A rewording must never be able to silently kill a
    teaching surface. *Kills: F2 class.*
-6. **Bouncer/graveyard grep-gates** (mechanical, diff-detectable — fits the existing
-   `.claude/graveyard.md` system):
+6. **Bouncer grep-gates** (mechanical, diff-detectable):
    - `design/[a-z-]+\.md` or `IMP-[a-z-]+\.md` inside a string literal in `crates/**/*.rs`
      diagnostic text (B3);
    - `Tokio|ynz_rt_init|alloca|vtable` in diagnostic/hover strings (B2);

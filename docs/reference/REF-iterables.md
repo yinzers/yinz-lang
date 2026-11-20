@@ -17,7 +17,7 @@ metadata:
 
 ---
 
-## How for loops work under the hood
+## How for loops work
 
 ```ynz
 for (player in players) {
@@ -25,13 +25,13 @@ for (player in players) {
 }
 ```
 
-The compiler calls `next(players)` repeatedly until it returns `none`. (Equivalent to `players.next()` via UFCS — both forms work the same.) That's the entire `Iterable` contract.
+The loop asks `players` for its next value again and again, using the function `next(players)`. It stops when `next` returns `none`. You can also write the call as `players.next()`; both forms do the same thing. That one function is the whole `Iterable` contract.
 
 ---
 
-## Two contracts — in-memory and fallible
+## Two contracts — one that cannot fail, one that can
 
-Most iterables can never fail mid-step. Some iterables (reading a file, paging through an API) can — disk errors, network timeouts, etc. Yinz has a contract for each. Contracts use bare-signature form (no `function` keyword, no body — see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md)):
+Most iterables never fail while giving you the next value. Some can: reading a file or paging through a web API can hit a disk error or a network timeout. Yinz has one contract for each. A contract lists only the function signatures a shape must provide, with no `function` keyword and no body:
 
 ```ynz
 shape Iterable<T> {
@@ -43,9 +43,9 @@ shape FallibleIterable<T> {
 }
 ```
 
-Return the next value or `none` when there are no more. For `FallibleIterable`, `next` can also fail.
+`next` returns the next value, or `none` when there are no more. For `FallibleIterable`, `next` can also fail.
 
-You almost never think about which contract is which — the compiler picks based on the iterator you're using:
+You almost never need to choose a contract. The compiler picks one from what you loop over:
 
 | You're iterating over | Contract |
 |-----------------------|----------|
@@ -56,36 +56,36 @@ You almost never think about which contract is which — the compiler picks base
 | `request.stream(url)` | `FallibleIterable<Response>` |
 | Paginated API clients | `FallibleIterable<T>` |
 
-The `for` syntax is the same either way. What changes is that a fallible loop requires your function to be marked `errors` (or you handle the failures explicitly).
+The `for` syntax is the same either way. The difference: a loop that can fail needs your function to be marked `errors`, or you handle the failures yourself.
 
 ---
 
-## Shape destructuring in for loops
+## Pulling fields out of shapes in a for loop
 
-When iterating a collection of shapes, you can destructure fields directly in the loop header instead of accessing them via the loop variable:
+When you loop over a collection of shapes, you can pull the fields out right in the loop header instead of reading them from the loop variable:
 
 ```ynz
 shape Player { name: string, health: int, score: int }
 
 const players: fixed<Player> = [
-    { name: "Alice", health: 100, score: 50 },
-    { name: "Bob",   health: 80,  score: 30 },
+    { name: `Alice`, health: 100, score: 50 },
+    { name: `Bob`,   health: 80,  score: 30 },
 ]
 
-// Single binding — access fields via the variable
+// One variable — read fields from it
 for (player in players) {
     print(player.name)
     print(player.health)
 }
 
-// Shape destructuring — bind fields directly
+// Pull the fields out — name and health become variables
 for ({ name, health } in players) {
     print(name)
     print(health)
 }
 ```
 
-Both forms compile to the same code. Destructuring is shorthand — the compiler introduces a hidden `__shape` binding and generates the field accesses for you.
+Both forms do the same thing. Pulling fields out is shorthand for reading `player.name` and `player.health` yourself.
 
 You can rename a field with `as`:
 
@@ -96,11 +96,11 @@ for ({ name as playerName, health as hp } in players) {
 }
 ```
 
-You don't have to destructure every field — list only the ones you need:
+You don't have to pull out every field — list only the ones you need:
 
 ```ynz
 for ({ name } in players) {
-    print(name)   // health and score are still there on the hidden binding, just not bound
+    print(name)   // health and score exist, but you didn't ask for them
 }
 ```
 
@@ -127,7 +127,7 @@ for (num in range(1, 1000000)) {
 }
 ```
 
-`range()` is built into the standard library. Each number is generated on demand — no array created. Under the hood it's a `Range` type that follows `Iterable<int>`.
+`range()` is built in. It makes each number only when the loop asks for it, so it never builds an array. It follows the `Iterable<int>` contract.
 
 ---
 
@@ -136,33 +136,40 @@ for (num in range(1, 1000000)) {
 ```
 // Process a 50GB log file with only one line in memory at a time
 function findErrors(path: string) -> array<string> errors {
-  let errors: array<string> = []
-  for (line in file.lines(path)) {     // each read can fail — auto-propagates
-    if (line.contains("ERROR")) {
-      errors.add(line)
+  let errorLines: array<string> = []
+  for (line in file.lines(path)) {     // each read can fail — the failure goes up automatically
+    if (line.contains(`ERROR`)) {
+      errorLines.add(line)
     }
   }
-  return errors
+  return errorLines
 }
 ```
 
-`file.lines()` returns a `FallibleIterable<string>` — it reads one line at a time, and any read can fail (disk errors, mid-read closure, etc.). Because the enclosing function is `errors`, failures auto-propagate just like a direct `errors` function call.
+`file.lines()` returns a `FallibleIterable<string>`. It reads one line at a time, and any read can fail (disk error, file closed mid-read, and so on). Because the function is marked `errors`, a failed read ends the function and passes the failure to the caller, just like a failed call to any other `errors` function.
 
-If you want to keep reading past failures (for example, log them and continue), use one of the adapters:
+If you want to keep reading past failures (for example, log them and carry on), use one of these adapters (functions that sit between the file and your loop and change what happens when a read fails):
 
 ```ynz
-// Skip lines that failed to read — silently discards failures, continues to next
-for (line in file.lines(path).orSkipFailures()) {
+// Skip lines that failed to read — drops each failure and moves on
+const firstPassLines = file.lines(path)
+const readableLines = firstPassLines.orSkipFailures()
+for (line in readableLines) {
   if (line.contains(`ERROR`)) { print(line) }
 }
 
-// Skip and log each failure to stderr — compose .logSkippedFailuresTo() with .orSkipFailures()
-for (line in file.lines(path).logSkippedFailuresTo(terminal.stderr).orSkipFailures()) {
+// Skip and log each failure to the error output — call .logSkippedFailuresTo() first, then .orSkipFailures()
+const secondPassLines = file.lines(path)
+const loggedLines = secondPassLines.logSkippedFailuresTo(terminal.stderr)
+const survivingLines = loggedLines.orSkipFailures()
+for (line in survivingLines) {
   if (line.contains(`ERROR`)) { print(line) }
 }
 
 // Get each step as a success-or-failure value, decide per line
-for (result in file.lines(path).withErrors()) {
+const thirdPassLines = file.lines(path)
+const lineResults = thirdPassLines.withErrors()
+for (result in lineResults) {
   if (result.failed()) {
     log.warn(`bad line: ${result.message}`)
   } else {
@@ -175,13 +182,13 @@ for (result in file.lines(path).withErrors()) {
 
 With any adapter, the enclosing function no longer needs to be `errors`.
 
-**`.orSkipFailures()` is silent** — it drops failed iterations without any I/O. If you want logging, chain `.logSkippedFailuresTo(sink)` before it. `terminal.stderr` and `terminal.stdout` are built-in log sinks. You can also pass any value that follows the `LogSink` contract (has a `.write(message)` method).
+**`.orSkipFailures()` is silent** — it drops failed lines and writes nothing. If you want a log, call `.logSkippedFailuresTo(sink)` first and then `.orSkipFailures()` on its result. `terminal.stderr` and `terminal.stdout` are built-in places to log to. You can also pass any value that follows the `LogSink` contract (one with a `.write(message)` function).
 
 ---
 
-## Building a custom iterable
+## Building your own iterable
 
-Declare a shape that `follows Iterable<T>` (data fields + `hidden` state). Provide a standalone `next` function whose signature matches the contract — the compiler verifies the match.
+Declare a shape that `follows Iterable<T>`, with its data fields and any `hidden` fields it needs to remember where it is. Then write a standalone `next` function whose signature matches the contract. The compiler checks the match.
 
 ```ynz
 shape CountDown follows Iterable<int> {
@@ -204,7 +211,7 @@ for (num in counter) {
 }
 ```
 
-If your iteration step can fail (I/O, network), follow the fallible contract instead:
+If getting the next value can fail (a file or the network), follow the `FallibleIterable` contract instead:
 
 ```ynz
 shape ApiPager<T> follows FallibleIterable<T> {
@@ -217,26 +224,27 @@ function next(lend self: ApiPager<T>) -> maybe<T> errors {
   if (self.done) {
     return none
   }
-  const response = request.get(self.buildUrl())   // can fail — errors propagates
+  const url = self.buildUrl()
+  const response = request.get(url)   // can fail — the failure goes up automatically
   self.cursor = response.nextCursor
   self.done = response.nextCursor.exists() == false
   return response.item
 }
 ```
 
-The choice — `Iterable<T>` vs `FallibleIterable<T>` — comes down to one question: can a single step fail at runtime? If yes, use `FallibleIterable<T>`. If no, use `Iterable<T>`. The compiler will catch you trying to do I/O inside an infallible `next`.
+To choose between `Iterable<T>` and `FallibleIterable<T>`, ask one question: can getting the next value fail while the program runs? If yes, use `FallibleIterable<T>`. If no, use `Iterable<T>`. The compiler reports an error if you read a file or call the network inside a `next` that is not allowed to fail.
 
-Note: Yinz is not object-oriented — `next` is a standalone function, not a method "on" the iterator. The for-loop machinery calls `next(iterator)` (or equivalently `iterator.next()` via UFCS dot-call sugar).
+`next` is a standalone function, not something stored inside the iterable. The `for` loop calls `next(iterator)`, which you can also write as `iterator.next()`.
 
 ---
 
 ## Who needs custom iterables
 
-Most developers never build one. Standard iterables cover all common cases:
+Most developers never build one. The built-in iterables cover everyday code:
 
-- `array<T>` and `fixed<T>` — iterate elements
-- `map<K, V>` — iterate entries (each with `.key` and `.value`)
-- `range(start, end)` — number sequences
-- `file.lines(path)` — file lines without loading into memory
+- `array<T>` and `fixed<T>` — go through the items
+- `map<K, V>` — go through the entries (each with `.key` and `.value`)
+- `range(start, end)` — a sequence of numbers
+- `file.lines(path)` — the lines of a file, without loading the whole file
 
-Custom iterables are for library authors and advanced patterns like lazy generation or streaming data.
+Custom iterables are for library authors and for cases like making values on demand or reading a stream of data.

@@ -45,7 +45,7 @@ Print, log, string interpolation, type default representation — sensitive valu
 
 Getting the raw value requires calling `.reveal()`, which is clearly named and produces an IDE warning when used in output contexts.
 
-**Why not just return the string and let developers be careful**: That's exactly how every other language works, and it fails constantly. Accidental API key logging has caused real security incidents across major companies. Requiring explicit action + warning on suspicious usage catches the mistake at the point of error.
+Decided: returning the plain string and trusting developers to be careful rejected; an explicit action plus a warning on suspicious usage catches the mistake at the point of error.
 
 ---
 

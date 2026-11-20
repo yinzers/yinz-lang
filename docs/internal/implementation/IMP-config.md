@@ -24,15 +24,15 @@ Configuration lives in three distinct layers:
 2. `.env` auto-loaded — secrets, connection strings, machine-specific values (runtime, never compiled in)
 3. `set` functions in `main()` — runtime behavior (shutdown, threads, logging, error handling)
 
+**Why `.env` for secrets**: secrets and connection strings differ on every machine, so they never belong in code or the compiled binary; the same binary reads different `.env` values at runtime.
+
 **Why three layers**: Each layer has a different lifecycle, different audience, and different security requirements. Mixing them creates confusion about when values are read, who can see them, and what they affect.
 
 ---
 
 ## TOML over JSON or YAML
 
-**Why not JSON**: No comments — can't annotate config. Missing trailing commas cause cryptic errors. Every key needs quotes. Designed for machine data exchange, not human editing.
-
-**Why not YAML**: Whitespace-sensitive — indentation errors cause silent failures. Implicit type coercion: `no` becomes boolean `false`, `NO` (Norwegian country code) becomes `false`. Has caused real production outages. Not worth the risk for a config file format.
+Decided: JSON and YAML rejected.
 
 **Why TOML**: Designed specifically for config files. Comments allowed. Explicit types with no implicit coercion. Not whitespace-sensitive. Used by Rust (Cargo.toml), Python (pyproject.toml). Clean and predictable.
 
@@ -53,7 +53,9 @@ Runtime behavior (`setShutdownTimeout`, `setThreadPoolSize`, `setErrorHandler`, 
 **Why**: Runtime settings often depend on other values — environment variables, command-line arguments, conditions. A static config file can't branch on these. Code handles branching naturally:
 
 ```
-if (env.get("ENV").or("dev") == "production") {
+let foundEnvironment = env.get("ENV")
+let environment = foundEnvironment.or("dev")
+if (environment == "production") {
   setThreadPoolSize(32)
 } else {
   setThreadPoolSize(4)

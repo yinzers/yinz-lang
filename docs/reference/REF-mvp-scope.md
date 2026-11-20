@@ -54,11 +54,11 @@ The granular model exists because (a) each version has predictable scope, (b) ea
 
 ### Demo files (from v0.1 onward)
 - [ ] `examples/pirates-roster/entrypoint.ynz` extended with a realistic section showing the new feature in context — not a toy snippet, something that looks like real code
-- [ ] `examples/primantis-orders/v{0.N}_errors.ynz` (or milestone-specific `m{N}_errors.ynz`) — intentional triggers for every new compile error class, each with `// WHY: <DiagnosticClassName>` comment
+- [ ] A new gallery file `examples/primantis-orders/<version>_<slug>_errors.ynz`, registered in `crates/ynz-driver/tests/error_galleries.rs` — intentional triggers for every new compile error class, each with `// WHY: <DiagnosticClassName>` comment
 
 ### Spec + design docs
 - [ ] `docs/reference/REF-feature.md` written or updated — audience is an 18-year-old JS dev, examples-heavy, plain English
-- [ ] `docs/internal/implementation/IMP-feature.md` written or updated — rationale, alternatives considered, locked decisions
+- [ ] `docs/internal/implementation/IMP-feature.md` written or updated — the decision in force plus a one-clause reason (alternatives go in the commit message)
 - [ ] [`docs/reference/REF-language-overview.md`](REF-language-overview.md) table of contents updated if a new spec file was created
 - [ ] [`docs/README.md`](../README.md) index updated if a new design file was created
 - [ ] Resolved open questions moved from [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md) to the relevant design file
@@ -75,7 +75,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 **Language features (all v0.1):**
 - Variables (`let`, `const`)
 - Functions (with ownership modifiers: `share`/`lend`/`give`/`copy`/`.freeze`)
-- Types (struct-like with fields and methods)
+- Shapes (data fields plus contract signatures; behavior lives in standalone functions)
 - Options (named value sets, replaces enums)
 - Unions (`shape Foo = A | B | C`)
 - Maybe types (`maybe<T>`, `none`, `.exists()`, `.value`, `.or(default)`)
@@ -150,7 +150,7 @@ Single source of truth for all feature inventories. [`registry/features.toml`](.
 
 ### v0.2-M3: `ynz fmt` (active — tag `v0.2.0-m3` pending)
 
-**Locked decisions (2026-05-20):**
+**Locked decisions:**
 - CLI flag set: `ynz fmt <path>`, `--all` (walk `yinz.toml` project), `--check` (CI gate), `--stdin` (editor/LSP pipe)
 - Comment handling: additive `lex_with_trivia()` re-lex pass in `ynz-parser` — captures every `//` + `///` span without altering the existing `lex()` path
 - Registry consumer only: formatter reads keyword spellings, banned-jargon, and reserved-name protection from `ynz-registry`; adds zero new registry entries
@@ -236,7 +236,7 @@ The compiler auto-transforms `array<Shape>` storage from Array-of-Structs to Str
 - **Substitute used pre-this-version**: Default Array-of-Structs layout. Manual SoA via parallel `array<T>` of each field is possible if a user really needs it pre-v0.3, but no compiler help.
 - **Locked design**: Shipped in v0.3-M5 — see [`docs/internal/implementation/IMP-collections.md` — "Auto-SoA layout (v0.3-M5)"](../internal/implementation/IMP-collections.md#auto-soa-layout-v03-m5)
 
-> **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; per-milestone error gallery files (`v0_3_m{1..4}_errors.ynz`). Roadmap: [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
+> **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; one error gallery file per work item, named `<version>_<slug>_errors.ynz` and registered in `crates/ynz-driver/tests/error_galleries.rs`. Roadmap: [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
 
 ---
 
@@ -248,7 +248,7 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
-**Co-shipping: `set<T>` core collection** (committed 2026-06-13) — the unique-value collection sibling of `map<K,V>`, plus the `array.unique()` method and the `array<T> → set<T>` auto-promotion. Designed in [`docs/internal/implementation/IMP-collections.md`](../internal/implementation/IMP-collections.md). **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
+**Co-shipping: `set<T>` core collection** — the unique-value collection sibling of `map<K,V>`, plus the `array.unique()` method and the `array<T> → set<T>` auto-promotion. Designed in [`docs/internal/implementation/IMP-collections.md`](../internal/implementation/IMP-collections.md). **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
 
 **Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see [`docs/internal/scratchpad/SCRATCH-future-release-mode.md`](../internal/scratchpad/SCRATCH-future-release-mode.md). May ship in v0.4 alongside the linting work, or slip to a later perf-focused slot if scope demands.
 

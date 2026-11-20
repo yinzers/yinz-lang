@@ -111,10 +111,11 @@ The for loop syntax is identical for both contracts. The compiler checks the ite
 
 ```ynz
 // Skip failed iterations silently (logs the error, continues to next item)
-let lines = file.lines(path).orSkipFailures()        // Iterable<string>
+let fileLines = file.lines(path)
+let lines = fileLines.orSkipFailures()               // Iterable<string>
 
 // Get each step's success-or-failure as a value
-let results = file.lines(path).withErrors()          // Iterable<Result<string>>
+let results = fileLines.withErrors()                 // Iterable<Result<string>>
 ```
 
 These let users iterate fallible sources from non-errors functions when they have a specific recovery strategy.
@@ -128,7 +129,8 @@ These let users iterate fallible sources from non-errors functions when they hav
 iter.orSkipFailures()
 
 // Logged failures + continue (compose explicitly)
-iter.logSkippedFailuresTo(terminal.stderr).orSkipFailures()
+let loggedIter = iter.logSkippedFailuresTo(terminal.stderr)
+loggedIter.orSkipFailures()
 ```
 
 `.logSkippedFailuresTo(sink)` takes a `LogSink` value. The `LogSink` contract:
@@ -144,7 +146,9 @@ In M7, `terminal.stderr` and `terminal.stdout` follow `LogSink`. The v0.5+ stdli
 `.withErrors()` returns `Iterable<maybe<T> errors>` (NOT `Iterable<Result<T>>`). `Result` is on the banned-jargon list. Each iteration step yields an errors-capable maybe-value; the user inspects it with standard `.failed()` / `.message` / `.or()` machinery. Example:
 
 ```ynz
-for (result in file.lines(path).withErrors()) {
+let fileLines = file.lines(path)
+let results = fileLines.withErrors()
+for (result in results) {
   if (result.failed()) {
     log.warn(`bad line: ${result.message}`)
   } else {
@@ -161,13 +165,7 @@ No new shape is needed — this reuses M7's own errors-capable mechanism uniform
 
 Yinz's `follows` contracts require method signatures to match exactly. There's no language-level mechanism for "this method returns `maybe<T>` OR `maybe<T> errors`" — adding one would complicate every `follows` contract for one feature. Two explicit contracts is simpler and matches the user's mental model: "is this iterator infallible or fallible?"
 
-**Why not Option A (single contract that always returns `errors`):**
-
-Forces every for loop (even `for (x in [1,2,3])`) into an `errors` context. Pollutes pure code with annotations for a failure mode that can't actually happen on in-memory data. Rejected.
-
-**Why not Option B (swallow errors and return `none`):**
-
-Violates Yinz's core error principle: failures are visible and structured. A `for (line in file.lines(path))` that silently stops on an I/O error and returns a truncated result is the exact bug pattern Yinz exists to prevent. Rejected outright.
+Decided: a single contract that always returns `errors`, and swallowing errors as `none`, rejected.
 
 **Writing a custom iterable — the choice is clarifying:**
 

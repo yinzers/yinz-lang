@@ -202,14 +202,29 @@ physics.VACUUM_PERMEABILITY         // 1.25663706212e-6 N/A²
 ## Unit Conversion
 
 ```
-convert.celsius(100).toFahrenheit()
-convert.kilometers(5).toMiles()
-convert.kilograms(1).toPounds()
-convert.meters(1).toFeet()
-convert.liters(1).toGallons()
-convert.joules(1).toCalories()
-convert.pascals(101325).toAtmospheres()
-convert.radians(math.PI).toDegrees()
+let boiling = convert.celsius(100)
+let boilingFahrenheit = boiling.toFahrenheit()
+
+let distance = convert.kilometers(5)
+let distanceMiles = distance.toMiles()
+
+let weight = convert.kilograms(1)
+let weightPounds = weight.toPounds()
+
+let height = convert.meters(1)
+let heightFeet = height.toFeet()
+
+let volume = convert.liters(1)
+let volumeGallons = volume.toGallons()
+
+let energy = convert.joules(1)
+let energyCalories = energy.toCalories()
+
+let pressure = convert.pascals(101325)
+let pressureAtmospheres = pressure.toAtmospheres()
+
+let angle = convert.radians(math.PI)
+let angleDegrees = angle.toDegrees()
 ```
 
 ---

@@ -241,7 +241,7 @@ The supervisor pattern at the task boundary handles every legitimate recovery us
 
 `try { } recover` would add a SECOND recovery mechanism — task boundary AND in-scope catch. Two mechanisms doing the same thing violates Yinz's design philosophy ("one concept = one keyword"). Rejected.
 
-**Graveyard Entry 5 catches re-introduction** of try/catch/recover tokens in the parser, AST, or spec docs. The mechanical enforcement exists specifically because this kind of decision gets re-relitigated in 6-month windows.
+Decided: try/catch/recover rejected. No such token may return to the parser, AST, or spec docs; this decision gets re-relitigated in 6-month windows.
 
 ---
 
@@ -261,7 +261,7 @@ Yinz with the supervisor pattern + auto-isolated background tasks gives you PHP-
 - Performance: panic itself is slow (stack unwind isn't free). Normal control flow has zero overhead — no `try/catch` infrastructure that costs even for non-panicking code.
 - Codegen: panic call sites get a special unwind table entry. The runtime walks the table during unwind.
 
-The v0.2 milestone plan must include these in `### Performance` and `### Runtime Dependencies` invariants.
+The v0.2 work must state these costs, what the feature needs at runtime, and whether it works in the no-runtime `--kernel` mode.
 
 ---
 
@@ -272,4 +272,3 @@ The v0.2 milestone plan must include these in `### Performance` and `### Runtime
 - [`docs/internal/implementation/IMP-no-function-coloring.md`](../implementation/IMP-no-function-coloring.md) (the `background` keyword + scheduler)
 - [`docs/internal/scratchpad/SCRATCH-future-supervisor.md`](SCRATCH-future-supervisor.md) (stdlib supervisor helpers)
 - [`docs/internal/implementation/IMP-ownership.md`](../implementation/IMP-ownership.md) (drop-on-scope-exit cleanup during unwind)
-- [`.claude/graveyard.md`](../../../.claude/graveyard.md) Entry 5 (mechanical enforcement of try/catch rejection)

@@ -24,7 +24,7 @@ data** — every AI session reads the contradiction and half of them follow the 
 - `vocabulary.md` Quick Reference: "`share` keyword in signature; compiler-inferred at call
   sites. **NO body-level `.share()` syntax**" (same for lend/give), and `.copy()` **with
   parens** as a body operation.
-- `inference.md` + `dot-postfix.md` + graveyard Entry "Requiring Explicit Ownership Annotation
+- `inference.md` + `dot-postfix.md` + the rejected idea "Requiring Explicit Ownership Annotation
   at Call Sites" all agree with vocabulary.md.
 - So one always-loaded rule teaches call-site dot-modifiers as current syntax while three
   others ban it. **Downstream damage already observed** (teaching audit): the registry template
@@ -169,12 +169,6 @@ data** — every AI session reads the contradiction and half of them follow the 
   were already extracted into the `@theme` block (per the same file) — make the `@theme` block
   the declared SSOT and drop the /tmp pointer.
 
-### 3.7 Graveyard entries cited by number, but the file has no numbers
-- `plan-invariants.md` cites "graveyard Entries 1, 3, 4"; `inference.md` cites "Entry 2". The
-  graveyard's 18 entries are date-titled sections with no stable numbering — insertion or
-  reordering silently re-points every citation. Cite by entry *title* (the corpse name), as
-  `authoritative-derivation.md` already does.
-
 ---
 
 ## Class 4 — Loading architecture ("Load when" is fiction; the whole corpus rides every turn)
@@ -230,7 +224,7 @@ data** — every AI session reads the contradiction and half of them follow the 
 
 ## Class 6 — What's healthy (don't break it in the cleanup)
 
-- `authoritative-derivation.md` — tight, current, cites corpses by title, names its global
+- `authoritative-derivation.md` — tight, current, cites removed approaches by title, names its global
   parent. The model rule.
 - `plan-invariants.md` — the invariants structure + Design-Doc Alignment section is the
   strongest process rule in the repo (one stale `/design/` path aside).

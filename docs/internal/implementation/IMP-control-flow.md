@@ -62,9 +62,7 @@ Multi-case matching uses the existing `if` keyword with `=>` arrows inside the b
 
 The `else =>` inside a multi-case block is the catch-all case. It reads like English ("else, do this"). `else` only exists in this context — never standalone.
 
-**Alternatives considered:**
-- `default =>` — more familiar from switch/match; rejected because `else` is more English (Golden Rule 5) and `default` feels like switch syntax
-- `_ =>` — common in Rust/Haskell; rejected because `_` is programmer notation, not plain English
+Decided: `default =>` and `_ =>` rejected.
 
 ---
 

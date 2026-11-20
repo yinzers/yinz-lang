@@ -58,7 +58,7 @@ function polish_hidden_in_inline_shape() -> nothing {
 // (IMP-ownership.md "Teaching text" for the three transfer diagnostics — ConsumedBySend,
 // ParamNeedsGive, TransferNeedsCopy — and IMP-concurrency.md "Teaching text" for
 // HandleChannelArgNeedsBinding), plus the two existing diagnostics `.close()` extends. The
-// seven live-hole probe programs of 2026-09-03 (`.claude/corpses.md`, first entry) are here as
+// seven live-hole probe programs of 2026-09-03 are here as
 // triggers so the class that took three review rounds to name can never silently reopen.
 
 shape Bucket {
@@ -67,7 +67,8 @@ shape Bucket {
 
 // eat — a declared `give` position: the sink every "given to `eat`" trigger below hits.
 function m8Eat(give rows: array<int>) -> nothing {
-  print(rows.count().toString())
+  let rowCount = rows.count()
+  print(rowCount.toString())
 }
 
 // pick — returns a PIECE of its argument (`MayAlias` under the `returns_fresh` fixpoint fact),
@@ -89,7 +90,8 @@ function m8ConsumedBySendArray() -> nothing {
   let wire: channel<array<int>> = channel<array<int>>(2)
   let rows: array<int> = [1, 2, 3]
   wire.send(rows)
-  print(rows.count().toString())
+  let rowCount = rows.count()
+  print(rowCount.toString())
 }
 
 // WHY: ConsumedBySend (map) — the same rule for the other owned-heap element kind. The
@@ -99,7 +101,8 @@ function m8ConsumedBySendMap() -> nothing {
   let wire: channel<map<string, int>> = channel<map<string, int>>(2)
   let table: map<string, int> = { `a`: 1 }
   wire.send(table)
-  print(table.count().toString())
+  let entryCount = table.count()
+  print(entryCount.toString())
 }
 
 // WHY: ConsumedBySend through an ALIAS CLASS — `let other = rows` puts both names in one
@@ -110,7 +113,8 @@ function m8ConsumedViaAliasLet() -> nothing {
   let rows: array<int> = [1, 2, 3]
   let other = rows
   wire.send(rows)
-  print(other.count().toString())
+  let otherCount = other.count()
+  print(otherCount.toString())
 }
 
 // WHY: ConsumedBySend through REASSIGNMENT — `rows = other` moves `rows` out of its own class
@@ -122,7 +126,8 @@ function m8ConsumedViaAliasReassign() -> nothing {
   let other: array<int> = [2]
   rows = other
   wire.send(rows)
-  print(other.count().toString())
+  let otherCount = other.count()
+  print(otherCount.toString())
 }
 
 // WHY: ConsumedBySend through a SHADOWING `let` — a new entry joining `other`'s class; the
@@ -132,7 +137,8 @@ function m8ConsumedViaAliasShadow() -> nothing {
   let other: array<int> = [2]
   let rows = other
   wire.send(rows)
-  print(other.count().toString())
+  let otherCount = other.count()
+  print(otherCount.toString())
 }
 
 // WHY: ParamNeedsGive at a SEND — `rows` is a parameter with no ownership word, and the body
@@ -177,7 +183,8 @@ function m8GivenThenRead() -> nothing {
   let wire: channel<array<int>> = channel<array<int>>(2)
   let rows: array<int> = [1, 2, 3]
   wait m8Producer(wire, rows)
-  print(rows.count().toString())
+  let rowCount = rows.count()
+  print(rowCount.toString())
 }
 
 // WHY: TransferNeedsCopy — a FIELD (`bucket.rows` is `Reaches(bucket)`; `bucket` still holds
@@ -222,7 +229,8 @@ function m8UfcsNonReceiverGive() -> nothing {
   let bucket: Bucket = { rows: [] }
   let rows: array<int> = [1, 2, 3]
   bucket.m8Stash(rows)
-  print(rows.count().toString())
+  let rowCount = rows.count()
+  print(rowCount.toString())
 }
 
 // WHY: `dynamic Contract` dispatch, covered BY CONSTRUCTION — `ContractSigDef` carries the
@@ -238,7 +246,8 @@ shape Goat follows Eater {
 }
 
 function swallow(share self: Goat, give rows: array<int>) -> nothing {
-  print(rows.count().toString())
+  let rowCount = rows.count()
+  print(rowCount.toString())
 }
 
 function m8DynamicContractGive(d: dynamic Eater) -> nothing {

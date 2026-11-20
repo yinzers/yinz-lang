@@ -21,9 +21,7 @@ User spec: [`docs/reference/REF-errors.md`](../../reference/REF-errors.md)
 
 No try/catch. No Result types. No `?` operator. Functions that can fail declare `errors` after their return type. Auto-propagation in `errors` functions. Compile-time enforcement in non-errors functions.
 
-**Why try/catch was rejected**: Separates error handling from the call site — you lose context. Error handling logic ends up far from the code that caused the error. Nested try/catch blocks are hard to read and easy to get wrong.
-
-**Why Result types were rejected**: Require boilerplate at every level of the call stack. Every function that calls a fallible function must unwrap or propagate explicitly — the boilerplate multiplies through the codebase. Rust's `?` operator reduces this, but it's still a symbol with no plain-English meaning.
+Decided: try/catch, Result types and the `?` operator rejected.
 
 **Why `errors` works**: Keeps the contract at the function boundary with zero boilerplate inside `errors` functions. Auto-propagation handles the common case (let failures cascade to the caller). Explicit handling is required when the function doesn't auto-propagate, enforced at compile time.
 
@@ -76,11 +74,7 @@ function loadConfig() -> Config errors {
 //                move the .failed() check above the parseConfig() call.
 ```
 
-**Why this design wins over alternatives:**
-
-- **Pure Option A (eager auto-propagation, no `.failed()` inside errors functions):** Would break real systems code — you can't log-and-recover within an errors function. Forces every recoverable case to be a non-errors function, which pushes the complexity outward instead of containing it.
-- **Pure Option B (lazy, variables retain error-capable type until manually unwrapped):** Forces users to think about "what's the type" at every fallible call. Heavier mental load. Goes against "happy path reads like the happy path."
-- **This hybrid (lazy under the hood, eager in feel):** Pure Option B mechanics, taught to users as "auto-propagation happens by default, you can opt out by checking first." 99% of code reads as Option A; 1% gets Option B's flexibility.
+**Decided: the hybrid (lazy under the hood, eager in feel).** Auto-propagation happens by default, and you can opt out by checking first; pure eager propagation and pure lazy error-capable variables are rejected.
 
 **Implementation note:** This is flow-sensitive narrowing — the same machinery the type checker already uses for `maybe<T>` (after `if (item.exists())`, `item` narrows to `T`). Salsa handles flow-typing well. No new infrastructure needed.
 

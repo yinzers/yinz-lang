@@ -65,20 +65,20 @@ scores["bob"] = 75              // sugar for scores.set("bob", 75)
 
 Works on: `array<T>`, `fixed<T>`, `map<K,V>`, `string` (read only — strings are immutable).
 
-Does NOT work on: `type` instances. Types use dot access for fields and methods — brackets at a value position on a type are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
+Does NOT work on: shape values. Shapes use dot access for fields, and functions are called with dot sugar — brackets at a value position on a shape value are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
 
 **Why bracket sugar:**
 - **Familiarity:** Every JS/Python/C-family dev expects `arr[0]`. Forcing `.get(0)` everywhere creates needless friction.
 - **Safety preserved:** The sugar still returns `maybe<T>`. The type system enforces handling. Surface looks familiar; semantics stay safe.
 - **No syntax conflict with type parameters:** Different syntax, different position. `array<Player>` is a TYPE (left of equals or in a type annotation); `players[0]` is a VALUE (right of equals or in an expression). TypeScript proved this distinction works for human readers.
 
-**Reverses an earlier decision:** the original `docs/internal/implementation/IMP-collections.md` rejected `map["key"]` notation citing visual ambiguity with `array<Player>` type syntax. That argument was weaker than originally stated — TS does both fine. Reversing for consistency: brackets work universally on all four collection types for read; on map/array/fixed for write.
+Brackets work universally on all four collection types for read; on map/array/fixed for write. Decided: `map["key"]` is allowed (TypeScript does both bracket forms fine).
 
 **Why dot doesn't work on map keys (the real reason):**
 
 Maps have methods (`.count()`, `.get()`, `.set()`, `.keys()`, `.values()`, `.filter()`, etc.). If keys could be accessed via dot, a key named `count` would collide with the `.count()` method — exactly the JavaScript bug class around `obj.constructor`, `obj.toString`, etc.
 
-Types don't have this problem because the user defines both fields and methods in one place, and the compiler can verify no collision. Map keys are runtime user data; method names are compile-time built-ins. The two namespaces can't be unified.
+Shapes don't have this problem because the user declares the fields in one place, and the compiler can verify no field name collides with a function called through dot sugar. Map keys are runtime user data; method names are compile-time built-ins. The two namespaces can't be unified.
 
 Bracket access keeps the namespaces visually separated: `m["count"]` is unambiguously a key lookup; `m.count()` is unambiguously a method call. No collision possible.
 
@@ -99,7 +99,7 @@ Sparse-array growth (JS's `arr[100] = "x"` creating `<97 empty items>`) is rejec
 
 ## Methods Added: `.set()` on `array<T>` and `fixed<T>`
 
-Originally `.set()` only existed on maps. For the bracket-write sugar to work consistently, arrays and fixed arrays also need `.set(index, value)`:
+`.set()` exists on maps, arrays and fixed arrays, so the bracket-write sugar works the same everywhere; arrays and fixed arrays take `.set(index, value)`:
 
 - `array<T>.set(lend self, index: int, value: T) -> nothing` — replace at index. Runtime error if out of bounds.
 - `fixed<T>.set(lend self, index: int, value: T) -> nothing` — same. Index out of bounds is a compile error when the index is a literal AND the size is known; runtime error otherwise.
@@ -169,9 +169,7 @@ When the compiler can prove the keys are NOT externally-controlled (e.g., the ma
 
 When the compiler picks perfect hashing or identity hash for a literal, the IDE shows a muted hint: `// perfect hash — zero collisions for these compile-time-known keys`.
 
-### Why not let the user pick from N hashers
-
-C++ template parameters explode when stdlib offers many hashers (`std::unordered_map<K, V, Hash, KeyEqual, Allocator>` with 4 type parameters). Yinz keeps it simple: the safe default covers 95% of use cases (and the cases where overhead matters are exactly the cases that need safety), the fast opt-in covers the security-irrelevant 5%, and the compiler auto-selects perfect/identity hash where it can. No template-parameter explosion.
+Decided: user-selectable hashers rejected. The safe default, the fast opt-in and compiler-chosen perfect/identity hashing cover every case.
 
 ---
 
@@ -189,7 +187,7 @@ If a user genuinely doesn't care about iteration order and wants to skip the ove
 
 ## `set<T>` — Unique-Value Collection (PLANNED — not yet implemented)
 
-> **Status**: Direction locked 2026-06-13; **co-ships with v0.4** (the linting tier) per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `map<K,V>` — NOT a stdlib module.
+> **Status**: Direction locked; **co-ships with v0.4** (the linting tier) per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `map<K,V>` — NOT a stdlib module.
 
 A `set<T>` holds unique values of one type and answers "is value `X` present?" in O(1). It is `map<K,V>` with keys only — same machinery, no values.
 
@@ -452,9 +450,7 @@ For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-S
 
 `array<Shape>` elements are stored **by value, inline** in the array's heap buffer — variable slot
 width = `sizeof(elem)`, exactly like `array<int>` stores i64 values inline. Shipped in v0.3-M5
-(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3), replacing the original uniform-8-byte-slot
-representation that stored shape elements as pointers. Graduated here from
-`SCRATCH-future-array-by-value-element-storage.md` (now a pointer stub).
+(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3); shape elements are no longer stored as pointers.
 
 ### The forcing bug
 
@@ -475,23 +471,14 @@ variant (next section) is the SAME single allocation, segmented per field, with 
 computed at compile time from `cap ×` per-field sizes — a layout variant of one representation,
 never a second substrate (the twin-substrate drift class is eliminated by construction).
 
-**Rejected alternatives:**
-- **Per-element heap cells** (the scratch analysis's Option B): one allocation per element violates
-  GR6 (zero-cost), fragments cache lines, multiplies alloc=free accounting, and immediately forces
-  `ynz_array_drop` to become element-aware — the exact leak-hazard class an earlier M3a fix round
-  hit.
-- **LLVM module globals**: stable storage for compile-time-literal-field shapes only — the partial
-  fix whose runtime-field hole WAS the forcing bug.
+Decided: per-element heap cells and LLVM module globals rejected.
 
 ### Element-blind drop, parity-gated (D6)
 
 `ynz_array_drop` stays element-blind, matching pre-M5 semantics. The migration was gated by an
 alloc=free parity check (`YNZ_ALLOC_COUNTER_OUTPUT`) against the pre-migration baseline, with a
 buffer-visibility entry criterion so the gate could not pass vacuously — it ran green, proving no
-NEW leak class vs the pointer representation. **Rejected:** element-aware drop now — YAGNI until
-the ownership model's drop story adds guaranteed heap-owned-field freeing (plan
-`2026-07-03-v0-3-m5-auto-soa` Future Requirements #6). A contingency loud-reject
-(`array<Shape-with-heap-fields>` typeck error) was armed for a parity RED and was not needed.
+NEW leak class vs the pointer representation. Decided: element-aware drop rejected (until the ownership model's drop story adds guaranteed heap-owned-field freeing).
 
 ### `contains` on `array<Shape>` = field-wise value equality (D12)
 
@@ -501,11 +488,7 @@ membership (GR4), matches every primitive cell's behavior, and matches the non-O
 shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
 `crates/ynz-codegen/src/emit.rs`).
 
-**Rejected alternatives:**
-- **Pointer identity**: has no by-value analogue — there is no stable element pointer to compare.
-- **Whole-element memcmp**: compares garbage padding bytes — both natural alignment padding and
-  M4's false-sharing cache-line pads. Per-field compares are the only layout-honest form; for
-  padded shapes the wrapper GEP at offset 0 is layout-correct.
+Decided: pointer identity and whole-element memcmp rejected.
 
 **Pointer-typed fields (string, nested shape/collection) compare by identity** — ratified as final
 for M5 after the E8-class review. Deep value equality for those fields is a future extension, not

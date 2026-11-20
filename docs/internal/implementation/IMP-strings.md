@@ -138,7 +138,7 @@ This extends [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-de
 
 ## M7 SSO Layout — 24-Byte Struct (ABI Locked)
 
-**Locked 2026-05-18 for M7.** This is ABI-locked — any change requires a semver major bump and a recompile of all dependent binaries.
+**Locked.** This is ABI-locked — any change requires a semver major bump and a recompile of all dependent binaries.
 
 A `YnzString` is exactly 24 bytes with 8-byte alignment. The tag byte lives at offset 23 and is the inline/heap discriminator.
 

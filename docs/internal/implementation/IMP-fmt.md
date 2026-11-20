@@ -147,7 +147,7 @@ Doc comments (`///`) are handled separately: the AST already carries them; the w
 
 ## Algorithm Choice
 
-**LOCKED 2026-05-20: Prettier-style (full AST reflow).**
+**Locked: Prettier-style (full AST reflow).**
 
 Both spikes passed all numeric gates. Prettier-style was chosen for canonicality — a requirement the LOC tie-break cannot override.
 

@@ -13,9 +13,9 @@ metadata:
 
 # Inline / Anonymous Shape Types — Single-Use Structural Types
 
-> **Status**: Shipped — v0.1-polish (2026-05-19).
+> **Status**: Shipped — v0.1-polish.
 > **Spec**: [`docs/reference/REF-types.md`](../../reference/REF-types.md) → "Inline shapes (anonymous types)" section.
-> **Trigger**: Patrick hit verbosity friction while testing — defining a one-off shape outside a function just to type a single binding scrolled the eye too far from the use site.
+> **Motivation**: defining a one-off shape outside a function just to type a single binding scrolled the eye too far from the use site.
 
 ---
 
@@ -39,7 +39,7 @@ const intervals: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }]
 shape Bar { spread: { bid: number, ask: number } }
 ```
 
-## Design decisions (locked 2026-05-19)
+## Design decisions (locked)
 
 ### 1. Structural typing for anonymous shapes only
 
@@ -80,7 +80,7 @@ Inline shapes are pure data — they have no inheritance or contract requirement
 
 ## Open questions (not addressed in v0.1-polish)
 
-1. **Auto-promotion lint**: when the same inline type appears in 2+ places, a Tier 3 lint emits a Warning at each use site suggesting extraction to a named `shape`. **SHIPPED (2026-05-19)** — implemented in `check.rs` `lint_repeated_inline_shapes`, 3 tests in `tests/check.rs`.
+1. **Auto-promotion lint**: when the same inline type appears in 2+ places, a Tier 3 lint emits a Warning at each use site suggesting extraction to a named `shape`. **SHIPPED** — implemented in `check.rs` `lint_repeated_inline_shapes`, 3 tests in `tests/check.rs`.
 
 2. **Cross-file structural equivalence**: Positive case (passing a correctly-typed struct literal to an imported function) is tested and works. Negative case (passing a struct literal with wrong fields to an imported function) currently does NOT produce an error — the expected-type is not threaded into untyped call-argument checking. Fix requires threading the param's expected type into `check_call` argument evaluation. Test `cross_file_inline_shape_field_mismatch_documents_known_gap` in `tests/check.rs` tracks this gap.
 
