@@ -322,7 +322,7 @@ fn test_rename_response_under_1000ms() {
     let src = "function greet() -> String { return `hi` }\n\
                function entrypoint() -> Nothing {\n  let a = greet()\n  let b = greet()\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_perf.ynz", src);
-    let pos = position_at(src, "greet() -> string");
+    let pos = position_at(src, "greet() -> String");
     let start = std::time::Instant::now();
     let _ = rename_response(&state, &uri, pos, "sayHi", &mock_sender());
     let elapsed = start.elapsed();

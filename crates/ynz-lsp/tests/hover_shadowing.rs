@@ -88,10 +88,10 @@ fn variable_named_share_in_expression_position_shows_type_in_hover() {
                  got: {v:?}",
                 v = mc.value
             );
-            // The annotation `let share: int` must surface the type.
+            // The annotation `let share: Int` must surface the type.
             assert!(
-                mc.value.contains("int"),
-                "annotated binding hover must include the type `int`; got: {v:?}",
+                mc.value.contains("Int"),
+                "annotated binding hover must include the type `Int`; got: {v:?}",
                 v = mc.value
             );
         }
@@ -300,15 +300,15 @@ fn end_of_token_cursor_does_not_double_match_adjacent_token() {
     let src = "function entrypoint() -> Nothing { }";
     let tokens = tokenize(src);
 
-    // `->` in "function entrypoint() -> nothing". Find its end byte.
+    // `->` in "function entrypoint() -> Nothing". Find its end byte.
     let arrow_pos = src.find("->").unwrap();
-    let arrow_end = arrow_pos + 2; // byte after `>`; whitespace follows before `nothing`
+    let arrow_end = arrow_pos + 2; // byte after `>`; whitespace follows before `Nothing`
 
     let result = token_at_offset(&tokens, arrow_end);
-    // Whitespace after `->` — must return None (not `nothing`).
+    // Whitespace after `->` — must return None (not `Nothing`).
     assert!(
         result.is_none(),
-        "cursor in whitespace gap after `->` must return None, not bridge to adjacent `nothing`"
+        "cursor in whitespace gap after `->` must return None, not bridge to adjacent `Nothing`"
     );
 }
 
@@ -324,10 +324,10 @@ fn inner_shadowing_share_resolves_to_binding_hover_not_keyword() {
     // innermost expression use-site correctly, and that the result is Some regardless
     // of any keyword disambiguation logic.
     let src = concat!(
-        "function entrypoint() -> nothing {\n",
-        "  let share: int = 5\n", // outer binding
+        "function entrypoint() -> Nothing {\n",
+        "  let share: Int = 5\n", // outer binding
         "  if (true) {\n",
-        "    let share: int = 99\n", // inner binding (shadows outer)
+        "    let share: Int = 99\n", // inner binding (shadows outer)
         "    print(share)\n",        // inner use-site — resolve this one
         "  }\n",
         "}"

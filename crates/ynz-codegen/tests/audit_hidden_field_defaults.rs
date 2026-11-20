@@ -40,19 +40,19 @@ fn audit_finding_zero_non_zero_defaults() {
     let zero_default_fixtures = [
         (
             "examples/pirates-roster/entrypoint.ynz",
-            "hidden current: int = 0",
+            "hidden current: Int = 0",
         ),
         (
             "crates/ynz-driver/tests/fixtures/m4_neg_hidden_field_access.ynz",
-            "hidden balance: int = 0",
+            "hidden balance: Int = 0",
         ),
         (
             "crates/ynz-driver/tests/fixtures/m7_user_iterable.ynz",
-            "hidden pos: int = 0",
+            "hidden pos: Int = 0",
         ),
         (
             "crates/ynz-driver/tests/fixtures/m4_hidden_field.ynz",
-            "hidden count: int = 0",
+            "hidden count: Int = 0",
         ),
     ];
 

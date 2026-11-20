@@ -212,7 +212,7 @@ fn long_session_10k_rebuilds() {
 
     for i in 1..=10000usize {
         // Mutate source text slightly each iteration via update_source API.
-        let src = format!("function entrypoint() -> nothing {{ print(`iteration {i}`) }}\n");
+        let src = format!("function entrypoint() -> Nothing {{ print(`iteration {i}`) }}\n");
         db.update_source(&path, src);
 
         let _ = db.run_codegen(&path);

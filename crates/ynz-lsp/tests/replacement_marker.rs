@@ -1,4 +1,4 @@
-// WHY: `array` → `fixed` and `let` → `const` are Replacement-category promotions:
+// WHY: `Array` → `Fixed` and `let` → `const` are Replacement-category promotions:
 // the compiler already chose the stricter form, and the editor shows that on the
 // token the user wrote (semantic-token modifier `promotable`), explains it on hover,
 // and rewrites it through a `refactor.rewrite` code action. Each case is driven
@@ -152,17 +152,17 @@ fn assert_no_promotion_inlay_hint(client: &HarnessClient) {
 #[test]
 fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
     let src = concat!(
-        "function entrypoint() -> nothing {\n",
-        "  let scores: array<int> = [1, 2, 3]\n",
+        "function entrypoint() -> Nothing {\n",
+        "  let scores: Array<Int> = [1, 2, 3]\n",
         "}\n",
     );
     let client = open_document(src);
-    let (line, array_column) = position_of(src, "scores", "array");
+    let (line, array_column) = position_of(src, "scores", "Array");
     let (_, scores_column) = position_of(src, "let", "scores");
 
     assert!(
         is_marked(&client, line, array_column),
-        "the `array` token must carry the `promotable` modifier"
+        "the `Array` token must carry the `promotable` modifier"
     );
     assert!(
         !is_marked(&client, line, scores_column),
@@ -174,9 +174,9 @@ fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
         hover.contains("**WHAT**")
             && hover.contains("fixed-size")
             && hover.contains("**WHAT INSTEAD**")
-            && hover.contains("the \"Write 'fixed' instead of 'array'\" action")
+            && hover.contains("the \"Write 'Fixed' instead of 'Array'\" action")
             && hover.contains("**WHY**"),
-        "hover on `array` must teach the array→fixed decision, got: {hover}"
+        "hover on `Array` must teach the Array→Fixed decision, got: {hover}"
     );
 
     let angle_bracket_hover = client.request(
@@ -184,30 +184,30 @@ fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
         "textDocument/hover",
         json!({
             "textDocument": { "uri": URI },
-            "position": { "line": line, "character": array_column + "array".len() },
+            "position": { "line": line, "character": array_column + "Array".len() },
         }),
     );
     assert!(
         angle_bracket_hover["contents"]["value"]
             .as_str()
             .is_none_or(|text| !text.contains("**WHAT INSTEAD**")),
-        "hover on the `<` after `array` must not show the `array` promotion hover, got: {angle_bracket_hover}"
+        "hover on the `<` after `Array` must not show the `Array` promotion hover, got: {angle_bracket_hover}"
     );
 
     let rewrites = rewrite_actions_at(&client, line, array_column);
     assert_eq!(
         rewrites.len(),
         1,
-        "exactly the `array` rewrite at that cursor"
+        "exactly the `Array` rewrite at that cursor"
     );
     assert_eq!(
-        rewrites[0]["title"], "Write 'fixed' instead of 'array'",
+        rewrites[0]["title"], "Write 'Fixed' instead of 'Array'",
         "the action title is the exact text the hover quotes"
     );
     assert_eq!(
         apply_edit(src, &rewrites[0]),
-        src.replace("array<int>", "fixed<int>"),
-        "the action rewrites `array` to `fixed` and leaves `<int>` and the initializer alone"
+        src.replace("Array<Int>", "Fixed<Int>"),
+        "the action rewrites `Array` to `Fixed` and leaves `<Int>` and the initializer alone"
     );
 
     assert_no_promotion_inlay_hint(&client);
@@ -216,7 +216,7 @@ fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
 #[test]
 fn let_to_const_marks_let_token_with_hover_and_rewrite_action() {
     let src = concat!(
-        "function entrypoint() -> nothing {\n",
+        "function entrypoint() -> Nothing {\n",
         "  let count = 5\n",
         "}\n",
     );
@@ -268,10 +268,10 @@ fn changed_bindings_and_loop_variables_get_no_marker_hover_or_action() {
     // analysis. A marker on a binding that does change would teach a false promotion
     // and offer an edit that breaks the program.
     let src = concat!(
-        "function entrypoint() -> nothing {\n",
+        "function entrypoint() -> Nothing {\n",
         "  let total = 0\n",
         "  total = 1\n",
-        "  let items: array<int> = []\n",
+        "  let items: Array<Int> = []\n",
         "  items.add(1)\n",
         "  for ((key, value) in table) {\n",
         "  }\n",
@@ -288,7 +288,7 @@ fn changed_bindings_and_loop_variables_get_no_marker_hover_or_action() {
     for (anchor, needle) in [
         ("let total", "let"),
         ("let items", "let"),
-        ("items:", "array"),
+        ("items:", "Array"),
         ("for ((", "key"),
         ("for ((", "value"),
         ("for ((letter", "letter"),
@@ -319,7 +319,7 @@ fn let_passed_to_read_only_parameter_is_still_marked() {
     // `lend`/`give` parameter may block it; a plain read-only parameter must not.
     let src = concat!(
         "function consume(x: Int) -> Nothing {}\n",
-        "function entrypoint() -> nothing {\n",
+        "function entrypoint() -> Nothing {\n",
         "  let val = 42\n",
         "  consume(val)\n",
         "}\n",

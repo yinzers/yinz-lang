@@ -54,8 +54,8 @@ fn test_inlay_hint_variable_type_fires_for_unannotated_let() {
         })
         .collect();
     assert!(
-        labels.iter().any(|l| l.contains(": int")),
-        "type hint must include ': int'; got: {:?}",
+        labels.iter().any(|l| l.contains(": Int")),
+        "type hint must include ': Int'; got: {:?}",
         labels
     );
 }

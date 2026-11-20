@@ -78,7 +78,7 @@ fn test_formatting_parse_error_file_returns_empty_vec_and_show_message() {
     // AND emit window/showMessage so the user knows WHY nothing happened (Golden
     // Rule 3 teaching mission — silent empty is duct tape per no-duct-tape.md).
     // This test asserts both sides of the contract.
-    let src = "function broken( -> nothing {}\n"; // missing param closing paren
+    let src = "function broken( -> Nothing {}\n"; // missing param closing paren
     let (state, uri) = state_single("/tmp/ynz_fmt_broken.ynz", src);
     let (tx, rx) = spy_sender();
     let edits = formatting_response(&state, &uri, &tx);
@@ -174,7 +174,7 @@ fn test_range_formatting_canonical_range_returns_empty_vec() {
 
 #[test]
 fn test_range_formatting_parse_error_returns_empty_vec() {
-    let src = "function broken( -> nothing {}\n";
+    let src = "function broken( -> Nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_fmt_range_broken.ynz", src);
     let range = Range {
         start: Position {

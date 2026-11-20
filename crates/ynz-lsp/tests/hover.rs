@@ -106,9 +106,9 @@ fn hover_user_defined_function() {
                 mc.value.contains("myFunc"),
                 "hover must include function name"
             );
-            assert!(mc.value.contains("int"), "hover must include param type");
+            assert!(mc.value.contains("Int"), "hover must include param type");
             assert!(
-                mc.value.contains("string"),
+                mc.value.contains("String"),
                 "hover must include return type"
             );
         }

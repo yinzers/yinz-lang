@@ -213,7 +213,7 @@ fn bare_completion_contains_keywords() {
     use lsp_types::Position;
     use ynz_lsp::{completion::completion_list, position::LineTable};
 
-    let text = "function entrypoint() -> nothing {\n    ";
+    let text = "function entrypoint() -> Nothing {\n    ";
     let table = LineTable::new(text);
     let position = Position {
         line: 1,
@@ -294,7 +294,7 @@ fn after_dot_completion_returns_items() {
     use ynz_lsp::{completion::completion_list, position::LineTable};
 
     // Cursor after "score." where score is int
-    let text = "function entrypoint() -> nothing {\n    let score: int = 42\n    score.";
+    let text = "function entrypoint() -> Nothing {\n    let score: Int = 42\n    score.";
     let table = LineTable::new(text);
     let lines: Vec<&str> = text.lines().collect();
     let last_line = lines.last().unwrap();
@@ -366,7 +366,7 @@ fn after_dot_with_receiver_type_narrows_to_int_methods() {
         line: 0,
         character: text.len() as u32,
     };
-    // Pass receiver_type_name = Some("int") as if typeck resolved `score: int`
+    // Pass receiver_type_name = Some("Int") as if typeck resolved `score: Int`
     let list = completion_list(
         text,
         &table,
@@ -374,20 +374,20 @@ fn after_dot_with_receiver_type_narrows_to_int_methods() {
         PositionEncoding::Utf8,
         None,
         None,
-        Some("int"),
+        Some("Int"),
     );
     let list = list.expect("completion must be Some");
     let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
 
-    // int has methods like toString(), toFloat(), toNumber() etc.
+    // Int has methods like toString(), toFloat(), toNumber() etc.
     assert!(
         labels.iter().any(|l| l.starts_with("toString")),
-        "int after-dot should include toString(): {labels:?}"
+        "Int after-dot should include toString(): {labels:?}"
     );
-    // string-only method should NOT appear when receiver is int
+    // String-only method should NOT appear when receiver is Int
     assert!(
         !labels.contains(&"count()"),
-        "string method count() must not appear for int receiver: {labels:?}"
+        "String method count() must not appear for Int receiver: {labels:?}"
     );
 }
 

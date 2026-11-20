@@ -29,7 +29,7 @@ fn parse_fn_body(source: &str) -> Vec<Stmt> {
 }
 
 fn wrap(inner: &str) -> String {
-    format!("function entrypoint() -> nothing {{ {inner} }}")
+    format!("function entrypoint() -> Nothing {{ {inner} }}")
 }
 
 const FILE: &str = "test.ynz";
@@ -702,7 +702,7 @@ fn m5_type_variant_count_locked() {
             span: span(0, 1),
         },
         Generic {
-            name: "array".into(),
+            name: "Array".into(),
             name_span: span(0, 5),
             args: vec![Int],
             span: span(0, 10),
@@ -809,7 +809,7 @@ fn m6_type_variant_count_locked() {
             span: span(0, 1),
         },
         Generic {
-            name: "array".into(),
+            name: "Array".into(),
             name_span: span(0, 5),
             args: vec![Int],
             span: span(0, 10),
@@ -911,7 +911,7 @@ fn m6_is_arm_produces_is_pattern() {
     // WHY: `is Circle =>` in a multi-case arm must produce MatchPatternKind::Is(TypePath),
     // not a generic Value pattern. Typeck and codegen key on this variant for union narrowing.
     let output = parse(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
   if (x) {
     is Circle => print("circle")
     else => print("other")
@@ -1194,7 +1194,7 @@ fn prefix_form_struct_lit_produces_teaching_diagnostic() {
     // a teaching diagnostic redirecting to the annotation-only form, recover cleanly,
     // and NOT produce an Expr::StructLit (since the prefix form is compile-time banned).
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> nothing { let x = Player { name: `Patrick` } }");
+    let output = parse("function entrypoint() -> Nothing { let x = Player { name: `Patrick` } }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1212,7 +1212,7 @@ fn method_body_inside_shape_produces_diagnostic() {
     // WHY: Yinz is not OOP — method bodies cannot be declared inside shapes.
     // The parser must emit a clear teaching diagnostic and recover.
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("shape Player { function greet() -> string { return `hi` } }");
+    let output = parse("shape Player { function greet() -> String { return `hi` } }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1360,7 +1360,7 @@ fn number_bracket_syntax_produces_migration_diagnostic() {
     assert_eq!(
         output.diagnostics.len(),
         1,
-        "number[N] must produce exactly 1 migration diagnostic"
+        "Number[N] must produce exactly 1 migration diagnostic"
     );
     assert!(
         output.diagnostics[0].what.contains("angle brackets"),
@@ -1368,7 +1368,7 @@ fn number_bracket_syntax_produces_migration_diagnostic() {
         output.diagnostics[0].what
     );
     assert!(
-        output.diagnostics[0].what_instead.contains("number<"),
+        output.diagnostics[0].what_instead.contains("Number<"),
         "Migration diagnostic what-instead must show the angle-bracket form, got: {:?}",
         output.diagnostics[0].what_instead
     );
@@ -1382,7 +1382,7 @@ fn number_angle_bracket_34_accepts() {
     assert_eq!(
         output.diagnostics.len(),
         0,
-        "number<34> must have no diagnostics"
+        "Number<34> must have no diagnostics"
     );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1409,7 +1409,7 @@ fn number_angle_bracket_non34_parses_in_m8() {
     assert_eq!(
         output.diagnostics.len(),
         0,
-        "number<128> must parse without diagnostics in M8 (bignum ships): {:?}",
+        "Number<128> must parse without diagnostics in M8 (bignum ships): {:?}",
         output.diagnostics
     );
 }
@@ -1708,7 +1708,7 @@ fn missing_rhs_produces_diagnostic_and_recovers() {
     // WHY: `let x = 1 +` must emit a diagnostic and still produce a parseable
     // AST. If the parser panics or produces no AST, all other errors in the
     // file are hidden.
-    let output = parse("function entrypoint() -> nothing { let x = 1 + }");
+    let output = parse("function entrypoint() -> Nothing { let x = 1 + }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1722,7 +1722,7 @@ fn missing_rhs_produces_diagnostic_and_recovers() {
 fn missing_let_identifier_produces_diagnostic_and_recovers() {
     // WHY: `let : int = 5` (missing the variable name) must emit a diagnostic
     // but not crash. The block should continue parsing.
-    let output = parse("function entrypoint() -> nothing { let : int = 5 }");
+    let output = parse("function entrypoint() -> Nothing { let : Int = 5 }");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing variable name must produce at least 1 diagnostic"
@@ -1770,7 +1770,7 @@ fn unexpected_rbrace_in_expression_recovers() {
     // WHY: `let x = }` must not eat the `}` that closes the function body.
     // If the parser consumes the `}`, the enclosing block is left unclosed
     // and the rest of the file is misparsed.
-    let output = parse("function entrypoint() -> nothing { let x = }");
+    let output = parse("function entrypoint() -> Nothing { let x = }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1936,7 +1936,7 @@ fn missing_arrow_produces_diagnostic_and_recovers() {
 
 #[test]
 fn missing_closing_brace_produces_diagnostic() {
-    let output = parse("function entrypoint() -> nothing { print(\"hi\")");
+    let output = parse("function entrypoint() -> Nothing { print(\"hi\")");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing `}}` must produce at least one diagnostic"
@@ -1946,7 +1946,7 @@ fn missing_closing_brace_produces_diagnostic() {
 
 #[test]
 fn trailing_garbage_after_function_produces_diagnostic() {
-    let output = parse("function entrypoint() -> nothing { } extra }");
+    let output = parse("function entrypoint() -> Nothing { } extra }");
     assert!(
         !output.diagnostics.is_empty(),
         "Trailing garbage must produce at least one diagnostic"
@@ -1972,7 +1972,7 @@ fn hardening_expression_nesting_depth_cap() {
         .spawn(|| {
             let depth = 300usize;
             let source = format!(
-                "function entrypoint() -> nothing {{ let x = {}1{} }}",
+                "function entrypoint() -> Nothing {{ let x = {}1{} }}",
                 "(".repeat(depth),
                 ")".repeat(depth)
             );
@@ -2021,8 +2021,8 @@ fn wrong_return_type_parses_with_named_type() {
     match &output.module.items[0] {
         Item::Function(f) => {
             assert!(
-                matches!(&f.return_type, Type::Named(n, _) if n == "string"),
-                "Expected Type::Named(\"string\"), got {:?}",
+                matches!(&f.return_type, Type::Named(n, _) if n == "String"),
+                "Expected Type::Named(\"String\"), got {:?}",
                 f.return_type
             );
         }
@@ -2120,7 +2120,7 @@ fn duplicate_param_name_produces_diagnostic() {
     // WHY: `function foo(a: int, a: int) -> int { return a }` — two params with
     // the same name — must produce a diagnostic. Silent acceptance would leave
     // typeck to pick one arbitrarily (implementation-defined behavior = bug).
-    let output = parse("function foo(a: int, a: int) -> int { return a }");
+    let output = parse("function foo(a: Int, a: Int) -> Int { return a }");
     assert!(
         !output.diagnostics.is_empty(),
         "Duplicate param name must produce at least 1 diagnostic"
@@ -2379,7 +2379,7 @@ fn if_without_parens_produces_diagnostic() {
     // WHY: `if cond { }` (no parentheses) is a common mistake from languages like
     // Rust/Go. The parser must emit a teaching diagnostic, not silently misbehave.
     // Yinz requires `if (cond)` consistently with `while (cond)` and `for (...)`.
-    let output = parse("function entrypoint() -> nothing { if x > 0 { print(x) } }");
+    let output = parse("function entrypoint() -> Nothing { if x > 0 { print(x) } }");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing parens on if must produce at least 1 diagnostic"
@@ -2603,15 +2603,15 @@ fn m5_array_type_annotation() {
     // WHY: acceptance criterion — `let arr: array<int> = ...` must produce
     // `Type::Generic { name: "array", args: [Int] }`. If it stays `Type::Named`,
     // the typeck cannot resolve the element type.
-    let output = parse(&wrap("let arr: array<int> = arr"));
+    let output = parse(&wrap("let arr: Array<Int> = arr"));
     assert_eq!(output.diagnostics.len(), 0);
-    let stmts = parse_fn_body(&wrap("let arr: array<int> = arr"));
+    let stmts = parse_fn_body(&wrap("let arr: Array<Int> = arr"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Generic { name, args, .. }),
             ..
         } => {
-            assert_eq!(name, "array");
+            assert_eq!(name, "Array");
             assert_eq!(args.len(), 1);
             assert!(matches!(args[0], Type::Int));
         }
@@ -2624,7 +2624,7 @@ fn m5_maybe_type_annotation() {
     // WHY: acceptance criterion — `let x: maybe<int> = none` must produce
     // `Type::Maybe { inner: Int }`. The distinct Maybe variant (not Generic)
     // is required so typeck can apply flow-sensitive `.value` rules.
-    let stmts = parse_fn_body(&wrap("let x: maybe<int> = none"));
+    let stmts = parse_fn_body(&wrap("let x: Maybe<Int> = none"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Maybe { inner, .. }),
@@ -2640,7 +2640,7 @@ fn m5_maybe_type_annotation() {
 #[test]
 fn m5_maybe_player_type_annotation() {
     // WHY: `maybe<Player>` (named inner type) must produce `Maybe { inner: Named("Player") }`.
-    let stmts = parse_fn_body(&wrap("let x: maybe<Player> = none"));
+    let stmts = parse_fn_body(&wrap("let x: Maybe<Player> = none"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Maybe { inner, .. }),
@@ -2657,7 +2657,7 @@ fn m5_nested_generic_type() {
     // WHY: `Pair<Pair<int, string>, int>` tests nested angle brackets. The depth
     // cap (16) must not fire here; the type must parse to a Generic with one
     // Generic arg and one Int arg.
-    let stmts = parse_fn_body(&wrap("let x: Pair<Pair<int, int>, int> = x"));
+    let stmts = parse_fn_body(&wrap("let x: Pair<Pair<Int, Int>, Int> = x"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Generic { name, args, .. }),
@@ -2679,13 +2679,13 @@ fn m5_nested_generic_type() {
 #[test]
 fn a_whole_number_in_a_generic_argument_list_parses_as_a_length() {
     for written in [0_u64, 1, 4, u32::MAX as u64] {
-        let stmts = parse_fn_body(&wrap(&format!("let x: fixed<int, {written}> = x")));
+        let stmts = parse_fn_body(&wrap(&format!("let x: Fixed<Int, {written}> = x")));
         match &stmts[0] {
             Stmt::Let {
                 ty: Some(Type::Generic { name, args, .. }),
                 ..
             } => {
-                assert_eq!(name, "fixed");
+                assert_eq!(name, "Fixed");
                 assert_eq!(args.len(), 2, "{written}");
                 assert!(matches!(args[0], Type::Int), "{written}");
                 assert!(
@@ -2694,14 +2694,14 @@ fn a_whole_number_in_a_generic_argument_list_parses_as_a_length() {
                     args[1]
                 );
             }
-            other => panic!("expected `fixed` with a length, got {other:?}"),
+            other => panic!("expected `Fixed` with a length, got {other:?}"),
         }
     }
 }
 
 #[test]
 fn a_length_not_closed_by_a_comma_or_angle_bracket_is_refused_once() {
-    for written in ["fixed<int, 3 4>", "fixed<int, 3 int>"] {
+    for written in ["Fixed<Int, 3 4>", "Fixed<Int, 3 Int>"] {
         let output = parse(&wrap(&format!("let x: {written} = x")));
         let refused = output
             .diagnostics
@@ -2721,8 +2721,8 @@ fn m5_generic_type_depth_cap_error() {
     // WHY: the depth cap (16) must produce exactly ONE diagnostic, not a
     // cascade of errors. A cascade would hide the real error in noise.
     // Build 17-deep nesting: `A<A<A<...<int>...>>>`.
-    let deep: String = "A<".repeat(17) + "int" + &">".repeat(17);
-    let source = format!("function entrypoint() -> nothing {{ let x: {deep} = x }}");
+    let deep: String = "A<".repeat(17) + "Int" + &">".repeat(17);
+    let source = format!("function entrypoint() -> Nothing {{ let x: {deep} = x }}");
     let output = parse(&source);
     assert!(
         !output.diagnostics.is_empty(),
@@ -2865,7 +2865,7 @@ fn m5_generic_call_one_type_arg() {
     // WHY: acceptance criterion — `identity<int>(5)` must produce a Call with
     // `type_args: Some([Int])`. Without this, explicit type arguments at call
     // sites are silently dropped and typeck falls back to inference only.
-    let stmts = parse_fn_body(&wrap("let x = identity<int>(5)"));
+    let stmts = parse_fn_body(&wrap("let x = identity<Int>(5)"));
     match &stmts[0] {
         Stmt::Let {
             value: Expr::Call(call),
@@ -2886,7 +2886,7 @@ fn m5_generic_call_two_type_args() {
     // second type arg is dropped, the `B` parameter can't be inferred.
     //
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let stmts = parse_fn_body(&wrap("let x = pair<int, string>(1, `a`)"));
+    let stmts = parse_fn_body(&wrap("let x = pair<Int, String>(1, `a`)"));
     match &stmts[0] {
         Stmt::Let {
             value: Expr::Call(call),
@@ -2895,7 +2895,7 @@ fn m5_generic_call_two_type_args() {
             let args = call.type_args.as_ref().expect("type_args must be Some");
             assert_eq!(args.len(), 2);
             assert!(matches!(args[0], Type::Int));
-            assert!(matches!(args[1], Type::Named(ref n, _) if n == "string"));
+            assert!(matches!(args[1], Type::Named(ref n, _) if n == "String"));
         }
         other => panic!("expected Call with two type_args, got {other:?}"),
     }
@@ -2995,7 +2995,7 @@ fn m5_comparison_in_index_not_generic() {
 fn m5_generic_call_not_confused_by_comparison() {
     // WHY: `foo<int>(x)` must be a generic call even when `foo < int` would also
     // be a valid comparison. The `(` following the `>` disambiguates.
-    let stmts = parse_fn_body(&wrap("let x = foo<int>(5)"));
+    let stmts = parse_fn_body(&wrap("let x = foo<Int>(5)"));
     match &stmts[0] {
         Stmt::Let {
             value: Expr::Call(call),
@@ -3054,7 +3054,7 @@ fn m5_recovery_unclosed_generic_param_list() {
     // WHY: `function foo<` with no closing `>` must produce exactly one diagnostic
     // and still parse the remaining top-level items. A cascade of errors here
     // would drown out the single real mistake.
-    let output = parse("function foo< { } function bar() -> nothing { }");
+    let output = parse("function foo< { } function bar() -> Nothing { }");
     assert!(
         !output.diagnostics.is_empty(),
         "Expected at least one diagnostic"
@@ -3079,7 +3079,7 @@ fn m5_recovery_unclosed_generic_param_list() {
 fn m5_recovery_missing_type_arg_close_bracket() {
     // WHY: `let x: array<int = 5` (missing `>`) must produce a diagnostic but
     // still give the parser enough to continue with the next statement.
-    let output = parse(&wrap("let x: array<int = 5"));
+    let output = parse(&wrap("let x: Array<Int = 5"));
     assert!(
         !output.diagnostics.is_empty(),
         "Expected at least one diagnostic for missing `>`"
@@ -3091,10 +3091,10 @@ fn m5_recovery_generic_call_no_close_angle() {
     // WHY: `foo<int(5)` — paren before `>` — must NOT parse as a generic call
     // (falls back to comparison). The 32-token budget ensures we don't consume
     // the arg list as part of speculative type-arg parsing.
-    let output = parse(&wrap("let x = foo < int > 5"));
+    let output = parse(&wrap("let x = foo < Int > 5"));
     // This is a comparison, not a generic call: (foo < int) > 5
     assert_eq!(output.diagnostics.len(), 0, "comparison must parse cleanly");
-    match &parse_fn_body(&wrap("let x = foo < int > 5"))[0] {
+    match &parse_fn_body(&wrap("let x = foo < Int > 5"))[0] {
         Stmt::Let {
             value: Expr::BinOp {
                 op: BinOpKind::Gt, ..
@@ -3119,14 +3119,14 @@ fn m5_recovery_index_missing_close_bracket() {
 fn m5_maybe_missing_type_arg() {
     // WHY: `maybe` without `<T>` must produce exactly one diagnostic. The error
     // message must guide the user to write `maybe<T>` — not produce a cascade.
-    let output = parse(&wrap("let x: maybe = none"));
+    let output = parse(&wrap("let x: Maybe = none"));
     assert!(
         !output.diagnostics.is_empty(),
-        "Expected diagnostic for bare `maybe`"
+        "Expected diagnostic for bare `Maybe`"
     );
     assert!(
-        output.diagnostics.iter().any(|d| d.what.contains("maybe")),
-        "Diagnostic must mention `maybe`"
+        output.diagnostics.iter().any(|d| d.what.contains("Maybe")),
+        "Diagnostic must mention `Maybe`"
     );
 }
 
@@ -3148,7 +3148,7 @@ fn m7_errors_capable_string_return_type() {
         Item::Function(f) => {
             assert!(
                 f.errors_capable,
-                "errors_capable must be true for `-> string errors`"
+                "errors_capable must be true for `-> String errors`"
             );
             assert!(
                 matches!(f.return_type, Type::ErrorCapable { .. }),
@@ -3175,7 +3175,7 @@ fn m7_errors_capable_nothing_return_type() {
         Item::Function(f) => {
             assert!(
                 f.errors_capable,
-                "errors_capable must be true for `-> nothing errors`"
+                "errors_capable must be true for `-> Nothing errors`"
             );
             assert!(
                 matches!(f.return_type, Type::ErrorCapable { ref inner, .. } if matches!(**inner, Type::Nothing)),
@@ -3232,11 +3232,11 @@ fn m7_plain_return_type_has_errors_capable_false() {
         Item::Function(f) => {
             assert!(
                 !f.errors_capable,
-                "errors_capable must be false for plain `-> string`"
+                "errors_capable must be false for plain `-> String`"
             );
             assert!(
                 matches!(f.return_type, Type::Named(_, _)),
-                "return_type must be Named(string), got {:?}",
+                "return_type must be Named(String), got {:?}",
                 f.return_type
             );
         }
@@ -3580,7 +3580,7 @@ fn m7_errors_keyword_not_after_type_is_ignored() {
     // `let x: string errors` is not valid syntax — the parser doesn't consume `errors`
     // in annotation position. This test guards that `errors` doesn't silently vanish
     // from unexpected positions, producing an error diagnostic instead.
-    let output = parse(&wrap("let x: string errors = foo"));
+    let output = parse(&wrap("let x: String errors = foo"));
     // `string errors` in let-binding type position — `errors` is unexpected there.
     // The parser produces a diagnostic about unexpected token.
     assert!(
@@ -3717,7 +3717,7 @@ fn m7_type_variant_count_locked() {
             span: span(0, 1),
         },
         Generic {
-            name: "array".into(),
+            name: "Array".into(),
             name_span: span(0, 5),
             args: vec![Int],
             span: span(0, 10),

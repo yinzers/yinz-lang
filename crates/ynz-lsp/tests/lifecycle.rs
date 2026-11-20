@@ -29,9 +29,9 @@ fn did_open_triggers_publish_diagnostics() {
 fn did_change_triggers_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    h.did_open("file:///test.ynz", "let x: int = 1");
+    h.did_open("file:///test.ynz", "let x: Int = 1");
     h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
-    h.did_change("file:///test.ynz", "let x: int = 2", 2);
+    h.did_change("file:///test.ynz", "let x: Int = 2", 2);
     let msg = h.try_recv_timeout(Duration::from_millis(300));
     assert!(
         msg.is_some(),
@@ -43,7 +43,7 @@ fn did_change_triggers_publish_diagnostics() {
 fn did_close_sends_empty_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    h.did_open("file:///test.ynz", "let x: int = 1");
+    h.did_open("file:///test.ynz", "let x: Int = 1");
     h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
     h.did_close("file:///test.ynz");
     let msg = h.try_recv_timeout(Duration::from_millis(300));

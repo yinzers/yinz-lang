@@ -162,7 +162,7 @@ fn test_references_progress_emitted_for_large_project() {
     for i in 0..10 {
         let fake_path = format!("/tmp/ynz_fake_{i}.ynz");
         let fake_uri = lsp_types::Url::from_file_path(&fake_path).expect("valid path");
-        state.open_document(fake_uri, format!("function f{i}() -> nothing {{}}"));
+        state.open_document(fake_uri, format!("function f{i}() -> Nothing {{}}"));
     }
     let (tx, rx) = crossbeam_channel::unbounded();
     let decl_pos = lsp_types::Position {

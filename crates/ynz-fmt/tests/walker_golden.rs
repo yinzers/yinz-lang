@@ -57,7 +57,7 @@ fn nested_generic_keeps_lexer_required_space() {
         "function f() -> Nothing {\n  let picks: Map<String, Maybe<Int> > = { `a`: 1 }\n}\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
-        got.contains("map<string, maybe<int> >"),
+        got.contains("Map<String, Maybe<Int> >"),
         "nested generic must keep the space before the outer `>`; got:\n{got}"
     );
     let got2 = ynz_fmt::format(&got).expect("format output must re-parse");
@@ -182,7 +182,7 @@ fn block_opener_on_same_line_as_keyword() {
     let source = "function f() -> Nothing { let x = 1 }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
-        got.contains("function f() -> nothing {"),
+        got.contains("function f() -> Nothing {"),
         "block opener moved: {got}"
     );
 }
