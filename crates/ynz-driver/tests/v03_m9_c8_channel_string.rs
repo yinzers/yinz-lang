@@ -15,15 +15,15 @@ use support::assert_source_balanced_and_asan_clean as assert_balanced;
 #[test]
 fn strings_buffered_and_parked_in_a_channel_are_released_with_it() {
     let source = "
-function producer(wire: channel<string>) -> nothing {
+function producer(wire: Channel<String>) -> Nothing {
   wire.send(`a`.toUpperCase())
   wire.send(`b`.toUpperCase())
   wire.send(`c`.toUpperCase())
   print(`sent`)
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<string> = channel<string>(1)
+function entrypoint() -> Nothing {
+  let wire: Channel<String> = Channel<String>(1)
   background producer(wire)
   wait sleep(50)
   print(`parent`)
@@ -39,13 +39,13 @@ function entrypoint() -> nothing {
 #[test]
 fn a_given_string_a_task_sends_is_received_intact_and_freed_once() {
     let source = "
-function producer(wire: channel<string>, give text: string) -> nothing {
+function producer(wire: Channel<String>, give text: String) -> Nothing {
   wire.send(text)
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<string> = channel<string>(2)
-  let text: string = `hello`.toUpperCase()
+function entrypoint() -> Nothing {
+  let wire: Channel<String> = Channel<String>(2)
+  let text: String = `hello`.toUpperCase()
   background producer(wire, text)
   wait sleep(50)
   let delivered = wire.receive()

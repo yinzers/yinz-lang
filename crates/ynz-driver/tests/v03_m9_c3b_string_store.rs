@@ -117,7 +117,7 @@ store_case!(
     "v0_3_m9_c3b_content_equality.ynz",
     "true\ntrue\ntrue\nfalse\ntrue\n5\n5\n",
     6,
-    "`array<string>.contains` and `array<shape>.contains` compared string cells by pointer, so the copy a store now makes is never found by the text it was copied from (High: wrong answer)"
+    "`Array<String>.contains` and `Array<shape>.contains` compared string cells by pointer, so the copy a store now makes is never found by the text it was copied from (High: wrong answer)"
 );
 
 store_case!(
@@ -125,7 +125,7 @@ store_case!(
     "v0_3_m9_c3b_fixed_copy.ynz",
     "p\nchanged\nq\n",
     5,
-    "`fixed<string>.copy()` is refused once a string is not plain bits, or builds but shares its strings with the original (High: a program that built stops building; two owners of one string)"
+    "`Fixed<String>.copy()` is refused once a string is not plain bits, or builds but shares its strings with the original (High: a program that built stops building; two owners of one string)"
 );
 
 /// Every `alloca` of a function's entry block comes before the loop's `llvm.stacksave`.
@@ -165,7 +165,7 @@ store_case!(
     "v0_3_m9_c3b_container_copy.ynz",
     "t-1\nv-1\nx-1\nx-1\n",
     11,
-    "`.copy()` of a shape or a map, and a `maybe<string>` stored in a field or returned, hold the source's string pointer, so releasing both frees it twice (High)"
+    "`.copy()` of a shape or a map, and a `Maybe<String>` stored in a field or returned, hold the source's string pointer, so releasing both frees it twice (High)"
 );
 
 store_case!(
@@ -173,7 +173,7 @@ store_case!(
     "v0_3_m9_c3b_array_shape_copy.ynz",
     "t-1\nu-1\nt-1\nu-1\n",
     4,
-    "`array<Tag>.copy()` memcpys each element, so the copy's `name` fields hold the original's string pointers and releasing both frees them twice (High)"
+    "`Array<Tag>.copy()` memcpys each element, so the copy's `name` fields hold the original's string pointers and releasing both frees them twice (High)"
 );
 
 store_case!(
@@ -181,7 +181,7 @@ store_case!(
     "v0_3_m9_c3b_maybe_shape.ynz",
     "t-1\nt-1\n",
     2,
-    "returning a `maybe<Tag>` memcpys the payload shape, so its `name` is the array element's pointer and a release of both frees it twice; a binding of the element read (`let found = tags.get(0)`) only reads it and is a view, which owns no string (High)"
+    "returning a `Maybe<Tag>` memcpys the payload shape, so its `name` is the array element's pointer and a release of both frees it twice; a binding of the element read (`let found = tags.get(0)`) only reads it and is a view, which owns no string (High)"
 );
 
 store_case!(
@@ -197,7 +197,7 @@ store_case!(
     "v0_3_m9_c3b_array_string_copy.ynz",
     "a-1\nb-1\nc-1\nb-1\n",
     5,
-    "`array<string>.copy()` clones the buffer and shares each string pointer with the original (High)"
+    "`Array<String>.copy()` clones the buffer and shares each string pointer with the original (High)"
 );
 
 store_case!(
@@ -221,7 +221,7 @@ store_case!(
     "v0_3_m9_c3b_map_copy_kinds.ynz",
     "7\nv-1\n7\nv-1\n",
     6,
-    "`.copy()` of a `map<string, int>` or `map<int, string>` clones the wrong side: an `int` read as a string pointer (crash), or the string side shared with the source (High)"
+    "`.copy()` of a `Map<String, Int>` or `Map<Int, String>` clones the wrong side: an `int` read as a string pointer (crash), or the string side shared with the source (High)"
 );
 
 store_case!(
@@ -229,7 +229,7 @@ store_case!(
     "v0_3_m9_c3b_fixed_index_assign.ynz",
     "fresh-3\nnamed\nfresh-3\n",
     6,
-    "`list[i] = value` on a `fixed<string>` stores a still-read local or an element read by pointer (two owners), or copies a fresh or last-use string (High)"
+    "`list[i] = value` on a `Fixed<String>` stores a still-read local or an element read by pointer (two owners), or copies a fresh or last-use string (High)"
 );
 
 store_case!(

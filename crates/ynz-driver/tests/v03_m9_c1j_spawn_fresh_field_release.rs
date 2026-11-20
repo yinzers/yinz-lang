@@ -68,9 +68,9 @@ fn a_field_with_no_owned_copy_of_a_fresh_call_result_is_refused_for_a_task() {
     assert_refused_with(
         "v0_3_m9_c1j_spawn_fresh_field_refused.ynz",
         &[
-            "A `fixed<array<string>>` read out of another value",
+            "A `Fixed<Array<String>>` read out of another value",
             "cannot be handed to a background task",
-            "`array<string>` values",
+            "`Array<String>` values",
             "when this line ends",
             "background crunch(make().rows)",
         ],
@@ -117,7 +117,7 @@ fn an_array_of_channels_field_of_a_fresh_call_result_stays_refused_for_a_task() 
     assert_refused_with(
         "v0_3_m9_c1j_spawn_fresh_channels_array_refused.ynz",
         &[
-            "`array<channel<int>>`",
+            "`Array<Channel<Int>>`",
             "cannot be handed to a background task",
             "background ping(make().lines)",
         ],
@@ -132,7 +132,7 @@ fn an_array_of_channels_field_of_a_named_value_is_refused_for_a_task() {
     assert_refused_with(
         "v0_3_m9_c1j_spawn_named_channels_array_refused.ynz",
         &[
-            "`array<channel<int>>`",
+            "`Array<Channel<Int>>`",
             "cannot be handed to a background task",
             "background f(bag.rows)",
         ],
@@ -146,7 +146,7 @@ fn a_fixed_of_arrays_field_of_a_named_value_is_refused_for_a_task() {
     assert_refused_with(
         "v0_3_m9_c1j_spawn_named_fixed_refused.ynz",
         &[
-            "`fixed<array<string>>`",
+            "`Fixed<Array<String>>`",
             "cannot be handed to a background task",
             "background f(bag.rows)",
         ],
@@ -213,7 +213,7 @@ fn a_field_of_a_union_without_an_envelope_of_a_fresh_call_result_is_refused_for_
     assert_refused_with(
         "v0_3_m9_c1j_spawn_plain_union_field_refused.ynz",
         &[
-            "`array<int> | nothing`",
+            "`Array<Int> | Nothing`",
             "cannot be handed to a background task",
             "background crunch(make().items)",
         ],

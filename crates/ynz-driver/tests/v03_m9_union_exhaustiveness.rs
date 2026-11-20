@@ -39,11 +39,11 @@ fn v03_m9_union_match_missing_a_non_shape_variant_is_rejected() {
     let (success, diagnostics) = build("v0_3_m9_union_nonexhaustive_non_shape.ynz");
     assert!(!success, "non-exhaustive match compiled:\n{diagnostics}");
     assert!(
-        diagnostics.contains("Non-exhaustive union multi-case — 1 variant is not handled: int."),
+        diagnostics.contains("Non-exhaustive union multi-case — 1 variant is not handled: Int."),
         "WHAT must name the missing non-shape variant; got:\n{diagnostics}"
     );
     assert!(
-        diagnostics.contains("Add an `else =>` default arm to handle int."),
+        diagnostics.contains("Add an `else =>` default arm to handle Int."),
         "WHAT-INSTEAD must suggest `else =>`; got:\n{diagnostics}"
     );
     // The card requires the pre-existing text unchanged apart from the added names: the WHAT
@@ -56,7 +56,7 @@ fn v03_m9_union_match_missing_a_non_shape_variant_is_rejected() {
         "WHY must keep the pre-existing exhaustiveness text; got:\n{diagnostics}"
     );
     assert!(
-        !diagnostics.contains("`is int =>`"),
+        !diagnostics.contains("`is Int =>`"),
         "WHAT-INSTEAD must not suggest an `is int` arm — it does not compile; got:\n{diagnostics}"
     );
 }

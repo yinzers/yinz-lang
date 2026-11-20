@@ -22,19 +22,19 @@ fn assert_balanced_and_clean(label: &str, program: &str, expected: &str) {
 }
 
 const STRING_ERRORS_TEMPORARIES: &str = "
-function make(n: int) -> string errors {
-  let a: string = `ab`
+function make(n: Int) -> String errors {
+  let a: String = `ab`
   return a.toUpperCase()
 }
-function entrypoint() -> nothing {
-  let i: int = 0
-  let t: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let t: Int = 0
   while (i < 20) {
     if (make(i).failed() == false) {
       t = t + 1
     }
     make(i)
-    let kept: string = make(i).or(`z`)
+    let kept: String = make(i).or(`z`)
     t = t + kept.count() + make(i).or(`z`).count()
     i = i + 1
   }
@@ -55,28 +55,28 @@ fn an_unbound_string_errors_result_is_released_at_the_end_of_its_statement() {
 
 const SHAPE_ARRAY_ERRORS_TEMPORARIES: &str = "
 shape Tag {
-  name: string
+  name: String
 }
-function makeTag(n: int) -> Tag errors {
+function makeTag(n: Int) -> Tag errors {
   let tag: Tag = { name: `ab` }
   return tag
 }
-function makeList(n: int) -> array<string> errors {
-  let list: array<string> = [`a`, `b`]
+function makeList(n: Int) -> Array<String> errors {
+  let list: Array<String> = [`a`, `b`]
   return list
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let fallbackTag: Tag = { name: `z` }
-  let fallbackList: array<string> = []
-  let i: int = 0
-  let t: int = 0
+  let fallbackList: Array<String> = []
+  let i: Int = 0
+  let t: Int = 0
   while (i < 10) {
     t = t + makeTag(i).or(fallbackTag).name.count()
     t = t + makeList(i).or(fallbackList).count()
     makeTag(i)
     makeList(i)
     let tag: Tag = makeTag(i).or(fallbackTag)
-    let list: array<string> = makeList(i).or(fallbackList)
+    let list: Array<String> = makeList(i).or(fallbackList)
     t = t + tag.name.count() + list.count()
     i = i + 1
   }
@@ -96,16 +96,16 @@ fn an_unbound_shape_or_array_errors_result_is_released_once() {
 }
 
 const BIGNUM_ERRORS_TEMPORARIES: &str = "
-function make(n: int) -> number<100> errors {
-  let a: number<100> = 1.5
+function make(n: Int) -> Number<100> errors {
+  let a: Number<100> = 1.5
   return a + a
 }
-function entrypoint() -> nothing {
-  let zero: number<100> = 0.0
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let zero: Number<100> = 0.0
+  let i: Int = 0
   while (i < 10) {
     make(i)
-    let kept: number<100> = make(i).or(zero)
+    let kept: Number<100> = make(i).or(zero)
     print(kept + make(i).or(zero))
     i = i + 1
   }
@@ -135,31 +135,31 @@ fn an_unbound_bignum_errors_result_is_released() {
 
 const ERRORS_TEMPORARY_HANDED_ON: &str = "
 shape Tag {
-  name: string
+  name: String
 }
-function make(n: int) -> string errors {
-  let a: string = `ab`
+function make(n: Int) -> String errors {
+  let a: String = `ab`
   return a.toUpperCase()
 }
-function makeTag(n: int) -> Tag errors {
+function makeTag(n: Int) -> Tag errors {
   let tag: Tag = { name: `ab` }
   return tag
 }
-function eat(give text: string) -> int {
+function eat(give text: String) -> Int {
   return text.count()
 }
-function find(share list: array<string>, index: int) -> maybe<string> {
+function find(share list: Array<String>, index: Int) -> Maybe<String> {
   return list.get(index)
 }
-function viaReturn(n: int) -> string {
+function viaReturn(n: Int) -> String {
   return make(n).or(`z`)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let fallbackTag: Tag = { name: `z` }
-  let words: array<string> = []
-  let held: array<Tag> = []
-  let i: int = 0
-  let t: int = 0
+  let words: Array<String> = []
+  let held: Array<Tag> = []
+  let i: Int = 0
+  let t: Int = 0
   while (i < 10) {
     t = t + eat(make(i).or(`z`))
     words.add(make(i).or(`z`))

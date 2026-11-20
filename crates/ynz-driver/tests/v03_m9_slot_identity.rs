@@ -112,19 +112,19 @@ slot_case!(
     p26_sibling_int_then_number,
     "v0_3_m9_slot_p26_sibling_int_then_number.ynz",
     "7\n1.5\n",
-    "sibling `x: int` then `x: number`: slot width came from the first `let`, `1.5` printed as 0.000.. (High)"
+    "sibling `x: Int` then `x: Number`: slot width came from the first `let`, `1.5` printed as 0.000.. (High)"
 );
 slot_case!(
     p28_sibling_shape_then_int,
     "v0_3_m9_slot_p28_sibling_shape_then_int.ynz",
     "1\n99\n",
-    "sibling `x: shape` then `x: int`: the int was read through the shape's slot layout, garbage (High)"
+    "sibling `x: shape` then `x: Int`: the int was read through the shape's slot layout, garbage (High)"
 );
 slot_case!(
     p29_sibling_int_then_shape,
     "v0_3_m9_slot_p29_sibling_int_then_shape.ynz",
     "99\n2\n",
-    "sibling `x: int` then `x: shape`: a shape was stored in an int-width slot, garbage (High)"
+    "sibling `x: Int` then `x: shape`: a shape was stored in an int-width slot, garbage (High)"
 );
 slot_case!(
     q02_nested_destructure_alias,
@@ -163,5 +163,5 @@ slot_case!(
     m03_param_int_vs_for_var_string,
     "v0_3_m9_slot_m03_param_int_vs_for_var_string.ynz",
     "amy\nbob\n41\n",
-    "crossing param `n: int` vs crossing `for (n in strings)`: slot width/type came from one binding (High)"
+    "crossing param `n: Int` vs crossing `for (n in strings)`: slot width/type came from one binding (High)"
 );

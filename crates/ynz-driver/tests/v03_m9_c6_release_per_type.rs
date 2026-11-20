@@ -35,7 +35,7 @@ enum SpawnSite {
     InLoop,
 }
 
-const TAG: &str = "shape Tag {\n  name: string\n  id: int\n}\n";
+const TAG: &str = "shape Tag {\n  name: String\n  id: Int\n}\n";
 
 fn program(case: &Case, suspending_callee: bool, spawns: usize, site: SpawnSite) -> String {
     let callee_body = if suspending_callee {
@@ -50,9 +50,9 @@ fn program(case: &Case, suspending_callee: bool, spawns: usize, site: SpawnSite)
         }
     };
     format!(
-        "{declarations}\nfunction show(value: {value_type}) -> nothing {{\n{callee_body}}}\n\n\
-         function launch() -> nothing {{\n{setup}{spawn_lines}{read}}}\n\n\
-         function entrypoint() -> nothing {{\n  launch()\n  wait sleep(200)\n}}\n",
+        "{declarations}\nfunction show(value: {value_type}) -> Nothing {{\n{callee_body}}}\n\n\
+         function launch() -> Nothing {{\n{setup}{spawn_lines}{read}}}\n\n\
+         function entrypoint() -> Nothing {{\n  launch()\n  wait sleep(200)\n}}\n",
         declarations = case.declarations,
         value_type = case.value_type,
         setup = case.setup,
@@ -193,8 +193,8 @@ looped_release_cases!(
     "parked 67: a nested array handed to a `background` spawn inside a loop leaks its inner arrays once per iteration (High)",
     Case {
         declarations: "",
-        value_type: "array<array<int>>",
-        setup: "  let first: array<int> = [1, 2]\n  let second: array<int> = [3]\n  let value: array<array<int>> = [first, second]\n",
+        value_type: "Array<Array<Int>>",
+        setup: "  let first: Array<Int> = [1, 2]\n  let second: Array<Int> = [3]\n  let value: Array<Array<Int>> = [first, second]\n",
         read: "  print(value.count())\n",
     }
 );
@@ -204,8 +204,8 @@ looped_release_cases!(
     "parked 67: one allocation per leaf string and per inner array is made per iteration and each is released (High)",
     Case {
         declarations: "",
-        value_type: "array<array<string>>",
-        setup: "  let first: array<string> = [`a`, `b`]\n  let second: array<string> = [`c`]\n  let value: array<array<string>> = [first, second]\n",
+        value_type: "Array<Array<String>>",
+        setup: "  let first: Array<String> = [`a`, `b`]\n  let second: Array<String> = [`c`]\n  let value: Array<Array<String>> = [first, second]\n",
         read: "  print(value.count())\n",
     }
 );
@@ -215,19 +215,19 @@ looped_release_cases!(
     "parked 68: a spawn-cloned `map` in a spawn loop is released by nobody, so the heap grows with the loop (High)",
     Case {
         declarations: "",
-        value_type: "map<int, int>",
-        setup: "  let value: map<int, int> = {}\n  value.set(1, 2)\n",
+        value_type: "Map<Int, Int>",
+        setup: "  let value: Map<Int, Int> = {}\n  value.set(1, 2)\n",
         read: "  print(value.count())\n",
     }
 );
 
 release_cases!(
     array_of_strings,
-    "an `array<string>` copy's strings are freed by nobody (High)",
+    "an `Array<String>` copy's strings are freed by nobody (High)",
     Case {
         declarations: "",
-        value_type: "array<string>",
-        setup: "  let value: array<string> = [`a`, `b`]\n",
+        value_type: "Array<String>",
+        setup: "  let value: Array<String> = [`a`, `b`]\n",
         read: "  print(value.count())\n",
     }
 );
@@ -237,19 +237,19 @@ release_cases!(
     "a deep array copy's items (the inner arrays) are not released with it (High)",
     Case {
         declarations: "",
-        value_type: "array<array<int>>",
-        setup: "  let first: array<int> = [1, 2]\n  let second: array<int> = [3]\n  let value: array<array<int>> = [first, second]\n",
+        value_type: "Array<Array<Int>>",
+        setup: "  let first: Array<Int> = [1, 2]\n  let second: Array<Int> = [3]\n  let value: Array<Array<Int>> = [first, second]\n",
         read: "  print(value.count())\n",
     }
 );
 
 release_cases!(
     array_of_shapes,
-    "an `array<Tag>` copy's elements (inline shapes holding strings) are not released (High)",
+    "an `Array<Tag>` copy's elements (inline shapes holding strings) are not released (High)",
     Case {
         declarations: TAG,
-        value_type: "array<Tag>",
-        setup: "  let tag: Tag = { name: `t`, id: 1 }\n  let value: array<Tag> = [tag]\n",
+        value_type: "Array<Tag>",
+        setup: "  let tag: Tag = { name: `t`, id: 1 }\n  let value: Array<Tag> = [tag]\n",
         read: "  print(value.count())\n",
     }
 );
@@ -259,19 +259,19 @@ release_cases!(
     "a spawn-cloned `map` is released by nobody, so a spawn in a loop grows the heap (High)",
     Case {
         declarations: "",
-        value_type: "map<int, int>",
-        setup: "  let value: map<int, int> = {}\n  value.set(1, 2)\n",
+        value_type: "Map<Int, Int>",
+        setup: "  let value: Map<Int, Int> = {}\n  value.set(1, 2)\n",
         read: "  print(value.count())\n",
     }
 );
 
 release_cases!(
     map_of_strings,
-    "a `map<string, string>` copy's keys (held by raw pointer) and values are not released (High)",
+    "a `Map<String, String>` copy's keys (held by raw pointer) and values are not released (High)",
     Case {
         declarations: "",
-        value_type: "map<string, string>",
-        setup: "  let value: map<string, string> = {}\n  value.set(`k`, `v`)\n",
+        value_type: "Map<String, String>",
+        setup: "  let value: Map<String, String> = {}\n  value.set(`k`, `v`)\n",
         read: "  print(value.count())\n",
     }
 );
@@ -281,8 +281,8 @@ release_cases!(
     "a map's array values are cloned with the map but freed by nobody (High)",
     Case {
         declarations: "",
-        value_type: "map<string, array<int>>",
-        setup: "  let rows: array<int> = [1]\n  let value: map<string, array<int>> = {}\n  value.set(`k`, rows)\n",
+        value_type: "Map<String, Array<Int>>",
+        setup: "  let rows: Array<Int> = [1]\n  let value: Map<String, Array<Int>> = {}\n  value.set(`k`, rows)\n",
         read: "  print(value.count())\n",
     }
 );
@@ -291,53 +291,53 @@ release_cases!(
     shape_with_every_kind_of_field,
     "a shape copy's string, array, map, nested shape and `maybe` fields are copied but not released, or shared with the original and released twice (High)",
     Case {
-        declarations: "shape Tag {\n  name: string\n  id: int\n}\nshape Bundle {\n  label: string\n  rows: array<int>\n  table: map<string, int>\n  inner: Tag\n  note: maybe<string>\n  id: int\n}\n",
+        declarations: "shape Tag {\n  name: String\n  id: Int\n}\nshape Bundle {\n  label: String\n  rows: Array<Int>\n  table: Map<String, Int>\n  inner: Tag\n  note: Maybe<String>\n  id: Int\n}\n",
         value_type: "Bundle",
-        setup: "  let labels: array<string> = [`n`]\n  let rows: array<int> = [1, 2]\n  let table: map<string, int> = {}\n  table.set(`k`, 1)\n  let inner: Tag = { name: `i`, id: 2 }\n  let value: Bundle = { label: `l`, rows: rows, table: table, inner: inner, note: labels.get(0), id: 3 }\n",
+        setup: "  let labels: Array<String> = [`n`]\n  let rows: Array<Int> = [1, 2]\n  let table: Map<String, Int> = {}\n  table.set(`k`, 1)\n  let inner: Tag = { name: `i`, id: 2 }\n  let value: Bundle = { label: `l`, rows: rows, table: table, inner: inner, note: labels.get(0), id: 3 }\n",
         read: "  print(value.id)\n",
     }
 );
 
 release_cases!(
     maybe_of_string,
-    "a `maybe<string>` argument's envelope cell and payload string are not freed (High)",
+    "a `Maybe<String>` argument's envelope cell and payload string are not freed (High)",
     Case {
         declarations: "",
-        value_type: "maybe<string>",
-        setup: "  let labels: array<string> = [`n`]\n  let value = labels.get(0)\n",
+        value_type: "Maybe<String>",
+        setup: "  let labels: Array<String> = [`n`]\n  let value = labels.get(0)\n",
         read: "  print(value.or(`none`))\n",
     }
 );
 
 release_cases!(
     maybe_of_shape,
-    "a `maybe<Tag>` argument's envelope cell, payload heap cell and the payload's string are not freed (High)",
+    "a `Maybe<Tag>` argument's envelope cell, payload heap cell and the payload's string are not freed (High)",
     Case {
         declarations: TAG,
-        value_type: "maybe<Tag>",
-        setup: "  let tag: Tag = { name: `t`, id: 1 }\n  let tags: array<Tag> = [tag]\n  let value = tags.get(0)\n",
+        value_type: "Maybe<Tag>",
+        setup: "  let tag: Tag = { name: `t`, id: 1 }\n  let tags: Array<Tag> = [tag]\n  let value = tags.get(0)\n",
         read: "  print(value.exists())\n",
     }
 );
 
 release_cases!(
     fixed_of_strings,
-    "a `fixed<string>` argument's cells hold strings its copy cloned and nobody freed (High)",
+    "a `Fixed<String>` argument's cells hold strings its copy cloned and nobody freed (High)",
     Case {
         declarations: "",
-        value_type: "fixed<string>",
-        setup: "  let value: fixed<string> = [`p`, `q`]\n",
+        value_type: "Fixed<String>",
+        setup: "  let value: Fixed<String> = [`p`, `q`]\n",
         read: "  print(value[0].or(`none`))\n",
     }
 );
 
 release_cases!(
     fixed_of_shapes,
-    "a `fixed<Tag>` copy shares the original's heap cells and strings, so the task's release frees what the spawner still holds, or the helper refuses the type (High)",
+    "a `Fixed<Tag>` copy shares the original's heap cells and strings, so the task's release frees what the spawner still holds, or the helper refuses the type (High)",
     Case {
         declarations: TAG,
-        value_type: "fixed<Tag>",
-        setup: "  let first: Tag = { name: `a`, id: 1 }\n  let second: Tag = { name: `b`, id: 2 }\n  let fallback: Tag = { name: `none`, id: 0 }\n  let value: fixed<Tag> = [first, second]\n",
+        value_type: "Fixed<Tag>",
+        setup: "  let first: Tag = { name: `a`, id: 1 }\n  let second: Tag = { name: `b`, id: 2 }\n  let fallback: Tag = { name: `none`, id: 0 }\n  let value: Fixed<Tag> = [first, second]\n",
         read: "  let item: Tag = value[0].or(fallback)\n  print(item.id)\n",
     }
 );
@@ -346,7 +346,7 @@ release_cases!(
     shape_with_a_union_field,
     "a shape's union slot copy (string variant) is shared with the original or never freed (High)",
     Case {
-        declarations: "shape Circle {\n  radius: float\n}\nshape Box {\n  held: Circle | string\n  id: int\n}\n",
+        declarations: "shape Circle {\n  radius: Float\n}\nshape Box {\n  held: Circle | String\n  id: Int\n}\n",
         value_type: "Box",
         setup: "  let value: Box = { held: `boxed`, id: 1 }\n",
         read: "  print(value.id)\n",
@@ -357,9 +357,9 @@ release_cases!(
     shape_with_a_channel_field,
     "a shape copy shares its channel field without taking a counted reference, so the task's release gives back a reference it never held and frees the channel under the spawner (High)",
     Case {
-        declarations: "shape Wire {\n  line: channel<int>\n  id: int\n}\n",
+        declarations: "shape Wire {\n  line: Channel<Int>\n  id: Int\n}\n",
         value_type: "Wire",
-        setup: "  let line: channel<int> = channel<int>(2)\n  let value: Wire = { line: line, id: 1 }\n",
+        setup: "  let line: Channel<Int> = Channel<Int>(2)\n  let value: Wire = { line: line, id: 1 }\n",
         read: "  print(value.id)\n",
     }
 );
@@ -370,7 +370,7 @@ release_cases!(
     Case {
         declarations: "",
         value_type: "string",
-        setup: "  let labels: array<string> = [`heap string`]\n  let maybeLabel: maybe<string> = labels.get(0)\n  let value: string = maybeLabel.or(`none`)\n",
+        setup: "  let labels: Array<String> = [`heap string`]\n  let maybeLabel: Maybe<String> = labels.get(0)\n  let value: String = maybeLabel.or(`none`)\n",
         read: "  print(value)\n",
     }
 );
@@ -390,19 +390,19 @@ mod string_handed_over_whole {
             ""
         };
         let store_line = if give_callee {
-            "  let held: array<string> = []\n  held.add(value)\n"
+            "  let held: Array<String> = []\n  held.add(value)\n"
         } else {
             ""
         };
         let parameter = if give_callee {
-            "give value: string"
+            "give value: String"
         } else {
-            "value: string"
+            "value: String"
         };
         format!(
-            "function show({parameter}) -> nothing {{\n{wait_line}{store_line}  print(777)\n}}\n\n\
-             function launch() -> nothing {{\n{setup}  background show({argument})\n}}\n\n\
-             function entrypoint() -> nothing {{\n  launch()\n  wait sleep(200)\n}}\n"
+            "function show({parameter}) -> Nothing {{\n{wait_line}{store_line}  print(777)\n}}\n\n\
+             function launch() -> Nothing {{\n{setup}  background show({argument})\n}}\n\n\
+             function entrypoint() -> Nothing {{\n  launch()\n  wait sleep(200)\n}}\n"
         )
     }
 
@@ -491,25 +491,25 @@ mod string_handed_over_whole {
     handed_over_case!(
         owned_fresh_value,
         true,
-        "  let count: int = 5\n",
+        "  let count: Int = 5\n",
         "`n=${count}`"
     );
     handed_over_case!(
         owned_last_use_of_a_binding,
         true,
-        "  let count: int = 5\n  let value: string = `n=${count}`\n",
+        "  let count: Int = 5\n  let value: String = `n=${count}`\n",
         "value"
     );
     handed_over_case!(
         last_use_of_a_binding,
         false,
-        "  let labels: array<string> = [`heap string`]\n  let maybeLabel: maybe<string> = labels.get(0)\n  let value: string = maybeLabel.or(`none`)\n",
+        "  let labels: Array<String> = [`heap string`]\n  let maybeLabel: Maybe<String> = labels.get(0)\n  let value: String = maybeLabel.or(`none`)\n",
         "value"
     );
     handed_over_case!(
         fresh_value,
         false,
-        "  let labels: array<string> = [`heap string`]\n  let maybeLabel: maybe<string> = labels.get(0)\n",
+        "  let labels: Array<String> = [`heap string`]\n  let maybeLabel: Maybe<String> = labels.get(0)\n",
         "maybeLabel.or(`none`)"
     );
     handed_over_case!(literal, false, "", "`literal`");

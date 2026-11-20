@@ -13,15 +13,15 @@ use support::{
 
 const UNION_MAYBE_RETURNED: &str = "
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -33,13 +33,13 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function fetch(share things: array<Thing>, index: int) -> maybe<Thing> {
+function fetch(share things: Array<Thing>, index: Int) -> Maybe<Thing> {
   let found = things.get(index)
   return found
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let tiny: Tiny = { flag: true }
   things.add(tiny)
   let big: Big = { label: `kept`, count: 1 }
@@ -85,25 +85,25 @@ fn a_maybe_union_a_function_returns_is_released() {
 
 const UNION_MAYBE_FORMS: &str = "
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function direct(share things: array<Thing>, index: int) -> maybe<Thing> {
+function direct(share things: Array<Thing>, index: Int) -> Maybe<Thing> {
   return things.get(index)
 }
 
-function passed(share things: array<Thing>, index: int) -> maybe<Thing> {
+function passed(share things: Array<Thing>, index: Int) -> Maybe<Thing> {
   let found = direct(things, index)
   return found
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let tiny: Tiny = { flag: true }
   things.add(tiny)
   let big: Big = { label: `kept`, count: 1 }
@@ -156,24 +156,24 @@ fn every_form_of_a_returned_maybe_union_is_released() {
 
 const MAYBE_GIVEN_BY_UFCS: &str = "
 shape Basket {
-  size: int
+  size: Int
 }
 shape Tag {
-  name: string
+  name: String
 }
-function firstTag(share list: array<Tag>) -> maybe<Tag> {
+function firstTag(share list: Array<Tag>) -> Maybe<Tag> {
   let found = list.get(0)
   return found
 }
-function eatTag(share basket: Basket, give found: maybe<Tag>) -> int {
+function eatTag(share basket: Basket, give found: Maybe<Tag>) -> Int {
   return found.or({name: `z`}).name.count()
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{name: `nn`}]
-  let current: maybe<Tag> = tags.get(0)
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{name: `nn`}]
+  let current: Maybe<Tag> = tags.get(0)
   let basket: Basket = { size: 1 }
-  let copied: int = basket.eatTag(current.copy())
-  let returned: int = basket.eatTag(firstTag(tags))
+  let copied: Int = basket.eatTag(current.copy())
+  let returned: Int = basket.eatTag(firstTag(tags))
   print(copied + returned)
 }
 ";

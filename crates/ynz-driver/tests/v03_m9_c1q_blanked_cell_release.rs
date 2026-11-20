@@ -24,15 +24,15 @@ use support::{build_asan_from_ir, build_source, run_asan_binary_counted};
 
 const SHAPES: &str = "\
 shape Tag {
-  label: string
-  nums: array<int>
+  label: String
+  nums: Array<Int>
 }
 shape Big {
-  name: string
-  weight: int
+  name: String
+  weight: Int
 }
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Thing = Big | Tiny
 ";
@@ -54,7 +54,7 @@ struct Case {
 
 fn program(case: &Case) -> String {
     format!(
-        "{SHAPES}\nfunction entrypoint() -> nothing {{\n{}\n}}\n",
+        "{SHAPES}\nfunction entrypoint() -> Nothing {{\n{}\n}}\n",
         case.body
     )
 }
@@ -210,42 +210,42 @@ macro_rules! blank_case {
 blank_case!(
     a_blanked_string_cell_is_skipped,
     Outer::Array,
-    "  let f: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]\n  print(f.count())",
+    "  let f: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]\n  print(f.count())",
     "a string list release that frees a null string cell (High)"
 );
 blank_case!(
     a_blanked_array_cell_is_skipped,
     Outer::Array,
-    "  let f: array<array<int>> = [[1, 2], [3, 4]]\n  print(f.count())",
+    "  let f: Array<Array<Int>> = [[1, 2], [3, 4]]\n  print(f.count())",
     "an array-of-arrays release that frees a null row (High)"
 );
 blank_case!(
     a_blanked_map_cell_is_skipped,
     Outer::Array,
-    "  let f: array<map<string, int>> = [{ `a`: 1 }, { `b`: 2 }]\n  print(f.count())",
+    "  let f: Array<Map<String, Int>> = [{ `a`: 1 }, { `b`: 2 }]\n  print(f.count())",
     "an array-of-maps release that frees a null map (High)"
 );
 blank_case!(
     a_blanked_shape_inline_cell_is_skipped,
     Outer::Array,
-    "  let f: array<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())",
+    "  let f: Array<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())",
     "an array-of-shapes release that frees the heap fields of an all-zero inline shape cell (High)"
 );
 blank_case!(
     a_blanked_union_inline_cell_is_skipped,
     Outer::Array,
-    "  let f: array<Thing> = []\n  let first: Big = { name: `n`.toUpperCase(), weight: 1 }\n  f.add(first)\n  let second: Big = { name: `m`.toUpperCase(), weight: 2 }\n  f.add(second)\n  print(f.count())",
+    "  let f: Array<Thing> = []\n  let first: Big = { name: `n`.toUpperCase(), weight: 1 }\n  f.add(first)\n  let second: Big = { name: `m`.toUpperCase(), weight: 2 }\n  f.add(second)\n  print(f.count())",
     "an array-of-unions release that frees the payload of an all-zero slot (tag 0 is the heap variant `Big`) (High)"
 );
 blank_case!(
     a_blanked_fixed_array_cell_is_skipped,
     Outer::Fixed,
-    "  let f: fixed<array<int>> = [[1, 2], [3, 4]]\n  print(f.count())",
+    "  let f: Fixed<Array<Int>> = [[1, 2], [3, 4]]\n  print(f.count())",
     "a fixed-list release that frees a zeroed array cell (High)"
 );
 blank_case!(
     a_blanked_fixed_shape_cell_is_skipped,
     Outer::Fixed,
-    "  let f: fixed<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())",
+    "  let f: Fixed<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())",
     "a fixed-list release that frees a zeroed shape-box cell (High)"
 );

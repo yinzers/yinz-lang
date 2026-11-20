@@ -94,8 +94,8 @@ fn v03_m9_c1g_generic_int_and_string_for_one_type_parameter_is_rejected() {
     assert_rejected_with(
         "v0_3_m9_c1g_generic_int_and_string.ynz",
         &[
-            "`label` has type `string`, but `same` needs `int` for `second`",
-            "the argument `count` for `first` already made it `int`",
+            "`label` has type `String`, but `same` needs `Int` for `second`",
+            "the argument `count` for `first` already made it `Int`",
         ],
     );
 }
@@ -120,7 +120,7 @@ fn v03_m9_c1g_dot_call_int_for_a_shape_is_rejected() {
     // bug instead of a diagnostic. TIER: High.
     assert_rejected_with(
         "v0_3_m9_c1g_dot_call_int_for_shape.ynz",
-        &["This argument is `int`, but `useBig` expects `Big` here."],
+        &["This argument is `Int`, but `useBig` expects `Big` here."],
     );
 }
 
@@ -132,10 +132,10 @@ fn v03_m9_c1g_plain_call_mismatches_stay_rejected() {
         "v0_3_m9_c1g_plain_call_guard.ynz",
         &[
             "This argument is `Tiny`, but `useBig` expects `Big` here.",
-            "This argument is `int`, but `useString` expects `string` here.",
-            "This argument is `string`, but `useInt` expects `int` here.",
-            "This argument is `maybe<int>`, but `useInt` expects `int` here.",
-            "This argument is `array<Tiny>`, but `useBigs` expects `array<Big>` here.",
+            "This argument is `Int`, but `useString` expects `String` here.",
+            "This argument is `String`, but `useInt` expects `Int` here.",
+            "This argument is `Maybe<Int>`, but `useInt` expects `Int` here.",
+            "This argument is `Array<Tiny>`, but `useBigs` expects `Array<Big>` here.",
         ],
     );
 }

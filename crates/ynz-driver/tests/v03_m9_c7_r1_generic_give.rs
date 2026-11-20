@@ -28,13 +28,13 @@ fn assert_balanced_and_clean(label: &str, program: &str, expected: &str) {
 }
 
 const TWICE: &str = "
-function twice<T>(give first: T, give second: T) -> nothing {
+function twice<T>(give first: T, give second: T) -> Nothing {
   print(1)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
-  let name: string = `a ${n}`
-  let other: string = `b ${n}`
+  let name: String = `a ${n}`
+  let other: String = `b ${n}`
   twice(name, other)
   twice(`c ${n}`, `d ${n}`)
   twice(5, 6)
@@ -55,11 +55,11 @@ fn an_int_instance_of_a_generic_give_compiles_with_no_release() {
     at_both_optimization_levels(|no_optimize| {
         let built = build_source(
             "
-function twice<T>(give first: T, give second: T) -> nothing {
+function twice<T>(give first: T, give second: T) -> Nothing {
   let held: T = first
   print(1)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   twice(5, 6)
 }
 ",
@@ -84,14 +84,14 @@ fn a_type_parameter_local_is_released() {
     assert_balanced_and_clean(
         "c7_r1_local",
         "
-function hold<T>(give value: T) -> nothing {
+function hold<T>(give value: T) -> Nothing {
   let held: T = value
   print(1)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
   hold(`a ${n}`)
-  let name: string = `b ${n}`
+  let name: String = `b ${n}`
   hold(name)
   hold(7)
   hold([n, 1])
@@ -111,24 +111,24 @@ fn a_type_parameter_returned_or_stored_is_released_once_by_its_new_holder() {
 function same<T>(give value: T) -> T {
   return value
 }
-function wrap<T>(give value: T) -> array<T> {
-  let items: array<T> = []
+function wrap<T>(give value: T) -> Array<T> {
+  let items: Array<T> = []
   items.add(value)
   return items
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
-  let back: string = same(`a ${n}`)
+  let back: String = same(`a ${n}`)
   print(back)
-  let name: string = `b ${n}`
-  let again: string = same(name)
+  let name: String = `b ${n}`
+  let again: String = same(name)
   print(again)
-  let rows: array<string> = wrap(`c ${n}`)
+  let rows: Array<String> = wrap(`c ${n}`)
   print(rows.count())
   print(same(5))
-  let nums: array<int> = wrap(6)
+  let nums: Array<Int> = wrap(6)
   print(nums.count())
-  let lists: array<array<int>> = wrap([n, 1])
+  let lists: Array<Array<Int>> = wrap([n, 1])
   print(lists.count())
 }
 ",
@@ -143,23 +143,23 @@ fn a_type_parameter_moved_on_some_paths_is_released_only_where_it_is_live() {
     assert_balanced_and_clean(
         "c7_r1_some_paths",
         "
-function maybeKeep<T>(give value: T, flag: boolean) -> array<T> {
-  let items: array<T> = []
+function maybeKeep<T>(give value: T, flag: Boolean) -> Array<T> {
+  let items: Array<T> = []
   if (flag) {
     items.add(value)
   }
   return items
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
-  let kept: array<string> = maybeKeep(`a ${n}`, true)
-  let dropped: array<string> = maybeKeep(`b ${n}`, false)
+  let kept: Array<String> = maybeKeep(`a ${n}`, true)
+  let dropped: Array<String> = maybeKeep(`b ${n}`, false)
   print(kept.count() + dropped.count())
-  let numbers: array<int> = maybeKeep(5, true)
-  let skipped: array<int> = maybeKeep(6, false)
+  let numbers: Array<Int> = maybeKeep(5, true)
+  let skipped: Array<Int> = maybeKeep(6, false)
   print(numbers.count() + skipped.count())
-  let lists: array<array<int>> = maybeKeep([n, 1], true)
-  let gone: array<array<int>> = maybeKeep([n, 2], false)
+  let lists: Array<Array<Int>> = maybeKeep([n, 1], true)
+  let gone: Array<Array<Int>> = maybeKeep([n, 2], false)
   print(lists.count() + gone.count())
 }
 ",
@@ -178,7 +178,7 @@ function pick<T>(give first: T, give second: T) -> T {
   held = second
   return held
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
   print(pick(`a ${n}`, `b ${n}`))
   print(pick(1, 2))
@@ -198,17 +198,17 @@ fn a_fresh_type_parameter_value_no_binding_holds_is_released_per_instance() {
         "c7_r1_temporary",
         "
 shape Row {
-  name: string
+  name: String
 }
-function burn<T>(share value: T) -> nothing {
-  let items: array<T> = []
+function burn<T>(share value: T) -> Nothing {
+  let items: Array<T> = []
   value.copy()
   items.get(0).or(value.copy())
   print(1)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
-  let name: string = `a ${n}`
+  let name: String = `a ${n}`
   burn(name)
   burn([n, 1])
   let row: Row = { name: `b ${n}` }

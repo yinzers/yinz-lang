@@ -16,20 +16,20 @@ use support::{
 /// `b` is bound: releasing every non-null slot would free it twice; the per-state list does not
 /// list `b` there.
 const STALE_CHILD_SLOT: &str = "
-function inner(ms: int) -> nothing {
-  let a: array<int> = [1, 2]
+function inner(ms: Int) -> Nothing {
+  let a: Array<Int> = [1, 2]
   wait sleep(ms)
-  let b: array<int> = [3]
+  let b: Array<Int> = [3]
   wait sleep(ms)
 }
 
-function worker() -> nothing {
-  let outer: array<int> = [9]
+function worker() -> Nothing {
+  let outer: Array<Int> = [9]
   inner(1)
   inner(500)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -44,18 +44,18 @@ fn child_called_twice_does_not_release_a_stale_slot() {
 /// The parked task holds the handle of its own child. The drop entry releases the handle
 /// (`ynz_handle_free` aborts the child); the child's own future frees the child's frame.
 const OWN_CHILD_HANDLE: &str = "
-function child() -> nothing {
-  let theirs: array<int> = [5, 6]
+function child() -> Nothing {
+  let theirs: Array<Int> = [5, 6]
   wait sleep(500)
 }
 
-function worker() -> nothing {
-  let mine: array<int> = [1]
+function worker() -> Nothing {
+  let mine: Array<Int> = [1]
   let handle = background child()
   wait sleep(500)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -70,19 +70,19 @@ fn parked_task_holding_its_childs_handle_composes() {
 /// A borrowed parameter (read again after the wait, so it sits in a frame slot) is in non-null frame slots the task does not own: the
 /// spawn ladder frees the argument's clone, so the drop entry must not.
 const BORROWED_PARAMETER: &str = "
-function worker(rows: array<int>) -> nothing {
-  let before: int = rows.count()
-  let mine: array<int> = [1, 2]
+function worker(rows: Array<Int>) -> Nothing {
+  let before: Int = rows.count()
+  let mine: Array<Int> = [1, 2]
   wait sleep(500)
   print(`${before + rows.count()}`)
 }
 
-function launch() -> nothing {
-  let rows: array<int> = [10, 20, 30]
+function launch() -> Nothing {
+  let rows: Array<Int> = [10, 20, 30]
   background worker(rows)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(100)
   print(`parent`)
@@ -96,19 +96,19 @@ fn borrowed_parameter_and_view_are_not_released_by_the_drop_entry() {
 
 /// A local given away before the wait is not released by the drop entry (the slot is null).
 const MOVED_BEFORE_WAIT: &str = "
-function take(give rows: array<int>) -> int {
+function take(give rows: Array<Int>) -> Int {
   return rows.count()
 }
 
-function worker() -> nothing {
-  let moved: array<int> = [1, 2, 3]
-  let kept: array<int> = [4]
-  let count: int = take(moved)
+function worker() -> Nothing {
+  let moved: Array<Int> = [1, 2, 3]
+  let kept: Array<Int> = [4]
+  let count: Int = take(moved)
   wait sleep(500)
   print(`${count}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -123,34 +123,34 @@ fn a_local_given_away_before_the_wait_is_released_once() {
 /// The two dropped-while-pending programs of `v03_m9_c8_s0`, under AddressSanitizer (their counters are pinned
 /// there).
 const DROPPED_AT_SHUTDOWN: &str = "
-function worker(give rows: array<int>) -> nothing {
-  let mine: array<int> = [1, 2]
-  let label: string = `x`.toUpperCase()
+function worker(give rows: Array<Int>) -> Nothing {
+  let mine: Array<Int> = [1, 2]
+  let label: String = `x`.toUpperCase()
   wait sleep(500)
   print(`child done`)
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [10, 20, 30]
   background worker(rows)
   print(`parent`)
 }
 ";
 
 const DROPPED_IN_NESTED_CHILD: &str = "
-function inner() -> nothing {
-  let deep: array<int> = [7, 8, 9]
+function inner() -> Nothing {
+  let deep: Array<Int> = [7, 8, 9]
   wait sleep(500)
   print(`inner done`)
 }
 
-function worker() -> nothing {
-  let outer: array<int> = [1]
+function worker() -> Nothing {
+  let outer: Array<Int> = [1]
   inner()
   print(`worker done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   print(`parent`)
 }
@@ -175,14 +175,14 @@ fn a_task_dropped_at_shutdown_or_in_a_nested_child_is_asan_clean_and_balanced() 
 
 /// Conduit site: parked in `receive` on a channel nobody sends to.
 const PARKED_IN_CONDUIT: &str = "
-function worker() -> nothing {
-  let mine: array<int> = [1, 2]
-  let ch: channel<int> = channel<int>(2)
+function worker() -> Nothing {
+  let mine: Array<Int> = [1, 2]
+  let ch: Channel<Int> = Channel<Int>(2)
   let got = ch.receive()
   print(`${mine.count()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -197,26 +197,26 @@ fn parked_in_a_conduit_receive_releases_its_frame() {
 /// Independent I/O group: two suspending calls that overlap; both members are parked in their
 /// own `wait`, each holding a local of its own, beside a local of the parent.
 const PARKED_IN_INDEPENDENT_GROUP: &str = "
-function slowFirst() -> int {
-  let first: array<int> = [1, 2, 3]
+function slowFirst() -> Int {
+  let first: Array<Int> = [1, 2, 3]
   wait sleep(500)
   return first.count()
 }
 
-function slowSecond() -> int {
-  let second: array<int> = [4]
+function slowSecond() -> Int {
+  let second: Array<Int> = [4]
   wait sleep(500)
   return second.count()
 }
 
-function worker() -> nothing {
-  let mine: array<int> = [9]
+function worker() -> Nothing {
+  let mine: Array<Int> = [9]
   let a = slowFirst()
   let b = slowSecond()
   print(`${a + b + mine.count()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -235,24 +235,24 @@ fn parked_in_an_independent_group_releases_every_member_frame() {
 /// Independent I/O group where one member already returned a heap value: the value sits in the
 /// finished member's return slot, owned by nobody else, until the group joins.
 const PARKED_IN_GROUP_WITH_A_RETURNED_MEMBER: &str = "
-function quick() -> array<int> {
-  let made: array<int> = [1, 2, 3]
+function quick() -> Array<Int> {
+  let made: Array<Int> = [1, 2, 3]
   wait sleep(1)
   return made
 }
 
-function slow() -> int {
+function slow() -> Int {
   wait sleep(500)
   return 1
 }
 
-function worker() -> nothing {
+function worker() -> Nothing {
   let a = quick()
   let b = slow()
   print(`${a.count() + b}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -271,9 +271,9 @@ fn parked_in_a_group_releases_the_value_a_finished_member_returned() {
 /// Back-edge yield: a wait-free loop in a state-machine function yields at its back edge; the
 /// task is parked there holding a local declared before the loop and a loop-carried string.
 const PARKED_AT_A_BACK_EDGE: &str = "
-function hog() -> nothing {
-  let mine: array<int> = [1, 2]
-  let label: string = `x`.toUpperCase()
+function hog() -> Nothing {
+  let mine: Array<Int> = [1, 2]
+  let label: String = `x`.toUpperCase()
   let x = 0
   while (x < 2000000000) {
     x = x + 1
@@ -282,7 +282,7 @@ function hog() -> nothing {
   wait sleep(0)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background hog()
   wait sleep(100)
   print(`parent`)
@@ -297,7 +297,7 @@ fn parked_at_a_loop_back_edge_releases_its_frame() {
 /// Fused CPU + I/O group: the host is parked at the shared poll state with its CPU handle live
 /// and its I/O member in a `wait`.
 const PARKED_IN_FUSED_GROUP: &str = "
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 1000) {
@@ -307,20 +307,20 @@ function crunch(n: int) -> int {
   return total + n
 }
 
-function fetchSlow(n: int) -> int {
-  let own: array<int> = [n]
+function fetchSlow(n: Int) -> Int {
+  let own: Array<Int> = [n]
   wait sleep(500)
   return own.count() + n
 }
 
-function fusedHost() -> nothing {
-  let mine: array<int> = [7, 8]
+function fusedHost() -> Nothing {
+  let mine: Array<Int> = [7, 8]
   let a = crunch(1)
   let b = fetchSlow(2)
   print(a + b + mine.count())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background fusedHost()
   wait sleep(100)
   print(`parent`)
@@ -335,9 +335,9 @@ fn parked_in_a_fused_group_releases_its_frame() {
 /// CPU spike group: a promoted host (no `wait` of its own; its CPU join is the suspension) is
 /// parked at the join while the two CPU members still run.
 const PARKED_AT_A_CPU_JOIN: &str = "
-function buildFirst(n: int) -> string {
-  let seed: int = 1
-  let i: int = 0
+function buildFirst(n: Int) -> String {
+  let seed: Int = 1
+  let i: Int = 0
   while (i < n) {
     seed = (seed * 1103515245 + 12345) % 2147483648
     i = i + 1
@@ -345,9 +345,9 @@ function buildFirst(n: int) -> string {
   return `len=${seed}`
 }
 
-function buildSecond(n: int) -> string {
-  let seed: int = 7
-  let i: int = 0
+function buildSecond(n: Int) -> String {
+  let seed: Int = 7
+  let i: Int = 0
   while (i < n) {
     seed = (seed * 1103515245 + 12345) % 2147483648
     i = i + 1
@@ -355,8 +355,8 @@ function buildSecond(n: int) -> string {
   return `total=${seed}`
 }
 
-function host() -> nothing {
-  let mine: array<int> = [1, 2]
+function host() -> Nothing {
+  let mine: Array<Int> = [1, 2]
   let a = buildFirst(4000000000)
   let b = buildSecond(4000000000)
   print(a)
@@ -364,7 +364,7 @@ function host() -> nothing {
   print(`${mine.count()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background host()
   wait sleep(50)
   print(`parent`)
@@ -407,23 +407,23 @@ fn a_promoted_host_parked_at_its_cpu_join_releases_its_frame() {
 
 const PARKED_HOLDERS: &str = "
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function fetchName(fail: boolean) -> string errors {
+function fetchName(fail: Boolean) -> String errors {
   let status = wait __testFallibleAsync(fail)
   return `name${status}`
 }
 
-function pickShape(index: int) -> maybe<Big> {
+function pickShape(index: Int) -> Maybe<Big> {
   wait sleep(1)
-  let items: array<Big> = [{ label: `a`, count: 1 }]
+  let items: Array<Big> = [{ label: `a`, count: 1 }]
   let found = items.get(index)
   return found
 }
 
-function takeShape(give kept: maybe<Big>) -> int {
+function takeShape(give kept: Maybe<Big>) -> Int {
   return 1
 }
 ";
@@ -435,7 +435,7 @@ function takeShape(give kept: maybe<Big>) -> int {
 fn a_parked_task_releases_errors_and_maybe_locals_and_skips_a_given_one() {
     let source = format!(
         "{PARKED_HOLDERS}
-function worker() -> nothing {{
+function worker() -> Nothing {{
   let name = fetchName(false)
   let big = pickShape(0)
   let given = pickShape(0)
@@ -445,7 +445,7 @@ function worker() -> nothing {{
   print(`${{count}}`)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -461,21 +461,21 @@ function entrypoint() -> nothing {{
 #[test]
 fn a_parked_task_releases_the_loop_variable_copy_and_the_iteration_local() {
     let source = "
-function makeNames() -> array<string> {
-  let names: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+function makeNames() -> Array<String> {
+  let names: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   return names
 }
 
-function worker() -> nothing {
+function worker() -> Nothing {
   let names = makeNames()
   for (label in names) {
-    let shout: string = label.toUpperCase()
+    let shout: String = label.toUpperCase()
     wait sleep(500)
     print(shout)
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -488,8 +488,8 @@ function entrypoint() -> nothing {
 #[test]
 fn a_task_parked_at_a_for_back_edge_releases_its_frame() {
     let source = "
-function hog() -> nothing {
-  let keep: string = `k`.toUpperCase()
+function hog() -> Nothing {
+  let keep: String = `k`.toUpperCase()
   let sink = 0
   for (outer in range(0, 2000000000)) {
     sink = sink + outer
@@ -498,7 +498,7 @@ function hog() -> nothing {
   wait sleep(0)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background hog()
   wait sleep(100)
   print(`parent`)
@@ -520,7 +520,7 @@ fn unreceived_after_finish(result_function: &str) -> String {
     format!(
         "{result_function}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(100)
   print(`parent`)
@@ -532,7 +532,7 @@ function entrypoint() -> nothing {{
 #[test]
 fn an_unreceived_string_result_is_released_with_the_handle() {
     let source = unreceived_after_finish(
-        "function make() -> string {
+        "function make() -> String {
   wait sleep(1)
   return `big`.toUpperCase()
 }",
@@ -543,9 +543,9 @@ fn an_unreceived_string_result_is_released_with_the_handle() {
 #[test]
 fn an_unreceived_array_result_is_released_with_the_handle() {
     let source = unreceived_after_finish(
-        "function make() -> array<string> {
+        "function make() -> Array<String> {
   wait sleep(1)
-  let items: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  let items: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   return items
 }",
     );
@@ -555,9 +555,9 @@ fn an_unreceived_array_result_is_released_with_the_handle() {
 #[test]
 fn an_unreceived_maybe_result_is_released_with_the_handle() {
     let source = unreceived_after_finish(
-        "function make() -> maybe<string> {
+        "function make() -> Maybe<String> {
   wait sleep(1)
-  let items: array<string> = [`a`.toUpperCase()]
+  let items: Array<String> = [`a`.toUpperCase()]
   let found = items.get(0)
   return found
 }",
@@ -568,7 +568,7 @@ fn an_unreceived_maybe_result_is_released_with_the_handle() {
 #[test]
 fn an_unreceived_errors_result_is_released_with_the_handle() {
     let source = unreceived_after_finish(
-        "function make() -> string errors {
+        "function make() -> String errors {
   wait sleep(1)
   return `big`.toUpperCase()
 }",
@@ -581,17 +581,17 @@ fn an_unreceived_errors_result_is_released_with_the_handle() {
 #[test]
 fn a_handle_freed_while_its_task_runs_aborts_it_and_leaks_nothing() {
     let source = "
-function make() -> string {
+function make() -> String {
   wait sleep(100)
   return `big`.toUpperCase()
 }
 
-function spawnAndLeave() -> nothing {
+function spawnAndLeave() -> Nothing {
   let pending = background make()
   wait sleep(1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   spawnAndLeave()
   wait sleep(300)
   print(`parent`)
@@ -607,7 +607,7 @@ function entrypoint() -> nothing {
 #[test]
 fn an_unreceived_error_result_is_released_with_the_handle() {
     let source = unreceived_after_finish(
-        "function make() -> string errors {
+        "function make() -> String errors {
   let status = wait __testFallibleAsync(true)
   return `name${status}`
 }",
@@ -623,18 +623,18 @@ fn an_unreceived_error_result_is_released_with_the_handle() {
 /// (ownership boundary between the drop entry and the spawn ladder).
 const PARKED_WITH_A_GIVEN_SHAPE: &str = "
 shape Crew {
-  label: string
-  members: array<string>
+  label: String
+  members: Array<String>
 }
 
-function worker(give crew: Crew) -> nothing {
-  let note: string = `n`.toUpperCase()
+function worker(give crew: Crew) -> Nothing {
+  let note: String = `n`.toUpperCase()
   wait sleep(500)
   print(`${crew.label}${note}`)
 }
 
-function entrypoint() -> nothing {
-  let members: array<string> = [`a`.toUpperCase()]
+function entrypoint() -> Nothing {
+  let members: Array<String> = [`a`.toUpperCase()]
   let crew: Crew = { label: `L`.toUpperCase(), members: members }
   background worker(crew)
   wait sleep(100)
@@ -653,17 +653,17 @@ fn a_parked_task_given_a_flat_shape_releases_its_fields_and_the_ladder_frees_the
 fn a_task_dropped_before_its_first_poll_releases_a_given_shape() {
     let source = "
 shape Crew {
-  label: string
-  members: array<string>
+  label: String
+  members: Array<String>
 }
 
-function worker(give crew: Crew) -> nothing {
+function worker(give crew: Crew) -> Nothing {
   wait sleep(500)
   print(crew.label)
 }
 
-function entrypoint() -> nothing {
-  let members: array<string> = [`a`.toUpperCase()]
+function entrypoint() -> Nothing {
+  let members: Array<String> = [`a`.toUpperCase()]
   let crew: Crew = { label: `L`.toUpperCase(), members: members }
   background worker(crew)
   print(`parent`)
@@ -682,17 +682,17 @@ function entrypoint() -> nothing {
 
 /// One local given to the parked callee.
 const GIVEN_TO_PARKED_CHILD: &str = "
-function inner(give rows: array<int>) -> nothing {
+function inner(give rows: Array<Int>) -> Nothing {
   wait sleep(500)
   print(`${rows.count()}`)
 }
 
-function worker() -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function worker() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   inner(rows)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -701,19 +701,19 @@ function entrypoint() -> nothing {
 
 /// A string given to the parked callee beside a local the task keeps.
 const STRING_GIVEN_TO_PARKED_CHILD: &str = "
-function inner(give label: string) -> nothing {
+function inner(give label: String) -> Nothing {
   wait sleep(500)
   print(label)
 }
 
-function worker() -> nothing {
-  let label: string = `x`.toUpperCase()
-  let kept: string = `y`.toUpperCase()
+function worker() -> Nothing {
+  let label: String = `x`.toUpperCase()
+  let kept: String = `y`.toUpperCase()
   inner(label)
   print(kept)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -722,25 +722,25 @@ function entrypoint() -> nothing {
 
 /// Two locals given to the two members of an independent group the task is parked in.
 const GIVEN_TO_PARKED_GROUP: &str = "
-function first(give rows: array<int>) -> int {
+function first(give rows: Array<Int>) -> Int {
   wait sleep(500)
   return rows.count()
 }
 
-function second(give rows: array<int>) -> int {
+function second(give rows: Array<Int>) -> Int {
   wait sleep(500)
   return rows.count()
 }
 
-function worker() -> nothing {
-  let firstRows: array<int> = [1, 2, 3]
-  let secondRows: array<int> = [4]
+function worker() -> Nothing {
+  let firstRows: Array<Int> = [1, 2, 3]
+  let secondRows: Array<Int> = [4]
   let firstCount = first(firstRows)
   let secondCount = second(secondRows)
   print(`${firstCount + secondCount}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -749,22 +749,22 @@ function entrypoint() -> nothing {
 
 /// The callee is called in a loop (its embedded frame reused) and parks on a later iteration.
 const GIVEN_TO_PARKED_CHILD_IN_A_LOOP: &str = "
-function inner(give rows: array<int>, sleepMilliseconds: int) -> nothing {
-  let local: array<int> = [1]
+function inner(give rows: Array<Int>, sleepMilliseconds: Int) -> Nothing {
+  let local: Array<Int> = [1]
   wait sleep(sleepMilliseconds)
   print(`${rows.count()}`)
 }
 
-function worker() -> nothing {
+function worker() -> Nothing {
   let i = 0
   while (i < 3) {
-    let rows: array<int> = [i]
+    let rows: Array<Int> = [i]
     inner(rows, i * 400)
     i = i + 1
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -773,19 +773,19 @@ function entrypoint() -> nothing {
 
 /// Recursion that gives a local to the next level, parked at the deepest one.
 const GIVEN_DOWN_A_PARKED_RECURSION: &str = "
-function down(depth: int, give carried: array<int>) -> nothing {
+function down(depth: Int, give carried: Array<Int>) -> Nothing {
   if (depth == 0) {
     wait sleep(500)
     print(`${carried.count()}`)
     return
   }
-  let next: array<int> = [depth]
+  let next: Array<Int> = [depth]
   down(depth - 1, next)
   print(`${carried.count()}`)
 }
 
-function entrypoint() -> nothing {
-  let start: array<int> = [0]
+function entrypoint() -> Nothing {
+  let start: Array<Int> = [0]
   background down(3, start)
   wait sleep(100)
   print(`parent`)
@@ -831,18 +831,18 @@ fn a_local_given_to_the_parked_callee_is_released_once_by_the_callee() {
 #[test]
 fn return_of_a_suspending_call_releases_the_open_locals() {
     let program = "
-function inner() -> int {
+function inner() -> Int {
   wait sleep(1)
   return 7
 }
 
-function mid() -> int {
-  let mine: array<int> = [4, 5]
-  let more: string = `x${mine.count()}`
+function mid() -> Int {
+  let mine: Array<Int> = [4, 5]
+  let more: String = `x${mine.count()}`
   return inner()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = mid()
   print(`${result}`)
 }
@@ -853,18 +853,18 @@ function entrypoint() -> nothing {
 #[test]
 fn a_task_parked_in_a_returned_suspending_call_releases_the_open_locals() {
     let program = "
-function inner() -> int {
+function inner() -> Int {
   wait sleep(500)
   return 7
 }
 
-function worker() -> int {
-  let mine: array<int> = [4, 5]
-  let more: string = `x${mine.count()}`
+function worker() -> Int {
+  let mine: Array<Int> = [4, 5]
+  let more: String = `x${mine.count()}`
   return inner()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -882,14 +882,14 @@ function entrypoint() -> nothing {
 #[test]
 fn a_return_of_a_suspending_call_nested_in_a_branch_releases_the_open_locals() {
     let in_a_branch = "
-function inner(n: int) -> int {
+function inner(n: Int) -> Int {
   wait sleep(n)
   return n
 }
 
-function worker(n: int) -> int {
-  let keep: array<int> = [1, 2]
-  let label: string = `k`.toUpperCase()
+function worker(n: Int) -> Int {
+  let keep: Array<Int> = [1, 2]
+  let label: String = `k`.toUpperCase()
   if (n > 0) {
     return inner(n)
   }
@@ -897,7 +897,7 @@ function worker(n: int) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let done = worker(5)
   print(`${done}`)
   background worker(500)
@@ -912,16 +912,16 @@ function entrypoint() -> nothing {
     );
 
     let in_a_loop = "
-function inner(n: int) -> int {
+function inner(n: Int) -> Int {
   wait sleep(n)
   return n
 }
 
-function worker(n: int) -> int {
-  let keep: array<int> = [1, 2]
+function worker(n: Int) -> Int {
+  let keep: Array<Int> = [1, 2]
   let i = 0
   while (i < 3) {
-    let local: string = `x`.toUpperCase()
+    let local: String = `x`.toUpperCase()
     if (i == 1) {
       return inner(n)
     }
@@ -930,7 +930,7 @@ function worker(n: int) -> int {
   return keep.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let done = worker(5)
   print(`${done}`)
   background worker(500)
@@ -948,23 +948,23 @@ function entrypoint() -> nothing {
 /// frees its handle once, so the same run also pins that the root frame and a recursion child (whose
 /// handles the runtime used to free) are freed exactly once, not twice.
 const EMBEDDED_CHILD_SLEEP: &str = "
-function inner() -> nothing {
+function inner() -> Nothing {
   wait sleep(5000)
 }
 
-function worker() -> nothing {
+function worker() -> Nothing {
   inner()
 }
 ";
 
 const ROOT_SLEEP: &str = "
-function worker() -> nothing {
+function worker() -> Nothing {
   wait sleep(5000)
 }
 ";
 
 const RECURSION_CHILD_SLEEP: &str = "
-function worker(depth: int) -> nothing {
+function worker(depth: Int) -> Nothing {
   if (depth > 0) {
     worker(depth - 1)
   }
@@ -981,7 +981,7 @@ fn a_task_dropped_while_a_frame_sleeps_frees_that_frames_sleep_box_once() {
     ] {
         let source = format!(
             "{worker}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   background {spawn}
   wait sleep(100)
   print(`parent`)
@@ -1004,11 +1004,11 @@ function entrypoint() -> nothing {{
 fn finished_member_program(return_type: &str, body: &str) -> String {
     format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1017,18 +1017,18 @@ function quick() -> {return_type} {{
 {body}
 }}
 
-function slow() -> int {{
+function slow() -> Int {{
   wait sleep(500)
   return 1
 }}
 
-function worker() -> nothing {{
+function worker() -> Nothing {{
   let a = quick()
   let b = slow()
   print(`${{b}}`)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   background worker()
   wait sleep(100)
   print(`parent`)
@@ -1050,22 +1050,22 @@ macro_rules! finished_member_cases {
 }
 
 finished_member_cases! {
-    a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped: "maybe<string>",
-        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped: "maybe<Big>",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped: "maybe<number<20> >",
-        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped: "Maybe<String>",
+        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped: "Maybe<Big>",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped: "Maybe<Number<20> >",
+        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
     a_finished_member_returning_a_union_is_released_when_the_task_is_dropped: "Thing",
         "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
-    a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped: "maybe<string> errors",
-        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped: "maybe<Big> errors",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped: "Maybe<String> errors",
+        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
+    a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped: "Maybe<Big> errors",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
     a_finished_member_returning_a_union_errors_is_released_when_the_task_is_dropped: "Thing errors",
         "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
-    a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped: "number<40> errors",
-        "  let made: number<40> = 2.5\n  return made";
+    a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped: "Number<40> errors",
+        "  let made: Number<40> = 2.5\n  return made";
 }
 
 /// Bug caught: pre-existing, a leak found by the C8 round-2 review: `handle_result_release_fn`
@@ -1076,11 +1076,11 @@ finished_member_cases! {
 fn unreceived_result_program(return_type: &str, body: &str) -> String {
     unreceived_after_finish(&format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1104,18 +1104,18 @@ macro_rules! unreceived_result_cases {
 }
 
 unreceived_result_cases! {
-    an_unreceived_maybe_shape_result_is_released_with_the_handle: "maybe<Big>",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    an_unreceived_maybe_decimal_result_is_released_with_the_handle: "maybe<number<20> >",
-        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
-    an_unreceived_maybe_string_errors_result_is_released_with_the_handle: "maybe<string> errors",
-        "  let items: array<string> = [`a`.toUpperCase()]\n  return items.get(0)";
-    an_unreceived_maybe_shape_errors_result_is_released_with_the_handle: "maybe<Big> errors",
-        "  let items: array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle: "maybe<number<20> > errors",
-        "  let items: array<number<20> > = [2.5]\n  return items.get(0)";
-    an_unreceived_bignum_errors_result_is_released_with_the_handle: "number<40> errors",
-        "  let made: number<40> = 2.5\n  return made";
+    an_unreceived_maybe_shape_result_is_released_with_the_handle: "Maybe<Big>",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    an_unreceived_maybe_decimal_result_is_released_with_the_handle: "Maybe<Number<20> >",
+        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
+    an_unreceived_maybe_string_errors_result_is_released_with_the_handle: "Maybe<String> errors",
+        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
+    an_unreceived_maybe_shape_errors_result_is_released_with_the_handle: "Maybe<Big> errors",
+        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
+    an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle: "Maybe<Number<20> > errors",
+        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
+    an_unreceived_bignum_errors_result_is_released_with_the_handle: "Number<40> errors",
+        "  let made: Number<40> = 2.5\n  return made";
 }
 
 // ── a union a task returns through its handle ───────────────────────────────────────────────
@@ -1130,11 +1130,11 @@ unreceived_result_cases! {
 fn union_handle_program(return_type: &str, receive_lines: &str) -> String {
     format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1144,7 +1144,7 @@ function make() -> {return_type} {{
   return big
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(50)
 {receive_lines}
@@ -1200,11 +1200,11 @@ union_handle_cases! {
 #[test]
 fn a_union_an_embedded_suspending_call_returns_is_unchanged() {
     let source = "shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
@@ -1214,7 +1214,7 @@ function make() -> Thing {
   return big
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let value = make()
   if (value) {
     is Big => {
@@ -1244,11 +1244,11 @@ fn a_failed_union_errors_task_delivers_its_error_and_no_cell() {
     ] {
         let source = format!(
             "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
@@ -1258,7 +1258,7 @@ function make() -> Thing errors {{
   return tiny
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(50)
 {receive}
@@ -1280,17 +1280,17 @@ fn a_received_bignum_errors_result_is_released_with_its_binding() {
         ("failed", "print(got.failed())"),
         (
             "or",
-            "let fallback: number<40> = 0.5\n  print(got.or(fallback))",
+            "let fallback: Number<40> = 0.5\n  print(got.or(fallback))",
         ),
     ] {
         let source = format!(
-            "function make() -> number<40> errors {{
+            "function make() -> Number<40> errors {{
   wait sleep(1)
-  let made: number<40> = 1.5
+  let made: Number<40> = 1.5
   return made
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let pending = background make()
   wait sleep(20)
   let got = pending.receive()
@@ -1314,15 +1314,15 @@ function entrypoint() -> nothing {{
 fn maybe_union_program(return_type: &str, body: &str, entry: &str) -> String {
     format!(
         "shape Tiny {{
-  flag: boolean
+  flag: Boolean
 }}
 shape Big {{
-  label: string
-  count: int
+  label: String
+  count: Int
 }}
 shape Thing = Tiny | Big
 
-function make(flag: boolean) -> {return_type} {{
+function make(flag: Boolean) -> {return_type} {{
   wait sleep(1)
 {body}
 }}
@@ -1331,22 +1331,22 @@ function makeBig() -> {return_type} {{
   wait sleep(1)
   let big: Big = {{ label: `abc`.toUpperCase(), count: 7 }}
   let wrapped: Thing = big
-  let items: array<Thing> = [wrapped]
+  let items: Array<Thing> = [wrapped]
   return items.get(0)
 }}
 
-function slow() -> int {{
+function slow() -> Int {{
   wait sleep(500)
   return 1
 }}
 
-function worker() -> nothing {{
+function worker() -> Nothing {{
   let first = makeBig()
   let second = slow()
   print(`${{second}}`)
 }}
 
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
 {entry}
 }}
 "
@@ -1356,21 +1356,21 @@ function entrypoint() -> nothing {{
 const MAYBE_UNION_SOME: &str = "  if (flag) {
     let tiny: Tiny = { flag: true }
     let wrapped: Thing = tiny
-    let items: array<Thing> = [wrapped]
+    let items: Array<Thing> = [wrapped]
     return items.get(0)
   }
   let big: Big = { label: `abc`.toUpperCase(), count: 7 }
   let wrapped: Thing = big
-  let items: array<Thing> = [wrapped]
+  let items: Array<Thing> = [wrapped]
   return items.get(0)";
 
-const MAYBE_UNION_NONE: &str = "  let items: array<Thing> = []
+const MAYBE_UNION_NONE: &str = "  let items: Array<Thing> = []
   return items.get(0)";
 
 const RECEIVE_MAYBE_UNION: &str = "  let pending = background make(false)
   wait sleep(50)
   let got = pending.receive()
-  let fallback: maybe<Thing> = none
+  let fallback: Maybe<Thing> = none
   let held = got.or(fallback)
   print(held.exists())
   if (held.exists()) {
@@ -1407,13 +1407,13 @@ macro_rules! maybe_union_handle_cases {
 }
 
 maybe_union_handle_cases! {
-    a_maybe_union_a_task_returns_is_received_and_read_once: "maybe<Thing>", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
-    a_maybe_union_errors_a_task_returns_is_received_and_read_once: "maybe<Thing> errors", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
-    a_none_maybe_union_a_task_returns_is_received_once: "maybe<Thing>", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
-    a_none_maybe_union_errors_a_task_returns_is_received_once: "maybe<Thing> errors", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
-    an_unreceived_maybe_union_result_is_released_with_the_handle: "maybe<Thing>", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    an_unreceived_maybe_union_errors_result_is_released_with_the_handle: "maybe<Thing> errors", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    an_unreceived_none_maybe_union_result_is_released_with_the_handle: "maybe<Thing>", MAYBE_UNION_NONE, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped: "maybe<Thing>", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
-    a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped: "maybe<Thing> errors", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
+    a_maybe_union_a_task_returns_is_received_and_read_once: "Maybe<Thing>", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
+    a_maybe_union_errors_a_task_returns_is_received_and_read_once: "Maybe<Thing> errors", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
+    a_none_maybe_union_a_task_returns_is_received_once: "Maybe<Thing>", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
+    a_none_maybe_union_errors_a_task_returns_is_received_once: "Maybe<Thing> errors", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
+    an_unreceived_maybe_union_result_is_released_with_the_handle: "Maybe<Thing>", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    an_unreceived_maybe_union_errors_result_is_released_with_the_handle: "Maybe<Thing> errors", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    an_unreceived_none_maybe_union_result_is_released_with_the_handle: "Maybe<Thing>", MAYBE_UNION_NONE, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
+    a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped: "Maybe<Thing>", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
+    a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped: "Maybe<Thing> errors", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
 }

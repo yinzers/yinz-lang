@@ -14,7 +14,7 @@ fn ynz_binary() -> PathBuf {
 /// Builds a `.ynz` source string with `depth` levels of nested `if (true) { ... }`
 /// blocks inside a single function body.
 fn deeply_nested_program(depth: usize) -> String {
-    let mut src = String::from("function entrypoint() -> nothing {\n");
+    let mut src = String::from("function entrypoint() -> Nothing {\n");
     for _ in 0..depth {
         src.push_str("if (true) {\n");
     }
@@ -79,7 +79,7 @@ fn deeply_nested_blocks_never_abort_the_process() {
 /// Builds a `.ynz` source string with `depth` levels of nested anonymous inline shape
 /// TYPES (`{ a: { a: { a: ... } } }`) used as a `let` binding's type annotation.
 fn deeply_nested_anon_shape_type_program(depth: usize) -> String {
-    let mut src = String::from("function entrypoint() -> nothing {\n");
+    let mut src = String::from("function entrypoint() -> Nothing {\n");
     src.push_str("let x: ");
     for _ in 0..depth {
         src.push_str("{ a: ");
