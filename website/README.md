@@ -110,6 +110,7 @@ docker run -p 8080:80 yinzlang-prod
 ### CSP forward-warning
 
 Shiki renders code colors via inline `<span style="color:...">`. Any future CSP at the DO edge or via `nuxt-security` MUST allow `style-src 'unsafe-inline'` OR migrate Shiki to class-based theming.
+
 **Tailwind v4 `@theme` HMR caveat**: edits to the `@theme` block in `app/assets/css/tailwind.css` sometimes require a full dev-server restart to reflect. Known v4 quirk.
 
 **Always install via docker compose in dev** — never `bun install` from the host; host bun version drift would corrupt `bun.lock`.
