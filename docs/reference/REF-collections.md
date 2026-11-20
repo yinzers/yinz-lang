@@ -20,9 +20,9 @@ Three ways to hold multiple values.
 ## The three collection types
 
 ```
-fixed<string>           // fixed size, stack-allocated — size locked at creation, fastest
-array<Player>           // growable, heap-allocated — add and remove freely
-map<string, number>     // key-value pairs with dynamic keys
+fixed<string>           // fixed size: the size is set when you create it. Fastest.
+array<Player>           // growable: add and remove items freely
+map<string, number>     // key-value pairs: look up a value by its key
 ```
 
 All collections are typed. Every element must be the same type:
@@ -36,9 +36,9 @@ The syntax is the same for all three: `kind<type>`. No exceptions.
 
 ---
 
-## fixed<T> — fixed-size arrays
+## fixed<T> — fixed-size lists
 
-`fixed<T>` is stack-allocated and size-locked at creation. The fastest option — no heap, no growth tracking.
+`fixed<T>` has a size that is set when you create it and never changes. It is the fastest option because it lives on the stack (the quick memory a function uses for its own variables) and never has to grow.
 
 Use `fixed<T>` when you know the size up front:
 
@@ -59,6 +59,8 @@ rgb.add(50)
 // fixed<number> is size-locked. Use array<number> if it needs to grow.
 ```
 
+Pick `array<T>` when the list can grow.
+
 You CAN replace existing elements — the size stays the same:
 
 ```
@@ -68,9 +70,9 @@ rgb.set(1, 200)         // same thing, longer form
 
 ---
 
-## array<T> — growable arrays
+## array<T> — growable lists
 
-`array<T>` is heap-allocated and can grow and shrink:
+`array<T>` can grow and shrink. It lives in the heap (flexible memory that can change size):
 
 ```
 let roster: array<Player> = []
@@ -82,12 +84,12 @@ roster[0] = newPlayer   // replace element at index 0
 
 ---
 
-## Safe access — brackets are sugar for .get()
+## Safe access — brackets are shorthand for .get()
 
-Reading by index uses brackets, which is shorthand for `.get()`. Both forms return `maybe<T>` — never a raw value, so you can't accidentally crash on out-of-bounds:
+Reading by index uses brackets, which is shorthand for `.get()`. Both forms return `maybe<T>` — never a bare value, so an index that is too big can't crash your program:
 
 ```
-let player = players[3]              // sugar for players.get(3)
+let player = players[3]              // shorthand for players.get(3)
 let player = players.get(3)          // same thing, longer form
 // both return: maybe<Player>
 
@@ -100,22 +102,22 @@ let foundPlayer = players.get(5)                // a Maybe: the Player, or nothi
 let player = foundPlayer.or(defaultPlayer)      // always a Player
 ```
 
-The same rule applies to all collections — `array<T>`, `fixed<T>`, `map<K, V>`, and `string`. Every access that might not exist returns `maybe`. No out-of-bounds crashes anywhere in the language.
+The same rule applies to all collections — `array<T>`, `fixed<T>`, `map<K, V>`, and `string`. Every access that might not exist returns `maybe`. An index past the end never crashes a read.
 
-**Brackets and `.get()` both work:** brackets are the everyday shorthand. `.get()` is the long form — useful when you want the operation to be explicit, or when you want `.or(default)` on the result.
+**Brackets and `.get()` both work:** brackets are the everyday shorthand. `.get()` is the long form — use it when you want the code to say exactly what it does.
 
 ---
 
 ## Writing by index
 
-Writes use the same sugar — brackets desugar to `.set()`:
+Writes use the same shorthand — brackets turn into `.set()`:
 
 ```
-players[2] = newPlayer       // sugar for players.set(2, newPlayer)
-scores["alice"] = 75          // sugar for scores.set("alice", 75)
+players[2] = newPlayer       // shorthand for players.set(2, newPlayer)
+scores["alice"] = 75          // shorthand for scores.set("alice", 75)
 ```
 
-Writing past the end is a runtime error, not a sparse-array creation:
+Writing past the end is an error when the program runs. It does not leave empty slots behind:
 
 ```
 let arr: array<number> = [1, 2, 3]
@@ -166,7 +168,9 @@ path[0] = { x: 99.0, y: 2.0 }
 
 ---
 
-## Dot methods — available on both fixed and array
+## Functions you call with a dot — on both fixed and array
+
+Write these after the collection, like `players.count()`:
 
 ```
 .filter(fn)         // filter — returns new collection where fn returns true
@@ -259,9 +263,9 @@ Want to match on a condition instead of a whole value? Use `.find(fn)` the same 
 
 ---
 
-## Dot methods — array only
+## Functions you call with a dot — array only
 
-These mutate in place, which requires dynamic sizing:
+These change the array itself, so they only work on a list that can change size:
 
 ```
 .add(item)              // add item at end
@@ -274,7 +278,7 @@ These mutate in place, which requires dynamic sizing:
 
 ## map<K, V> — key-value pairs
 
-Use maps when keys aren't known at compile time. For known fields, define a `shape` — it's faster.
+Use maps when you don't know the keys until the program runs. For fields you know in advance, define a `shape` — it's faster.
 
 ```
 let wordCounts: map<string, number> = {}
@@ -284,7 +288,7 @@ for (word in words) {
 }
 ```
 
-Map dot methods:
+Functions you call on a map:
 
 ```
 .get(key)             // → maybe<V> (might not exist — see Maybe Types)
@@ -301,11 +305,11 @@ Map dot methods:
 .count()              // → number of entries
 ```
 
-**Bracket sugar works on maps too:**
+**Brackets work on maps too:**
 
 ```
-scores["alice"]              // sugar for scores.get("alice") → maybe<number>
-scores["alice"] = 75         // sugar for scores.set("alice", 75)
+scores["alice"]              // shorthand for scores.get("alice") → maybe<number>
+scores["alice"] = 75         // shorthand for scores.set("alice", 75)
 ```
 
 **Bulk update with `.update({...})`:**
@@ -330,19 +334,19 @@ if (aliceEntry.exists()) {
 
 ---
 
-## Dot is for types; brackets are for collections
+## Dot is for shapes; brackets are for collections
 
-There's one rule that determines whether to use `.` or `[]`:
+One rule decides whether to use `.` or `[]`:
 
 | Access | What it does |
 |--------|--------------|
-| `obj.fieldName` | Field on a type — compile-time known name |
-| `obj.methodName()` | Method on a type or collection |
-| `arr[i]` | Index lookup → `maybe<T>` (sugar for `.get(i)`) |
-| `m["key"]` | Key lookup → `maybe<V>` (sugar for `.get(key)`) |
-| `s[i]` | Code point lookup → `maybe<string>` (sugar for `.get(i)`) |
+| `player.fieldName` | Reads a field of a shape. The name is fixed when you write the code. |
+| `player.functionName()` | Calls a function on a shape or collection |
+| `arr[i]` | Reads by position → `maybe<T>` (shorthand for `.get(i)`) |
+| `m["key"]` | Reads by key → `maybe<V>` (shorthand for `.get(key)`) |
+| `s[i]` | Reads one character of a string → `maybe<string>` (shorthand for `.get(i)`) |
 
-Types and collections are different concepts. Trying to use brackets on a type, or dot to access a runtime key on a map, both fail:
+Shapes and collections are different things. Using brackets on a shape, or a dot to read a map key, both fail:
 
 ```
 shape Player { name: string, health: number }
@@ -361,22 +365,22 @@ scores.alice
 //     shape Scores { alice: number, bob: number }
 //     scores.alice         // works — alice is a compile-time field
 //
-//   See: docs/reference/REF-collections.md#use-shapes-instead-of-maps-for-known-fields
+//   See "Use shapes instead of maps for known fields" below.
 ```
 
-The simple rule: **dot is for compile-time-known names; brackets are for runtime lookups.**
+The simple rule: **use a dot for names you write in the code; use brackets for keys and positions you look up while the program runs.**
 
 ---
 
 ## Use shapes instead of maps for known fields
 
-If you know all the keys at compile time, a `shape` is faster (direct field access vs hash lookup):
+If you know all the keys when you write the code, use a `shape`. Reading a field is faster than looking up a key:
 
 ```
 // Slower — known fields in a map
 let stats: map<string, number> = { health: 100, attack: 50 }
 
-// Faster — typed object with fixed offsets
+// Faster — a shape
 shape Stats { health: number, attack: number }
 let stats: Stats = { health: 100, attack: 50 }
 ```
@@ -418,7 +422,7 @@ let top = ranked.limit(10)
 let names = top.map(p => p.name)
 ```
 
-The compiler sees that each result is only used once and fuses all four steps into a single optimized pass with zero intermediate allocations. You get readable code AND fast code.
+The compiler sees that each result is only used once, so it combines the four steps into one fast pass and builds no temporary lists. You get readable code AND fast code.
 
 Early returns fit naturally into this pattern:
 
@@ -460,7 +464,7 @@ let team: array<Player> = { name: `Alice`, health: 100 }
 // Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
 ```
 
-**A shape type is not a collection type:**
+**A shape is not a collection:**
 
 ```
 let team: Player = []
