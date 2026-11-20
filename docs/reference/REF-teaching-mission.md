@@ -74,15 +74,13 @@ let weekdays: array<string> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
 ### Pattern 3 — The usual Yinz style
 
 ```ynz
-let delay = 3600
-// IDE HINT: 3600 is a number with no explanation. Give it a name that says
-//           what it means:
-//   const secondsPerHour = 3600
-//   let delay = secondsPerHour
+let serverName = `prod-01`
+// IDE HINT: effectively const — never reassigned. You can write that yourself:
+//   const serverName = `prod-01`
 //
-// Why: A reader can't tell from `3600` whether it counts seconds, minutes or
-//      items. A named constant says what it is and lets you change it in one
-//      place. The compiled program is the same, so there is no speed cost.
+// Why: Nothing gives `serverName` a new value, so `const` tells every reader
+//      it will not change, and the compiler then refuses any later change.
+//      The compiled program is the same, so there is no speed cost.
 ```
 
 ### Pattern 4 — Choosing a number type
@@ -145,7 +143,7 @@ Both are required. Error messages fix misunderstandings; muted hints prevent the
 **How hints look**:
 
 - Neutral muted (gray): harmless choices — types, how long a value lives, where memory comes from
-- Cautionary muted (red-tinted): choices that change data or affect ownership — `lend`, `give`, and automatic sharing of a value across threads
+- Cautionary muted (red-tinted): choices that change data or affect ownership — `lend`, `give`, and automatic sharing of a value across tasks
 - Compile errors use the normal error look (red squiggly line plus a message panel), so they never look like muted hints
 
 The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
