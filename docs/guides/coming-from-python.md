@@ -168,7 +168,7 @@ shape Player {
 let player: Player = { name: `Alice`, health: 50 }
 ```
 
-Writing `class` gives this first message:
+Writing `class` gives errors, and among them you also get this warning:
 
 ```
 class Player {
@@ -355,7 +355,7 @@ shape Square {
 }
 
 shape Triangle {
-  base: Int
+  baseLength: Int
   height: Int
 }
 
@@ -428,7 +428,7 @@ function entrypoint() -> Nothing {
 
 This prints `online`. Names are camelCase, like every other name that is not a type. The compiler checks that your `if` handles every name in the set.
 
-Writing `enum` gives this first message:
+Writing `enum` gives errors, and among them you also get this warning:
 
 ```
 enum Status {
@@ -474,7 +474,7 @@ A value written with `{ ... }` is a single shape value, not a collection. Use `[
 ```
 let team: Array<Player> = { name: `Alice`, health: 100 }
 // COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `Array<Player>`.
-// Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
+// Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
 Writing past the end by position is an error when the program runs, so use `.add` to grow an `Array`.
@@ -607,7 +607,7 @@ function describeStatus(statusCode: Int) -> Nothing {
 }
 ```
 
-Writing `match` gives this warning:
+Writing `match` gives errors, and among them you also get this warning:
 
 ```
 match (statusCode) {
@@ -743,7 +743,7 @@ The two fetches have nothing to do with each other, so they overlap: the wait is
 
 Your editor shows a muted `wait` hint where a call pauses. Write `wait` yourself only when two calls must finish in a set order and the compiler cannot see why. Write `background` to start a task that keeps running after your function returns.
 
-The compiler flags the Python words:
+Writing the Python words gives errors, and among them you also get these warnings:
 
 ```
 async function fetchPrice() -> Number {

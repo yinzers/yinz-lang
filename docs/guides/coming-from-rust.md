@@ -18,8 +18,6 @@ If you write Rust, Yinz will feel like a close cousin. There is no garbage colle
 
 The compiler teaches as you go. Every message below says what is wrong, what to write instead, and why.
 
-A note on the examples: a `// COMPILE ERROR: (pending ynz build run)` line marks a message that has not been copied from the real compiler yet. The mistake is real, but the exact message is not shown here until it is.
-
 ## The concept list
 
 The table and the traps below follow this list, in this order:
@@ -91,12 +89,7 @@ function startRound() -> Nothing {
 // Change `const maxPlayers = ...` to `let maxPlayers = ...` if you need to reassign it.
 ```
 
-There is no `mut` keyword:
-
-```
-let mut health = 100
-// COMPILE ERROR: (pending ynz build run)
-```
+There is no `mut`. `let` is already changeable; `const` is the fixed one.
 
 A `const` value cannot change at all, fields included, as in Rust when you leave `mut` off a whole struct value. Use `const` by default and `let` when the value needs to change.
 
@@ -124,7 +117,8 @@ print(greeting)    // Hello Alice
 
 ```
 print("Health: {health}")
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: Double-quoted strings don't exist in Yinz.
+// Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``
 ```
 
 Write ``print(`Health: ${health}`)`` instead.
@@ -179,17 +173,17 @@ shape Player {
 let player: Player = { name: `Alice`, health: 50 }
 ```
 
-Neither Rust form is valid in Yinz:
+Neither Rust form is valid in Yinz. Writing `struct` gives errors, and among them you also get this warning:
 
 ```
 struct Player {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `struct` is not a keyword in Yinz.
+// `struct` not valid here
 ```
 
-```
-impl Player {
-// COMPILE ERROR: (pending ynz build run)
-```
+Its hint teaches the fix: use `shape` to declare a data type: `shape Player { name: String, health: Int }`.
+
+An `impl Player {` line gives only generic errors, so remember the rule instead: there is no `impl` block, and functions stand alone, as the next trap shows.
 
 ### Functions: `share` and `lend` replace `&` and `&mut`
 
@@ -247,11 +241,12 @@ function entrypoint() -> Nothing {
 }
 ```
 
-`&` and `&mut` in a signature are not valid:
+`&` and `&mut` in a signature are not valid. The `&mut` gives only generic errors, so remember the rule instead: write `lend` in front of the parameter, with no `&`. The `i32` in the same line does get a message of its own:
 
 ```
 function heal(player: &mut Player, amount: i32) -> Nothing {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `i32` is not a keyword in Yinz.
+// Use `Int` for whole numbers.
 ```
 
 Rust traits (`trait`, `impl Trait for`) are a separate topic in Yinz, called contracts and written with `follows`. This guide does not cover them.
@@ -299,7 +294,8 @@ print(nickname.value)
 
 ```
 let name = nickname.unwrap()
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `Maybe<String>` does not have a method called `unwrap`.
+// Available methods: exists(), or(default).
 ```
 
 `Maybe` means "no value" is a normal outcome. When the caller must deal with a failure, use `errors`.
@@ -354,10 +350,10 @@ function report(hits: Int, atBats: Int) -> Result<String, String> {
   let average = battingAverage(hits, atBats)?
   return `average: ${average}`
 }
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `Result` is not a known type.
 ```
 
-To pass a failure up, write `errors` on the calling function instead of a `?` at the call.
+The compiler also points at the `errors` keyword. To pass a failure up, write `errors` on the calling function instead of a `?` at the call.
 
 A failure left unhandled is a compile error, so it cannot slip through:
 
@@ -368,11 +364,10 @@ print(attempt)
 // Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.
 ```
 
-`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops that one task, not the whole program. You do not write `panic!` for it:
+`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops that one task, not the whole program. You do not write `panic!` for it: `panic!(...)` gives only generic errors. An overflowing `Int` stops the task with a message like this, and the program exits with code 134:
 
 ```
-panic!("bad health")
-// COMPILE ERROR: (pending ynz build run)
+RUNTIME ERROR: Int overflow in '*' at …
 ```
 
 ### Choosing between kinds of values: a union of shapes replaces `enum` with data
@@ -385,7 +380,7 @@ Rust:
 enum Shape {
     Circle { radius: i32 },
     Square { side: i32 },
-    Triangle { base: i32, height: i32 },
+    Triangle { base_length: i32, height: i32 },
 }
 
 fn describe(outline: &Shape) {
@@ -409,7 +404,7 @@ shape Square {
 }
 
 shape Triangle {
-  base: Int
+  baseLength: Int
   height: Int
 }
 
@@ -441,11 +436,12 @@ if (outline) {
 // Add the missing arms (e.g. `is Triangle =>`) or add an `else =>` default arm.
 ```
 
-`match` and `enum Shape { Circle { radius: Int } }` are not valid. Write unions with `|`; words such as `or` do not work.
+`match` and `enum Shape { Circle { radius: Int } }` are not valid. Write unions with `|`; words such as `or` do not work. Writing `match` gives errors, and among them you also get this warning:
 
 ```
 match outline {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `match` is not a keyword in Yinz.
+// Use multi-case `if` with `=>` arms: `if (value) { 1 => ...; 2 => ...; else => ... }`
 ```
 
 ### Named value sets: `options` replaces `enum` without data
@@ -492,7 +488,7 @@ function entrypoint() -> Nothing {
 
 This prints `online`. The compiler checks that your `if` handles every name in the set, as `match` does.
 
-Writing `enum` gives this first message:
+Writing `enum` gives errors, and among them you also get this warning:
 
 ```
 enum Status {
@@ -546,15 +542,17 @@ Rust's collection names are not valid:
 
 ```
 let scores: Vec<Int> = [70, 85, 92]
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `Vec` is not a known type.
 ```
+
+Use `Array<Int>` instead.
 
 A value written with `{ ... }` is a single shape value, not a collection. Use `[...]` to make one:
 
 ```
 let team: Array<Player> = { name: `Alice`, health: 100 }
 // COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `Array<Player>`.
-// Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
+// Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
 Writing past the end by position is an error when the program runs, so use `.add` to grow an `Array`.
@@ -579,7 +577,8 @@ A size such as `i32` is not a Yinz type:
 
 ```
 let health: i32 = 100
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `i32` is not a keyword in Yinz.
+// Use `Int` for whole numbers.
 ```
 
 Whole-number division works as in Rust: `/` on two `Int` values gives an `Int`, and the decimals are cut off. `//` starts a comment, so it is not an operator:
@@ -692,8 +691,10 @@ if (health <= 0) {
 } else {
   return `alive`
 }
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `else` cannot appear here.
 ```
+
+Yinz has no `else` block, so end the first branch with `return` and carry on below it.
 
 When you cannot return, set a value first and change it. This replaces `let message = if health > 50 { ... } else { ... };`:
 
@@ -735,7 +736,7 @@ function describeStatus(statusCode: Int) -> Nothing {
 
 The catch-all arm does not give the value a new name, so `other` becomes the `statusCode` you already have.
 
-Writing `match` gives this warning:
+Writing `match` gives errors, and among them you also get this warning:
 
 ```
 match (statusCode) {
@@ -836,13 +837,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-Rust's `mod` and `use` lines are not valid:
-
-```
-mod services;
-use crate::services::users::fetch_user;
-// COMPILE ERROR: (pending ynz build run)
-```
+Rust's `mod` and `use` lines are not valid. They give only generic errors, so remember the rule instead: there is no `mod`, and you write `` import { fetchUser } from `services/users` `` where Rust has `use`.
 
 Two imports cannot use the same name. Yinz stops you and asks you to rename one:
 
@@ -907,16 +902,20 @@ The two fetches have nothing to do with each other, so they overlap: the wait is
 
 Your editor shows a muted `wait` hint where a call pauses. Write `wait` yourself only when two calls must finish in a set order and the compiler cannot see why. Write `background` to start a task that keeps running after your function returns, which is the closest match to `tokio::spawn`.
 
-The compiler flags the Rust words:
+Writing the Rust words gives errors, and among them you also get these warnings:
 
 ```
 async fn fetchPrice() -> Number {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `async` is not a keyword in Yinz.
+// `async` not valid here
 ```
+
+Write `wait foo()` at the call site — no declaration-level annotation needed.
 
 ```
 let price = fetchPrice().await
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `await` is not a keyword in Yinz.
+// Write `wait foo()` at the call site.
 ```
 
 The prefix form `await fetchPrice()` is also not Yinz:
@@ -966,8 +965,10 @@ print(total)    // 3
 
 ```
 let backup = scores.clone()
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `Array<Int>` does not have a method called `clone`.
 ```
+
+Use `.copy()` instead.
 
 Passing a value to a function is not a store: the signature decides, with `share`, `lend` or `give` as the Functions trap shows. The same hand-over rule applies when you store a shape value in an array:
 
