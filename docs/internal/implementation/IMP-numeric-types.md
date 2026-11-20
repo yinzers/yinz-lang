@@ -126,4 +126,4 @@ count = count + 1
 
 **Why panic over wrap:** Wrapping is almost always a bug, not a feature. Making the bug loud at the call site is better than silent corruption downstream. Users who genuinely want wrap (rare — usually cryptography, hashing) get to ask for it explicitly with `.wrappingAdd()`. That visibility is good — code review can spot it.
 
-**Sized integers (`i8`…`i64`, `u8`…`u64`):** not shipped. `Int` (64-bit signed) is the only integer type; writing a sized name is a compile error naming `Int` as the substitute. Deferred to v2+ — see `docs/reference/REF-mvp-scope.md#v2--deferred-features`.
+**Sized integers:** not shipped. `Int` (64-bit signed) is the only integer type that ships. Sized integers are deferred to v2+ — see `docs/reference/REF-mvp-scope.md#v2--deferred-features`.

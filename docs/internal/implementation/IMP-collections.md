@@ -31,9 +31,9 @@ The collection types are written `Array<T>`, `Fixed<T>`, `Map<K, V>` and `Channe
 
 **Why**: Golden Rule 7 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `Fixed<T>` requires no annotation — it's what you get when you declare a collection with known content. `Array<T>` is the explicit opt-in for when you need growth.
 
-**Removed**: `collection<T>` type removed — unnecessary complexity. Two collection types are enough. "Collections" still exists as an English umbrella term covering `Fixed<T>`, `Array<T>`, `Map<K,V>` — but it's not a TYPE, just a category name.
+There is no `collection<T>` type: "collections" is an English umbrella term for `Fixed<T>`, `Array<T>` and `Map<K,V>`, not a type.
 
-**No spread operator**: Not included. Compiler handles optimization internally.
+**No spread operator**: the compiler handles optimization internally.
 
 ---
 
@@ -54,7 +54,9 @@ Several method names chosen for plain-English readability over functional progra
 - `.get(index)` over `items[n]` — safe access returning `Maybe<T>`; brackets are sugar for `.get()`
 - `.last()` added — mirrors `.first()`, returns `Maybe<T>`
 
-**Why**: Golden Rule 5. Every method name that requires FP background knowledge is a barrier. `.limit`, `.filter`, `.prepend` are plain English instructions anyone can guess.
+Plain English names are the rule (Golden Rule 5): `.limit`, `.filter`, `.prepend` are instructions anyone can guess.
+
+**Build status**: the registry and type checker list `map`, `filter`, `limit`, `append`, `sort` and `unique` on arrays, but codegen does not lower them yet. `ynz build` fails with "array method `<name>` not yet lowered". Everything in this doc about those methods is a design, not shipped behavior.
 
 ---
 
@@ -205,7 +207,7 @@ A set IS a map with keys only, so it reuses map's locked decisions verbatim:
 
 ### `Array.unique()` companion
 
-The one-time "dedupe this list" case is not a set — it is the shipped `Array` method `array.unique()`, which returns a new array with duplicates removed (insertion order preserved). Rule of thumb: `.unique()` for one-shot dedup; `Set<T>` (once built) when you keep the collection and repeatedly query membership.
+The one-time "dedupe this list" case is not a set — it is the `Array` method `array.unique()`, which returns a new array with duplicates removed (insertion order preserved). **Designed but not built:** the registry lists it, but `ynz build` fails with "array method `unique` not yet lowered". Rule of thumb: `.unique()` for one-shot dedup; `Set<T>` when you keep the collection and repeatedly query membership.
 
 ### Open questions
 
