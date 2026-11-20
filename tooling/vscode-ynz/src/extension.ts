@@ -57,10 +57,14 @@ const applyPromotableDecorations = (editor: vscode.TextEditor): void => {
     editor.setDecorations(promotableDecoration, isCurrent ? cached.ranges : []);
 };
 
+// `coveredRange` is the part of the document the response described: a range response
+// covers only the requested range (tokens overlapping it are included), a full response
+// covers the whole document.
 const decoratePromotableTokens = (
     document: vscode.TextDocument,
     requestedVersion: number,
-    tokens: vscode.SemanticTokens
+    tokens: vscode.SemanticTokens,
+    coveredRange: vscode.Range | undefined
 ): void => {
     // The document changed while the server answered: these ranges are stale, and
     // the edit already triggered a fresh request.
@@ -69,9 +73,19 @@ const decoratePromotableTokens = (
         client?.initializeResult?.capabilities.semanticTokensProvider?.legend.tokenModifiers ?? [];
     const modifierIndex = modifierNames.indexOf(PROMOTABLE_MODIFIER);
     if (modifierIndex < 0) return;
-    promotableRangesByDocument.set(document.uri.toString(), {
+    const answeredRanges = promotableRanges(tokens, 1 << modifierIndex);
+    const documentKey = document.uri.toString();
+    const cached = promotableRangesByDocument.get(documentKey);
+    // A range response replaces only the cached ranges it covers; ranges outside it
+    // stay, provided they describe this same document version. Ranges that merely touch
+    // the covered range do not overlap it (the server's overlap test is strict too).
+    const keptRanges =
+        coveredRange !== undefined && cached !== undefined && cached.documentVersion === requestedVersion
+            ? cached.ranges.filter(range => range.intersection(coveredRange)?.isEmpty ?? true)
+            : [];
+    promotableRangesByDocument.set(documentKey, {
         documentVersion: requestedVersion,
-        ranges: promotableRanges(tokens, 1 << modifierIndex),
+        ranges: [...keptRanges, ...answeredRanges],
     });
     for (const editor of vscode.window.visibleTextEditors) {
         if (editor.document === document) applyPromotableDecorations(editor);
@@ -111,7 +125,13 @@ export const activate = (context: vscode.ExtensionContext): void => {
             provideDocumentSemanticTokens: async (document, cancellation, next) => {
                 const requestedVersion = document.version;
                 const tokens = await next(document, cancellation);
-                if (tokens) decoratePromotableTokens(document, requestedVersion, tokens);
+                if (tokens) decoratePromotableTokens(document, requestedVersion, tokens, undefined);
+                return tokens;
+            },
+            provideDocumentRangeSemanticTokens: async (document, range, cancellation, next) => {
+                const requestedVersion = document.version;
+                const tokens = await next(document, range, cancellation);
+                if (tokens) decoratePromotableTokens(document, requestedVersion, tokens, range);
                 return tokens;
             },
         },
