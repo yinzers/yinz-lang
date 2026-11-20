@@ -71,15 +71,16 @@ let serverName = `prod-01`
 ### Pattern 3 — Memory and ownership
 
 ```ynz
-function takeDamage(share player: Player, amount: Number) -> Nothing {
+shape Player {
+  name: String
+  health: Int
+}
+
+function takeDamage(share player: Player, amount: Int) -> Nothing {
   player.health = player.health - amount
   // COMPILE ERROR: `player` is declared `share` — read-only — so its fields cannot be changed.
-  //   Change the parameter to `lend player: Player` if this function needs to modify it.
-  //
-  // Why: A `share` parameter is a read-only borrow: the caller keeps ownership
-  //      and trusts the value is unchanged after the call. When a function
-  //      modifies a value, declare `lend` so the change is visible at every
-  //      call site.
+  // Change the parameter to `lend player: Player` if this function needs to modify it.
+  // A `share` parameter is a read-only borrow: the caller keeps ownership and trusts the value is unchanged after the call. When a function modifies a value, declare `lend` so the change is visible at every call site.
 }
 ```
 
@@ -92,9 +93,22 @@ The IDE is not only a place to type code. It teaches just as much as compiler er
 So a developer learns even when their code is **completely correct**:
 
 ```ynz
-let maxHealth = 42            // IDE shows muted ": Int" → teaches how the compiler picks types
-heal(player)                  // IDE shows muted "share" → teaches ownership at call sites
-sleep(100)                    // IDE shows muted "wait" → teaches that the call pauses
+shape Player {
+  name: String
+  health: Int
+}
+
+function heal(lend player: Player) -> Nothing {
+  player.health = 100
+}
+
+function entrypoint() -> Nothing {
+  let maxHealth = 42                                   // IDE shows muted ": Int" → teaches how the compiler picks types
+  let player: Player = { name: `Alice`, health: maxHealth }
+  heal(player)                                         // IDE shows muted "lend" → teaches ownership at call sites
+  sleep(100)                                           // IDE shows muted "wait" → teaches that the call pauses
+  print(player.health)
+}
 ```
 
 Each muted hint shows a tooltip when you hover. The tooltip uses the same WHAT / WHAT-INSTEAD / WHY format as compiler messages, with the same wording, so the explanation is the same whether you meet it as a hint or as a compile error.
@@ -121,7 +135,7 @@ The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
 
 Every error, warning and suggestion from the Yinz compiler MUST follow this structure.
 
-```
+```text
 [severity]: [WHAT — a short statement of the problem]
 
   [WHAT TO DO INSTEAD — corrected code, ready to copy]
