@@ -18,7 +18,7 @@ If you write C++, you already think about who owns a value, when it is copied an
 
 The compiler teaches as you go. Every message below says what is wrong, what to write instead, and why.
 
-A note on the examples: a `// COMPILE ERROR: (pending ynz build run)` line marks a message that has not been copied from the real compiler yet. The mistake is real, but the exact message is not shown here until it is. C++ examples are C++20 and do not show the C++ compiler's messages; a comment says what C++ does.
+A note on the examples: C++ examples are C++20 and do not show the C++ compiler's messages; a comment says what C++ does.
 
 ## The concept list
 
@@ -59,7 +59,7 @@ The table and the traps below follow this list, in this order:
 | Numbers | `int`, `long long`, `unsigned`, `double`<br>signed overflow is undefined behavior | `Int`, `Number`, `Float`<br>overflow stops the task |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score++`, `score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`switch (code) { case 200: ... break; default: ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | `players \| std::views::filter(f) \| std::views::transform(g)` | one named step per line |
+| Chaining | `players \| std::views::filter(f) \| std::views::transform(g)` | a `for` loop, one named step per line |
 | Files and imports | `#include "services/users.hpp"`<br>a header (`.hpp`) plus a source file (`.cpp`), `namespace`<br>`int main()` | `` import { fetchUser } from `services/users` ``<br>`export function`, one file<br>`function entrypoint()` |
 | Slow work | `std::thread`, `std::async`, `std::future`<br>`std::mutex`, `join()` | plain `function`; `wait` and `background` only when you need them<br>`Channel<Int>` |
 | Copies | `b = a` copies the whole value<br>`std::move(a)` leaves `a` in an unspecified state | `let b = a` hands the value over<br>`a.copy()` |
@@ -92,17 +92,7 @@ function startRound() -> Nothing {
 // Change `const maxPlayers = ...` to `let maxPlayers = ...` if you need to reassign it.
 ```
 
-`auto` does not exist. Inside a function, `let` and `const` already work out the type, the way `auto` does. Write a type when you want one, after a colon: `let health: Int = 100`.
-
-```
-auto health = 100
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-int health = 100
-// COMPILE ERROR: (pending ynz build run)
-```
+`auto` and `int` do not exist as words in Yinz, and the compiler gives only general errors for them, so remember the rule instead: write `let health = 100`. Inside a function, `let` and `const` already work out the type, the way `auto` does. Write a type when you want one, after a colon: `let health: Int = 100`.
 
 A capital letter always means a type, so every name that is not a type is camelCase. In C++, built-in types are lowercase (`int`, `double`) and constants are often `kMaxPlayers` or `MAX_PLAYERS`. In Yinz, `Int` is a type and `maxPlayers` is a constant.
 
@@ -140,18 +130,14 @@ let greeting = "Hello"
 // Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``
 ```
 
-There is no `std::string`, no `std::format` and no `{}` placeholder. Put the value inside the text with `${}`:
-
-```
-let greeting = std::format(`Hello {}`, name)
-// COMPILE ERROR: (pending ynz build run)
-```
+There is no `std::string`, no `std::format` and no `{}` placeholder. The compiler gives only general errors for `std::format`, so remember the rule: put the value inside the text with `${}`, as in `` `Hello ${name}` ``.
 
 `std::cout << a << b` joins pieces with `<<`. In Yinz, `print` is a function that takes exactly one value, so build the text first:
 
 ```
-print(`Health: `, health)
-// COMPILE ERROR: (pending ynz build run)
+print(`Health:`, health)
+// COMPILE ERROR: `print` takes 1 argument, but 2 were given.
+// Call it with one value: `print(value)`
 ```
 
 Write ``print(`Health: ${health}`)`` instead.
@@ -225,19 +211,17 @@ function entrypoint() -> Nothing {
 }
 ```
 
-`class` is not valid in Yinz:
+`class` is not valid in Yinz. Writing `class Player {` gives errors, and among them this warning:
 
 ```
 class Player {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `class` is not a keyword in Yinz.
+// `class` not valid here
 ```
 
-A `virtual` function lets one call run different code depending on the value's real kind. Yinz picks the code when it compiles, unless you ask for the dynamic form with a contract. Contracts, written with `follows`, are a separate topic that this guide does not cover. For a value that is one of a few known kinds, use a union (see "Choosing between kinds of values").
+Its hint says: "Use `shape` for data and standalone functions for behavior".
 
-```
-virtual void heal(int amount);
-// COMPILE ERROR: (pending ynz build run)
-```
+A `virtual` function lets one call run different code depending on the value's real kind. Yinz picks the code when it compiles, unless you ask for the dynamic form with a contract. Contracts, written with `follows`, are a separate topic that this guide does not cover. For a value that is one of a few known kinds, use a union (see "Choosing between kinds of values"). The compiler gives only general errors for `virtual`, so remember the rule: leave it out.
 
 ### Functions: `share`, `lend` and `give` replace `const&`, `&` and by-value
 
@@ -308,20 +292,11 @@ In Yinz, the compiler stops you when a function that only reads tries to change 
 function heal(share player: Player, amount: Int) -> Nothing {
   player.health = player.health + amount
 }
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `player` is declared `share` — read-only — so its fields cannot be changed.
+// Change the parameter to `lend player: Player` if this function needs to modify it.
 ```
 
-`&` and `const&` in a signature are not valid:
-
-```
-function heal(player: Player&, amount: Int) -> Nothing {
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-function show(player: const Player&) -> String {
-// COMPILE ERROR: (pending ynz build run)
-```
+`&` and `const&` in a signature, as in `Player&` or `const Player&`, are not valid. The compiler gives only general errors for them, so remember the rule: write `share`, `lend` or `give` in front of the parameter, and no `&`.
 
 ### Missing values: `Maybe<T>` and `none` replace `nullptr` and `std::optional`
 
@@ -366,17 +341,7 @@ print(nickname.value)
 // Add a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.
 ```
 
-`nullptr` and `std::optional` do not exist:
-
-```
-let nickname: Maybe<String> = nullptr
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-let nickname: std::optional<String> = none
-// COMPILE ERROR: (pending ynz build run)
-```
+`nullptr` and `std::optional` do not exist. The compiler gives only general errors for them, so remember the rule: write `none`, as in `let nickname: Maybe<String> = none`.
 
 `Maybe` means "no value" is a normal outcome. When the caller must deal with a failure, use `errors`.
 
@@ -431,17 +396,7 @@ if (checked.failed()) {
 }
 ```
 
-`throw`, `try` and `catch` are not valid:
-
-```
-throw std::runtime_error(`no at-bats`)
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-try {
-// COMPILE ERROR: (pending ynz build run)
-```
+`throw`, `try` and `catch` are not valid. The compiler gives only general errors for them, so remember the rule: mark the function `errors`, and let the caller use `.or(...)` or `.failed()`. There is nothing to throw by hand.
 
 A failure left unhandled is a compile error, so it cannot slip through:
 
@@ -466,7 +421,7 @@ C++:
 
 struct Circle { int radius; };
 struct Square { int side; };
-struct Triangle { int base; int height; };
+struct Triangle { int baseLength; int height; };
 
 using Shape = std::variant<Circle, Square, Triangle>;
 
@@ -499,7 +454,7 @@ shape Square {
 }
 
 shape Triangle {
-  base: Int
+  baseLength: Int
   height: Int
 }
 
@@ -518,7 +473,14 @@ function describe(share outline: Shape) -> Nothing {
     }
   }
 }
+
+function entrypoint() -> Nothing {
+  let circle: Circle = { radius: 3 }
+  describe(circle)    // circle, radius 3
+}
 ```
+
+`base` is a reserved word, so a field cannot use that name; the Triangle field is called `baseLength`.
 
 As in C++, a forgotten kind is an error, and the Yinz compiler names it in a short message:
 
@@ -531,17 +493,7 @@ if (outline) {
 // Add the missing arms (e.g. `is Triangle =>`) or add an `else =>` default arm.
 ```
 
-The C++ forms are not valid:
-
-```
-let outline: std::variant<Circle, Square, Triangle> = ...
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-std::visit(describer, outline)
-// COMPILE ERROR: (pending ynz build run)
-```
+`std::variant` and `std::visit` do not exist. The compiler gives only general errors for them, so remember the rule: write a union with `|` and check the kind with `is`, as above.
 
 ### Named value sets: `options` replaces `enum class`
 
@@ -590,20 +542,15 @@ function entrypoint() -> Nothing {
 
 This prints `online`. In C++, `static_cast<Status>(7)` is a valid `Status`, and a `switch` that skips a name is only a compiler warning, if that. In Yinz, the compiler checks that your `if` handles every name in the set.
 
-`enum class` does not exist:
-
-```
-enum class Status { Active, Banned };
-// COMPILE ERROR: (pending ynz build run)
-```
-
-Writing plain `enum` gives this first message:
+`enum` and `enum class` do not exist. Writing `enum Status {` gives errors, and among them this warning:
 
 ```
 enum Status {
 // COMPILE WARNING: `enum` is not a keyword in Yinz.
 // Use `options` to declare a set of named values: `options Status { active, inactive, banned }`
 ```
+
+Writing `enum class Status { Active, Banned };` gives the same `enum` warning and the `class` warning from the Data structures trap.
 
 ### Collections and reading by position: reading never gives undefined behavior
 
@@ -662,17 +609,14 @@ The everyday functions have new names, and they are called with a dot:
 | `std::ranges::find(scores, 88) != scores.end()` | `scores.contains(88)` |
 | `scores.back()`, undefined behavior when empty | `scores.last()`, a `Maybe` |
 
-C++'s collection names are not valid:
-
-```
-let scores: std::vector<Int> = [70, 85, 92]
-// COMPILE ERROR: (pending ynz build run)
-```
+C++'s collection names are not valid. `std::vector<Int>` gives only general errors, so remember the rule: write `Array<Int>`. A C++ method name gives an error that names the Yinz type:
 
 ```
 let total = scores.size()
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `Array<Int>` does not have a method called `size`.
 ```
+
+Use `scores.count()` instead.
 
 A value written with `{ ... }` is a single shape value, not a collection. Use `[...]` to make one:
 
@@ -705,8 +649,10 @@ A C++ size or sign is not a Yinz type:
 
 ```
 let health: unsigned = 100
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `unsigned` is not a known type.
 ```
+
+Use `Int`.
 
 Whole-number division works as in C++: `/` on two `Int` values gives an `Int`, and the decimals are cut off. `//` starts a comment, so it is not an operator:
 
@@ -740,8 +686,10 @@ Use `Int` for whole numbers, `Number` for anything where the exact value matters
 
 ```
 let price: double = 24.5
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `double` is not a known type.
 ```
+
+Use `Float` or `Number`.
 
 ### Operators: `&&`, `||`, `!` and `==` match C++, and `++` and `+=` do not exist
 
@@ -790,7 +738,8 @@ score = score + 5
 
 ```
 score++
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `++` is not supported in Yinz.
+// Use `x = x + 1` instead.
 ```
 
 The same goes for `++score`.
@@ -837,8 +786,10 @@ if (health <= 0) {
 } else {
   return `alive`
 }
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `else` cannot appear here.
 ```
+
+Yinz has no `else` block, so end the first branch with `return` and carry on below it.
 
 When you cannot return, set a value first and change it. This replaces the `?:` operator, as in `health > 50 ? "healthy" : "in danger"`:
 
@@ -850,10 +801,7 @@ if (health > 50) {
 print(message)
 ```
 
-```
-let message = health > 50 ? `healthy` : `in danger`
-// COMPILE ERROR: (pending ynz build run)
-```
+The `?:` operator gives a misleading error, because the compiler reads the `?` as a `Maybe` marker. Remember the rule: there is no `?:`, so use the `let` and `if` form above.
 
 To compare one value against several cases, use a multi-case `if`. Each arm is its own block, so you write no `break`, and one arm never runs into the next. `else =>` is the catch-all, like C++'s `default:`:
 
@@ -890,16 +838,17 @@ function describeStatus(statusCode: Int) -> Nothing {
 }
 ```
 
-Writing `switch` gives this error:
+Writing `switch` gives errors, and among them this warning:
 
 ```
 switch (statusCode) {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `switch` is not a keyword in Yinz.
+// Use multi-case `if` with `=>` arms: `if (value) { 1 => ...; 2 => ...; else => ... }`
 ```
 
 ### Chaining: a ranges pipeline becomes named steps
 
-C++20 ranges join steps with `|`. In Yinz, each step is one line with a name, and each step gives back a collection. `filter` keeps what passes a test, `limit` keeps the first few, and `map` turns each item into something else. The `|` is not used for this: in Yinz, a single `|` is for unions.
+C++20 ranges join steps with `|`. Yinz has no chaining and no `|` pipeline: a single `|` is for unions. Each step goes on its own line with a name, so you can inspect every value. A `for` loop builds the result one item at a time.
 
 C++:
 
@@ -917,8 +866,7 @@ struct Player {
 int main() {
     std::vector<Player> players{{"Alice", 100}, {"Bob", 0}, {"Cara", 80}};
     auto active = players | std::views::filter([](const Player& player) { return player.health > 0; });
-    auto topTen = active | std::views::take(10);
-    auto names = topTen | std::views::transform([](const Player& player) { return player.name; });
+    auto names = active | std::views::transform([](const Player& player) { return player.name; });
     std::cout << std::ranges::distance(names) << '\n'; // 2
 }
 ```
@@ -937,27 +885,18 @@ function entrypoint() -> Nothing {
     { name: `Bob`, health: 0 },
     { name: `Cara`, health: 80 }
   ]
-  let active = players.filter(player => player.health > 0)
-  let topTen = active.limit(10)
-  let names = topTen.map(player => player.name)
-  let nameCount = names.count()
-  print(nameCount)    // 2
+  let activeNames: Array<String> = []
+  for (player in players) {
+    if (player.health > 0) {
+      activeNames.add(player.name)
+    }
+  }
+  let activeCount = activeNames.count()
+  print(activeCount)    // 2
 }
 ```
 
-`[](const Player& player) { return player.health > 0; }` becomes `player => player.health > 0`, and `take(10)` becomes `limit(10)`. Arrow functions are written only inside calls like these, and you write no types and no `[]` capture list. The compiler joins the steps into one fast pass, as the C++ ranges do, so the named version costs nothing.
-
-A `|` pipeline is not valid, and neither is joining the calls on one line:
-
-```
-let active = players | std::views::filter(player => player.health > 0)
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-let names = players.filter(player => player.health > 0).map(player => player.name)
-// COMPILE ERROR: (pending ynz build run)
-```
+A chain of calls written on one line is not written in Yinz. Give each result a name on its own line, as above.
 
 ### Files and imports: no `#include` and no headers; paths start at the project root
 
@@ -1022,17 +961,7 @@ function entrypoint() -> Nothing {
 
 Names are private unless you mark them with `export`. There are no default exports. Every Yinz program starts at `function entrypoint()`, where C++ has `int main()`.
 
-`#include` and `namespace` are not valid:
-
-```
-#include "services/users.hpp"
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-namespace services {
-// COMPILE ERROR: (pending ynz build run)
-```
+`#include` and `namespace` are not valid. `#include` gives a misleading error, because the compiler reads the `#` as the start of a comment. Remember the rule: leave out the include, the header and the `namespace`, and let the file's path be its name.
 
 Two imports cannot use the same name. Yinz stops you and asks you to rename one:
 
@@ -1098,17 +1027,15 @@ The two fetches have nothing to do with each other, so they overlap: the wait is
 
 Your editor shows a muted `wait` hint where a call pauses. Write `wait` yourself only when two calls must finish in a set order and the compiler cannot see why. Write `background` to start a task that keeps running after your function returns, which is the closest match to `std::thread`. A value you hand to a background task must be given away or copied, so two tasks never write the same value. A `Channel<T>` is the one value both sides can use, and it takes care of the waiting for you. See [Concurrency](../reference/REF-concurrency.md).
 
-The C++ words are not valid:
+The C++ words are not valid. `std::thread` gives only general errors, so remember the rule: write `background fetchLowerBowlPrice()`. Writing `std::async(...)` gives errors, and among them this warning:
 
 ```
 let lowerBowl = std::async(fetchLowerBowlPrice)
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `async` is not a keyword in Yinz.
+// `async` not valid here
 ```
 
-```
-std::thread worker(fetchLowerBowlPrice)
-// COMPILE ERROR: (pending ynz build run)
-```
+Its hint says: "Write `wait foo()` at the call site — no declaration-level annotation needed." A `std::future` has no match: the call gives the value directly.
 
 ### Copies: `let b = a` hands the value over, and `.copy()` replaces the copy constructor
 
@@ -1149,17 +1076,7 @@ let total = scores.count()
 print(total)    // 3
 ```
 
-`std::move` and copy constructors do not exist:
-
-```
-let taken = std::move(scores)
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-Player(const Player& other) : name(other.name), health(other.health) {}
-// COMPILE ERROR: (pending ynz build run)
-```
+`std::move` and copy constructors do not exist. The compiler gives only general errors for them, so remember the rule: storing a value already hands it over, so `let taken = scores` replaces `std::move(scores)`, and `.copy()` replaces a copy constructor.
 
 Passing a value to a function is not a store: the signature decides, with `share`, `lend` or `give` as the Functions trap shows. The same hand-over rule applies when you store a shape value in an array. In C++, `path.push_back(start)` copies `start`, and a later change to `start` does not reach the vector. In Yinz, you ask for the copy:
 
