@@ -41,62 +41,34 @@ Yinz combines four things: **easy syntax**, **real systems skills** (ownership, 
 
 ## What teaching looks like in practice
 
-### Pattern 1 — Choosing how to store data
-
-```ynz
-let scores: Map<String, Number> = { alice: 90, bob: 85, charlie: 78 }
-// IDE HINT: Every key here is written out in your code, so a shape is
-//           much faster than a map:
-//   shape Scores { alice: Number, bob: Number, charlie: Number }
-//   let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
-//
-// Why: Reading a shape field is one step: the computer jumps straight to it.
-//      Reading a map key means searching for it. For keys that never change,
-//      a shape is faster AND you get dot access with autocomplete.
-```
-
-### Pattern 2 — Speed suggestions
+### Pattern 1 — Speed suggestions
 
 ```ynz
 let weekdays: Array<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
-// IDE HINT: `weekdays` never grows or shrinks, so the compiler stores it as
-//           a `Fixed<String>`. You can write that yourself:
-//   let weekdays: Fixed<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
-//
-// Why: Nothing in this file calls .add() or .remove() on `weekdays`, so it
-//      never needs room to grow. A `Fixed<String>` lives in the quick memory
-//      a function uses for its own variables, so reading it is faster.
+// IDE HINT: `Array` carries a dotted underline. Hover says:
+//   WHAT:    The compiler stores this value as a fixed-size `Fixed<T>` instead of
+//            a growable `Array<T>`, because nothing in this function ever grows it.
+//   INSTEAD: Write `Fixed` instead of `Array` in the annotation, for example
+//            `let weekdays: Fixed<String> = [...]`.
+//   WHY:     A fixed-size list never has to grow, so it is cheaper to create and
+//            use than a growable `Array`, and writing `Fixed` tells readers its
+//            size will not change.
 ```
 
-### Pattern 3 — The usual Yinz style
+### Pattern 2 — The usual Yinz style
 
 ```ynz
 let serverName = `prod-01`
-// IDE HINT: effectively const — never reassigned. You can write that yourself:
-//   const serverName = `prod-01`
-//
-// Why: Nothing gives `serverName` a new value, so `const` tells every reader
-//      it will not change, and the compiler then refuses any later change.
-//      The compiled program is the same, so there is no speed cost.
+// IDE HINT: `let` carries a dotted underline. Hover says:
+//   WHAT:    The compiler treats this `let` as a `const`, because nothing in this
+//            function ever reassigns it, changes it, or lends it out to be changed.
+//   INSTEAD: Write `const` instead of `let`, for example `const serverName = `prod-01``.
+//   WHY:     A value that never changes can be treated as fixed for the whole
+//            function, and writing `const` tells readers at a glance that it will
+//            not change.
 ```
 
-### Pattern 4 — Choosing a number type
-
-```ynz
-let price: Float = 19.99
-// IDE HINT: Using Float for financial values may cause rounding errors.
-//   Consider Number for exact arithmetic:
-//     let price: Number = 19.99
-//
-// Why: Float stores numbers in binary, which can't hold most decimal
-//      fractions exactly (0.1 + 0.2 = 0.30000000000000004). Money math that
-//      repeats many times adds up those tiny errors and gives wrong totals.
-//      Number does its math in base 10, so it is exact for any value you
-//      would write by hand. The speed difference is small; the accuracy
-//      difference is large.
-```
-
-### Pattern 5 — Memory and ownership
+### Pattern 3 — Memory and ownership
 
 ```ynz
 function takeDamage(share player: Player, amount: Number) -> Nothing {
@@ -167,41 +139,15 @@ This applies to:
 
 ---
 
-## A Question for Every New Feature
-
-Every new feature, rule, or message must answer four questions:
-
-1. Does it follow the golden rules?
-2. Does it repeat an idea Yinz already has?
-3. Is the default the fastest option?
-4. **Does it teach the user something, or does it just hide complexity?**
-
-The fourth question is the teaching check.
-
-**Things that pass it:** error messages, lint suggestions, IDE hints, even example text in these docs. They inform the user.
-
-**Things that might fail it:** automatic type conversions, global values that appear from nowhere, behavior that happens with no explanation, and anything that hides what the machine is really doing.
-
-If a feature makes it easier to write code without learning why it works, it fails the teaching mission. Yinz should make it easy to write GOOD code AND to understand WHY it is good.
-
----
-
-## What the compiler should teach
-
-The compiler's teaching covers at least these areas:
+## What the compiler teaches
 
 | Area | Examples |
 |------|----------|
-| **Choosing a data layout** | shape or map, array or fixed array, when to use which |
-| **Speed habits** | reserving room up front, avoiding repeated memory requests, why merged steps are fast |
-| **Memory and ownership** | when to use share, lend, give and copy, and why ownership matters |
-| **Number types** | when to use Number, Float or Int, and why exact decimals are the default |
-| **The usual Yinz style** | one step per line instead of chaining, named intermediate values, descriptive function names |
-| **Design habits** | when a shape is better than a map, when a union is better than yes/no flags |
-| **Conventions** | naming (Rule 10), how to handle errors, how to organize modules |
-| **Habits to avoid** | what NOT to do and why (arrays with gaps, deeply nested code, unexplained numbers) |
+| **Choosing a data layout** | `Array` or `Fixed`, when to use which |
+| **Memory and ownership** | when the compiler chose share, lend, give and copy, and why |
+| **The usual Yinz style** | `const` instead of `let` when a value never changes |
 
-Each area has rules in the linter and hints in the IDE.
+The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
 
 ---
 
