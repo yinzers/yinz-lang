@@ -62,7 +62,7 @@ The table and the traps below follow this list, in this order:
 | Chaining | Go has no filter-and-map chains; you write a `for` loop with `append` | a `for` loop, one named step per line |
 | Files and imports | `package services`<br>`import "myapp/services"`<br>`FetchUser` (capital letter exports), `func main()` | `` import { fetchUser } from `services/users` ``<br>`export function`<br>`function entrypoint()` |
 | Slow work | `go fetch()`, `sync.WaitGroup`<br>`chan int`, `wire <- 2`, `<-wire` | plain `function`; `wait` and `background` only when you need them<br>`Channel<Int>`, `wire.send(2)`, `wire.receive()` |
-| Copies | `b := a` copies a struct, but a slice, a map or a pointer is shared<br>`slices.Clone(a)` | `let b = a` hands the value over<br>`a.copy()` |
+| Copies | `backup := scores` copies a struct, but a slice, a map or a pointer is shared<br>`slices.Clone(scores)` | `let backup = scores` hands the value over<br>`scores.copy()` |
 
 ## Traps
 
@@ -236,8 +236,8 @@ In Go you choose between a pointer, `*Player`, which can change the original, an
 
 | Go | Yinz | The function |
 |---|---|---|
-| `p Player`, a copy you only read | `share player: Player` | only reads the value |
-| `p *Player`, changes the original | `lend player: Player` | changes the value |
+| `player Player`, a copy you only read | `share player: Player` | only reads the value |
+| `player *Player`, changes the original | `lend player: Player` | changes the value |
 | nothing; Go's garbage collector keeps a value alive while anything points to it | `give player: Player` | takes the value for good |
 
 Nothing is written at the call. Go's `heal(&player, 20)` becomes `heal(player, 20)`. You write no `&` to take an address and no `*` to read through one. Your editor shows a muted note at the call saying which of the three the function uses.
@@ -560,7 +560,7 @@ Every Yinz type starts with a capital letter, built-in collections included:
 | `[3]int`, size fixed | `Fixed<Int>`, size set at creation |
 | `map[string]int` | `Map<String, Int>` |
 
-In Go, `scores[5]` on a slice with three items panics, and a missing map key quietly gives the zero value, so a player with `0` hits and a player who is not in the map look the same. To tell them apart you write `hits, found := m[key]`. In Yinz, reading by position or by key gives a `Maybe`, so the plain `[ ]` is already the safe form.
+In Go, `scores[5]` on a slice with three items panics, and a missing map key quietly gives the zero value, so a player with `0` hits and a player who is not in the map look the same. To tell them apart you write `hits, found := hitLeaders[key]`. In Yinz, reading by position or by key gives a `Maybe`, so the plain `[ ]` is already the safe form.
 
 Go:
 
@@ -1092,9 +1092,9 @@ function entrypoint() -> Nothing {
 
 The Go words are not valid. `go relayScores(wire)` gives only general errors, so remember the rule: write `background relayScores(wire)`. `wire <- 2` gives a misleading error, because the compiler reads `<` as a comparison and says it cannot be used with a Channel. Write `wire.send(2)` instead.
 
-### Copies: `let b = a` hands the value over, and `.copy()` replaces sharing by accident
+### Copies: `let backup = scores` hands the value over, and `.copy()` replaces sharing by accident
 
-In Go, `b := a` copies a struct or an array, but it only copies the reference for a slice, a map or a pointer, so both names see each other's changes. Which one you get depends on the type. In Yinz, the rule is one rule for every type: storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward. Asking for a second, separate value is `.copy()`.
+In Go, `backup := scores` copies a struct or an array, but it only copies the reference for a slice, a map or a pointer, so both names see each other's changes. Which one you get depends on the type. In Yinz, the rule is one rule for every type: storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward. Asking for a second, separate value is `.copy()`.
 
 Go:
 

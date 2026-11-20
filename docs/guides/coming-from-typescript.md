@@ -57,10 +57,10 @@ The table and the traps below follow this list, in this order:
 | Numbers | `0.1 + 0.2` is `0.30000000000000004` | `0.1 + 0.2` is `0.3` |
 | Operators | `===`, `score += 5`, `count++` | `==`, `score = score + 5`, `count = count + 1` |
 | Branching | `if () { } else { }`<br>`switch (code) { case 200: }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | `players.filter(f).map(g)` | a `for` loop, one named step per line |
+| Chaining | `players.filter(isAlive).map(toName)` | a `for` loop, one named step per line |
 | Files and imports | `import { x } from './utils/helpers'`<br>`export default` | `` import { x } from `utils/helpers` ``<br>`export function` |
 | Slow work | `async function`, `await` | plain `function`; `wait` and `background` only when you need them |
-| Copies | `const b = a` makes two names for one object<br>`structuredClone(a)` | `let b = a` hands the value over<br>`a.copy()` |
+| Copies | `const backup = scores` makes two names for one array<br>`structuredClone(scores)` | `let backup = scores` hands the value over<br>`scores.copy()` |
 
 ## Traps
 
@@ -475,9 +475,9 @@ You do not mark functions as `async`. When a call has to pause, such as a networ
 
 Write `wait` only when two calls must finish in a set order and the compiler cannot see why. Write `background` to start a task that keeps running after your function returns.
 
-### Copies: `const b = a` hands the value over
+### Copies: `const backup = scores` hands the value over
 
-In TypeScript, `const b = a` gives one array two names, and a change through one name shows through the other. Yinz never lets one value have two names. Storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward.
+In TypeScript, `const backup = scores` gives one array two names, and a change through one name shows through the other. Yinz never lets one value have two names. Storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward.
 
 TypeScript:
 

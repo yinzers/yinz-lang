@@ -59,10 +59,10 @@ The table and the traps below follow this list, in this order:
 | Numbers | `int`, `long long`, `unsigned`, `double`<br>signed overflow is undefined behavior | `Int`, `Number`, `Float`<br>overflow stops the program |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score++`, `score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`switch (code) { case 200: ... break; default: ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | `players \| std::views::filter(f) \| std::views::transform(g)` | a `for` loop, one named step per line |
+| Chaining | `players \| std::views::filter(isAlive) \| std::views::transform(toName)` | a `for` loop, one named step per line |
 | Files and imports | `#include "services/users.hpp"`<br>a header (`.hpp`) plus a source file (`.cpp`), `namespace`<br>`int main()` | `` import { fetchUser } from `services/users` ``<br>`export function`, one file<br>`function entrypoint()` |
 | Slow work | `std::thread`, `std::async`, `std::future`<br>`std::mutex`, `join()` | plain `function`; `wait` and `background` only when you need them<br>`Channel<Int>` |
-| Copies | `b = a` copies the whole value<br>`std::move(a)` leaves `a` in an unspecified state | `let b = a` hands the value over<br>`a.copy()` |
+| Copies | `backup = scores` copies the whole value<br>`std::move(scores)` leaves `scores` in an unspecified state | `let backup = scores` hands the value over<br>`scores.copy()` |
 
 ## Traps
 
@@ -132,7 +132,7 @@ let greeting = "Hello"
 
 There is no `std::string`, no `std::format` and no `{}` placeholder. The compiler gives only general errors for `std::format`, so remember the rule: put the value inside the text with `${}`, as in `` `Hello ${name}` ``.
 
-`std::cout << a << b` joins pieces with `<<`. In Yinz, `print` is a function that takes exactly one value, so build the text first:
+`std::cout << health << name` joins pieces with `<<`. In Yinz, `print` is a function that takes exactly one value, so build the text first:
 
 ```
 print(`Health:`, health)
@@ -1039,9 +1039,9 @@ let lowerBowl = std::async(fetchLowerBowlPrice)
 
 Its hint says: "Write `wait foo()` at the call site — no declaration-level annotation needed." A `std::future` has no match: the call gives the value directly.
 
-### Copies: `let b = a` hands the value over, and `.copy()` replaces the copy constructor
+### Copies: `let backup = scores` hands the value over, and `.copy()` replaces the copy constructor
 
-In C++, `b = a` copies the whole value, and the old name stays usable. `std::move(a)` hands the contents over, and `a` stays usable in an unspecified state. You write copy constructors and move constructors to control both. In Yinz, the default is the other way round: storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward. Asking for a second, separate value is `.copy()`. There is no constructor to write, because `.copy()` copies every field.
+In C++, `backup = scores` copies the whole value, and the old name stays usable. `std::move(scores)` hands the contents over, and `scores` stays usable in an unspecified state. You write copy constructors and move constructors to control both. In Yinz, the default is the other way round: storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward. Asking for a second, separate value is `.copy()`. There is no constructor to write, because `.copy()` copies every field.
 
 C++:
 

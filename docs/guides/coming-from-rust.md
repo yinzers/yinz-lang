@@ -57,10 +57,10 @@ The table and the traps below follow this list, in this order:
 | Numbers | `i32`, `i64`, `u8`, `usize`, `f64`<br>`0.1 + 0.2` is `0.30000000000000004` | `Int`, `Number`, `Float`<br>`0.1 + 0.2` is `0.3` |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`match code { 200 => ..., _ => ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | `players.iter().filter(f).map(g).collect()` | a `for` loop, one named step per line |
+| Chaining | `players.iter().filter(is_alive).map(to_name).collect()` | a `for` loop, one named step per line |
 | Files and imports | `mod services;`<br>`use crate::services::users::fetch_user;`<br>`pub fn`, `fn main()` | `` import { fetchUser } from `services/users` ``<br>`export function`<br>`function entrypoint()` |
 | Slow work | `async fn`, `.await`, an async runtime such as `tokio`<br>`tokio::join!(...)` | plain `function`; `wait` and `background` only when you need them |
-| Copies | `let b = a;` moves the value<br>`a.clone()` | `let b = a` hands the value over<br>`a.copy()` |
+| Copies | `let backup = scores;` moves the value<br>`scores.clone()` | `let backup = scores` hands the value over<br>`scores.copy()` |
 
 ## Traps
 
@@ -924,7 +924,7 @@ let price = await fetchPrice()
 // Write `wait foo()` at the call site.
 ```
 
-### Copies: `let b = a` hands the value over, and `.copy()` replaces `.clone()`
+### Copies: `let backup = scores` hands the value over, and `.copy()` replaces `.clone()`
 
 This is the part of Rust you already know. Storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward. Rust calls it a move. Asking for a second value is `.copy()`, where Rust has `.clone()`.
 

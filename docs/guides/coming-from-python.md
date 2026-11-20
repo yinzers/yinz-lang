@@ -57,10 +57,10 @@ The table and the traps below follow this list, in this order:
 | Numbers | `0.1 + 0.2` is `0.30000000000000004`<br>`7 / 2` is `3.5`, `7 // 2` is `3` | `0.1 + 0.2` is `0.3`<br>`7 / 2` is `3`; `//` starts a comment |
 | Operators | `and`, `or`, `not`<br>`score += 5` | `&&`, `\|\|`, `!`<br>`score = score + 5` |
 | Branching | `if:` / `elif:` / `else:`<br>`match code:` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | `[p.name for p in players if p.health > 0]` | a `for` loop, one named step per line |
+| Chaining | `[player.name for player in players if player.health > 0]` | a `for` loop, one named step per line |
 | Files and imports | `from services.users import fetch_user`<br>`from .users import fetch_user`<br>`if __name__ == "__main__":` | `` import { fetchUser } from `services/users` ``<br>`export function`<br>`function entrypoint()` |
 | Slow work | `async def`, `await`, `asyncio.gather(...)` | plain `function`; `wait` and `background` only when you need them |
-| Copies | `b = a` makes two names for one list<br>`a.copy()` | `let b = a` hands the value over<br>`a.copy()` |
+| Copies | `backup = scores` makes two names for one list<br>`scores.copy()` | `let backup = scores` hands the value over<br>`scores.copy()` |
 
 ## Traps
 
@@ -762,9 +762,9 @@ let price = await fetchPrice()
 // Write `wait foo()` at the call site.
 ```
 
-### Copies: `b = a` hands the value over
+### Copies: `backup = scores` hands the value over
 
-In Python, `b = a` gives one list two names, and a change through one name shows through the other. Yinz never lets one value have two names. Storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward.
+In Python, `backup = scores` gives one list two names, and a change through one name shows through the other. Yinz never lets one value have two names. Storing a value in another name, an array or a shape hands it over, and the old name cannot be read afterward.
 
 Python:
 
