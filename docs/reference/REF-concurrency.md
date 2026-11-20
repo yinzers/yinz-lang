@@ -13,18 +13,18 @@ metadata:
 
 # Concurrency
 
-Yinz runs code concurrently for you. You write normal, sequential-looking code. The compiler analyzes what each operation depends on and runs independent operations at the same time.
+Yinz runs code concurrently for you. *Concurrently* means several jobs make progress at the same time. You write normal code that reads top to bottom. The compiler works out what each line needs and runs lines that don't need each other at the same time.
 
-Two keywords and one type. That's the entire developer API:
-- `wait` — force something to complete before continuing
-- `background` — run something separately, outside this function's lifetime
-- `channel<T>` — send values between tasks safely
+Two keywords and one type are the whole toolkit:
+- `wait` — finish something before the next line runs
+- `background` — start a job that keeps going after this function returns
+- `channel<T>` — pass values from one job to another safely
 
 ---
 
 ## How it works — the compiler does the thinking
 
-The compiler builds a dependency graph from your code. Operations that don't depend on each other run at the same time. Operations that depend on something automatically wait for it.
+The compiler maps which line needs which value. Lines that don't need each other run at the same time. A line that needs a value waits for it automatically.
 
 ```
 function loadDashboard() -> Dashboard errors {
@@ -41,13 +41,13 @@ What the compiler sees:
 - `fetchFeed`, `fetchMessages`, `fetchStats` all need `user` → all three wait for `user`, then run at the same time
 - `buildDashboard` needs all four → waits for everything
 
-You write 6 lines of normal code. You get optimal concurrent execution.
+You write 6 lines of normal code. The compiler runs the three independent fetches at the same time.
 
 ---
 
 ## The IDE shows you the execution plan
 
-The IDE marks which lines run concurrently and which run in sequence. This is not optional — you should always be able to see what the compiler decided.
+The IDE marks which lines run at the same time and which run one after another, so you can always see what the compiler decided.
 
 ```
 function loadDashboard() -> Dashboard errors {
@@ -65,29 +65,29 @@ Hovering over any line shows: "Runs concurrently with lines X and Y. Waits for: 
 
 ## Reads vs writes — the compiler knows the difference
 
-The compiler uses ownership to tell reads from writes. This is the same ownership system you already use — no new rules.
+The compiler uses the ownership words you already write (`share`, `lend`) to tell reads from writes. There are no new rules to learn.
 
 ```
 function getUser(share db: Database, id: string) -> User errors
-//               ^^^^^ share = reading — safe to parallelize with other reads
+//               ^^^^^ share = only reads — safe to run alongside other reads
 
 function saveUser(lend db: Database, user: User) -> nothing errors
-//                ^^^^ lend = writing — compiler sequences this correctly
+//                ^^^^ lend = may change it — the compiler runs this in the right order
 ```
 
-`share` in a parameter = the function reads this resource. Multiple reads can run concurrently.
+`share` on a parameter means the function only reads that value. Several readers can run at the same time.
 
-`lend` in a parameter = the function writes to this resource. Writes to the same resource run in order. Two functions that only `share` the same data can always parallelize.
+`lend` on a parameter means the function may change that value. Changes to the same value run in order. Two functions that only `share` the same data can always run at the same time.
 
 ---
 
 ## `wait` — when you need explicit ordering
 
-**Suspension is automatic — you never type `wait` to make I/O suspend.** When a call can block (for example, a network fetch or `sleep`), the compiler detects this and suspends the function automatically. The IDE shows that suspension as a muted `wait` hint. You don't write `wait` for it.
+**Pausing is automatic — you never type `wait` to make a slow call pause.** When a call has to wait for the outside world (a network fetch, `sleep`, a file read), the compiler pauses your function by itself. The IDE shows that pause as a muted `wait` hint. You don't write it.
 
-**`wait` is only for ordering.** Use it when a call must complete before the next statement runs, but the compiler can't infer that — because the two operations touch different resources and no value passes between them.
+**`wait` is only for ordering.** Use it when one call must finish before the next line runs, but the compiler can't see that. That happens when the two calls touch different things and no value passes between them.
 
-Most code never needs `wait`. The compiler handles reads automatically and infers write ordering from ownership. Use `wait` when you need explicit ordering that the dependency graph can't figure out on its own.
+Most code never needs `wait`. The compiler orders reads and writes from the ownership words in your function signatures. Use `wait` when you need an order the compiler can't work out on its own.
 
 **When to use `wait` — ordered side effects:**
 
@@ -99,7 +99,7 @@ function processOrder(order: Order) -> nothing errors {
 }
 ```
 
-Without `wait`, the compiler would run all three concurrently (none use each other's return values). `wait chargePayment(order)` tells the compiler: "finish this before moving forward."
+Without `wait`, the compiler would run all three at the same time, because none of them uses another's result. `wait chargePayment(order)` tells the compiler: "finish this before moving on."
 
 **When to use `wait` — external API ordering:**
 
@@ -110,16 +110,16 @@ request.post("api.email.com/send", receipt)
 
 The compiler can't tell that these two HTTP calls are logically related. They're just two HTTP posts to different URLs. `wait` makes the intended ordering explicit.
 
-**When to use `wait` — rate limiting:**
+**When to use `wait` — one request at a time:**
 
 ```
 for (page in pageNumbers) {
-  let result = wait fetchPage(page)     // wait for each before starting the next
+  let result = wait fetchPage(page)     // finish each fetch before starting the next
   results.add(result)
 }
 ```
 
-Without `wait`, the loop would fetch each page sequentially anyway (loops are sequential by default). With `wait`, you're being explicit — and it also works inside any other construct where you need one-at-a-time behavior.
+A loop already runs one pass at a time, so this loop would fetch the pages in order even without `wait`. Writing `wait` makes that intent clear, and it works anywhere you need one-at-a-time behavior.
 
 **When you do NOT need `wait` — data dependencies:**
 
@@ -136,17 +136,15 @@ function buildProfile(id: string) -> Profile errors {
 
 ---
 
-## Loops run one iteration at a time
+## Loops run one pass at a time
 
-Independent statements in a function auto-parallelize based on dependencies. Loop iterations do not.
-
-The rule: independent statements = auto-parallel. Loop iterations = sequential by default.
+Separate statements that don't need each other run at the same time. The passes of a loop do not: each pass finishes before the next one starts.
 
 ---
 
-## `background` — tasks that outlive this function
+## `background` — jobs that keep going after this function returns
 
-`background` runs something outside the current function's lifetime. The current function doesn't wait for it.
+`background` starts a job on its own. The current function doesn't wait for it, and the job can still be running after the function returns.
 
 **Fire and forget — don't store the result:**
 
@@ -154,24 +152,24 @@ The rule: independent statements = auto-parallel. Loop iterations = sequential b
 background sendWelcomeEmail(user)
 background logAnalytics(event)
 background retryPayment(payoutId)
-// function continues immediately — these run whenever
+// the function carries on right away — these jobs run on their own
 ```
 
-The task runs independently. If it fails, it handles the failure internally. The caller never waits and never sees the result. Good for MVP work and non-critical background operations.
+Each job runs on its own. If it fails, it has to deal with the failure itself. The caller never waits and never sees the result. This suits small, non-critical jobs such as sending an email or logging.
 
-**Long-running — store the handle to communicate:**
+**Long-running — keep the handle so you can talk to the job:**
 
 ```ynz
 let scout = background gradeProspect(requests)
 ```
 
-If you store the result of `background`, you get a handle you can talk to via `.send()` and `.receive()`. If you don't store it, it's fire-and-forget. Same keyword, two patterns. Handles are built on channels, so read the next section first — then see "Talking to a background task" below.
+If you store the result of `background`, you get a **handle**: a line you can use to talk to the running job with `.send()` and `.receive()`. If you don't store it, the job is fire-and-forget. It is the same keyword either way. Handles are built on channels, so read the next section first, then see "Talking to a background task" below.
 
 ---
 
 ## Channels — sending values between tasks
 
-A channel carries values of one type from one task to another. You create one with `channel<T>()`, where `T` is the type of value it carries:
+A channel carries values of one type from one job to another. You create one with `channel<T>()`, where `T` is the type of value it carries:
 
 ```ynz
 let scores: channel<int> = channel<int>()        // holds up to 64 values (the default)
@@ -180,7 +178,7 @@ let names: channel<string> = channel<string>(8)  // holds up to 8 values
 
 The number is the channel's **capacity** — how many values it can hold at once. Leave the parens empty and you get the default of 64. The IDE shows the default as a muted `64` hint inside the empty parens; click it to write `64` into your source.
 
-One task puts values in with `.send(value)`. Another task takes them out with `.receive()`:
+One job puts values in with `.send(value)`. Another job takes them out with `.receive()`:
 
 ```ynz
 function relayScores(lend wire: channel<int>) -> nothing {
@@ -203,25 +201,25 @@ function entrypoint() -> nothing {
 }
 ```
 
-`relayScores` runs as a background task and pushes three scores into the channel. `entrypoint` pulls them out one at a time. If the channel is empty when you call `.receive()`, your task pauses until a value arrives. You never write any locking or waiting code — the channel handles it.
+`relayScores` runs as a background job and puts three scores into the channel. `entrypoint` takes them out one at a time. If the channel is empty when you call `.receive()`, your job pauses until a value arrives. You never write locking or waiting code — the channel does it for you.
 
-**`.receive()` gives you a `maybe<T>`, not a bare `T`.** A channel can be closed (see "Closing a channel" below), and once it is closed and empty, `.receive()` returns `none` instead of waiting forever. So you read a delivery the way you read any `maybe` value: `.or(fallback)` when you know a value is there, or `.exists()` and `.value` when the end of the stream matters to you.
+**`.receive()` gives you a `maybe<T>`, not a plain `T`.** A channel can be closed (see "Closing a channel" below). Once it is closed and empty, `.receive()` returns `none` instead of waiting forever. So you read a delivery the way you read any `maybe` value: `.or(fallback)` when you just want a default, or `.exists()` and `.value` when you need to know the stream has ended.
 
-**A channel is the one value you can hand to a background task and keep using yourself.** Both sides hold the same channel safely — that is the entire point of a channel. (Every other value must be given away or copied — see "Ownership with background tasks" below.)
+**A channel is the one value you can hand to a background job and keep using yourself.** Both sides share the same channel safely — that is the point of a channel. (Every other value must be given away or copied — see "Ownership with background jobs" below.)
 
-### Every channel is bounded — and that's a feature
+### Every channel has a size limit
 
-There is no unlimited channel. When a producer fills the channel faster than the receiver drains it, `send()` pauses the producer until a slot frees up.
+There is no unlimited channel. When a producer fills the channel faster than the receiver empties it, `send()` pauses the producer until a slot frees up.
 
-In the example above the capacity is 1: `relayScores` sends the first score, then pauses on the second send until `entrypoint` receives the first. This is called **backpressure**.
+In the example above the capacity is 1: `relayScores` sends the first score, then pauses on the second send until `entrypoint` receives the first. This slow-down is called **backpressure**: a fast sender is made to wait for a slow receiver.
 
-**A suspended producer is backpressure working correctly, not a deadlock.** The producer isn't stuck — it's waiting for the receiver to catch up, and it resumes the moment a slot opens. Without the bound, a fast producer would silently fill up memory until the program dies. The bound is what keeps that from ever happening.
+**A paused producer is backpressure working correctly, not a freeze.** The producer isn't stuck. It is waiting for the receiver to catch up, and it continues the moment a slot opens. Without the limit, a fast producer would quietly fill up memory until the program crashed.
 
-Need more buffering? Pass a bigger number: `channel<int>(10000)`. There is deliberately no "unlimited" option.
+Need more room? Pass a bigger number: `channel<int>(10000)`. There is deliberately no "unlimited" option.
 
 ### The rules channels follow
 
-**The element type is fixed at construction.** A `channel<int>` carries `int` values only:
+**The value type is fixed when you create the channel.** A `channel<int>` carries `int` values only:
 
 ```
 wire.send(`three`)
@@ -238,9 +236,9 @@ let wire: channel<int> = channel<int>(0)
 // large explicit number — there is deliberately no unbounded channel.
 ```
 
-**A channel operation gets its own line.** `.send()` and `.receive()` can pause your task, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Burying one inside a bigger expression is a compile error that tells you to pull it out into a named variable first.
+**A channel operation gets its own line.** `.send()` and `.receive()` can pause your job, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Putting one inside a bigger expression is a compile error that tells you to move it out into a named variable first.
 
-**Channels carry these values in v0.3:** `int`, `float`, `boolean`, `string`, `number`, `array<T>`, and `map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and rebuilding the shape on the receiving side.
+**A channel can carry these values:** `int`, `float`, `boolean`, `string`, `number`, `array<T>`, and `map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and building the shape again on the receiving side.
 
 ### Closing a channel
 
@@ -278,7 +276,7 @@ function entrypoint() -> nothing {
 After `close()`:
 
 - `.receive()` still delivers everything that was already sent, in order, and then returns `none`. That `none` is how `tallyScores` knows the game is over — no counting, no timers.
-- `.send()` is refused with the channel-closed error on the usual `send() -> nothing errors` surface. Check it with `.failed()` if a late send is something you want to notice:
+- `.send()` is refused with a channel-closed error. Because `send()` is declared `-> nothing errors`, you can check it with `.failed()` if you want to notice a late send:
 
 ```ynz
 let late = wire.send(9)
@@ -290,10 +288,10 @@ if (late.failed()) {
 ```
 
 - Calling `.close()` again does nothing — it is safe to close twice.
-- A send that was already waiting for room when the channel closed still goes through. Close means no *new* sends, not "throw away what was on its way."
-- A channel you never close behaves exactly as before: `.receive()` waits until a value arrives.
+- A send that was already waiting for room when the channel closed still goes through. Close means no *new* sends. It does not throw away what was already on its way.
+- A channel you never close keeps working as before: `.receive()` waits until a value arrives.
 
-`.close()` never pauses your task and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a task handle — if you spawned a task with `let h = background worker(commands)`, you close `commands`, not `h`. For that reason the handle form needs its channel in a named binding:
+`.close()` never pauses your job and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a handle. If you started a job with `let h = background worker(commands)`, you close `commands`, not `h`. For that reason the handle form needs the channel stored in a named variable:
 
 ```
 let h = background doubler(makeWire())
@@ -305,7 +303,7 @@ let h = background doubler(makeWire())
 
 ### Sending an array or a map gives it away
 
-An `int`, a `string`, or a `number` is copied into the channel — your binding keeps working after the send. An `array<T>` or a `map<K, V>` is different: the channel hands the *same* value to whichever task receives it, so `send()` gives it away and the compiler refuses any later read of that binding:
+An `int`, a `string`, or a `number` is copied into the channel — your variable keeps working after the send. An `array<T>` or a `map<K, V>` is different: the channel hands the *same* value to whichever job receives it, so `send()` gives it away and the compiler refuses any later use of that variable:
 
 ```ynz
 let rows: array<int> = [1, 2, 3]
@@ -318,14 +316,14 @@ print(rows.count())
 
 Two more rules follow from the same idea:
 
-- A parameter you send must be declared `give` on its function, so the caller's binding is given up too. Without the word, the compile error names the function and the one-word fix: `function producer(lend wire: channel<array<int>>, give rows: array<int>)`.
-- You can only send something you hold whole. A field (`bucket.rows`), an item (`rows[0]`), the loop variable of a `for`, or a value built from other named values still belongs to someone here — the compile error tells you to send `.copy()` of it instead.
+- A parameter you send must be declared `give` on its function, so the caller's variable is given up too. Without the word, the compile error names the function and the one-word fix: `function producer(lend wire: channel<array<int>>, give rows: array<int>)`.
+- You can only send something you own whole. A field (`bucket.rows`), an item (`rows[0]`), the loop variable of a `for`, or a value built from other named values still belongs to something else here — the compile error tells you to send `.copy()` of it instead.
 
 ---
 
 ## Talking to a background task — handles
 
-Storing the result of `background` gives you a **handle** — a two-way line to the running task:
+Storing the result of `background` gives you a **handle** — a two-way line to the running job:
 
 ```ynz
 function gradeProspect(lend requests: channel<int>) -> int errors {
@@ -344,9 +342,9 @@ function entrypoint() -> nothing {
 }
 ```
 
-**Sending TO the task:** `scout.send(21)` delivers into the **first `channel<T>` parameter** of the spawned function. Here that's `requests`, so inside the task, `requests.receive()` reads what you sent. That's the whole convention: the task reads its messages from its first channel parameter — there is no hidden mailbox.
+**Sending TO the job:** `scout.send(21)` delivers into the **first `channel<T>` parameter** of the function you started. Here that's `requests`, so inside the job, `requests.receive()` reads what you sent. That's the whole rule: the job reads its messages from its first channel parameter. There is no hidden mailbox.
 
-Because of that, the spawned function must take a channel parameter to receive messages:
+Because of that, the function you start must take a channel parameter to receive messages:
 
 ```
 let counter = background slowCount()
@@ -356,19 +354,19 @@ counter.send(7)
 // spawn: `let h = background worker(commands)` — `h.send(v)` then feeds that channel.
 ```
 
-**Receiving FROM the task:** `scout.receive()` gives you the next thing the task delivers. For a function like `gradeProspect` that returns a value, that's its completion value — typed with `errors`, because the task might have failed. Handle it like any other `errors` value (here, `graded.or(0)` falls back to 0).
+**Receiving FROM the job:** `scout.receive()` gives you the next thing the job delivers. For a function like `gradeProspect` that returns a value, that's its final result. It comes with `errors`, because the job might have failed. Handle it like any other `errors` value (here, `graded.or(0)` falls back to 0).
 
-One more rule: the handle form needs a function that can pause (one that uses `wait`, a channel, or calls something that does). For a pure number-cruncher that never pauses, use fire-and-forget `background crunch()` — handle support for those ships in a later milestone, and the compile error says exactly that.
+One more rule: the handle form needs a function that can pause (one that uses `wait` or a channel, or calls something that does). For a plain calculation that never pauses, use fire-and-forget `background crunch()`. Handles for those are not supported yet, and the compile error says so.
 
 ---
 
-## Ownership with background tasks
+## Ownership with background jobs
 
-Background tasks might outlive the current function. This changes how ownership works.
+A background job can still be running after the current function returns. This changes how ownership works.
 
-The compiler infers whether to move or copy the argument — you don't have to write `.give` or `.copy` yourself. The IDE shows the inferred modifier as a muted hint at the call site.
+The compiler works out whether to give away or copy each argument, so you don't have to write `.give` or `.copy` yourself. The IDE shows its choice as a muted hint at the call.
 
-**A `share`-signature function cannot be called via background:**
+**A function whose parameter is `share` cannot be started with `background`:**
 
 ```ynz
 function processData(share data: Data) -> nothing { ... }
@@ -381,20 +379,20 @@ background processData(data)
 // on data before passing to a give-signature function.
 ```
 
-A shared borrow is only valid while its owner exists. A background task might still be running after the current function returns — so sharing would create a dangling reference. The function being called via `background` must take its parameters as `give`, OR the caller passes a `.copy()` (which creates an independent owned value).
+A `share` parameter only works while the original owner still has the value. A background job might still be running after the current function returns and the value is gone. So the function you start with `background` must take its parameters as `give`, or the caller passes a `.copy()` (an independent value the job owns).
 
-**The one exception: `channel<T>` parameters.** A channel is built to be held by two tasks at once — that's its job — so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything you saw in the channels section above relies on this.
+**The one exception: `channel<T>` parameters.** A channel is made to be held by two jobs at once, so passing a channel to a background job is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
 
-**The compiler figures out which one to use** when the function signature is `give`:
+**When the parameter is `give`, the compiler picks give-away or copy for you:**
 
-If you don't use the value after the `background` call, the compiler infers `give` (transfers ownership to the task):
+If you don't use the value after the `background` call, the compiler gives it away (ownership moves to the job):
 
 ```ynz
 function processEvent(give event: WebhookEvent) -> nothing { ... }
 
 function handleWebhook(event: WebhookEvent) -> Response errors {
-  background processEvent(event)             // event not used after — give inferred, ownership transfers
-  return response.json({ status: "queued" })
+  background processEvent(event)             // event not used after — it is given away
+  return response.json({ status: `queued` })
 }
 ```
 
@@ -402,9 +400,9 @@ If you do use the value after, you call `.copy()` to keep the original:
 
 ```ynz
 function handleWebhook(event: WebhookEvent) -> Response errors {
-  background processEvent(event.copy())      // explicit copy — original event stays usable
+  background processEvent(event.copy())      // explicit copy — the original event stays usable
   log(`Queued: ${event.id}`)
-  return response.json({ status: "queued", id: event.id })
+  return response.json({ status: `queued`, id: event.id })
 }
 ```
 
@@ -421,12 +419,12 @@ const count = hugeDataset.count()
 
 ## Error handling with concurrency
 
-The `errors` system works exactly the same as everywhere else. Concurrency doesn't change the rules.
+`errors` works the same as everywhere else. Running things at the same time doesn't change the rules.
 
-If a concurrent operation fails while others are still running:
-- Operations already in progress run to completion — but their results are discarded
+If one operation fails while others are still running:
+- Operations already in progress run to the end, but their results are thrown away
 - Operations not yet started are cancelled before they begin
-- The function exits with the error
+- The function ends with the error
 
 ```
 function loadDashboard() -> Dashboard errors {
@@ -438,17 +436,17 @@ function loadDashboard() -> Dashboard errors {
 }
 ```
 
-If `loadDashboard()` is marked `errors`, the error auto-propagates to the caller. Same rules as everywhere else.
+Because `loadDashboard()` is marked `errors`, the failure goes up to the caller automatically. Same rules as everywhere else.
 
 ---
 
-## Heavy number-crunching also runs in parallel
+## Heavy number-crunching also runs at the same time
 
-Everything above is about waiting for network calls and disk reads — things that pause while
-waiting for the outside world.  Yinz does the same thing for heavy CPU work.
+Everything above is about waiting for network calls and file reads — things that pause while
+waiting for the outside world.  Yinz does the same for heavy calculations.
 
-If you have multiple calculations that don't depend on each other, the compiler runs them
-on different cores at the same time:
+If you have several calculations that don't need each other, the compiler runs them
+on different processor cores at the same time:
 
 ```ynz
 function analyzeGame(game: Game) -> Stats {
@@ -459,15 +457,15 @@ function analyzeGame(game: Game) -> Stats {
 }
 ```
 
-`hits`, `rbi`, and `average` don't depend on each other, so the compiler runs all three
+`hits`, `rbi`, and `average` don't need each other, so the compiler runs all three
 `crunchStat` calls at the same time — each on its own core.  `combineStats` runs only after
 all three finish.
 
 You don't write anything special.  No `background`, no `wait`.  Just normal code.
 
-The compiler only does this when `crunchStat` is actually doing heavy work (has a loop or
-complex math inside).  Simple functions that return immediately aren't worth running in
-parallel — the overhead of starting a new core would cost more than just running it directly.
+The compiler only does this when `crunchStat` does heavy work (a loop or
+lots of math inside).  A small function that returns right away isn't worth it:
+starting work on another core would take longer than just running it.
 
 Your editor shows what's happening in muted text:
 
@@ -481,19 +479,19 @@ function analyzeGame(game: Game) -> Stats {
 ```
 
 These annotations are read-only notes — nothing to change.  They show you what the compiler
-decided so you understand what's actually running in parallel.
+decided, so you know what is running at the same time.
 
 ---
 
 ## That's it
 
 ```
-wait           // complete this before continuing
-background     // run this outside this function's lifetime
-channel<T>     // send values between tasks safely
+wait           // finish this before the next line
+background     // start a job that keeps going after this function returns
+channel<T>     // pass values between jobs safely
 ```
 
-Two keywords and one type. Everything else is automatic. The compiler builds the dependency
-graph, runs independent operations in parallel on all available cores, sequences writes to
-the same resource, manages core pools, applies backpressure when a producer outruns a
-receiver, and handles cleanup. You don't see any of it — you just write normal code.
+Two keywords and one type. Everything else is automatic. The compiler works out which lines
+can run at the same time, spreads them over all available cores, keeps changes to the same
+value in order, slows a fast sender down when the receiver falls behind, and cleans up
+afterward. You write normal code.

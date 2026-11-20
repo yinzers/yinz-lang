@@ -122,7 +122,7 @@ Three ways to handle it:
 
 ```
 function loadConfig() -> Config errors {
-  let raw = readFile(`config.txt`)    // auto-propagates
+  let raw = readFile(`config.txt`)    // a failure goes up automatically
   return parseConfig(raw)
 }
 ```
