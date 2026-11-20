@@ -35,7 +35,7 @@ Every type starts with a capital letter, built-ins included: `Int`, `Float`, `Nu
 
 `shape` is the only declaration keyword. No `interface`, `struct`, `class`, `type`.
 
-**Why**: Three keywords for three overlapping concepts confuses junior developers. `shape` handles all cases: plain data shapes, shapes used as contracts (with bare-signature declarations only — no bodies), shapes that extend other shapes for data reuse. One concept, one word. The word `type` is banned at the lexer level (declaration-keyword diagnostic redirects to `shape`) because "type" is also the generic English word for a category — keeping it as a keyword would constantly conflict with that broader usage.
+**Why**: one word covers plain data shapes, contracts (bare-signature declarations only, no bodies) and shapes that extend other shapes. The declaration keyword `type` is rejected at the lexer, and the diagnostic redirects to `shape`.
 
 > Yinz is **NOT object-oriented** — see [`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md). Shapes hold DATA + (optionally) CONTRACT METHOD-SIGNATURE DECLARATIONS only. Method implementations live as standalone `function` declarations at file/module level. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). The sections below describe the type system within this non-OOP model.
 
@@ -45,9 +45,9 @@ Every type starts with a capital letter, built-ins included: `Int`, `Float`, `Nu
 
 Single inheritance only. `extends` reuses parent's DATA FIELDS — behavior comes from standalone functions, not from inherited methods (because there are no methods on shapes to inherit). No multiple inheritance.
 
-**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; behavior polymorphism per-shape is planned to eventually work via argument-type overloading, but **that dispatch mechanism is not implemented in v0.1** — see "No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)" below. For shared behavior contracts, `follows` handles any number of contracts.
+**Why**: single inheritance has no ambiguous resolution. `extends` reuses data only; shared behavior comes from `follows`, which takes any number of contracts. Overloading by argument type is not built (see the overloading section below).
 
-**Example** (v0.1-valid — distinct function names, since same-named functions in one file are a compile error; see the overloading section below):
+**Example** (distinct function names, since same-named functions in one file are a compile error):
 ```ynz
 shape Entity { name: String, health: Int }
 shape Warrior extends Entity { weapon: String, armor: Int }
@@ -70,7 +70,7 @@ w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an 
 
 `base shape Entity` instead of `abstract class Entity`.
 
-**Why**: "Base shape" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in object-oriented design. Yinz isn't OOP and avoids the term. Golden Rule 5.
+**Why**: "base shape" reads as plain English, and `abstract` is object-oriented vocabulary (Golden Rule 5).
 
 `base` shapes cannot be instantiated via shape value literal — attempting `let e: Entity = { ... }` on a `base shape Entity` is a compile error. They exist purely to be extended.
 
@@ -80,7 +80,7 @@ w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an 
 
 `follows` instead of `implements`. Optional in structurally-typed code but recommended for catching contract mismatches at definition time.
 
-**Why**: "Player follows Damageable" reads like a sentence. `implements` is CS jargon. Structural typing means `follows` isn't required for compatibility — but writing it catches missing-method errors at the shape-declaration site rather than at the first call site, and makes the relationship visible to readers.
+**Why**: "Player follows Damageable" reads as a sentence (Golden Rule 5). Structural typing means `follows` is not required for compatibility; writing it reports a missing function at the shape declaration instead of at the first call site.
 
 **Contract verification**: when a shape declares `follows Foo`, the compiler verifies that standalone functions exist whose signatures match each of Foo's bare-signature method declarations. No method implementations live inside the contract OR the implementing shape — both sides declare signatures; standalone functions provide the behavior.
 
@@ -88,40 +88,38 @@ w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an 
 
 ---
 
-## No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)
+## No `override` Keyword; Function Overloading by Argument Type Is Not Built
 
-There is no `override` keyword in Yinz — methods don't live inside shapes ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), so there's nothing to "override." **Function overloading by argument type** (several standalone functions with the same name but different first-parameter types) is not implemented: the v0.1 typeck function-declaration collision check (`crates/ynz-typeck/src/signatures.rs`) keys the signature table by function **name alone** and unconditionally rejects a second same-named function in the same file, regardless of its parameter types:
+There is no `override` keyword: methods don't live inside shapes ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), so there is nothing to override.
+
+**Function overloading by argument type** (several standalone functions with the same name and different first-parameter types) is not built. The typeck collision check (`crates/ynz-typeck/src/signatures.rs`) keys the signature table by function name alone and rejects a second same-named function in the same file, whatever its parameter types:
 
 ```ynz
 shape Entity { name: String }
 shape Warrior extends Entity { weapon: String }
 
-function attack(share self: Entity) -> String { return self.name + " attacks!" }
-function attack(share self: Warrior) -> String { return self.name + " swings " + self.weapon + "!" }
+function attack(share self: Entity) -> String { return `${self.name} attacks!` }
+function attack(share self: Warrior) -> String { return `${self.name} swings ${self.weapon}!` }
 // COMPILE ERROR: A function named `attack` is already defined in this file.
 ```
 
-**Actual v0.1 behavior**: two functions sharing a name in the same file is a compile error no matter how their parameter types differ. `extends` gives a child shape its parent's *fields* only ([data-only inheritance](#single-inheritance-with-extends-data-only)) — it does not give call sites polymorphic dispatch over a shared function name. The polymorphism mechanisms in v0.1 are **generics** (static dispatch through monomorphization) and **`dynamic Contract`** (runtime dispatch, see [Dynamic dispatch](#dynamic-dispatch--when-and-how)).
-
-**Status**: overload-by-argument-type dispatch is now tracked as a deferred language feature, not a shipped one — see the `function-overload-by-argument-type` `[[deferred_language_feature]]` registry entry in [`registry/features.toml`](../../../registry/features.toml) for the WHY/SUBSTITUTE/SHIPS_IN/DESIGN_DOC deferral fields. Until it ships, give overload-shaped functions distinct names (e.g. `attackEntity`/`attackWarrior`) or reach for generics.
+`extends` gives a child shape its parent's fields only, so call sites get no polymorphic dispatch over a shared function name. Polymorphism comes from **generics** (a specialized version per concrete type) and **`dynamic Contract`** (runtime dispatch, see [Dynamic dispatch](#dynamic-dispatch--when-and-how)). Overload-by-argument-type is the `function-overload-by-argument-type` `[[deferred_language_feature]]` entry in [`registry/features.toml`](../../../registry/features.toml). Until it ships, give such functions distinct names (`attackEntity`, `attackWarrior`) or use generics.
 
 ---
 
 ## Structural Typing
 
-Shape matching like TypeScript. If the fields match the type, the value is valid — no explicit type constructor required.
+If a value's fields match the expected shape, the value is valid with no explicit constructor. `return { quotient: a / b, remainder: a % b }` works when the return type is `DivResult`.
 
-**Why**: Reduces ceremony. Object literals that match a type's shape are accepted without explicit type-name syntax. `return { quotient: a / b, remainder: a % b }` works when the return type is `DivResult` — no `return DivResult { ... }` needed.
+**Why**: Golden Rule 12 (familiar syntax) and less ceremony at every construction site.
 
 ---
 
 ## Static Dispatch Default for `follows` Constraints
 
-When a function is generic over a `follows` constraint AND the concrete type at the call site is known to the compiler, the compiler **generates a specialized version per concrete type** and pastes the called methods directly into the loop (no function-call overhead, no runtime lookup). This is "static dispatch" — the dispatch decision is made at compile time. Dynamic dispatch (runtime lookup, no inlining) is the explicit opt-in for the case where the concrete type cannot be known until runtime.
+When a function is generic over a `follows` constraint and the concrete type at the call site is known, the compiler generates a specialized version per concrete type and inlines the called functions (no call overhead, no runtime lookup). This is static dispatch: the decision is made at compile time. Dynamic dispatch (runtime lookup, no inlining) is the explicit opt-in for when the concrete type is unknown until runtime.
 
-Locked: static dispatch is the default. Dynamic dispatch requires explicit syntax.
-
-> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). That word is BANNED from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 5 — even the design doc you're reading should prefer "specialized version per type" so a jr dev contributing to Yinz isn't blocked by jargon. The internal term is documented here once and referenced in contributor-only compiler-internals docs (`crates/ynz-codegen/`); user-facing surfaces use the plain phrase.
+Locked: static dispatch is the default; dynamic dispatch requires explicit syntax. User-facing surfaces and docs say "specialized version per type", never the compiler-literature term for it (Golden Rule 5).
 
 ### Concrete example
 
@@ -154,61 +152,54 @@ function findMax<T follows Comparable>(share items: Array<T>) -> Maybe<T> {
   // ... walk the array, keep the largest per compare()
 }
 
-// CASE A — concrete type known → STATIC DISPATCH (auto-picked, fast)
+// CASE A — concrete type known → static dispatch (auto-picked)
 let players: Array<Player> = [...]
 let best = findMax(players)
-// Compiler generates a specialized findMax just for Player; .compare() is pasted inline.
-// Cost: ~1 CPU instruction per .compare()
-// IDE muted hint: // static dispatch (T = Player)
+// The compiler generates a specialized findMax for Player; compare() is inlined.
 
-// CASE B — heterogeneous collection → DYNAMIC DISPATCH (user opt-in via `dynamic`)
+// CASE B — heterogeneous collection → dynamic dispatch (opt-in via `dynamic`)
 let mixedThings: Array<dynamic Comparable> = [player1, item1, player2]
 let maxThing = findMax(mixedThings)
-// Compiler can't generate a specialized version — array holds different concrete types.
-// Each .compare() = runtime lookup ("which compare() do I call for THIS element?") + indirect function call.
-// Cost: ~3 CPU instructions + likely cache miss per .compare()
+// No specialized version exists: the array holds different concrete types, so each
+// compare() is a runtime lookup plus an indirect call.
 ```
 
-### Why this matters
+**Built today**: the specialized-version codegen for generics. `dynamic Contract` parses and type-checks, but codegen rejects calls through it (`emit.rs:23987-23990`, "dynamic dispatch call sites not yet lowered"), so Case B does not build.
 
-Go ships with always-dynamic interface dispatch — even when only one concrete type ever satisfies an interface at a given call site, Go can't skip the runtime lookup without profile-guided optimization. Polar Signals' benchmark shows ~3× overhead in tight loops: 958 µs (interface dispatch) vs 320 µs (concrete type dispatch) per 1024 iterations (https://www.polarsignals.com/blog/posts/2023/11/24/go-interface-devirtualization-and-pgo). Yinz inherits Rust's correct model — generate a specialized version when the type is known, runtime lookup only when the user explicitly opts in via `dynamic`.
+### When you need `dynamic`
 
-### When you actually need `dynamic`
+Only when heterogeneity is the feature:
+- **Heterogeneous collections**: a UI tree whose leaves are all `Drawable` but are buttons, sliders and text boxes, stored in `Array<dynamic Drawable>`.
+- **Plugin architectures**: types loaded from packages at runtime.
+- **Stored callback collections**: arrays of different function-shaped values.
 
-Rare in practice. Real cases:
-- **Heterogeneous collections** — UI tree where leaves are buttons, sliders, text boxes (all `Drawable`), stored in `Array<dynamic Drawable>` for rendering
-- **Plugin architectures** — types loaded from packages at runtime
-- **Stored callback collections** — arrays of different function-shaped values
+### Teaching surfaces (designed, not built)
 
-For 95% of code, the user writes generic functions and the compiler picks static dispatch automatically. `dynamic` is only needed when the heterogeneity is the actual feature.
+Per Golden Rule 3 and [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md), both dispatch cases show what was chosen at the call site, plus a lint when `dynamic` was unnecessary. None of these hints or the lint exist in the compiler yet.
 
-### Teaching surfaces — both directions get IDE hints
-
-Per Golden Rule 3 (compiler is teacher) and [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md), both dispatch cases get visible teaching at the call site, plus a lint when the user opted into dynamic unnecessarily.
-
-#### Static dispatch — neutral muted hint
+#### Static dispatch: neutral muted hint
 
 ```ynz
-let best = findMax(players)        // muted: // static dispatch (T = Player) — .compare() inlined, ~1 cycle
+let best = findMax(players)        // muted: // static dispatch (T = Player)
 ```
 
 Hover tooltip:
-- **WHAT**: A specialized version of `findMax` was generated for `Player`. The `.compare()` call is pasted directly into the loop body — no function-call jump.
-- **WHAT INSTEAD**: To explicitly force dynamic dispatch (rare — only useful for benchmarking), wrap the input as `Array<dynamic Comparable>`.
-- **WHY**: The compiler knew the concrete type at this call site. Static dispatch is ~3× faster than runtime lookup in tight loops.
+- **WHAT**: a specialized version of `findMax` was generated for `Player`, and `compare()` is inlined into the loop body.
+- **WHAT INSTEAD**: to force dynamic dispatch, wrap the input as `Array<dynamic Comparable>`.
+- **WHY**: the compiler knew the concrete type at this call site, so no runtime lookup is needed.
 
-#### Dynamic dispatch — cautionary muted hint (red-tinted per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md))
+#### Dynamic dispatch: cautionary muted hint (red-tinted per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md))
 
 ```ynz
-let maxThing = findMax(mixedThings)   // muted (red-tinted): // dynamic dispatch — runtime lookup per .compare(), ~3× cost
+let maxThing = findMax(mixedThings)   // muted (red-tinted): // dynamic dispatch — runtime lookup per compare()
 ```
 
 Hover tooltip:
-- **WHAT**: This call uses runtime lookup because `mixedThings` is `Array<dynamic Comparable>` — the concrete type at each iteration isn't known at compile time.
-- **WHAT INSTEAD**: If all elements are actually the same concrete type, switch to `Array<Player>` for static dispatch (~3× faster).
-- **WHY**: You wrote `dynamic Comparable` to allow heterogeneous storage. The cost is one runtime lookup + indirect call per `.compare()`.
+- **WHAT**: this call uses a runtime lookup because `mixedThings` is `Array<dynamic Comparable>`, so the concrete type of each element is unknown at compile time.
+- **WHAT INSTEAD**: if all elements have the same concrete type, switch to `Array<Player>` for static dispatch.
+- **WHY**: you wrote `dynamic Comparable` to allow mixed storage, which costs one runtime lookup and indirect call per `compare()`.
 
-#### Tier 3 lint when dynamic could have been static
+#### Lint when `dynamic` could have been static
 
 ```ynz
 let things: Array<dynamic Comparable> = []   // yellow squiggle from `prefer-static-dispatch-when-monotype`
@@ -217,9 +208,9 @@ things.add(player2)
 // All elements are Player. The dynamic wrapper is unnecessary.
 ```
 
-The lint fires when the compiler can prove the `dynamic` collection only ever holds one concrete type. Suggested fix: change to `Array<Player>` for the perf win.
+The lint fires when the compiler proves the `dynamic` collection only ever holds one concrete type. Suggested fix: change to `Array<Player>`.
 
-#### Compile errors when contract isn't followed (Rule 3 format)
+#### Compile errors when a contract is not followed
 
 ```
 COMPILE ERROR: Item is not a Player.
@@ -228,7 +219,7 @@ COMPILE ERROR: Item is not a Player.
   To store a mix of Comparable shapes, declare:
     let things: Array<dynamic Comparable> = []
 
-  This adds runtime dispatch cost (~3× per .compare() call) but allows mixed types.
+  This adds runtime dispatch cost per compare() call but allows mixed types.
 ```
 
 ```
@@ -251,30 +242,19 @@ COMPILE ERROR: Foo does not follow Comparable.
   functions, not methods inside the shape. See docs/reference/REF-operators.md.
 ```
 
-All four diagnostics (two muted hints + one lint + two compile errors) follow WHAT/WHAT-INSTEAD/WHY. None use jargon (`monomorphization`, `vtable`, `devirtualization` are internal compiler terms — user-facing diagnostics say "specialized version per type" and "runtime lookup").
-
-### Why this matters
-
-Go shipped with interface dispatch always being dynamic. Polar Signals' production benchmark (https://www.polarsignals.com/blog/posts/2023/11/24/go-interface-devirtualization-and-pgo) shows ~3× overhead in tight loops: ~958 µs (interface dispatch) vs ~320 µs (concrete type dispatch). Even when only one concrete type ever satisfies the interface at a given call site, Go can't skip the runtime lookup without profile-guided optimization. Yinz inherits Rust's correct model — `follows` is the contract, generating a specialized version per concrete type is the codegen — so this overhead doesn't exist by default.
+All diagnostics follow what / what-instead / why and use plain words ("specialized version per type", "runtime lookup").
 
 ### Auto-promotion (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md))
 
-This pattern qualifies as auto-promotion (codegen surface only):
-- **Codegen**: when the compiler proves the concrete type at a call site, it emits the static-dispatch version. Always applies when proof is possible.
-- **Muted IDE hint**: optional — the IDE can show `// static dispatch (T = Player)` on the call to confirm what was chosen.
-- **Tier 3 lint suggestion**: not applicable — there's no source-level rewrite that improves things; the user wrote idiomatic generic code and the compiler handled it.
+Codegen only: when the compiler proves the concrete type at a call site, it emits the static-dispatch version. The muted hint above is the optional confirmation; there is no lint, because the user wrote idiomatic generic code.
 
 ### Dynamic dispatch — when and how
 
-Dynamic dispatch is needed when the concrete type genuinely isn't known until runtime — e.g., a heterogeneous collection of values that all satisfy a contract but are different types. The opt-in is `dynamic Contract` (for example `dynamic Drawable`), shipped. It is written `dynamic`, never `dyn` (Rust jargon; Golden Rule 5).
+The opt-in is `dynamic Contract` (for example `dynamic Drawable`). It is written `dynamic`, never `dyn` (Golden Rule 5).
 
 ### Tradeoff
 
-Generating a specialized version per concrete type produces more machine code than a single runtime-dispatched implementation. For very large programs with many concrete types satisfying the same contract, binary size grows proportionally. Mitigated by:
-1. Deduplication of identical specialized versions (per the generics section of [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md)) — identical instantiations share LLVM IR
-2. Opt-in dynamic dispatch (`dynamic ...` in stored-value contexts) recovers code size when that matters
-
-The default favors perf; the opt-in covers binary-size-constrained cases.
+A specialized version per concrete type grows binary size with the number of concrete types behind one contract. Identical instantiations are deduplicated (generics section of [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md)), and `dynamic` recovers code size when that matters.
 
 ---
 
@@ -282,7 +262,7 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 `shape Box<T> { value: T }` — angle bracket generics, same pattern as built-in collections.
 
-**Why**: Consistent with `Array<Player>`, `Map<String, Number>`, `Fixed<String>`. One `name<type>` pattern covers both built-in and user-defined generic types. No special cases.
+**Why**: one `name<type>` pattern covers built-in (`Array<Player>`, `Map<String, Number>`) and user-defined generic types.
 
 ---
 
@@ -290,9 +270,9 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 `shape DrawableShape = Circle | Square | Triangle` with `is` for type checking and narrowing.
 
-**Why `|` over `or`**: Golden Rule 5 exception: `or` is a prose word, while `|` is unambiguous and familiar from TypeScript. `is` matches plain English — "if shape is Circle."
+**Why `|` over `or`**: the Golden Rule 5 exception: `or` is a prose word, while `|` is unambiguous. `is` reads as plain English ("if shape is Circle").
 
-**`is` in union context = exact type**: `Admin` does NOT match `is User` in a union even if `Admin extends User`. Outside unions, normal subtype rules apply. This makes union discrimination predictable — each variant is always distinct.
+**`is` in a union is an exact-type test**: `Admin` does not match `is User` in a union even if `Admin extends User`. Outside unions, normal subtype rules apply. Each variant stays distinct.
 
 ---
 
@@ -300,9 +280,9 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 No `null`. No `undefined`. Absence is expressed as `none` and tracked by the type system with `Maybe<T>`.
 
-**Why**: Null references are the "billion dollar mistake" — entire categories of runtime errors exist only because null can masquerade as any type. Making absence explicit in the type system moves null errors to compile time (Golden Rule 2).
+**Why**: explicit absence moves null errors to compile time (Golden Rule 2).
 
-**`Maybe<T>` = `T | none`**: Interchangeable syntax. `Maybe<String>` is sugar for `String | none`. Both valid everywhere.
+**`Maybe<T>` and `T | none`** are designed as one type. Built today, `T | none` stays a plain union and is not rewritten to `Maybe<T>`; write `Maybe<T>` where `Maybe` lowering must apply (see [`IMP-maybe.md`](IMP-maybe.md)).
 
 ---
 
@@ -314,19 +294,19 @@ No `null`. No `undefined`. Absence is expressed as `none` and tracked by the typ
 shape Player {
   name: String
   hidden damageMultiplier: Number = 1.0
-  hidden internalCache: Map<String, Number> = {}
+  hidden hitCount: Int = 0
 }
 ```
 
-**Why `hidden` exists**: per-field visibility within an exported shape. Without it, external code could write `player.damageMultiplier = 10` and bypass the invariants `takeDamage` maintains; module-level "don't export the field" cannot work because exporting a shape exposes all its fields.
+**Why `hidden` exists**: per-field visibility within an exported shape. Exporting a shape exposes all its fields, so without `hidden` external code could write `player.damageMultiplier = 10` and bypass the invariants `takeDamage` maintains.
 
-**Why `hidden` over `private`**: Golden Rule 5. "Hidden field" reads like English. "Private" requires knowing OOP access modifier terminology. A developer who has never seen Yinz understands what `hidden damageMultiplier` means.
+**Why `hidden` over `private`**: Golden Rule 5; `hidden damageMultiplier` is understood without OOP vocabulary.
 
-**Why require defaults**: Without a default, the caller would need to provide the hidden field during construction — which would require knowing the field name, defeating the purpose of hiding it. Requiring defaults makes the initial state explicit and visible in the type definition (Golden Rule 4 — self-documenting). The caller only provides visible fields.
+**Why defaults are required**: a caller constructing the shape provides only the visible fields, so the initial state of a hidden field must be explicit in the type definition (Golden Rule 4).
 
-**Visibility scope (non-OOP framing)**: Yinz isn't object-oriented — fields don't belong to instances; functions don't live inside shapes. `hidden` means "this field is only accessible to standalone functions declared in the same file as the shape." A `hidden` field can be read and written by functions in the file; it's invisible to imports and to functions in other files. Default values cover construction (the only way an outside caller could touch a hidden field would be at construction — defaults make that path go through the shape's file).
+**Visibility scope**: a `hidden` field is read and written only by standalone functions declared in the same file as the shape, and is invisible to imports and to functions in other files.
 
-**Hidden vs ownership modifiers**: these are different concepts. `share`/`lend`/`give` are SIGNATURE-level ownership declarations (or compiler-inferred at call sites). `hidden` is a FIELD-level visibility modifier. They don't interact.
+**Hidden vs ownership modifiers** are separate: `share`/`lend`/`give` declare ownership in signatures; `hidden` is field-level visibility. They don't interact.
 
 ---
 
@@ -334,11 +314,11 @@ shape Player {
 
 `options Status { active, inactive, banned }` instead of `enum`.
 
-**Why**: "Options" is a plain English word non-programmers understand. A non-programmer reading `options Status` knows what it means. They don't know what an enum is. Golden Rule 5.
+**Why**: "options" is a plain word; `enum` is jargon (Golden Rule 5).
 
-**Built-in options**: `SortOrder { asc, desc }`, `Comparison { equal, greater, less }`.
+**Built-in options**: `SortOrder { asc, desc }`, `Comparison { equal, greater, less }` (registered in `crates/ynz-typeck/src/options_table.rs`).
 
-**Shorthand**: Context-aware shorthand allowed when the expected type is known at the call site.
+**Shorthand**: allowed when the expected type is known at the call site.
 
 ---
 
@@ -356,14 +336,10 @@ shape Bar {
 }
 ```
 
-**No keyword**: `{` in type position is unambiguous (no other Yinz type annotation uses it), so the compiler reads it as an anonymous shape type.
+**No keyword**: `{` in type position is unambiguous, so the compiler reads it as an anonymous shape type.
 
-**How it works**: The compiler synthesizes a name (`__anon_Bar_spread`) and registers the anonymous shape as a real named shape. All downstream passes (typeck, codegen, print) see an ordinary named shape — zero special cases in the backend.
+**How it works**: the compiler registers the anonymous shape as a synthetic named shape with a content-based name, so every later pass sees an ordinary named shape. Naming and equivalence rules are in [`IMP-inline-shape-types.md`](IMP-inline-shape-types.md).
 
-**Print output**: The synthesized name is stripped from debug output. `print(b)` shows `Bar { symbol: AAPL, spread: { bid: 182.40, ask: 182.50 } }` — clean and uncluttered.
+**Print output**: the synthesized name is omitted (`emit.rs:27088`), so `print(b)` shows `Bar { symbol: AAPL, spread: { bid: 182.40, ask: 182.50 } }`.
 
-**When to use vs named shapes**:
-- Anonymous: field is one-off, only used in this one shape, never referenced elsewhere
-- Named (`shape Spread { ... }`): reusable across multiple shapes, or you need to pass a `Spread` value independently
-
-The friction of a named declaration is intentional pressure toward naming things that matter. If you later need `let s: Bar.spread = ...` or want to pass the spread independently, promote it to a named shape.
+**Anonymous vs named**: use an anonymous shape for a one-off field referenced nowhere else; use a named shape (`shape Spread { ... }`) when it is reused or passed independently.
