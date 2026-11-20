@@ -151,19 +151,19 @@ Cross-reference: [`docs/reference/REF-variables.md`](../../reference/REF-variabl
 
 ---
 
-## Transfer — Who Else Holds This Value (v0.3-M8 Phase 2; Phase 4 implements)
+## Transfer — Who Else Holds This Value
 
-**Status**: designed in v0.3-M8 Phase 2 (`git log --grep=m8-p2` for the design rounds); **SHIPPED in v0.3-M8 Phase 4** (`crates/ynz-typeck/src/effective_ownership.rs` `provenance`/`consumed`/`returns_fresh`, `scope.rs` `Origin`/`ConsumedBy`/alias classes, `check.rs` `check_transfer` — the one emit site). This section is the ONE home for the question *"may this value leave this frame for a sink that will free it?"* — a channel `send`, a `give` parameter in any call form, a `background` argument the spawn gives away. [`IMP-concurrency.md`](IMP-concurrency.md)'s channel-close section cites it for the channel instance; it does not restate the rule.
+**Status**: built (`git log --grep=m8-p2` for the design rounds; `crates/ynz-typeck/src/effective_ownership.rs` `provenance`/`consumed`/`returns_fresh`, `scope.rs` `Origin`/`ConsumedBy`/alias classes, `check.rs` `check_transfer` — the one emit site). This section is the ONE home for the question *"may this value leave this frame for a sink that will free it?"* — a channel `send`, a `give` parameter in any call form, a `background` argument the spawn gives away. [`IMP-concurrency.md`](IMP-concurrency.md)'s channel-close section cites it for the channel instance; it does not restate the rule.
 
-### The producer this section retires
+### The decision: one provenance function, no per-site lists
 
-A list of argument shapes at call sites is unbounded — every expression form the list omits is a hole (eight probes were run against the tree; seven found a live hole, and the eighth — `dynamic Contract` — ICEs in codegen before reaching one, so it confirms zero runtime exposure rather than a hole; see `git log --grep=m8-p2`). The fix is not another shape on a list. It is one **provenance** function, defined once, with an exhaustive match the compiler enforces, whose four-valued answer every sink consumes; one **binding-event** rule, exhaustive over every statement form that can make a name denote a value; and the whole-program facts the existing `effective_ownership` fixpoint already computes, threaded to those sinks instead of re-derived.
+Decided: the transfer question is answered by one **provenance** function with an exhaustive, wildcard-free match, whose four-valued answer every sink consumes; one **binding-event** rule, exhaustive over every statement form that can make a name denote a value; and the whole-program facts the `effective_ownership` fixpoint already computes, threaded to the sinks instead of re-derived. A list of argument shapes at each call site is rejected, because every expression form it omits is a hole (`git log --grep=m8-p2`).
 
-**One exhaustive `Expr` match.** The question is answered by threading `effective_ownership`, never by enumerating `Expr::` variants at call sites; the design does ONE exhaustive `Expr` match, inside the authoritative module, because "what does this expression denote, ownership-wise" is a syntactic question by nature — it is the input the fixpoint itself consumes (`arg_is_binding`, `root_binding_name` and `place_path` are already `Expr` matches inside that module). The design bans a partial list re-derived at each CALL SITE (enumerating syntactic sites was tried and removed because every omitted form is a hole); a single match with no wildcard arm, in the one owning function, is closed by the compiler's exhaustiveness check rather than by a reviewer's memory. A single exhaustive, wildcard-free match in the owning module is the remedy for the ban on open per-site lists, not an instance of it.
+**One exhaustive `Expr` match.** "What does this expression denote, ownership-wise" is a syntactic question, so the single match lives inside the authoritative module (`arg_is_binding`, `root_binding_name` and `place_path` there are already `Expr` matches). The compiler's exhaustiveness check closes it, not a reviewer's memory; call sites never enumerate `Expr::` variants.
 
 ### Where the authority lives
 
-`crates/ynz-typeck/src/effective_ownership.rs` is the module. It already owns (a) a Kleene fixpoint over every parameter of every local function, converging under mutual recursion, seeded from declared `lend`/`give` and raised by body use; (b) the per-expression helpers `arg_is_binding`, `root_binding_name`, `place_path`. `root_binding_name` already has a pre-existing twin at `check.rs:11864` beside `effective_ownership.rs:658` — Phase 4 collapses it to the one definition this section's threading depends on, or this section's "one authoritative answer" claim rests on an un-collapsed twin ([`authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md)). The fixpoint runs in the same query as the body check but **after** it today (`check(...)` at `queries.rs:~423`, `effective_ownership::analyze` at `:503`), and it depends only on the parse and the signature tables, both in hand at `queries.rs:279–308` — so hoisting it above the body check is a reorder, not a redesign. Phase 4 performs that reorder; every consumer below assumes the report exists before any body is checked.
+`crates/ynz-typeck/src/effective_ownership.rs` is the module. It already owns (a) a Kleene fixpoint over every parameter of every local function, converging under mutual recursion, seeded from declared `lend`/`give` and raised by body use; (b) the per-expression helpers `arg_is_binding`, `root_binding_name`, `place_path`. `root_binding_name` has one definition (`effective_ownership.rs:1606`) ([`authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md)). The fixpoint runs in the same query as the body check but **before** it (`effective_ownership::analyze` at `queries.rs:514`, `check(...)` at `:518`), because it depends only on the parse and the signature tables; every consumer below assumes the report exists before any body is checked.
 
 This design **extends that module** with three facts and one function, and forbids a second derivation of any of them anywhere else ([`authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md)):
 
@@ -369,7 +369,7 @@ One rule decides, at every exit edge on the plain path and in a resume function,
 
 A read of a moved value is refused at compile time (`Consumed`, `ConsumedBySend`, `ConsumedByStore`), so a nulled slot is never read again. A callee never releases a value it only borrows (`share`, `lend` and bare parameters stay the caller's). That is why a value is freed exactly once, with no drop flag beyond the null check. A task dropped while Pending applies the same rule to the list of the statement it is parked at ("A task dropped while Pending (C8 slice 6)" below). Pinned by `v03_m9_release_safety` and `v03_m9_c7_*`.
 
-### Scope-exit release on the plain path (C7)
+### Scope-exit release on the plain path
 
 A plain (non-suspending) function releases its heap locals at every exit edge of `TypedModule::release_plan`, through ONE emitter, `Cg::emit_release_edge` (`crates/ynz-codegen/src/emit.rs:30830-30836`, with `emit_release_edge_with`, `:30841-30871`), which calls `Cg::release_fn` (the C6 helper) for each entry whose fate releases. A state-machine resume function releases through the same emitter for the frame-backed kinds only, see "Scope-exit release in a resume function (C8 slice 2)" below.
 
@@ -404,7 +404,7 @@ A plain (non-suspending) function releases its heap locals at every exit edge of
 
 Pinned by `v03_m9_release_safety` (ASan, both optimization levels, counters) and `v03_m9_c7_*`.
 
-### Scope-exit release in a resume function (C8 slice 2)
+### Scope-exit release in a resume function
 
 A state-machine resume function releases through the one emitter, `Cg::emit_release_edge`, at the same edges as a plain function: block end (`lower_sm_block`, `crates/ynz-codegen/src/emit.rs:11190-11218`; `release_at_block_end`, `:32412-32453`), `return` and auto-propagation. `Cg::releases_in_instance` (`emit.rs:30117-30136`) is the one predicate of what it releases: exactly the kinds with `ReleaseKind::has_frame_backing`, the kinds the crossing set reads. An errors-capable local is one of them (C8 slice 4b); a `Fixed<T>` of heap items whose length is unknown is `Omitted(UnsizedFixed)` in the plan and its items leak.
 
@@ -416,7 +416,7 @@ A state-machine resume function releases through the one emitter, `Cg::emit_rele
 - **The error path of a narrowed re-read** (`.failed()` checked or propagated before) cannot run and has no plan edge: it releases temporaries and loop copies only (`release_at_narrowed_error_path`, `emit.rs:32490-32501`).
 
 
-### Copies held across a `wait` (C8 slice 3)
+### Copies held across a `wait`
 
 A copy a suspending statement makes lives in a slot of the heap frame, not in an SSA value: a resume gets a new stack frame, so only the frame reaches the release.
 
@@ -427,7 +427,7 @@ A copy a suspending statement makes lives in a slot of the heap frame, not in an
 - **CPU-group results.** The result of a spike or fused member is bound to the host's result slot as a frame-backed local, so the slice 2 release plan releases it like any local (`producer_p5_*`); nothing more was needed.
 
 
-### Frame regions for aggregates (C8 slice 4a)
+### Frame regions for aggregates
 
 A shape, a nested shape, a `fixed` list, a `maybe` and an envelope union are inline bytes, not a pointer a frame slot keeps, and a resume gets a fresh stack, so their bytes live in a region of the heap frame. Rust keeps a value that crosses an await inline in the future's state; a region is that, and no allocation is added (Golden Rule 6).
 
@@ -437,7 +437,7 @@ A shape, a nested shape, a `fixed` list, a `maybe` and an envelope union are inl
 - **Staged `maybe` arguments.** A `maybe` call result at a `give` position (not a temporary) is staged like a shape: `Temporaries::staged_arguments` records it, `Cg::stage_value_in_frame` (`emit.rs:31852-31900`; `stage_maybe_payload`, `:31912-31993`) moves its 16-byte envelope into a region reserved per argument (`staged_region_slots`), whose payload is a heap pointer or value already. A `maybe` of an envelope union is not staged. A `fixed` call result is not staged (`has_staging_region`, `crates/ynz-typeck/src/temporaries.rs:545-552`, answers true only for a shape, a `maybe` of a non-envelope-union and a decimal128 `number`). A signature's `fixed` has a length (`FixedLength`; `IMP-collections.md` "`Fixed<T, N>` in function signatures"), so a returned `fixed` reports its `count`; only an unknown-length `fixed` (from `filter`, `unique`, `limit` or `freeze`) reads `count` 0.
 - **Not yet.** A `give` argument that is a named `maybe` or `fixed` local still travels by pointer (the plain-local forms are unchanged).
 
-### Errors-capable values in a resume function (C8 slice 4b)
+### Errors-capable values in a resume function
 
 An errors-capable local releases through the same emitter as any other (`ReleaseKind::ErrorsCapable.has_frame_backing`). Its frame home is the one a crossing errors local always had: the error word and the ok word in two frame slots (three for a decimal), refreshed into a companion `{err, ok}` struct on every resume, and for a union result the union's slot in a region.
 
@@ -451,7 +451,7 @@ An errors-capable local releases through the same emitter as any other (`Release
 - **A `fixed` of unknown length.** The plan records `Omitted(UnsizedFixed)` for a list of unknown length whose items own heap, and its items leak. A signature's `fixed` always has a length (`docs/internal/implementation/IMP-collections.md`, "`Fixed<T, N>` in function signatures"), so `KNOWN_PLAIN_LEAKS` is empty (`crates/ynz-driver/tests/v03_m9_c7_leak_sweep.rs:46`).
 - **An unbound errors-capable temporary of a statement that suspends** (`wait consume(label(1).or(fallback))`) keeps its `{err, ok}` pair in a frame region behind its slot (`temporary_home`): 16 bytes for a string, array, map, shape, `maybe` of a string, scalar or shape, or a bignum ok word; the pair, the 16-byte view and the slot (`ErrorsUnion`) for an envelope union; the pair, the `maybe` pair, the view and the slot (`ErrorsMaybeUnion`) for a `maybe` of one (`bind_temporary`, `maybe_union_payload_into`). A decimal128 `number` result keeps no home (its ok word points into staging; nothing to release). Pinned by `an_unbound_errors_temporary_is_released_for_every_inner_type` (plain and suspending consumer). Not built: a crossing errors local passed to a `give` parameter cannot be written (an `errors` type is not a parameter type).
 
-### The spawn ladder (C8 slice 5)
+### The spawn ladder
 
 A `background` argument is the task's own value, and the ladder (`SpawnStateFnFuture::drop`, or the CPU closure's `emit_bg_arg_frees`) releases it once. The spawn site (`prepare_bg_arg_for_ctx`, `emit.rs:24471-24887`; `lower_sm_background_spawn`) decides who owns what; the free kind a slot carries (`BgArgFreeKind`, wire kinds `BG_ARG_KIND_*`) says how the ladder frees it.
 
@@ -462,7 +462,7 @@ A `background` argument is the task's own value, and the ladder (`SpawnStateFnFu
 - **A value a handle delivers.** `h.receive()` of a plain `Maybe<T>` result copies the callee's `{flag, bits}` pair into a counted cell (`RET_KIND_VALUE_MAYBE`, `ynz_alloc(16)`), as a `Maybe<T> errors` result's ok word already is one, so the receiving binding owns the envelope and its payload and releases it like any call result. A decimal128 `number` (34 digits or fewer) still sits in the handle's own buffer (`ec_borrowed_ok`: the binding drops the error object only). A `number<40> errors` result does not: its ok word is the text the task allocated and the handle hands over (`RET_KIND_EC_WORD`), so the binding owns it and frees it like any string. A union or `maybe` of a union is not the plain `maybe` cell either: it is the moved union cell ("A completion nobody receives" below). A completion nobody receives is released by the handle ("A task dropped while Pending (C8 slice 6)" below). Pinned by `a_maybe_received_from_a_handle_is_owned_by_its_binding`, `a_number_received_from_a_handle_is_not_freed_by_its_binding`, `a_received_bignum_errors_result_is_released_with_its_binding`.
 - **Generic `T` temporaries.** A `T`-typed temporary that is an explicit `.copy()` (`Temporaries::is_type_parameter_copy`) is a minted `maybe` envelope cell in an instance whose `T` is a `maybe` (`MaybeCellClone`) and releases in the cell form. A union or channel `T` cannot reach it: its `.copy()` is refused in codegen. Pinned by `a_type_parameter_copy_instantiated_as_a_maybe_is_released`.
 
-### A task dropped while Pending (C8 slice 6)
+### A task dropped while Pending
 
 A task whose future is dropped before it returned (the runtime shut down, its handle was freed) releases what its frame holds through **the drop entry of its resume function**. Nothing runs on the normal path.
 
@@ -625,7 +625,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-### Registry entries this section needs (Phase 4 adds them)
+### Registry entries this section needs
 
 - `[[diagnostic_template]]` `ConsumedBySend` (slots `{name}`, `{channel}`, `{sent}`, `{via}`), `ParamNeedsGive` (as above, `{act}` gains the chain form), `TransferNeedsCopy`. `HandleChannelArgNeedsBinding` is unchanged.
 - `[[deferred_language_feature]]` `name = "maybe-move-out"` — the consuming move-out-of-`Maybe<T>` form deferred above ("What this makes sound, and what stays outside"). `substitute` = "Call `.copy()` on the accessed value at the relay site instead — e.g. `other.send(got.value.copy())`." `why` = the deferral's WHY (a consuming accessor is a language-wide `maybe` semantics addition outside a concurrency milestone's charter, not a corollary of the transfer rule) folded with its COST (a `maybe` design addendum, one new `Provenance` arm, one codegen path to move the wrapped value out instead of reading through the envelope). `ships_in` = "a later version" (no milestone tag). `design_doc` = this file, "Deferred (four fields)" above. `triggers` = "a measured relay workload where the extra `.copy()` per hop is a real cost, or the general move/drop story landing and settling what 'consuming' means for `Maybe<T>` alongside every other heap type."
@@ -639,7 +639,7 @@ function entrypoint() -> Nothing {
 
 ---
 
-## Auto-Arc — Sharing Topology Across `background` Boundaries (v0.3-M8 Phase 2; Phase 5 SHIPPED it)
+## Auto-Arc — Sharing Topology Across `background` Boundaries
 
 Code is cited by function name; a line range, where given, is at `d1dd8d8`.
 
@@ -714,7 +714,7 @@ The runtime's release protocol (`release_ladder_payload`, pointer identity) neve
 - **Force the AUTO pick (Arc when the compiler would not)**: deliberately no override. Every decline above is a soundness decline (a writer, an unprovable callee, a type the block cannot express) or a zero-benefit case (one task, a loop); forcing sharing through any of them either races or costs more than it saves.
 - **`share` at a `background` boundary** stays a compile error. It is not reinterpreted as "Arc this": a `share` parameter is a borrow of the caller's frame, and the spawned task may outlive that frame; the Arc block is not the caller's value, it is a copy the tasks own.
 
-### The muted hint (`auto_arc` domain, Informational category; live since Phase 5)
+### The muted hint (`auto_arc` domain, Informational category)
 
 Inline: `// shared by reference count with {n} tasks — read-only` — `{n}` is the group's member count, read from the same `BgOwnership::Arc` record codegen emits from. The hover is static registry markdown (`ynz_registry::lsp_inlay_hint_hover_for` substitutes nothing), so the registry text says "each `background` task started here" where the draft below writes `{n}`; the count is in the label. The draft, tied to the actual group:
 
