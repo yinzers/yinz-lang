@@ -15,7 +15,7 @@ metadata:
 
 A programming language that is fast, safe and easy to read.
 
-You write clean, simple code. The compiler turns it into fast, safe machine code. No garbage collector. No runtime crashes from null. No mystery memory bugs.
+You write clean, simple code. The compiler turns it into fast, safe machine code. There is no garbage collector (no background cleaner that pauses your program). A missing value can't crash your program, because the compiler makes you handle it. Memory bugs are caught while compiling, not while the program runs.
 
 ---
 
@@ -27,7 +27,7 @@ shape Player {
   health: number
 }
 
-// Methods are standalone functions; value.method() is sugar for method(value) (UFCS)
+// Functions are written on their own; player.takeDamage(5) is a shortcut for takeDamage(player, 5)
 function takeDamage(lend self: Player, amount: number) -> nothing {
   self.health = self.health - amount
 }
@@ -52,9 +52,9 @@ function getTopPlayers(share players: fixed<Player>, count: number) -> array<str
 Every decision in this language follows these rules. When something seems weird, one of these is why.
 
 1. **No garbage collector** — ownership handles memory; no pauses, no overhead
-2. **Compile-time safety** — every check that can run at compile time does; a failure that can't (I/O, division by zero) is explicit: `errors` or a task-isolated panic, never silent
+2. **Compile-time safety** — every check that can run at compile time does; a failure that can't (file and network problems, division by zero) is explicit: `errors` or a task-isolated panic, never silent
 3. **The compiler is a teacher** — errors explain what went wrong and suggest fixes
-4. **Self-documenting syntax** — a jr dev who's never seen Yinz should understand any line
+4. **Self-documenting syntax** — a junior developer who has never seen Yinz should understand any line
 5. **Human-readable over jargon** — `options` not `enum`, `nothing` not `void`, `follows` not `implements`
 6. **Zero-cost abstractions** — high-level syntax compiles to what a careful Rust/C++ programmer would write by hand; the features themselves cost what they inherently cost
 7. **Efficiency first, dynamic after** — the default path is always the fastest path
@@ -76,17 +76,17 @@ Each section covers one part of the language. They're self-contained — start w
 - [Ownership](REF-ownership.md) — how memory works without a garbage collector
 - [Types](REF-types.md) — defining your own data shapes
 - [Numeric Types](REF-numeric-types.md) — `number`, `float`, `int`, and `number<N>` for high precision
-- [Options](REF-options.md) — named value sets (like enums, but readable)
+- [Options](REF-options.md) — a fixed set of named choices
 - [Collections](REF-collections.md) — fixed arrays, growable arrays, and maps
 - [Maybe Types](REF-maybe.md) — values that might not exist
 - [Unions](REF-unions.md) — values that can be one of several types
-- [Generics](REF-generics.md) — types that work with any type
+- [Generics](REF-generics.md) — one shape or function that works with many types
 - [Control Flow](REF-control-flow.md) — if, multi-case if, for, while, early returns
-- [Destructuring](REF-destructuring.md) — pulling fields out of types
+- [Destructuring](REF-destructuring.md) — pulling fields out of shapes
 - [Type Conversion](REF-type-conversion.md) — converting between types with dot methods
 - [Strings](REF-strings.md) — text and interpolation
 - [Errors](REF-errors.md) — handling things that can go wrong
-- [Concurrency](REF-concurrency.md) — running code in parallel, background tasks
+- [Concurrency](REF-concurrency.md) — running code at the same time, background jobs
 - [Modules](REF-modules.md) — importing, exporting, and organizing code across files
 - [Scope](REF-scope.md) — block scoping and file-level constants
 - [Main Function](REF-main.md) — program entry point
@@ -96,9 +96,9 @@ Each section covers one part of the language. They're self-contained — start w
 - [Tooling](REF-tooling.md) — ynz build, ynz run, ynz watch, ynz test, ynz add
 - [Testing](REF-testing.md) — writing and running tests
 - [Packages](REF-packages.md) — adding and publishing packages
-- [Operators](REF-operators.md) — operator overloading, boolean operators (`&&` `||` `!`), bitwise operators
-- [Sensitive Values](REF-sensitive.md) — auto-redacting secrets with the `sensitive` type modifier
-- [Iterables](REF-iterables.md) — custom iteration with follows Iterable
+- [Operators](REF-operators.md) — math, comparison, boolean operators (`&&` `||` `!`), bitwise operators
+- [Sensitive Values](REF-sensitive.md) — hiding secrets automatically with the `sensitive` modifier
+- [Iterables](REF-iterables.md) — making your own shapes work in `for` loops with `follows Iterable`
 - [FFI](REF-ffi.md) — calling C libraries and system APIs
 - [Linting](REF-linting.md) — errors, warnings, and suggestions the compiler catches
 - [Performance](REF-performance.md) — why Yinz is fast
