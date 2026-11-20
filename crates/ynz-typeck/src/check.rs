@@ -5246,6 +5246,11 @@ impl<'b> Checker<'b> {
             return;
         };
         let walked_text = expr_source_text(iter);
+        let walked_kind = match iter_ty {
+            Type::BuiltinMap { .. } => "map",
+            Type::String => "string",
+            _ => "list",
+        };
         let copy_name = match walked.last() {
             Some(crate::walked_place::PlaceStep::Field(name))
             | Some(crate::walked_place::PlaceStep::Root(name)) => format!("{name}Copy"),
@@ -5260,6 +5265,7 @@ impl<'b> Checker<'b> {
             &[
                 ("loopVariable", loop_variable),
                 ("walked", walked_text.as_str()),
+                ("walkedKind", walked_kind),
                 ("write", write.as_str()),
                 ("released", released.as_str()),
                 ("copyName", copy_name.as_str()),

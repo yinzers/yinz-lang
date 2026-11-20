@@ -1684,6 +1684,7 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment()
         &[
             ("loopVariable", "row"),
             ("walked", "outer.inner.rows"),
+            ("walkedKind", "list"),
             ("write", "assigns `outer.inner`"),
             ("released", "outer.inner"),
             ("copyName", "rowsCopy"),
@@ -1720,6 +1721,7 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
         &[
             ("loopVariable", "row"),
             ("walked", "holder.rows"),
+            ("walkedKind", "list"),
             (
                 "write",
                 "calls `reset(holder)`, which assigns `holder.rows`",
@@ -1731,5 +1733,40 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
     assert_compiles(&program(
         "row in rowsCopy",
         "let rowsCopy = holder.rows.copy()",
+    ));
+}
+
+#[test]
+fn walked_list_written_in_loop_names_a_map_walk_a_map() {
+    // WHY: the text names what the loop walks, so a map walk is told "map", not "list".
+    let program = |loop_header: &str, before_loop: &str| {
+        format!(
+            "shape Holder {{ table: map<string, int> }}\n\
+             function entrypoint() -> nothing {{\n\
+               let holder: Holder = {{ table: {{}} }}\n\
+               {before_loop}\n\
+               for ({loop_header}) {{\n\
+                 let fresh: Holder = {{ table: {{}} }}\n\
+                 holder = fresh\n\
+                 print(entry.key)\n\
+               }}\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::WalkedListWrittenInLoop,
+        &program("entry in holder.table", ""),
+        &[
+            ("loopVariable", "entry"),
+            ("walked", "holder.table"),
+            ("walkedKind", "map"),
+            ("write", "assigns `holder`"),
+            ("released", "holder"),
+            ("copyName", "tableCopy"),
+        ],
+    );
+    assert_compiles(&program(
+        "entry in tableCopy",
+        "let tableCopy = holder.table.copy()",
     ));
 }

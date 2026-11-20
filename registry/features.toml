@@ -2893,10 +2893,10 @@ why_template = "A `fixed` parameter without a length makes the compiler build on
 # `check_walked_list_kept`; `{loopVariable}` the loop variable, `{walked}` the walked place as
 # written, `{write}` the assignment or call that frees it ("assigns `outer.inner`" or "calls
 # `reset(holder)`, which assigns `holder.rows`"), `{released}` the place that is assigned,
-# `{copyName}` a name for the copy.
+# `{copyName}` a name for the copy, `{walkedKind}` what the loop walks: `list`, `map` or `string`.
 # Decided v0.3-M9 C10 (#387): `git log --grep=WalkedListWrittenInLoop`.
 [[diagnostic_template]]
 kind_name = "WalkedListWrittenInLoop"
-what_template = "The `for` loop over `{walked}` {write}. That frees the list `{loopVariable}` is still being read from."
-what_instead_template = "Copy the list into a local before the loop and walk the copy: `let {copyName} = {walked}.copy()`, then `for ({loopVariable} in {copyName})`. The body can then assign `{released}` freely."
-why_template = "Assigning a place replaces its value and releases the old one. This loop reads `{walked}` straight from the value it started with, so once `{released}` is assigned, the next pass of `{loopVariable}` would read a list that was already released. A copy is a list of its own, so the body can change the original while the loop walks the copy."
+what_template = "The `for` loop over `{walked}` {write}. That frees the {walkedKind} `{loopVariable}` is still being read from."
+what_instead_template = "Copy the {walkedKind} into a local before the loop and walk the copy: `let {copyName} = {walked}.copy()`, then `for ({loopVariable} in {copyName})`. The body can then assign `{released}` freely."
+why_template = "Assigning a place replaces its value and releases the old one. This loop reads `{walked}` straight from the value it started with, so once `{released}` is assigned, the next pass of `{loopVariable}` would read a {walkedKind} that was already released. A copy is a {walkedKind} of its own, so the body can change the original while the loop walks the copy."
