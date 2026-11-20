@@ -805,3 +805,110 @@ fn no_banned_jargon_in_muted_hint_domain_descriptions() {
         );
     }
 }
+
+/// Replace each `{placeholder}` token with a space so placeholder names are not
+/// scanned as prose. The literal escapes `{{` and `}}` are kept as they are.
+///
+/// O(n) time, O(n) memory.
+fn strip_template_placeholders(template: &str) -> String {
+    let mut stripped = String::with_capacity(template.len());
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                stripped.push_str("{{");
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                stripped.push_str("}}");
+            }
+            '{' => {
+                for inner in chars.by_ref() {
+                    if inner == '}' {
+                        break;
+                    }
+                }
+                stripped.push(' ');
+            }
+            other => stripped.push(other),
+        }
+    }
+    stripped
+}
+
+/// Every spelling of a single-word banned entry that a template must not use:
+/// the base word plus `s`, `es`, `d`, `ed`, `ing`, a doubled final consonant
+/// before `ed`/`ing` (wrap -> wrapped, wrapping), a dropped final `e` before `ing`
+/// (coerce -> coercing), and final `y` -> `ies`/`ied` (try -> tries, tried).
+///
+/// Multi-word phrases and acronyms return only themselves: they are matched as
+/// written, as in the other registry audits.
+fn banned_word_forms(banned_name: &str, is_acronym: bool) -> Vec<String> {
+    let base = banned_name.to_lowercase();
+    if is_acronym || base.contains(' ') {
+        return vec![base];
+    }
+    let mut forms = vec![base.clone()];
+    for suffix in ["s", "es", "d", "ed", "ing"] {
+        forms.push(format!("{base}{suffix}"));
+    }
+    if let Some(final_char) = base.chars().last() {
+        let is_consonant = final_char.is_ascii_alphabetic() && !"aeiouy".contains(final_char);
+        if is_consonant {
+            forms.push(format!("{base}{final_char}ed"));
+            forms.push(format!("{base}{final_char}ing"));
+        }
+        if let Some(stem) = base.strip_suffix('e') {
+            forms.push(format!("{stem}ing"));
+        }
+        if let Some(stem) = base.strip_suffix('y') {
+            forms.push(format!("{stem}ies"));
+            forms.push(format!("{stem}ied"));
+        }
+    }
+    forms
+}
+
+// WHY (High tier: untrusted-text validator, a shipped bug): `[[diagnostic_template]]` text
+//      renders as WHAT/WHAT-INSTEAD/WHY in every user-facing diagnostic built from a registry
+//      kind, but lives in registry/features.toml, outside the `Diagnostic::*` source scan.
+//      A banned word shipped in a template and was caught only by hand (plan #17 after-action
+//      review). Word forms ("wrapping", "catches", "tried") are scanned too: the whole-word
+//      check alone lets them through.
+#[test]
+fn no_banned_jargon_in_diagnostic_templates() {
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+    let mut violations: Vec<String> = Vec::new();
+
+    for entry in ynz_registry::diagnostic_templates() {
+        let fields = [
+            ("what_template", entry.what_template),
+            ("what_instead_template", entry.what_instead_template),
+            ("why_template", entry.why_template),
+        ];
+        for (field, text) in &fields {
+            let lower = strip_template_placeholders(text).to_lowercase();
+            for banned_entry in &banned {
+                for form in banned_word_forms(banned_entry.name, banned_entry.is_acronym) {
+                    if contains_whole_word(&lower, &form) {
+                        violations.push(format!(
+                            "[[diagnostic_template]] '{}' field '{}' contains banned word {:?} (matched {:?}): {:?}",
+                            entry.kind_name, field, banned_entry.name, form, text
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon found in {} diagnostic-template field(s):\n{}\n\n\
+             Edit the [[diagnostic_template]] entry in registry/features.toml and replace with \
+             plain English per vocabulary.md.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
