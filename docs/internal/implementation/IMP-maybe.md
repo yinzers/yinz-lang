@@ -34,6 +34,8 @@ See [`docs/reference/REF-maybe.md`](../../reference/REF-maybe.md) for the user-f
 
 `Maybe<T>` is the return type of `.get()` on every built-in collection, so it belongs to the generics engine and not to the narrowing features (unions, `options`, `is Type`). `Array<Int>.get(0)` returns `Maybe<Int>`, and an out-of-bounds index gives `none`, not a runtime panic.
 
+`Maybe<T>` and `T | none` are designed to be one type (the union form rewritten to `Maybe<T>` at type resolution, so there is one encoding). **Built today:** `T | none` stays a plain union (`ast_type_to_type` in `crates/ynz-typeck/src/check.rs` does not rewrite it), so only write `Maybe<T>` where the lowering table below must apply.
+
 ---
 
 ## LLVM Lowering Decision Table

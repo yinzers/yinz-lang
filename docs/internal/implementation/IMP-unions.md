@@ -35,7 +35,7 @@ The lowering is chosen per concrete variant set at codegen time. The decision is
 |---|---|---|
 | All variants are heap-allocated shapes (`ynz_alloc`-backed) AND no `none` variant | Pointer-niche: `{ i8 tag, ptr data }` where tag identifies which shape `data` points to | One pointer + one tag byte; no max-payload waste. Used when every payload is a single pointer. |
 | Mixed value-type and heap variants, OR any variant has a value-type payload >1 pointer | Tagged struct: `{ i8 tag, [maxPayloadSize x i8] payload, padding }` aligned to max(alignof variant) | Single representation; payload area sized for largest variant; alignment correct for all. |
-| `T \| none` (any T) | NOT a union per M6 codegen — this IS `Maybe<T>` and uses M5's lowering table | Avoids double-encoding; the `T | none` form at typeck time is rewritten to `Maybe<T>`. See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md). |
+| `T \| none` (any T) | **Designed:** the same type as `Maybe<T>`, using M5's lowering table. **Built today:** a plain union, not rewritten | The design avoids double-encoding by rewriting `T \| none` to `Maybe<T>` when the type is resolved; `ast_type_to_type` in `crates/ynz-typeck/src/check.rs` leaves it a `Type::Union` for now. See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md). |
 | Single-variant union (`shape S = A`) | **REJECTED at typeck** — compile error | Degenerate; see "Single-variant rejection" below. |
 | 2 to 255 variants | Tag is `i8` | One byte covers up to 256 distinct variants |
 | 256+ variants | Tag is `i16`, but **COMPILE ERROR** with teaching hint | 256+ union variants is almost certainly a code smell. Hint suggests refactoring. |

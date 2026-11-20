@@ -60,19 +60,21 @@ function loadConfigWithLog() -> Config errors {
 }
 ```
 
-**Compile error when ordering is wrong:**
+**Compile error when ordering is wrong — designed, not built.** The design: a `.failed()` check that comes after the success value was used is a compile error ("check-after-use"), because the variable is already narrowed to its success type:
 
 ```ynz
 function loadConfig() -> Config errors {
   let raw = readFile("config.txt")
   let parsed = parseConfig(raw)              // raw auto-propagated here
-  if (raw.failed()) { ... }                  // ← compile error
+  if (raw.failed()) { ... }                  // ← designed to be a compile error
 }
-// COMPILE ERROR: raw was auto-propagated on line 3 (parseConfig(raw)).
+// DESIGNED ERROR (not emitted today): raw was auto-propagated on line 3 (parseConfig(raw)).
 //                After auto-propagation, raw is narrowed to String and no
 //                longer has .failed(). To handle the error before propagating,
 //                move the .failed() check above the parseConfig() call.
 ```
+
+What ships: the checker records which variables were auto-propagated (`errors_consumed` in `crates/ynz-typeck/src/check.rs`), but nothing reads that set to report a diagnostic, so the check-after-use error is not raised. The same holds for the "check-after-use" row of `IMP-narrowing.md`.
 
 **Decided: the hybrid (lazy under the hood, eager in feel).** Auto-propagation happens by default, and you can opt out by checking first; pure eager propagation and pure lazy error-capable variables are rejected.
 
@@ -82,9 +84,24 @@ function loadConfig() -> Config errors {
 
 ---
 
+## Custom Error Handler — `setErrorHandler` (designed, not built)
+
+`setErrorHandler(handler)` replaces the default top-level behavior (print the trace, exit 1) with a function the program supplies. The handler receives the error value described below and typically logs `.message` and `.trace` and reports to monitoring:
+
+```ynz
+setErrorHandler(error => {
+  log.error(error.message)
+  log.error(error.trace)
+})
+```
+
+`setErrorHandler` has no registry entry, typeck rule or runtime support today, so a program that calls it does not build. The default handler is the only top-level behavior that ships. It is called from `main()` before any error can occur (see [`IMP-main-entry.md`](IMP-main-entry.md) and [`IMP-config.md`](IMP-config.md), where it sits with the other runtime-behavior setters).
+
+---
+
 ## Error Object Shape
 
-When an error reaches a custom handler (`setErrorHandler`) or propagates to the top, it carries:
+When an error reaches a custom handler (`setErrorHandler`, designed) or propagates to the top, it carries:
 
 - `.message` — human-readable description (String)
 - `.suggestions` — array of human-readable next steps (Array<String>, may be empty)
