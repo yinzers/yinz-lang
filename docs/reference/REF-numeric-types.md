@@ -69,11 +69,7 @@ let chaotic: Number<200> = initialCondition
 
 `N` is the number of significant digits (the digits that count, ignoring leading zeros).
 
-| Range | Speed |
-|-------|-------|
-| `Number` (the same as `Number<34>`) | Fastest |
-| `Number<N>` for N ≤ 34 | Fastest |
-| `Number<N>` for N > 34 | Slower per operation, but still bounded |
+`Number` is the same as `Number<34>`.
 
 **Maximum precision: `Number<4096>`.** Larger values are a compile error:
 
@@ -91,15 +87,6 @@ let longValue: Number<100> = 2.0
 let total = shortValue + longValue    // total is Number<100> — no precision lost
 ```
 
-**Assigning to a lower precision** rounds the value and gives a compiler warning:
-
-```
-let high: Number<100> = 0.123456789012345678901234567890
-let low: Number<34> = high
-// COMPILER WARNING: assigning Number<100> to Number<34> will round to 34 digits.
-//   If this is intentional, the warning can be silenced. Otherwise widen the target.
-```
-
 ---
 
 ## Float — fast binary arithmetic (opt-in)
@@ -108,20 +95,12 @@ let low: Number<34> = high
 
 ```
 let velocity: Float = 9.81 * 2.5    // fast — tiny rounding is acceptable here
-let angle: Float = math.sin(1.5)    // graphics/physics — speed over precision
+let height: Float = 1.5 * 2.0       // graphics/physics — speed over precision
 ```
 
 Use `Float` when:
 - You're doing graphics, physics, or simulations
 - You've measured that `Number` is too slow and a tiny rounding error is acceptable
-
-The IDE warns you if `Float` looks wrong:
-
-```
-let price: Float = 19.99
-// IDE HINT: Using Float for financial values may cause rounding errors.
-// Consider using Number for exact arithmetic.
-```
 
 ---
 
@@ -144,15 +123,6 @@ let count: Int = 3.5
 // COMPILE ERROR: 3.5 is not a whole number. Int only holds whole numbers.
 // Use Number or Float for decimal values.
 ```
-
-The IDE suggests `Int` when you use `Number` for something that is clearly a whole number:
-
-```
-let pixels: Number = 1920
-// IDE HINT: Number (decimal) is slower for pure integer math.
-// Consider Int for whole numbers.
-```
-
 ---
 
 ## Int overflow
@@ -163,9 +133,15 @@ let pixels: Number = 1920
 let count: Int = Int.max
 count = count + 1
 // RUNTIME ERROR: Int overflow in '+' at main.ynz:2:9
+//
+//   The value wrapped past the maximum (or minimum) for this type.
+//
+//   Use .wrappingAdd() if wrap-around is intentional.
+//
+//   Why: Yinz panics on integer overflow by default to prevent silent data corruption.
 ```
 
-The same message appears for `-` and `*`. Use `.wrappingAdd()` if you want wrap-around behavior on purpose, or `.saturatingAdd()` to cap at `Int.max`.
+The same message appears for `-` and `*`.
 
 When you want the number to wrap around (jump to the other end of the range) or stop at the limit, ask for it by name:
 
