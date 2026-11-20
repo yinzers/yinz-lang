@@ -86,9 +86,9 @@ let huge: number<5000> = 0.001
 **Mixing precisions in math** gives the higher precision automatically:
 
 ```
-let a: number<34> = 1.0
-let b: number<100> = 2.0
-let c = a + b              // c is number<100> — no precision lost
+let shortValue: number<34> = 1.0
+let longValue: number<100> = 2.0
+let total = shortValue + longValue    // total is number<100> — no precision lost
 ```
 
 **Assigning to a lower precision** rounds the value and gives a compiler warning:
@@ -198,7 +198,7 @@ Wrapping is rare (it is mostly for hashing and encryption), so you ask for it by
 | Loop counters, array indices, counts of things | `int` |
 | Graphics positions, colors, transforms | `float` |
 | Physics simulations (where speed matters more than 34th-digit accuracy) | `float` |
-| Machine learning, tensors | `float` |
+| Machine learning | `float` |
 
 When in doubt, use `number`. The IDE suggests the others when it would help.
 
@@ -209,9 +209,9 @@ When in doubt, use `number`. The IDE suggests the others when it would help.
 If you don't write a type, the compiler picks a numeric type from the value:
 
 ```
-let x = 42          // the compiler picks int
-let y = 3.14        // the compiler picks number
-let z: float = 1.0  // you asked for float
+let playerCount = 42       // the compiler picks int
+let taxRate = 0.07         // the compiler picks number
+let gravity: float = 9.81  // you asked for float
 ```
 
 Mixing numeric types in one expression is a compile error — you must convert one side yourself:
