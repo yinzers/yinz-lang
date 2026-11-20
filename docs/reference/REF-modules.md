@@ -55,7 +55,7 @@ function entrypoint() -> Nothing {
 
 ## Importing your own code
 
-### Style 1 — Pick specific items
+Name the items you need, in braces:
 
 ```ynz
 import { fetchUser, User } from `services/users`
@@ -66,15 +66,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-Use this when you need a few things from a file. It is the most common style.
-
-### Style 2 — Import the whole module as a name
-
-```ynz
-import users from `services/users`
-```
-
-This form imports the whole module under one name. Yinz has no default exports. Calling a function through the name, such as `users.fetchUser(7)`, does not compile yet, so use Style 1 for now.
+Yinz has no default exports: every import names the items it brings in.
 
 ---
 
