@@ -6,11 +6,11 @@
 import { process } from `io_ops`
 
 shape Entry {
-  value: int
+  value: Int
 }
 
-function entrypoint() -> nothing {
-  let entries: array<Entry> = [{ value: 10 }, { value: 20 }]
+function entrypoint() -> Nothing {
+  let entries: Array<Entry> = [{ value: 10 }, { value: 20 }]
   for (e in entries) {
     process()
     print(`item: ${e.value.toString()}`)

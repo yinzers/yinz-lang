@@ -3,19 +3,19 @@
 // itself clones nothing. Correct behavior: prints 200. The counter test pins 400 cells more than
 // the moved-binding fixture.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 shape Outer {
   inner: Holder
-  tag: int
+  tag: Int
 }
 
 function buildChain() -> Node {
@@ -36,7 +36,7 @@ function pass(share holder: Holder) -> Holder {
   return holder
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let round = 0
   while (round < 100) {

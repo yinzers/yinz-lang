@@ -2,11 +2,11 @@
 // success_val field (field 1) of {i64, i64} carries scalar int values correctly.
 // If only string/pointer returns work but int scalars are corrupted, this test fails.
 
-function getCount() -> int errors {
+function getCount() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = getCount()
   print(result.or(0))
 }

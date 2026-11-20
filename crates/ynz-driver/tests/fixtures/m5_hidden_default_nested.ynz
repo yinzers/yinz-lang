@@ -3,24 +3,24 @@
 /// must be evaluated at construction time.  Inherited hidden fields live in the
 /// parent's shape declaration, not the child's.
 shape Base {
-  id: int
-  hidden base_count: int = 10
+  id: Int
+  hidden base_count: Int = 10
 }
 
 shape Derived extends Base {
-  name: string
-  hidden own_offset: int = 99
+  name: String
+  hidden own_offset: Int = 99
 }
 
-function getBaseCount(share self: Derived) -> int {
+function getBaseCount(share self: Derived) -> Int {
   return self.base_count
 }
 
-function getOwnOffset(share self: Derived) -> int {
+function getOwnOffset(share self: Derived) -> Int {
   return self.own_offset
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let d: Derived = { id: 1, name: `test` }
   print(d.getBaseCount())
   print(d.getOwnOffset())

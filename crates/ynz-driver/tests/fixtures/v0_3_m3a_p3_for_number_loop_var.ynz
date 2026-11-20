@@ -2,8 +2,8 @@
 // Each element must round-trip correctly through the frame flush/reload path after wait.
 // decimal128 values use an i128 alloca and 2 consecutive frame slots (lo + hi halves).
 // See design/concurrency.md 'UnsupportedCrossingLocalType' — number is a SUPPORTED type.
-function entrypoint() -> nothing {
-  let prices: array<number> = [1.5, 2.25, 3.125]
+function entrypoint() -> Nothing {
+  let prices: Array<Number> = [1.5, 2.25, 3.125]
   for (x in prices) {
     wait sleep(5)
     print(x.toString())

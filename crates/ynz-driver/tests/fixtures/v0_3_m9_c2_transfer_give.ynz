@@ -13,17 +13,17 @@
 //
 // Expected output (one per line): 3, 3, kept, 3, 7, 8, 3, done, done
 
-function eat(give rows: array<int>) -> nothing {
+function eat(give rows: Array<Int>) -> Nothing {
   print(rows.count().toString())
 }
 
-function definite() -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function definite() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   eat(rows)
 }
 
-function conditional(handOver: boolean) -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function conditional(handOver: Boolean) -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   if (handOver) {
     eat(rows)
   }
@@ -32,9 +32,9 @@ function conditional(handOver: boolean) -> nothing {
   }
 }
 
-function aliased(handOver: boolean) -> int {
-  let original: array<int> = [1, 2, 3]
-  let alias: array<int> = original
+function aliased(handOver: Boolean) -> Int {
+  let original: Array<Int> = [1, 2, 3]
+  let alias: Array<Int> = original
   if (handOver) {
     eat(alias)
   }
@@ -44,8 +44,8 @@ function aliased(handOver: boolean) -> int {
   return 8
 }
 
-function suspending(handOver: boolean) -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function suspending(handOver: Boolean) -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   wait sleep(1)
   if (handOver) {
     eat(rows)
@@ -55,7 +55,7 @@ function suspending(handOver: boolean) -> nothing {
   print(`done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   definite()
   conditional(true)
   conditional(false)

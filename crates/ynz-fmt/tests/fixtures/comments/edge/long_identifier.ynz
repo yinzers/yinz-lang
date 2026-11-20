@@ -1,5 +1,5 @@
 function aVeryLongFunctionNameThatExceedsOneHundredCharactersAndShouldNotHaveArbitraryLineBreaksInserted(
 
-) -> nothing {
+) -> Nothing {
   print(`done`)
 }

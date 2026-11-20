@@ -6,17 +6,17 @@
 // `xs.get(`zero`)` panicked the code generator.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let xs: array<Big> = [big]
+  let xs: Array<Big> = [big]
   xs.add(tiny)
   xs.set(0, tiny)
   let found = xs.contains(tiny)

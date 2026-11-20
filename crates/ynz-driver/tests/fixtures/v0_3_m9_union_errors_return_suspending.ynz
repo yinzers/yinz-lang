@@ -6,15 +6,15 @@
 // failed), clean under AddressSanitizer at both optimization levels.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -26,7 +26,7 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function slowBig(count: int) -> Thing errors {
+function slowBig(count: Int) -> Thing errors {
   wait sleep(1)
   let big: Big = { label: `slow`, count: count }
   return big
@@ -44,12 +44,12 @@ function slowFailing() -> Thing errors {
   return tiny
 }
 
-function clobber(depth: int) -> int {
+function clobber(depth: Int) -> Int {
   let filler: Big = { label: `filler`, count: depth }
   return filler.count
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first = slowBig(5)
   let second = slowTiny()
   let third = slowFailing()

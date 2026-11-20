@@ -14,7 +14,7 @@
 //   "Ships in: v2+  Substitute: float (f64)  Why deferred: ..."
 // Try hovering over `f32` below to see the registry-driven hover popup.
 
-function deferredFeatureDemo() -> nothing {
+function deferredFeatureDemo() -> Nothing {
   let x: f32 = 1.0
 }
 
@@ -32,8 +32,8 @@ type Player = nothing
 // WHAT/WHAT-INSTEAD/WHY content flows from the compiler through the LSP
 // transform and renders as a squiggle in the editor.
 
-function typeMismatchDemo() -> nothing {
-  let score: int = `not an int`
+function typeMismatchDemo() -> Nothing {
+  let score: Int = `not an int`
 }
 
 // ─── Section 4: Autocomplete cursor positions ────────────────────────────────
@@ -42,7 +42,7 @@ function typeMismatchDemo() -> nothing {
 // Place your cursor after the `.` on the line below and trigger completion
 // (Ctrl+Space) to see all int primitive methods: toString, toFloat, abs, etc.
 
-function autocompleteDemo() -> nothing {
-  const score: int = 42
+function autocompleteDemo() -> Nothing {
+  const score: Int = 42
   const result = score.
 }

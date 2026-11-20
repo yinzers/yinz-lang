@@ -2,15 +2,15 @@
 // at typeck with a clean WHAT/WHAT-INSTEAD/WHY compile error (not silent garbage).
 // Expected: exit 1, diagnostic mentions nested-shape field / cannot be frame-embedded.
 shape Inner {
-  val: int
+  val: Int
 }
 
 shape Outer {
   inner: Inner
-  extra: int
+  extra: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let inner: Inner = { val: 42 }
   let o: Outer = { inner: inner, extra: 7 }
   wait sleep(5)

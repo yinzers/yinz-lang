@@ -12,18 +12,18 @@
 // through `helper`." Exit 1, empty stdout.
 
 shape Box {
-  v: int
+  v: Int
 }
 
-function helper(b: Box) -> nothing {
+function helper(b: Box) -> Nothing {
   b.v = 999
 }
 
-function fa(share x: Box) -> nothing {
+function fa(share x: Box) -> Nothing {
   helper(x)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Box = { v: 1 }
   fa(p)
   print(`${p.v.toString()}`)

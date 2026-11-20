@@ -8,20 +8,20 @@
 // before the colon is the key's own text, so that spelling copies the text and leaves the local.)
 // Expected output: the entry count.
 
-function build(count: int) -> map<string, string> {
-  let firstValue: string = `value-a-${count}`
-  let secondKey: string = `key-b-${count}`
-  let secondValue: string = `value-b-${count}`
-  let table: map<string, string> = { `key-a`: firstValue }
+function build(count: Int) -> Map<String, String> {
+  let firstValue: String = `value-a-${count}`
+  let secondKey: String = `key-b-${count}`
+  let secondValue: String = `value-b-${count}`
+  let table: Map<String, String> = { `key-a`: firstValue }
   table.set(secondKey, secondValue)
   return table
 }
 
-function show(table: map<string, string>) -> nothing {
+function show(table: Map<String, String>) -> Nothing {
   print(table.count())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background show(build(1))
   wait sleep(80)
 }

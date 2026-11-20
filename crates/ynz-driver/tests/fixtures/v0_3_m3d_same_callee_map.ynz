@@ -4,9 +4,9 @@
 // Both print the same lines (the entry counts, which don't depend on the order the two
 // finish in) whether or not the two calls run at the same time.
 
-function buildMap(n: int) -> map<int, int> {
-  let m: map<int, int> = {}
-  let i: int = 0
+function buildMap(n: Int) -> Map<Int, Int> {
+  let m: Map<Int, Int> = {}
+  let i: Int = 0
   while (i < n) {
     m.set(i, i * 10)
     i = i + 1
@@ -14,7 +14,7 @@ function buildMap(n: int) -> map<int, int> {
   return m
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = buildMap(3)
   let b = buildMap(5)
   print(a.count())

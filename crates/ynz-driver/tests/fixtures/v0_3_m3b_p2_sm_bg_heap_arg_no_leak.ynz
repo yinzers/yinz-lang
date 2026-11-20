@@ -12,16 +12,16 @@
 //   task sees id: 7
 
 shape Task {
-  id: int
-  priority: int
+  id: Int
+  priority: Int
 }
 
-function slow(t: Task) -> nothing {
+function slow(t: Task) -> Nothing {
   wait sleep(50)
   print(`task sees id: ${t.id}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let job: Task = { id: 7, priority: 1 }
   background slow(job)
   wait sleep(200)

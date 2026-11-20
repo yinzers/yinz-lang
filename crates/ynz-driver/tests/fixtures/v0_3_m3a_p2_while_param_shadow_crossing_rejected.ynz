@@ -13,15 +13,15 @@
 //
 // This fixture MUST produce a clean compile error (exit 1). It must NOT produce any
 // ICE text ("does not dominate", "Machine-code generation failed", "compiler bug").
-function worker(p: int) -> nothing {
-  let count: int = 2
+function worker(p: Int) -> Nothing {
+  let count: Int = 2
   while (count > 0) {
-    let p: int = 99
+    let p: Int = 99
     wait sleep(5)
     print(p.toString())
     count = count - 1
   }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   worker(3)
 }

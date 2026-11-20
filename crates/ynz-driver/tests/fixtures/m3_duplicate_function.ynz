@@ -1,11 +1,11 @@
-function foo() -> nothing {
+function foo() -> Nothing {
   print(`first`)
 }
 
-function foo() -> nothing {
+function foo() -> Nothing {
   print(`second`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   foo()
 }

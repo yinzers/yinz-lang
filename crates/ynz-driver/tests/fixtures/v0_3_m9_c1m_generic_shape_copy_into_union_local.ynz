@@ -6,16 +6,16 @@
 // Expected output: `kept`, then the caller's label `ABCDEFGHIJ`.
 
 shape Pt {
-  count: int
-  label: string
+  count: Int
+  label: String
 }
 
-function keep<T>(share first: T) -> nothing {
-  let held: T | nothing = first.copy()
+function keep<T>(share first: T) -> Nothing {
+  let held: T | Nothing = first.copy()
   print(`kept`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let point: Pt = { count: 0, label: `abcdefghij`.toUpperCase() }
   keep(point)
   print(point.label)

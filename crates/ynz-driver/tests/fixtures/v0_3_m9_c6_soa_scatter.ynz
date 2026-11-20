@@ -9,12 +9,12 @@
 // Expected output: the hot loop's sum of `x` and the sum of the name lengths.
 
 shape Part {
-  name: string
-  x: int
+  name: String
+  x: Int
 }
 
-function entrypoint() -> nothing {
-  let pts: array<Part> = [
+function entrypoint() -> Nothing {
+  let pts: Array<Part> = [
     { name: `n-${0}`, x: 0 },
     { name: `n-${1}`, x: 1 },
     { name: `n-${2}`, x: 2 },
@@ -89,8 +89,8 @@ function entrypoint() -> nothing {
     { name: `n-${71}`, x: 71 }
   ]
   pts[0] = { name: `z-${9}`, x: 100 }
-  let total: int = 0
-  let longest: int = 0
+  let total: Int = 0
+  let longest: Int = 0
   for (part in pts) {
     total = total + part.x
     longest = longest + part.name.count()

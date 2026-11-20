@@ -6,22 +6,22 @@
 // internal error.
 // Expected output: the tasks' `task` twice and `done`.
 
-function takeMaybe(count: int | nothing) -> nothing {
+function takeMaybe(count: Int | Nothing) -> Nothing {
   print(`task`)
 }
 
-function takeNumber(amount: int | float) -> nothing {
+function takeNumber(amount: Int | Float) -> Nothing {
   print(`task`)
 }
 
-function launch() -> nothing {
-  let count: int | nothing = 2
+function launch() -> Nothing {
+  let count: Int | Nothing = 2
   background takeMaybe(count)
-  let amount: int | float = 3
+  let amount: Int | Float = 3
   background takeNumber(amount)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(50)
   print(`done`)

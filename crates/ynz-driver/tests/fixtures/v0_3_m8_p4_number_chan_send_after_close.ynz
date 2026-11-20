@@ -8,8 +8,8 @@
 // Expected output:
 //   refused
 //   end
-function producer(lend wire: channel<number>) -> nothing {
-  let price: number = 2.5
+function producer(lend wire: Channel<Number>) -> Nothing {
+  let price: Number = 2.5
   wire.close()
   let sent = wire.send(price)
   if (sent.failed()) {
@@ -17,8 +17,8 @@ function producer(lend wire: channel<number>) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<number> = channel<number>(4)
+function entrypoint() -> Nothing {
+  let wire: Channel<Number> = Channel<Number>(4)
   background producer(wire)
   wait sleep(40)
   let got = wire.receive()

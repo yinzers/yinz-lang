@@ -5,13 +5,13 @@
 // of `rows` (2) and the copy (2); all six are freed.
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
-  let rows: array<int> = [1]
+  let rows: Array<Int> = [1]
   rows = bucket.rows
   print(rows.count())
 }

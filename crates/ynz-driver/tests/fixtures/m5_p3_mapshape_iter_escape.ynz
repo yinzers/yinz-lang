@@ -4,15 +4,15 @@
 // for arrays), `keep` would silently read the LAST iteration's bytes (3/30);
 // the golden asserts the matched entry's bytes (1/10).
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let pa: Part = { qty: 1, price: 10 }
   let pb: Part = { qty: 2, price: 20 }
   let pc: Part = { qty: 3, price: 30 }
-  let stock: map<string, Part> = { `a`: pa, `b`: pb, `c`: pc }
+  let stock: Map<String, Part> = { `a`: pa, `b`: pb, `c`: pc }
   let keep: Part = { qty: 0, price: 0 }
   for (entry in stock) {
     if (entry.value.qty == 1) {

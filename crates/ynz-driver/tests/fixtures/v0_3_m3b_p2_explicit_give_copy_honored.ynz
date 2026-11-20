@@ -5,13 +5,13 @@
 // the task gets its own copy. The inferred-copy path must not double-copy or
 // emit a conflicting hint.
 
-function taskB(id: int) -> nothing {
+function taskB(id: Int) -> Nothing {
   sleepBlocking(10)
   print(`taskB: ${id}`)
 }
 
-function entrypoint() -> nothing {
-  let b: int = 20
+function entrypoint() -> Nothing {
+  let b: Int = 20
   background taskB(b.copy())
   // b is still accessible — explicit .copy() left the original intact
   print(`caller b: ${b}`)

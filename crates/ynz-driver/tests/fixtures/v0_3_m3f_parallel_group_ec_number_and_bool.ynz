@@ -10,17 +10,17 @@
 // Expected output (correct — price is 24.50; flag is true):
 //   24.50
 //   true
-function fetchPrice() -> number errors {
+function fetchPrice() -> Number errors {
   wait sleep(40)
   return 24.50
 }
 
-function flagFn() -> boolean {
+function flagFn() -> Boolean {
   wait sleep(40)
   return true
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let price = fetchPrice()
   let flag = flagFn()
   wait sleep(1)

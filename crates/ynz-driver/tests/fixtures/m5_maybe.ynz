@@ -1,7 +1,7 @@
-function entrypoint() -> nothing {
-  let x: maybe<int> = none
+function entrypoint() -> Nothing {
+  let x: Maybe<Int> = none
   print(x.or(99))
-  let y: maybe<int> = none
+  let y: Maybe<Int> = none
   if (y.exists()) {
     print(y.value)
   }

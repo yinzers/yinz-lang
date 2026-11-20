@@ -1,11 +1,11 @@
 shape A extends B {
-  x: int
+  x: Int
 }
 
 shape B extends A {
-  y: int
+  y: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(1)
 }

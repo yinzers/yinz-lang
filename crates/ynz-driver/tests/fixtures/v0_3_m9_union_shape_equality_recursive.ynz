@@ -6,23 +6,23 @@
 // `same node true`, `deep differs false`, `end`; clean under AddressSanitizer at both optimization levels.
 
 shape Node {
-  value: int
-  next: Node | int
+  value: Int
+  next: Node | Int
 }
 
-function leaf(count: int) -> Node {
+function leaf(count: Int) -> Node {
   let node: Node = { value: 1, next: count }
   return node
 }
 
-function chain(count: int) -> Node {
+function chain(count: Int) -> Node {
   let tail: Node = { value: 1, next: count }
   let head: Node = { value: 2, next: tail }
   return head
 }
 
-function entrypoint() -> nothing {
-  let known: array<Node> = []
+function entrypoint() -> Nothing {
+  let known: Array<Node> = []
   known.add(leaf(5))
   print(`same int ${known.contains(leaf(5))}`)
   print(`other int ${known.contains(leaf(6))}`)

@@ -16,26 +16,26 @@
 // shapes → by-value struct, EC ok-words heap-promote wide inners.
 
 shape Player {
-  name: string
-  health: int
-  score: int
+  name: String
+  health: Int
+  score: Int
 }
 
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
 shape Box {
   corner: Point
-  tag: int
+  tag: Int
 }
 
 shape Coin {
-  value: int
+  value: Int
 }
 
-function makePlayer(h: int) -> Player {
+function makePlayer(h: Int) -> Player {
   let p: Player = { name: `pat`, health: h, score: h * 2 }
   return p
 }
@@ -46,36 +46,36 @@ function makeBox() -> Box {
   return b
 }
 
-function addUp(a: number, b: number) -> number {
+function addUp(a: Number, b: Number) -> Number {
   let sum = a + b
   return sum
 }
 
-function firstCoin(coins: array<Coin>) -> maybe<Coin> {
+function firstCoin(coins: Array<Coin>) -> Maybe<Coin> {
   let got = coins.get(0)
   return got
 }
 
-function pickMaybe(want: int) -> maybe<int> errors {
+function pickMaybe(want: Int) -> Maybe<Int> errors {
   if (want > 0) {
-    let arr: array<int> = [11, 22]
+    let arr: Array<Int> = [11, 22]
     let got = arr.get(0)
     return got
   }
   return none
 }
 
-function pickCoin(want: int) -> Coin errors {
+function pickCoin(want: Int) -> Coin errors {
   let c: Coin = { value: want }
   return c
 }
 
-function pickNumber(a: number) -> number errors {
+function pickNumber(a: Number) -> Number errors {
   let doubled = a + a
   return doubled
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = makePlayer(10)
   let b = makePlayer(77)
   print(a.health.toString())
@@ -94,7 +94,7 @@ function entrypoint() -> nothing {
   print(x.toString())
   print(y.toString())
 
-  let coins: array<Coin> = [{ value: 25 }, { value: 10 }]
+  let coins: Array<Coin> = [{ value: 25 }, { value: 10 }]
   let hit = firstCoin(coins)
   if (hit.exists()) {
     let c: Coin = hit.value
@@ -102,7 +102,7 @@ function entrypoint() -> nothing {
   }
 
   let m = pickMaybe(1)
-  let empty: maybe<int> = none
+  let empty: Maybe<Int> = none
   let mv = m.or(empty)
   let got = mv.or(0)
   print(got.toString())

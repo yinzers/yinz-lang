@@ -7,23 +7,23 @@
 //
 // Expected output (byte-identical default vs --no-auto-parallel): a:42 / b:7
 
-function loadEC() -> int errors {
+function loadEC() -> Int errors {
   wait sleep(50)
   return 42
 }
 
-function loadPlain() -> int {
+function loadPlain() -> Int {
   wait sleep(50)
   return 7
 }
 
-function run() -> nothing errors {
+function run() -> Nothing errors {
   let a = loadEC()
   let b = loadPlain()
   print(`a:${a.toString()}`)
   print(`b:${b.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   run()
 }

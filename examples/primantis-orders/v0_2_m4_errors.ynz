@@ -33,7 +33,7 @@
 // WHY: error gallery files must produce at least one compile diagnostic per
 //      the CI sweep test. The infrastructure errors above require command-line
 //      flags; this error is in-source to satisfy the sweep.
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   // Uncomment the next line to trigger: unknown identifier `watchDemoError`
   // watchDemoError
   print(`v0_2_m4_errors.ynz — see comments above for watch error trigger guidance`)
@@ -41,7 +41,7 @@ function entrypoint() -> nothing {
 
 // The function below is intentionally unreachable code, causing a diagnostic.
 // WHY: ensures at least one compile diagnostic fires for the CI error-fixture sweep.
-function unusedWatchDemoFn() -> nothing {
+function unusedWatchDemoFn() -> Nothing {
   let x = undeclaredWatchIdentifier
   print(x)
 }

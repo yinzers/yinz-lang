@@ -10,15 +10,15 @@
 // the 1-byte `Tiny`.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
+function describe(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -30,20 +30,20 @@ function describe(share t: Thing) -> string {
   return `none`
 }
 
-function pair(share first: Tiny, share second: Thing) -> string {
+function pair(share first: Tiny, share second: Thing) -> String {
   return `${first.flag} / ${describe(second)}`
 }
 
-function genericDescribe<T>(share t: Thing, share extra: T) -> string {
+function genericDescribe<T>(share t: Thing, share extra: T) -> String {
   return describe(t)
 }
 
-function describeLater(share t: Thing) -> string {
+function describeLater(share t: Thing) -> String {
   wait sleep(1)
   return describe(t)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   print(describe(big))

@@ -1,11 +1,11 @@
 shape Pt {
-  a: int
-  b: int
+  a: Int
+  b: Int
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c = true
   if (c) {
-    let x: int = 99
+    let x: Int = 99
     wait sleep(5)
     print(x.toString())
   }

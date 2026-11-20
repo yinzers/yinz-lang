@@ -6,22 +6,22 @@
 //   2. the task's ITEMS are its own too: the task overwrites its row 0 with 999 and the
 //      parent's row 0 still starts at 1;
 //   3. nothing dangles: the parent dereferences `bucket[0]` after the task finished.
-function stash(bucket: array<array<int>>, give rows: array<int>) -> nothing {
+function stash(bucket: Array<Array<Int>>, give rows: Array<Int>) -> Nothing {
   bucket.add(rows)
-  let spare: array<int> = [0]
-  let mine: array<int> = bucket[0].or(spare)
+  let spare: Array<Int> = [0]
+  let mine: Array<Int> = bucket[0].or(spare)
   mine.set(0, 999)
   print(`task sees ${bucket.count().toString()} rows`)
 }
 
-function entrypoint() -> nothing {
-  let seed: array<int> = [1, 2, 3]
-  let bucket: array<array<int>> = [seed]
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let seed: Array<Int> = [1, 2, 3]
+  let bucket: Array<Array<Int>> = [seed]
+  let rows: Array<Int> = [10, 20, 30]
   background stash(bucket, rows)
   wait sleep(80)
   print(`parent sees ${bucket.count().toString()} rows`)
-  let fallback: array<int> = [0]
-  let first: array<int> = bucket[0].or(fallback)
+  let fallback: Array<Int> = [0]
+  let first: Array<Int> = bucket[0].or(fallback)
   print(`parent row 0 starts at ${first[0].or(-1).toString()}`)
 }

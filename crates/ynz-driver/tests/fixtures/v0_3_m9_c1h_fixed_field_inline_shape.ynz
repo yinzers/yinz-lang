@@ -5,12 +5,12 @@
 // stopped the compiler with an internal error.
 // Expected output: the count of each list, then the last item and the label.
 
-function entrypoint() -> nothing {
-  let first: { trail: fixed<int, 2> } = { trail: [1, 2] }
-  let second: { trail: fixed<int, 3> } = { trail: [4, 5, 6] }
+function entrypoint() -> Nothing {
+  let first: { trail: Fixed<Int, 2> } = { trail: [1, 2] }
+  let second: { trail: Fixed<Int, 3> } = { trail: [4, 5, 6] }
   print(first.trail.count())
   print(second.trail.count())
-  let labelled: { label: string, trail: fixed<int, 3> } = { label: `p`.toUpperCase(), trail: [7, 8, 9] }
+  let labelled: { label: String, trail: Fixed<Int, 3> } = { label: `p`.toUpperCase(), trail: [7, 8, 9] }
   print(labelled.trail[2].or(-1))
   print(labelled.label)
 }

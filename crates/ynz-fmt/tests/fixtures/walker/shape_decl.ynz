@@ -1,5 +1,5 @@
 shape Player {
-  name: string
-  health: int
-  active: boolean
+  name: String
+  health: Int
+  active: Boolean
 }

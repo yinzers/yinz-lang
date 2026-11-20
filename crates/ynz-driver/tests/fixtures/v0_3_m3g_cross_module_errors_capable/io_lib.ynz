@@ -5,7 +5,7 @@
 // (`v0_3_m3b_p4_parallel_errors_return.ynz`) and the M3e cross-module frame reconstruction
 // (`v0_3_m3e_reexport_ec_number`).
 
-export function fetchRemoteWithErrors(n: int) -> int errors {
+export function fetchRemoteWithErrors(n: Int) -> Int errors {
   wait sleep(0)
   return n + 1
 }

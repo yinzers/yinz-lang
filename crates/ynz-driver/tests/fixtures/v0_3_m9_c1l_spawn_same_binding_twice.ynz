@@ -6,13 +6,13 @@
 // pointer dereference at both optimization levels).
 // Expected output: the two counts, then `done` (the task's two lines may come after `done`).
 
-function consume(first: array<int>, second: array<int>) -> nothing {
+function consume(first: Array<Int>, second: Array<Int>) -> Nothing {
   print(first.count())
   print(second.count())
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   background consume(rows, rows)
   wait sleep(50)
   print(`done`)

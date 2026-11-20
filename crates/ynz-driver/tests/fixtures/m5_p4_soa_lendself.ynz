@@ -7,16 +7,16 @@
 // (66 > 64, 1-field union, no escape/growth). Asserted verdict:
 // LendSelfMethod { function: "recordHit" }.
 shape Pirate {
-  hits: int
-  bounty: int
+  hits: Int
+  bounty: Int
 }
 
-function recordHit(lend self: Pirate, amount: int) -> nothing {
+function recordHit(lend self: Pirate, amount: Int) -> Nothing {
   self.hits = self.hits + amount
 }
 
-function entrypoint() -> nothing {
-  let crew: array<Pirate> = [
+function entrypoint() -> Nothing {
+  let crew: Array<Pirate> = [
     { hits: 1, bounty: 10 },
     { hits: 2, bounty: 20 },
     { hits: 3, bounty: 30 },

@@ -3,32 +3,32 @@
 // number value, and a nested destructure loop. Before the fix every one of these failed in
 // codegen with `field_gep: receiver is not a Shape, got <K or V>`.
 shape Player {
-  name: string
-  points: int
+  name: String
+  points: Int
 }
 
-function entrypoint() -> nothing {
-  let capitals: map<string, string> = { `PA`: `Harrisburg`, `OH`: `Columbus` }
+function entrypoint() -> Nothing {
+  let capitals: Map<String, String> = { `PA`: `Harrisburg`, `OH`: `Columbus` }
   for ((state, capital) in capitals) {
     print(`${state}=${capital}`)
   }
 
-  let scores: map<string, int> = { `alice`: 90, `bob`: 85 }
+  let scores: Map<String, Int> = { `alice`: 90, `bob`: 85 }
   for ((name, score) in scores) {
     print(`${name}=${score.toString()}`)
   }
 
-  let weights: map<int, number> = { 1: 1.5, 2: 2.25 }
+  let weights: Map<Int, Number> = { 1: 1.5, 2: 2.25 }
   for ((id, weight) in weights) {
     print(`${id.toString()}=${weight.toString()}`)
   }
 
-  let roster: map<string, Player> = { `a`: { name: `Ann`, points: 3 }, `b`: { name: `Bo`, points: 5 } }
+  let roster: Map<String, Player> = { `a`: { name: `Ann`, points: 3 }, `b`: { name: `Bo`, points: 5 } }
   for ((slot, player) in roster) {
     print(`${slot}=${player.name}:${player.points.toString()}`)
   }
 
-  let lists: map<int, array<int>> = { 1: [10, 20], 2: [30] }
+  let lists: Map<Int, Array<Int>> = { 1: [10, 20], 2: [30] }
   for ((listId, items) in lists) {
     print(`${listId.toString()}=${items.count().toString()}`)
     for ((otherId, otherItems) in lists) {
@@ -36,7 +36,7 @@ function entrypoint() -> nothing {
     }
   }
 
-  let flags: map<string, boolean> = { `x`: true, `y`: false }
+  let flags: Map<String, Boolean> = { `x`: true, `y`: false }
   for ((flag, isOn) in flags) {
     if (isOn) {
       print(`${flag} is on`)

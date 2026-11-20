@@ -11,7 +11,7 @@ options Status {
   banned
 }
 
-function nonExhaustiveOptions(s: Status) -> nothing {
+function nonExhaustiveOptions(s: Status) -> Nothing {
   if (s) {
     active => {
       print(`active`)
@@ -33,7 +33,7 @@ options Single {
 options Empty { }
 
 // WHY: .toInt() on boolean is rejected — no silent 0/1 coercion
-function boolToInt() -> nothing {
+function boolToInt() -> Nothing {
   let x = true.toInt()
 }
 
@@ -43,32 +43,32 @@ options Visibility {
   invisible
 }
 
-function crossOptionsCompare(s: Status, v: Visibility) -> nothing {
+function crossOptionsCompare(s: Status, v: Visibility) -> Nothing {
   let eq = s == v
 }
 
 // WHY: unknown options variant — typo caught at compile time
-function badVariant() -> nothing {
+function badVariant() -> Nothing {
   let s: Status = Status.activ
 }
 
 // WHY: non-exhaustive union multi-case — missing variant named in diagnostic
 shape Circle {
-  radius: int
+  radius: Int
 }
 
 shape Square {
-  side: int
+  side: Int
 }
 
 shape Triangle {
-  width: int
-  height: int
+  width: Int
+  height: Int
 }
 
 shape AnyShape = Circle | Square | Triangle
 
-function nonExhaustiveUnion(s: AnyShape) -> nothing {
+function nonExhaustiveUnion(s: AnyShape) -> Nothing {
   if (s) {
     is Circle => {
       print(`circle`)
@@ -82,8 +82,8 @@ function nonExhaustiveUnion(s: AnyShape) -> nothing {
 }
 
 // WHY: `is Type` on a non-union value — must produce teaching error
-function isOnString() -> nothing {
-  let msg: string = `hello`
+function isOnString() -> Nothing {
+  let msg: String = `hello`
   if (msg) {
     is Circle => {
       print(`never`)
@@ -95,8 +95,8 @@ function isOnString() -> nothing {
 }
 
 // WHY: `.value` without narrowing on maybe<T>
-function valueWithoutCheck() -> nothing {
-  let x: maybe<int> = `bad`.toInt()
+function valueWithoutCheck() -> Nothing {
+  let x: Maybe<Int> = `bad`.toInt()
   print(x.value.toString())
 }
 
@@ -108,12 +108,12 @@ function valueWithoutCheck() -> nothing {
 // passed as the receiver of `haulCircle(give self: Circle)` — the relay-through-bare-
 // parameter shape the transfer rule refuses (only a `give` parameter can be given away);
 // before M8 this was a silent consume (parked item 17).
-function haulCircle(give self: Circle) -> nothing {
+function haulCircle(give self: Circle) -> Nothing {
   wait sleep(20)
   print(`hauling`)
 }
 
-function narrowedUnionSpawn(fig: AnyShape) -> nothing {
+function narrowedUnionSpawn(fig: AnyShape) -> Nothing {
   if (fig) {
     is Circle => {
       background fig.haulCircle()
@@ -124,4 +124,4 @@ function narrowedUnionSpawn(fig: AnyShape) -> nothing {
   }
 }
 
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }

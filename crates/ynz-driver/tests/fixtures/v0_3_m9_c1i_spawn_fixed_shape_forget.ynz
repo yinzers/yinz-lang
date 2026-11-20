@@ -3,20 +3,20 @@
 // Expected output: the count, the first name, then `done`.
 
 shape Part {
-  name: string
+  name: String
 }
 
-function crunch(xs: fixed<Part>) -> nothing {
+function crunch(xs: Fixed<Part>) -> Nothing {
   let nobody: Part = { name: `none` }
   let first: Part = xs[0].or(nobody)
   print(xs.count())
   print(first.name)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Part = { name: `a`.toUpperCase() }
   let second: Part = { name: `b`.toUpperCase() }
-  let xs: fixed<Part> = [first, second]
+  let xs: Fixed<Part> = [first, second]
   background crunch(xs)
   wait sleep(50)
   print(`done`)

@@ -3,18 +3,18 @@
 // The stack is freed on suspension; the stored fat-pointer dangles on the next resume.
 // UnsupportedCrossingLocalType must fire with a teaching error.
 shape Printable {
-  display(share self) -> string
+  display(share self) -> String
 }
 
 shape Ticker {
-  symbol: string
+  symbol: String
 }
 
-function display(share self: Ticker) -> string {
+function display(share self: Ticker) -> String {
   return `ticker`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let t: Ticker = { symbol: `AAPL` }
   let d: dynamic Printable = t
   wait sleep(5)

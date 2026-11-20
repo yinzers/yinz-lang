@@ -3,11 +3,11 @@
 // missed the suspend set, and ICEd in codegen. Expected: origin teaching error at compile time.
 import { makeChannel } from `chan_ops`
 
-function feed(out: channel<int>) -> nothing {
+function feed(out: Channel<Int>) -> Nothing {
   let r = out.send(7)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let ch = makeChannel()
   background feed(ch)
   let first = ch.receive()

@@ -3,8 +3,8 @@
 // unconditional `int` hint and never checked against the map's key type.
 // Pre-fix: SILENT type corruption (prints `a`, exit 0), same bit-identity
 // class as the method-key slot. Must be the teaching error.
-function entrypoint() -> nothing {
-  let names: map<number, string> = {}
+function entrypoint() -> Nothing {
+  let names: Map<Number, String> = {}
   names[5] = `a`
   let got = names[5]
   print(got.or(`none`))

@@ -14,7 +14,7 @@ fn cookSandwich() -> nothing {
 
 // WHY: unterminated string literal. Tests the lexer's recovery path —
 //      diagnostic at the opening quote span; lexer continues to next sensible boundary.
-function unterminatedOrder() -> nothing {
+function unterminatedOrder() -> Nothing {
   print(`pastrami slaw fries on the sandwich
 }
 

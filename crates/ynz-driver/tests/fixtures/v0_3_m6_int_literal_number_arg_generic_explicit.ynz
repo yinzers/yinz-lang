@@ -6,7 +6,7 @@ function pass<T>(v: T) -> T {
   return v
 }
 
-function entrypoint() -> nothing {
-  let got = pass<number>(5)
+function entrypoint() -> Nothing {
+  let got = pass<Number>(5)
   print(got)
 }

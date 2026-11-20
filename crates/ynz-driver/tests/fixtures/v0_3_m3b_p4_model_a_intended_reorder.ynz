@@ -15,17 +15,17 @@
 //
 // Expected default output:  B\nA\ndone
 // Expected sequential output: A\nB\ndone
-function fa() -> nothing {
+function fa() -> Nothing {
   wait sleep(100)
   print(`A`)
 }
 
-function fb() -> nothing {
+function fb() -> Nothing {
   wait sleep(50)
   print(`B`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   fa()
   fb()
   print(`done`)

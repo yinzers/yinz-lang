@@ -6,7 +6,7 @@
 //           (1.5, 1.5)  false true true false false true
 //           (12.5, 20)  true true false true false false
 
-function sixOps(lhs: number<50>, rhs: number<10>) -> nothing {
+function sixOps(lhs: Number<50>, rhs: Number<10>) -> Nothing {
   print(lhs < rhs)
   print(lhs <= rhs)
   print(lhs == rhs)
@@ -15,11 +15,11 @@ function sixOps(lhs: number<50>, rhs: number<10>) -> nothing {
   print(lhs >= rhs)
 }
 
-function entrypoint() -> nothing {
-  let small: number<10> = 1.5
-  let twenty: number<10> = 20.0
-  let large: number<50> = oneAnd(11.5)
-  let sameAsSmall: number<50> = oneAnd(0.5)
+function entrypoint() -> Nothing {
+  let small: Number<10> = 1.5
+  let twenty: Number<10> = 20.0
+  let large: Number<50> = oneAnd(11.5)
+  let sameAsSmall: Number<50> = oneAnd(0.5)
   sixOps(large, small)
   sixOps(sameAsSmall, small)
   sixOps(large, twenty)
@@ -27,7 +27,7 @@ function entrypoint() -> nothing {
 
 // A computed bignum is an exact-size heap string. A literal is a static string, which sits in
 // read-only data with more bytes after it, so a 16-byte over-read of it can happen to look right.
-function oneAnd(addend: number<50>) -> number<50> {
-  let one: number<50> = 1.0
+function oneAnd(addend: Number<50>) -> Number<50> {
+  let one: Number<50> = 1.0
   return one + addend
 }

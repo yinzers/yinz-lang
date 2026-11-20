@@ -8,15 +8,15 @@
 //   1.5
 //   2.5
 //   end
-function producer(lend wire: channel<number>) -> nothing {
-  let low: number = 1.5
-  let high: number = 2.5
+function producer(lend wire: Channel<Number>) -> Nothing {
+  let low: Number = 1.5
+  let high: Number = 2.5
   wire.send(low)
   wire.send(high)
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<number> = channel<number>(1)
+function entrypoint() -> Nothing {
+  let wire: Channel<Number> = Channel<Number>(1)
   background producer(wire)
   wait sleep(30)
   wire.close()

@@ -5,42 +5,42 @@
 // ordering. Each shape follows its OWN contract (distinct method names) so every vtable
 // slot resolves to a distinct standalone function.
 shape Sailable {
-  sail(share self) -> nothing
+  sail(share self) -> Nothing
 }
 
 shape Haulable {
-  haul(share self) -> nothing
+  haul(share self) -> Nothing
 }
 
 shape Dockable {
-  dock(share self) -> nothing
+  dock(share self) -> Nothing
 }
 
 shape Boat follows Sailable {
-  name: string
+  name: String
 }
 
 shape Barge follows Haulable {
-  cargo: string
+  cargo: String
 }
 
 shape Pier follows Dockable {
-  address: string
+  address: String
 }
 
-function sail(share self: Boat) -> nothing {
+function sail(share self: Boat) -> Nothing {
   print(self.name)
 }
 
-function haul(share self: Barge) -> nothing {
+function haul(share self: Barge) -> Nothing {
   print(self.cargo)
 }
 
-function dock(share self: Pier) -> nothing {
+function dock(share self: Pier) -> Nothing {
   print(self.address)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let boat: Boat = { name: `gertrude` }
   let barge: Barge = { cargo: `steel coils` }
   let pier: Pier = { address: `1 Water St` }

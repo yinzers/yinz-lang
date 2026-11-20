@@ -2,20 +2,20 @@
 // Correct behavior: prints 3, A, B, C, 1.
 
 shape Tag {
-  label: string
-  nums: array<int>
+  label: String
+  nums: Array<Int>
 }
 
-function entrypoint() -> nothing {
-  let matrix: array<Tag> = [
+function entrypoint() -> Nothing {
+  let matrix: Array<Tag> = [
     { label: `a`.toUpperCase(), nums: [1] },
     { label: `b`.toUpperCase(), nums: [2] },
     { label: `c`.toUpperCase(), nums: [3] }
   ]
-  let kept: array<Tag> = []
+  let kept: Array<Tag> = []
   for (row in matrix) {
     kept.add(row.copy())
-    let fresh: array<Tag> = [{ label: `z`.toUpperCase(), nums: [9] }]
+    let fresh: Array<Tag> = [{ label: `z`.toUpperCase(), nums: [9] }]
     matrix = fresh
   }
   print(kept.count())

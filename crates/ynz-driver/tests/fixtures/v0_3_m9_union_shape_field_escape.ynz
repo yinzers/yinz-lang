@@ -8,20 +8,20 @@
 // `big escaped` at -O0 and segfaults at -O2.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
 shape Holder {
-  name: string
+  name: String
   slot: Tiny | Big
 }
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -45,20 +45,20 @@ function build_tiny() -> Holder {
   return holder
 }
 
-function restock(lend holder: Holder) -> nothing {
+function restock(lend holder: Holder) -> Nothing {
   let big: Big = { label: `stored`, count: 2 }
   let as_thing: Thing = big
   holder.slot = as_thing
 }
 
-function clobber(seed: int) -> int {
+function clobber(seed: Int) -> Int {
   let plusOne = seed + 1
   let doubled = plusOne * 2
   let reduced = doubled - 3
   return reduced + plusOne
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first = build()
   let second = build_tiny()
   let third = build_tiny()

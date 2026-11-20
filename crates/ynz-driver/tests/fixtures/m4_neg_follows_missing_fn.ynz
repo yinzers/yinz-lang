@@ -1,12 +1,12 @@
 shape Drawable {
-  draw(share self) -> nothing
+  draw(share self) -> Nothing
 }
 
 shape Circle follows Drawable {
-  radius: int
+  radius: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 5 }
   print(c.radius)
 }

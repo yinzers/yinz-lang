@@ -20,25 +20,25 @@
 //                                  Shape arm; accounted-and-deferred-to-drop-
 //                                  story per FRAGO 011, EXACT-COUNT pinned)
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
 shape Holder {
   best: Part
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
+function entrypoint() -> Nothing {
+  let seed: Int = 1
   let pa: Part = { qty: seed, price: seed * 10 }
   let pb: Part = { qty: seed * 2, price: seed * 20 }
 
   // ── arrays: exactly one array<Part> (+2 counted; elements inline)
-  let parts: array<Part> = [pa, pb]
+  let parts: Array<Part> = [pa, pb]
 
   // ── per-iteration regression pin: 40 element reads allocate ZERO
-  let total: int = 0
-  let i: int = 0
+  let total: Int = 0
+  let i: Int = 0
   while (i < 40) {
     let m = parts.get(0)
     if (m.exists()) {
@@ -50,7 +50,7 @@ function entrypoint() -> nothing {
   print(total)
 
   // ── maps: exactly one map<int, Part> (+5 counted; shape values inline)
-  let stock: map<int, Part> = {}
+  let stock: Map<Int, Part> = {}
   let pa2: Part = { qty: seed, price: seed * 10 }
   let pb2: Part = { qty: seed * 2, price: seed * 20 }
   let pb3: Part = { qty: seed * 2, price: seed * 20 }
@@ -62,7 +62,7 @@ function entrypoint() -> nothing {
   // ── FRAGO 011 persist cells, exact-count: +1 at construction, +3 in the loop
   let pa3: Part = { qty: seed, price: seed * 10 }
   let holder: Holder = { best: pa3 }
-  let j: int = 0
+  let j: Int = 0
   while (j < 3) {
     let next: Part = { qty: seed * 2, price: seed * 20 }
     holder.best = next

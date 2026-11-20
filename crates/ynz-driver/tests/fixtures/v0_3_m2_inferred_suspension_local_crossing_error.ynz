@@ -1,13 +1,13 @@
-function sleeper() -> int {
+function sleeper() -> Int {
   wait sleep(10)
   return 5
 }
-function compute() -> int {
+function compute() -> Int {
   let slot = 7
   let other = sleeper()
   return slot + other
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = compute()
   print(r.toString())
 }

@@ -8,24 +8,24 @@
 // Pre-fix: both calls were refused. On the parent of C1g both compiled and ran.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
-function orElse<T>(share value: T | nothing, share fallback: T) -> T {
+function orElse<T>(share value: T | Nothing, share fallback: T) -> T {
   return fallback
 }
 function firstOf<T>(share first: T | Tiny, share second: T) -> T | Tiny {
   return first
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   let u: Big | Tiny = big.copy()
   let v: Big | Tiny = tiny.copy()
-  let w: Big | Tiny | nothing = big.copy()
+  let w: Big | Tiny | Nothing = big.copy()
   let x: Big | Tiny = tiny.copy()
   let out = firstOf(u, v)
   if (out) {

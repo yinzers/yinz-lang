@@ -6,19 +6,19 @@
 // Pre-fix (b3e23ce): prints a heap address.
 
 shape Tiny {
-  code: int
+  code: Int
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
-function show<T>(share value: T) -> nothing {
+function show<T>(share value: T) -> Nothing {
   print(`generic`)
 }
-function show_shape_Big(share value: Tiny) -> nothing {
+function show_shape_Big(share value: Tiny) -> Nothing {
   print(`${value.code}`)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   show(big)
 }

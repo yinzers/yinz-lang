@@ -2,11 +2,11 @@
 // the suspending call's result goes into its own variable first, and `return got` passes through
 // the one coercion point, so the caller reads the right variant tag.
 shape Circle {
-  name: string
+  name: String
 }
-shape Mixed = Circle | int
+shape Mixed = Circle | Int
 
-function count() -> int {
+function count() -> Int {
   wait sleep(1)
   return 4
 }
@@ -23,7 +23,7 @@ function pickWait() -> Mixed {
   return got
 }
 
-function show(share m: Mixed) -> string {
+function show(share m: Mixed) -> String {
   if (m) {
     is Circle => {
       return `circle ${m.name}`
@@ -34,7 +34,7 @@ function show(share m: Mixed) -> string {
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let direct = pickDirect()
   print(show(direct))
   let waited = pickWait()

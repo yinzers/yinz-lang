@@ -5,19 +5,19 @@
 // landed (no `ynz_arc_*` call anywhere), which `v03_m8_auto_arc.rs` pins against the
 // committed pre-emission IR digest.
 shape Scene {
-  name: string
-  width: int
-  height: int
+  name: String
+  width: Int
+  height: Int
 }
 
-function render(scene: Scene, results: channel<int>) -> nothing {
+function render(scene: Scene, results: Channel<Int>) -> Nothing {
   wait sleep(10)
   let area = scene.width * scene.height
   results.send(area)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>()
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>()
   let scene: Scene = { name: `Three Rivers`, width: 6, height: 7 }
   background render(scene, results)
   let a = results.receive()

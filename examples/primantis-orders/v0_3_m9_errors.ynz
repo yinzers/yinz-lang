@@ -9,10 +9,10 @@
 // A sandwich that is either a plain order or a special; `Special` is the variant the
 // kitchen helpers below expect.
 shape Plain {
-  table: int
+  table: Int
 }
 shape Special {
-  label: string
+  label: String
 }
 shape Order = Plain | Special
 
@@ -21,19 +21,19 @@ shape Ticket {
 }
 
 shape Book {
-  tickets: array<array<int>>
+  tickets: Array<Array<Int>>
 }
 
-shape Round = Plain | int
+shape Round = Plain | Int
 
 shape Tip {
-  amount: int
+  amount: Int
   // WHY: hidden-field default mismatch — every new `Tip` starts with this default, but a
   // `string` field cannot start as the `int` 4096.
-  hidden note: string = 4096
+  hidden note: String = 4096
 }
 
-function plateSpecial(share special: Special) -> string {
+function plateSpecial(share special: Special) -> String {
   return special.label
 }
 
@@ -41,7 +41,7 @@ function pickSpecial(share order: Order) -> Special {
   return order
 }
 
-function describeRound(share round: Round) -> string {
+function describeRound(share round: Round) -> String {
   if (round) {
     is Plain => {
       return `plain`
@@ -54,11 +54,11 @@ function sameKind<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function eat<T>(held: T) -> nothing {
+function eat<T>(held: T) -> Nothing {
   print(`ate`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let special: Special = { label: `cheesesteak` }
   let order: Order = special.copy()
   let second: Order = special.copy()
@@ -88,25 +88,25 @@ function entrypoint() -> nothing {
 
   // WHY: ConsumedByStore — `box.add(moved)` hands `moved` over to `box`, so the read of
   // `moved` on the next line is refused (store a copy, or read it above the store).
-  let moved: array<int> = [1, 2, 3]
-  let box: array<array<int>> = []
+  let moved: Array<Int> = [1, 2, 3]
+  let box: Array<Array<Int>> = []
   box.add(moved)
   print(moved.count().toString())
 
   // WHY: MapKeyNotStorable (shape) — not supported yet: a map keeps each key in one slot of 8 or
   // 16 bytes today, and a shape holds several fields, so an equal `Plain` would be looked up at
   // another address and miss. For now, key the map by a field and keep the shape as the value.
-  let byPlain: map<Plain, int> = {}
+  let byPlain: Map<Plain, Int> = {}
   print(byPlain.count().toString())
 
   // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — it is kept outside the 16-byte
   // slot, so only its address would be the key.
-  let byPrice: map<number<50>, int> = {}
+  let byPrice: Map<Number<50>, Int> = {}
   print(byPrice.count().toString())
 
   // WHY: MapKeyNotStorable (`sensitive string`) — a map would free the secret as an ordinary
   // string and compare keys in a way whose timing leaks. Keep the secret as the value.
-  let bySecret: map<sensitive string, int> = {}
+  let bySecret: Map<sensitive String, Int> = {}
   print(bySecret.count().toString())
 
   // WHY: BackgroundUnionToGenericParameter — a task copies a union argument into a slot of its

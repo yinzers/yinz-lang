@@ -5,20 +5,20 @@
 // Expected output: the payload's item count, first item and label, then `done`.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Names {
-  items: array<string>
-  label: string
+  items: Array<String>
+  label: String
 }
 
 shape Bag {
   choice: Circle | Names
-  id: int
+  id: Int
 }
 
-function f(choice: Circle | Names) -> nothing {
+function f(choice: Circle | Names) -> Nothing {
   wait sleep(100)
   if (choice) {
     is Circle => {
@@ -38,7 +38,7 @@ function make() -> Bag {
   return bag
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background f(make().choice)
   wait sleep(300)
   print(`done`)

@@ -11,22 +11,22 @@
 //   task sees 2.5
 //   tasks saw 1
 shape Lens {
-  focal: number
+  focal: Number
 }
 
 shape Scene {
-  name: string
+  name: String
   lens: Lens
 }
 
-function render(scene: Scene, results: channel<int>) -> nothing {
+function render(scene: Scene, results: Channel<Int>) -> Nothing {
   wait sleep(5)
   print(`task sees ${scene.lens.focal}`)
   results.send(1)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>(4)
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>(4)
   let scene: Scene = { name: `Three Rivers`, lens: { focal: 2.5 } }
   background render(scene, results)
   let a = results.receive()

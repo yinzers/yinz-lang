@@ -15,11 +15,11 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   3675
 
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(0)
 }
 
-function leaf(n: int) -> int {
+function leaf(n: Int) -> Int {
   background doWork()
   let t = 0
   let i = 0
@@ -30,7 +30,7 @@ function leaf(n: int) -> int {
   return t
 }
 
-function leaf2(n: int) -> int {
+function leaf2(n: Int) -> Int {
   let t = 0
   let i = 0
   while (i < n) {
@@ -40,7 +40,7 @@ function leaf2(n: int) -> int {
   return t
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = leaf(50)
   let b = leaf2(50)
   print(a + b)

@@ -13,14 +13,14 @@
 // Rationale: R6's non-crossing compile path silently miscompiled `f(7)` → printed
 // garbage instead of 7 in the code-reviewer's repro. Conservative reject is the
 // correct safe answer per design/concurrency.md ShadowsCrossingLocal.
-function worker(p: int) -> nothing {
+function worker(p: Int) -> Nothing {
   if (p > 0) {
-    let p: int = 42
+    let p: Int = 42
     print(p.toString())
   }
   wait sleep(5)
   print(p.toString())
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   worker(10)
 }

@@ -12,12 +12,12 @@
 // covers). Asserted verdict: exactly one `pts` row, declined
 // Escapes { how: "rebound by a later let" }.
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function entrypoint() -> nothing {
-  let pts: array<Point> = [
+function entrypoint() -> Nothing {
+  let pts: Array<Point> = [
     { x: 1, y: 2 },
     { x: 2, y: 4 },
     { x: 3, y: 6 },
@@ -91,7 +91,7 @@ function entrypoint() -> nothing {
     { x: 71, y: 142 },
     { x: 72, y: 144 }
   ]
-  let pts: array<Point> = [
+  let pts: Array<Point> = [
     { x: 1, y: 2 },
     { x: 2, y: 4 },
     { x: 3, y: 6 },

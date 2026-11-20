@@ -1,11 +1,11 @@
 // v0.3-M9 C6: a share argument reads an item another argument's lend overwrites
 // The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
-function both(share name: string, lend items: array<string>) -> nothing {
+function both(share name: String, lend items: Array<String>) -> Nothing {
   items[0] = `z-${3}`
   print(name)
 }
-function entrypoint() -> nothing {
-  let items: array<string> = [`a-${1}`]
+function entrypoint() -> Nothing {
+  let items: Array<String> = [`a-${1}`]
   both(items[0].or(`none`), items)
 }

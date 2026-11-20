@@ -3,19 +3,19 @@
 // call site looks like a transfer. `make` then returns `o`; a release pass that frees `a` at
 // `make`'s scope exit leaves the caller reading a freed row. GREEN today; guards C7.
 // Expected output: `3`.
-function put(lend o: array<array<int>>, give a: array<int>) -> nothing {
+function put(lend o: Array<Array<Int>>, give a: Array<Int>) -> Nothing {
   o.add(a)
 }
 
-function make() -> array<array<int>> {
-  let a: array<int> = [1, 2, 3]
-  let o: array<array<int>> = []
+function make() -> Array<Array<Int>> {
+  let a: Array<Int> = [1, 2, 3]
+  let o: Array<Array<Int>> = []
   put(o, a)
   return o
 }
 
-function entrypoint() -> nothing {
-  let o: array<array<int>> = make()
+function entrypoint() -> Nothing {
+  let o: Array<Array<Int>> = make()
   for (inner in o) {
     print(inner.count().toString())
   }

@@ -7,14 +7,14 @@
 //
 // Expected (semantic / O0) output: 1\n42
 shape Box {
-  value: int
+  value: Int
 }
 
-function bump(b: Box) -> nothing {
+function bump(b: Box) -> Nothing {
   b.value = b.value + 41
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let b: Box = { value: 1 }
   print(b.value.toString())
   bump(b)

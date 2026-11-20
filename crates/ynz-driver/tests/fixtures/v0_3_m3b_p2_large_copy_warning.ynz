@@ -7,22 +7,22 @@
 // "Copying 72 bytes" warning diagnostic.
 
 shape BigRecord {
-  a: int
-  b: int
-  c: int
-  d: int
-  e: int
-  f: int
-  g: int
-  h: int
-  i: int
+  a: Int
+  b: Int
+  c: Int
+  d: Int
+  e: Int
+  f: Int
+  g: Int
+  h: Int
+  i: Int
 }
 
-function process(record: BigRecord) -> nothing {
+function process(record: BigRecord) -> Nothing {
   print(`${record.a}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let value: BigRecord = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }
   background process(value)
   // `value` is read after spawn — compiler infers .copy (large: 72 bytes → warning)

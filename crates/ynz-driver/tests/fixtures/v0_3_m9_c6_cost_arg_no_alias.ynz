@@ -2,12 +2,12 @@
 // the call copy nothing.
 // Allocations: the outer literal and two inner literals (6) and the fallback literal (2).
 
-function show(share first: array<int>, share second: array<int>) -> nothing {
+function show(share first: Array<Int>, share second: Array<Int>) -> Nothing {
   print(first.count() + second.count())
 }
 
-function entrypoint() -> nothing {
-  let rows: array<array<int>> = [[1], [2, 3]]
-  let fallback: array<int> = []
+function entrypoint() -> Nothing {
+  let rows: Array<Array<Int>> = [[1], [2, 3]]
+  let fallback: Array<Int> = []
   show(rows[0].or(fallback), rows[1].or(fallback))
 }

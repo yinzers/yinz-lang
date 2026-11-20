@@ -13,9 +13,9 @@
 //   false
 //   true
 
-function over(n: int) -> boolean {
-  let sum: int = 0
-  let i: int = 0
+function over(n: Int) -> Boolean {
+  let sum: Int = 0
+  let i: Int = 0
   while (i < n) {
     sum = sum + i
     i = i + 1
@@ -23,7 +23,7 @@ function over(n: int) -> boolean {
   return sum > 10
 }
 
-function combine() -> boolean {
+function combine() -> Boolean {
   let pick = 1
   let result = false
   if (pick) {
@@ -40,7 +40,7 @@ function combine() -> boolean {
   return result
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

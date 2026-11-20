@@ -1,7 +1,7 @@
 // v0.3-M9 C10: the same for a `string` walked by code point: the string the loop started with
 // survives the reassignment of its binding. Correct behavior: prints 3, XYZ.
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let text = `abc`.toUpperCase()
   let seen = 0
   for (letter in text) {

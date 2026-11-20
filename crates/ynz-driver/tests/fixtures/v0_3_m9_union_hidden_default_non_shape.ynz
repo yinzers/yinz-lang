@@ -9,17 +9,17 @@
 // stops with "struct literal with non-shape type Error".)
 
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 shape Holder {
-  name: string
-  hidden extra: Big | int = 4096
+  name: String
+  hidden extra: Big | Int = 4096
 }
 
-function peek(share self: Holder) -> string {
-  let slot: Big | int = self.extra
+function peek(share self: Holder) -> String {
+  let slot: Big | Int = self.extra
   if (slot) {
     is Big => {
       return `big ${slot.label}`
@@ -31,7 +31,7 @@ function peek(share self: Holder) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { name: `a` }
   print(holder.peek())
   print(`end`)

@@ -6,12 +6,12 @@
 // The guard must fire with a clean error (exit 1). Compiling this program would produce
 // a slot collision: parameter `p` and `let p = 99` share frame slot "p".
 // Expected: exit 1, diagnostic mentions `p` and `wait`
-function work(p: int) -> nothing {
+function work(p: Int) -> Nothing {
   wait sleep(5)
   let p = 99
   if (1 > 0) { print(p.toString()) }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait work(10)
 }

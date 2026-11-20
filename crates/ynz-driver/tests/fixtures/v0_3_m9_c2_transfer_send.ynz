@@ -9,16 +9,16 @@
 //
 // Expected output (one per line): 2, 3, 10, 30, end
 
-function producer(lend wire: channel<array<int>>) -> nothing {
-  let sent: array<int> = [10, 20, 30]
-  let unsent: array<int> = [1, 2]
+function producer(lend wire: Channel<Array<Int>>) -> Nothing {
+  let sent: Array<Int> = [10, 20, 30]
+  let unsent: Array<Int> = [1, 2]
   wire.send(sent)
   print(unsent.count().toString())
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(2)
   background producer(wire)
   wait sleep(50)
   let got = wire.receive()

@@ -3,9 +3,9 @@
 // buildStr(5) (len=5) — the two results stay separate, so the prints differ. Both print the
 // same lines whether or not the two calls run at the same time.
 
-function buildStr(n: int) -> string {
-  let count: int = 0
-  let i: int = 0
+function buildStr(n: Int) -> String {
+  let count: Int = 0
+  let i: Int = 0
   while (i < n) {
     count = count + 1
     i = i + 1
@@ -13,7 +13,7 @@ function buildStr(n: int) -> string {
   return `len=${count}`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = buildStr(3)
   let b = buildStr(5)
   print(a)

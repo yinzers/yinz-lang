@@ -5,16 +5,16 @@
 // Expected output: the name twice, the task's then the spawner's.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function show(tag: Tag) -> nothing {
+function show(tag: Tag) -> Nothing {
   print(tag.name)
 }
 
-function entrypoint() -> nothing {
-  let count: int = 1
+function entrypoint() -> Nothing {
+  let count: Int = 1
   let tag: Tag = { name: `tag-${count}`, id: 7 }
   background show(tag)
   wait sleep(80)

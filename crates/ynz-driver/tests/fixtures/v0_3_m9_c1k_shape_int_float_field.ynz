@@ -5,14 +5,14 @@
 // Expected output: `A`, `B`.
 
 shape Holder {
-  label: string
-  pick: int | float
+  label: String
+  pick: Int | Float
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { label: `a`.toUpperCase(), pick: 3 }
   print(holder.label)
-  let wide: float = 2.5
+  let wide: Float = 2.5
   let other: Holder = { label: `b`.toUpperCase(), pick: wide }
   print(other.label)
 }

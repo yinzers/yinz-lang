@@ -4,15 +4,15 @@
 // of the name (1); a copied loop item would clone the name again (3).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  name: string
-  weight: int
+  name: String
+  weight: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Big => {
       return thing.name
@@ -24,10 +24,10 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { name: `big-${1}`, weight: 5 }
   let first: Thing = big
-  let things: array<Thing> = [first]
+  let things: Array<Thing> = [first]
   for (thing in things) {
     print(describe(thing))
   }

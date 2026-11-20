@@ -3,13 +3,13 @@
 // Allocations: `rows` literal (2), the bucket's literal (2), the copy (2).
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [0]
-  let enter: int = 1
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [0]
+  let enter: Int = 1
   if (enter == 1) {
     let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
     rows = bucket.rows

@@ -3,6 +3,6 @@
 // callee → same FrameLayout entry). A crossing-local live across BOTH calls must not be
 // clobbered by the second call's sub-frame reuse.
 
-export function doTick() -> nothing {
+export function doTick() -> Nothing {
   sleep(10)
 }

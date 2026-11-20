@@ -4,9 +4,9 @@
 // distinct function, so each result stays its own value). This file locks that the compiler
 // declines to overlap them.
 
-function priceA(n: int) -> number errors {
-  let total: number = 0.0
-  let i: int = 0
+function priceA(n: Int) -> Number errors {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5
     i = i + 1
@@ -14,9 +14,9 @@ function priceA(n: int) -> number errors {
   return total
 }
 
-function priceB(n: int) -> number errors {
-  let total: number = 0.0
-  let i: int = 0
+function priceB(n: Int) -> Number errors {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 2.5
     i = i + 1
@@ -24,7 +24,7 @@ function priceB(n: int) -> number errors {
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = priceA(4)
   let b = priceB(4)
   print(a.or(0.0))

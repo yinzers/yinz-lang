@@ -2,15 +2,15 @@
 // overwrites the same tags. Each module emits its own release glue for `array<Tag>`.
 
 export shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-export function makeTags() -> array<Tag> {
-  let tags: array<Tag> = [{ name: `a-${1}`, id: 1 }, { name: `b-${2}`, id: 2 }]
+export function makeTags() -> Array<Tag> {
+  let tags: Array<Tag> = [{ name: `a-${1}`, id: 1 }, { name: `b-${2}`, id: 2 }]
   return tags
 }
 
-export function replaceFirst(lend tags: array<Tag>) -> nothing {
+export function replaceFirst(lend tags: Array<Tag>) -> Nothing {
   tags[0] = { name: `lib-${3}`, id: 3 }
 }

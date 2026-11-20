@@ -1,12 +1,12 @@
 // v0.3-M9 C10: a parameter with no modifier that the body assigns is inferred `lend`: the callee
 // writes the walked field, so the call is refused as for an explicit `lend`.
 shape Holder {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
-function reset(holder: Holder) -> nothing {
+function reset(holder: Holder) -> Nothing {
   holder.rows = [[9]]
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { rows: [[1], [2], [3]] }
   let total = 0
   for (row in holder.rows) {

@@ -7,18 +7,18 @@
 // read the 1-byte `Tiny` as a 16-byte `Big`: ASan stack-buffer-overflow READ.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 function same<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   let out = same(big, tiny)

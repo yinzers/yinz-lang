@@ -27,7 +27,7 @@
 // Arithmetic per worker (seed s): crunch(s) = 0+1+...+499 + s = 124750 + s; fetchIO(s) = s + 1.
 //   worker sum = 124750 + s + s + 1 = 124751 + 2s.
 
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 500) {
@@ -37,12 +37,12 @@ function crunch(n: int) -> int {
   return total + n
 }
 
-function fetchIO(n: int) -> int {
+function fetchIO(n: Int) -> Int {
   wait sleep(15)
   return n + 1
 }
 
-function workerA1() -> nothing {
+function workerA1() -> Nothing {
   let a = crunch(1)
   let b = fetchIO(1)
   print(`DONE_A1 ${a + b}`)
@@ -51,28 +51,28 @@ function workerA1() -> nothing {
   background workerA4()
   background workerA5()
 }
-function workerA2() -> nothing {
+function workerA2() -> Nothing {
   let a = crunch(2)
   let b = fetchIO(2)
   print(`DONE_A2 ${a + b}`)
 }
-function workerA3() -> nothing {
+function workerA3() -> Nothing {
   let a = crunch(3)
   let b = fetchIO(3)
   print(`DONE_A3 ${a + b}`)
 }
-function workerA4() -> nothing {
+function workerA4() -> Nothing {
   let a = crunch(4)
   let b = fetchIO(4)
   print(`DONE_A4 ${a + b}`)
 }
-function workerA5() -> nothing {
+function workerA5() -> Nothing {
   let a = crunch(5)
   let b = fetchIO(5)
   print(`DONE_A5 ${a + b}`)
 }
 
-function workerB1() -> nothing {
+function workerB1() -> Nothing {
   let a = crunch(6)
   let b = fetchIO(6)
   print(`DONE_B1 ${a + b}`)
@@ -81,28 +81,28 @@ function workerB1() -> nothing {
   background workerB4()
   background workerB5()
 }
-function workerB2() -> nothing {
+function workerB2() -> Nothing {
   let a = crunch(7)
   let b = fetchIO(7)
   print(`DONE_B2 ${a + b}`)
 }
-function workerB3() -> nothing {
+function workerB3() -> Nothing {
   let a = crunch(8)
   let b = fetchIO(8)
   print(`DONE_B3 ${a + b}`)
 }
-function workerB4() -> nothing {
+function workerB4() -> Nothing {
   let a = crunch(9)
   let b = fetchIO(9)
   print(`DONE_B4 ${a + b}`)
 }
-function workerB5() -> nothing {
+function workerB5() -> Nothing {
   let a = crunch(10)
   let b = fetchIO(10)
   print(`DONE_B5 ${a + b}`)
 }
 
-function workerC1() -> nothing {
+function workerC1() -> Nothing {
   let a = crunch(11)
   let b = fetchIO(11)
   print(`DONE_C1 ${a + b}`)
@@ -111,28 +111,28 @@ function workerC1() -> nothing {
   background workerC4()
   background workerC5()
 }
-function workerC2() -> nothing {
+function workerC2() -> Nothing {
   let a = crunch(12)
   let b = fetchIO(12)
   print(`DONE_C2 ${a + b}`)
 }
-function workerC3() -> nothing {
+function workerC3() -> Nothing {
   let a = crunch(13)
   let b = fetchIO(13)
   print(`DONE_C3 ${a + b}`)
 }
-function workerC4() -> nothing {
+function workerC4() -> Nothing {
   let a = crunch(14)
   let b = fetchIO(14)
   print(`DONE_C4 ${a + b}`)
 }
-function workerC5() -> nothing {
+function workerC5() -> Nothing {
   let a = crunch(15)
   let b = fetchIO(15)
   print(`DONE_C5 ${a + b}`)
 }
 
-function workerD1() -> nothing {
+function workerD1() -> Nothing {
   let a = crunch(16)
   let b = fetchIO(16)
   print(`DONE_D1 ${a + b}`)
@@ -141,28 +141,28 @@ function workerD1() -> nothing {
   background workerD4()
   background workerD5()
 }
-function workerD2() -> nothing {
+function workerD2() -> Nothing {
   let a = crunch(17)
   let b = fetchIO(17)
   print(`DONE_D2 ${a + b}`)
 }
-function workerD3() -> nothing {
+function workerD3() -> Nothing {
   let a = crunch(18)
   let b = fetchIO(18)
   print(`DONE_D3 ${a + b}`)
 }
-function workerD4() -> nothing {
+function workerD4() -> Nothing {
   let a = crunch(19)
   let b = fetchIO(19)
   print(`DONE_D4 ${a + b}`)
 }
-function workerD5() -> nothing {
+function workerD5() -> Nothing {
   let a = crunch(20)
   let b = fetchIO(20)
   print(`DONE_D5 ${a + b}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background workerA1()
   background workerB1()
   background workerC1()

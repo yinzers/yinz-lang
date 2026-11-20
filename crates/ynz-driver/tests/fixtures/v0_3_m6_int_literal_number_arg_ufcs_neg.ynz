@@ -3,14 +3,14 @@
 // has no general mismatch backstop. Pre-fix: LLVM verifier ICE
 // (`call ptr @scale(ptr, i64 -5)`). The gate's `-IntLit` arm must fire.
 shape Player {
-  score: number
+  score: Number
 }
 
-function scale(share self: Player, factor: number) -> number {
+function scale(share self: Player, factor: Number) -> Number {
   return factor
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { score: 1.5 }
   let got = p.scale(-5)
   print(got)

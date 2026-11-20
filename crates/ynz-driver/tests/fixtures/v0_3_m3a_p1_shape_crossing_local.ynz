@@ -4,11 +4,11 @@
 // field accesses and writes go directly to the frame — no separate heap allocation.
 // Expected output: 30  (p.x + p.y = 10 + 20)
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Point = { x: 10, y: 20 }
   wait sleep(5)
   let sum = p.x + p.y

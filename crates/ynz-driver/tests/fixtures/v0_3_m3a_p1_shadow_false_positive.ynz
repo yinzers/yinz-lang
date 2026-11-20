@@ -5,7 +5,7 @@
 // ran for ALL crossing locals including inner-only ones, and the outer post-if `let x`
 // was mistakenly treated as a shadowed crossing local — producing a false compile error.
 // Expected output: 42 then 100
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let flag = true
   if (flag) {
     let x = 42

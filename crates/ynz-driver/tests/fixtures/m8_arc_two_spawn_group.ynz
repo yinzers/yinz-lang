@@ -15,19 +15,19 @@
 // sorts): the caller's own read after the spawns must see the ORIGINAL (the caller never reads
 // through the Arc block).
 shape Scene {
-  name: string
-  width: int
-  height: int
+  name: String
+  width: Int
+  height: Int
 }
 
-function render(scene: Scene, results: channel<int>) -> nothing {
+function render(scene: Scene, results: Channel<Int>) -> Nothing {
   wait sleep(10)
   let area = scene.width * scene.height
   results.send(area)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>()
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>()
   let scene: Scene = { name: `Three Rivers`, width: 6, height: 7 }
   background render(scene, results)
   background render(scene, results)

@@ -6,15 +6,15 @@
 // the base): ASan stack-use-after-return at -O0 (stack-use-after-scope at -O2), `none` printed.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -26,23 +26,23 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function build() -> array<Thing> {
+function build() -> Array<Thing> {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let things: array<Thing> = []
+  let things: Array<Thing> = []
   things.add(big)
   things.add(tiny)
   return things
 }
 
-function clobber(seed: int) -> int {
+function clobber(seed: Int) -> Int {
   let plusOne = seed + 1
   let doubled = plusOne * 2
   let reduced = doubled - 3
   return reduced + plusOne
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let things = build()
   let scratch = clobber(7)
   let i = 0

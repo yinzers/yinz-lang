@@ -7,18 +7,18 @@
 //   tasks total 84
 //   caller keeps Bonds 6x7
 shape Scene {
-  name: string
-  width: int
-  height: int
+  name: String
+  width: Int
+  height: Int
 }
 
-function render(scene: Scene, results: channel<int>) -> nothing {
+function render(scene: Scene, results: Channel<Int>) -> Nothing {
   wait sleep(5)
   results.send(scene.width * scene.height)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>()
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>()
   let scene: Scene = { name: `Bonds`, width: 6, height: 7 }
   let bail = scene.width > 100
   background render(scene, results)

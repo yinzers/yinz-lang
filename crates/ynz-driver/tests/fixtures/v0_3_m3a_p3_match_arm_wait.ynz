@@ -3,8 +3,8 @@
 // The `1 =>` arm (no wait) must NOT run. Guards that SM match correctly routes
 // to the right arm and resumes there.
 // Expected output: two
-function entrypoint() -> nothing {
-  let x: int = 2
+function entrypoint() -> Nothing {
+  let x: Int = 2
   if (x) {
     1 => {
       print(`one`)

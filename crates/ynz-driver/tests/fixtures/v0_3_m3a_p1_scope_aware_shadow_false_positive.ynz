@@ -5,7 +5,7 @@
 //   "x is declared again inside a nested scope, but the outer x crosses a `wait`"
 // The outer x has zero reads after any top-level suspension, so the shadow guard
 // must not fire. Expected output: hello (printed before the if) then 42 (inside).
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = `hello`
   print(x)
   if (1 > 0) {

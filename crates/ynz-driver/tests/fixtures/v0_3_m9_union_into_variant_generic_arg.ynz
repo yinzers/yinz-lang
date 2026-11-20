@@ -6,15 +6,15 @@
 // the callee read the 16-byte union envelope as a `Big` — SIGSEGV.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function pick<T>(share first: T, share b: Big) -> int {
+function pick<T>(share first: T, share b: Big) -> Int {
   return b.count
 }
 
@@ -22,16 +22,16 @@ function same<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function useBig<T>(share b: Big, share extra: T) -> string {
+function useBig<T>(share b: Big, share extra: T) -> String {
   return b.label
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   let thing: Thing = tiny
   print(pick(5, thing).toString())
   let out = same(big, thing)
   print(out.label)
-  print(useBig<int>(thing, 3))
+  print(useBig<Int>(thing, 3))
 }

@@ -1,17 +1,17 @@
 shape Counter {
-  name: string
-  hidden count: int = 0
+  name: String
+  hidden count: Int = 0
 }
 
-function increment(lend self: Counter) -> nothing {
+function increment(lend self: Counter) -> Nothing {
   self.count = self.count + 1
 }
 
-function value(share self: Counter) -> int {
+function value(share self: Counter) -> Int {
   return self.count
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Counter = { name: `clicks` }
   c.increment()
   c.increment()

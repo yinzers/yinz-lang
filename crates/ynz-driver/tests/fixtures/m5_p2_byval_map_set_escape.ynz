@@ -5,22 +5,22 @@
 // (unfixed observed 3/30; golden asserts the matched 1/10). Fixed: map-value
 // marshalling clones the shape bytes into a counted heap cell per insertion.
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let qc: int = seed * 3
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let qc: Int = seed * 3
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 },
     { qty: qc, price: qc * 10 }
   ]
   let zero: Part = { qty: 0, price: 0 }
-  let picks: map<string, Part> = { `pick`: zero }
+  let picks: Map<String, Part> = { `pick`: zero }
   for (p in parts) {
     if (p.qty == 1) {
       picks.set(`pick`, p.copy())

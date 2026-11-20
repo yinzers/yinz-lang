@@ -1,5 +1,5 @@
-function entrypoint() -> nothing {
-  let ch: channel<int> = channel<int>(4)
+function entrypoint() -> Nothing {
+  let ch: Channel<Int> = Channel<Int>(4)
   ch.send(7)
   let got = ch.receive()
   let v = got.or(0)

@@ -6,8 +6,8 @@
 // Releases: the item each overwrite replaces (4) and each iteration's copy (4), and the frame.
 // Plus the state-machine frame (1 allocated, 1 freed).
 
-function entrypoint() -> nothing {
-  let rows: array<array<int>> = [[1], [2]]
+function entrypoint() -> Nothing {
+  let rows: Array<Array<Int>> = [[1], [2]]
   for (row in rows) {
     rows[0] = [9]
     wait sleep(1)

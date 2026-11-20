@@ -3,8 +3,8 @@
 // Allocations: the literal's map (counted: 5), its two array values (2 each = 4), nothing for the
 // loop. The two literal keys are heap strings the map owns (2); the loop copies neither.
 
-function entrypoint() -> nothing {
-  let table: map<string, array<int>> = { `a`: [1, 2], `b`: [3] }
+function entrypoint() -> Nothing {
+  let table: Map<String, Array<Int>> = { `a`: [1, 2], `b`: [3] }
   for (entry in table) {
     print(entry.value.count())
   }

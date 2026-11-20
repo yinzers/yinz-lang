@@ -4,8 +4,8 @@
 // Pre-fix failure: `m.set(`a`)` panicked the code generator (it reads the value argument that was
 // never passed).
 
-function entrypoint() -> nothing {
-  let m: map<string, int> = {}
+function entrypoint() -> Nothing {
+  let m: Map<String, Int> = {}
   m.set(`a`)
   let found = m.get(`a`, `b`)
 }

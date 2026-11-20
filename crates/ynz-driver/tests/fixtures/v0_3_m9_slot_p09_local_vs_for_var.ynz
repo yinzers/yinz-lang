@@ -1,7 +1,7 @@
 // Q1: for-loop var same name as an outer crossing local.
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = `outer`
-  let names: array<string> = [`amy`, `bob`]
+  let names: Array<String> = [`amy`, `bob`]
   for (n in names) {
     wait sleep(5)
     print(n)

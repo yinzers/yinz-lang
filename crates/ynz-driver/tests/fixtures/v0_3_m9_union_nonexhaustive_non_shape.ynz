@@ -7,11 +7,11 @@
 // variant that is not a shape.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
-shape Mixed = Circle | int
+shape Mixed = Circle | Int
 
-function describe(share fig: Mixed) -> string {
+function describe(share fig: Mixed) -> String {
   if (fig) {
     is Circle => {
       return `circle`
@@ -20,7 +20,7 @@ function describe(share fig: Mixed) -> string {
   return `other`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let circle: Circle = { radius: 2.0 }
   let fig: Mixed = circle
   print(describe(fig))

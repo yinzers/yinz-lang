@@ -17,7 +17,7 @@
 
 import { fetchRemote } from `io_lib`
 
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -27,7 +27,7 @@ function crunch(n: int) -> int {
   return total + n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunch(1)
   let b = fetchRemote(2)
   print(a + b)

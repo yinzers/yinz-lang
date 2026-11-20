@@ -5,6 +5,6 @@
 
 import { innerSleep } from `a_ops`
 
-export function doWork() -> nothing {
+export function doWork() -> Nothing {
   innerSleep()
 }

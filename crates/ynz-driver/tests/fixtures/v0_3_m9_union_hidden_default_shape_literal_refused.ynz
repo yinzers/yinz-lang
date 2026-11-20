@@ -3,19 +3,19 @@
 // with the internal error "struct literal with non-shape type Error".
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 shape Holder {
-  name: string
+  name: String
   hidden extra: Tiny | Big = { flag: true }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { name: `a` }
   print(holder.name)
 }

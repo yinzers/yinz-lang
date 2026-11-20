@@ -5,17 +5,17 @@
 // under AddressSanitizer at both optimization levels.
 
 shape Part {
-  name: string
+  name: String
 }
 
-function consume(give parts: fixed<Part>) -> int {
+function consume(give parts: Fixed<Part>) -> Int {
   return 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Part = { name: `a`.toUpperCase() }
   let second: Part = { name: `bb` }
-  let parts: fixed<Part> = [first, second]
+  let parts: Fixed<Part> = [first, second]
   let used = consume(parts)
   print(used)
 }

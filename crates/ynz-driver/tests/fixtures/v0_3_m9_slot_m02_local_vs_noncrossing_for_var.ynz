@@ -1,8 +1,8 @@
 // Shadow matrix: non-crossing `for` variable named like a crossing LOCAL (the loop body has no
 // wait; the local is read after a later wait). Expected: amy, bob, outer.
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = `outer`
-  let names: array<string> = [`amy`, `bob`]
+  let names: Array<String> = [`amy`, `bob`]
   for (n in names) {
     print(n)
   }

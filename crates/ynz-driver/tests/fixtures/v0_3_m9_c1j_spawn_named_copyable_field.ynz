@@ -4,23 +4,23 @@
 // Expected output: the count, the first name, then `done`.
 
 shape Bag {
-  items: array<string>
-  id: int
+  items: Array<String>
+  id: Int
 }
 
-function f(items: array<string>) -> nothing {
+function f(items: Array<String>) -> Nothing {
   wait sleep(100)
   print(items.count())
   print(items[0].or(`?`))
 }
 
-function launch() -> nothing {
-  let names: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+function launch() -> Nothing {
+  let names: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   let bag: Bag = { items: names, id: 1 }
   background f(bag.items)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
   print(`done`)

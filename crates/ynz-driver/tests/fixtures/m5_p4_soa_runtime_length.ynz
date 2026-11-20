@@ -6,12 +6,12 @@
 // of guessing runtime sizes). Asserted verdicts: `pts` = LengthNotProvable; the
 // `out` binding inside makePoints = Escapes { how: "returned from the function" }.
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function makePoints() -> array<Point> {
-  let out: array<Point> = [
+function makePoints() -> Array<Point> {
+  let out: Array<Point> = [
     { x: 1, y: 2 },
     { x: 2, y: 4 },
     { x: 3, y: 6 }
@@ -19,7 +19,7 @@ function makePoints() -> array<Point> {
   return out
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let pts = makePoints()
   let total = 0
   for (p in pts) {

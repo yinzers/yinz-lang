@@ -1,32 +1,32 @@
 // v0.3-M9 C1f security round 1 (#423): `HolderA` keeps `Big | Tiny` inline, sized by this
 // module's 48-byte `Big`, which is not exported.
 shape Big {
-  first: int
-  second: int
-  third: int
-  fourth: int
-  fifth: int
-  label: string
+  first: Int
+  second: Int
+  third: Int
+  fourth: Int
+  fifth: Int
+  label: String
 }
 export shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Slot = Big | Tiny
 export shape HolderA {
   slot: Big | Tiny
-  id: int
+  id: Int
 }
 export function makeA() -> HolderA {
   let tiny: Tiny = { flag: true }
   let holder: HolderA = { slot: tiny, id: 1 }
   return holder
 }
-export function fillA(lend holder: HolderA) -> nothing {
+export function fillA(lend holder: HolderA) -> Nothing {
   let big: Big = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, label: `a${1}` }
   let asSlot: Slot = big
   holder.slot = asSlot
 }
-export function showA(share holder: HolderA) -> string {
+export function showA(share holder: HolderA) -> String {
   let slot = holder.slot
   if (slot) {
     is Big => {

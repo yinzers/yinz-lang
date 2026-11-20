@@ -13,7 +13,7 @@
 // local is read by a statement that suspends. Closes M8 FR #11(b) (int variant).
 //
 // When C1's fix lands: exit 0, stdout exactly "102" on every run, at every tier.
-function feed(wire: channel<int>) -> nothing {
+function feed(wire: Channel<Int>) -> Nothing {
   let price = 34
   wire.send(price)
   wire.send(price)
@@ -21,8 +21,8 @@ function feed(wire: channel<int>) -> nothing {
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(1)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(1)
   background feed(wire)
   let total = 0
   let open = true

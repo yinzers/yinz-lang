@@ -3,16 +3,16 @@
 // SECOND. Reading `slot` in `return slot + other` crosses the second suspension —
 // `slot` would need a frame slot across that boundary, which M2 does not allocate.
 // Must reject with LocalCrossesWait teaching error, NOT crash the LLVM backend.
-function sleeper() -> int {
+function sleeper() -> Int {
   wait sleep(10)
   return 5
 }
-function compute() -> int {
+function compute() -> Int {
   let slot = sleeper()
   let other = sleeper()
   return slot + other
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = compute()
   print(r.toString())
 }

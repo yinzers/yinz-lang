@@ -27,14 +27,14 @@
 // The 3 recursion_cancellation* tests are serialized via a static Mutex in the
 // test harness — no CPU contention can affect relative timing across these tests.
 
-function countdown(n: int) -> nothing {
+function countdown(n: Int) -> Nothing {
   if (n > 0) {
     wait sleep(200)
     countdown(n - 1)
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background countdown(3)
   wait sleep(500)
   print(`done`)

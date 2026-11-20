@@ -15,22 +15,22 @@
 // the exact values after the crossing.
 //
 // Expected output: later\na:7\nb:8
-function priceA() -> int {
+function priceA() -> Int {
   wait sleep(40)
   return 7
 }
 
-function priceB() -> int {
+function priceB() -> Int {
   wait sleep(40)
   return 8
 }
 
-function later() -> nothing {
+function later() -> Nothing {
   wait sleep(10)
   print(`later`)
 }
 
-function run() -> nothing {
+function run() -> Nothing {
   let a = priceA()
   let b = priceB()
   wait later()
@@ -38,6 +38,6 @@ function run() -> nothing {
   print(`b:${b.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   run()
 }

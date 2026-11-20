@@ -4,18 +4,18 @@
 /// This is the over-acceptance adversarial case: verifies the fix doesn't
 /// accept all shapes unconditionally.
 shape Printable {
-  display(share self) -> nothing
+  display(share self) -> Nothing
 }
 
 shape Enemy {
-  health: int
+  health: Int
 }
 
-function showDynamic(d: dynamic Printable) -> nothing {
+function showDynamic(d: dynamic Printable) -> Nothing {
   print(`accepted`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let e: Enemy = { health: 50 }
   showDynamic(e)
 }

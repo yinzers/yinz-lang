@@ -1,9 +1,9 @@
 // v0.3-M9 C10 guard: a `while` over an index re-reads the binding each pass, so reassigning it is
 // fine. Correct behavior: prints 3, 16, 3.
 
-function entrypoint() -> nothing {
-  let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
-  let kept: array<array<int>> = []
+function entrypoint() -> Nothing {
+  let matrix: Array<Array<Int>> = [[1, 2], [3, 4], [5, 6]]
+  let kept: Array<Array<Int>> = []
   let index = 0
   while (index < 3) {
     let row = matrix[index].or([1])

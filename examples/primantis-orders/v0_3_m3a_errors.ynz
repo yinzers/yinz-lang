@@ -33,12 +33,12 @@
 // the compiler to auto-parallelize independent statements in a future release.
 // Fix: `let r = wait fetchRating()` then use `r` in the expression.
 
-function fetchRating() -> int {
+function fetchRating() -> Int {
   wait sleep(10)
   return 92
 }
 
-function displayAdjusted(pts: int) -> nothing {
+function displayAdjusted(pts: Int) -> Nothing {
   let adjusted = pts + fetchRating()    // WHY: SubExprSuspendViolation — suspending call inside arithmetic
   print(adjusted.toString())
 }
@@ -52,12 +52,12 @@ function displayAdjusted(pts: int) -> nothing {
 // cancellation. Restructure so only one function suspends, or extract shared
 // logic into a self-recursive helper.
 
-function pingRoster(n: int) -> nothing {
+function pingRoster(n: Int) -> Nothing {
   wait sleep(5)
   pongRoster(n - 1)                     // WHY: MutualSuspensionCycle — mutual call with pongRoster
 }
 
-function pongRoster(n: int) -> nothing {
+function pongRoster(n: Int) -> Nothing {
   wait sleep(5)
   pingRoster(n - 1)                     // WHY: MutualSuspensionCycle — mutual call with pingRoster
 }
@@ -70,11 +70,11 @@ function pongRoster(n: int) -> nothing {
 // (e.g. `discountedSubtotal`) to resolve.
 
 shape OrderItem {
-  price: int
-  quantity: int
+  price: Int
+  quantity: Int
 }
 
-function processOrder(basePrice: int, qty: int) -> nothing {
+function processOrder(basePrice: Int, qty: Int) -> Nothing {
   let subtotal = basePrice * qty
   wait sleep(10)
   if (qty > 10) {
@@ -93,10 +93,10 @@ function processOrder(basePrice: int, qty: int) -> nothing {
 
 shape OrderLine {
   item: OrderItem
-  quantity: int
+  quantity: Int
 }
 
-function shipOrder(unitPrice: int) -> nothing {
+function shipOrder(unitPrice: Int) -> Nothing {
   let line: OrderLine = { item: { price: unitPrice, quantity: 1 }, quantity: 3 }
   wait sleep(10)
   print(line.quantity.toString())       // WHY: NestedShapeCrossing — OrderLine has nested OrderItem field
@@ -110,7 +110,7 @@ function shipOrder(unitPrice: int) -> nothing {
 // Note: `-> number errors` (decimal128 EC) IS supported — only Shape returns are deferred.
 
 shape Item {
-  price: int
+  price: Int
 }
 
 function suspendingReturnShape() -> Item {
@@ -132,8 +132,8 @@ function suspendingReturnShapeErrors() -> Item errors {
 // not yet implemented: these types are pointers to stack-allocated tag+payload pairs
 // that become invalid after suspension. Extract the inner value before the `wait`.
 
-function processQuantity(qty: int) -> nothing {
-  let adjusted: maybe<int> = qty.toString().toInt()
+function processQuantity(qty: Int) -> Nothing {
+  let adjusted: Maybe<Int> = qty.toString().toInt()
   wait sleep(5)
   let val = adjusted.or(0)             // WHY: UnsupportedCrossingLocalType — maybe<int> crosses wait
   print(val.toString())
@@ -146,8 +146,8 @@ function processQuantity(qty: int) -> nothing {
 // pointer becomes dangling when the function suspends and resumes in a new call
 // frame. Use `array<int>` instead — heap-allocated pointers survive suspension.
 
-function scanFixed() -> nothing {
-  let ratings: fixed<int> = [85, 92, 78]
+function scanFixed() -> Nothing {
+  let ratings: Fixed<Int> = [85, 92, 78]
   for (r in ratings) {
     wait sleep(5)                       // WHY: FixedArrayIterWithWait — fixed<int> iter + wait in body
     print(r.toString())
@@ -160,7 +160,7 @@ function scanFixed() -> nothing {
 // a `for` whose body has a `wait`. Recovering range bounds from a frame-backed alloca
 // is not yet implemented. Inline the range directly: `for (i in range(0, 3))`.
 
-function scanStoredRange() -> nothing {
+function scanStoredRange() -> Nothing {
   let r = range(0, 3)
   for (i in r) {
     wait sleep(5)                       // WHY: StoredRangeWithWait — stored range local + wait in body
@@ -175,9 +175,9 @@ function scanStoredRange() -> nothing {
 // frame-backed; its fields yield a dangling pointer after suspension.
 // Read entry fields before the `wait`, or accumulate into an outer crossing local.
 
-function scanMap() -> nothing {
-  let scores: map<string, int> = { `clemente`: 3000, `wagner`: 3420 }
-  let total: int = 0
+function scanMap() -> Nothing {
+  let scores: Map<String, Int> = { `clemente`: 3000, `wagner`: 3420 }
+  let total: Int = 0
   for (entry in scores) {
     wait sleep(5)
     total = total + entry.value         // WHY: MapEntryFieldAfterWait — entry.value read after wait
@@ -192,6 +192,6 @@ function scanMap() -> nothing {
 // `wait` is no longer an error — it compiles and runs correctly. Acceptance lives in
 // crates/ynz-driver/tests/integration.rs (m5_p3_array_shape_*_runs).
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   processOrder(8, 12)
 }

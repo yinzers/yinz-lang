@@ -3,7 +3,7 @@
 // (i64), not the ptr fallback that was used before Pass 0.25 was fixed.
 // Expected: fetchValue() returns 42.
 
-export function fetchValue() -> int {
+export function fetchValue() -> Int {
   sleep(10)
   return 42
 }

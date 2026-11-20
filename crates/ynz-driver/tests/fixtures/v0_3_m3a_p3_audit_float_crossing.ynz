@@ -3,8 +3,8 @@
 // The round-trip correctness is verified by confirming the function completes without error.
 // (Float comparisons with literals are not yet supported in Yinz v0.3; this fixture
 // proves the frame-slot mechanism does not crash, which is the relevant audit property.)
-function entrypoint() -> nothing {
-  let x: float = 7.0
+function entrypoint() -> Nothing {
+  let x: Float = 7.0
   wait sleep(5)
   let _ = x
   print(`ok`)

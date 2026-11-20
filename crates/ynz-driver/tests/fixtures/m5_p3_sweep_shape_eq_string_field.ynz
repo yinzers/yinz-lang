@@ -12,19 +12,19 @@
 //   true
 //   true
 shape Tag {
-  name: string
-  n: int
+  name: String
+  n: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a: Tag = { name: `alpha`, n: 1 }
   let same: Tag = { name: a.name, n: 1 }
-  let tags: array<Tag> = [a]
+  let tags: Array<Tag> = [a]
   print(tags.contains(same))
   let fresh: Tag = { name: `alpha`, n: 1 }
   print(tags.contains(fresh))
-  let prefix: string = `al`
-  let built: string = `${prefix}pha`
+  let prefix: String = `al`
+  let built: String = `${prefix}pha`
   let runtimeName: Tag = { name: built, n: 1 }
   print(tags.contains(runtimeName))
 }

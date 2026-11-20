@@ -18,17 +18,17 @@
 //
 // Expected output (correct — suspension preserves bound values; default == --no-auto-parallel):
 //   42
-function slowCall() -> int {
+function slowCall() -> Int {
   wait sleep(40)
   return 42
 }
 
-function other() -> boolean {
+function other() -> Boolean {
   wait sleep(40)
   return true
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = slowCall()
   let cond = other()
   wait sleep(1)

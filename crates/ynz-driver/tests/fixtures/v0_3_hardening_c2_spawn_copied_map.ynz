@@ -5,12 +5,12 @@
 //
 // The pin is the COMPARISON, not a magic constant: this file and its `_plain` twin must cost
 // the same, because `.copy()` before a spawn asks for exactly what the spawn already does.
-function eat(counts: map<string, int>) -> nothing {
+function eat(counts: Map<String, Int>) -> Nothing {
   print(counts.count())
 }
 
-function entrypoint() -> nothing {
-  let m: map<string, int> = { `a`: 1, `b`: 2 }
+function entrypoint() -> Nothing {
+  let m: Map<String, Int> = { `a`: 1, `b`: 2 }
   background eat(m.copy())
   print(m.count())
 }

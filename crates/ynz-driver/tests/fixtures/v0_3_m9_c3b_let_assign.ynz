@@ -6,17 +6,17 @@
 // `second` 1 (fresh), `second = fromLiteral` 1 (copy: `fromLiteral` is read again). Total 6.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let count: int = 4
-  let source: string = `item-${count}`
-  let copied: string = source
+function entrypoint() -> Nothing {
+  let count: Int = 4
+  let source: String = `item-${count}`
+  let copied: String = source
   print(source)
   print(copied)
-  let handedOn: string = `next-${count}`
-  let moved: string = handedOn
+  let handedOn: String = `next-${count}`
+  let moved: String = handedOn
   print(moved)
-  let fromLiteral: string = `plain`
-  let second: string = `x-${count}`
+  let fromLiteral: String = `plain`
+  let second: String = `x-${count}`
   second = fromLiteral
   print(second)
   print(fromLiteral)

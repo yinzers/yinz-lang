@@ -1,9 +1,9 @@
 // v0.3-M9 C1q: the same hand-over for the items of a `fixed` list.
 // Correct behavior: prints 2, then 6.
 
-function entrypoint() -> nothing {
-  let matrix: fixed<array<int>> = [[1, 2], [3, 4], [5, 6]]
-  let kept: array<array<int>> = []
+function entrypoint() -> Nothing {
+  let matrix: Fixed<Array<Int>> = [[1, 2], [3, 4], [5, 6]]
+  let kept: Array<Array<Int>> = []
   let seen = 0
   for (row in matrix) {
     seen = seen + 1

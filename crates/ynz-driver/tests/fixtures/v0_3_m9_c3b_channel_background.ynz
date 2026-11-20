@@ -6,17 +6,17 @@
 // Total 1+1+1+0+1+1+1+1+0 = 7.
 // Expected output: one value per line below (each task finishes inside the sleep).
 
-function echo(give text: string) -> nothing {
+function echo(give text: String) -> Nothing {
   print(text)
 }
 
-function entrypoint() -> nothing {
-  let count: int = 3
-  let wire: channel<string> = channel<string>(4)
-  let sentCopy: string = `copy-${count}`
+function entrypoint() -> Nothing {
+  let count: Int = 3
+  let wire: Channel<String> = Channel<String>(4)
+  let sentCopy: String = `copy-${count}`
   wire.send(sentCopy)
   print(sentCopy)
-  let sentLast: string = `last-${count}`
+  let sentLast: String = `last-${count}`
   wire.send(sentLast)
   wire.send(`lit`)
   let first = wire.receive()
@@ -25,11 +25,11 @@ function entrypoint() -> nothing {
   print(second.or(`none`))
   let third = wire.receive()
   print(third.or(`none`))
-  let taskText: string = `task-${count}`
+  let taskText: String = `task-${count}`
   background echo(taskText.copy())
   wait sleep(50)
   print(taskText)
-  let handedOver: string = `over-${count}`
+  let handedOver: String = `over-${count}`
   background echo(handedOver)
   wait sleep(50)
 }

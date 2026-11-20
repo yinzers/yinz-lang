@@ -1,5 +1,5 @@
-function constants() -> nothing {
-  const pi: number = 3
+function constants() -> Nothing {
+  const pi: Number = 3
   let count = 0
   count = count + 1
   print(pi)

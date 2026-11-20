@@ -11,22 +11,22 @@
 // still carries the padded `{ i64, [56 x i8] }` slots + exact dual-mode-identical
 // stdout. Analysis half: crates/ynz-typeck/tests/soa_analysis.rs.
 shape Tally {
-  hits: int
-  outs: int
+  hits: Int
+  outs: Int
 }
 
-function report(give t: Tally, lend wire: channel<int>) -> nothing {
+function report(give t: Tally, lend wire: Channel<Int>) -> Nothing {
   wire.send(t.hits + t.outs)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let t: Tally = { hits: 3, outs: 2 }
-  let wire: channel<int> = channel<int>(4)
+  let wire: Channel<Int> = Channel<Int>(4)
   background report(t, wire)
   let reply = wire.receive()
   let total = reply.or(0)
   print(`tally total: ${total.toString()}`)
-  let season: array<Tally> = [
+  let season: Array<Tally> = [
     { hits: 1, outs: 2 },
     { hits: 2, outs: 4 },
     { hits: 3, outs: 6 },

@@ -15,29 +15,29 @@
 // incorrectly receive can't-infer errors.
 
 shape Handler {
-    handle(share self) -> nothing
+    handle(share self) -> Nothing
 }
 
 shape EchoHandler follows Handler {
-    tag: string
+    tag: String
 }
 
-function handle(share self: EchoHandler) -> nothing {
+function handle(share self: EchoHandler) -> Nothing {
     print(`echo: ${self.tag}`)
 }
 
 // dispatch is a free function taking a dynamic Handler — the free-fn dynamic-call form.
-function dispatch(h: dynamic Handler) -> nothing {
+function dispatch(h: dynamic Handler) -> Nothing {
     h.handle()
 }
 
 // relay is NON-suspending. It calls dispatch(h) with a dynamic value.
 // current_fn_suspends=false for relay => no can't-infer error should fire.
-function relay(h: dynamic Handler) -> nothing {
+function relay(h: dynamic Handler) -> Nothing {
     dispatch(h)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     const eh: EchoHandler = { tag: `relay-test` }
     relay(eh)
 }

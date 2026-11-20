@@ -11,9 +11,9 @@
 //   6
 //   30
 
-function compute(n: int) -> int errors {
-  let total: int = 0
-  let i: int = 0
+function compute(n: Int) -> Int errors {
+  let total: Int = 0
+  let i: Int = 0
   while (i < n) {
     total = total + i
     i = i + 1
@@ -21,9 +21,9 @@ function compute(n: int) -> int errors {
   return total
 }
 
-function compute2(n: int) -> int errors {
-  let total: int = 0
-  let i: int = 0
+function compute2(n: Int) -> Int errors {
+  let total: Int = 0
+  let i: Int = 0
   while (i < n) {
     total = total + i * 2
     i = i + 1
@@ -31,7 +31,7 @@ function compute2(n: int) -> int errors {
   return total
 }
 
-function combine() -> int {
+function combine() -> Int {
   let go = true
   let lo = 0
   let hi = 0
@@ -45,7 +45,7 @@ function combine() -> int {
   return hi
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

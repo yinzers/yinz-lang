@@ -16,32 +16,32 @@
 //   - non-SM `-> maybe<number>` return           (`pickPrice`)
 //   - non-SM `-> maybe<number> errors` ok-word   (`priceOrMissing`)
 
-function pickPrice(idx: int) -> maybe<number> {
-  let prices: fixed<number> = [3.50, 10.75, 99.25]
+function pickPrice(idx: Int) -> Maybe<Number> {
+  let prices: Fixed<Number> = [3.50, 10.75, 99.25]
   let got = prices.get(idx)
   return got
 }
 
-function priceOrMissing(idx: int) -> maybe<number> errors {
-  let prices: fixed<number> = [4.25, 6.75]
+function priceOrMissing(idx: Int) -> Maybe<Number> errors {
+  let prices: Fixed<Number> = [4.25, 6.75]
   let got = prices.get(idx)
   return got
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = pickPrice(0)
   if (a.exists()) {
-    let av: number = a.value
+    let av: Number = a.value
     print(av.toString())
   }
   let b = pickPrice(1)
   if (b.exists()) {
-    let bv: number = b.value
+    let bv: Number = b.value
     print(bv.toString())
   }
   let c = pickPrice(2)
   if (c.exists()) {
-    let cv: number = c.value
+    let cv: Number = c.value
     print(cv.toString())
   }
   let missing = pickPrice(9)
@@ -50,7 +50,7 @@ function entrypoint() -> nothing {
   }
 
   let e = priceOrMissing(1)
-  let empty: maybe<number> = none
+  let empty: Maybe<Number> = none
   let ev = e.or(empty)
   let got = ev.or(0.0)
   print(got.toString())

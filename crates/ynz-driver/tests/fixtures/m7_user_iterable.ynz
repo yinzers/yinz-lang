@@ -4,12 +4,12 @@
 // Expected output: 10, 20, 30 (3 iterations then none).
 
 shape SliceIter {
-  max: int
-  hidden pos: int = 0
+  max: Int
+  hidden pos: Int = 0
 }
 
-function next(lend self: SliceIter) -> maybe<int> {
-  let items: fixed<int> = [10, 20, 30]
+function next(lend self: SliceIter) -> Maybe<Int> {
+  let items: Fixed<Int> = [10, 20, 30]
   if (self.pos >= self.max) {
     return none
   }
@@ -18,7 +18,7 @@ function next(lend self: SliceIter) -> maybe<int> {
   return result
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let iter: SliceIter = { max: 3, pos: 0 }
   for (v in iter) {
     print(v.toString())

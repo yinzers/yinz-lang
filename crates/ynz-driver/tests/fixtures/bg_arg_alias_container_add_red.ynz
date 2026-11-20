@@ -22,20 +22,20 @@
 //
 // The parent's `wait sleep(80)` is what makes the reads happen after the task has finished
 // mutating, so the assertions are about ownership rather than timing.
-function stash(bucket: array<array<int>>, rows: array<int>) -> nothing {
+function stash(bucket: Array<Array<Int>>, rows: Array<Int>) -> Nothing {
   bucket.add(rows)
-  let mine: array<int> = bucket[0].or(rows)
+  let mine: Array<Int> = bucket[0].or(rows)
   mine.set(0, 999)
   print(`task sees ${bucket.count().toString()} rows`)
 }
 
-function entrypoint() -> nothing {
-  let seed: array<int> = [1, 2, 3]
-  let bucket: array<array<int>> = [seed]
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let seed: Array<Int> = [1, 2, 3]
+  let bucket: Array<Array<Int>> = [seed]
+  let rows: Array<Int> = [10, 20, 30]
   background stash(bucket, rows)
   wait sleep(80)
   print(`parent sees ${bucket.count().toString()} rows`)
-  let first: array<int> = bucket[0].or(rows)
+  let first: Array<Int> = bucket[0].or(rows)
   print(`parent row 0 starts at ${first[0].or(-1).toString()}`)
 }

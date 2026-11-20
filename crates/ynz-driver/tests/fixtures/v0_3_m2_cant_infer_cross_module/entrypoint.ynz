@@ -5,7 +5,7 @@
 // Expected: exits 0, prints "remote op".
 import { remoteOp } from `utils`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   sleep(10)
   remoteOp()
 }

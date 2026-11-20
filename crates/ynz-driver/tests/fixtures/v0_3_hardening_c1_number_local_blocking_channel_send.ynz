@@ -17,18 +17,18 @@
 // without a flaky assertion. Closes M8 FR #11(b).
 //
 // When C1's fix lands: exit 0, stdout exactly "10.2" on every run, at every tier.
-function feed(wire: channel<number>) -> nothing {
-  let price: number = 3.4
+function feed(wire: Channel<Number>) -> Nothing {
+  let price: Number = 3.4
   wire.send(price)
   wire.send(price)
   wire.send(price)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<number> = channel<number>(1)
+function entrypoint() -> Nothing {
+  let wire: Channel<Number> = Channel<Number>(1)
   background feed(wire)
-  let total: number = 0.0
+  let total: Number = 0.0
   let open = true
   while (open) {
     let nx = wire.receive()

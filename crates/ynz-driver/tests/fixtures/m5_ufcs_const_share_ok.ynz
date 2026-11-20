@@ -2,14 +2,14 @@
 /// `const p; p.greet()` where `greet` declares `share self` must compile and run.
 /// The ownership check must NOT over-reject read-only (`share`) methods on const bindings.
 shape Player {
-  name: string
+  name: String
 }
 
-function greet(share self: Player) -> nothing {
+function greet(share self: Player) -> Nothing {
   print(self.name)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { name: `hero` }
   p.greet()
 }

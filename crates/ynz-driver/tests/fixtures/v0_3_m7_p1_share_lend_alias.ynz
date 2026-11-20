@@ -8,15 +8,15 @@
 //
 // Expected: COMPILE ERROR — "`h` is passed to `relay` twice in the same call".
 shape Box {
-  value: int
+  value: Int
 }
 
-function relay(share src: Box, lend dst: Box) -> nothing {
+function relay(share src: Box, lend dst: Box) -> Nothing {
   dst.value = 5
   dst.value = src.value
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let h: Box = { value: 1 }
   relay(h, h)
   print(h.value.toString())

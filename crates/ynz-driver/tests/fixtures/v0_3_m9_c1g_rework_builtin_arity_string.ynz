@@ -4,7 +4,7 @@
 // Pre-fix failure: `s.contains()` and `s.substring(1)` panicked the code generator (each reads an
 // argument that was never passed); `s.trim(1)` dropped its argument without a word.
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s = `hello`
   let has = s.contains()
   let part = s.substring(1)

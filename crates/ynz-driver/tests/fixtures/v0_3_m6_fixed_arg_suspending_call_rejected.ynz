@@ -14,14 +14,14 @@
 // is a separate pre-existing backend limitation ("cannot iterate fixed array with
 // unknown size"), orthogonal to this fixture's crossing-classification contract.
 
-function total(share nums: fixed<int>) -> int {
+function total(share nums: Fixed<Int>) -> Int {
   wait sleep(10)
   return 9
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let nums: fixed<int> = [2, 3, 4]
+  let nums: Fixed<Int> = [2, 3, 4]
   const t = wait total(nums)
   print(t.toString())
 }

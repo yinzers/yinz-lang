@@ -5,20 +5,20 @@
 // auto-parallelize. The final print is "done".
 //
 // Expected output: waiter\ndone
-function waiter() -> nothing {
+function waiter() -> Nothing {
   wait sleep(5)
   print(`waiter`)
 }
 
-function worker() -> nothing {
+function worker() -> Nothing {
   wait sleep(10)
 }
 
-function helper() -> nothing {
+function helper() -> Nothing {
   wait sleep(10)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait waiter()
   worker()
   helper()

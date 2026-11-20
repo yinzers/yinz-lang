@@ -8,28 +8,28 @@
 // envelope + payload per write). Covers BOTH admission routes: annotation
 // (`array<maybe<Part> >`) and inference (`[empty]` from a maybe binding).
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let qc: int = seed * 3
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let qc: Int = seed * 3
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 },
     { qty: qc, price: qc * 10 }
   ]
-  let empty: maybe<Part> = parts[9]
+  let empty: Maybe<Part> = parts[9]
   // Inference route: element type comes from `empty`'s maybe<Part>.
   let inferred = [empty.copy()]
   // Annotation route: explicit nested-generic element type.
-  let annotated: array<maybe<Part> > = [empty.copy()]
-  let i: int = 0
+  let annotated: Array<Maybe<Part> > = [empty.copy()]
+  let i: Int = 0
   while (i < 3) {
-    let cur: maybe<Part> = parts[i]
+    let cur: Maybe<Part> = parts[i]
     if (i == 0) {
       inferred.set(0, cur.copy())
       annotated.set(0, cur.copy())
@@ -38,7 +38,7 @@ function entrypoint() -> nothing {
   }
   let entryA = inferred.get(0)
   if (entryA.exists()) {
-    let gotA: maybe<Part> = entryA.value
+    let gotA: Maybe<Part> = entryA.value
     if (gotA.exists()) {
       print(gotA.value.qty)
       print(gotA.value.price)
@@ -46,7 +46,7 @@ function entrypoint() -> nothing {
   }
   let entryB = annotated.get(0)
   if (entryB.exists()) {
-    let gotB: maybe<Part> = entryB.value
+    let gotB: Maybe<Part> = entryB.value
     if (gotB.exists()) {
       print(gotB.value.qty)
       print(gotB.value.price)

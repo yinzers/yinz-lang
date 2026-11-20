@@ -9,15 +9,15 @@
 // Expected output: the two names the lists hold.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Tag = { name: `a-${1}`, id: 1 }
   let second: Tag = { name: `b-${2}`, id: 2 }
   let fallback: Tag = { name: `none`, id: 0 }
-  let value: fixed<Tag> = [first, second]
+  let value: Fixed<Tag> = [first, second]
   let twin = value.copy()
   let firstItem: Tag = value[0].or(fallback)
   let twinItem: Tag = twin[1].or(fallback)

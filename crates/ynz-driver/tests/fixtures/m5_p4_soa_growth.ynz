@@ -6,12 +6,12 @@
 // x-loop cannot rescue it; growth precedes the union check in the banked decline
 // precedence). Asserted verdict: Grown { op: ".add()" }.
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function entrypoint() -> nothing {
-  let pts: array<Point> = []
+function entrypoint() -> Nothing {
+  let pts: Array<Point> = []
   let n = 3
   for (i in range(0, n)) {
     let np: Point = { x: i + 1, y: 0 }

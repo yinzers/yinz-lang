@@ -1,14 +1,14 @@
 // v0.3-M9 C1f (#423) round 2: baseline of `v0_3_m9_union_view_walk_N.ynz`: builds an N-link chain by
 // moves and does not walk it. Correct behavior: prints `built`.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 
-function sum(share head: Node | End) -> int {
+function sum(share head: Node | End) -> Int {
   if (head) {
     is Node => {
       let rest = head.next
@@ -21,7 +21,7 @@ function sum(share head: Node | End) -> int {
   return 0
 }
 
-function depth(share head: Node | End) -> int {
+function depth(share head: Node | End) -> Int {
   if (head) {
     is Node => {
       let rest = head.next
@@ -34,7 +34,7 @@ function depth(share head: Node | End) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let stop: End = { flag: true }
   let list: Node | End = stop
   let count = 0

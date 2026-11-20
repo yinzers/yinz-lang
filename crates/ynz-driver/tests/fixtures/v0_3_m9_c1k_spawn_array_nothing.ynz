@@ -3,12 +3,12 @@
 // Before (also on `main`): the original's array header and buffer leaked.
 // Expected output: `ran` and `done`, in either order (nothing waits for the task).
 
-function inspect(xs: array<int> | nothing) -> nothing {
+function inspect(xs: Array<Int> | Nothing) -> Nothing {
   print(`ran`)
 }
 
-function entrypoint() -> nothing {
-  let xs: array<int> | nothing = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let xs: Array<Int> | Nothing = [1, 2, 3]
   background inspect(xs)
   wait sleep(50)
   print(`done`)

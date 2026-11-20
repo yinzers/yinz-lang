@@ -1,8 +1,8 @@
-function first() -> nothing {
+function first() -> Nothing {
   print(`first`)
 }
 
 // This comment belongs to second
-function second() -> nothing {
+function second() -> Nothing {
   print(`second`)
 }

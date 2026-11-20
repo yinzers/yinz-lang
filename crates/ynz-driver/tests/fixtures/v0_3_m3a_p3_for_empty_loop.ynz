@@ -3,9 +3,9 @@
 // A local declared before the loop must be readable after it — the frame slot
 // is preserved even when the suspending body never ran.
 // Expected output: 42
-function entrypoint() -> nothing {
-  let result: int = 42
-  let empty: array<int> = []
+function entrypoint() -> Nothing {
+  let result: Int = 42
+  let empty: Array<Int> = []
   for (x in empty) {
     wait sleep(5)
     result = x

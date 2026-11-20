@@ -9,14 +9,14 @@
 // of `Big | Small` as `Small` and printed `small`. The shadowing `let` was matched by name alone,
 // so the callee got the outer `Tiny` envelope and printed `tiny`.
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Small {
-  n: int
+  n: Int
 }
 shape Thing = Tiny | Big
 shape Other = Big | Small
@@ -25,7 +25,7 @@ shape Holder {
   inner: Big | Small
 }
 
-function describeOther(share t: Other) -> string {
+function describeOther(share t: Other) -> String {
   if (t) {
     is Small => {
       return `small`
@@ -37,7 +37,7 @@ function describeOther(share t: Other) -> string {
   return `none`
 }
 
-function route(share t: Thing) -> string {
+function route(share t: Thing) -> String {
   if (t) {
     is Big => {
       return describeOther(t)
@@ -49,7 +49,7 @@ function route(share t: Thing) -> string {
   return `none`
 }
 
-function viaField(share t: Thing) -> string {
+function viaField(share t: Thing) -> String {
   if (t) {
     is Big => {
       let h: Holder = { inner: t.copy() }
@@ -62,7 +62,7 @@ function viaField(share t: Thing) -> string {
   return `none`
 }
 
-function shadowed(share t: Thing) -> string {
+function shadowed(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       let t: Big = { label: `shadow`, count: 9 }
@@ -75,7 +75,7 @@ function shadowed(share t: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let t: Thing = big
   let tiny: Tiny = { flag: true }

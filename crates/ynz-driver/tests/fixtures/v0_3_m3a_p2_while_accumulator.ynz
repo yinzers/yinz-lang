@@ -3,9 +3,9 @@
 // Guards that the accumulator's frame slot survives each suspension — a single-slot
 // read of a stale value would produce 10 (only last iteration) instead of 40.
 // Expected output: 40
-function entrypoint() -> nothing {
-  let acc: int = 0
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let acc: Int = 0
+  let i: Int = 0
   while (i < 4) {
     wait sleep(5)
     acc = acc + 10

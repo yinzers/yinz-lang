@@ -1,11 +1,11 @@
 // v0.3-M9 C10, stays legal: the callee only reads what the loop walks.
 shape Holder {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
-function countRows(share holder: Holder) -> int {
+function countRows(share holder: Holder) -> Int {
   return holder.rows.count()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { rows: [[1], [2], [3]] }
   let total = 0
   for (row in holder.rows) {

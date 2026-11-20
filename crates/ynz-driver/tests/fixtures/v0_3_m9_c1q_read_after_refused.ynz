@@ -1,9 +1,9 @@
 // v0.3-M9 C1q: `matrix` is read after the loop, so a row cannot be handed over: the `.copy()`
 // refusal stands. Expected: TransferNeedsCopy, with `row.copy()` as the fix.
 
-function entrypoint() -> nothing {
-  let matrix: array<array<int>> = [[1, 2], [3, 4]]
-  let kept: array<array<int>> = []
+function entrypoint() -> Nothing {
+  let matrix: Array<Array<Int>> = [[1, 2], [3, 4]]
+  let kept: Array<Array<Int>> = []
   for (row in matrix) {
     kept.add(row)
   }

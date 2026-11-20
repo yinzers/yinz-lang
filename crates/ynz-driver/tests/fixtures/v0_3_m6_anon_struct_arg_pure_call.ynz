@@ -11,16 +11,16 @@
 // reads a dangling `self` — garbage (observed pre-fix: 4240380 vs 7).
 
 shape Ship {
-  name: string
-  cargo: int
+  name: String
+  cargo: Int
 }
 
-function crew(share self: Ship) -> int {
+function crew(share self: Ship) -> Int {
   wait sleep(10)
   return self.cargo
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
   const c = wait crew({ name: `Mon`, cargo: 7 })
   print(c.toString())

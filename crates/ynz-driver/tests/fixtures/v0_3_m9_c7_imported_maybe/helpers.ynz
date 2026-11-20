@@ -1,5 +1,5 @@
 // An imported function whose `maybe` result is an item of its argument: typeck cannot trace
 // which holder the result points into.
-export function firstRow(share rows: array<array<int>>) -> maybe<array<int>> {
+export function firstRow(share rows: Array<Array<Int>>) -> Maybe<Array<Int>> {
   return rows.first()
 }

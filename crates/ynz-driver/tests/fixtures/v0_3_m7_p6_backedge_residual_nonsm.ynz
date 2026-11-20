@@ -11,7 +11,7 @@
 // This fixture documents that residual as expected behavior, not a gap: it passes both
 // BEFORE and AFTER the back-edge transform, proving the non-SM path is untouched.
 
-function plainHog() -> nothing {
+function plainHog() -> Nothing {
   let x = 0
   while (x < 100000000) {
     x = x + 1
@@ -19,12 +19,12 @@ function plainHog() -> nothing {
   print(`plain hog done`)
 }
 
-function victimPing() -> nothing {
+function victimPing() -> Nothing {
   wait sleep(0)
   print(`victim ran`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background plainHog()
   // Mirror fixture (a)'s spawn gap exactly: the hog is fully started before the victim
   // is spawned, so the victim-runs-first verdict below can only come from the hog being

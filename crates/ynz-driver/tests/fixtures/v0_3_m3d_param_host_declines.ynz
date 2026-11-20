@@ -15,7 +15,7 @@
 //
 // Expected output (both modes — default and --no-auto-parallel):
 //   9910
-function score(seed: int) -> int {
+function score(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -25,14 +25,14 @@ function score(seed: int) -> int {
   return total + seed
 }
 
-function combine(seed: int) -> int {
+function combine(seed: Int) -> Int {
   let other = seed + 1
   let a = score(seed)
   let b = score(other)
   return seed + a + b
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine(3)
   print(r)
 }

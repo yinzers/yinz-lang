@@ -1,7 +1,7 @@
 // Announcement helpers shared between every ship in the stadium fleet.
 // Used by ships/concessions/entrypoint.ynz to format PA broadcasts.
 
-export function capitalize(share s: string) -> string {
+export function capitalize(share s: String) -> String {
   if (s.length == 0) {
     return s
   }

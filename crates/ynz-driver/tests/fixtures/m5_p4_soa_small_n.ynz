@@ -5,12 +5,12 @@
 // tiny array buys no cache locality. Asserted verdict:
 // BelowSizeThreshold { len: 4 }.
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function entrypoint() -> nothing {
-  let pts: array<Point> = [
+function entrypoint() -> Nothing {
+  let pts: Array<Point> = [
     { x: 3, y: 6 },
     { x: 4, y: 8 },
     { x: 5, y: 10 },

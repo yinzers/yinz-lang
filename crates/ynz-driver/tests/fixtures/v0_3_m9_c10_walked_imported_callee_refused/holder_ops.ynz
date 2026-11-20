@@ -1,9 +1,9 @@
 // The callee lives in another module: the loop in the importer learns what it writes from the
 // summary the exported signature carries.
 export shape Holder {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
 
-export function reset(lend holder: Holder) -> nothing {
+export function reset(lend holder: Holder) -> Nothing {
   holder.rows = [[9]]
 }

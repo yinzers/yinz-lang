@@ -7,22 +7,22 @@
 //   42
 //   99
 //   true
-function slowCall() -> int {
+function slowCall() -> Int {
   wait sleep(40)
   return 42
 }
 
-function otherInt() -> int {
+function otherInt() -> Int {
   wait sleep(40)
   return 99
 }
 
-function flagFn() -> boolean {
+function flagFn() -> Boolean {
   wait sleep(40)
   return true
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = slowCall()
   let b = otherInt()
   let flag = flagFn()

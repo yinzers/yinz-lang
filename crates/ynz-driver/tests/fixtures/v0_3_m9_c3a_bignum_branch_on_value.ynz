@@ -5,7 +5,7 @@
 //
 // Expected: two-five / ten / other
 
-function describe(value: number<50>) -> nothing {
+function describe(value: Number<50>) -> Nothing {
   if (value) {
     1.5 => print(`one-five`)
     2.50 => print(`two-five`)
@@ -14,10 +14,10 @@ function describe(value: number<50>) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
-  let two: number<50> = 2.5
-  let ten: number<50> = 10.0
-  let eleven: number<50> = 11.0
+function entrypoint() -> Nothing {
+  let two: Number<50> = 2.5
+  let ten: Number<50> = 10.0
+  let eleven: Number<50> = 11.0
   describe(two)
   describe(ten)
   describe(eleven)

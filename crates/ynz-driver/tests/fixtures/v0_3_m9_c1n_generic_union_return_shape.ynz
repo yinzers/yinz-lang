@@ -7,19 +7,19 @@
 // Expected output: `hello`, `bye`.
 
 shape Big {
-  label: string
-  items: array<int>
+  label: String
+  items: Array<Int>
 }
 
-function wrap<T>(give item: T, share other: T) -> T | nothing {
+function wrap<T>(give item: T, share other: T) -> T | Nothing {
   return item
 }
 
-function wrapOther<T>(give item: T, share other: T) -> T | nothing {
+function wrapOther<T>(give item: T, share other: T) -> T | Nothing {
   return other
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Big = { label: `hello`.toUpperCase(), items: [1] }
   let second: Big = { label: `bye`.toUpperCase(), items: [2] }
   let wrapped = wrap(first, second)

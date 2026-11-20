@@ -7,59 +7,59 @@
 // Each block has a // WHY: comment naming the diagnostic class.
 
 // A suspending worker with NO channel parameter — the h.send()-with-no-inbox trigger below.
-function reheatOven() -> int errors {
+function reheatOven() -> Int errors {
   wait sleep(1)
   return 350
 }
 
 // A pure-CPU function that never suspends — the handle-form-needs-suspending trigger below.
-function countBuns() -> int {
+function countBuns() -> Int {
   return 12
 }
 
 // A shape holding a channel — the receiver-origin trigger below extracts it unannotated.
-shape PickupWindow { line: channel<int> }
+shape PickupWindow { line: Channel<Int> }
 
 // A plain shape + a GENERIC worker that borrows it — the auto-Arc boundary trigger below.
-shape BatchNote { label: string }
+shape BatchNote { label: String }
 
-function describeBatch<T>(share note: BatchNote) -> nothing {
+function describeBatch<T>(share note: BatchNote) -> Nothing {
   print(note.label)
 }
 
 // An EXPORTED shape + a worker that takes ownership of it — the padding-decline
 // lint trigger below (Phase 4). Export is what makes it unpaddable.
-export shape PalletLabel { count: int }
+export shape PalletLabel { count: Int }
 
-function stackPallet(give label: PalletLabel) -> nothing {
+function stackPallet(give label: PalletLabel) -> Nothing {
   wait sleep(1)
   print(label.count.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   // WHY: channel-capacity-non-positive — a channel is bounded by construction (stdlib-design
   // Rule 4); a zero-capacity channel could never accept a value, so it is rejected.
-  let zeroCap: channel<int> = channel<int>(0)
+  let zeroCap: Channel<Int> = Channel<Int>(0)
 
   // WHY: channel-capacity-non-positive (negated literal) — `-3` is caught at compile time too;
   // a negative capacity is meaningless.
-  let negCap: channel<int> = channel<int>(-3)
+  let negCap: Channel<Int> = Channel<Int>(-3)
 
   // WHY: channel-capacity-wrong-type — the capacity is a count of slots, so it must be an `int`,
   // not a string.
-  let wrongCapType: channel<int> = channel<int>(`plenty`)
+  let wrongCapType: Channel<Int> = Channel<Int>(`plenty`)
 
   // WHY: channel-missing-element-type — the compiler needs the element type `T` to check
   // `send`/`receive` later, so `channel()` with no `<T>` is rejected.
-  let noElem = channel()
+  let noElem = Channel()
 
   // WHY: channel-too-many-args — a channel takes at most one argument, its capacity.
-  let tooMany: channel<int> = channel<int>(8, 16)
+  let tooMany: Channel<Int> = Channel<Int>(8, 16)
 
   // ── v0.3-M4 Phase 2: the .send()/.receive() method surface ──
 
   // A well-formed channel the method-surface triggers below use.
-  let orders: channel<int> = channel<int>(2)
+  let orders: Channel<Int> = Channel<Int>(2)
 
   // WHY: channel-unknown-method — channels carry values with send(value)/receive() only;
   // anything else names the two available methods.
@@ -81,7 +81,7 @@ function entrypoint() -> nothing {
 
   // WHY: channel-receiver-must-be-named-binding — an unnamed in-flight channel has nowhere to
   // live across a suspension; bind it first (`let ch = ...`), then call methods on the binding.
-  channel<int>(2).send(3)
+  Channel<Int>(2).send(3)
 
   // WHY: channel-receiver-origin-not-derivable — the compiler decides which functions need
   // suspend-and-resume support by reading each binding's declared type early, so a channel
@@ -97,7 +97,7 @@ function entrypoint() -> nothing {
   // would read freed memory. Rejected until per-type heap-copying ships. (`channel<number>`
   // was this trigger until v0.3-M8 shipped decimal128 marshalling — fr12 — so the class keeps
   // a shape instance here.)
-  let widePipe: channel<BatchNote> = channel<BatchNote>(2)
+  let widePipe: Channel<BatchNote> = Channel<BatchNote>(2)
 
   // ── v0.3-M4 Phase 2: the background handle-form ──
 

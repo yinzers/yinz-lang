@@ -1,9 +1,9 @@
 // v0.3-M9 C5a: `let b = a` hands the value over, so reading `a` afterwards is refused
 // (`ConsumedByStore`). Before: two names for one array, which a release pass would free twice.
 // Refused: the read of `first` below. Fix: `let second = first.copy()`, or read `first` above.
-function entrypoint() -> nothing {
-  let first: array<int> = [1, 2, 3]
-  let second: array<int> = first
+function entrypoint() -> Nothing {
+  let first: Array<Int> = [1, 2, 3]
+  let second: Array<Int> = first
   print(first.count().toString())
   print(second.count().toString())
 }

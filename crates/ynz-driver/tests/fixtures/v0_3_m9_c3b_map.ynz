@@ -9,15 +9,15 @@
 // Total 1+1+1+1+0+1+1+0+1+1+1+4 = 13.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let count: int = 2
-  let valueText: string = `value-${count}`
-  let keyText: string = `key-${count}`
-  let table: map<string, string> = { `a`: valueText }
+function entrypoint() -> Nothing {
+  let count: Int = 2
+  let valueText: String = `value-${count}`
+  let keyText: String = `key-${count}`
+  let table: Map<String, String> = { `a`: valueText }
   print(valueText)
   table.set(keyText, `v`)
   table.set(`b`, valueText)
-  let sharedKey: string = `shared-${count}`
+  let sharedKey: String = `shared-${count}`
   table.set(sharedKey, `s`)
   print(sharedKey)
   let literalKeyValue = table.get(`a`)

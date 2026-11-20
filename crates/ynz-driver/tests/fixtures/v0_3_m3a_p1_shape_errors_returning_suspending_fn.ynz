@@ -9,7 +9,7 @@
 // Expected: exit code 1, diagnostic mentions the type and suspension.
 // Expected: no stdout (compile error, no binary produced).
 shape Player {
-  health: int
+  health: Int
 }
 
 function sleepingShapeErrors() -> Player errors {
@@ -18,7 +18,7 @@ function sleepingShapeErrors() -> Player errors {
   return p
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let fallback: Player = { health: 0 }
   const r = sleepingShapeErrors()
   const p = r.or(fallback)

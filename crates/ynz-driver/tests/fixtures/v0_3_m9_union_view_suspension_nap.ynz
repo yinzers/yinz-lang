@@ -3,18 +3,18 @@
 // parameter's field and reading the 100-link chain allocates nothing (the crossing set of the
 // binding decides, not "is a state machine"). Correct behavior: prints `4950`.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 
-function sum(share head: Node | End) -> int {
+function sum(share head: Node | End) -> Int {
   if (head) {
     is Node => {
       let rest = head.next
@@ -27,7 +27,7 @@ function sum(share head: Node | End) -> int {
   return 0
 }
 
-function makeHolder(count: int) -> Holder {
+function makeHolder(count: Int) -> Holder {
   let stop: End = { flag: true }
   let list: Node | End = stop
   let index = 0
@@ -41,13 +41,13 @@ function makeHolder(count: int) -> Holder {
   return holder
 }
 
-function napThenTotal(share holder: Holder) -> int {
+function napThenTotal(share holder: Holder) -> Int {
   wait sleep(1)
   let held = holder.chain
   return sum(held)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder = makeHolder(100)
   let total = wait napThenTotal(holder)
   print(total)

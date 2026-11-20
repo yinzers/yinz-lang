@@ -1,4 +1,4 @@
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s = `hello`
   if (s) {
     `hello` => {

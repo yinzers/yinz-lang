@@ -3,16 +3,16 @@
 // Verifies that an errors-capable function can call another errors-capable function
 // and propagate its result.
 
-function inner() -> string errors {
+function inner() -> String errors {
   return `propagated`
 }
 
-function outer() -> string errors {
+function outer() -> String errors {
   let x = inner()
   return x
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = outer()
   print(result.or(`fallback`))
 }

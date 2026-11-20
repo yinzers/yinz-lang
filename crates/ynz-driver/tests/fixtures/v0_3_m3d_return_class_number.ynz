@@ -2,9 +2,9 @@
 // function that returns a `number`. They run at the same time; each result is available after
 // both finish. Both print the same lines whether or not they run at the same time.
 
-function sumn(n: int) -> number {
-  let total: number = 0.0
-  let i: int = 0
+function sumn(n: Int) -> Number {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5
     i = i + 1
@@ -12,9 +12,9 @@ function sumn(n: int) -> number {
   return total
 }
 
-function sumn2(n: int) -> number {
-  let total: number = 0.0
-  let i: int = 0
+function sumn2(n: Int) -> Number {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 2.5
     i = i + 1
@@ -22,7 +22,7 @@ function sumn2(n: int) -> number {
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = sumn(4)
   let b = sumn2(6)
   print(a)

@@ -52,7 +52,7 @@ abstract class MenuItem {
 // WHY: `test` is reserved for the built-in test framework (v0.13). Pre-reserving
 // now means existing code gets a clear message rather than a surprise breakage
 // when v0.13 ships. This is a locked design decision (design/mvp-scope.md:39).
-function test() -> nothing {
+function test() -> Nothing {
   print(`this function name is reserved`)
 }
 
@@ -60,7 +60,7 @@ function test() -> nothing {
 
 // WHY: Prefix-form struct literal `Sandwich { ... }` is banned — annotation-only
 //      form is required. Parser redirects to `let s: Sandwich = { ... }` form.
-function prefixStructLit() -> nothing {
+function prefixStructLit() -> Nothing {
   let s = Sandwich { name: `Pitts-burgher` }
 }
 
@@ -76,25 +76,25 @@ shape BadKitchen {
 
 // WHY: Struct literal missing a required field.
 //      P3a check_struct_lit validates all visible fields are present.
-shape Sandwich { name: string priceCents: int }
-function missingField() -> nothing {
+shape Sandwich { name: String priceCents: Int }
+function missingField() -> Nothing {
   let s: Sandwich = { name: `Pitts-burgher` }
 }
 
 // WHY: Field type mismatch — priceCents expects int, got string.
-function wrongFieldType() -> nothing {
+function wrongFieldType() -> Nothing {
   let s: Sandwich = { name: `Pitts-burgher`, priceCents: `one thousand` }
 }
 
 // WHY: `base shape` cannot be instantiated directly.
-base shape MenuItem { name: string }
-function instantiateBase() -> nothing {
+base shape MenuItem { name: String }
+function instantiateBase() -> Nothing {
   let m: MenuItem = { name: `mystery item` }
 }
 
 // WHY: `const` binding — field mutation rejected.
 //      Demonstrates const deep-immutability (one of the five const paths from plan invariants).
-function constFieldMutation() -> nothing {
+function constFieldMutation() -> Nothing {
   const s: Sandwich = { name: `Pitts-burgher`, priceCents: 1100 }
   s.priceCents = 50
 }
@@ -105,7 +105,7 @@ function constFieldMutation() -> nothing {
 // construction would leave the field uninitialized. This triggers the
 // "hidden field has no default" diagnostic from collect_shapes.
 shape NoDefault {
-    hidden ingredientCount: int
+    hidden ingredientCount: Int
 }
 
 // WHY: external construction cannot set a hidden field. The multi-file case

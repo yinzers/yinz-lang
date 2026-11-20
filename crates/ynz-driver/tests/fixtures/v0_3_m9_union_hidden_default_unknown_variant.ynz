@@ -3,16 +3,16 @@
 // broken type, which used to add a second error naming a type called `unknown`.
 
 shape Big {
-  first: int
-  second: int
+  first: Int
+  second: Int
 }
 
 shape Holder {
-  name: string
+  name: String
   hidden extra: Big | Missing = 4096
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { name: `a` }
   print(holder.name)
 }

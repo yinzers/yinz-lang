@@ -5,15 +5,15 @@
 // both optimization levels.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -25,13 +25,13 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function fetch(share things: array<Thing>, index: int) -> maybe<Thing> {
+function fetch(share things: Array<Thing>, index: Int) -> Maybe<Thing> {
   let found = things.get(index)
   return found
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let tiny: Tiny = { flag: true }
   things.add(tiny)
   let big: Big = { label: `kept`, count: 1 }

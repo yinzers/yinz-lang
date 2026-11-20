@@ -6,15 +6,15 @@
 // Before: the staged argument was a heap envelope and payload (two counted cells per call).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -31,18 +31,18 @@ function slowPass(give thing: Thing) -> Thing {
   return thing
 }
 
-function slowDescribe(share thing: Thing) -> string {
+function slowDescribe(share thing: Thing) -> String {
   wait sleep(1)
   return describe(thing)
 }
 
-function clobber(seed: int) -> int {
+function clobber(seed: Int) -> Int {
   let plusOne = seed + 1
   let doubled = plusOne * 2
   return doubled + plusOne
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `waited`, count: 7 }
   let tiny: Tiny = { flag: true }
   let first = wait slowDescribe(big)

@@ -5,19 +5,19 @@
 // Pre-fix (b3e23ce): fails in the LLVM verifier ("Function return type does not match").
 
 shape A {
-  flag: boolean
+  flag: Boolean
 }
 shape A_shape_B {
-  flag: boolean
+  flag: Boolean
 }
 shape B_int {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 function second<T, U>(share first: T, share other: U) -> U {
   return other
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a: A = { flag: true }
   let ab: A_shape_B = { flag: true }
   let bint: B_int = { label: `x`, count: 1 }

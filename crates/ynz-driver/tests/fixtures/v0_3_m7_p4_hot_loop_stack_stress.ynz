@@ -18,18 +18,18 @@
 // non-zero exit is the crash class.
 
 shape Player {
-  x: int
-  y: int
-  dx: int
-  dy: int
-  health: int
-  stamina: int
-  gold: int
-  level: int
+  x: Int
+  y: Int
+  dx: Int
+  dy: Int
+  health: Int
+  stamina: Int
+  gold: Int
+  level: Int
 }
 
-function entrypoint() -> nothing {
-  let players: array<Player> = [
+function entrypoint() -> Nothing {
+  let players: Array<Player> = [
     { x: 1, y: 2, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
     { x: 2, y: 4, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
     { x: 3, y: 6, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
@@ -39,9 +39,9 @@ function entrypoint() -> nothing {
     { x: 7, y: 14, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
     { x: 8, y: 16, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 }
   ]
-  let reps: int = 8388608
-  let r: int = 0
-  let acc: int = 0
+  let reps: Int = 8388608
+  let r: Int = 0
+  let acc: Int = 0
   while (r < reps) {
     for (p in players) {
       acc = acc + p.x + p.y

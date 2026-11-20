@@ -9,14 +9,14 @@
 // AddressSanitizer stack-/heap-buffer-overflow READ past the 1-byte `Tiny`.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
+  label: String
 }
 shape Thing = Tiny | Big
 
-function name(share t: Thing) -> string {
+function name(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -28,12 +28,12 @@ function name(share t: Thing) -> string {
   return `none`
 }
 
-function pair(share a: Tiny, share b: Thing) -> nothing {
+function pair(share a: Tiny, share b: Thing) -> Nothing {
   print(a.flag)
   print(name(b))
 }
 
-function genericName<T>(share t: Thing, share extra: T) -> string {
+function genericName<T>(share t: Thing, share extra: T) -> String {
   return name(t)
 }
 
@@ -49,12 +49,12 @@ function pass(share t: Thing) -> Thing {
   return t
 }
 
-function nameLater(share t: Thing) -> nothing {
+function nameLater(share t: Thing) -> Nothing {
   wait sleep(1)
   print(name(t))
 }
 
-function suspendingHost(share thing: Thing) -> nothing {
+function suspendingHost(share thing: Thing) -> Nothing {
   if (thing) {
     is Tiny => {
       wait nameLater(thing)
@@ -66,7 +66,7 @@ function suspendingHost(share thing: Thing) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let thing: Thing = tiny
   if (thing) {

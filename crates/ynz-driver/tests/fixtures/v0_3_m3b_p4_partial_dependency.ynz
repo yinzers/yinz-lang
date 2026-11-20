@@ -8,22 +8,22 @@
 //
 // NOTE: Since both `a` and `c` run in parallel and we read `a` first in the print
 // order, the output is: a is printed from the joined results.
-function fa() -> int {
+function fa() -> Int {
   wait sleep(20)
   return 1
 }
 
-function fb(n: int) -> int {
+function fb(n: Int) -> Int {
   wait sleep(5)
   return n
 }
 
-function fc() -> int {
+function fc() -> Int {
   wait sleep(20)
   return 2
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fa()
   let b = fb(a)
   let c = fc()

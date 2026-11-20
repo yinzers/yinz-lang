@@ -2,23 +2,23 @@
 // Exercises: shape declaration, struct literal, field access, UFCS method calls,
 // share/lend/give ownership, LLVM readonly/noalias attributes.
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
-function greet(share self: Player) -> nothing {
+function greet(share self: Player) -> Nothing {
   print(self.name)
 }
 
-function heal(lend self: Player, amount: int) -> nothing {
+function heal(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health + amount
 }
 
-function consume(give p: Player) -> nothing {
+function consume(give p: Player) -> Nothing {
   print(p.name)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { name: `Patrick`, health: 100 }
   p.greet()
   p.heal(20)

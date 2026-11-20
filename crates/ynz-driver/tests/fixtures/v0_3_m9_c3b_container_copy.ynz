@@ -10,27 +10,27 @@
 // Expected output: one value per line below.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 shape Holder {
-  slot: maybe<string>
+  slot: Maybe<String>
 }
 
-function pick(names: array<string>) -> maybe<string> {
+function pick(names: Array<String>) -> Maybe<String> {
   return names.get(0)
 }
 
-function entrypoint() -> nothing {
-  let count: int = 1
+function entrypoint() -> Nothing {
+  let count: Int = 1
   let tag: Tag = { name: `t-${count}`, id: 1 }
   let tagCopy = tag.copy()
   print(tagCopy.name)
-  let table: map<string, string> = { `a`: `v-${count}` }
+  let table: Map<String, String> = { `a`: `v-${count}` }
   let tableCopy = table.copy()
   let tableValue = tableCopy.get(`a`)
   print(tableValue.or(`none`))
-  let names: array<string> = [`x-${count}`]
+  let names: Array<String> = [`x-${count}`]
   let firstName = names.get(0)
   let holder: Holder = { slot: firstName }
   print(holder.slot.or(`none`))

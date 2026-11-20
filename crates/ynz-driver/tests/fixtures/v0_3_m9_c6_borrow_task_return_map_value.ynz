@@ -1,18 +1,18 @@
 // v0.3-M9 C6: a task returns its argument's map value; the glue frees it
 // The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
-function pick(table: map<string, array<int>>) -> array<int> {
+function pick(table: Map<String, Array<Int>>) -> Array<Int> {
   wait sleep(1)
-  let fallback: array<int> = []
+  let fallback: Array<Int> = []
   let maybeRow = table.get(`k`)
   return maybeRow.or(fallback)
 }
-function entrypoint() -> nothing {
-  let table: map<string, array<int>> = { `k`: [1, 2, 3] }
+function entrypoint() -> Nothing {
+  let table: Map<String, Array<Int>> = { `k`: [1, 2, 3] }
   let handle = background pick(table)
   wait sleep(50)
   let got = handle.receive()
-  let fallback: array<int> = []
+  let fallback: Array<Int> = []
   let pickedArray = got.or(fallback)
   print(pickedArray.count())
   print(pickedArray[0].or(-1))

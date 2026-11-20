@@ -7,16 +7,16 @@
 import { fetchItem } from `io_ops`
 
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function caller() -> nothing {
+function caller() -> Nothing {
   let pt: Point = { x: 3, y: 7 }
   fetchItem()
   print(`x: ${pt.x.toString()}, y: ${pt.y.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

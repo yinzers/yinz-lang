@@ -6,15 +6,15 @@
 // then `done`.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Names {
-  items: array<string>
-  label: string
+  items: Array<String>
+  label: String
 }
 
-function f(choice: Circle | Names) -> nothing {
+function f(choice: Circle | Names) -> Nothing {
   wait sleep(100)
   if (choice) {
     is Circle => {
@@ -28,7 +28,7 @@ function f(choice: Circle | Names) -> nothing {
   }
 }
 
-function launch() -> nothing {
+function launch() -> Nothing {
   let names: Names = { items: [`a`.toUpperCase(), `b`.toUpperCase()], label: `l`.toUpperCase() }
   let choice: Circle | Names = names
   background f(choice)
@@ -42,7 +42,7 @@ function launch() -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
   print(`done`)

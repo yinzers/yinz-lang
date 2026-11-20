@@ -5,9 +5,9 @@
 // `v0_3_m3d_worth_it_trivial_leaf_inline.ynz`, which has the identical shape but tiny
 // straight-line callees that run inline instead.
 
-function sumRange(n: int) -> int {
-  let total: int = 0
-  let i: int = 0
+function sumRange(n: Int) -> Int {
+  let total: Int = 0
+  let i: Int = 0
   while (i < n) {
     total = total + i
     i = i + 1
@@ -15,9 +15,9 @@ function sumRange(n: int) -> int {
   return total
 }
 
-function sumDoubled(n: int) -> int {
-  let total: int = 0
-  let i: int = 0
+function sumDoubled(n: Int) -> Int {
+  let total: Int = 0
+  let i: Int = 0
   while (i < n) {
     total = total + i * 2
     i = i + 1
@@ -25,7 +25,7 @@ function sumDoubled(n: int) -> int {
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = sumRange(20)
   let b = sumDoubled(21)
   print(a)

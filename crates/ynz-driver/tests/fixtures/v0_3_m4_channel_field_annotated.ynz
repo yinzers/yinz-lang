@@ -3,17 +3,17 @@
 // annotation is the syntactic evidence the may-block resolver derives conduit-ness from.
 // This locks the origin diagnostic's WHAT-INSTEAD suggestion as a real, working escape hatch.
 // Expected output: "7"
-shape Box { wire: channel<int> }
+shape Box { wire: Channel<Int> }
 
-function feed(out: channel<int>) -> nothing {
+function feed(out: Channel<Int>) -> Nothing {
   let r = out.send(7)
 }
 
-function entrypoint() -> nothing {
-  let ch = channel<int>(4)
+function entrypoint() -> Nothing {
+  let ch = Channel<Int>(4)
   background feed(ch)
   let b: Box = { wire: ch }
-  let c: channel<int> = b.wire
+  let c: Channel<Int> = b.wire
   let first = c.receive()
   let value = first.or(0)
   print(value)

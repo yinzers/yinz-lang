@@ -3,17 +3,17 @@
 // checker's own copy (`Circle | Square | Square`, used for `let`), so `describe(c)` was
 // refused while the `let` lines passed. Aliases are now derived once, in `collect_shapes`,
 // to a fixpoint, and every consumer reads that one map.
-shape Circle { radius: float }
-shape Square { side: float }
+shape Circle { radius: Float }
+shape Square { side: Float }
 
 shape Outer = Inner | Square
 shape Inner = Circle | Square
 
-function describe(value: Outer) -> nothing {
+function describe(value: Outer) -> Nothing {
   print(`described`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 1.0 }
   let outer: Outer = c.copy()
   describe(c)

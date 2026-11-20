@@ -13,19 +13,19 @@
 // WHY: [[deferred_language_feature]] — sized types reserved, ship in v2+
 // ---------------------------------------------------------------------------
 
-function deferredSizedFloats() -> nothing {
+function deferredSizedFloats() -> Nothing {
     let x: f32 = 5.0   // WHY: f32 — deferred, substitute = use `float`
     let y: f64 = 5.0   // WHY: f64 — deferred, substitute = use `float`
 }
 
-function deferredSignedInts() -> nothing {
+function deferredSignedInts() -> Nothing {
     let a: i8 = 5      // WHY: i8 — deferred, substitute = use `int`
     let b: i16 = 5     // WHY: i16 — deferred
     let c: i32 = 5     // WHY: i32 — deferred
     let d: i64 = 5     // WHY: i64 — deferred, `int` is already i64
 }
 
-function deferredUnsignedInts() -> nothing {
+function deferredUnsignedInts() -> Nothing {
     let a: u8 = 5      // WHY: u8 — deferred, substitute = use `int`
     let b: u16 = 5     // WHY: u16 — deferred
     let c: u32 = 5     // WHY: u32 — deferred
@@ -37,7 +37,7 @@ function deferredUnsignedInts() -> nothing {
 // WHY: [[deferred_language_feature]] — reserved for v0.13 testing framework
 // ---------------------------------------------------------------------------
 
-function deferredTestKeyword() -> nothing {
+function deferredTestKeyword() -> Nothing {
     let test = "reserved"   // WHY: `test` identifier — reserved for v0.13
 }
 
@@ -46,7 +46,7 @@ function deferredTestKeyword() -> nothing {
 // WHY: registry lookup fails → undefined-field error
 // ---------------------------------------------------------------------------
 
-function wrongTypeConstant() -> nothing {
+function wrongTypeConstant() -> Nothing {
     let x = string.max  // WHY: string has no .max constant
 }
 
@@ -71,7 +71,7 @@ abstract shape BaseEntity { }
 // WHY: [[banned_declaration_keyword]] — Yinz uses wait/background instead
 // ---------------------------------------------------------------------------
 
-function asyncExample() -> nothing {
+function asyncExample() -> Nothing {
     async function inner() -> nothing { }   // WHY: async banned, use wait at call site
 }
 
@@ -85,7 +85,7 @@ function asyncExample() -> nothing {
 // of non-diagnostic contexts works correctly.)
 // ---------------------------------------------------------------------------
 
-function sampleJargonContextValidation() -> nothing {
+function sampleJargonContextValidation() -> Nothing {
     // The jargon_audit test scans diagnostic *strings*, not identifiers.
     // No runtime trigger needed here; jargon_audit.rs is the validator.
 }

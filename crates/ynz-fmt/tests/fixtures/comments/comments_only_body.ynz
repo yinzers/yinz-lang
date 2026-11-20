@@ -1,6 +1,6 @@
 // File header
 
-function planned() -> nothing {
+function planned() -> Nothing {
   // step 1: fetch
   // step 2: transform
   // step 3: insert

@@ -12,14 +12,14 @@
 // Expected output (both modes):
 //   55
 //   89
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function runner() -> nothing {
+function runner() -> Nothing {
   let a = fib(10)
   let b = fib(11)
   wait sleep(0)
@@ -27,6 +27,6 @@ function runner() -> nothing {
   print(b)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait runner()
 }

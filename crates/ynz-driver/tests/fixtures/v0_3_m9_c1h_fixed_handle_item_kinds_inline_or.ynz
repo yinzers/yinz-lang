@@ -4,24 +4,24 @@
 // Expected output: each list's count, then its last item.
 
 shape Part {
-  name: string
+  name: String
 }
 
-function buildInts() -> fixed<int> {
+function buildInts() -> Fixed<Int> {
   wait sleep(1)
-  let numbers: fixed<int> = [10, 20, 30]
+  let numbers: Fixed<Int> = [10, 20, 30]
   return numbers
 }
 
-function buildParts() -> fixed<Part> {
+function buildParts() -> Fixed<Part> {
   wait sleep(1)
   let first: Part = { name: `a`.toUpperCase() }
   let second: Part = { name: `bb` }
-  let parts: fixed<Part> = [first, second]
+  let parts: Fixed<Part> = [first, second]
   return parts
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let ints = background buildInts()
   let parts = background buildParts()
   wait sleep(20)

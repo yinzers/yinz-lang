@@ -2,17 +2,17 @@
 // Expected output: 4, 14, B
 
 shape Bag {
-  tag: int
-  names: fixed<string, 2>
-  nums: fixed<int, 3>
+  tag: Int
+  names: Fixed<String, 2>
+  nums: Fixed<Int, 3>
 }
 
-function work(give bag: Bag) -> int {
+function work(give bag: Bag) -> Int {
   wait sleep(1)
   return bag.nums[2].or(-1) + bag.tag
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bag: Bag = { tag: 1, names: [`a`.toUpperCase(), `b`.toUpperCase()], nums: [1, 2, 3] }
   let task = background work(bag.copy())
   wait sleep(20)

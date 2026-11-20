@@ -2,12 +2,12 @@
 // background spawn allocates ONE additional frame for the spawned task tree.
 // Expected: alloc=2 (1 for the main task tree + 1 for the spawned task).
 
-function worker() -> nothing {
+function worker() -> Nothing {
   wait sleep(1)
   print(`worker done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   wait sleep(5)
   print(`main done`)

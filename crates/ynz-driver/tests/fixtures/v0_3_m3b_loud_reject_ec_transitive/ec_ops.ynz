@@ -3,11 +3,11 @@
 // This fixture tests the M3b-era loud-reject path; frame_layouts_query now computes
 // the EC staging slot + child sub-frame interaction correctly at the import site.
 
-function innerWork() -> nothing {
+function innerWork() -> Nothing {
   sleep(10)
 }
 
-export function compute() -> int errors {
+export function compute() -> Int errors {
   innerWork()
   return 42
 }

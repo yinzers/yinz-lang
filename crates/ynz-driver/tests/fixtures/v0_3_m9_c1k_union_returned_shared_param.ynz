@@ -5,17 +5,17 @@
 // Before: the result was an alias of `table`, and both frees ran (a segmentation fault).
 // Expected output: `ok`, `end`.
 
-function fallback(share first: map<string, string> | nothing, share second: map<string, string> | nothing) -> map<string, string> | nothing {
+function fallback(share first: Map<String, String> | Nothing, share second: Map<String, String> | Nothing) -> Map<String, String> | Nothing {
   return second
 }
 
-function describeTable(share table: map<string, string> | nothing) -> string {
+function describeTable(share table: Map<String, String> | Nothing) -> String {
   return `ok`
 }
 
-function entrypoint() -> nothing {
-  let table: map<string, string> = { `a`: `b` }
-  let other: map<string, string> = table.copy()
+function entrypoint() -> Nothing {
+  let table: Map<String, String> = { `a`: `b` }
+  let other: Map<String, String> = table.copy()
   print(describeTable(fallback(other, table)))
   print(`end`)
 }

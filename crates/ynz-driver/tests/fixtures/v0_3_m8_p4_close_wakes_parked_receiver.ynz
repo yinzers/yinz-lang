@@ -7,13 +7,13 @@
 //
 // Expected output:
 //   woken by close
-function closer(lend wire: channel<int>) -> nothing {
+function closer(lend wire: Channel<Int>) -> Nothing {
   wait sleep(30)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(2)
   background closer(wire)
   let got = wire.receive()
   if (got.exists()) {

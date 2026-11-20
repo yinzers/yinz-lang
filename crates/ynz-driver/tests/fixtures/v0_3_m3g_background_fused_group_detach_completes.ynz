@@ -13,7 +13,7 @@
 //
 // crunch(n) loops 0..50 (sum 1225); fetchSlow(n) waits 5ms on a timer.
 
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -23,18 +23,18 @@ function crunch(n: int) -> int {
   return total + n
 }
 
-function fetchSlow(n: int) -> int {
+function fetchSlow(n: Int) -> Int {
   wait sleep(5)
   return n + 1
 }
 
-function fusedHost() -> nothing {
+function fusedHost() -> Nothing {
   let a = crunch(1)
   let b = fetchSlow(2)
   print(a + b)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background fusedHost()
   wait sleep(50)
   print(`main-done`)

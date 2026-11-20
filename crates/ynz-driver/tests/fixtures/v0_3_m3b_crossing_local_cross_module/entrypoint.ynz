@@ -3,13 +3,13 @@
 // Expected output: "before: 10\nfetched\nafter: 10"
 import { fetchNum } from `io_ops`
 
-function caller() -> nothing {
+function caller() -> Nothing {
   let x = 10
   print(`before: ${x}`)
   fetchNum()
   print(`after: ${x}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

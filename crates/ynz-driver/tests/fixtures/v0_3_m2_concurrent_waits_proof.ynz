@@ -16,13 +16,13 @@
 // keep-alive dominates total runtime, so timing CANNOT detect a sleep no-op (the
 // binary runs ~300ms either way). M4's handle form removes the keep-alive and lets timing tighten.
 
-function pause(n: int) -> nothing {
+function pause(n: Int) -> Nothing {
   print(`START ${n}`)
   wait sleep(100)
   print(`DONE ${n}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background pause(1)
   background pause(2)
   background pause(3)

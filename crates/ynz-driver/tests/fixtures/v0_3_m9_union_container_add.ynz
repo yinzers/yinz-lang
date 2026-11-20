@@ -7,15 +7,15 @@
 // Pre-fix failure: the bare shape pointer was stored as the element (no `{tag, data}` envelope).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -27,12 +27,12 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let tiny_again: Tiny = { flag: false }
   let big: Big = { label: `hello`, count: 3 }
   let other: Big = { label: `world`, count: 4 }
-  let things: array<Thing> = []
+  let things: Array<Thing> = []
   things.add(tiny)
   things.add(big)
   things.add(tiny_again)

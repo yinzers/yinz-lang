@@ -1,9 +1,9 @@
 // v0.3-M9 C1q: the same hand-over for `map` rows.
 // Correct behavior: prints 2, then 4 (the two kept maps hold 2 + 2 entries).
 
-function entrypoint() -> nothing {
-  let matrix: array<map<string, int>> = [{ `a`: 1, `b`: 2 }, { `c`: 3 }, { `d`: 4, `e`: 5 }]
-  let kept: array<map<string, int>> = []
+function entrypoint() -> Nothing {
+  let matrix: Array<Map<String, Int>> = [{ `a`: 1, `b`: 2 }, { `c`: 3 }, { `d`: 4, `e`: 5 }]
+  let kept: Array<Map<String, Int>> = []
   let seen = 0
   for (row in matrix) {
     seen = seen + 1

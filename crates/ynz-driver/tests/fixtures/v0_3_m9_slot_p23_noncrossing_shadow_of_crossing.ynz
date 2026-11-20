@@ -1,5 +1,5 @@
 // Q1: inner shadow within a while that has no wait, outer crossing in while.
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let i = 0
   while (i < 1) {
     let s = `outer`

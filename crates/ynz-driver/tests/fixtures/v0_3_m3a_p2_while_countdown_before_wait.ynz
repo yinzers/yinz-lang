@@ -3,8 +3,8 @@
 // write precedes the `wait` textually. The back-edge (the while condition re-reads
 // `n` after each suspension) means `n` must survive the `wait` in the frame.
 // Expected output: 3\n2\n1
-function entrypoint() -> nothing {
-  let n: int = 3
+function entrypoint() -> Nothing {
+  let n: Int = 3
   while (n > 0) {
     print(n.toString())
     n = n - 1

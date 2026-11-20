@@ -13,17 +13,17 @@
 //   3
 //   end
 shape Bucket {
-  rows: array<int>
+  rows: Array<Int>
 }
 
-function build(share b: Bucket) -> array<int> {
+function build(share b: Bucket) -> Array<Int> {
   let n = b.rows.count()
-  let out: array<int> = [n]
+  let out: Array<Int> = [n]
   return out
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(2)
   let bucket: Bucket = { rows: [1, 2, 3] }
   wire.send(build(bucket))
   wire.close()

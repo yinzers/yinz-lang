@@ -1,4 +1,4 @@
-function sum(n: int) -> int {
+function sum(n: Int) -> Int {
   let total = 0
   for (i in range(n)) {
     total = total + i

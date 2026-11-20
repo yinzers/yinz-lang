@@ -13,19 +13,19 @@
 // The test asserts byte-identical stdout under default and --no-auto-parallel modes.
 //
 // Expected output: x:3.5\ny:7
-function rateA() -> float {
+function rateA() -> Float {
   wait sleep(5)
   let v = (3).toFloat() + 0.5.toFloat()
   return v
 }
 
-function rateB() -> float {
+function rateB() -> Float {
   wait sleep(5)
   let v = (7).toFloat()
   return v
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = rateA()
   let y = rateB()
   print(`x:${x.toString()}`)

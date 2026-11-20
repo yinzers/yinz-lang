@@ -4,13 +4,13 @@
 // Allocations: the outer literal and its inner literal (4), the fallback literal (2) and one
 // state-machine frame (1, freed: the same frame a bare `wait` costs). A copy of the argument would add 2.
 
-function slow(share row: array<int>) -> nothing {
+function slow(share row: Array<Int>) -> Nothing {
   wait sleep(1)
   print(row.count())
 }
 
-function entrypoint() -> nothing {
-  let rows: array<array<int>> = [[1, 2]]
-  let fallback: array<int> = []
+function entrypoint() -> Nothing {
+  let rows: Array<Array<Int>> = [[1, 2]]
+  let fallback: Array<Int> = []
   slow(rows[0].or(fallback))
 }

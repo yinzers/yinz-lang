@@ -5,10 +5,10 @@
 // Expected output: the count, the first name, then `done`.
 
 shape Crate {
-  items: fixed<string, 2>
+  items: Fixed<String, 2>
 }
 
-function crunch(xs: fixed<string>) -> nothing {
+function crunch(xs: Fixed<String>) -> Nothing {
   print(xs.count())
   print(xs[0].or(`?`))
 }
@@ -18,7 +18,7 @@ function make() -> Crate {
   return crate
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background crunch(make().items)
   wait sleep(50)
   print(`done`)

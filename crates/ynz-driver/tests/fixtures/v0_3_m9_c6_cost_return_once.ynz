@@ -3,15 +3,15 @@
 // Allocations: the field's literal (2) and the one returned copy (2).
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
-function pick(share bucket: Bucket) -> array<int> {
+function pick(share bucket: Bucket) -> Array<Int> {
   return bucket.rows
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
   let rows = pick(bucket)
   print(rows.count())

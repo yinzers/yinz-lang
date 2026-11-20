@@ -11,7 +11,7 @@
 // dying resume-fn stack temp for `x`; the resumed child reads freed memory — garbage
 // instead of 4.5.
 
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -21,13 +21,13 @@ function crunch(n: int) -> int {
   return total + n
 }
 
-function fetchNum(m: number) -> number {
+function fetchNum(m: Number) -> Number {
   wait sleep(0)
   return m
 }
 
-function entrypoint() -> nothing {
-  let x: number = 4.5
+function entrypoint() -> Nothing {
+  let x: Number = 4.5
   let a = crunch(1)
   let b = fetchNum(x)
   print(a.toString())

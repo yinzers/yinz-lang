@@ -11,13 +11,13 @@
 //   caller mutated to: 99
 //   task sees first: 10
 
-function processArr(nums: array<int>) -> nothing {
+function processArr(nums: Array<Int>) -> Nothing {
   sleepBlocking(80)
   print(`task sees first: ${nums[0].or(-1)}`)
 }
 
-function entrypoint() -> nothing {
-  let nums: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [10, 20, 30]
   background processArr(nums)
   nums[0] = 99
   print(`caller mutated to: ${nums[0].or(-1)}`)

@@ -6,15 +6,15 @@
 // freed, clean under AddressSanitizer at both optimization levels.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -26,13 +26,13 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function fetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+function fetch(share things: Array<Thing>, index: Int) -> Maybe<Thing> errors {
   let found = things.get(index)
   return found
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let big: Big = { label: `kept`, count: 1 }
   things.add(big)
   let picked = fetch(things, 5)

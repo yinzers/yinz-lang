@@ -5,9 +5,9 @@
 // Total 2+2+1 = 5.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let count: int = 1
-  let names: array<string> = [`a-${count}`, `b-${count}`]
+function entrypoint() -> Nothing {
+  let count: Int = 1
+  let names: Array<String> = [`a-${count}`, `b-${count}`]
   let copied = names.copy()
   copied[0] = `c-${count}`
   print(names[0].or(`none`))

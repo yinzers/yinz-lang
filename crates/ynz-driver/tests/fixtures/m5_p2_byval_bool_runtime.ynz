@@ -1,12 +1,12 @@
 // M5 P2 step 1 — by-value ABI matrix: boolean × runtime-computed elements × full op set
 // (non-suspending). Bool values derive from runtime comparisons.
-function entrypoint() -> nothing {
-  let n: int = 7
-  let t1: boolean = n > 3
-  let f1: boolean = n > 100
-  let t2: boolean = n == 7
-  let f2: boolean = n < 0
-  let flags: array<boolean> = [t1, f1, t2]
+function entrypoint() -> Nothing {
+  let n: Int = 7
+  let t1: Boolean = n > 3
+  let f1: Boolean = n > 100
+  let t2: Boolean = n == 7
+  let f2: Boolean = n < 0
+  let flags: Array<Boolean> = [t1, f1, t2]
   flags.add(f2)
   print(flags.count())
   print(flags[0].or(false))
@@ -15,12 +15,12 @@ function entrypoint() -> nothing {
   print(flags.get(1).or(true))
   print(flags.first().or(false))
   print(flags.last().or(true))
-  let target: boolean = n < 1
+  let target: Boolean = n < 1
   print(flags.contains(target))
-  let setVal: boolean = n > 6
+  let setVal: Boolean = n > 6
   flags.set(1, setVal)
   print(flags[1].or(false))
-  let setVal2: boolean = n < 5
+  let setVal2: Boolean = n < 5
   flags[2] = setVal2
   print(flags[2].or(true))
 }

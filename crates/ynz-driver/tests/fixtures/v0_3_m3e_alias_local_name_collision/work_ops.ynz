@@ -8,11 +8,11 @@
 // spawn BEFORE printing "main-done", so task completion is a real happens-before edge,
 // not a timing margin.
 
-export function compute(lend done: channel<int>) -> nothing {
-  let a: int = 1
-  let b: int = 2
-  let c: int = 3
-  let d: int = 4
+export function compute(lend done: Channel<Int>) -> Nothing {
+  let a: Int = 1
+  let b: Int = 2
+  let c: Int = 3
+  let d: Int = 4
   sleep(10)
   print(`IMPORTED-OK`)
   done.send(1)

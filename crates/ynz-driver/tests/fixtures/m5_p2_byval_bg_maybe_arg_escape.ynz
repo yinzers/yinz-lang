@@ -10,20 +10,20 @@
 // Expected output (in order):
 //   loop done
 //   1
-function report(m: maybe<int>) -> nothing {
+function report(m: Maybe<Int>) -> Nothing {
   sleepBlocking(80)
   if (m.exists()) {
     print(m.value)
   }
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let a: int = seed * 1
-  let b: int = seed * 2
-  let c: int = seed * 3
-  let nums: array<int> = [a, b, c]
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let a: Int = seed * 1
+  let b: Int = seed * 2
+  let c: Int = seed * 3
+  let nums: Array<Int> = [a, b, c]
+  let i: Int = 0
   while (i < 3) {
     let cur = nums.get(i)
     if (i == 0) {

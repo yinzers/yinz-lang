@@ -2,18 +2,18 @@
 // Expected output: 50, 50, B
 
 shape Bag {
-  tag: int
-  names: fixed<string, 2>
-  nums: fixed<int, 3>
+  tag: Int
+  names: Fixed<String, 2>
+  nums: Fixed<Int, 3>
 }
 
-function pause(lend bag: Bag) -> int {
+function pause(lend bag: Bag) -> Int {
   wait sleep(1)
   bag.nums.set(0, 50)
   return bag.nums[0].or(-1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bag: Bag = { tag: 1, names: [`a`.toUpperCase(), `b`.toUpperCase()], nums: [1, 2, 3] }
   let r = wait pause(bag)
   print(r)

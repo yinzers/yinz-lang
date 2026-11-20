@@ -23,7 +23,7 @@
 // START/DONE lines differs between modes, per this fixture's own test):
 //   449999985000004
 
-function crunch(seed: int) -> int {
+function crunch(seed: Int) -> Int {
   print(`START_CPU`)
   let total = 0
   let i = 0
@@ -35,14 +35,14 @@ function crunch(seed: int) -> int {
   return total + seed
 }
 
-function fetchData(seed: int) -> int {
+function fetchData(seed: Int) -> Int {
   print(`START_IO`)
   wait sleep(80)
   print(`DONE_IO`)
   return seed + 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunch(1)
   let b = fetchData(2)
   print(a + b)

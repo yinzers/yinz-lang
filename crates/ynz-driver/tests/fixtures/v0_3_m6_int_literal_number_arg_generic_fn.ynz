@@ -10,11 +10,11 @@
 // passed typeck silently and ICE'd at codegen (an LLVM verifier reject: i64
 // arg against the callee's pointer-typed decimal128 param).
 
-function scale<T>(factor: number, give item: T) -> number {
+function scale<T>(factor: Number, give item: T) -> Number {
   return factor
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tag = `crate`
   let scaled = scale(5, tag)
   print(scaled.toString())

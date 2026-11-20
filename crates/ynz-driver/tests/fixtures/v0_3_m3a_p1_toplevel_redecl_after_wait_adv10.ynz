@@ -7,7 +7,7 @@
 // program would produce incorrect output because all three `x` bindings (x=10, x=99,
 // x=7 inside if) share one name-keyed frame slot.
 // Expected: exit 1, diagnostic mentions `x` and `wait`
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = 10
   wait sleep(5)
   let x = 99

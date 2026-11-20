@@ -9,29 +9,29 @@
 // -- Shapes used as targets in the examples below --
 
 shape Order {
-  id: int
-  item: string
+  id: Int
+  item: String
 }
 
 shape BigOrder {
-  id: int
-  item: string
-  qty: int
-  price: int
-  note: string
-  region: int
-  zone: int
-  code: int
-  flag: int
+  id: Int
+  item: String
+  qty: Int
+  price: Int
+  note: String
+  region: Int
+  zone: Int
+  code: Int
+  flag: Int
 }
 
 // -- v0.3-M1 Error Class 1: share-param callee via background (M8 carry-forward) --
 
-function readOrder(share self: Order) -> nothing {
+function readOrder(share self: Order) -> Nothing {
   print(self.item)
 }
 
-function triggerShareError() -> nothing {
+function triggerShareError() -> Nothing {
   let order: Order = { id: 1, item: `cheesesteak` }
   // WHY: background + share param = borrow-may-outlive-caller safety error.
   // (Was locked in M8; carry-forward regression check -- still errors in v0.3-M1.)
@@ -40,11 +40,11 @@ function triggerShareError() -> nothing {
 
 // -- v0.3-M1 Error Class 2: lend-param callee via background --
 
-function updateOrder(lend self: Order) -> nothing {
+function updateOrder(lend self: Order) -> Nothing {
   self.id = self.id + 1
 }
 
-function triggerLendError() -> nothing {
+function triggerLendError() -> Nothing {
   let order: Order = { id: 1, item: `kielbasa` }
   // WHY: LendAcrossThreadBoundary -- background + lend param is a new v0.3-M1 error.
   // A lend borrow across a thread boundary lets the background task mutate
@@ -54,11 +54,11 @@ function triggerLendError() -> nothing {
 
 // -- v0.3-M1 Warning Class: large-copy at background call site --
 
-function processBigOrder(order: BigOrder) -> nothing {
+function processBigOrder(order: BigOrder) -> Nothing {
   print(order.item)
 }
 
-function triggerLargeCopyWarning() -> nothing {
+function triggerLargeCopyWarning() -> Nothing {
   let big: BigOrder = { id: 1, item: `primanti sandwich`, qty: 100, price: 9, note: `extra coleslaw`, region: 3, zone: 7, code: 42, flag: 1 }
   // WHY: BackgroundLargeStructCopy -- BigOrder has 9 fields x 8 bytes = 72 bytes > 64 byte threshold.
   // Suggests passing ownership instead of copying.
@@ -90,12 +90,12 @@ function triggerLargeCopyWarning() -> nothing {
 
 // -- Happy path: fire-and-forget (the correct form) --
 
-function dispatchOrder(order: Order) -> nothing {
+function dispatchOrder(order: Order) -> Nothing {
   print(order.item)
 }
 
 // WHY: This is the CORRECT form -- ownership is inferred as give, no copy needed.
-function validBackgroundDispatch() -> nothing {
+function validBackgroundDispatch() -> Nothing {
   let order: Order = { id: 1, item: `fries on the sandwich` }
   background dispatchOrder(order)
 }

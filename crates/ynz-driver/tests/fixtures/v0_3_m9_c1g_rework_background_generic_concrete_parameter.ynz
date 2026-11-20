@@ -6,18 +6,18 @@
 // garbage. Kept as a guard on that route.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function pick<T>(give first: T, give second: Big) -> nothing {
+function pick<T>(give first: T, give second: Big) -> Nothing {
   print(second.count.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   background pick(big, tiny)

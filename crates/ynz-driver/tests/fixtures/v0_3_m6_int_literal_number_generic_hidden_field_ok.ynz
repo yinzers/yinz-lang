@@ -13,14 +13,14 @@
 // must compile clean and must never emit `T is not a known type`. Declaration-site
 // only: the over-reach fired at shape-declaration time, independent of construction.
 shape Cache<T> {
-  label: string
-  hidden buffer: array<T> = []
+  label: String
+  hidden buffer: Array<T> = []
 }
 
-function getLabel<T>(share self: Cache<T>) -> string {
+function getLabel<T>(share self: Cache<T>) -> String {
   return self.label
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(`generic-hidden-field-ok`)
 }

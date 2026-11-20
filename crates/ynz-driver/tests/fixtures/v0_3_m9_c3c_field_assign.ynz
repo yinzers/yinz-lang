@@ -6,21 +6,21 @@
 // Expected output: the name.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 
-function build(count: int) -> Tag {
+function build(count: Int) -> Tag {
   let tag: Tag = { name: `tag-${count}`, id: 1 }
   tag.name = `renamed`
   return tag
 }
 
-function show(tag: Tag) -> nothing {
+function show(tag: Tag) -> Nothing {
   print(tag.name)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background show(build(1))
   wait sleep(80)
 }

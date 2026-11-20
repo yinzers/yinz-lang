@@ -26,33 +26,33 @@
 //    whose join IS a genuine suspension point, making the args TRUE crossings.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Square {
-  side: float
+  side: Float
 }
 
 shape Figure = Circle | Square
 
 shape Ship {
-  name: string
-  cargo: int
+  name: String
+  cargo: Int
 }
 
-function bump(n: number) -> number {
+function bump(n: Number) -> Number {
   return n + 1.0
 }
 
-function headroom(share nums: fixed<int>) -> int {
+function headroom(share nums: Fixed<Int>) -> Int {
   return 9
 }
 
-function firstOr(m: maybe<int>) -> int {
+function firstOr(m: Maybe<Int>) -> Int {
   return m.or(0)
 }
 
-function tagOf(figure: Figure) -> string {
+function tagOf(figure: Figure) -> String {
   if (figure) {
     is Circle => {
       return `circle`
@@ -64,21 +64,21 @@ function tagOf(figure: Figure) -> string {
   return `unknown`
 }
 
-function crewOf(ship: Ship) -> int {
+function crewOf(ship: Ship) -> Int {
   return ship.cargo
 }
 
-function entrypoint() -> nothing {
-  let x: number = 2.5
+function entrypoint() -> Nothing {
+  let x: Number = 2.5
   const b = bump(x)
-  let nums: fixed<int> = [2, 3, 4]
+  let nums: Fixed<Int> = [2, 3, 4]
   const h = headroom(nums)
-  let m: maybe<int> = `40`.toInt()
+  let m: Maybe<Int> = `40`.toInt()
   const mv = firstOr(m)
   let s: Square = { side: 3.0 }
   let f: Figure = s
   const t = tagOf(f)
-  let sep: int = 1
+  let sep: Int = 1
   const av = crewOf({ name: `tug`, cargo: 6 })
   wait sleep(sep)
   print(b.toString())

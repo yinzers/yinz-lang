@@ -4,10 +4,10 @@
 // Correct behavior: prints the summed head values, 100.
 
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 
@@ -19,7 +19,7 @@ function build() -> Node {
   return top
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let round = 0
   while (round < 100) {

@@ -3,9 +3,9 @@
 // the statement that made it frees it. Expected output: 40.
 import { freshRows } from `rows`
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + freshRows(i).count()
     i = i + 1

@@ -1,12 +1,12 @@
 // v0.3-M2 Phase 7: background from a suspending entrypoint.
 // Verifies Bug C fix: background task runs concurrently while parent SM waits.
 
-function worker() -> nothing {
+function worker() -> Nothing {
   wait sleep(50)
   print(`worker done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   print(`main waiting`)
   wait sleep(100)

@@ -31,91 +31,91 @@
 // resume-stack pointer riding the return slot / ok word diverges under
 // optimization.
 
-function tallyScore(start: number) -> number {
+function tallyScore(start: Number) -> Number {
   wait sleep(1)
   let total = start + 0.25
   return total
 }
 
-function findRank(idx: int) -> maybe<int> {
+function findRank(idx: Int) -> Maybe<Int> {
   wait sleep(1)
   if (idx >= 0) {
-    let ranks: array<int> = [40, 30, 20]
+    let ranks: Array<Int> = [40, 30, 20]
     let got = ranks.get(idx)
     return got
   }
   return none
 }
 
-function pickFee(idx: int) -> maybe<number> {
+function pickFee(idx: Int) -> Maybe<Number> {
   wait sleep(1)
   if (idx >= 0) {
     let seed = 5.25
     let fee = seed + 0.25
     let bump = fee + 3.00
-    let fees: fixed<number> = [fee, bump]
+    let fees: Fixed<Number> = [fee, bump]
     let got = fees.get(idx)
     return got
   }
   return none
 }
 
-function rankOrMissing(idx: int) -> maybe<int> errors {
+function rankOrMissing(idx: Int) -> Maybe<Int> errors {
   wait sleep(1)
   if (idx >= 0) {
-    let ranks: array<int> = [12, 34]
+    let ranks: Array<Int> = [12, 34]
     let got = ranks.get(idx)
     return got
   }
   return none
 }
 
-function feeOrMissing(idx: int) -> maybe<number> errors {
+function feeOrMissing(idx: Int) -> Maybe<Number> errors {
   wait sleep(1)
   if (idx >= 0) {
     let seed2 = 7.25
     let fee2 = seed2 + 0.50
     let bump2 = fee2 + 1.25
-    let fees: fixed<number> = [fee2, bump2]
+    let fees: Fixed<Number> = [fee2, bump2]
     let got = fees.get(idx)
     return got
   }
   return none
 }
 
-function showRank(idx: int) -> nothing {
+function showRank(idx: Int) -> Nothing {
   let r = findRank(idx)
   let rv = r.or(0 - 1)
   print(rv.toString())
 }
 
-function showFee(idx: int) -> nothing {
+function showFee(idx: Int) -> Nothing {
   let f = pickFee(idx)
   let fv = f.or(0.0)
   print(fv.toString())
 }
 
-function showRankOrMissing(idx: int) -> nothing {
+function showRankOrMissing(idx: Int) -> Nothing {
   let m = rankOrMissing(idx)
   if (idx >= 0) {
-    let empty: maybe<int> = none
+    let empty: Maybe<Int> = none
     let mv = m.or(empty)
     let got = mv.or(0)
     print(got.toString())
   }
 }
 
-function showFeeOrMissing(idx: int) -> nothing {
+function showFeeOrMissing(idx: Int) -> Nothing {
   let n = feeOrMissing(idx)
   if (idx >= 0) {
-    let empty: maybe<number> = none
+    let empty: Maybe<Number> = none
     let nv = n.or(empty)
     let fee = nv.or(0.0)
     print(fee.toString())
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s = tallyScore(2.25)
   print(s.toString())
 

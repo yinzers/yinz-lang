@@ -4,13 +4,13 @@
 // in the wrapper-return match) because `Type::Float` had no explicit arm. LLVM module
 // verification failed: "Function return type does not match operand type of return inst!"
 // Expected output: 8.5
-function sleepingFloat() -> float {
+function sleepingFloat() -> Float {
   wait sleep(5)
   let v = (8).toFloat() + 0.5.toFloat()
   return v
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = sleepingFloat()
   print(r.toString())
 }

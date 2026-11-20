@@ -10,7 +10,7 @@
 // fused variant): same i64-load-vs-pointer-param mismatch as the pure-CPU spike
 // path — LLVM verifier failure surfaced as "compiler bug" on valid code.
 
-function heavyEcho(n: number) -> number {
+function heavyEcho(n: Number) -> Number {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -20,13 +20,13 @@ function heavyEcho(n: number) -> number {
   return n
 }
 
-function fetchInt(k: int) -> int {
+function fetchInt(k: Int) -> Int {
   wait sleep(0)
   return k
 }
 
-function entrypoint() -> nothing {
-  let x: number = 2.5
+function entrypoint() -> Nothing {
+  let x: Number = 2.5
   let a = heavyEcho(x)
   let b = fetchInt(7)
   print(a.toString())

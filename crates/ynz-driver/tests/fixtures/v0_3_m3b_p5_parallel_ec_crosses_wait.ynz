@@ -16,22 +16,22 @@
 // correct values after the crossing (no segfault from a collapsed/garbage EC struct).
 //
 // Expected output: later\na:10\nb:20
-function loadA() -> int errors {
+function loadA() -> Int errors {
   wait sleep(40)
   return 10
 }
 
-function loadB() -> int errors {
+function loadB() -> Int errors {
   wait sleep(40)
   return 20
 }
 
-function later() -> nothing {
+function later() -> Nothing {
   wait sleep(10)
   print(`later`)
 }
 
-function run() -> nothing {
+function run() -> Nothing {
   let a = loadA()
   let b = loadB()
   wait later()
@@ -41,6 +41,6 @@ function run() -> nothing {
   print(`b:${bv}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   run()
 }

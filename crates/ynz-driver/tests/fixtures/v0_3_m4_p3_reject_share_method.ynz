@@ -2,15 +2,15 @@
 // (`cfg.inspect()`). The reject resolves the method name into sig_table.fns, so
 // UFCS is covered identically to the free-function form.
 shape Config {
-  name: string
-  retries: int
+  name: String
+  retries: Int
 }
 
-function inspect(share cfg: Config) -> nothing {
+function inspect(share cfg: Config) -> Nothing {
   print(cfg.name)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let cfg: Config = { name: `steel`, retries: 3 }
   background cfg.inspect()
 }

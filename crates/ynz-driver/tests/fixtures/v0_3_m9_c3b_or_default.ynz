@@ -4,10 +4,10 @@
 // Allocations: `names` literal elements 2 (copies); 4 iterations each copy once 4. Total 6.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let names: array<string> = [`a`, `b`]
+function entrypoint() -> Nothing {
+  let names: Array<String> = [`a`, `b`]
   for (index in range(0, 4)) {
-    let chosen: string = names[index].or(`none`)
+    let chosen: String = names[index].or(`none`)
     print(chosen)
   }
 }

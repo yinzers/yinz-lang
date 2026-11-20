@@ -11,7 +11,7 @@
 // scheduled time BEFORE the hog completes — observable as "victim ran" preceding
 // "hog done" in stdout.
 
-function hogTally() -> nothing {
+function hogTally() -> Nothing {
   let x = 0
   while (x < 100000000) {
     x = x + 1
@@ -24,12 +24,12 @@ function hogTally() -> nothing {
   wait sleep(0)
 }
 
-function victimPing() -> nothing {
+function victimPing() -> Nothing {
   wait sleep(0)
   print(`victim ran`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let hog = background hogTally()
   // Let the hog OCCUPY the single worker before the victim is spawned — Tokio's
   // scheduler does not guarantee spawn-order execution (newest-task-first fast paths),

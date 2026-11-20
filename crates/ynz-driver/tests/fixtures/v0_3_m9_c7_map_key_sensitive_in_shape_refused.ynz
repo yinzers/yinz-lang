@@ -1,9 +1,9 @@
 // v0.3-M9 C7 review r2 (security): a `sensitive string` map key is refused wherever a shape
 // declaration writes the map: a field, a map nested in a field's type, and a union alias variant.
 // Correct behavior: does not compile; each of the three is refused by typeck, never by codegen.
-shape Vault { entries: map<sensitive string, int> }
-shape Ledger { pages: array<map<sensitive string, int>> }
-shape Holder = map<sensitive string, int> | int
-function entrypoint() -> nothing {
+shape Vault { entries: Map<sensitive String, Int> }
+shape Ledger { pages: Array<Map<sensitive String, Int>> }
+shape Holder = Map<sensitive String, Int> | Int
+function entrypoint() -> Nothing {
   print(1)
 }

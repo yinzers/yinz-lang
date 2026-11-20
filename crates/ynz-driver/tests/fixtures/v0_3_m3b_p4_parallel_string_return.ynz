@@ -14,17 +14,17 @@
 // The test asserts byte-identical stdout under default and --no-auto-parallel modes.
 //
 // Expected output: first:hello\nsecond:world
-function labelA() -> string {
+function labelA() -> String {
   wait sleep(5)
   return `hello`
 }
 
-function labelB() -> string {
+function labelB() -> String {
   wait sleep(5)
   return `world`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first = labelA()
   let second = labelB()
   print(`first:${first}`)

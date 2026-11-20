@@ -2,16 +2,16 @@
 // used to resolve to `Circle | unknown` (a second alias resolver had no `nothing` arm), so
 // `let m: MaybeCircle = make()` was refused. Alias resolution now goes through the one
 // resolver, `ShapeTable::resolve_ast_type`.
-shape Circle { radius: float }
+shape Circle { radius: Float }
 
-shape MaybeCircle = Circle | nothing
+shape MaybeCircle = Circle | Nothing
 
-function make() -> Circle | nothing {
+function make() -> Circle | Nothing {
   let c: Circle = { radius: 1.0 }
   return c
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let m: MaybeCircle = make()
   print(`ok`)
 }

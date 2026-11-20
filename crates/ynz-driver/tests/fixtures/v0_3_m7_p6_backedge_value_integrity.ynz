@@ -27,7 +27,7 @@
 //   0.75                 (0.25 + 0.5, mutated between the two yields)
 //   main done
 
-function tallyAcrossYields() -> nothing {
+function tallyAcrossYields() -> Nothing {
   let label = `crossing-intact`
   let total = 0
   let i = 0
@@ -49,7 +49,7 @@ function tallyAcrossYields() -> nothing {
   print(frac.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   tallyAcrossYields()
   print(`main done`)
 }

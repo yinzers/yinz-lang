@@ -1,7 +1,7 @@
-function entrypoint() -> nothing {
-  print(int.max)
-  print(int.min)
-  let big: int = 9223372036854775807
+function entrypoint() -> Nothing {
+  print(Int.max)
+  print(Int.min)
+  let big: Int = 9223372036854775807
   print(big.saturatingAdd(100))
   print(big.wrappingAdd(1))
 }

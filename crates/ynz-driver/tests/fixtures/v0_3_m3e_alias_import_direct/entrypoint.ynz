@@ -3,7 +3,7 @@
 // suspending callee's true module origin so frame_layouts_query reads the correct layout.
 import { getValue as fetchVal } from `data_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const result = fetchVal()
   const v = result.or(0)
   print(v.toString())

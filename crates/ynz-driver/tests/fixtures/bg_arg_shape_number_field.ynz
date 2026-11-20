@@ -17,20 +17,20 @@
 // struct's ABI `align 16` → optimized ISel emits `movaps` → #GP. The identical
 // program without the `scale` field runs (no 16-aligned field, no `movaps`).
 shape Scene {
-  name: string
-  width: int
-  height: int
-  scale: number
+  name: String
+  width: Int
+  height: Int
+  scale: Number
 }
 
-function render(scene: Scene, results: channel<int>) -> nothing {
+function render(scene: Scene, results: Channel<Int>) -> Nothing {
   wait sleep(5)
   print(`${scene.name} ${scene.width} ${scene.height} ${scene.scale}`)
   results.send(scene.width / scene.height)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>(4)
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>(4)
   let scene: Scene = { name: `Point`, width: 800, height: 600, scale: 1.5 }
   background render(scene, results)
   let ratio = results.receive()

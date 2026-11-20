@@ -1,8 +1,8 @@
 // WHY: int literal index-assigned into an `array<number>` element
 // (`prices[0] = 5`) — the hinted value infer silently passes typeck.
 // Pre-fix: codegen ICE panic.
-function entrypoint() -> nothing {
-  let prices: array<number> = [1.5]
+function entrypoint() -> Nothing {
+  let prices: Array<Number> = [1.5]
   prices[0] = 5
   let got = prices.get(0)
   print(got.or(0.0))

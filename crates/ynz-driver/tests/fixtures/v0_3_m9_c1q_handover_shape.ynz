@@ -2,17 +2,17 @@
 // Correct behavior: prints 2, A, C.
 
 shape Tag {
-  label: string
-  nums: array<int>
+  label: String
+  nums: Array<Int>
 }
 
-function entrypoint() -> nothing {
-  let matrix: array<Tag> = [
+function entrypoint() -> Nothing {
+  let matrix: Array<Tag> = [
     { label: `a`.toUpperCase(), nums: [1] },
     { label: `b`.toUpperCase(), nums: [2] },
     { label: `c`.toUpperCase(), nums: [3] }
   ]
-  let kept: array<Tag> = []
+  let kept: Array<Tag> = []
   let seen = 0
   for (row in matrix) {
     seen = seen + 1

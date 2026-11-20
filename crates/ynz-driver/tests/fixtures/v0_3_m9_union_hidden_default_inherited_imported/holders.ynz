@@ -4,32 +4,32 @@
 // `extra` is a non-shape variant default into a union field, inherited from `Parent`.
 
 export shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 export shape Parent {
-  name: string
-  hidden count: int = 5
-  hidden extra: Big | int = 4096
+  name: String
+  hidden count: Int = 5
+  hidden extra: Big | Int = 4096
 }
 
 export shape Child extends Parent {
-  tag: string
-  hidden more: int = 7
+  tag: String
+  hidden more: Int = 7
 }
 
 // Hidden fields are read only by functions taking the shape as `self`, so the readers live here.
-export function peekCount(share self: Child) -> int {
+export function peekCount(share self: Child) -> Int {
   return self.count
 }
 
-export function peekMore(share self: Child) -> int {
+export function peekMore(share self: Child) -> Int {
   return self.more
 }
 
-export function peekExtra(share self: Child) -> string {
-  let slot: Big | int = self.extra
+export function peekExtra(share self: Child) -> String {
+  let slot: Big | Int = self.extra
   if (slot) {
     is Big => {
       return `big ${slot.label}`

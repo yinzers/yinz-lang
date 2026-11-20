@@ -11,16 +11,16 @@
 // variant (`circle` 5/5 pre-fix runs vs the non-suspending control's `square`).
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Square {
-  side: float
+  side: Float
 }
 
 shape Figure = Circle | Square
 
-function describe(figure: Figure) -> string {
+function describe(figure: Figure) -> String {
   wait sleep(10)
   if (figure) {
     is Circle => {
@@ -33,7 +33,7 @@ function describe(figure: Figure) -> string {
   return `unknown`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
   let s: Square = { side: 2.0 }
   let fig: Figure = s

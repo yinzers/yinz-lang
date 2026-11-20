@@ -3,7 +3,7 @@
 // "sleepBlocking" — if the rename was applied to the dispatch arm but not to the
 // redundant-wait CPU-only-intrinsic list, this warning silently stops firing.
 // sleepBlocking blocks the OS thread; the `wait` keyword has no effect on it.
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleepBlocking(100)
   print(`done`)
 }

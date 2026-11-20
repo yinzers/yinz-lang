@@ -15,7 +15,7 @@
 // This fixture MUST produce a clean compile error (exit 1). No ICE text.
 // test-ratchet: R6 flipped this to compile (non-crossing predicate); R7 reverts to
 // conservative reject (Option A, blunt param_has_nested_let_shadow guard).
-function f(x: int) -> nothing {
+function f(x: Int) -> Nothing {
   wait sleep(5)
   if (1 > 0) {
     let x = 99
@@ -23,6 +23,6 @@ function f(x: int) -> nothing {
   }
   print(x.toString())
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   f(7)
 }

@@ -3,6 +3,6 @@
 // namespace member-calls are not yet resolved by typeck, so the call rejects cleanly
 // at compile time with a "not defined" diagnostic regardless of whether the callee suspends.
 
-export function runTask() -> nothing {
+export function runTask() -> Nothing {
   sleep(10)
 }

@@ -1,8 +1,8 @@
 // v0.3-M9 C10: a `return` inside the loop, after the iterated binding was reassigned, still
 // releases the list the loop was walking. Correct behavior: prints 4, 3.
 
-function find(start: array<array<int>>) -> int {
-  let matrix: array<array<int>> = start.copy()
+function find(start: Array<Array<Int>>) -> Int {
+  let matrix: Array<Array<Int>> = start.copy()
   let total = 0
   for (row in matrix) {
     matrix = [[9]]
@@ -14,7 +14,7 @@ function find(start: array<array<int>>) -> int {
   return total + matrix.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(find([[1, 2], [3, 4], [5, 6]]))
   print(find([[1], [1]]))
 }

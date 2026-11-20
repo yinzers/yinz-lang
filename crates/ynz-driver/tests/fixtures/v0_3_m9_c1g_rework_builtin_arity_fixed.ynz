@@ -5,8 +5,8 @@
 // Pre-fix failure: the type checker never counted a built-in method's arguments, so `fs.get()`
 // read an index that was never passed and `fs.count(1)` dropped its argument without a word.
 
-function entrypoint() -> nothing {
-  let fs: fixed<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let fs: Fixed<Int> = [1, 2, 3]
   let found = fs.get()
   let total = fs.count(1)
 }

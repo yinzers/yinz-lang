@@ -1,20 +1,20 @@
 // M5 P2 step 1 — by-value ABI matrix: float × runtime-computed elements × full op set
 // (non-suspending). Float values derive from runtime int arithmetic via .toFloat()
 // (decimal-literal float coercion is a known, deferred pre-existing miscompile — s1_verdict.md).
-function entrypoint() -> nothing {
-  let seed: int = 5
-  let ia: int = seed * 2
-  let ib: int = seed * 4
-  let ic: int = seed * 6
-  let id: int = seed * 8
-  let fa: float = ia.toFloat()
-  let fb: float = ib.toFloat()
-  let fc: float = ic.toFloat()
-  let fd: float = id.toFloat()
-  let vals: array<float> = [fa, fb, fc]
+function entrypoint() -> Nothing {
+  let seed: Int = 5
+  let ia: Int = seed * 2
+  let ib: Int = seed * 4
+  let ic: Int = seed * 6
+  let id: Int = seed * 8
+  let fa: Float = ia.toFloat()
+  let fb: Float = ib.toFloat()
+  let fc: Float = ic.toFloat()
+  let fd: Float = id.toFloat()
+  let vals: Array<Float> = [fa, fb, fc]
   vals.add(fd)
-  let iNeg: int = 0 - seed
-  let fNeg: float = iNeg.toFloat()
+  let iNeg: Int = 0 - seed
+  let fNeg: Float = iNeg.toFloat()
   print(vals.count())
   print(vals[0].or(fNeg))
   print(vals[3].or(fNeg))
@@ -22,18 +22,18 @@ function entrypoint() -> nothing {
   print(vals.get(1).or(fNeg))
   print(vals.first().or(fNeg))
   print(vals.last().or(fNeg))
-  let iPresent: int = seed * 6
-  let fPresent: float = iPresent.toFloat()
+  let iPresent: Int = seed * 6
+  let fPresent: Float = iPresent.toFloat()
   print(vals.contains(fPresent))
-  let iAbsent: int = seed * 99
-  let fAbsent: float = iAbsent.toFloat()
+  let iAbsent: Int = seed * 99
+  let fAbsent: Float = iAbsent.toFloat()
   print(vals.contains(fAbsent))
-  let iSet: int = seed * 5
-  let fSet: float = iSet.toFloat()
+  let iSet: Int = seed * 5
+  let fSet: Float = iSet.toFloat()
   vals.set(1, fSet)
   print(vals[1].or(fNeg))
-  let iSet2: int = seed * 7
-  let fSet2: float = iSet2.toFloat()
+  let iSet2: Int = seed * 7
+  let fSet2: Float = iSet2.toFloat()
   vals[2] = fSet2
   print(vals[2].or(fNeg))
 }

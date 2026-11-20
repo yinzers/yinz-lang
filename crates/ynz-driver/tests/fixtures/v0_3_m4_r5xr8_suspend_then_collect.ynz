@@ -3,15 +3,15 @@
 // value is collected via receive() through the copy-before-free path (R8's scenario).
 // Asserts: the frame survives the channel suspension; the collected wide value is
 // byte-correct; frame + buffer each freed exactly once (alloc=free gate in the test).
-function worker(lend out: channel<int>) -> number errors {
+function worker(lend out: Channel<Int>) -> Number errors {
   out.send(7)
   // Channel is capacity-1 and already full — this send SUSPENDS the child mid-execution.
   out.send(8)
   return 9999999999.000000001
 }
 
-function entrypoint() -> nothing {
-  let ch: channel<int> = channel<int>(1)
+function entrypoint() -> Nothing {
+  let ch: Channel<Int> = Channel<Int>(1)
   let h = background worker(ch)
   wait sleep(30)
   let a = ch.receive()

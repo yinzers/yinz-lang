@@ -4,19 +4,19 @@
 // the one spawn refusal, never as a backend error.
 
 shape Bag {
-  items: array<int> | nothing
-  label: string
+  items: Array<Int> | Nothing
+  label: String
 }
 
 function make() -> Bag {
   return { items: [1, 2].copy(), label: `l`.toUpperCase() }
 }
 
-function crunch(items: array<int> | nothing) -> nothing {
+function crunch(items: Array<Int> | Nothing) -> Nothing {
   print(`task`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background crunch(make().items)
   wait sleep(50)
   print(`done`)

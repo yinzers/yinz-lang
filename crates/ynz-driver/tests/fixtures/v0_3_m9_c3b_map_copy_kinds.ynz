@@ -8,11 +8,11 @@
 // copies the payload 2 (the `int` results copy nothing). Total 1+1+1+1+2 = 6.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let count: int = 1
-  let counts: map<string, int> = { `a`: 7 }
+function entrypoint() -> Nothing {
+  let count: Int = 1
+  let counts: Map<String, Int> = { `a`: 7 }
   let countsCopy = counts.copy()
-  let names: map<int, string> = { 5: `v-${count}` }
+  let names: Map<Int, String> = { 5: `v-${count}` }
   let namesCopy = names.copy()
   let copiedCount = countsCopy.get(`a`)
   print(copiedCount.or(0))

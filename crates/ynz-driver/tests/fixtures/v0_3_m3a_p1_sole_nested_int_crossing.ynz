@@ -2,7 +2,7 @@
 // also contains the wait. Previously caused an LLVM dominance ICE because the
 // alloca was created in the non-entry state block instead of sm_entry.
 // Expected output: 42
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let flag = true
   if (flag) {
     let inner = 42

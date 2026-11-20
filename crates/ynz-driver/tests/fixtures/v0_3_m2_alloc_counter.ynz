@@ -3,17 +3,17 @@
 // ONE ynz_alloc for the whole composed frame; no per-call allocation.
 // (Alloc counting is done in the Rust integration test via a counter shim.)
 
-function inner() -> int {
+function inner() -> Int {
   wait sleep(5)
   return 1
 }
 
-function outer() -> int {
+function outer() -> Int {
   const v = inner()
   return v + 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const v = outer()
   print(`result: ${v}`)
 }

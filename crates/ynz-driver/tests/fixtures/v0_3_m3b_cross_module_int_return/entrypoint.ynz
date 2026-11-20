@@ -3,11 +3,11 @@
 // Expected output: "42"
 import { fetchValue } from `number_ops`
 
-function caller() -> nothing {
+function caller() -> Nothing {
   let v = fetchValue()
   print(v.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

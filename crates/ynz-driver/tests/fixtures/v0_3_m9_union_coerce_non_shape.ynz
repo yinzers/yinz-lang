@@ -8,15 +8,15 @@
 // read its tag through address 0x5 (SIGSEGV).
 
 shape Circle {
-  radius: float
+  radius: Float
 }
-shape Mixed = Circle | int
+shape Mixed = Circle | Int
 
 shape Box {
-  held: Circle | int
+  held: Circle | Int
 }
 
-function show(share fig: Mixed) -> string {
+function show(share fig: Mixed) -> String {
   if (fig) {
     is Circle => {
       return `circle`
@@ -36,7 +36,7 @@ function makeCircle() -> Mixed {
   return made
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(show(5))
   let returned = makeInt()
   print(show(returned))

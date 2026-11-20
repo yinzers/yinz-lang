@@ -4,12 +4,12 @@
 // Expected last line: 1000
 
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let ratio: float = (3).toFloat()
-  let price: number = 9.5
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let ratio: Float = (3).toFloat()
+  let price: Number = 9.5
   while (i < 1000) {
-    let line: string = `d=${price}`
+    let line: String = `d=${price}`
     i = i + 1
   }
   print(i)

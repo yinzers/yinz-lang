@@ -5,12 +5,12 @@
 // Total 1+1+1+1+1+0+1 = 6.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let count: int = 5
-  let built: string = `built-${count}`
-  let names: array<string> = [built, `lit`]
+function entrypoint() -> Nothing {
+  let count: Int = 5
+  let built: String = `built-${count}`
+  let names: Array<String> = [built, `lit`]
   names.add(`more`)
-  let last: string = `last-${count}`
+  let last: String = `last-${count}`
   names.add(last)
   names[0] = built
   print(built)

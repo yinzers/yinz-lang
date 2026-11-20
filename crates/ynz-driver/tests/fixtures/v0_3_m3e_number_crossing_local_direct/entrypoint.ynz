@@ -5,13 +5,13 @@
 // Expected output: "before: 1.5\nafter: 1.5"
 import { fetchPrice } from `io_ops`
 
-function caller() -> nothing {
-  let price: number = 1.5
+function caller() -> Nothing {
+  let price: Number = 1.5
   print(`before: ${price.toString()}`)
   fetchPrice()
   print(`after: ${price.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

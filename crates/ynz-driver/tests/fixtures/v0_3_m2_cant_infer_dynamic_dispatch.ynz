@@ -4,22 +4,22 @@
 // Expected: exits 1 with a can't-infer error mentioning "dynamic-dispatch".
 
 shape Worker {
-  doWork(share self) -> nothing
+  doWork(share self) -> Nothing
 }
 
 shape FastWorker follows Worker {
-  speed: int
+  speed: Int
 }
 
-function doWork(share self: FastWorker) -> nothing {
+function doWork(share self: FastWorker) -> Nothing {
   print(`fast worker done`)
 }
 
-function runWithDynamicWorker(w: dynamic Worker) -> nothing {
+function runWithDynamicWorker(w: dynamic Worker) -> Nothing {
   sleep(10)
   w.doWork()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(`should not reach here`)
 }

@@ -19,8 +19,8 @@
 // repeated runs); O0 printed `haul: 0/1`.
 
 shape Cargo {
-  weight: int
-  tag: int
+  weight: Int
+  tag: Int
 }
 
 function makeCargo() -> Cargo {
@@ -31,23 +31,23 @@ function identity<T>(give value: T) -> T {
   return value
 }
 
-function haul(self: Cargo) -> nothing {
+function haul(self: Cargo) -> Nothing {
   sleepBlocking(150)
   print(`haul: ${self.weight}/${self.tag}`)
 }
 
-function spawner() -> nothing {
+function spawner() -> Nothing {
   background identity(makeCargo()).haul()
 }
 
-function stomp() -> nothing {
+function stomp() -> Nothing {
   let junkA: Cargo = { weight: 777777, tag: 777888 }
   let junkB: Cargo = { weight: 888777, tag: 888888 }
-  let sum: int = junkA.weight + junkB.tag
+  let sum: Int = junkA.weight + junkB.tag
   print(`stomp: ${sum}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   spawner()
   stomp()
   stomp()

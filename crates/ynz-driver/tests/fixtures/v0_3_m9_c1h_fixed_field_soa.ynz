@@ -2,13 +2,13 @@
 // Expected output: 4970, 7
 
 shape Point {
-  x: int
-  y: int
-  trail: fixed<int, 3>
+  x: Int
+  y: Int
+  trail: Fixed<Int, 3>
 }
 
-function entrypoint() -> nothing {
-  let points: array<Point> = [
+function entrypoint() -> Nothing {
+  let points: Array<Point> = [
     { x: 1, y: 1, trail: [1, 2, 3] },
     { x: 2, y: 1, trail: [2, 2, 3] },
     { x: 3, y: 1, trail: [3, 2, 3] },
@@ -80,7 +80,7 @@ function entrypoint() -> nothing {
     { x: 69, y: 1, trail: [69, 2, 3] },
     { x: 70, y: 1, trail: [70, 2, 3] },
   ]
-  let sum: int = 0
+  let sum: Int = 0
   for (point in points) {
     sum = sum + point.x + point.trail[0].or(0)
   }

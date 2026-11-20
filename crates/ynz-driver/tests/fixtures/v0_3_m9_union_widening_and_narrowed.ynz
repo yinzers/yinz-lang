@@ -13,23 +13,23 @@
 // reject them.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function showBig(share b: Big) -> string {
+function showBig(share b: Big) -> String {
   return b.label
 }
 
-function useBig(share first: Big, share second: Big) -> string {
+function useBig(share first: Big, share second: Big) -> String {
   return second.label
 }
 
-function pick<T>(share first: T, share b: Big) -> string {
+function pick<T>(share first: T, share b: Big) -> String {
   return b.label
 }
 
@@ -41,7 +41,7 @@ function fallback<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function describe(share t: Thing) -> string {
+function describe(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -53,11 +53,11 @@ function describe(share t: Thing) -> string {
   return `none`
 }
 
-function describeTable(share table: map<string, string> | nothing) -> string {
+function describeTable(share table: Map<String, String> | Nothing) -> String {
   return `ok`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   let thing: Thing = big.copy()
@@ -75,9 +75,9 @@ function entrypoint() -> nothing {
   }
   print(showBig(big))
   print(describe(same(thing, other)))
-  let table: map<string, string> = { `a`: `b` }
+  let table: Map<String, String> = { `a`: `b` }
   print(describeTable(table))
-  let maybeTable: map<string, string> | nothing = table.copy()
+  let maybeTable: Map<String, String> | Nothing = table.copy()
   print(describeTable(fallback(maybeTable, table)))
   print(`end`)
 }
