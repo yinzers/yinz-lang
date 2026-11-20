@@ -148,7 +148,7 @@ function findErrors(path: string) -> array<string> errors {
 
 `file.lines()` returns a `FallibleIterable<string>`. It reads one line at a time, and any read can fail (disk error, file closed mid-read, and so on). Because the function is marked `errors`, a failed read ends the function and passes the failure to the caller, just like a failed call to any other `errors` function.
 
-If you want to keep reading past failures (for example, log them and carry on), use one of these adapters:
+If you want to keep reading past failures (for example, log them and carry on), use one of these adapters (functions that wrap the lines and change what happens when a read fails):
 
 ```ynz
 // Skip lines that failed to read — drops each failure and moves on

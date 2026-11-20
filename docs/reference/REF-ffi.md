@@ -53,11 +53,5 @@ The foreign call never escapes the wrapper. That keeps unchecked code in one pla
 The compiler cannot see what a foreign function does. It cannot check it for ownership mistakes or for problems when two tasks run at the same time. So:
 
 - **Every foreign call needs `wait`.** The compiler can't tell whether it is safe to run the call alongside other work.
-- **Foreign calls never run at the same time as other lines on their own.**
+- **The compiler never runs a foreign call at the same time as other code on its own.**
 - **The compiler warns on every foreign call:** `Foreign call: compiler cannot verify memory safety. Consider wrapping in a safe Yinz function.`
-
----
-
-## Mapping C types to Yinz types
-
-How C types such as `void*`, `char*` and raw pointers map to Yinz types is not decided yet, so this page does not cover it.
