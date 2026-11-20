@@ -1,6 +1,6 @@
 ---
 name: "REF-maybe"
-description: "Some values might not exist. maybe lets you say that in the type system, so the compiler can make sure you handle it."
+description: "Some values might not exist. Maybe lets you say that in the type system, so the compiler can make sure you handle it."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -13,7 +13,7 @@ metadata:
 
 # Maybe Types
 
-Some values might not exist. `maybe` lets you say that in the type system, so the compiler can make sure you handle it.
+Some values might not exist. `Maybe` lets you say that in the type system, so the compiler can make sure you handle it.
 
 ---
 
@@ -23,32 +23,32 @@ A value can be missing: a player with no nickname, a file with no contents, a lo
 
 ---
 
-## maybe<T> — a value that might not exist
+## Maybe<T> — a value that might not exist
 
 ```
-let name: string = `Patrick`             // always has a value, guaranteed
-let nickname: maybe<string> = none       // might not have a value
+let name: String = `Patrick`             // always has a value, guaranteed
+let nickname: Maybe<String> = none       // might not have a value
 ```
 
-`maybe<string>` means: this is either a `string` or it's `none`. The compiler makes you handle the `none` case before you use the value.
+`Maybe<String>` means: this is either a `String` or it's `none`. The compiler makes you handle the `none` case before you use the value.
 
 ---
 
 ## none — the absent value
 
-`none` is the built-in value for "nothing here." It only works with `maybe` types:
+`none` is the built-in value for "nothing here." It only works with `Maybe` types:
 
 ```
-let name: string = none
-// COMPILE ERROR: string cannot be none.
-// Use maybe<string> if the value is optional.
+let name: String = none
+// COMPILE ERROR: String cannot be none.
+// Use Maybe<String> if the value is optional.
 
-let name: maybe<string> = none    // fine
+let name: Maybe<String> = none    // fine
 ```
 
 ---
 
-## Accessing a maybe value
+## Accessing a `Maybe` value
 
 Three ways:
 
@@ -70,7 +70,7 @@ let display = nickname.or(`Anonymous`)    // get the value or a fallback
 
 ```
 print(nickname.value)
-// COMPILE ERROR: nickname is maybe<string> — value might be none.
+// COMPILE ERROR: nickname is Maybe<String> — value might be none.
 // Use nickname.or(default) or check nickname.exists() first.
 ```
 
@@ -79,12 +79,12 @@ print(nickname.value)
 ## In function signatures
 
 ```
-function findPlayer(share roster: fixed<Player>, name: string) -> maybe<Player> {
-  return roster.find(player => player.name == name)    // .find() returns maybe<T>
+function findPlayer(share roster: Fixed<Player>, name: String) -> Maybe<Player> {
+  return roster.find(player => player.name == name)    // .find() returns Maybe<T>
 }
 ```
 
-The caller must handle the `maybe`:
+The caller must handle the `Maybe`:
 
 ```
 let player = findPlayer(roster, `Alice`)
@@ -101,24 +101,24 @@ if (player.exists()) {
 
 ---
 
-## `maybe<T>` and `T | none`
+## `Maybe<T>` and `T | none`
 
-`maybe<string>` is the same type as `string | none`. They're interchangeable:
+`Maybe<String>` is the same type as `String | none`. They're interchangeable:
 
 ```
-let a: maybe<string> = none
-let b: string | none = none
+let a: Maybe<String> = none
+let b: String | none = none
 // a and b are the same type — either works
 ```
 
-`maybe` exists because it's shorter and reads more naturally. See [Unions](REF-unions.md).
+`Maybe` exists because it's shorter and reads more naturally. See [Unions](REF-unions.md).
 
 ---
 
-## Functions you can call on a maybe
+## Functions you can call on a `Maybe`
 
 ```
-value.exists()      // does it have a value? → boolean
+value.exists()      // does it have a value? → Boolean
 value.or(default)   // get the value, or the fallback if none → T
 value.value         // get the value (compile error without an exists() check)
 ```
@@ -130,11 +130,11 @@ value.value         // get the value (compile error without an exists() check)
 After an early return, the compiler also knows `.value` is safe. You don't need to put the rest of your code inside the `if` block:
 
 ```
-function firstOr(nums: share array<int>) -> int {
-  let r = nums.first()               // maybe<int>
+function firstOr(nums: share Array<Int>) -> Int {
+  let r = nums.first()               // Maybe<Int>
   if (!r.exists()) { return -1 }     // leaves the function — below this line r must have a value
   return r.value                     // safe: you only get here if r.exists() was true
 }
 ```
 
-The early exit must use `return`, `panic`, or an endless `loop`. Those are the only ways the compiler can be sure the function never continues. A normal call to a function that returns `nothing` doesn't count.
+The early exit must use `return`, `panic`, or an endless `loop`. Those are the only ways the compiler can be sure the function never continues. A normal call to a function that returns `Nothing` doesn't count.
