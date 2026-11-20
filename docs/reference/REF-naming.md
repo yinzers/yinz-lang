@@ -68,7 +68,7 @@ A name can exist in both casings. `Date` is the type, `date` is the module. `Res
 | `Channel<T>` | A line for passing values between tasks |
 | `Nothing` | What a function returns when it returns no value: `-> Nothing` |
 
-`Nothing` is an ordinary type name, not a keyword. A function, module or variable can use the lowercase spelling of a type name. A variable called `number` is fine, and `.map(...)` is still the function that transforms a collection.
+`Nothing` is an ordinary type name, not a keyword. A function, module or variable can use the lowercase spelling of a type name. A variable called `number` is fine.
 
 ### Old lowercase type names
 
