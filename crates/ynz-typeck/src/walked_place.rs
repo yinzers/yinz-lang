@@ -705,10 +705,9 @@ mod tests {
         );
         assert_eq!(written["reader"], vec![Vec::<WrittenPlace>::new()]);
         assert_eq!(written["forwarded"], vec![vec![vec![field("rows")]]]);
-        assert_eq!(
-            written["viaView"],
-            vec![vec![vec![field("rows"), WrittenStep::Element(Some(1))]]]
-        );
+        // A read that is written is a copy (`non_owned_reads` rule (a)): `view[1] = ...` changes
+        // the view's own value, never `holder.rows`.
+        assert_eq!(written["viaView"], vec![Vec::<WrittenPlace>::new()]);
         assert_eq!(
             written["twoParameters"],
             vec![Vec::<WrittenPlace>::new(), vec![vec![field("name")]]]
