@@ -19,7 +19,7 @@ Some values might not exist. `maybe` lets you say that in the type system, so th
 
 ## The problem
 
-In a lot of languages, any variable can be `null` — and you only find out at runtime when your program crashes. Yinz makes absence explicit in the type, so the compiler catches it before the code ever runs.
+A value can be missing: a player with no nickname, a file with no contents, a lookup that finds nothing. Yinz makes absence explicit in the type, so the compiler catches a missing value before the code ever runs.
 
 ---
 

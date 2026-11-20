@@ -156,9 +156,7 @@ p.x = 99.0
 // not p itself.
 ```
 
-If you're coming from JavaScript, watch out: this is the opposite of what you're used to.
-In JavaScript, the array and `p` would share one object, so setting `p.x = 99.0` would change
-what the array sees. In Yinz, the stored copy keeps the values it had when you stored it.
+The stored copy keeps the values it had when you stored it.
 
 To change a stored element, write through the collection:
 

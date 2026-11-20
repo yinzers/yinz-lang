@@ -134,7 +134,7 @@ One assignment operator: `=`. Makes mutations visible and explicit.
 12. ||                   // boolean OR
 ```
 
-Same as C/Java/JavaScript. When in doubt, add parentheses.
+When in doubt, add parentheses.
 
 The IDE hints when precedence might be misread:
 
@@ -263,9 +263,9 @@ print(player)    // Alice (HP: 100)
 
 ---
 
-## No `===` triple equals
+## Comparing with `==`
 
-`==` is always type-safe. Comparing incompatible types is a compile error:
+`==` checks the types as well as the values. Comparing incompatible types is a compile error:
 
 ```
 let a: string = "5"

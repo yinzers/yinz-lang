@@ -33,18 +33,11 @@ A diagnostic that fails to answer all three is incomplete. Suggestions that just
 
 ## Why this matters
 
-Most languages teach you the LANGUAGE. Yinz wants to teach you to be a BETTER PROGRAMMER through the language.
+A language can teach you its syntax. Yinz also wants to teach you to be a BETTER PROGRAMMER while you use it.
 
-Current CS-101 teaching languages all have problems:
+Yinz combines four things: **easy syntax**, **real systems skills** (ownership, no garbage collector, native compilation), **compile-time safety** (the compiler catches errors before you run the program), and an **editor that explains everything**. The teaching mission makes this combination explicit.
 
-- **Python** — easy to learn, but no types, no compilation, no real systems exposure. Students learn nothing about how computers actually work.
-- **Java** — full of ceremony (`public static void main(String[] args)`) and outdated patterns (anonymous inner classes, factory factories).
-- **C/C++** — teaches systems thinking but the learning curve is brutal and modern tooling is missing.
-- **Rust** — teaches ownership but the borrow checker punishes beginners and most universities can't fit it in one semester.
-
-Yinz's unique combination: **easy syntax (Python-tier learning curve) + real systems exposure (ownership, no GC, native compilation) + compile-time safety (catches errors before run) + IDE that explains everything.** No current language has all four. The teaching mission makes this combination explicit.
-
-**Long-term aspiration:** Yinz becomes a CS-101 teaching language because it's both approachable AND production-grade. Students learn real systems concepts (ownership, type safety, exact arithmetic) without the brutal learning curve of Rust or C++, and graduate with a language they can actually ship code in.
+**Long-term aspiration:** Yinz becomes a CS-101 teaching language because it's both approachable AND production-grade. Students learn real systems concepts (ownership, type safety, exact arithmetic) and graduate with a language they can actually ship code in.
 
 ---
 

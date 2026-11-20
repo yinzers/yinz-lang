@@ -30,7 +30,7 @@ Before applying the 13 rules, internalize this: **Yinz is data shapes + standalo
 - `follows` is checked by **structural function-signature matching** — a shape follows a contract when standalone functions with matching signatures exist.
 - `dynamic Foo` provides runtime polymorphism via a per-(shape, contract) function-pointer table; static dispatch when concrete type is known.
 
-This is a deliberate alignment with Rust/Go (zero per-instance method storage; ownership tracking simpler) and away from Java/Swift (no implicit `this` binding; no virtual dispatch by default). The TypeScript-friendly part is preserved by UFCS — `player.heal(20)` reads like a TS method call but compiles to the standalone function `heal(player, 20)`.
+Values store no methods, so there is no per-value method storage, and ownership stays simple. Dispatch is static unless you ask for `dynamic`. `player.heal(20)` compiles to the standalone function `heal(player, 20)`.
 
 Canonical rule: [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md).
 
@@ -41,7 +41,7 @@ When the 13 rules below mention "method" or "dispatch," apply them with the non-
 **1. No garbage collector**
 Ownership-based memory management only. One memory model, no two-tier complexity.
 
-*Why*: GCs add unpredictable pauses, 2-3x memory overhead, and a second conceptual model ("I write the code but the GC cleans up sometimes"). Ownership is deterministic and has zero runtime overhead. It's also one of the things that makes Go and Java unsuitable for low-latency systems.
+*Why*: GCs add unpredictable pauses, 2-3x memory overhead, and a second conceptual model ("I write the code but the GC cleans up sometimes"). Ownership is deterministic and has zero runtime overhead.
 
 ---
 
@@ -84,7 +84,7 @@ The teaching mission is a first-class language goal — see [`docs/reference/REF
 **4. Self-documenting syntax**
 Every keyword, function, and pattern should be readable by a junior developer who has never seen Yinz. If someone needs docs to understand what a line does, the design failed.
 
-*Why*: The single biggest barrier to Rust adoption is its syntax. Yinz's `lend` keyword in a signature vs Rust's `&mut name`. Both express the same concept — one is guessable, one isn't. Every design decision should aim for guessable.
+*Why*: A keyword you can guess beats one you must look up. `lend` in a signature says "this function borrows the value to change it" in one plain word. Every design decision should aim for guessable.
 
 ---
 
@@ -93,7 +93,7 @@ Every keyword, function, and pattern should be readable by a junior developer wh
 
 *Why*: The stated goal is accessibility to junior developers. Every term that requires CS background knowledge is a barrier to entry. Plain English words are memorable, guessable, and require no prior knowledge.
 
-**Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Result = Success | Failure`, matching TypeScript convention. `or` is a prose word, while `|` is unambiguous and familiar from TypeScript. Boolean operators are symbols too: `&&`, `||`, `!`.
+**Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Result = Success | Failure`. `or` is a prose word, while `|` is unambiguous. Boolean operators are symbols too: `&&`, `||`, `!`.
 
 ---
 
@@ -147,7 +147,7 @@ Scan any line of code. Capital letter = type. No capital = not a type. Modules a
 **11. Dot-first design**
 If something can be `.method()` with autocomplete, it should be. No cryptic symbols, no keywords to memorize.
 
-*Why*: Autocomplete teaches the language. A developer who types `.` after a value sees all functions whose first parameter type matches that value (UFCS sugar — see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md)). No documentation lookup needed. Rust's `&'a mut` requires memorization; `player.heal(20)` (UFCS sugar for `heal(player, 20)`) shows up when you type `.` on a Player.
+*Why*: Autocomplete teaches the language. A developer who types `.` after a value sees all functions whose first parameter type matches that value (UFCS sugar — see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md)). No documentation lookup needed. `player.heal(20)` (sugar for `heal(player, 20)`) shows up when you type `.` on a Player.
 
 ---
 

@@ -31,15 +31,11 @@ Use `number` for anything where the exact value matters: money, measurements, us
 
 ---
 
-## Why binary floats produce errors (and number doesn't)
+## Why `float` rounds and `number` doesn't
 
-You may have seen this in JavaScript or Python:
+Adding `0.1 + 0.2` with binary floating point gives `0.30000000000000004`, not `0.3`.
 
-```
-0.1 + 0.2 === 0.30000000000000004    // JavaScript
-```
-
-That isn't a bug. It happens because most modern languages use **binary floating point** to store decimal numbers, and most decimals can't be represented exactly in binary.
+That isn't a bug. `float` uses **binary floating point** to store decimal numbers, and most decimals can't be represented exactly in binary.
 
 It's the same reason `1/3` in regular decimal is `0.3333333...` forever — base 10 can't divide cleanly. In base 2 (binary), `0.1` is:
 
@@ -111,7 +107,7 @@ let low: number<34> = high
 
 ## float — fast binary arithmetic (opt-in)
 
-`float` uses binary floating point — the same as most other languages. Faster than `number`, but produces the same binary-rounding errors described above:
+`float` uses binary floating point. It is faster than `number`, but it has the binary-rounding errors described above:
 
 ```
 let velocity: float = 9.81 * 2.5    // fast — tiny rounding is acceptable here

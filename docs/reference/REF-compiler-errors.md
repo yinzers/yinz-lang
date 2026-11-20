@@ -52,7 +52,7 @@ These words should NEVER appear in user-facing diagnostics. They require CS back
 | polymorphic | "works with any type", "is generic" |
 | monomorphize, monomorphic | "make a separate version for each type used", "specialized" |
 | covariant, contravariant | "fits anywhere a parent type fits" / "works in reverse" |
-| lifetime (Rust sense) | "how long this value stays around", "how long this exists" |
+| lifetime | "how long this value stays around", "how long this exists" |
 | deref, dereference | "look up the value", "follow the reference" |
 | alias (when not the syntax keyword) | "another name for the same thing" |
 | shadow, shadowing | "using the same name as something declared outside this block" |

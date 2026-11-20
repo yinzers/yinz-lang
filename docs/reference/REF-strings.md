@@ -232,7 +232,7 @@ This is called NFC canonical equivalence. You never need to think about it for n
 
 ---
 
-## Common mistakes from other languages
+## Other quote styles are errors
 
 **Single quotes (`'...'`) are not string delimiters in Yinz:**
 

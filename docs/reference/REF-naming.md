@@ -1,6 +1,6 @@
 ---
 name: "REF-naming"
-description: "Design rationale for Yinz's human-readable keyword naming choices (e.g. nothing, none, shape, follows) over traditional CS jargon, per Golden Rule 5."
+description: "The plain-English keywords Yinz uses (nothing, none, shape, follows and more), what each one means, and how names are capitalized."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -11,31 +11,27 @@ metadata:
   type: "reference"
 ---
 
-# Naming — Design Decisions
+# Naming
 
-User spec: [`docs/reference/REF-language-overview.md`](REF-language-overview.md) (golden rules), [`.claude/rules/vocabulary.md`](../../.claude/rules/vocabulary.md)
+Yinz uses plain English words for its keywords, and capital letters to mark types.
 
 ---
 
-## Human-Readable Keywords over Programmer Jargon
+## Keywords in plain English
 
-Use plain English words instead of CS terms throughout the language:
-
-| CS term | Yinz term | Why |
-|---------|-----------|-----|
-| `void` | `nothing` | Reads like English |
-| `null` / `undefined` | `none` with `maybe` | Explicit optionality |
-| `struct` / `class` / `interface` | `shape` | One concept, one word |
-| `enum` | `options` | Non-programmers understand it |
-| `abstract` | `base` | "Base type you build on" |
-| `implements` | `follows` | "Player follows Damageable" |
-| `\|` (union) | `\|` | Same as TypeScript — `Circle \| Square` |
-| `typeof` / `instanceof` | `is` | "if shape is Circle" |
-| `fn` | `function` | Spell it out |
-| `&T` / `&mut T` | `share` / `lend` | Keywords written in function signatures only |
-| `Result<T,E>` / `?` | `errors` keyword | Auto-propagation |
-
-**Why**: Golden Rule 5. Every keyword that requires CS background knowledge is a barrier to junior developers. Keywords that read like plain English lower the learning curve and make code self-documenting.
+| Yinz keyword | What it means | Reads as |
+|--------------|---------------|----------|
+| `nothing` | A function returns no value | `-> nothing` |
+| `none` and `maybe` | A value might be absent | `maybe<string>`: a string, or `none` |
+| `shape` | Declares a data structure | `shape Player { name: string }` |
+| `options` | A fixed set of named values | `options Status { active, banned }` |
+| `base` | A shape that you build on and never create directly | `base shape` |
+| `follows` | A shape meets a contract | "Player follows Damageable" |
+| `\|` | A value can be one of several shapes | `Circle \| Square` |
+| `is` | Asks which kind a union value is | "if shape is Circle" |
+| `function` | Declares a function | `function heal(...)` |
+| `share` and `lend` | How a function uses a value it receives; written in function signatures only | `share player: Player` |
+| `errors` | A function can fail, and the failure flows up to the caller automatically | `-> string errors` |
 
 ---
 

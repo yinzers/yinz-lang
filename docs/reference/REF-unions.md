@@ -27,7 +27,7 @@ shape Triangle { base: number, height: number }
 shape Shape = Circle | Square | Triangle
 ```
 
-`|` separates the variants. Same as TypeScript. Reads as "Circle | Square | Triangle."
+`|` separates the variants. It reads as "Circle or Square or Triangle."
 
 ---
 
@@ -137,9 +137,10 @@ Missing a variant is a compile error. The compiler names which ones are missing:
 
 ---
 
-## `|` not words
+## Write unions with `|`
 
 ```
-shape Shape = Circle | Square | Triangle    // correct
-shape Shape = Circle | Square | Triangle  // COMPILE ERROR: use | for union types
+shape Shape = Circle | Square | Triangle
 ```
+
+Use the `|` symbol between variants. Words such as `or` are not accepted.

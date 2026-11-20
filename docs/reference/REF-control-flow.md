@@ -34,7 +34,7 @@ Parentheses around the condition are required. Curly braces always required.
 There is no `else` block. Instead, use early returns to handle one case and fall through to the other:
 
 ```
-// Instead of if/else — early return pattern
+// Early return pattern
 function describe(share player: Player) -> string {
   if (player.health <= 0) {
     return `dead`
@@ -99,7 +99,7 @@ if (active && (isAdmin || isModerator) && !banned) {
 }
 ```
 
-Standard symbols — the same as JavaScript and TypeScript.
+Boolean conditions use three symbols:
 
 | Symbol | Meaning |
 |--------|---------|

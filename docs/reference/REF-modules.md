@@ -43,7 +43,7 @@ function validateEmail(email: string) -> boolean {
 }
 ```
 
-Two states: exported or private. No `pub`, no `pub(crate)`, no visibility modifiers. Just `export` or nothing.
+Two states: exported or private. Write `export` to share something, or nothing to keep it private.
 
 ---
 
@@ -85,7 +85,7 @@ let newUser = users.createUser(data)
 
 Use this when you use many things from the same file, or when you want the origin visible at every call site.
 
-**Note for JavaScript developers**: In JavaScript, `import X from "..."` is a default import. In Yinz, there are no default exports — this syntax imports the entire module as a namespace object. Same syntax, different meaning. `users.fetchUser()` means "call `fetchUser` from the `users` module," not "call a method on a default export."
+This form imports the whole module under one name. `users.fetchUser()` means "call `fetchUser` from the `users` module." Yinz has no default exports.
 
 Both import styles tree-shake the same way. The compiler traces which functions you actually call and strips everything else.
 
@@ -168,7 +168,7 @@ let user = users.fetchUser(id)
 let admin = admins.fetchUser(id)    // no conflict — the module name makes it clear
 ```
 
-**If you forget to alias a collision, the compiler refuses to guess.** Last-import-wins (the JavaScript / TypeScript behavior) would silently change which value is used when imports are reordered — that's a bug factory. Yinz errors at the import site and forces you to pick:
+**If two imports collide and you don't rename one, the compiler refuses to guess.** It reports an error at the import site and asks you to pick:
 
 ```
 import { Player } from `models/game`
