@@ -27,8 +27,6 @@ impl<T> Spanned<T> {
 pub enum Token {
     /// The `function` keyword.
     Function,
-    /// The `nothing` return type keyword.
-    Nothing,
     /// An identifier: a letter or underscore followed by letters, digits, or underscores.
     Identifier(String),
     /// A string literal: the raw UTF-8 bytes between the quotes, unescaped.

@@ -204,7 +204,7 @@ mod tests {
     fn test_int_annotated_let() {
         // WHY: Verifies annotated `let score: int` is resolved to Type::Int
         //      so after-dot completion narrows to int methods.
-        let src = "function entrypoint() -> nothing {\n  let score: int = 5\n  score\n}";
+        let src = "function entrypoint() -> Nothing {\n  let score: Int = 5\n  score\n}";
         let (db, sf) = make_db_with("test.ynz", src);
         // offset of "score" in the let binding name
         let score_offset = src.find("score").unwrap();
@@ -214,8 +214,8 @@ mod tests {
 
     #[test]
     fn test_float_annotated_let() {
-        // WHY: float type annotation should narrow to Type::Float.
-        let src = "function entrypoint() -> nothing {\n  let ratio: float = 1.5\n}";
+        // WHY: Float type annotation should narrow to Type::Float.
+        let src = "function entrypoint() -> Nothing {\n  let ratio: Float = 1.5\n}";
         let (db, sf) = make_db_with("test.ynz", src);
         let ratio_offset = src.find("ratio").unwrap();
         let ty = type_of_expression_at_offset(&db, sf, ratio_offset);
@@ -226,7 +226,7 @@ mod tests {
     fn test_param_type_resolved() {
         // WHY: function parameters with type annotations should narrow completion
         //      the same way let-bindings do.
-        let src = "function greet(share self: int) -> nothing { }";
+        let src = "function greet(share self: Int) -> Nothing { }";
         let (db, sf) = make_db_with("test.ynz", src);
         let self_offset = src.find("self").unwrap();
         let ty = type_of_expression_at_offset(&db, sf, self_offset);
@@ -237,7 +237,7 @@ mod tests {
     fn test_unannotated_let_returns_none() {
         // WHY: unannotated bindings require full inference; this pass returns None,
         //      which causes completion to show all primitive methods (safe fallback).
-        let src = "function entrypoint() -> nothing {\n  let x = 5\n}";
+        let src = "function entrypoint() -> Nothing {\n  let x = 5\n}";
         let (db, sf) = make_db_with("test.ynz", src);
         let x_offset = src.find("x = ").unwrap();
         let ty = type_of_expression_at_offset(&db, sf, x_offset);
@@ -248,7 +248,7 @@ mod tests {
     fn test_shape_type_annotation() {
         // WHY: shape types are returned as Type::Shape so hover can look up doc comments;
         //      they don't narrow primitive completion (no primitive methods on shapes).
-        let src = "function foo(p: Player) -> nothing { }";
+        let src = "function foo(p: Player) -> Nothing { }";
         let (db, sf) = make_db_with("test.ynz", src);
         let p_offset = src.find('p').unwrap();
         let ty = type_of_expression_at_offset(&db, sf, p_offset);

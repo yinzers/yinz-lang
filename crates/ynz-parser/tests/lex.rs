@@ -71,13 +71,14 @@ fn m4_token_variant_count_locked() {
     //   Note: Override was NOT added — the non-OOP model removed it;
     //         function overloading by argument type replaces it.
     //   Total M1+M2+M3+M4: 49 + 8 = 57
-    let expected_count = 57usize;
+    // test-ratchet: PascalCase built-ins — `nothing` stops being a keyword (`Nothing` is an
+    // ordinary type name), so every milestone total drops by one: 57 - 1 = 56
+    let expected_count = 56usize;
 
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
         Function,
-        Nothing,
         Identifier("x".into()),
         StringLit(vec![]),
         LParen,
@@ -152,13 +153,13 @@ fn m5_token_variant_count_locked() {
     // test-ratchet: M5 P1 adds 1 variant over M4's 57:
     //   Keyword (1): None (for the `none` literal value of `maybe<T>`)
     //   Total M1+M2+M3+M4+M5: 57 + 1 = 58
-    let expected_count = 58usize;
+    // test-ratchet: PascalCase built-ins — the `Nothing` token is removed: 58 - 1 = 57
+    let expected_count = 57usize;
 
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
         Function,
-        Nothing,
         Identifier("x".into()),
         StringLit(vec![]),
         LParen,
@@ -235,7 +236,7 @@ fn m1_source_produces_expected_tokens() {
     //
     // test-ratchet: M7 P1 migrates source to backtick syntax — double-quotes now
     // produce an error diagnostic so the snapshot must use backtick strings.
-    let source = "function entrypoint() -> nothing { print(`hello, yinz`) }";
+    let source = "function entrypoint() -> Nothing { print(`hello, yinz`) }";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m1_token_stream", tokens);
 }
@@ -244,9 +245,9 @@ fn m1_source_produces_expected_tokens() {
 fn m2_source_produces_expected_tokens() {
     // WHY: This is the exact token stream Phase 3 (parser) depends on for the
     // M2 smoke test. A silent change here means the parser's expectations break.
-    let source = r#"function entrypoint() -> nothing {
+    let source = r#"function entrypoint() -> Nothing {
   let price = 0.1 + 0.2
-  let count: int = 42
+  let count: Int = 42
   let active = true
   print(price)
   print(count * count - 1)
@@ -361,8 +362,8 @@ fn arrow_still_works() {
     // WHY: `->` must still produce Arrow in M2. The `-` arm checks for `>`
     // first so `->` beats the new `Minus` token.
     assert_eq!(
-        lex_tokens("-> nothing"),
-        vec![Token::Arrow, Token::Nothing, Token::Eof]
+        lex_tokens("-> Nothing"),
+        vec![Token::Arrow, Token::Identifier("nothing".into()), Token::Eof]
     );
 }
 
@@ -572,7 +573,7 @@ fn token_spans_reconstruct_lexemes() {
     // test-ratchet: M7 P1 changes the source to use backtick strings (double-quotes
     // now produce an error diagnostic). New Token variants are added to the exhaustive
     // match so the test remains a full-coverage span check.
-    let source = r#"function entrypoint() -> nothing { print(`hello`) }"#;
+    let source = r#"function entrypoint() -> Nothing { print(`hello`) }"#;
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
     let output = lex_query(&db, sf);
@@ -584,7 +585,6 @@ fn token_spans_reconstruct_lexemes() {
         let reconstructed = &source[spanned.span.start..spanned.span.end];
         match &spanned.value {
             Token::Function => assert_eq!(reconstructed, "function"),
-            Token::Nothing => assert_eq!(reconstructed, "nothing"),
             Token::LParen => assert_eq!(reconstructed, "("),
             Token::RParen => assert_eq!(reconstructed, ")"),
             Token::LBrace => assert_eq!(reconstructed, "{"),
@@ -674,7 +674,7 @@ fn token_spans_reconstruct_lexemes() {
 fn m2_token_spans_cover_source() {
     // WHY: M2 tokens must have accurate spans so ariadne can point at the right
     // character for every error involving an operator, literal, or keyword.
-    let source = "let x: int = 42 + 0xFF";
+    let source = "let x: Int = 42 + 0xFF";
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
     let output = lex_query(&db, sf);
@@ -713,7 +713,7 @@ fn whitespace_only_source_produces_only_eof() {
 fn unknown_char_produces_diagnostic_and_continues() {
     // WHY: The lexer must not bail on the first unknown character. A broken
     // file should show all its errors at once, not just the first.
-    let source = r#"function entrypoint() -> nothing { print($) }"#;
+    let source = r#"function entrypoint() -> Nothing { print($) }"#;
     let (token_count, diag_count) = lex_counts(source);
     assert_eq!(
         diag_count, 1,
@@ -729,7 +729,7 @@ fn unknown_char_produces_diagnostic_and_continues() {
 fn unterminated_string_produces_diagnostic_and_continues() {
     // WHY: Parser must not panic on unterminated strings — it needs a
     // complete token stream to detect all parse errors at once.
-    let source = r#"function entrypoint() -> nothing { print("oops) }"#;
+    let source = r#"function entrypoint() -> Nothing { print("oops) }"#;
     let (token_count, diag_count) = lex_counts(source);
     assert_eq!(
         diag_count, 1,
@@ -749,7 +749,7 @@ fn non_ascii_bytes_inside_string_lex_clean() {
     // test-ratchet: M7 P1 — migrated from double-quoted to backtick syntax.
     // Double-quotes now produce a diagnostic; backtick strings carry raw bytes.
     // The token is now BacktickString instead of StringLit.
-    let source = "function entrypoint() -> nothing { print(`café`) }";
+    let source = "function entrypoint() -> Nothing { print(`café`) }";
     let (token_count, diag_count) = lex_counts(source);
     assert_eq!(
         diag_count, 0,
@@ -1086,7 +1086,7 @@ fn m4_source_produces_expected_tokens() {
     // token kinds in a realistic shape-declaration context.
     //
     // test-ratchet: M7 P1 migrates source to backtick syntax.
-    let source = "base shape Entity {\n  name: string\n}\n\nshape Player extends Entity follows Damageable {\n  hidden cache: int\n}\n\nfunction greet(share self: Player) -> string {\n  return self.name\n}\n\nfunction example() -> nothing {\n  let p: Player = { name: `Patrick`, cache: 0 }\n  let d: dynamic Damageable = p\n  print(greet(p))\n}";
+    let source = "base shape Entity {\n  name: String\n}\n\nshape Player extends Entity follows Damageable {\n  hidden cache: Int\n}\n\nfunction greet(share self: Player) -> String {\n  return self.name\n}\n\nfunction example() -> Nothing {\n  let p: Player = { name: `Patrick`, cache: 0 }\n  let d: dynamic Damageable = p\n  print(greet(p))\n}";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m4_token_stream", tokens);
 }
@@ -1166,7 +1166,7 @@ fn m3_source_produces_expected_tokens() {
     // immediately visible. The source exercises all seven new token kinds.
     //
     // test-ratchet: M7 P1 migrates source to backtick syntax.
-    let source = "function fib(n: int) -> int {\n  if (n < 2) {\n    return n\n  }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfunction entrypoint() -> nothing {\n  let result = fib(10)\n  while (result > 0) {\n    result = result - 1\n  }\n  for (i in range(0, 5)) {\n    if (i) {\n      0 => print(`zero`)\n      else => print(`nonzero`)\n    }\n  }\n}";
+    let source = "function fib(n: Int) -> Int {\n  if (n < 2) {\n    return n\n  }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfunction entrypoint() -> Nothing {\n  let result = fib(10)\n  while (result > 0) {\n    result = result - 1\n  }\n  for (i in range(0, 5)) {\n    if (i) {\n      0 => print(`zero`)\n      else => print(`nonzero`)\n    }\n  }\n}";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m3_token_stream", tokens);
 }
@@ -1180,7 +1180,7 @@ fn changing_source_text_invalidates_cache() {
     let sf = SourceFile::new(
         &db,
         FILE.to_string(),
-        "function entrypoint() -> nothing { }".to_string(),
+        "function entrypoint() -> Nothing { }".to_string(),
     );
 
     let output1 = lex_query(&db, sf);
@@ -1188,7 +1188,7 @@ fn changing_source_text_invalidates_cache() {
 
     // test-ratchet: M7 P1 — migrated to backtick syntax
     sf.set_text(&mut db)
-        .to("function entrypoint() -> nothing { print(`hello`) }".to_string());
+        .to("function entrypoint() -> Nothing { print(`hello`) }".to_string());
 
     let output2 = lex_query(&db, sf);
     let token_count_2 = output2.tokens.len();
@@ -1208,13 +1208,13 @@ fn m6_token_variant_count_locked() {
     // test-ratchet: M6 P1 adds 2 variants over M5's 58:
     //   Keyword (2): Options (`options` declaration keyword), Is (`is` type-narrowing keyword)
     //   Total M1+M2+M3+M4+M5+M6: 58 + 2 = 60
-    let expected_count = 60usize;
+    // test-ratchet: PascalCase built-ins — the `Nothing` token is removed: 60 - 1 = 59
+    let expected_count = 59usize;
 
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
         Function,
-        Nothing,
         Identifier("x".into()),
         StringLit(vec![]),
         LParen,
@@ -1344,13 +1344,13 @@ fn m7_token_variant_count_locked() {
     // test-ratchet: M7 P1 adds 4 variants over M6's 60:
     //   BacktickString, InterpolationStart, InterpolationEnd, Errors
     //   Total M1+M2+M3+M4+M5+M6+M7: 60 + 4 = 64
-    let expected_count = 64usize;
+    // test-ratchet: PascalCase built-ins — the `Nothing` token is removed: 64 - 1 = 63
+    let expected_count = 63usize;
 
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
         Function,
-        Nothing,
         Identifier("x".into()),
         StringLit(vec![]),
         LParen,
@@ -1715,7 +1715,7 @@ fn question_mark_produces_teaching_error() {
     assert!(!diags.is_empty(), "? must produce a diagnostic");
     assert!(
         diags[0].what_instead.contains("maybe") || diags[0].why.contains("maybe"),
-        "Must redirect to maybe<T>, got: {:?}",
+        "Must redirect to Maybe<T>, got: {:?}",
         diags[0]
     );
 }
@@ -1738,7 +1738,7 @@ fn m7_errors_keyword_in_context() {
     // WHY: `-> string errors` must produce Arrow, Named/string, Errors. If `errors`
     // is lexed as an Identifier, the parser sees `-> string identifier` and cannot
     // produce a FunctionDecl with `errors_capable: true`.
-    let tokens = lex_tokens("-> string errors");
+    let tokens = lex_tokens("-> String errors");
     assert!(
         tokens.contains(&Token::Errors),
         "Token::Errors must appear in the token stream for `errors` keyword"
@@ -1758,13 +1758,13 @@ fn m8_token_variant_count_locked() {
     // test-ratchet: M8 P1 adds 6 variants over M7's 64:
     //   Import, Export, Sensitive, Wait, Background, DocComment
     //   Total M1+...+M8: 64 + 6 = 70
-    let expected_count = 70usize;
+    // test-ratchet: PascalCase built-ins — the `Nothing` token is removed: 70 - 1 = 69
+    let expected_count = 69usize;
 
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
         Function,
-        Nothing,
         Identifier("x".into()),
         StringLit(vec![]),
         LParen,
@@ -1908,7 +1908,7 @@ fn m8_doc_comment_simple() {
     // WHY: `/// foo` must produce Token::DocComment{content:"foo", break_after:false}
     // when followed immediately by a real token. If it produces no token or
     // an Identifier, doc-comment attachment is impossible.
-    let tokens = lex_tokens("/// foo\nexport function f() -> nothing {}");
+    let tokens = lex_tokens("/// foo\nexport function f() -> Nothing {}");
     let doc = tokens.iter().find_map(|t| {
         if let Token::DocComment {
             content,
@@ -1936,7 +1936,7 @@ fn m8_doc_comment_simple() {
 fn m8_doc_comment_empty_line_is_break_after() {
     // WHY: A blank line between a doc-comment and the following item sets
     // break_after = true. The parser uses this to discard orphaned doc chains.
-    let src = "/// orphan\n\nexport function f() -> nothing {}";
+    let src = "/// orphan\n\nexport function f() -> Nothing {}";
     let tokens = lex_tokens(src);
     let doc = tokens.iter().find_map(|t| {
         if let Token::DocComment {
@@ -1965,7 +1965,7 @@ fn m8_doc_comment_regular_comment_not_a_break() {
     // WHY: A regular `//` line between two `///` lines does NOT break the chain.
     // Source: `/// line1\n// internal\n/// line2\nexport ...`
     // Lexer must emit two DocComment tokens, both with break_after = false.
-    let src = "/// line1\n// internal\n/// line2\nexport function f() -> nothing {}";
+    let src = "/// line1\n// internal\n/// line2\nexport function f() -> Nothing {}";
     let tokens = lex_tokens(src);
     let docs: Vec<(String, bool)> = tokens
         .iter()
@@ -2008,7 +2008,7 @@ fn m8_double_slash_still_skipped() {
 fn m8_four_slashes_is_doc_with_slash_content() {
     // WHY: `////` must produce DocComment{content: "/", ...}. The fourth slash
     // is part of the content. Guards against off-by-one in the `///` prefix strip.
-    let tokens = lex_tokens("////\nexport function f() -> nothing {}");
+    let tokens = lex_tokens("////\nexport function f() -> Nothing {}");
     let doc = tokens.iter().find_map(|t| {
         if let Token::DocComment { content, .. } = t {
             Some(content.clone())
@@ -2028,7 +2028,7 @@ fn m8_four_slashes_is_doc_with_slash_content() {
 fn m8_async_banned_keyword_produces_diagnostic() {
     // WHY: `async` is a banned concurrency keyword in Yinz. The lexer must emit
     // a teaching diagnostic and degrade to Identifier so parsing can continue.
-    let (toks, diags) = lex_with_diags("async function foo() -> nothing {}");
+    let (toks, diags) = lex_with_diags("async function foo() -> Nothing {}");
     assert_eq!(diags.len(), 1, "One diagnostic expected for `async`");
     assert!(
         diags[0].what.contains("async") || diags[0].what_instead.contains("wait"),
@@ -2044,7 +2044,7 @@ fn m8_async_banned_keyword_produces_diagnostic() {
 #[test]
 fn m8_pub_banned_keyword_produces_diagnostic() {
     // WHY: `pub` is a banned visibility keyword in Yinz. Must redirect to `export`.
-    let (toks, diags) = lex_with_diags("pub function foo() -> nothing {}");
+    let (toks, diags) = lex_with_diags("pub function foo() -> Nothing {}");
     assert_eq!(diags.len(), 1, "One diagnostic expected for `pub`");
     assert!(
         diags[0].what_instead.contains("export"),
@@ -2064,7 +2064,7 @@ fn test_keyword_reserved_for_v014() {
     //      will have working code that suddenly breaks when v0.13 ships.
     //      The reservation gives them a clear message now rather than a
     //      surprise incompatibility later.
-    let (toks, diags) = lex_with_diags("function test() -> nothing {}");
+    let (toks, diags) = lex_with_diags("function test() -> Nothing {}");
     assert_eq!(diags.len(), 1, "One diagnostic expected for `test`");
     assert!(
         diags[0].what.contains("`test`") || diags[0].what_instead.contains("v0.13"),

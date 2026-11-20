@@ -60,7 +60,7 @@ fn range_at(src: &str, needle: &str) -> lsp_types::Range {
 
 #[test]
 fn test_code_action_class_produces_replace_with_shape() {
-    let src = "class Player { name: string }\n";
+    let src = "class Player { name: String }\n";
     let (state, uri) = state_single("/tmp/ynz_ca_class.ynz", src);
     let range = full_range(src);
     let actions = code_action_response(&state, &uri, range);
@@ -106,7 +106,7 @@ fn test_code_action_enum_produces_replace_with_options() {
 
 #[test]
 fn test_code_action_struct_produces_replace_with_shape() {
-    let src = "struct Point { x: int, y: int }\n";
+    let src = "struct Point { x: Int, y: Int }\n";
     let (state, uri) = state_single("/tmp/ynz_ca_struct.ynz", src);
     let range = full_range(src);
     let actions = code_action_response(&state, &uri, range);
@@ -127,7 +127,7 @@ fn test_code_action_struct_produces_replace_with_shape() {
 #[test]
 fn test_code_action_no_fix_returns_empty() {
     // A missing-return error has no unambiguous single-token replacement.
-    let src = "function broken() -> int { let x = 1 }\n";
+    let src = "function broken() -> Int { let x = 1 }\n";
     let (state, uri) = state_single("/tmp/ynz_ca_nofix.ynz", src);
     let range = full_range(src);
     let actions = code_action_response(&state, &uri, range);
@@ -237,9 +237,9 @@ fn test_code_action_response_under_50ms() {
 // symbol usage, which is the most common new-file workflow.
 fn auto_import_suggests_shape_from_other_file() {
     let root = std::path::Path::new("/tmp/ynz_autoimport_shape");
-    let exporter_src = "export shape Player {\n  name: string\n  health: int\n}\n";
+    let exporter_src = "export shape Player {\n  name: String\n  health: Int\n}\n";
     let importer_src =
-        "function main() -> nothing {\n  let p: Player = { name: \"x\", health: 1 }\n}\n";
+        "function main() -> Nothing {\n  let p: Player = { name: \"x\", health: 1 }\n}\n";
 
     let (state, imp_uri) = state_two_files(
         root,
@@ -276,8 +276,8 @@ fn auto_import_suggests_shape_from_other_file() {
 // Functions are the most common import target in Yinz (data + standalone fns model).
 fn auto_import_suggests_function_from_other_file() {
     let root = std::path::Path::new("/tmp/ynz_autoimport_fn");
-    let exporter_src = "export function greet(name: string) -> string {\n  return \"hello\"\n}\n";
-    let importer_src = "function main() -> nothing {\n  greet(\"world\")\n}\n";
+    let exporter_src = "export function greet(name: String) -> String {\n  return \"hello\"\n}\n";
+    let importer_src = "function main() -> Nothing {\n  greet(\"world\")\n}\n";
 
     let (state, imp_uri) = state_two_files(
         root,
@@ -315,8 +315,8 @@ fn auto_import_suggests_function_from_other_file() {
 // imports are more disruptive than no lightbulb at all.
 fn auto_import_no_action_when_not_exported_anywhere() {
     let root = std::path::Path::new("/tmp/ynz_autoimport_none");
-    let exporter_src = "export shape Player { name: string }\n";
-    let importer_src = "function main() -> nothing {\n  let x: GhostType = 1\n}\n";
+    let exporter_src = "export shape Player { name: String }\n";
+    let importer_src = "function main() -> Nothing {\n  let x: GhostType = 1\n}\n";
 
     let (state, imp_uri) = state_two_files(
         root,
@@ -352,8 +352,8 @@ fn auto_import_no_action_when_not_exported_anywhere() {
 // A malformed import string would cause a parse error in the user's file.
 fn auto_import_edit_produces_correct_import_text() {
     let root = std::path::Path::new("/tmp/ynz_autoimport_edit");
-    let exporter_src = "export shape Order { id: string }\n";
-    let importer_src = "function main() -> nothing {\n  let o: Order = { id: \"x\" }\n}\n";
+    let exporter_src = "export shape Order { id: String }\n";
+    let importer_src = "function main() -> Nothing {\n  let o: Order = { id: \"x\" }\n}\n";
 
     let (state, imp_uri) = state_two_files(
         root,
@@ -406,10 +406,10 @@ fn auto_import_edit_produces_correct_import_text() {
 // imports that might confuse future readers (and auto-formatters).
 fn auto_import_inserts_after_existing_imports() {
     let root = std::path::Path::new("/tmp/ynz_autoimport_after");
-    let orders_src = "export shape Order { id: string }\n";
-    let users_src = "export shape User { name: string }\n";
+    let orders_src = "export shape Order { id: String }\n";
+    let users_src = "export shape User { name: String }\n";
     // importer already has one import; new one should land after it.
-    let importer_src = "import { User } from `services/users`\n\nfunction main() -> nothing {\n  let o: Order = { id: \"x\" }\n}\n";
+    let importer_src = "import { User } from `services/users`\n\nfunction main() -> Nothing {\n  let o: Order = { id: \"x\" }\n}\n";
 
     let mut state = ServerState::new(PositionEncoding::Utf8);
     let root_buf = root.to_path_buf();
@@ -465,9 +465,9 @@ fn auto_import_inserts_after_existing_imports() {
 fn unused_import_produces_remove_action() {
     let root = std::path::Path::new("/tmp/ynz_unused_import_action");
     // exporter exports `greet` but importer never calls it.
-    let exporter_src = "export function greet(name: string) -> string {\n  return `hi`\n}\n";
+    let exporter_src = "export function greet(name: String) -> String {\n  return `hi`\n}\n";
     let importer_src =
-        "import { greet } from `utils/greeting`\n\nfunction main() -> nothing {\n  let x = 1\n}\n";
+        "import { greet } from `utils/greeting`\n\nfunction main() -> Nothing {\n  let x = 1\n}\n";
 
     let (state, imp_uri) = state_two_files(
         root,
@@ -529,9 +529,9 @@ fn unused_import_produces_remove_action() {
 // cross-file import resolution succeeds and the function enters referenced_names.
 fn used_import_produces_no_remove_action() {
     let root = std::path::Path::new("/tmp/ynz_used_import_no_action");
-    let exporter_src = "export function greet(name: string) -> string {\n  return `hi`\n}\n";
+    let exporter_src = "export function greet(name: String) -> String {\n  return `hi`\n}\n";
     let importer_src =
-        "import { greet } from `utils/greeting`\n\nfunction main() -> nothing {\n  greet(`world`)\n}\n";
+        "import { greet } from `utils/greeting`\n\nfunction main() -> Nothing {\n  greet(`world`)\n}\n";
 
     // Write real files so import resolution can find them on disk.
     std::fs::create_dir_all(root.join("utils")).unwrap();

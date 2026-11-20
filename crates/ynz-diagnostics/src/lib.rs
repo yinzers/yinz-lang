@@ -1,4 +1,5 @@
 pub mod banned_jargon;
+pub mod builtin_type_names;
 mod bucket;
 pub mod deferred_feature;
 mod diagnostic;

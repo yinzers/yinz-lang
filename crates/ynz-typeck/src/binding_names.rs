@@ -497,7 +497,7 @@ mod tests {
 
     /// A function whose inner `x` shadows its outer `x`; both are printed.
     const SHADOWED_X_SOURCE: &str =
-        "function entrypoint() -> nothing {\n  let flag = true\n  let x = 1\n  \
+        "function entrypoint() -> Nothing {\n  let flag = true\n  let x = 1\n  \
                                      if (flag) {\n    let x = 2\n    print(x.toString())\n  }\n  \
                                      print(x.toString())\n}\n";
 
@@ -520,7 +520,7 @@ mod tests {
     // bindings back in one slot, the exact bug class this map exists to close.
     #[test]
     fn shadowing_declarations_get_unique_names_that_avoid_user_names() {
-        let source = "function entrypoint() -> nothing {\n  let flag = true\n  let x = 1\n  \
+        let source = "function entrypoint() -> Nothing {\n  let flag = true\n  let x = 1\n  \
                       let x__1 = 2\n  if (flag) {\n    let x = 3\n    print(x.toString())\n  }\n  \
                       print(x__1.toString())\n}\n";
         let (module, names) = recorded(source);
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn declaration_without_a_codegen_name_is_a_hard_error() {
         let (module, _) =
-            recorded("function entrypoint() -> nothing {\n  let x = 1\n  print(x.toString())\n}\n");
+            recorded("function entrypoint() -> Nothing {\n  let x = 1\n  print(x.toString())\n}\n");
         let error = BindingNames::default()
             .apply(&module)
             .expect_err("an empty record must not apply");
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn local_identifier_without_a_resolution_entry_is_a_hard_error() {
         let (module, mut names) =
-            recorded("function entrypoint() -> nothing {\n  let x = 1\n  print(x.toString())\n}\n");
+            recorded("function entrypoint() -> Nothing {\n  let x = 1\n  print(x.toString())\n}\n");
         names.uses.clear();
         let error = names
             .apply(&module)

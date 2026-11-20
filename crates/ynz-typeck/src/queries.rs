@@ -1513,7 +1513,7 @@ mod promotion_tests {
     }
 
     const FIB: &str = r#"
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
     if (n < 2) { return n }
     return fib(n - 1) + fib(n - 2)
 }
@@ -1525,7 +1525,7 @@ function fib(n: int) -> int {
         // group, so the enclosing function promotes to a state machine.
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     print(a)
@@ -1553,7 +1553,7 @@ function entrypoint() -> nothing {{
         // invocation ctx), unlike the suspending same-callee restriction.
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(20)
     print(a)
@@ -1573,8 +1573,8 @@ function entrypoint() -> nothing {{
     fn trivial_leaf_calls_do_not_promote() {
         // WHY: the worth-it proxy — two calls to a trivial leaf are not worth spawning.
         let src = r#"
-function add(n: int) -> int { return n + 1 }
-function entrypoint() -> nothing {
+function add(n: Int) -> Int { return n + 1 }
+function entrypoint() -> Nothing {
     let a = add(20)
     let b = add(21)
     print(a)
@@ -1594,7 +1594,7 @@ function entrypoint() -> nothing {
         // WHY: a data dependency breaks the group → no parallel group → no promotion.
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(a)
     print(a)
@@ -1616,17 +1616,17 @@ function entrypoint() -> nothing {{
         // mutual-suspension prevention). Even with a CPU group, a cyclic host declines.
         let src = format!(
             r#"{FIB}
-function pingHost() -> nothing {{
+function pingHost() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     print(a)
     print(b)
     pongHost()
 }}
-function pongHost() -> nothing {{
+function pongHost() -> Nothing {{
     pingHost()
 }}
-function entrypoint() -> nothing {{ pingHost() }}
+function entrypoint() -> Nothing {{ pingHost() }}
 "#
         );
         let inputs = build_inputs(&src);
@@ -1650,7 +1650,7 @@ function entrypoint() -> nothing {{ pingHost() }}
         // WHY: the program-wide escape hatch — promotion declines entirely.
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     print(a)
@@ -1672,7 +1672,7 @@ function entrypoint() -> nothing {{
         // (inline-sequential fallback, never an error).
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     print(a)
@@ -1693,13 +1693,13 @@ function entrypoint() -> nothing {{
         // WHY: the candidate + rollback fixpoint must be order-independent.
         let src = format!(
             r#"{FIB}
-function sumTo(n: int) -> int {{
+function sumTo(n: Int) -> Int {{
     let t = 0
     let i = 0
     while (i < n) {{ t = t + i; i = i + 1 }}
     return t
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = sumTo(21)
     print(a)
@@ -1728,7 +1728,7 @@ function entrypoint() -> nothing {{
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     print(a)
@@ -1755,7 +1755,7 @@ function entrypoint() -> nothing {{
         let mut db2 = CompilerDb::default();
         let src2 = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     print(a)
@@ -1815,15 +1815,15 @@ function entrypoint() -> nothing {{
         let src = format!(
             r#"{FIB}
 shape Point {{
-    x: int
-    y: int
+    x: Int
+    y: Int
 }}
 function makePoint() -> Point {{
     let a = fib(20)
     let b = fib(21)
     return {{ x: a, y: b }}
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let p = makePoint()
     print(p.x)
 }}
@@ -1850,17 +1850,17 @@ function entrypoint() -> nothing {{
         let src = format!(
             r#"{FIB}
 shape Inner {{
-    v: int
+    v: Int
 }}
 shape Outer {{
     inner: Inner
-    tag: int
+    tag: Int
 }}
 function makeOuter() -> Outer {{
     let i: Inner = {{ v: 1 }}
     return {{ inner: i, tag: 2 }}
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let w = makeOuter()
     let a = fib(20)
     let b = fib(21)
@@ -1895,18 +1895,18 @@ function entrypoint() -> nothing {{
         // the SOUND candidate it transitively calls — a false negative.
         let src = format!(
             r#"{FIB}
-function caller() -> nothing {{
+function caller() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     print(a)
     print(b)
 }}
-function wrapper() -> nothing {{
+function wrapper() -> Nothing {{
     let x = fib(10) + 1
     print(x)
     caller()
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     wrapper()
 }}
 "#
@@ -1933,7 +1933,7 @@ function entrypoint() -> nothing {{
         // nested param shadow and decline, keeping the host sequential and clean.
         let src = format!(
             r#"{FIB}
-function host(seed: int) -> nothing {{
+function host(seed: Int) -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     if (a > 0) {{
@@ -1943,7 +1943,7 @@ function host(seed: int) -> nothing {{
     print(a)
     print(b)
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     host(1)
 }}
 "#
@@ -1975,12 +1975,12 @@ function entrypoint() -> nothing {{
         let src = format!(
             r#"{FIB}
 shape Item {{
-    id: int
-    qty: int
+    id: Int
+    qty: Int
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let qval = 10
-    let items: array<Item> = [{{ id: 1, qty: qval }}, {{ id: 2, qty: qval }}]
+    let items: Array<Item> = [{{ id: 1, qty: qval }}, {{ id: 2, qty: qval }}]
     let a = fib(20)
     let b = fib(21)
     print(a)
@@ -1997,12 +1997,12 @@ function entrypoint() -> nothing {{
         let promoted = promote(&inputs, false, false);
         assert!(
             promoted.contains("entrypoint"),
-            "an array<Shape>-runtime-field crossing-local host must now PROMOTE (guard \
+            "an Array<Shape>-runtime-field crossing-local host must now PROMOTE (guard \
              lifted by v0.3-M5 by-value storage); got: {promoted:?}"
         );
         assert!(
             !has_errors(&src),
-            "the promoted array<Shape>-runtime-field host must compile with no errors"
+            "the promoted Array<Shape>-runtime-field host must compile with no errors"
         );
     }
 
@@ -2021,15 +2021,15 @@ function entrypoint() -> nothing {{
         // covers the complementary case: a wait-free loop doesn't get caught in the crossfire.)
         let src = format!(
             r#"{FIB}
-function makeArray() -> array<int> {{
+function makeArray() -> Array<Int> {{
     return [1, 2, 3]
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let sum = 0
     for (i in range(0, 3)) {{
         sum = sum + i
     }}
-    let nums: fixed<int> = [10, 20, 30]
+    let nums: Fixed<Int> = [10, 20, 30]
     for (n in nums) {{
         sum = sum + n
     }}
@@ -2063,7 +2063,7 @@ function entrypoint() -> nothing {{
     // CPU-promotion candidate. `wait tick()` only earns a "never suspends" WARNING — never
     // an error — so the ONLY error each fixture sees is its for-with-wait guard.
     const TICK: &str = r#"
-function tick() -> int {
+function tick() -> Int {
     return 1
 }
 "#;
@@ -2085,7 +2085,7 @@ function tick() -> int {
         // declines it.
         let src = format!(
             r#"{FIB}{TICK}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let r = range(0, 3)
     for (i in r) {{
         wait tick()
@@ -2117,7 +2117,7 @@ function entrypoint() -> nothing {{
         assert!(
             !whats
                 .iter()
-                .any(|w| w.contains("`fixed<T>` array") || w.contains("call-expression iterator")),
+                .any(|w| w.contains("`Fixed<T>` array") || w.contains("call-expression iterator")),
             "must isolate StoredRangeWithWait — no fixed/expr guard should fire; got: {whats:?}"
         );
     }
@@ -2132,8 +2132,8 @@ function entrypoint() -> nothing {{
         // host a real CPU candidate, so the `!promoted` decline is non-vacuous.
         let src = format!(
             r#"{FIB}{TICK}
-function entrypoint() -> nothing {{
-    let nums: fixed<int> = [10, 20, 30]
+function entrypoint() -> Nothing {{
+    let nums: Fixed<Int> = [10, 20, 30]
     for (n in nums) {{
         wait tick()
     }}
@@ -2148,13 +2148,13 @@ function entrypoint() -> nothing {{
         let promoted = promote(&inputs, false, false);
         assert!(
             !promoted.contains("entrypoint"),
-            "a fixed<T>-iter for-with-wait host must decline promotion; got: {promoted:?}"
+            "a Fixed<T>-iter for-with-wait host must decline promotion; got: {promoted:?}"
         );
         let whats = error_whats(&src);
         assert!(
             whats
                 .iter()
-                .any(|w| w.contains("`fixed<T>` array cannot be the iterator")),
+                .any(|w| w.contains("`Fixed<T>` array cannot be the iterator")),
             "must hit the FixedArrayIterWithWait guard; got errors: {whats:?}"
         );
         assert!(
@@ -2177,10 +2177,10 @@ function entrypoint() -> nothing {{
         // non-vacuous.
         let src = format!(
             r#"{FIB}{TICK}
-function makeArray() -> array<int> {{
+function makeArray() -> Array<Int> {{
     return [1, 2, 3]
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     for (m in makeArray()) {{
         wait tick()
     }}
@@ -2207,7 +2207,7 @@ function entrypoint() -> nothing {{
         assert!(
             !whats
                 .iter()
-                .any(|w| w.contains("stored range variable") || w.contains("`fixed<T>` array")),
+                .any(|w| w.contains("stored range variable") || w.contains("`Fixed<T>` array")),
             "must isolate ExpressionIterWithWait — no stored-range/fixed guard; got: {whats:?}"
         );
     }
@@ -2233,7 +2233,7 @@ function entrypoint() -> nothing {{
             .expect("write yinz.toml");
 
         let dep_src = r#"
-export function heavy(n: int) -> int {
+export function heavy(n: Int) -> Int {
     let total = 0
     let i = 0
     while (i < n) {
@@ -2245,7 +2245,7 @@ export function heavy(n: int) -> int {
 "#;
         let main_src = r#"
 import { heavy } from `lib`
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let a = heavy(20)
     let b = heavy(21)
     print(a)
@@ -2282,13 +2282,13 @@ function entrypoint() -> nothing {
         // (here: zero errors in both, because P2 emits no new diagnostics at all).
         let src = r#"
 shape Point {
-    x: int
-    y: int
+    x: Int
+    y: Int
 }
-function makePoint(seed: int) -> Point {
+function makePoint(seed: Int) -> Point {
     return { x: seed, y: seed }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let p = makePoint(3)
     print(p.x)
 }
@@ -2318,7 +2318,7 @@ function entrypoint() -> nothing {
         // one must still promote.
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     wait sleep(0)
@@ -2352,7 +2352,7 @@ function entrypoint() -> nothing {{
         // in `promoted` — this test would then fail to observe the decline.
         let src = format!(
             r#"{FIB}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
     let a = fib(20)
     let b = fib(21)
     let c = fib(22) + 1

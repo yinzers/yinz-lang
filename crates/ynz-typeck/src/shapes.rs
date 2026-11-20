@@ -515,7 +515,7 @@ pub fn collect_shapes(
                              external construction would leave the field in an undefined state. \
                              If no sensible default applies here, change the type to \
                              `maybe {}` and default to `none`: \
-                             `hidden {}: maybe {} = none`. \
+                             `hidden {}: Maybe {} = none`. \
                              The type then says `sometimes absent` and same-file code reads it \
                              through `.exists()` guards.",
                             tn, field.name, tn
@@ -1025,7 +1025,7 @@ fn emit_unknown_field_type_diag(
                 span.clone(),
                 format!("`{n}` is not a known type."),
                 format!("Field `{field_name}` on `{shape_name}` cannot use `{n}`. Use a built-in or a `shape` name defined in this file."),
-                "Built-ins: `int`, `float`, `number`, `boolean`, `string`. Collections: `array<T>`, `fixed<T>`, `map<K, V>`. Optionals: `maybe<T>`.",
+                "Built-ins: `int`, `float`, `number`, `boolean`, `string`. Collections: `Array<T>`, `Fixed<T>`, `Map<K, V>`. Optionals: `Maybe<T>`.",
             ));
         }
         AstType::Union { variants, .. } => {

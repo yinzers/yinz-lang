@@ -199,8 +199,8 @@ fn fn_snippet(name: &str, params: &[(String, ynz_typeck::types::Type)]) -> Strin
 /// or `None` for keywords where plain insertion is the right behaviour.
 fn keyword_snippet(label: &str) -> Option<String> {
     let s = match label {
-        "function" => "function ${1:name}(${2:params}) -> ${3:nothing} {\n\t$0\n}",
-        "shape" => "shape ${1:Name} {\n\t${2:field}: ${3:string}\n}",
+        "function" => "function ${1:name}(${2:params}) -> ${3:Nothing} {\n\t$0\n}",
+        "shape" => "shape ${1:Name} {\n\t${2:field}: ${3:String}\n}",
         "options" => "options ${1:Name} {\n\t${2:variant1},\n\t${3:variant2},\n}",
         "let" => "let ${1:name} = $0",
         "const" => "const ${1:name} = $0",

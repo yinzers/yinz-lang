@@ -144,7 +144,7 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
                     opt.name
                 ),
                 "Add a second variant, or use a const if you only need one named value:\n\
-                 `const ACTIVE: int = 0`",
+                 `const ACTIVE: Int = 0`",
                 "A single-variant options type has only one possible value and carries no \
                  information. It is almost always the wrong tool.",
             ));

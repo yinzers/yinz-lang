@@ -1667,7 +1667,7 @@ mod tests {
     fn pure_cpu_fn_not_suspends() {
         let suspends = suspends_set(
             r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     print("hello")
 }
 "#,
@@ -1682,10 +1682,10 @@ function entrypoint() -> nothing {
     fn direct_sleep_async_call_suspends() {
         let suspends = suspends_set(
             r#"
-function pause() -> nothing {
+function pause() -> Nothing {
     wait sleep(100)
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         );
         assert!(
@@ -1702,13 +1702,13 @@ function entrypoint() -> nothing { }
     fn transitive_outer_inner_sleep_async_all_suspends() {
         let suspends = suspends_set(
             r#"
-function inner() -> nothing {
+function inner() -> Nothing {
     wait sleep(50)
 }
-function outer() -> nothing {
+function outer() -> Nothing {
     inner()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     outer()
 }
 "#,
@@ -1734,13 +1734,13 @@ function entrypoint() -> nothing {
         // does not itself suspend — it fires and forgets.
         let suspends = suspends_set(
             r#"
-function worker() -> nothing {
+function worker() -> Nothing {
     wait sleep(100)
 }
-function launcher() -> nothing {
+function launcher() -> Nothing {
     background worker()
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         );
         assert!(
@@ -1759,9 +1759,9 @@ function entrypoint() -> nothing { }
         // Mutual recursion: a() calls b(), b() calls a(). Neither reaches `sleep`.
         let suspends = suspends_set(
             r#"
-function a() -> nothing { b() }
-function b() -> nothing { a() }
-function entrypoint() -> nothing { }
+function a() -> Nothing { b() }
+function b() -> Nothing { a() }
+function entrypoint() -> Nothing { }
 "#,
         );
         assert!(
@@ -1776,9 +1776,9 @@ function entrypoint() -> nothing { }
         // Mutual recursion where one reaches `sleep` — both should be suspends.
         let suspends2 = suspends_set(
             r#"
-function a() -> nothing { b() }
-function b() -> nothing { wait sleep(10); a() }
-function entrypoint() -> nothing { }
+function a() -> Nothing { b() }
+function b() -> Nothing { wait sleep(10); a() }
+function entrypoint() -> Nothing { }
 "#,
         );
         assert!(suspends2.contains("b"), "b (direct) must be suspends");
@@ -1797,7 +1797,7 @@ function entrypoint() -> nothing { }
         // the caller's suspension analysis (false-positive state machine classification).
         let module = parse_module(
             r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     remoteOp()
 }
 "#,
@@ -1825,7 +1825,7 @@ function entrypoint() -> nothing {
         // at runtime trying to run a state machine outer wrapper from inside a Tokio runtime).
         let module = parse_module(
             r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     slowOp()
 }
 "#,
@@ -1853,16 +1853,16 @@ function entrypoint() -> nothing {
         // caller IS suspends (the arg evaluation happens before the background launch).
         let suspends = suspends_set(
             r#"
-function worker(n: int) -> nothing {
+function worker(n: Int) -> Nothing {
     wait sleep(n)
 }
-function compute() -> int {
+function compute() -> Int {
     return 5
 }
-function launcher() -> nothing {
+function launcher() -> Nothing {
     background worker(compute())
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         );
         // compute() is pure CPU; worker() suspends; launcher() backgrounds worker —
@@ -1884,15 +1884,15 @@ function entrypoint() -> nothing { }
         // A function with `wait` nested inside an `if` is still suspends.
         let suspends = suspends_set(
             r#"
-function maybePause(flag: bool) -> nothing {
+function maybePause(flag: bool) -> Nothing {
     if (flag) {
         wait sleep(50)
     }
 }
-function caller() -> nothing {
+function caller() -> Nothing {
     maybePause(true)
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         );
         assert!(
@@ -1909,10 +1909,10 @@ function entrypoint() -> nothing { }
     fn test_fallible_async_seeds_suspends() {
         let suspends = suspends_set(
             r#"
-function fetchResult() -> int {
+function fetchResult() -> Int {
     return 0
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     wait __testFallibleAsync(true)
 }
 "#,
@@ -1933,10 +1933,10 @@ function entrypoint() -> nothing {
         // intrinsic but whose body calls nothing does not.
         let suspends = suspends_set(
             r#"
-function sleep(ms: int) -> nothing {
+function sleep(ms: Int) -> Nothing {
     print(`this is a user fn, not the intrinsic`)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     sleep(100)
 }
 "#,
@@ -1963,8 +1963,8 @@ function entrypoint() -> nothing {
         // query never parallelizes calls to it.
         let work = real_work_set(
             r#"
-function add(x: int) -> int { return x + 1 }
-function entrypoint() -> nothing { print("hi") }
+function add(x: Int) -> Int { return x + 1 }
+function entrypoint() -> Nothing { print("hi") }
 "#,
         );
         assert!(
@@ -1979,7 +1979,7 @@ function entrypoint() -> nothing { print("hi") }
         // WHY: a `while`/`for` loop is the worth-it proxy's primary signal.
         let work = real_work_set(
             r#"
-function sumTo(n: int) -> int {
+function sumTo(n: Int) -> Int {
     let total = 0
     let i = 0
     while (i < n) {
@@ -1988,7 +1988,7 @@ function sumTo(n: int) -> int {
     }
     return total
 }
-function entrypoint() -> nothing { print("hi") }
+function entrypoint() -> Nothing { print("hi") }
 "#,
         );
         assert!(
@@ -2003,13 +2003,13 @@ function entrypoint() -> nothing { print("hi") }
         // headline CPU-parallel callee shape.
         let work = real_work_set(
             r#"
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
     if (n < 2) { return n }
     let a = fib(n - 1)
     let b = fib(n - 2)
     return a + b
 }
-function entrypoint() -> nothing { print("hi") }
+function entrypoint() -> Nothing { print("hi") }
 "#,
         );
         assert!(work.contains("fib"), "self-recursive fn must do real work");
@@ -2020,15 +2020,15 @@ function entrypoint() -> nothing { print("hi") }
         // WHY: a mutual cycle (isEven/isOdd) is recursion too — both members do work.
         let work = real_work_set(
             r#"
-function isEven(n: int) -> bool {
+function isEven(n: Int) -> bool {
     if (n == 0) { return true }
     return isOdd(n - 1)
 }
-function isOdd(n: int) -> bool {
+function isOdd(n: Int) -> bool {
     if (n == 0) { return false }
     return isEven(n - 1)
 }
-function entrypoint() -> nothing { print("hi") }
+function entrypoint() -> Nothing { print("hi") }
 "#,
         );
         assert!(
@@ -2047,12 +2047,12 @@ function entrypoint() -> nothing { print("hi") }
         // inside the call) — needed so a thin wrapper around `fib` is still worth it.
         let work = real_work_set(
             r#"
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
     if (n < 2) { return n }
     return fib(n - 1) + fib(n - 2)
 }
-function wrapper(n: int) -> int { return fib(n) }
-function entrypoint() -> nothing { print("hi") }
+function wrapper(n: Int) -> Int { return fib(n) }
+function entrypoint() -> Nothing { print("hi") }
 "#,
         );
         assert!(work.contains("fib"));
@@ -2068,7 +2068,7 @@ function entrypoint() -> nothing { print("hi") }
         // real-work callee does real work, exactly like the suspends seed path.
         let module = parse_module(
             r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     heavyImported()
 }
 "#,
@@ -2089,7 +2089,7 @@ function entrypoint() -> nothing {
         // caller must not be marked.
         let module = parse_module(
             r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     trivialImported()
 }
 "#,
@@ -2106,18 +2106,18 @@ function entrypoint() -> nothing {
     fn does_real_work_is_deterministic_across_runs() {
         // WHY: the fixpoint must be order-independent (no nondeterministic builds).
         let src = r#"
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
     if (n < 2) { return n }
     return fib(n - 1) + fib(n - 2)
 }
-function sumTo(n: int) -> int {
+function sumTo(n: Int) -> Int {
     let t = 0
     let i = 0
     while (i < n) { t = t + i; i = i + 1 }
     return t
 }
-function leaf(x: int) -> int { return x }
-function entrypoint() -> nothing { print("hi") }
+function leaf(x: Int) -> Int { return x }
+function entrypoint() -> Nothing { print("hi") }
 "#;
         let a = real_work_set(src);
         let b = real_work_set(src);

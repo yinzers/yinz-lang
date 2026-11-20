@@ -234,12 +234,12 @@ pub fn type_name(t: &Type) -> String {
             let arg_str = args.iter().map(type_name).collect::<Vec<_>>().join(", ");
             format!("{name}<{arg_str}>")
         }
-        Type::BuiltinArray { elem } => format!("array<{}>", type_name(elem)),
-        Type::BuiltinFixed { elem, .. } => format!("fixed<{}>", type_name(elem)),
-        Type::Maybe { inner } => format!("maybe<{}>", type_name(inner)),
-        Type::BuiltinMap { key, val } => format!("map<{}, {}>", type_name(key), type_name(val)),
+        Type::BuiltinArray { elem } => format!("Array<{}>", type_name(elem)),
+        Type::BuiltinFixed { elem, .. } => format!("Fixed<{}>", type_name(elem)),
+        Type::Maybe { inner } => format!("Maybe<{}>", type_name(inner)),
+        Type::BuiltinMap { key, val } => format!("Map<{}, {}>", type_name(key), type_name(val)),
         Type::MapEntry { key, val } => format!("MapEntry<{}, {}>", type_name(key), type_name(val)),
-        Type::BuiltinChannel { elem } => format!("channel<{}>", type_name(elem)),
+        Type::BuiltinChannel { elem } => format!("Channel<{}>", type_name(elem)),
         // Inferred-only in v0.3 (not typeable source syntax); lowercase per the
         // built-in-types-are-lowercase convention (`array`, `map`, `channel`).
         Type::BackgroundHandle { result, .. } => {
@@ -295,7 +295,7 @@ pub fn type_name_with_length(ty: &Type) -> String {
         Type::BuiltinFixed {
             elem,
             size: FixedLength::Known(count),
-        } => format!("fixed<{}, {count}>", type_name(elem)),
+        } => format!("Fixed<{}, {count}>", type_name(elem)),
         other => type_name(other),
     }
 }
@@ -418,8 +418,8 @@ pub const CHANNEL_ELEM_SUPPORTED_NAMES: &[&str] = &[
     "boolean",
     "string",
     "number",
-    "array<T>",
-    "map<K, V>",
+    "Array<T>",
+    "Map<K, V>",
 ];
 
 /// Is `.copy()` on a value of this type a genuinely INDEPENDENT copy (a value nobody else
@@ -587,13 +587,13 @@ mod channel_elem_tests {
             ("string", Type::String),
             ("number", Type::Number { precision: 34 }),
             (
-                "array<T>",
+                "Array<T>",
                 Type::BuiltinArray {
                     elem: Box::new(Type::Int),
                 },
             ),
             (
-                "map<K, V>",
+                "Map<K, V>",
                 Type::BuiltinMap {
                     key: Box::new(Type::String),
                     val: Box::new(Type::Int),
@@ -655,17 +655,17 @@ mod type_name_with_length_tests {
         };
         assert_eq!(
             type_name_with_length(&list(FixedLength::Known(4))),
-            "fixed<int, 4>"
+            "Fixed<Int, 4>"
         );
         assert_eq!(
             type_name_with_length(&list(FixedLength::Unknown)),
-            "fixed<int>"
+            "Fixed<Int>"
         );
         assert_eq!(
             type_name_with_length(&list(FixedLength::OfParam {
                 parameter: "xs".to_string()
             })),
-            "fixed<int>"
+            "Fixed<Int>"
         );
     }
 }

@@ -22,6 +22,9 @@ use ynz_ast::nodes::{
     ReExportItem, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
 };
 // TypePath is also used for Expr::Is
+use ynz_diagnostics::builtin_type_names::{
+    old_builtin_type_name_diagnostic, pascal_case_name_for_old_builtin_type,
+};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::token::{Spanned, Token};
@@ -801,7 +804,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected a function name after `function`.",
-                    "Write the function name: `function myFunction() -> nothing { }`",
+                    "Write the function name: `function myFunction() -> Nothing { }`",
                     "Every function needs a name so it can be called from other places.",
                 ));
                 self.recover_to_rbrace();
@@ -831,8 +834,8 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
                 format!("Missing return type on `{name}`."),
-                format!("Add `-> nothing` after the parentheses: `function {name}() -> nothing`"),
-                "Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.",
+                format!("Add `-> Nothing` after the parentheses: `function {name}() -> Nothing`"),
+                "Every function in Yinz declares what it returns. Use `-> Nothing` for functions that don't return a value.",
             ));
             self.recover_to_rbrace();
             return None;
@@ -864,7 +867,7 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 span,
                 format!("Expected `{{` to open the body of `{name}`."),
-                format!("function {name}() -> nothing {{ ... }}"),
+                format!("function {name}() -> Nothing {{ ... }}"),
                 "Function bodies start with `{` and end with `}`.",
             ));
             return None;
@@ -924,17 +927,13 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
                 "Generic type nesting exceeds 16 levels.",
-                "Simplify the type — for example, break the cycle with `maybe<Node<T>>` instead of nesting further.",
+                "Simplify the type — for example, break the cycle with `Maybe<Node<T>>` instead of nesting further.",
                 "Deeply nested generic types are almost always caused by an accidental cycle. 16 levels is far more than any real type should need.",
             ));
             return Type::Error;
         }
 
         match self.peek().clone() {
-            Token::Nothing => {
-                self.advance();
-                Type::Nothing
-            }
             Token::Sensitive => {
                 // `sensitive T` — type modifier wrapping the inner type.
                 // Only wraps `string` in v0.1 (enforced by typeck, not the parser).
@@ -970,15 +969,29 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Type::SelfType { span }
             }
-            Token::Identifier(name) => {
+            Token::Identifier(written_name) => {
                 let span = self.current_span();
                 self.advance();
+                // An old lowercase spelling (`int`) is taught, then read as its PascalCase
+                // name so one wrong word does not cascade into more errors.
+                let name = match pascal_case_name_for_old_builtin_type(&written_name) {
+                    Some(pascal_case_name) => {
+                        if let Some(teaching_error) =
+                            old_builtin_type_name_diagnostic(span.clone(), &written_name)
+                        {
+                            self.diags.push(teaching_error);
+                        }
+                        pascal_case_name.to_string()
+                    }
+                    None => written_name,
+                };
                 match name.as_str() {
-                    "int" => Type::Int,
-                    "float" => Type::Float,
-                    "boolean" => Type::Bool,
-                    "number" => self.parse_number_type(),
-                    "maybe" => self.parse_maybe_type(span, depth),
+                    "Int" => Type::Int,
+                    "Float" => Type::Float,
+                    "Boolean" => Type::Bool,
+                    "Nothing" => Type::Nothing,
+                    "Number" => self.parse_number_type(),
+                    "Maybe" => self.parse_maybe_type(span, depth),
                     _ => {
                         if matches!(self.peek(), Token::Lt) {
                             self.parse_generic_type(name, span, depth)
@@ -1058,7 +1071,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected a type here.",
-                    "Use `nothing`, `int`, `float`, `number`, `boolean`, `maybe<T>`, `array<T>`, `dynamic Foo`, `Self`, or a type name.",
+                    "Use `Nothing`, `Int`, `Float`, `Number`, `Boolean`, `Maybe<T>`, `Array<T>`, `dynamic Foo`, `Self`, or a type name.",
                     "Types tell Yinz what kind of value a variable holds or a function produces.",
                 ));
                 Type::Error
@@ -1071,9 +1084,9 @@ impl<'a> Parser<'a> {
         if self.expect(&Token::Lt).is_none() {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
-                "`maybe` requires a type argument.",
-                "Write `maybe<T>` — for example, `maybe<int>` or `maybe<Player>`.",
-                "`maybe<T>` is the Yinz optional type. It must have exactly one type argument.",
+                "`Maybe` requires a type argument.",
+                "Write `Maybe<T>` — for example, `Maybe<Int>` or `Maybe<Player>`.",
+                "`Maybe<T>` is the Yinz optional type. It must have exactly one type argument.",
             ));
             return Type::Error;
         }
@@ -1083,9 +1096,9 @@ impl<'a> Parser<'a> {
         if self.expect(&Token::Gt).is_none() {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
-                "Missing `>` to close `maybe<T>`.",
-                "Write `maybe<T>` — close the angle bracket after the type.",
-                "Every `<` in a `maybe<T>` must be matched with a `>`.",
+                "Missing `>` to close `Maybe<T>`.",
+                "Write `Maybe<T>` — close the angle bracket after the type.",
+                "Every `<` in a `Maybe<T>` must be matched with a `>`.",
             ));
             return Type::Error;
         }
@@ -1125,7 +1138,7 @@ impl<'a> Parser<'a> {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
                             "Expected `,` or `>` after the length in a generic type argument list.",
-                            "Close the list with `>`: `fixed<int, 4>`.",
+                            "Close the list with `>`: `Fixed<Int, 4>`.",
                             "Generic type arguments are comma-separated and the list ends with `>`.",
                         ));
                         break;
@@ -1137,7 +1150,7 @@ impl<'a> Parser<'a> {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
                             "Expected `,` or `>` in generic type argument list.",
-                            "Separate type arguments with `,`: `Pair<int, string>`. Close with `>`.",
+                            "Separate type arguments with `,`: `Pair<Int, String>`. Close with `>`.",
                             "Generic type arguments are comma-separated and the list ends with `>`.",
                         ));
                         // Recover to `>` or something sane
@@ -1213,9 +1226,9 @@ impl<'a> Parser<'a> {
                 let _ = self.expect(&Token::RBracket);
                 self.diags.push(Diagnostic::error(
                     bracket_span,
-                    "Use angle brackets for `number<N>`, not square brackets.",
-                    "Write `number<100>` instead of `number[100]`.",
-                    "M5 unified all generic syntax — array<T>, map<K,V>, number<N> — on `<>`. Square brackets are now index access only.",
+                    "Use angle brackets for `Number<N>`, not square brackets.",
+                    "Write `Number<100>` instead of `Number[100]`.",
+                    "M5 unified all generic syntax — Array<T>, Map<K,V>, Number<N> — on `<>`. Square brackets are now index access only.",
                 ));
                 Type::Error
             }
@@ -1231,9 +1244,9 @@ impl<'a> Parser<'a> {
                     _ => {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
-                            "Expected a precision value between 1 and 4096 inside `number<N>`.",
-                            "Write `number<34>` for the default 34-digit decimal.",
-                            "The number in `number<N>` sets how many decimal digits of precision you get.",
+                            "Expected a precision value between 1 and 4096 inside `Number<N>`.",
+                            "Write `Number<34>` for the default 34-digit decimal.",
+                            "The number in `Number<N>` sets how many decimal digits of precision you get.",
                         ));
                         // Consume to `>` to recover.
                         while !matches!(self.peek(), Token::Gt | Token::RBrace | Token::Eof) {
@@ -1247,8 +1260,8 @@ impl<'a> Parser<'a> {
                 if self.expect(&Token::Gt).is_none() {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
-                        "Expected `>` to close `number<N>`.",
-                        "Write `number<34>` — close the angle bracket after the precision.",
+                        "Expected `>` to close `Number<N>`.",
+                        "Write `Number<34>` — close the angle bracket after the precision.",
                         "The angle bracket must be closed to complete the type.",
                     ));
                     return Type::Error;
@@ -1600,7 +1613,7 @@ impl<'a> Parser<'a> {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
                         format!("Expected a parameter name in `{fn_name}`'s parameter list."),
-                        format!("Write `name: Type`, e.g. `function {fn_name}(x: int, y: string)`"),
+                        format!("Write `name: Type`, e.g. `function {fn_name}(x: Int, y: String)`"),
                         "Each parameter needs a name and a type so the function body can use it.",
                     ));
                     // Recover to `)` or `}`
@@ -1619,7 +1632,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     format!("Expected `:` after parameter name `{param_name}`."),
-                    format!("Write `{param_name}: Type`, e.g. `{param_name}: int`"),
+                    format!("Write `{param_name}: Type`, e.g. `{param_name}: Int`"),
                     "The `:` separates the parameter name from its type.",
                 ));
                 while !matches!(
@@ -1668,7 +1681,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected `,` or `)` after parameter.",
-                    "Separate parameters with `,`: `function foo(a: int, b: string)`",
+                    "Separate parameters with `,`: `function foo(a: Int, b: String)`",
                     "Each parameter must be separated by a comma.",
                 ));
                 // Recover to `)` or next identifier (another param attempt)
@@ -4207,7 +4220,7 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
                 format!("Contract signature `{name}` is missing a return type."),
-                format!("Add `-> nothing` or `-> ReturnType`: `{name}(share self) -> nothing`"),
+                format!("Add `-> Nothing` or `-> ReturnType`: `{name}(share self) -> Nothing`"),
                 "Contract signatures must declare their return type — the compiler needs it to verify implementing functions.",
             ));
             Type::Error
@@ -4293,7 +4306,6 @@ pub fn infix_bp(tok: &Token) -> Option<(u8, u8)> {
 fn token_as_keyword_name(tok: &Token) -> Option<&'static str> {
     match tok {
         Token::Function => Some("function"),
-        Token::Nothing => Some("nothing"),
         Token::Let => Some("let"),
         Token::Const => Some("const"),
         Token::True => Some("true"),
@@ -4326,7 +4338,6 @@ fn token_as_keyword_name(tok: &Token) -> Option<&'static str> {
 fn token_display(tok: &Token) -> &str {
     match tok {
         Token::Function => "function",
-        Token::Nothing => "nothing",
         Token::Identifier(_) => "identifier",
         Token::StringLit(_) => "string literal",
         Token::LParen => "(",

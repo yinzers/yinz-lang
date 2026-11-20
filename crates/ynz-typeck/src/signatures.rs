@@ -175,7 +175,7 @@ pub fn collect_signatures(
                         diags.push(Diagnostic::error(
                             f.span.clone(),
                             "`entrypoint` must have no parameters.",
-                            "Change the declaration to `function entrypoint() -> nothing { ... }`",
+                            "Change the declaration to `function entrypoint() -> Nothing { ... }`",
                             "`entrypoint` is where the program starts. It takes no arguments — use `process.args` to read command-line inputs (arriving in v0.7).",
                         ));
                     }
@@ -186,7 +186,7 @@ pub fn collect_signatures(
                                 "`entrypoint` must return `nothing`, but this declares it returns `{}`.",
                                 crate::types::type_name(&ret)
                             ),
-                            "Change the return type to `nothing`: `function entrypoint() -> nothing`",
+                            "Change the return type to `nothing`: `function entrypoint() -> Nothing`",
                             "`entrypoint` is where the program starts. It runs and exits — it does not return a value to a caller.",
                         ));
                     }
@@ -232,7 +232,7 @@ pub fn collect_signatures(
         diags.push(Diagnostic::error(
             module.span.clone(),
             "This file has no `entrypoint` function.",
-            "Add an entrypoint function:\n  function entrypoint() -> nothing {\n    ...\n  }",
+            "Add an entrypoint function:\n  function entrypoint() -> Nothing {\n    ...\n  }",
             "Every Yinz program needs an `entrypoint` function — that is where execution starts.",
         ));
     }

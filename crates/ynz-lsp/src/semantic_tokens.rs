@@ -250,7 +250,6 @@ fn classify_token(tok: &Token, sig: &ynz_typeck::queries::SignatureOutput) -> Op
         | Token::Errors
         | Token::True
         | Token::False
-        | Token::Nothing
         | Token::None
         | Token::SelfValue
         | Token::SelfType => Some(IDX_KEYWORD),

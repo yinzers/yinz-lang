@@ -487,9 +487,9 @@ impl<'src> Lexer<'src> {
                 self.diags.push(Diagnostic::error(
                     SourceSpan::new(self.file, start, self.pos),
                     "The `?` optional suffix is not valid in Yinz.",
-                    "Use `maybe<T>` instead: `maybe<int>` not `int?`.",
+                    "Use `Maybe<T>` instead: `Maybe<Int>` not `Int?`.",
                     "Swift, Kotlin, and TypeScript use `T?` for optional types. \
-                     Yinz uses `maybe<T>` — it reads the same way but is unambiguous.",
+                     Yinz uses `Maybe<T>` — it reads the same way but is unambiguous.",
                 ));
             }
 
@@ -543,7 +543,6 @@ impl<'src> Lexer<'src> {
             .expect("identifier slice is valid UTF-8 — source was validated at load time");
         let tok = match text {
             "function" => Token::Function,
-            "nothing" => Token::Nothing,
             "let" => Token::Let,
             "const" => Token::Const,
             "true" => Token::True,
@@ -670,7 +669,7 @@ impl<'src> Lexer<'src> {
             // M4 banned declaration keywords — redirect to Yinz equivalents
             "type" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "type",
-                    "Use `shape` to declare a data type: `shape Player { name: string, health: int }`",
+                    "Use `shape` to declare a data type: `shape Player { name: String, health: Int }`",
                     "`type` is common in TypeScript, but Yinz uses `shape` — one unambiguous keyword \
                      for all data type declarations.",
                 );
@@ -678,7 +677,7 @@ impl<'src> Lexer<'src> {
             }
             "struct" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "struct",
-                    "Use `shape` to declare a data type: `shape Player { name: string, health: int }`",
+                    "Use `shape` to declare a data type: `shape Player { name: String, health: Int }`",
                     "Yinz uses `shape` for all data type declarations, whether they would be called \
                      structs, classes, or interfaces in other languages.",
                 );
@@ -687,7 +686,7 @@ impl<'src> Lexer<'src> {
             "class" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "class",
                     "Use `shape` for data and standalone functions for behavior: \
-                     `shape Player { name: string }` then `function greet(share self: Player) -> string`",
+                     `shape Player { name: String }` then `function greet(share self: Player) -> String`",
                     "Yinz is not object-oriented — there are no classes. Data lives in shapes; \
                      behavior lives in standalone functions called via dot-call syntax.",
                 );
@@ -696,7 +695,7 @@ impl<'src> Lexer<'src> {
             "interface" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "interface",
                     "For contracts, declare a `shape` with bare method signatures and use `follows`: \
-                     `shape Damageable { takeDamage(lend self, amount: int) -> nothing }` \
+                     `shape Damageable { takeDamage(lend self, amount: Int) -> Nothing }` \
                      then `shape Player follows Damageable { ... }`",
                     "Yinz uses `shape` for both data types and contracts. A contract shape holds \
                      bare-signature declarations; implementing shapes use the `follows` keyword.",
@@ -714,7 +713,7 @@ impl<'src> Lexer<'src> {
             "abstract" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "abstract",
                     "Use `base shape` for a shape that cannot be instantiated directly: \
-                     `base shape Entity { name: string }`",
+                     `base shape Entity { name: String }`",
                     "`base shape` names what the type is before saying it cannot be instantiated — \
                      the constraint is part of the declaration, not a separate modifier.",
                 );
@@ -1032,9 +1031,9 @@ impl<'src> Lexer<'src> {
             Err(_) => {
                 self.diags.push(Diagnostic::error(
                     SourceSpan::new(self.file, start, self.pos),
-                    "This hex literal is too large to fit in an `int`.",
-                    "Use `number` for values beyond ±9.2×10¹⁸.",
-                    "`int` holds 64-bit signed integers — hex values above 0xFFFF_FFFF_FFFF_FFFF overflow.",
+                    "This hex literal is too large to fit in an `Int`.",
+                    "Use `Number` for values beyond ±9.2×10¹⁸.",
+                    "`Int` holds 64-bit signed integers — hex values above 0xFFFF_FFFF_FFFF_FFFF overflow.",
                 ));
             }
         }
@@ -1114,9 +1113,9 @@ impl<'src> Lexer<'src> {
             Err(_) => {
                 self.diags.push(Diagnostic::error(
                     SourceSpan::new(self.file, start, self.pos),
-                    "This binary literal is too large to fit in an `int`.",
-                    "Use `number` for values beyond ±9.2×10¹⁸.",
-                    "`int` holds 64-bit signed integers — this binary literal has too many bits.",
+                    "This binary literal is too large to fit in an `Int`.",
+                    "Use `Number` for values beyond ±9.2×10¹⁸.",
+                    "`Int` holds 64-bit signed integers — this binary literal has too many bits.",
                 ));
             }
         }
@@ -1274,9 +1273,9 @@ impl<'src> Lexer<'src> {
                 Err(_) => {
                     self.diags.push(Diagnostic::error(
                         SourceSpan::new(self.file, start, self.pos),
-                        "This integer literal is too large to fit in an `int`.",
-                        "Use `number` for values beyond ±9.2×10¹⁸: `let x: number = 99_999_999_999_999_999_999`.",
-                        "`int` holds 64-bit signed integers, in the range −9,223,372,036,854,775,808 to 9,223,372,036,854,775,807.",
+                        "This integer literal is too large to fit in an `Int`.",
+                        "Use `Number` for values beyond ±9.2×10¹⁸: `let x: Number = 99_999_999_999_999_999_999`.",
+                        "`Int` holds 64-bit signed integers, in the range −9,223,372,036,854,775,808 to 9,223,372,036,854,775,807.",
                     ));
                 }
             }

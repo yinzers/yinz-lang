@@ -699,16 +699,16 @@ mod tests {
     #[test]
     fn a_function_writes_the_places_it_assigns_through_a_parameter_and_through_its_callees() {
         let written = summaries(
-            "shape Holder { name: string rows: array<array<int>> }\n\
-             function direct(lend holder: Holder) -> nothing { holder.rows = [[1]] }\n\
-             function element(lend holder: Holder) -> nothing { holder.rows[0] = [1] }\n\
-             function reader(share holder: Holder) -> int { return holder.rows.count() }\n\
-             function forwarded(lend held: Holder) -> nothing { direct(held) }\n\
-             function viaView(lend holder: Holder) -> nothing {\n\
+            "shape Holder { name: String rows: Array<Array<Int>> }\n\
+             function direct(lend holder: Holder) -> Nothing { holder.rows = [[1]] }\n\
+             function element(lend holder: Holder) -> Nothing { holder.rows[0] = [1] }\n\
+             function reader(share holder: Holder) -> Int { return holder.rows.count() }\n\
+             function forwarded(lend held: Holder) -> Nothing { direct(held) }\n\
+             function viaView(lend holder: Holder) -> Nothing {\n\
                let view = holder.rows\n\
                view[1] = [2]\n\
              }\n\
-             function twoParameters(lend first: Holder, lend second: Holder) -> nothing {\n\
+             function twoParameters(lend first: Holder, lend second: Holder) -> Nothing {\n\
                second.name = `x`\n\
              }\n",
         );
@@ -733,9 +733,9 @@ mod tests {
     #[test]
     fn a_function_defined_twice_keeps_the_summary_of_its_first_definition() {
         let written = summaries(
-            "shape Holder { rows: array<array<int>> }\n\
-             function reset(lend holder: Holder) -> nothing { holder.rows = [[1]] }\n\
-             function reset(lend holder: Holder) -> nothing { print(holder.rows.count()) }\n",
+            "shape Holder { rows: Array<Array<Int>> }\n\
+             function reset(lend holder: Holder) -> Nothing { holder.rows = [[1]] }\n\
+             function reset(lend holder: Holder) -> Nothing { print(holder.rows.count()) }\n",
         );
         assert_eq!(written["reset"], vec![vec![vec![field("rows")]]]);
     }
@@ -745,15 +745,15 @@ mod tests {
     #[test]
     fn mutually_recursive_functions_reach_a_fixpoint_and_a_deepening_recursion_is_cut() {
         let written = summaries(
-            "shape Node { next: Node rows: array<int> }\n\
-             function ping(lend node: Node, depth: int) -> nothing {\n\
+            "shape Node { next: Node rows: Array<Int> }\n\
+             function ping(lend node: Node, depth: Int) -> Nothing {\n\
                if (depth > 0) { pong(node, depth - 1) }\n\
              }\n\
-             function pong(lend node: Node, depth: int) -> nothing {\n\
+             function pong(lend node: Node, depth: Int) -> Nothing {\n\
                ping(node, depth)\n\
                node.rows = [1]\n\
              }\n\
-             function deepen(lend node: Node) -> nothing {\n\
+             function deepen(lend node: Node) -> Nothing {\n\
                deepen(node.next)\n\
                node.rows = [1]\n\
              }\n",

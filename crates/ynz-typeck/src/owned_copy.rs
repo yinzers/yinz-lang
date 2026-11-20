@@ -221,7 +221,7 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
             format!(
                 "Pass the channel itself to the task and every task holding it reads and \
                  writes the same line. If you want a second, separate line, make one: `let \
-                 replies: channel<{0}> = channel<{0}>()`.",
+                 replies: Channel<{0}> = Channel<{0}>()`.",
                 type_name(elem)
             ),
             "A second channel holding the same messages would not help you: the task on the \
@@ -273,7 +273,7 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
             " — there is no value here to copy",
             "Drop the `.copy()` and call the function on its own: `saveOrder(order)`. If you \
              wanted something back from it, give it a return type and return the value: \
-             `function saveOrder(order: Order) -> int { return order.id }`, then copy that.",
+             `function saveOrder(order: Order) -> Int { return order.id }`, then copy that.",
             "`nothing` means no value was produced at all, so there is nothing here to make a \
              second one of.",
         )),

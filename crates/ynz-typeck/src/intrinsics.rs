@@ -47,14 +47,14 @@ fn parse_type(s: &str) -> Type {
         "bool" => Type::Bool,
         "string" => Type::String,
         "nothing" => Type::Nothing,
-        "range<int>" => Type::Range {
+        "Range<Int>" => Type::Range {
             element: Box::new(Type::Int),
             end_inclusive: false,
         },
-        s if s.starts_with("maybe<") && s.ends_with('>') => Type::Maybe {
+        s if s.starts_with("Maybe<") && s.ends_with('>') => Type::Maybe {
             inner: Box::new(parse_type(&s[6..s.len() - 1])),
         },
-        s if s.starts_with("array<") && s.ends_with('>') => Type::BuiltinArray {
+        s if s.starts_with("Array<") && s.ends_with('>') => Type::BuiltinArray {
             elem: Box::new(parse_type(&s[6..s.len() - 1])),
         },
         other => {

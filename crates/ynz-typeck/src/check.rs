@@ -1526,7 +1526,7 @@ fn unsized_lengths_of_once_only_functions(
                 .map(render_ast_type)
                 .unwrap_or_else(|| "int".to_string());
             let written_text = render_ast_type(&parameter.ty);
-            let suggested = format!("fixed<{element}, 4>");
+            let suggested = format!("Fixed<{element}, 4>");
             let slots = [
                 ("function", function.name.as_str()),
                 ("parameter", parameter.name.as_str()),
@@ -1621,7 +1621,7 @@ fn fixed_field_length_missing_diag(
     written: &str,
     element: &str,
 ) -> Diagnostic {
-    let suggested = format!("fixed<{element}, 4>");
+    let suggested = format!("Fixed<{element}, 4>");
     let slots = [
         ("shape", shape),
         ("field", field),
@@ -2276,7 +2276,7 @@ impl<'b> Checker<'b> {
                         Type::Shape { .. } => {
                             let rendered = type_name(inner.as_ref());
                             (
-                                "Return the shape's fields individually (e.g. `-> int errors`), \
+                                "Return the shape's fields individually (e.g. `-> Int errors`), \
                                  or compute a primitive result inside the function and return that."
                                     .to_string(),
                                 format!("`{rendered} errors`"),
@@ -2387,11 +2387,11 @@ impl<'b> Checker<'b> {
             if let Some(span) = find_fixed_array_iter_wait_in_for(&f.body.stmts, &self.expr_types) {
                 self.diags.push(Diagnostic::error(
                     span,
-                    "a `fixed<T>` array cannot be the iterator of a `for` loop that contains a \
+                    "a `Fixed<T>` array cannot be the iterator of a `for` loop that contains a \
                      `wait`.",
-                    "Use `array<T>` instead: `let items: array<T> = [...]`. An `array<T>` is \
+                    "Use `Array<T>` instead: `let items: Array<T> = [...]`. An `Array<T>` is \
                      heap-allocated so its pointer survives suspension.",
-                    "The elements of `fixed<T>` live on the current resume-function's stack. \
+                    "The elements of `Fixed<T>` live on the current resume-function's stack. \
                      When a `wait` suspends and the function returns to the scheduler, that stack \
                      frame is freed. On the next resume the element pointer is stale, producing \
                      undefined behavior. See design/concurrency.md 'FixedArrayIterWithWait'.",
@@ -2559,7 +2559,7 @@ impl<'b> Checker<'b> {
                             ),
                             format!(
                                 "Restructure `{shape_name}` so all its fields are primitive \
-                                 types (int, bool, float, number, string), or flatten the \
+                                 types (int, bool, Float, Number, string), or flatten the \
                                  nested shape's fields into `{shape_name}` directly."
                             ),
                             "Shapes with nested-shape fields store an internal pointer to a \
@@ -2673,10 +2673,10 @@ impl<'b> Checker<'b> {
                     let (what_instead, why) = match &ty {
                         Type::BuiltinFixed { .. } => (
                             format!(
-                                "Declare `{crossing_name}` as `array<T>` instead of `fixed<T>`. \
-                                 An `array<T>` is heap-allocated so its pointer survives suspension."
+                                "Declare `{crossing_name}` as `Array<T>` instead of `Fixed<T>`. \
+                                 An `Array<T>` is heap-allocated so its pointer survives suspension."
                             ),
-                            "fixed<T> arrays are stack-allocated in the resume function's stack \
+                            "Fixed<T> arrays are stack-allocated in the resume function's stack \
                              frame. When a `wait` suspends the function and the resume function \
                              returns to the scheduler, that stack frame is freed. On the next \
                              resume, the crossing-local frame slot holds a dangling pointer to the \
@@ -5121,8 +5121,8 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     iter.span().clone(),
                     format!("`for` loops over `{}` are not supported.", type_name(other)),
-                    "Use `range(...)`, iterate over `array<T>`, `fixed<T>`, `map<K, V>`, `string`, or a shape that follows `Iterable<T>`.",
-                    "For custom types, define `function next(lend self: YourShape) -> maybe<T>` to make them iterable.",
+                    "Use `range(...)`, iterate over `Array<T>`, `Fixed<T>`, `Map<K, V>`, `string`, or a shape that follows `Iterable<T>`.",
+                    "For custom types, define `function next(lend self: YourShape) -> Maybe<T>` to make them iterable.",
                 ));
                 Type::Error
             }
@@ -5412,9 +5412,9 @@ impl<'b> Checker<'b> {
                         other => {
                             self.diags.push(Diagnostic::error(
                                 span.clone(),
-                                format!("`{shape_name}.next()` must return `maybe<T>` to be iterable, but it returns `{}`.", type_name(other)),
-                                format!("Change `function next(lend self: {shape_name}) -> {}` to return `maybe<T>` instead.", type_name(other)),
-                                "The `Iterable<T>` contract requires `next(lend self) -> maybe<T>`. When the iterator is exhausted, return `none`.",
+                                format!("`{shape_name}.next()` must return `Maybe<T>` to be iterable, but it returns `{}`.", type_name(other)),
+                                format!("Change `function next(lend self: {shape_name}) -> {}` to return `Maybe<T>` instead.", type_name(other)),
+                                "The `Iterable<T>` contract requires `next(lend self) -> Maybe<T>`. When the iterator is exhausted, return `none`.",
                             ));
                             Type::Error
                         }
@@ -5425,8 +5425,8 @@ impl<'b> Checker<'b> {
         self.diags.push(Diagnostic::error(
             span.clone(),
             format!("`{shape_name}` cannot be iterated — it does not follow `Iterable<T>`."),
-            format!("Add `function next(lend self: {shape_name}) -> maybe<T>` to make it iterable."),
-            "For a `for` loop to work on a custom shape, the shape needs a standalone `next` function returning `maybe<T>`. When the iterator is done, return `none`.",
+            format!("Add `function next(lend self: {shape_name}) -> Maybe<T>` to make it iterable."),
+            "For a `for` loop to work on a custom shape, the shape needs a standalone `next` function returning `Maybe<T>`. When the iterator is done, return `none`.",
         ));
         Type::Error
     }
@@ -5459,9 +5459,9 @@ impl<'b> Checker<'b> {
                 self.infer_expr(expr, None);
                 self.diags.push(Diagnostic::error(
                     expr.span().clone(),
-                    "`return` with a value in a `-> nothing` function.",
+                    "`return` with a value in a `-> Nothing` function.",
                     "Remove the value: write `return` with no expression.",
-                    "Functions declared `-> nothing` do not produce a value. A `return` inside them ends the function — no value allowed.",
+                    "Functions declared `-> Nothing` do not produce a value. A `return` inside them ends the function — no value allowed.",
                 ));
             }
             (Some(expr), ret) => {
@@ -5742,8 +5742,8 @@ impl<'b> Checker<'b> {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
                             "Cannot work out which type `none` should be here.",
-                            "Annotate the binding: `let x: maybe<int> = none`.",
-                            "`none` is the absent value of `maybe<T>` for some T. The compiler needs the annotation to know which T.",
+                            "Annotate the binding: `let x: Maybe<Int> = none`.",
+                            "`none` is the absent value of `Maybe<T>` for some T. The compiler needs the annotation to know which T.",
                         ));
                         Type::Error
                     }
@@ -5752,8 +5752,8 @@ impl<'b> Checker<'b> {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
                             format!("`none` cannot be a `{other_name}` value."),
-                            "Use `maybe<T>` for optional values: `let x: maybe<int> = none`.",
-                            "`none` is only valid as the absent value of `maybe<T>`. It cannot be used where a concrete type is expected.",
+                            "Use `Maybe<T>` for optional values: `let x: Maybe<Int> = none`.",
+                            "`none` is only valid as the absent value of `Maybe<T>`. It cannot be used where a concrete type is expected.",
                         ));
                         Type::Error
                     }
@@ -5794,7 +5794,7 @@ impl<'b> Checker<'b> {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
                             format!("`{}` does not support bracket access.", type_name(other)),
-                            "Bracket access works on `array<T>`, `fixed<T>`, `map<K, V>`, and `string`.",
+                            "Bracket access works on `Array<T>`, `Fixed<T>`, `Map<K, V>`, and `string`.",
                             "Use `.get(index)` on built-in collections or access shape fields with dot notation.",
                         ));
                         Type::Error
@@ -5835,10 +5835,10 @@ impl<'b> Checker<'b> {
                                 format!("`{type_name_str}` cannot be used inside a string interpolation."),
                                 format!(
                                     "Add a `.toString()` method to `{type_name_str}`: \
-                                     `function toString(share self: {type_name_str}) -> string {{ ... }}`"
+                                     `function toString(share self: {type_name_str}) -> String {{ ... }}`"
                                 ),
                                 "String interpolation calls `.toString()` on each `${{}}` expression. \
-                                 Primitive types (int, float, bool, string) work automatically. \
+                                 Primitive types (int, Float, bool, string) work automatically. \
                                  Custom shapes need a standalone `toString` function.",
                             ));
                         }
@@ -7245,7 +7245,7 @@ impl<'b> Checker<'b> {
                              — its declaration doesn't show a channel type."
                         ),
                         format!(
-                            "Bind it with the type written out — `let ch: channel<T> = ...` \
+                            "Bind it with the type written out — `let ch: Channel<T> = ...` \
                              — then call `ch.{method}(...)`."
                         ),
                         "A channel operation can suspend this function and resume it later. \
@@ -7310,7 +7310,7 @@ impl<'b> Checker<'b> {
                                 type_name(&arg_ty)
                             ),
                             format!(
-                                "Send a `{}` value, or create a `channel<{}>` for this data.",
+                                "Send a `{}` value, or create a `Channel<{}>` for this data.",
                                 type_name(elem),
                                 type_name(&arg_ty)
                             ),
@@ -7387,10 +7387,10 @@ impl<'b> Checker<'b> {
                         self.diags.push(Diagnostic::error(
                             call_span.clone(),
                             "This task takes no channel — it has no way to receive messages.",
-                            "Add a `channel<T>` parameter to the task's function and pass a \
+                            "Add a `Channel<T>` parameter to the task's function and pass a \
                              channel at the spawn: `let h = background worker(commands)` — \
                              `h.send(v)` then feeds that channel.",
-                            "`h.send(v)` delivers into the FIRST `channel<T>` parameter of the \
+                            "`h.send(v)` delivers into the FIRST `Channel<T>` parameter of the \
                              spawned function, so the task can read messages with \
                              `commands.receive()` inside its own loop. A task whose function \
                              takes no channel never looks for messages, so sending to it \
@@ -7429,7 +7429,7 @@ impl<'b> Checker<'b> {
                                 type_name(&arg_ty)
                             ),
                             format!("Send a `{}` value.", type_name(elem)),
-                            "`h.send(v)` feeds the task function's first `channel<T>` \
+                            "`h.send(v)` feeds the task function's first `Channel<T>` \
                              parameter, so the value's type must match that channel's \
                              element type.",
                         ));
@@ -7459,10 +7459,10 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     call.span.clone(),
                     format!(
-                        "`channel<T>` takes exactly one type argument — the element type — but got {}.",
+                        "`Channel<T>` takes exactly one type argument — the element type — but got {}.",
                         args.len()
                     ),
-                    "Write `channel<int>()` or `channel<Order>(32)`.",
+                    "Write `Channel<Int>()` or `Channel<Order>(32)`.",
                     "A channel carries values of a single element type `T` between tasks.",
                 ));
                 for a in args {
@@ -7473,8 +7473,8 @@ impl<'b> Checker<'b> {
             None => {
                 self.diags.push(Diagnostic::error(
                     call.span.clone(),
-                    "`channel` needs an element type — write `channel<int>()`.",
-                    format!("Add the element type in angle brackets: `channel<int>()` (default capacity {DEFAULT_CHANNEL_CAPACITY}) or `channel<int>(32)`."),
+                    "`channel` needs an element type — write `Channel<Int>()`.",
+                    format!("Add the element type in angle brackets: `Channel<Int>()` (default capacity {DEFAULT_CHANNEL_CAPACITY}) or `Channel<Int>(32)`."),
                     "A channel carries values of a single element type `T`; the compiler needs to know `T` to check `send`/`receive` later.",
                 ));
                 Type::Error
@@ -7496,7 +7496,7 @@ impl<'b> Checker<'b> {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
                 format!(
-                    "`channel<{}>` is not supported yet — this element type cannot cross a task boundary.",
+                    "`Channel<{}>` is not supported yet — this element type cannot cross a task boundary.",
                     type_name(&elem)
                 ),
                 format!(
@@ -7517,9 +7517,9 @@ impl<'b> Checker<'b> {
         if self.kernel_mode {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
-                "`channel<T>` is not available in --kernel mode.",
+                "`Channel<T>` is not available in --kernel mode.",
                 "Remove the channel, or build without `--kernel`. Kernel-mode programs run without a scheduler runtime, so there are no tasks to communicate between.",
-                "A `channel<T>` suspends a task on `send()`-when-full and `receive()`-when-empty, which requires the thread-pool runtime started by `ynz_rt_init` — that runtime does not run in kernel mode. See `IMP-no-runtime-mode.md` for the kernel-mode contract.",
+                "A `Channel<T>` suspends a task on `send()`-when-full and `receive()`-when-empty, which requires the thread-pool runtime started by `ynz_rt_init` — that runtime does not run in kernel mode. See `IMP-no-runtime-mode.md` for the kernel-mode contract.",
             ));
         }
 
@@ -7535,7 +7535,7 @@ impl<'b> Checker<'b> {
                             "A channel's capacity must be an `int`, not `{}`.",
                             type_name(&cap_ty)
                         ),
-                        "Pass a whole number of slots: `channel<int>(32)`.",
+                        "Pass a whole number of slots: `Channel<Int>(32)`.",
                         "The capacity is how many values the channel can hold before `send()` suspends the producer (backpressure), so it must be a count.",
                     ));
                 }
@@ -7560,7 +7560,7 @@ impl<'b> Checker<'b> {
                         self.diags.push(Diagnostic::error(
                             span,
                             format!("A channel's capacity must be at least 1, but got {v}."),
-                            format!("Use a positive capacity: `channel<int>({DEFAULT_CHANNEL_CAPACITY})`. For very large buffering, pass a large explicit number — there is deliberately no unbounded channel."),
+                            format!("Use a positive capacity: `Channel<Int>({DEFAULT_CHANNEL_CAPACITY})`. For very large buffering, pass a large explicit number — there is deliberately no unbounded channel."),
                             "A zero- or negative-capacity channel could never accept a value (or would be unbounded), so it is rejected. Bounded capacity is what makes `send()` apply backpressure instead of growing memory without limit.",
                         ));
                     }
@@ -7569,8 +7569,8 @@ impl<'b> Checker<'b> {
             n => {
                 self.diags.push(Diagnostic::error(
                     call.span.clone(),
-                    format!("`channel<T>(...)` takes at most one argument — the capacity — but got {n}."),
-                    format!("Write `channel<int>()` for the default capacity ({DEFAULT_CHANNEL_CAPACITY}) or `channel<int>(32)` for an explicit capacity."),
+                    format!("`Channel<T>(...)` takes at most one argument — the capacity — but got {n}."),
+                    format!("Write `Channel<Int>()` for the default capacity ({DEFAULT_CHANNEL_CAPACITY}) or `Channel<Int>(32)` for an explicit capacity."),
                     "A channel is constructed with just its bounded capacity; values are added later with `send()`.",
                 ));
                 for a in &call.args {
@@ -7645,7 +7645,7 @@ impl<'b> Checker<'b> {
                         type_name(&arg_ty)
                     ),
                     what_instead,
-                    "`print` works with: int, float, number, boolean, string, and any shape.",
+                    "`print` works with: Int, Float, Number, Boolean, String, and any shape.",
                 ));
             }
             return Type::Error;
@@ -8362,7 +8362,7 @@ impl<'b> Checker<'b> {
             format!(
                 "Write it as a decimal literal: `{lit}.0`. A decimal literal is \
                  already a `number`, so no conversion is needed. A `number`-typed \
-                 variable works too: `let amount: number = {lit}.0`{variable_use}."
+                 variable works too: `let amount: Number = {lit}.0`{variable_use}."
             ),
             "The compiler does not yet convert an int literal to a `number` \
              automatically. An `int` and a `number` are stored in different formats \
@@ -9035,7 +9035,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(Diagnostic::error(
                         call.span.clone(),
                         format!("Cannot work out the type parameter `{tp_name}` for function `{name}` — pass a value or annotate explicitly."),
-                        format!("Examples: `{name}(5)` (T = int) or `{name}<int>()`"),
+                        format!("Examples: `{name}(5)` (T = int) or `{name}<Int>()`"),
                         "Yinz figures out type parameters from the argument types. If there are no arguments, specify the type explicitly.",
                     ));
                 }
@@ -9325,9 +9325,9 @@ impl<'b> Checker<'b> {
             } else {
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
-                    format!("`array<{}>` does not have a method called `{method}`.", type_name(&elem)),
-                    "Available methods: add, remove, get, set, count, first, last, contains, sort, filter, find, map, concat.",
-                    "These are the built-in methods on `array<T>`. Check the spelling.",
+                    format!("`Array<{}>` does not have a method called `{method}`.", type_name(&elem)),
+                    "Available methods: add, remove, get, set, count, first, last, contains, sort, filter, find, Map, concat.",
+                    "These are the built-in methods on `Array<T>`. Check the spelling.",
                 ));
                 Type::Error
             };
@@ -9348,9 +9348,9 @@ impl<'b> Checker<'b> {
             } else {
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
-                    format!("`fixed<{}>` does not have a method called `{method}`.", type_name(&elem)),
+                    format!("`Fixed<{}>` does not have a method called `{method}`.", type_name(&elem)),
                     "Available methods: get, set, count, first, last, contains, sort, filter, find, concat.",
-                    "`fixed<T>` is a size-locked array — it does not have `.add()` or `.remove()`. Use `array<T>` for growable collections.",
+                    "`Fixed<T>` is a size-locked array — it does not have `.add()` or `.remove()`. Use `Array<T>` for growable collections.",
                 ));
                 Type::Error
             };
@@ -9362,9 +9362,9 @@ impl<'b> Checker<'b> {
             } else {
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
-                    format!("`maybe<{}>` does not have a method called `{method}`.", type_name(&inner)),
+                    format!("`Maybe<{}>` does not have a method called `{method}`.", type_name(&inner)),
                     "Available methods: exists(), or(default).",
-                    "`maybe<T>` values can only be checked with `.exists()` or given a default with `.or(default)`. Access the value with `.value` (after checking `.exists()`).",
+                    "`Maybe<T>` values can only be checked with `.exists()` or given a default with `.or(default)`. Access the value with `.value` (after checking `.exists()`).",
                 ));
                 Type::Error
             };
@@ -9387,7 +9387,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
                     format!(
-                        "`map<{}, {}>` does not have a method called `{method}`.",
+                        "`Map<{}, {}>` does not have a method called `{method}`.",
                         type_name(&key),
                         type_name(&val)
                     ),
@@ -9888,7 +9888,7 @@ impl<'b> Checker<'b> {
             self.diags.push(Diagnostic::error(
                 name_span.clone(),
                 format!("`{name}` is not a known type."),
-                format!("Declare `shape {name}<T> {{ ... }}` in this file, or use a built-in generic (`array<T>`, `fixed<T>`, `map<K, V>`, `channel<T>`)."),
+                format!("Declare `shape {name}<T> {{ ... }}` in this file, or use a built-in generic (`Array<T>`, `Fixed<T>`, `Map<K, V>`, `Channel<T>`)."),
                 format!("`{name}` is not declared in this file as a generic shape, so `{name}<...>` names no type."),
             ).with_kind(ynz_diagnostics::DiagnosticKind::NotDefined));
         }
@@ -9956,8 +9956,8 @@ impl<'b> Checker<'b> {
     /// Time: O(1)  Space: O(1)
     fn check_map_key_type(&mut self, key: &Type, span: &SourceSpan) {
         let shown = match key {
-            Type::Number { precision } => format!("number<{precision}>"),
-            Type::Sensitive { .. } => "sensitive string".to_string(),
+            Type::Number { precision } => format!("Number<{precision}>"),
+            Type::Sensitive { .. } => "sensitive String".to_string(),
             other => type_name(other),
         };
         let diagnostic = match key {
@@ -9986,7 +9986,7 @@ impl<'b> Checker<'b> {
             Type::Shape { .. } => {
                 let recovery = format!(
                     "Key the map by one of its fields (an `int` id or a `string` name) and keep \
-                     the `{shown}` as the map's value: `map<string, {shown}>`."
+                     the `{shown}` as the map's value: `Map<String, {shown}>`."
                 );
                 registry_diag(
                     span.clone(),
@@ -10025,9 +10025,9 @@ impl<'b> Checker<'b> {
     /// Time: O(1)  Space: O(1)
     fn report_missing_type_arguments(&mut self, name: &str, required: usize, span: &SourceSpan) {
         let example = if required == 2 {
-            format!("{name}<string, int>")
+            format!("{name}<String, Int>")
         } else {
-            format!("{name}<int>")
+            format!("{name}<Int>")
         };
         let plural = if required == 1 { "" } else { "s" };
         self.diags.push(Diagnostic::error(
@@ -10086,7 +10086,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{n}` requires type argument(s)."),
-                    format!("Write `{n}<T>` — for example, `map<string, int>` or `array<int>`.", n = n),
+                    format!("Write `{n}<T>` — for example, `Map<String, Int>` or `Array<Int>`.", n = n),
                     format!("`{n}` is a built-in generic type. It must have the required type arguments.", n = n),
                 ));
                 Type::Error
@@ -10226,9 +10226,9 @@ impl<'b> Checker<'b> {
                         if resolved_args.len() != 1 {
                             self.diags.push(Diagnostic::error(
                                 span.clone(),
-                                "`channel<T>` takes exactly one type argument — the element type.",
-                                "Write `channel<int>` — for example, `channel<int>` or `channel<Order>`.",
-                                "A `channel<T>` carries values of a single element type `T` between tasks.",
+                                "`Channel<T>` takes exactly one type argument — the element type.",
+                                "Write `Channel<Int>` — for example, `Channel<Int>` or `Channel<Order>`.",
+                                "A `Channel<T>` carries values of a single element type `T` between tasks.",
                             ));
                         }
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
@@ -10846,9 +10846,9 @@ impl<'b> Checker<'b> {
             } else {
                 self.diags.push(Diagnostic::error(
                     field_span.clone(),
-                    format!("`maybe<{}>` does not have a field called `{field}`.", type_name(inner.as_ref())),
+                    format!("`Maybe<{}>` does not have a field called `{field}`.", type_name(inner.as_ref())),
                     "Use `.value` to get the value (after `.exists()` check), `.exists()` to check, or `.or(default)` for a safe fallback.",
-                    "`maybe<T>` only has the virtual field `.value` (requires prior `.exists()` guard) and the methods `.exists()` and `.or()`.",
+                    "`Maybe<T>` only has the virtual field `.value` (requires prior `.exists()` guard) and the methods `.exists()` and `.or()`.",
                 ));
                 return Type::Error;
             }
@@ -10907,7 +10907,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(Diagnostic::error(
                         field_span.clone(),
                         format!("`Frame` does not have a field called `{other}`."),
-                        "Frame has three fields: `file: string`, `line: maybe<int>`, `function: string`.",
+                        "Frame has three fields: `file: String`, `line: Maybe<Int>`, `function: String`.",
                         "`Frame` is a compiler-synthesized shape that represents one stack frame in an error trace.",
                     ));
                     Type::Error
@@ -10924,7 +10924,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(Diagnostic::error(
                         field_span.clone(),
                         format!("`SourceLoc` does not have a field called `{other}`."),
-                        "SourceLoc has two fields: `file: string`, `line: maybe<int>`.",
+                        "SourceLoc has two fields: `file: String`, `line: Maybe<Int>`.",
                         "`SourceLoc` is a compiler-synthesized shape that records the source position of an error.",
                     ));
                     Type::Error
@@ -11069,10 +11069,10 @@ impl<'b> Checker<'b> {
                 let elem_name = type_name(elem);
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("`{{ ... }}` creates a single `{elem_name}` value, not an `array<{elem_name}>`."),
+                    format!("`{{ ... }}` creates a single `{elem_name}` value, not an `Array<{elem_name}>`."),
                     "Put it inside `[...]` to make an array: `[{ ... }]`",
                     format!("`{{ ... }}` creates one value. `[...]` creates a collection. \
-                             Use `array<{elem_name}>` when you need multiple values."),
+                             Use `Array<{elem_name}>` when you need multiple values."),
                 ));
                 for f in fields {
                     self.infer_expr(&f.value, None);
@@ -11083,7 +11083,7 @@ impl<'b> Checker<'b> {
                 let elem_name = type_name(elem);
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("`{{ ... }}` creates a single `{elem_name}` value, not a `fixed<{elem_name}>`."),
+                    format!("`{{ ... }}` creates a single `{elem_name}` value, not a `Fixed<{elem_name}>`."),
                     "Put it inside `[...]` to make a fixed array: `[{ ... }]`",
                     "`{ ... }` creates one value. `[...]` creates a collection.",
                 ));
@@ -11252,7 +11252,7 @@ impl<'b> Checker<'b> {
                             "Remove `{}: <value>` from the shape value. \
                              The default from `{declaring_file}` will be used. \
                              To customize the value, expose a setter from the declaring file: \
-                             `function {setter_name}(lend self: {shape_name}, v: {field_ty_name}) -> nothing {{ self.{} = v }}`\
+                             `function {setter_name}(lend self: {shape_name}, v: {field_ty_name}) -> Nothing {{ self.{} = v }}`\
                              — then call that function instead.",
                             lit_field.name, lit_field.name
                         ),
@@ -11683,8 +11683,8 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`[]` is an array literal, but `{name}` is a shape — a single value, not a collection."),
-                    format!("Use `array<{name}>` if you want a list: `let ... : array<{name}> = []`"),
-                    format!("`{name}` holds one value. To store multiple `{name}` values, use `array<{name}>`."),
+                    format!("Use `Array<{name}>` if you want a list: `let ... : Array<{name}> = []`"),
+                    format!("`{name}` holds one value. To store multiple `{name}` values, use `Array<{name}>`."),
                 ));
                 return Type::Error;
             }
@@ -11736,7 +11736,7 @@ impl<'b> Checker<'b> {
             self.diags.push(Diagnostic::error(
                 span.clone(),
                 "Cannot work out the element type of this empty array literal.",
-                "Add a type annotation: `let arr: array<int> = []`.",
+                "Add a type annotation: `let arr: Array<Int> = []`.",
                 "Without an annotation, the compiler cannot determine what type of elements this array holds.",
             ));
         }
@@ -11794,7 +11794,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{root_name}` is `const` and its elements cannot be changed."),
-                    format!("Declare it with `let` instead: `let {root_name}: array<...> = [...]`"),
+                    format!("Declare it with `let` instead: `let {root_name}: Array<...> = [...]`"),
                     "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. Use `let` for values that need to change.",
                 ));
                 self.infer_expr(value, None);
@@ -11914,7 +11914,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{}` does not support index assignment.", type_name(other)),
-                    "Index assignment works on `array<T>`, `fixed<T>`, and `map<K, V>`.",
+                    "Index assignment works on `Array<T>`, `Fixed<T>`, and `Map<K, V>`.",
                     "Only built-in collection types support `collection[index] = value` syntax.",
                 ));
                 self.infer_expr(value, None);
@@ -12046,7 +12046,7 @@ impl<'b> Checker<'b> {
             self.diags.push(Diagnostic::error(
                 span.clone(),
                 "Cannot work out the key and value types of this empty map literal.",
-                "Add a type annotation: `let m: map<string, int> = {}`.",
+                "Add a type annotation: `let m: Map<String, Int> = {}`.",
                 "Without an annotation, the compiler cannot determine what type of keys and values this map holds.",
             ));
         }
@@ -12574,7 +12574,7 @@ pub fn suspending_union_diagnostics(
 /// Time: O(v) for v variants  Space: O(size of the type name)
 fn number_precision_name(ty: &Type) -> String {
     match ty {
-        Type::Number { precision } if *precision != 34 => format!("number<{precision}>"),
+        Type::Number { precision } if *precision != 34 => format!("Number<{precision}>"),
         Type::Union { variants } => variants
             .iter()
             .map(number_precision_name)
