@@ -55,9 +55,9 @@ function entrypoint() -> Nothing {
 
 ---
 
-## Exhaustiveness — all variants must be handled
+## Exhaustiveness — all choices must be handled
 
-When you use a multi-case `if` on an options value, you must handle every variant, or include `else =>`:
+When you use a multi-case `if` on an options value, you must handle every choice, or include `else =>`:
 
 ```ynz
 options Status {
@@ -77,7 +77,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-Missing a variant is a compile error. The compiler tells you exactly which ones are missing. With the `banned` arm removed, it reports:
+Missing a choice is a compile error. The compiler tells you exactly which ones are missing. With the `banned` arm removed, it reports:
 
 ```
 Non-exhaustive options multi-case — `Status` has 3 variants; 1 are not handled: banned.
@@ -109,13 +109,13 @@ shape Square {
 shape Figure = Circle | Square
 ```
 
-Use `options` when the variants are just labels. Use `|` when they have different data shapes. See [Unions](REF-unions.md).
+Use `options` when the choices are just labels. Use `|` when they have different data shapes. See [Unions](REF-unions.md).
 
 ---
 
 ## Display strings — human-readable `.toString()` values
 
-By default, `.toString()` on an options value returns the variant name as a string:
+By default, `.toString()` on an options value returns the choice's name as a string:
 
 ```ynz
 options Direction {
@@ -132,7 +132,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-You can attach a display string to any variant with `: ` and a backtick string:
+You can attach a display string to any choice with `: ` and a backtick string:
 
 ```ynz
 options Timeframe {
@@ -149,7 +149,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-Variants without a display string still return their name:
+Choices without a display string still return their name:
 
 ```ynz
 options Status {
@@ -161,13 +161,13 @@ options Status {
 
 Here `Status.inactive.toString()` returns `inactive`.
 
-Display strings are useful for UI labels and log output. The variant name is still used for comparisons and type-checking. The display string only affects `.toString()`.
+Display strings are useful for UI labels and log output. The choice's name is still used for comparisons and type-checking. The display string only affects `.toString()`.
 
 ---
 
 ## Commas are optional
 
-Variants can be comma-separated or newline-separated — both work:
+Choices can be comma-separated or newline-separated — both work:
 
 ```ynz
 options Status { active, inactive, banned }

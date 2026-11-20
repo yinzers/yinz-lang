@@ -131,7 +131,21 @@ Smart defaults everywhere. Type inference inside function bodies, operation fusi
 **9. Step-by-step over chaining**
 No method chaining. Each operation gets its own line with a named variable. The compiler merges sequential steps into a single fast pass.
 
-*Why*: `players.filter(p => p.health > 0).sort(p => p.health).limit(10)` is hard to debug because you can't look at the middle. `let active = ...; let ranked = ...` gives every intermediate result a name and a place to inspect it. The compiler removes any speed difference.
+*Why*: A chain is hard to debug because you can't look at the middle:
+
+```ynz
+let health = players.get(0).or(fallback).health
+```
+
+One step per line gives every intermediate result a name and a place to inspect it:
+
+```ynz
+let found = players.get(0)
+let player = found.or(fallback)
+let health = player.health
+```
+
+The compiler removes any speed difference.
 
 ---
 
@@ -152,7 +166,7 @@ If something can be `.method()` with autocomplete, it should be. No cryptic symb
 **12. Familiar syntax**
 Borrow from TypeScript/JavaScript wherever possible.
 
-*Why*: There are tens of millions of JS/TS developers. If they feel at home on day one, adoption starts from a much larger base. `let`, `const`, arrow functions, backtick interpolation — free familiarity.
+*Why*: There are tens of millions of JS/TS developers. If they feel at home on day one, adoption starts from a much larger base. `let`, `const`, backtick interpolation — free familiarity.
 
 ---
 
