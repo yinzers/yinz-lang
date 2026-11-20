@@ -141,7 +141,7 @@ Single source of truth for all feature inventories. [`registry/features.toml`](.
 **Explicitly out of scope (deferred to v0.2-M5):**
 - `textDocument/definition` (go-to-def), `textDocument/references` (find-refs), `textDocument/rename`
 - `textDocument/formatting` / `textDocument/rangeFormatting` (waits on v0.2-M3 `ynz-fmt`)
-- `textDocument/inlayHint` (muted-hint surfaces per [`.claude/rules/inference.md`](../../.claude/rules/inference.md))
+- `textDocument/inlayHint` (muted-hint surfaces; see [REF-ide-hints.md](REF-ide-hints.md))
 - `textDocument/codeAction`, `textDocument/semanticTokens`
 - Doc-comment integration in hover, pull-diagnostics model, structured `Diagnostic.data`
 - `Diagnostic.code` / `Diagnostic.codeDescription` fields
@@ -208,7 +208,7 @@ Single source of truth for all feature inventories. [`registry/features.toml`](.
 - `format_range(source, range)` API added to `ynz-fmt` library
 - VSCode extension v0.2.0: screenshots, `\n\n` separator polish, all 8 new capabilities wired
 
-**Cuts the `v0.2.0` release tag** (first plain-version tag; no `-mN` suffix) in Phase 12. Plan: [`.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md`](../../.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md).
+**Cuts the `v0.2.0` release tag** (first plain-version tag; no `-mN` suffix).
 
 > **⚠️ DO NOT FORGET** (checklist at top): registry entries (SSOT keyword/intrinsic/jargon/hint domains); LSP capabilities wired; WHAT/WHAT-INSTEAD/WHY for every new error; extension version bump + screenshots; `pirates-roster` demo; error gallery files. *(v0.2 shipped — checklist applied across M1–M5.)*
 
@@ -224,20 +224,17 @@ This is a compiler-internal milestone. From the user's perspective, code just ge
 
 The compiler's automatic dependency-graph analysis that schedules independent operations to run in parallel without `wait`/`background` keywords. This is the "default fast" Yinz promise — most code is automatically parallel.
 
-- **Why this version**: The dependency analysis is a significant sub-project. Shipping v0.1 + v0.2 with the optimization deferred means users get the SYNTAX (`wait`, `background` keywords parse, type-check, and have correct sequential semantics) but not the SPEED. Their code still WORKS — it just runs sequentially.
-- **Substitute used pre-this-version**: Sequential execution. All `wait` calls happen in order. All `background` calls run on a single thread. Correct behavior, no parallelism gain.
-- **Locked design**: See [`docs/internal/implementation/IMP-concurrency.md`](../internal/implementation/IMP-concurrency.md) and [`docs/reference/REF-concurrency.md`](REF-concurrency.md)
+- **Before this version**: Sequential execution. All `wait` calls happen in order. All `background` calls run on a single thread.
+- **Design**: See [`docs/internal/implementation/IMP-concurrency.md`](../internal/implementation/IMP-concurrency.md) and [`docs/reference/REF-concurrency.md`](REF-concurrency.md)
 
 ### Auto-SoA layout transformation (locked design, deferred from v0.1)
 
 The compiler auto-transforms `Array<Shape>` storage from Array-of-Structs to Struct-of-Arrays when a hot loop accesses only 1-2 fields, enabling SIMD vectorization and improving cache locality. Same external API (`arr[i].field` works identically); the memory layout is the only thing that changes.
 
-- **Why this version**: SoA analysis is a substantial codegen optimization pass — requires the ownership system to be working (M4, v0.1), the `Array<T>` implementation to be stable (v0.1), and an optimization-pass framework that can decide per-array (v0.2 LSP work surfaces some of this). v0.1 ships the basic `shape`/`array` infrastructure; v0.2 ships LSP/watch/fmt; v0.3 is the right slot for ambitious cross-cutting compiler analyses (it's also when auto-parallelization lands).
-- **Substitute used pre-this-version**: Default Array-of-Structs layout. Manual SoA via parallel `Array<T>` of each field is possible if a user really needs it pre-v0.3, but no compiler help.
-- **Locked design**: Shipped in v0.3-M5 — see [`docs/internal/implementation/IMP-collections.md` — "Auto-SoA layout (v0.3-M5)"](../internal/implementation/IMP-collections.md#auto-soa-layout-v03-m5)
+- **Before this version**: Default Array-of-Structs layout.
+- **Design**: Shipped in v0.3-M5 — see [`docs/internal/implementation/IMP-collections.md` — "Auto-SoA layout (v0.3-M5)"](../internal/implementation/IMP-collections.md#auto-soa-layout-v03-m5)
 
-> **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; one error gallery file per work item, named `<version>_<slug>_errors.ynz` and registered in `crates/ynz-driver/tests/error_galleries.rs`. Roadmap: [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
-
+> **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; one error gallery file per work item, named `<version>_<slug>_errors.ynz` and registered in `crates/ynz-driver/tests/error_galleries.rs`.
 ---
 
 ## v0.4 — Linting tier (compile-time suggestions)
@@ -248,11 +245,9 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
-**Co-shipping: `set<T>` core collection** — the unique-value collection sibling of `Map<K,V>`, plus the `array.unique()` method and the `Array<T> → set<T>` auto-promotion. Designed in [`docs/internal/implementation/IMP-collections.md`](../internal/implementation/IMP-collections.md). **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
-
 **Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see [`docs/internal/scratchpad/SCRATCH-future-release-mode.md`](../internal/scratchpad/SCRATCH-future-release-mode.md). May ship in v0.4 alongside the linting work, or slip to a later perf-focused slot if scope demands.
 
-> **⚠️ DO NOT FORGET** (checklist at top): `[[lint_rule]]` registry entries for every new Tier 3 suggestion rule (incl. `prefer-set-for-membership`); `[[primitive_intrinsic]]` entries for `set<T>` methods + `array.unique()`; `[[muted_hint_domain]]` for the array→set hint; LSP `Diagnostic.severity = hint` wired per rule; hover text for each rule follows WHAT/WHAT-INSTEAD/WHY; `--release` flag (if co-shipping) must suppress or adjust hint output; extension version bump + screenshot showing the suggestion squiggle; `pirates-roster` demo with at least two lint rules + a `set<T>` in context; error gallery showing triggered suggestions + set misuse (e.g. indexing a set).
+> **⚠️ DO NOT FORGET** (checklist at top): `[[lint_rule]]` registry entries for every new Tier 3 suggestion rule ; LSP `Diagnostic.severity = hint` wired per rule; hover text for each rule follows WHAT/WHAT-INSTEAD/WHY; `--release` flag (if co-shipping) must suppress or adjust hint output; extension version bump + screenshot showing the suggestion squiggle; `pirates-roster` demo with at least two lint rules; error gallery showing triggered suggestions.
 
 ---
 
@@ -300,7 +295,7 @@ See [`docs/internal/scratchpad/SCRATCH-stdlib-cli.md`](../internal/scratchpad/SC
 
 Parse, stringify, prettify. Universal data interchange.
 
-> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `json.*` methods; WHAT/WHAT-INSTEAD/WHY for parse errors (malformed JSON, type mismatch on deserialize); compiler-generated typed serializers per [`.claude/rules/stdlib-design.md`](../../.claude/rules/stdlib-design.md) Rule 6 (no runtime reflection); lint suggestions if any; stdlib example project; extension bump + screenshot; spec + design docs.
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `json.*` methods; WHAT/WHAT-INSTEAD/WHY for parse errors (malformed JSON, type mismatch on deserialize); compiler-generated typed serializers (no runtime reflection); lint suggestions if any; stdlib example project; extension bump + screenshot; spec + design docs.
 
 ---
 
@@ -374,7 +369,6 @@ See [`docs/internal/implementation/IMP-testing.md`](../internal/implementation/I
 
 `parallel file` declaration to enable within-file test parallelism. `sequential "resource-name"` declarations to serialize files that share a resource (e.g., two test files both writing to the `users` DB table).
 
-- **Why v0.14+**: v0.13 ships with file-level parallelism only. The 95% case is "files in parallel, tests within a file sequential" and it works fine. Adding refinements upfront creates complexity for everyone to solve a problem only large test suites hit.
 - **Substitute used pre-v0.14+**: Users are responsible for test isolation. `setup file { db.connect(...) }` opens a per-file connection. Files that genuinely share state should be designed differently or use `--serial` mode.
 - **Trigger to land**: v0.14+ if real demand surfaces (e.g., a project with massive test files that need within-file parallelism, or users reporting they can't isolate cross-file state cleanly).
 - **Locked design**: See [`docs/internal/implementation/IMP-testing.md`](../internal/implementation/IMP-testing.md) and [`docs/reference/REF-testing.md`](REF-testing.md)
@@ -467,7 +461,7 @@ Install mechanism targets bun-class speed (content-addressed cache, hard-links, 
 
 **Multi-entry projects ship in v0.22 too** — the `[entries]` table in `yinz.toml` (one project, multiple named binaries) lands here alongside `[dependencies]`. Each named entry is a **ship**; the canonical folder convention is `ships/<name>/entrypoint.ynz` plus a top-level `shared/` for cross-ship code. See `examples/stadium-fleet/` for the layout and [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md) "Workspace / Multi-Package Projects" for the locked rationale.
 
-**Why this version (late in the v0 train)**: There is no public release until v1.0. Shipping the package manager early would mean every pre-v1.0 breaking language change cracks every package — packages would live in an unstable language for ~17 releases. Landing it at v0.22 puts packages into a stable-ish language with the stdlib mostly built (so packages have real APIs to depend on), and gives the package manager one polish cycle before v1.0's backwards-compat promise kicks in. Per [`docs/internal/implementation/IMP-versioning.md`](../internal/implementation/IMP-versioning.md), pre-v1.0 has no compatibility guarantee, so the early-shipped value (ecosystem bootstrap, "fill gaps with packages") doesn't accrue until there's a public community — which is v1.0.
+Pre-v1.0 versions carry no compatibility guarantee; see [`docs/internal/implementation/IMP-versioning.md`](../internal/implementation/IMP-versioning.md).
 
 > **⚠️ DO NOT FORGET** (checklist at top): `ynz add/remove/update/install` CLI help text follows WHAT/WHAT-INSTEAD/WHY for all errors (package not found, version conflict, network failure); lock file format documented in spec; multi-entry project layout documented in spec (`examples/stadium-fleet/` demo updated); extension integration (show installed packages, dependency warnings); spec + design docs.
 
@@ -503,7 +497,6 @@ v1.0 is when the language becomes "stable" — breaking changes after this requi
 
 User-defined types can `follows Add`, `follows Subtract`, etc. and use `+`, `-`, `*`, `/` operators.
 
-- **Why this version**: Not load-bearing for v0.1. Built-in numeric types use the built-in operators just fine. Custom-type overloading is polish, not core. Ready to ship at public launch.
 - **Substitute used pre-v1.0**: Users with custom math types write `.add()`, `.subtract()` methods explicitly. Verbose but works.
 - **Locked design**: See [`docs/internal/implementation/IMP-operators.md`](../internal/implementation/IMP-operators.md) and [`docs/reference/REF-operators.md`](REF-operators.md)
 
@@ -511,7 +504,6 @@ User-defined types can `follows Add`, `follows Subtract`, etc. and use `+`, `-`,
 
 User types can implement `Iterable<T>` or `FallibleIterable<T>` and be iterated with `for`.
 
-- **Why this version**: Built-in `for` over collections (`Array`, `Fixed`, `Map`, ranges) works without this. Built-in `for` over fallible iterables like `file.lines()` works in v0.5. Custom user types implementing the contracts is the extension that ships at v1.0.
 - **Substitute used pre-v1.0**: Users with iterable-like data expose a `.items()` method returning `Array<T>` and `for (item in foo.items())`. Lossy compared to true iteration (materializes the whole collection) but works.
 - **Locked design**: See [`docs/internal/implementation/IMP-iterables.md`](../internal/implementation/IMP-iterables.md) and [`docs/reference/REF-iterables.md`](REF-iterables.md)
 
@@ -519,7 +511,6 @@ User types can implement `Iterable<T>` or `FallibleIterable<T>` and be iterated 
 
 A way to mark stdlib functions / language features as deprecated, with compiler warnings on use.
 
-- **Why this version**: Only relevant post-v1.0 when backwards-compatibility kicks in. v0.1 follows the no-backwards-compatibility-pre-release policy — breaking changes are fine.
 - **Substitute used pre-v1.0**: None needed.
 - **Locked design**: See [`docs/internal/implementation/IMP-versioning.md`](../internal/implementation/IMP-versioning.md) and [`docs/internal/implementation/IMP-linting.md`](../internal/implementation/IMP-linting.md)
 
@@ -534,7 +525,6 @@ A way to mark stdlib functions / language features as deprecated, with compiler 
 - **`ynz doc`** — generate static API documentation from `///` doc comments
 - **`ynz repl`** — interactive REPL for learning and exploration
 
-- **Why this version**: Polish tooling. Not blocking development or language usability. Post-launch additions.
 - **Substitute used pre-v1.1**: No static doc generation (read the source). No REPL (write a small script and `ynz run` it).
 - **Trigger to land**: v1.1 (post-launch polish milestone).
 - **Locked design**: See [`docs/reference/REF-doc-comments.md`](REF-doc-comments.md)
@@ -553,7 +543,6 @@ Registry isn't deployed publicly until shortly before this version ships. The la
 
 Server-side infrastructure for hosting and serving Yinz packages — the `ynz add some-package` discovery + download flow against a public registry.
 
-- **Why this version**: The language isn't publicly launched until v1.0. Before launch, breaking changes are fine; there's no community of authors to support. After v1.0 stabilizes, building the registry — in Yinz itself, as the project's first major dogfooding test — proves the language can build real services.
 - **Substitute used pre-v1.2**: Package manager (v0.22) supports git URLs and local paths. `ynz add github:user/repo` works fine. Public registry isn't required for the package manager to be useful.
 - **Trigger to land**: v1.2 milestone, after v1.0 launch stabilizes.
 - **Locked design**: See [`docs/internal/implementation/IMP-packages.md`](../internal/implementation/IMP-packages.md)
@@ -578,7 +567,6 @@ Exact version (v1.3? v1.5?) decided based on demand.
 
 The `[lint]` section in `yinz.toml` becomes fully configurable — disable rules, adjust severity per rule, tune rule parameters (e.g., `max-function-length = 75`), define pattern-based custom rules, or disable built-in linting entirely (`enabled = false`).
 
-- **Why this version**: v0.4 ships the linting tier with curated defaults. Customization adds a configuration surface that should be designed against real usage patterns — too early creates a config syntax we're stuck with.
 - **Substitute used pre-this-version**: Curated default rule set per [`docs/internal/implementation/IMP-linting.md`](../internal/implementation/IMP-linting.md). Cannot be customized; take-it-or-leave-it.
 - **Locked design**: See [`docs/internal/implementation/IMP-linting.md`](../internal/implementation/IMP-linting.md)
 
@@ -592,9 +580,8 @@ Headline entries with full rationale:
 
 ### Sized integer variants (locked design, deferred from v0.1)
 
-Angle-bracket-parameterized sized integers (`int<8>`, `int<16>`, `int<32>`, `uint<8>`, `uint<16>`, `uint<32>`, `uint<64>`, etc.) and signed equivalents.
+Sized whole-number types: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32` and `u64`. Writing one as a type today is refused with a message pointing you to `Int`.
 
-- **Why v2+**: Requires const generics (numeric values as type parameters) — a meaningful compiler sub-project that took Rust years to land well. v0.1 users have no legitimate need: FFI is deferred, binary protocols can use byte arrays + stdlib helpers.
 - **Substitute used pre-v2**: Use plain `Int` (= i64) for all whole numbers. Covers ±9.2 × 10^18 — bigger than any count a human writes by hand. Precision loss vs sized variants only matters at FFI boundaries, which aren't in v0.1.
 - **Trigger to land**: Either (a) FFI work begins, OR (b) a real user workload needs to interop with a binary protocol that v0.1's byte-array helpers can't ergonomically handle.
 - **Locked design**: See [`docs/internal/implementation/IMP-numeric-types.md`](../internal/implementation/IMP-numeric-types.md) and [`docs/reference/REF-numeric-types.md`](REF-numeric-types.md)
@@ -604,7 +591,6 @@ Angle-bracket-parameterized sized integers (`int<8>`, `int<16>`, `int<32>`, `uin
 
 Single-precision (32-bit) IEEE 754 binary float.
 
-- **Why v2+**: Only essential for GPU compute and ML workloads (both v2+). For graphics/physics in v0.1, `Float` (= f64) is overkill but works fine.
 - **Substitute used pre-v2**: Use `Float` (f64) for all binary-float math. Slower than f32 on SIMD-heavy workloads but correct.
 - **Trigger to land**: GPU dispatch begins OR ML stdlib begins.
 - **Locked design**: See [`docs/internal/implementation/IMP-numeric-types.md`](../internal/implementation/IMP-numeric-types.md) and [`docs/reference/REF-numeric-types.md`](REF-numeric-types.md)
@@ -614,7 +600,6 @@ Single-precision (32-bit) IEEE 754 binary float.
 
 `Number` precision larger than 4096 significant digits — true unbounded decimal arithmetic.
 
-- **Why v2+**: 4096 digits handles every realistic scientific calculation (gravitational wave numerics top out at ~200 digits; even number-theory research rarely exceeds 2000). Unbounded precision means unbounded memory per value and unbounded per-operation time — breaks the language's "predictable performance" character. Real arbitrary-precision libraries (GMP, MPFR) are massive projects.
 - **Substitute used pre-v2**: Use `Number<N>` with N up to 4096. Compile error if a user tries `Number<5000>` — error message explicitly points to this deferral.
 - **Trigger to land**: A real user workload genuinely exceeds 4096 digits AND can't be restructured to fit. This is a deliberately high bar.
 - **Locked design**: See [`docs/internal/implementation/IMP-numeric-types.md`](../internal/implementation/IMP-numeric-types.md) and [`docs/reference/REF-numeric-types.md`](REF-numeric-types.md)
@@ -624,7 +609,6 @@ Single-precision (32-bit) IEEE 754 binary float.
 
 The `foreign` keyword and machinery to call C / C++ / Rust libraries from Yinz.
 
-- **Why v2+**: Significant design surface (ownership across the boundary, type mapping, safety guarantees). Most v0.1 code doesn't need it — stdlib is in scope. Stdlib internals can use compiler-private FFI without exposing a user-facing `foreign` keyword.
 - **Substitute used pre-v2**: Stdlib modules that need C interop (file I/O, networking, math) call C internally via compiler-private mechanisms. Users don't see this. If a user genuinely needs to call a third-party C library, they have to wait for v2+ or contribute to the stdlib.
 - **Trigger to land**: v2+ work begins OR a stdlib gap creates a real need.
 - **Locked design**: See [`docs/internal/implementation/IMP-ffi.md`](../internal/implementation/IMP-ffi.md) and [`docs/reference/REF-ffi.md`](REF-ffi.md)
@@ -634,7 +618,6 @@ The `foreign` keyword and machinery to call C / C++ / Rust libraries from Yinz.
 
 The `gpu` call-site keyword and kernel compilation to GPU shader / compute languages.
 
-- **Why v2+**: Massive scope (kernel compilation, ABI design, runtime fallback). No v0.1 user has shown demand. Was tagged MVP2+ in original design.
 - **Substitute used pre-v2**: None — `gpu` keyword is reserved but not parseable. Compile error if used.
 - **Trigger to land**: v2+ AND a real ML/compute workload requires it.
 - **Locked design**: See [`docs/internal/implementation/IMP-gpu.md`](../internal/implementation/IMP-gpu.md) and [`docs/reference/REF-concurrency.md`](REF-concurrency.md)
@@ -644,7 +627,6 @@ The `gpu` call-site keyword and kernel compilation to GPU shader / compute langu
 
 Tensors, neural network primitives, autodiff, optimizers.
 
-- **Why v2+**: v0.1 stdlib focus is general-purpose. ML requires its own deep design (compatible with `Float`/`f32`, GPU dispatch, etc.) and is a v2+ concern.
 - **Substitute used pre-v2**: None. ML workloads run in Python until then.
 - **Trigger to land**: v2+ AND GPU dispatch lands.
 - **Locked design**: See [`docs/internal/scratchpad/SCRATCH-stdlib-ml.md`](../internal/scratchpad/SCRATCH-stdlib-ml.md)
@@ -654,7 +636,6 @@ Tensors, neural network primitives, autodiff, optimizers.
 
 Financial data ingestion, brokerage integrations, market data feeds.
 
-- **Why v2+**: Niche stdlib module. Not load-bearing for v0.1.
 - **Substitute used pre-v2**: None. Users write HTTP-based integrations directly.
 - **Trigger to land**: v2+.
 - **Locked design**: See [`docs/internal/scratchpad/SCRATCH-stdlib-markets.md`](../internal/scratchpad/SCRATCH-stdlib-markets.md)
@@ -664,33 +645,8 @@ Financial data ingestion, brokerage integrations, market data feeds.
 
 The Yinz compiler rewritten in Yinz (current bootstrap is in Rust).
 
-- **Why v2+**: Need feature parity in v1.0+ stable Yinz first. Bootstrap-in-Rust serves us for years.
 - **Substitute used pre-v2**: Rust bootstrap compiler — see [`docs/internal/implementation/IMP-compiler-language.md`](../internal/implementation/IMP-compiler-language.md).
 - **Trigger to land**: v2+ AND the language is stable enough to self-host.
 - **Locked design**: See [`docs/internal/implementation/IMP-compiler-language.md`](../internal/implementation/IMP-compiler-language.md)
 - **Registry entries**: No entry — compiler-internal milestone with no user-facing token reserved. No `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry applies.
 
----
-
-## How to decide if a feature is v0.N or vN+1
-
-Three questions:
-
-1. **Does it stand alone as a focused thing?** If yes, candidate for its own version. If it's part of a tightly-coupled pair (file+path+directory; date+duration; cli+env+process), bundle them.
-2. **Does the v0.1 syntax surface depend on it?** If yes, it's v0.1. Things that change every function signature (ownership) can't defer.
-3. **Does it unlock the most value for the next version's work?** (Order versions for value compounding — LSP early so everyone benefits, stdlib ramp before the package manager so packages land into stable APIs rather than churning every release, etc.)
-
-When in doubt, defer to a later version. We can always pull features forward when they prove easy; pushing them back is harder once users depend on them.
-
----
-
-## Tight Pair Rationale
-
-Some modules are bundled into one version because designing/shipping them separately would create awkward intermediate states:
-
-| Bundle | Why bundled |
-|--------|------------|
-| `file` + `path` + `directory` (v0.5) | `file.read()` needs `path` for argument types. `directory` is the iteration form of `file`. All three together. |
-| `cli` + `env` + `process` (v0.7) | Every CLI tool needs all three. Designing them together keeps conventions consistent. |
-| `date` + `duration` (v0.9) | Durations only make sense in relation to dates. Arithmetic between them is the same module's concern. |
-| LSP + `ynz watch` + `ynz fmt` (v0.2) | All dev-loop tooling — landing them together gives the dev experience a single noticeable jump rather than three small ones. |
