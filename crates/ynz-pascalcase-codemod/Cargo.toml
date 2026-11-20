@@ -1,0 +1,18 @@
+[package]
+name = "ynz-pascalcase-codemod"
+description = "Dev tool: renames old lowercase Yinz built-in type names (int, map, ...) to PascalCase, only in type positions, across a tree"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "pascalcase-codemod"
+path = "src/main.rs"
+
+[dependencies]
+ynz-parser      = { workspace = true }
+ynz-diagnostics = { workspace = true }
+ynz-registry    = { workspace = true }
