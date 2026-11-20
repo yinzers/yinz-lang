@@ -41,15 +41,17 @@ A sensitive value prints as `[REDACTED]` everywhere: `print()`, text with `${...
 shape Config {
   appName: String
   apiKey: sensitive String
-  port: Number
+  port: Int
 }
 
-let apiKey: sensitive String = sensitive(`sk-test-12345`)
-print(`Connecting with key: ${apiKey}`)         // Connecting with key: [REDACTED]
+function entrypoint() -> Nothing {
+  let apiKey: sensitive String = sensitive(`sk-test-12345`)
+  print(`Connecting with key: ${apiKey}`)         // [REDACTED] (the whole text is sensitive, because it holds the key)
 
-let config: Config = { appName: `MyApp`, apiKey: apiKey, port: 3000 }
-print(config)
-// Config { appName: MyApp, apiKey: [REDACTED], port: 3000 }
+  let config: Config = { appName: `MyApp`, apiKey: apiKey, port: 3000 }
+  print(config)
+  // Config { appName: MyApp, apiKey: [REDACTED], port: 3000 }
+}
 ```
 
 ---
@@ -77,6 +79,9 @@ let trimmed = key.trim()               // still sensitive String
 let combined = `Bearer ${key}`         // still sensitive String
 
 let length = key.count()               // Int — NOT sensitive (length isn't secret)
+
+print(upper)                           // [REDACTED]
+print(length)                          // 6
 ```
 
 ---
@@ -85,8 +90,8 @@ let length = key.count()               // Int — NOT sensitive (length isn't se
 
 `ynz run` takes a flag that prints sensitive values in plain text:
 
-```
+```text
 ynz run entrypoint.ynz --reveal-sensitive
 ```
 
-Without the flag, sensitive values stay `[REDACTED]`.
+Without the flag, sensitive values stay `[REDACTED]`. With it, text made from a sensitive value prints in plain text too.
