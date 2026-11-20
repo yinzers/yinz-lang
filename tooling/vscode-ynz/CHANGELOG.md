@@ -2,22 +2,6 @@
 
 All notable changes to the Yinz Language extension are documented here.
 
-## [0.4.0]
-
-### Added
-
-- **Dotted underline on promoted tokens** — when the compiler already uses a stricter form
-  than the one you wrote, the `array` of `array<int>` (never grown) or the `let` keyword
-  (never reassigned) gets a dotted underline instead of an end-of-line comment. Hover it for
-  the WHAT / WHAT INSTEAD / WHY explanation; the lightbulb offers the optional rewrite to
-  `fixed` / `const` (refactor action).
-- New semantic-token modifier `promotable`, so themes can restyle the marked tokens.
-
-### Changed
-
-- The end-of-line `// promoted to fixed — never grown` and `// effectively const — never
-  reassigned` hints are gone; the underline replaces them.
-
 ## [0.3.0] — 2026-07-03
 
 ### Added
