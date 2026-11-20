@@ -17,15 +17,15 @@ Variables store values. Declare them with `let` or `const`.
 
 ---
 
-## let — mutable variables
+## let — a variable you can change
 
 ```
-let name: string = "Patrick"
+let name: string = `Patrick`
 let health: number = 100
 let score: number = 0
 ```
 
-A `let` variable can be changed after it's created:
+You can give a `let` variable a new value after you create it:
 
 ```
 let health: number = 100
@@ -34,14 +34,14 @@ health = health - 25    // fine — health is now 75
 
 ---
 
-## const — immutable variables
+## const — a variable that never changes
 
 ```
 const maxPlayers: number = 10
-const serverName: string = "prod-01"
+const serverName: string = `prod-01`
 ```
 
-A `const` cannot be changed after it's created:
+You cannot give a `const` a new value after you create it:
 
 ```
 const maxPlayers: number = 10
@@ -49,18 +49,18 @@ maxPlayers = 20
 // COMPILE ERROR: maxPlayers is const and cannot be reassigned.
 ```
 
-Use `const` by default. Reach for `let` only when you need to update the value.
+Use `const` by default. Reach for `let` only when you need to change the value later.
 
 ### What const blocks — the full picture
 
 `const` means "this value never changes, in any way." That covers:
 
-- **Reassignment**: `maxPlayers = 20` — blocked (the example above)
-- **Field mutation** (when types land): `player.health = 50` on a `const player` is blocked
-- **Mutable borrows** (when ownership lands): you can't pass a `const` value to a function whose signature declares `lend` or `give` — the compiler refuses to grant the mutable access
+- **Giving it a new value**: `maxPlayers = 20` — blocked (the example above)
+- **Changing a field**: `player.health = 50` on a `const player` is blocked
+- **Letting a function change it**: you can't pass a `const` value to a function whose signature declares `lend` or `give`, because those words let the function change or take the value, and the compiler won't allow that
 
 ```ynz
-const player: Player = { name: "Patrick", health: 100 }
+const player: Player = { name: `Patrick`, health: 100 }
 player.health = 50            // COMPILE ERROR: player is const — fields can't change.
 healPlayer(player)            // COMPILE ERROR: player is const — healPlayer's signature is
                               //   `lend player: Player` which needs mutable access.
@@ -69,34 +69,34 @@ healPlayer(player)            // COMPILE ERROR: player is const — healPlayer's
 
 The compiler rejects all three at compile time. `const` is a complete promise — no exceptions.
 
-`const` and the ownership system work together to give you both safety and performance. The full picture lives in [Ownership](REF-ownership.md).
+`const` and ownership work together to keep your program safe and fast. See [Ownership](REF-ownership.md) for the full picture.
 
 ---
 
-## Type inference — skip the obvious type
+## Types the compiler fills in
 
-Inside a function body, you don't have to write the type when it's obvious:
+Inside a function body, you don't have to write a type when it is obvious from the value:
 
 ```
-let x = 42              // compiler knows: int
-let name = "Patrick"    // compiler knows: string
-let active = true       // compiler knows: boolean
+let x = 42              // the compiler knows: int
+let name = `Patrick`    // the compiler knows: string
+let active = true       // the compiler knows: boolean
 ```
 
-The IDE still shows the inferred type on hover. You just don't have to write it.
+The IDE still shows the type when you hover. You just don't have to write it.
 
-Type annotations are required at function boundaries — parameters, return types, and type definitions. Inference only applies inside function bodies:
+You must write types at the edges of a function: its parameters, its return type, and shape definitions. Inside the body you can leave them out:
 
 ```
 function add(a: number, b: number) -> number {
-  let result = a + b    // inferred — fine
+  let result = a + b    // no type needed — fine
   return result
 }
 ```
 
 ---
 
-## Every variable must be initialized
+## Every variable must start with a value
 
 You cannot declare a variable without giving it a value:
 
