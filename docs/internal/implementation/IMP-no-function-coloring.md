@@ -87,6 +87,22 @@ When a downstream project consumes a compiled Yinz package, the compiler reads t
 
 ---
 
+## Cross-Module Frame Layouts — `frame_layouts_query` (shipped)
+
+A function that suspends (it reaches a `wait`) keeps its locals in a heap frame. When file A calls a suspending function from file B, A must reserve room for B's frame inside its own and write B's arguments into it, so A needs B's real frame size and local count. `frame_layouts_query(source)` in `crates/ynz-codegen/src/queries.rs` is the one place that computes them: a Salsa query, memoized per source file, returning `Arc<HashMap<String, FrameLayout>>` (function name to layout).
+
+How it works:
+
+- **Codegen computes it, not the type checker.** The size of a shape-typed local is the target's padded layout, which only LLVM's data layout knows; `ynz-typeck` stays free of LLVM. Each source file is its own LLVM module and object file, so the importer cannot read the callee's module; it asks the query for the callee's file instead.
+- **One target-machine constructor** serves both `emit_artifact` and the query, so importer and exporter use byte-identical ABI sizes.
+- **Recursive for re-export chains:** for an imported suspending callee, the size resolver calls `frame_layouts_query(callee_file)`; A to B to C recurses and ends because the import graph has no cycle that survives (Salsa cycle recovery returns an empty map for a circular import).
+- **What it fixes:** exact slot offsets for every crossing local, the full sub-frame tree through re-exports, the `errors` staging slot next to a child sub-frame, the two-slot `Number` crossing local, and transitive composition with the caller's frame.
+- **Still refused:** edges the compiler cannot analyze (a call through a `dynamic Contract` vtable, a foreign call into a suspending function) keep failing through the existing may-block unresolvable-edge path.
+
+When the compiled-package format ships, it must serialize these layouts into the package artifact; nothing in the in-process query blocks that.
+
+---
+
 ## What this is NOT
 
 - **Not green threads / stackful coroutines** — those have per-task stack memory overhead. Yinz uses stackless state machines like Rust async, with the function-coloring problem eliminated by the compiler doing the work the user shouldn't have to.
