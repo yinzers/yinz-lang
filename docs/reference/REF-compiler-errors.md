@@ -177,7 +177,7 @@ Functions, modules and variables keep lowercase names, and they may match a type
 **A good compile error** names the user's own variable, gives code that can be copied, and explains the reason for this code. For a duplicate import:
 
 - **WHAT:** `` Import name `Player` is already bound by a previous import. ``
-- **WHAT TO DO INSTEAD:** ``Use a different local name: `import { Player as otherName } from `...` ``
+- **WHAT TO DO INSTEAD:** ``` Use a different local name: `import { Player as otherName } from `...`` ```
 - **WHY:** Each imported name must be unique in the local scope.
 
 **A good runtime error** says where it happened and how to fix it:
