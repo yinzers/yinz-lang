@@ -86,5 +86,4 @@ actually matters today, without pretending macOS is validated.
 - `.github/workflows/ci.yml` — the matrix (currently `[ubuntu-latest]`)
 - `crates/ynz-codegen/tests/golden.rs` — the golden/IR-snapshot tests + per-triple `load_golden`
 - `crates/ynz-codegen/tests/__golden__/` — committed SHA goldens (`*.x86_64-linux.sha256`)
-- [`.claude/todos.md`](../../../.claude/todos.md) — "macos-ci-codegen-support" tracked item
 - [`docs/internal/scratchpad/SCRATCH-future-designs-index.md`](SCRATCH-future-designs-index.md) — future-locked design index

@@ -18,8 +18,8 @@ metadata:
 ## CSV
 
 ```
-let data = csv.parse(file.read("sales.csv"))
-let typed = csv.parseAs<SalesRecord>(file.read("sales.csv"))
+let data = csv.parse(file.read(`sales.csv`))
+let typed = csv.parseAs<SalesRecord>(file.read(`sales.csv`))
 ```
 
 ---
@@ -38,8 +38,8 @@ let pretty = json.stringify(data, indent: 2)
 ## Data Operations on Collections
 
 ```
-let records = csv.parseAs<SalesRecord>(file.read("data.csv"))
-let q4 = records.filter(r => r.quarter == "Q4")
+let records = csv.parseAs<SalesRecord>(file.read(`data.csv`))
+let q4 = records.filter(r => r.quarter == `Q4`)
 let sorted = q4.sort(r => r.revenue, desc)
 let revenues = q4.map(r => r.revenue)
 let total = revenues.sum()

@@ -27,7 +27,7 @@ Each device feature (camera, mic, speaker, touch, GPS, notifications, biometrics
 1. **One unified Yinz API** — dot-first, self-documenting, the same on every platform. The jr dev writes this once and it works everywhere:
    ```
    // ILLUSTRATIVE — proposed future syntax, not yet implemented
-   const photo = camera.capture() errors      // errors surfaces "denied" / "no device"
+   const photo = camera.capture() errors      // errors surfaces `denied` / `no device`
    const here  = location.current() errors
    haptics.buzz(duration.ms(50))
    ```
@@ -54,7 +54,7 @@ The capability API must follow [`.claude/rules/stdlib-design.md`](../../../.clau
 - **Pure-named methods are pure** — `camera.isAvailable()` must not block on hardware init; anything doing real device I/O names it and carries `errors`.
 - **No parallel APIs** — one canonical way per capability, no `v1`/`v2`.
 - **No platform-default config** — defaults are identical on every platform; per-platform behavior is explicit, never a silent `getPreferredX()`.
-- **Bounded by default** — capability event streams (touch events, location updates, mic frames) are bounded channels, never unbounded mailboxes (Rule 4).
+- **Bounded by default** — capability event streams (touch events, location updates, mic frames) are bounded channels, never unbounded mailboxes.
 - **Receiver-first** — the dot-call convention already enforces this.
 
 ---

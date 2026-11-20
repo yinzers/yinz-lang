@@ -86,6 +86,26 @@ This means `--reveal-sensitive` and any future dev-only flags need a correspondi
 
 ---
 
+## Related commands
+
+**Designed, not built.** `ynz-driver` has no `--release` or `--clean` flag today.
+
+| Command | Behavior |
+|---|---|
+| `ynz run --release` | Compiles with full optimization (same pipeline as `ynz build --release`), then runs the program. |
+| `ynz build --clean` | Clears the incremental caches, then does a full rebuild. |
+| `ynz build --clean --release` | Clears the caches, then does a full optimized rebuild. |
+
+What `--clean` clears:
+
+- Type analysis results
+- Ownership proofs
+- Compiled output for unchanged files
+
+`ynz watch` already rebuilds and restarts the program on every save, so it needs no `--run` flag. Behavior is in [`IMP-watch.md`](../implementation/IMP-watch.md).
+
+---
+
 ## Cross-references
 
 - [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — v0.4+ deferred features section (this entry)

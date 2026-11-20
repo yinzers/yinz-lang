@@ -1,10 +1,10 @@
 ---
 name: "REF-sensitive"
-description: "Values from environment variables and other secret sources are automatically protected from accidental logging. You have to consciously choose to reveal them."
+description: "A value marked sensitive prints as [REDACTED] everywhere. You have to consciously choose to reveal it."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,46 +13,45 @@ metadata:
 
 # Sensitive Values
 
-Values from environment variables and other secret sources are automatically protected from accidental logging. You have to consciously choose to reveal them.
+A value marked `sensitive` is protected from accidental logging. It prints as `[REDACTED]`, and you have to consciously choose to reveal it.
 
 ---
 
-## How it works
+## Marking a value as sensitive
 
-`env.get()` returns `sensitive String` by default. No extra annotation needed:
+Put the value inside `sensitive(...)` and give the variable a `sensitive String` type:
 
 ```
-let foundApiKey = env.get(`STRIPE_KEY`)         // a maybe: the key, or nothing
-let apiKey = foundApiKey.or(``)                 // sensitive String
-let foundDatabasePassword = env.get(`DB_PASSWORD`)     // a maybe: the password, or nothing
-let databasePassword = foundDatabasePassword.or(``)  // sensitive String
+let apiKey: sensitive String = sensitive(`sk-test-12345`)
 let appName = `My App`                          // regular String
+
+print(apiKey)                                   // [REDACTED]
+print(appName)                                  // My App
 ```
+
+Only a `String` can be marked `sensitive`.
 
 ---
 
 ## Auto-redaction in all output
 
-A sensitive value prints as `[REDACTED]` everywhere: `print()`, log lines, text with `${...}` in it, and when you print a whole shape that holds one:
+A sensitive value prints as `[REDACTED]` everywhere: `print()`, text with `${...}` in it, and when you print a whole shape that holds one:
 
 ```
-let foundApiKey = env.get(`STRIPE_KEY`)
-let apiKey = foundApiKey.or(``)
-
-print(apiKey)                                   // [REDACTED]
-log(`Connecting with key: ${apiKey}`)           // Connecting with key: [REDACTED]
-
 shape Config {
   appName: String
   apiKey: sensitive String
-  port: Number
+  port: Int
 }
 
-let foundConfigKey = env.get(`API_KEY`)
-let configKey = foundConfigKey.or(``)
-let config: Config = { appName: `MyApp`, apiKey: configKey, port: 3000 }
-print(config)
-// Config { appName: `MyApp`, apiKey: [REDACTED], port: 3000 }
+function entrypoint() -> Nothing {
+  let apiKey: sensitive String = sensitive(`sk-test-12345`)
+  print(`Connecting with key: ${apiKey}`)         // [REDACTED] (the whole text is sensitive, because it holds the key)
+
+  let config: Config = { appName: `MyApp`, apiKey: apiKey, port: 3000 }
+  print(config)
+  // Config { appName: MyApp, apiKey: [REDACTED], port: 3000 }
+}
 ```
 
 ---
@@ -60,31 +59,12 @@ print(config)
 ## `.reveal()` — ask for the real value
 
 ```
-// Pass the secret only to code that actually needs it
-let connection = database.connect(databasePassword.reveal())
-let response = request.post(url, { headers: { authorization: apiKey.reveal() } })
+let apiKey: sensitive String = sensitive(`sk-test-12345`)
+let rawKey = apiKey.reveal()                    // String
+print(rawKey)                                   // sk-test-12345
 ```
 
-The IDE warns you when you print a revealed value:
-
-```
-print(apiKey.reveal())
-// IDE WARNING: Revealing sensitive value in print output.
-// Ensure this is not in production logging.
-```
-
----
-
-## Marking any value as sensitive
-
-Not just env vars — mark any value sensitive:
-
-```
-let socialSecurityNumber: sensitive String = sensitive(`123-45-6789`)
-let cardNumber: sensitive String = sensitive(rawCardNumber)
-
-print(socialSecurityNumber)    // [REDACTED]
-```
+Pass the revealed value only to code that actually needs it.
 
 ---
 
@@ -93,35 +73,25 @@ print(socialSecurityNumber)    // [REDACTED]
 Changing or joining a sensitive String gives another sensitive String. A plain fact about it, such as its length, is not sensitive:
 
 ```
-let foundKey = env.get(`API_KEY`)      // a maybe: the key, or nothing
-let key = foundKey.or(``)              // sensitive String
+let key: sensitive String = sensitive(`abc123`)
 let upper = key.toUpperCase()          // still sensitive String
 let trimmed = key.trim()               // still sensitive String
 let combined = `Bearer ${key}`         // still sensitive String
 
 let length = key.count()               // Int — NOT sensitive (length isn't secret)
+
+print(upper)                           // [REDACTED]
+print(length)                          // 6
 ```
 
 ---
 
-## Sensitive values in error messages
+## Showing sensitive values while you develop
 
-Error messages hide sensitive data automatically:
+`ynz run` takes a flag that prints sensitive values in plain text:
 
-```
-// Error output when database connection fails:
-// ERROR: Could not connect to database
-//   URL: [REDACTED]
+```text
+ynz run entrypoint.ynz --reveal-sensitive
 ```
 
----
-
-## Development flag
-
-> **Not available yet.** The `--reveal-sensitive` flag is planned but does not exist today.
-
-```
-ynz run entrypoint.ynz --reveal-sensitive    // shows all sensitive values in output
-```
-
-The flag will not work in release builds. `ynz build --release` leaves it out, so secrets can't leak in production by accident.
+Without the flag, sensitive values stay `[REDACTED]`. With it, text made from a sensitive value prints in plain text too.

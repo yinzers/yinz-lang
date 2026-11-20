@@ -89,7 +89,7 @@ Number of grapheme clusters. `O(n)` via `unicode-segmentation`.
 .contains(substr: String) -> Boolean
 ```
 
-Returns `true` if `substr` appears anywhere in `self`. For patterns ≥ 16 bytes, uses SIMD-accelerated `memchr::memmem`. For patterns ≤ 15 bytes, uses scalar scan. Pure read. No allocation. `stdlib-design.md` Rule 1: no I/O.
+Returns `true` if `substr` appears anywhere in `self`. For patterns ≥ 16 bytes, uses SIMD-accelerated `memchr::memmem`. For patterns ≤ 15 bytes, uses scalar scan. Pure read. No allocation. `stdlib-design.md`: a plain-read name does no I/O.
 
 **Ownership:** `share self, share substr`.
 
@@ -178,7 +178,7 @@ Replaces all occurrences of `old` with `new`. Returns a new string. `is_nfc_know
 ### For-loop over string
 
 ```ynz
-for c in "café" {
+for c in `café` {
   // c is a 1-character string (one code point per step)
 }
 ```

@@ -2753,7 +2753,7 @@ hover_why = "Several tasks read this value, so one shared copy saves a full copy
 
 # Cross-module frame serialization shipped in v0.3-M3e.
 # The deferred_language_feature entry has been retired — the feature is live.
-# See docs/internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md for the full design record.
+# See docs/internal/implementation/IMP-no-function-coloring.md "Cross-Module Frame Layouts" for the design.
 
 # ---------------------------------------------------------------------------
 # [[lint_rule]] — Tier 3 lint rules per docs/internal/implementation/IMP-linting.md.

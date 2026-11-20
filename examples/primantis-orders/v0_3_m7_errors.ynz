@@ -1,4 +1,4 @@
-// v0.3-M7 compile-error gallery (Phase 2 — aliasing-call rejection, FRAGO 002)
+// v0.3-M7 compile-error gallery (aliasing-call rejection)
 //
 // Every block below intentionally triggers a diagnostic class added in v0.3-M7.
 // Run `ynz build v0_3_m7_errors.ynz` to see all diagnostics.

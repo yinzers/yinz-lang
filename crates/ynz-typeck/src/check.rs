@@ -10817,7 +10817,7 @@ impl<'b> Checker<'b> {
             self.diags.push(Diagnostic::error(
                 field_span.clone(),
                 format!("Cannot use `.{field}` to look up a map key."),
-                format!("Map keys are runtime values — use `m[\"{field}\"]` to look up a key. For checking existence, use `m.has(\"{field}\")`.",),
+                format!("Map keys are runtime values — use `` m[`{field}`] `` to look up a key. For checking existence, use `` m.has(`{field}`) ``.",),
                 "Dot access is for shape fields with compile-time-known names. Map keys are dynamic — use bracket syntax.",
             ));
             let _ = (key, val);
@@ -11096,7 +11096,7 @@ impl<'b> Checker<'b> {
             Some(other) if *other != Type::Error => {
                 let what_instead = match other {
                     Type::BuiltinMap { .. } =>
-                        "For a map literal, use quoted string keys: `{ \"key\": value, \"key2\": value2 }`".to_string(),
+                        "For a map literal, use quoted string keys: `` { `key`: value, `key2`: value2 } ``".to_string(),
                     Type::Union { .. } =>
                         "Check the union type — if one variant is a `shape`, annotate with its name; if it's a `Map`, use quoted string keys.".to_string(),
                     _ =>
@@ -11109,7 +11109,7 @@ impl<'b> Checker<'b> {
                         type_name(other)
                     ),
                     what_instead,
-                    "Shape values use identifier field names (`name: value`). Map literals use quoted string keys (`\"name\": value`).",
+                    "Shape values use identifier field names (`name: value`). Map literals use quoted string keys (`` `name`: value ``).",
                 ));
                 for f in fields {
                     self.infer_expr(&f.value, None);
@@ -12032,7 +12032,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(
                         Diagnostic::error(
                             key_expr.span().clone(),
-                            format!("Duplicate key `\"{key_str}\"` in this map literal — the key is listed twice."),
+                            format!("Duplicate key `` `{key_str}` `` in this map literal — the key is listed twice."),
                             "Remove or rename one of the two entries so each key is unique.",
                             "The compiler refuses to silently pick one — duplicate keys in a map literal are always a mistake.",
                         ).with_related(first_span.clone(), "first occurrence here"),

@@ -1,0 +1,6 @@
+import { Player } from `models`
+import { Player } from `legacy`
+
+function entrypoint() -> Nothing {
+  print(`unreachable`)
+}

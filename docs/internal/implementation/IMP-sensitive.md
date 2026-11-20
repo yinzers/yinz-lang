@@ -45,7 +45,7 @@ Print, log, string interpolation, type default representation — sensitive valu
 
 Getting the raw value requires calling `.reveal()`, which is clearly named and produces an IDE warning when used in output contexts.
 
-Decided: returning the plain string and trusting developers to be careful rejected; an explicit action plus a warning on suspicious usage catches the mistake at the point of error.
+An explicit action plus a warning on suspicious usage catches a leak at the point of error; the plain string is never returned silently.
 
 ---
 

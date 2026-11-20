@@ -34,7 +34,7 @@ doOtherThing()
 
 Pre-assignment (when you can't return):
 ```
-let value = "default"
+let value = `default`
 if (condition) {
   value = "other"
 }
@@ -46,13 +46,9 @@ if (condition) {
 
 ---
 
-## Multi-Case `if` — No `switch`, No `match`
+## Multi-Case `if`
 
-Multi-case matching uses the existing `if` keyword with `=>` arrows inside the block. The compiler distinguishes simple `if` from multi-case `if` by the presence of `=>` inside the block.
-
-**Why no `switch`**: switch has fall-through bugs (famously confusing in C/Java/JS), requires `break` statements, and is a distinct keyword to learn. Multi-case `if` has no fall-through, no `break`, and uses the keyword developers already know.
-
-**Why no `match`**: `match` is Rust/functional jargon. `if` reads like English — developers already know it checks conditions. Multi-case `if` is a natural extension of what `if` already means.
+Multi-case matching uses the existing `if` keyword with `=>` arrows inside the block. The compiler distinguishes simple `if` from multi-case `if` by the presence of `=>` inside the block. There is no `switch` or `match` keyword: multi-case `if` has no fall-through and no `break`, and it reads like English with a keyword developers already know.
 
 **Zero new keywords added**: The compiler distinguishes the two forms based on `=>` inside the block. One keyword, two forms, no ambiguity.
 

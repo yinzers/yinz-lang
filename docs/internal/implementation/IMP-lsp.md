@@ -16,9 +16,7 @@ metadata:
 This doc is for **compiler contributors and milestone implementers**, not Yinz language users. It covers how `ynz-lsp` is structured, why it works the way it does, and what is deferred to v0.2-M5.
 
 User spec reference: N/A (tooling internals)
-Plan reference: [`.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md) (M2); [`.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md) (M5)
-
-Cross-references: [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md)
+Cross-references: [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../.claude/rules/inference.md)
 
 ---
 
@@ -74,7 +72,7 @@ Rationale: salsa inputs require `&mut db` access. Salsa is `Send` but not `Sync`
 - If `didChange` arrives while a previous response is being computed: the worker drains pending mutations BEFORE replying. The in-flight response reflects state N-1 but is sent unmodified; the next request sees post-mutation state.
 - For requests the LSP spec marks cancellable (`completion`, `hover`): `$/cancelRequest` is handled BEST-EFFORT. If the query hasn't started (still queued), it's dropped and a `RESPONSE_ERROR_REQUEST_CANCELLED` is returned. If already running, it completes; the client receives the late response (LSP spec permits this).
 
-**v0.2-M5 note:** When go-to-def / rename / find-refs scale horizontally (multi-window, background analysis), this model is revisited with salsa snapshots. See [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md) M5 entry.
+**v0.2-M5 note:** When go-to-def / rename / find-refs scale horizontally (multi-window, background analysis), this model is revisited with salsa snapshots.
 
 ---
 
@@ -181,7 +179,7 @@ The Yinz compiler enforces WHAT/WHAT-INSTEAD/WHY structure in every diagnostic (
 
 VSCode renders plaintext newlines as soft breaks in squiggle tooltips. The format is verified by Phase 3's integration tests, which assert the LSP message contains each substring.
 
-**Structured `Diagnostic.data` field** (v0.2-M5): if the client supports it, the data field will carry the three components as a JSON object, enabling per-client custom rendering of WHAT/WHAT-INSTEAD/WHY in a richer UI. The plaintext `message` stays as the canonical fallback. See the Deferrals table in the M2 plan.
+**Structured `Diagnostic.data` field** (v0.2-M5): if the client supports it, the data field will carry the three components as a JSON object, enabling per-client custom rendering of WHAT/WHAT-INSTEAD/WHY in a richer UI. The plaintext `message` stays as the canonical fallback.
 
 **Delimiter collision mitigation** (two layers):
 1. Registry consistency test asserts no diagnostic template field contains `"WHAT INSTEAD:"` or `"\n\nWHY:"` as a substring.
@@ -222,7 +220,7 @@ This mirrors the self-hosting plan in [`docs/internal/implementation/IMP-feature
 
 ## Shipped in v0.2-M5
 
-The following LSP capabilities were out of scope for v0.2-M2 and shipped in v0.2-M5 ([`.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md)):
+The following LSP capabilities were out of scope for v0.2-M2 and shipped in v0.2-M5:
 
 - `textDocument/definition` — go-to-def (cross-file span lookup via `symbol_lookup.rs`)
 - `textDocument/references` — find-refs (cross-file use-site tracking)
@@ -293,7 +291,9 @@ The following LSP capabilities were out of scope for v0.2-M2 and shipped in v0.2
 
 **What it will do**: LSP returns `InlayHint` objects for the viewport range, showing what the compiler figured out automatically. See **Inlay Hints** section below for the full 9-domain breakdown.
 
-**Performance design**: request includes `range` parameter (viewport). Server filters to hints whose byte-offset falls within the viewport. Salsa-cached per-file typeck pass; re-render is cheap.
+**Performance design**: request includes `range` parameter (viewport). Server filters to hints whose byte-offset falls within the viewport. Salsa-cached per-file typeck pass; re-render is cheap. Hints update on every keystroke, so the server recomputes incrementally per Salsa query and never re-analyzes the whole program.
+
+**Hint kinds**: hints are served through the standard `textDocument/inlayHint` capability, so any editor that follows the language server protocol can draw them. Type, lifetime and allocator hints use the `Type` kind; the ownership and `wait` hints have no matching standard kind, so they use `Other` or a custom kind (check against the current protocol version when changing this). Users choose which hint domains to see through editor settings; the protocol defines what exists, not what is shown.
 
 **What is NOT in M5**: inlay hints inside macro expansions (no macros in v0.1); configurable per-domain toggle (v0.3+ IDE preferences).
 
@@ -378,14 +378,14 @@ Progress tokens will be unique per request (monotonic counter). `ProgressTracker
 
 Will be added as an opt-in flag on `ynz build` in Phase 9. Will suppress ariadne human output; emits NDJSON to stdout. Default `ynz build` output is byte-identical to pre-M5 (flag is strictly opt-in).
 
-**Schema** (locked in plan; emits `schema_version: "v0.2.0-m5-unstable"` until Phase 12 drops the `-unstable` suffix at the v0.2.0 tag-cut):
+**Schema** (locked; emits `schema_version: "v0.2.0-m5-unstable"` until Phase 12 drops the `-unstable` suffix at the v0.2.0 tag-cut):
 
 ```json
 {"type": "diagnostic", "schema_version": "v0.2.0-m5-unstable", "severity": "error" | "warning" | "suggestion", "kind": "<DiagnosticKindName>", "code": "<DiagnosticKindName>", "span": {"file": "<absolute-path>", "start_byte": 0, "end_byte": 10}, "message": "<WHAT>\n\nWHAT INSTEAD: ...\n\nWHY: ...", "data": {"what": "...", "what_instead": "...", "why": "..."}}
 {"type": "summary", "schema_version": "v0.2.0-m5-unstable", "errors": 0, "warnings": 0, "suggestions": 0, "exit_code": 0}
 ```
 
-**Field semantics** (locked in plan; implemented in Phase 9):
+**Field semantics** (locked):
 - `span.file`: absolute filesystem path (UTF-8)
 - `span.start_byte` / `span.end_byte`: UTF-8 byte offsets, 0-indexed, half-open (start inclusive, end exclusive)
 - `severity`: lowercase string literal (`"error"` / `"warning"` / `"suggestion"`)

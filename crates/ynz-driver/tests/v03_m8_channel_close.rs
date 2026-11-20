@@ -1,10 +1,8 @@
 // v0.3-M8 Phase 4 — channel close semantics, the transfer rule, fr12 marshalling, and the
 // runtime-side P2-3 fix, locked end-to-end by `.ynz` fixtures.
 //
-// Plan: `.claude/planning/active/2026-07-04-v0-3-m8-concurrency-completion/plan.md` Phase 4
-// (steps 3, 3a, 3b, 3d, 4, 5). Designs: `IMP-concurrency.md` "Channel Close — End-of-Stream
-// Semantics" and `IMP-ownership.md` "Transfer — Who Else Holds This Value" (both signed
-// 2026-09-03, `audit.md`'s two SIGN-OFF records).
+// Phase 4 of v0.3-M8 (`git log --grep=m8-p4`). Designs: `IMP-concurrency.md` "Channel Close —
+// End-of-Stream Semantics" and `IMP-ownership.md` "Transfer — Who Else Holds This Value".
 //
 // RED-commit protocol (plan step 3a / step 5): every test here was authored and run RED
 // BEFORE the implementation landed — each fixture's header records the observed RED reason —

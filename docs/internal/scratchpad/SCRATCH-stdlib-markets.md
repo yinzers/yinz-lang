@@ -138,7 +138,7 @@ let rsi14 = closes.rsi(period: 14, skipWarmup: true)
 let latestRsi = rsi14.last()
 let current = latestRsi.or(50)
 if (current > 70) {
-  print("Overbought")
+  print(`Overbought`)
 }
 ```
 
@@ -171,7 +171,7 @@ let lastClose = latestClose.or(0)
 let latestUpper = bb.upper.last()
 let upperBand = latestUpper.or(0)
 if (lastClose > upperBand) {
-  print("Price above upper band")
+  print(`Price above upper band`)
 }
 ```
 
@@ -203,7 +203,7 @@ let lastVwap = latestVwap.or(0)
 let latestClose = closes.last()
 let lastClose = latestClose.or(0)
 if (lastClose > lastVwap) {
-  print("Price above VWAP")
+  print(`Price above VWAP`)
 }
 ```
 
@@ -223,7 +223,7 @@ let rvol = volumes.relVol(lookback: 20, skipWarmup: true)
 let latestRvol = rvol.last()
 let current = latestRvol.or(0)
 if (current > 2.0) {
-  print("High relative volume")
+  print(`High relative volume`)
 }
 ```
 

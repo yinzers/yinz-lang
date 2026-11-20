@@ -23,7 +23,7 @@ User spec target: `spec/stdlib/supervisor.md` (to be created when stdlib lands).
 
 Yinz stdlib provides supervisor helpers for the common patterns around `background` tasks. The meta-rule: **any stdlib API owning a long-running loop is supervised by default**, with explicit override available.
 
-Supervisor helpers turn the [supervisor pattern](panic-safety.md#supervisor-pattern-no-trycatch-needed) into one-line stdlib calls. Without them, every server/worker/daemon would re-implement the same `while (true) { background ... }` loop with the same error handling.
+Supervisor helpers turn the [supervisor pattern](SCRATCH-future-panic-safety.md#supervisor-pattern-no-trycatch-needed) into one-line stdlib calls. Without them, every server/worker/daemon would re-implement the same `while (true) { background ... }` loop with the same error handling.
 
 ---
 
@@ -47,7 +47,7 @@ supervise.alwaysRestart(
   processOrders,
   maxRestarts: 10,
   maxRestartsWindow: 1.minute,
-  onGiveUp: (e) => alerting.page("processOrders died permanently", e),
+  onGiveUp: (e) => alerting.page(`processOrders died permanently`, e),
 )
 
 // One-shot: spawn the task, observe panics but do NOT restart.
@@ -58,7 +58,7 @@ let handle = supervise.watch(processOrders, onPanic: (e) => log.error(e))
 supervise.pool(
   processOrders,
   count: 8,
-  onPanic: (worker, e) => log.error("worker ${worker.id} crashed", e),
+  onPanic: (worker, e) => log.error(`worker ${worker.id} crashed`, e),
 )
 ```
 
@@ -93,13 +93,13 @@ Spawns `task` as a `background` task. If the task panics, the supervisor:
 
 If the task returns normally (no panic), the supervisor does NOT restart it. `alwaysRestart` is specifically for panic-recovery.
 
-### `.withBackoff(initial, max, multiplier)`
+### `backoff:` named parameter
 
-Adds exponential backoff between restarts. Without it, a task that panics immediately on startup creates a tight crash loop hammering the runtime. Backoff applies after the FIRST panic; the first restart is immediate.
+Takes `duration.exponential(initial:, max:, multiplier:)` and adds exponential backoff between restarts. Without it, a task that panics immediately on startup creates a tight crash loop hammering the runtime. Backoff applies after the FIRST panic; the first restart is immediate.
 
-### `.maxRestarts(count, within: duration)`
+### `maxRestarts:` and `maxRestartsWindow:` named parameters
 
-Sliding-window restart limit. After `count` panics within `duration`, supervision gives up and calls `onGiveUp` if provided. Default: unlimited restarts (alwaysRestart lives up to its name).
+Sliding-window restart limit. After `maxRestarts` panics within `maxRestartsWindow`, supervision gives up and calls `onGiveUp` if provided. Default: unlimited restarts (alwaysRestart lives up to its name).
 
 ### `onPanic:` / `onGiveUp:` named parameters
 

@@ -35,7 +35,6 @@ let countText = playerCount.toString()      // `10`
 
 // Float conversions
 let gravity: Float = 9.81
-let gravityAsNumber = gravity.toNumber()    // 9.81 as a Number (exact decimal)
 let gravityText = gravity.toString()        // `9.81`
 
 // Boolean conversions
@@ -78,11 +77,29 @@ let wholePrice = unitPrice.toInt()  // a Maybe<Int>: 42
 
 ## Unions — no conversion needed, just check which kind
 
-A union is a value that can be one of several shapes. Use `is` to ask which one it is. No cast needed:
+A union is a value that can be one of several shapes. Put the union in `if (...)` and ask which one it is with `is`. No cast needed:
 
 ```
-if (figure is Circle) {
-  print(figure.radius)    // inside this block the compiler knows it is a Circle
+shape Circle {
+  radius: Number
+}
+
+shape Square {
+  side: Number
+}
+
+shape Figure = Circle | Square
+
+function describe(share figure: Figure) -> Nothing {
+  if (figure) {
+    is Circle => print(figure.radius)    // after `is Circle` the compiler knows it is a Circle
+    is Square => print(figure.side)
+  }
+}
+
+function entrypoint() -> Nothing {
+  let circle: Circle = { radius: 3.0 }
+  describe(circle)
 }
 ```
 
@@ -95,8 +112,8 @@ See [Unions](REF-unions.md).
 There is no cast keyword. Every conversion is written out by name:
 
 ```
-let n: Number = value as Number    // COMPILE ERROR: use .toNumber() instead
-let n: Number = value.toNumber()   // correct
+let value: Int = 7
+let n: Number = value.toNumber()
 ```
 
 That way every conversion is easy to spot, easy to find with autocomplete, and handled in the same safe way.

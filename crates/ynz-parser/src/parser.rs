@@ -349,7 +349,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     format!("Expected a declaration after `export`, not `{}`.", token_display(self.peek())),
-                    "Write `export function foo()`, `export shape Foo { ... }`, or `export { name } from \"path\"`.",
+                    "Write `export function foo()`, `export shape Foo { ... }`, or `` export { name } from `path` ``.",
                     "`export` makes a declaration visible to other modules.",
                 ));
                 self.advance();
@@ -374,8 +374,8 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 span,
                 "Wildcard imports are not allowed in Yinz.",
-                "Use a namespace import instead: `import utils from \"utils\"`.",
-                "Wildcard imports make it unclear where names come from. Namespace imports (`import ns from \"path\"`) give the same access with a clear prefix.",
+                "Use a namespace import instead: `` import utils from `utils` ``.",
+                "Wildcard imports make it unclear where names come from. Namespace imports (`` import ns from `path` ``) give the same access with a clear prefix.",
             ));
             return None;
         }
@@ -396,7 +396,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected a name or `{` after `import`.",
-                    "Write `import utils from \"utils\"` or `import { fetchUser } from \"services/users\"`.",
+                    "Write `` import utils from `utils` `` or `` import { fetchUser } from `services/users` ``.",
                     "`import` brings names from another module into scope.",
                 ));
                 return None;
@@ -409,7 +409,7 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 span,
                 "Import statements must bind a name.",
-                "Write `import utils from \"utils\"` to bind the module as a namespace.",
+                "Write `` import utils from `utils` `` to bind the module as a namespace.",
                 "Yinz does not support side-effect-only imports. Every import must name what it brings into scope.",
             ));
             self.advance();
@@ -434,7 +434,7 @@ impl<'a> Parser<'a> {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
                         "Expected a name after `as` to bind the import to.",
-                        "Write `import ns as myName from \"path\"`.",
+                        "Write `` import ns as myName from `path` ``.",
                         "`as` gives the import a different local name in this file.",
                     ));
                     return None;
@@ -455,7 +455,7 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
                 "Expected `from` after the import name.",
-                "Write `import utils from \"services/utils\"`.",
+                "Write `` import utils from `services/utils` ``.",
                 "`from` specifies which module to import from.",
             ));
             return None;
@@ -492,7 +492,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     span,
                     "Wildcard imports inside `{` are not allowed.",
-                    "List names explicitly: `import { fetchUser, createUser } from \"path\"`.",
+                    "List names explicitly: `` import { fetchUser, createUser } from `path` ``.",
                     "Wildcard imports make it unclear where names come from. List what you need.",
                 ));
                 // Recover to `}`
@@ -512,7 +512,7 @@ impl<'a> Parser<'a> {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
                         "Expected a name inside `import { ... }`.",
-                        "Write `import { fetchUser, createUser } from \"path\"`.",
+                        "Write `` import { fetchUser, createUser } from `path` ``.",
                         "Named imports list the specific names to bring into scope.",
                     ));
                     while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
@@ -539,7 +539,7 @@ impl<'a> Parser<'a> {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
                             "Expected a name after `as` to bind the import to.",
-                            "Write `import { fetchUser as getUser } from \"path\"`.",
+                            "Write `` import { fetchUser as getUser } from `path` ``.",
                             "`as` gives the imported name a different local name in this file.",
                         ));
                         (exported_name.clone(), exported_name_span.clone())
@@ -570,7 +570,7 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
                 "Expected `from` after `import { ... }`.",
-                "Write `import { fetchUser } from \"services/users\"`.",
+                "Write `` import { fetchUser } from `services/users` ``.",
                 "`from` specifies which module to import from.",
             ));
             return None;
@@ -700,7 +700,7 @@ impl<'a> Parser<'a> {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
                         "Expected a name in `export { ... }`.",
-                        "Write `export { fetchUser, createUser } from \"services/users\"`.",
+                        "Write `` export { fetchUser, createUser } from `services/users` ``.",
                         "Re-exports list the names to expose from a source module.",
                     ));
                     while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
@@ -742,7 +742,7 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
                 "Expected `from` after `export { ... }`.",
-                "Write `export { fetchUser } from \"services/users\"`.",
+                "Write `` export { fetchUser } from `services/users` ``.",
                 "`from` specifies which module to re-export names from.",
             ));
             return None;
@@ -3695,7 +3695,7 @@ impl<'a> Parser<'a> {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
                             "Expected `,` or `}` after map entry.",
-                            "Separate entries with `,`: `{ \"a\": 1, \"b\": 2 }`",
+                            "Separate entries with `,`: `` { `a`: 1, `b`: 2 } ``",
                             "Map literal entries must be separated by commas.",
                         ));
                     }

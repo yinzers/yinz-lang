@@ -44,7 +44,7 @@ File-level constants can use pure function calls with constant arguments. The co
 - `date.now()` — no, depends on when the program runs
 - `file.read("config.ynz")` — no, I/O at compile time would be wrong
 
-**Why allow pure function calls at file level**: `const RESPAWN_TIME = 5` is less clear than `const RESPAWN_TIME = duration.seconds(5)`. The compiler can evaluate the latter, so there's no reason to restrict to raw literals. The rule is principled — not "only literals" but "only values the compiler can determine."
+**Why allow pure function calls at file level**: `const respawnTime = 5` is less clear than `const respawnTime = duration.seconds(5)`. The compiler can evaluate the latter, so there's no reason to restrict to raw literals. The rule is principled — not "only literals" but "only values the compiler can determine."
 
 ---
 

@@ -2786,6 +2786,19 @@ fn duplicate_entrypoint_in_project_produces_teaching_diagnostic() {
     );
 }
 
+#[test]
+fn duplicate_import_hint_suggests_backtick_path() {
+    // WHY: the hint once showed `from "..."`, and Yinz rejects double-quoted import
+    // paths, so a user who copied it hit a second error. Medium tier: user-facing diagnostic.
+    let project_root = fixtures_dir().join("m_duplicate_import");
+    let (_stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_ne!(code, 0, "duplicate import must fail to build");
+    assert!(
+        stderr.contains("Use a different local name: `import { Player as otherName } from `...``"),
+        "hint must suggest a backtick path; got:\n{stderr}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // v0.3-M1: sleepBlocking intrinsic end-to-end
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4799,7 +4812,7 @@ fn v03_m3a_p3_audit_dynamic_crossing_loud_rejected() {
 // fixture programs (runtime-field crossing, between-two-waits, nested-if — the exact
 // positions the guard had to catch) are repurposed as ACCEPTANCE: each must now run
 // and print the CORRECT sum. This is the scratch doc's named acceptance signal
-// (SCRATCH-future-array-by-value-element-storage.md) and E9's B1 proof.
+// (IMP-collections.md "Array element storage") and E9's B1 proof.
 // A wrong value here is the pre-M5 silent stack-garbage miscompile returning; do NOT
 // weaken these to exit-code-only checks.
 

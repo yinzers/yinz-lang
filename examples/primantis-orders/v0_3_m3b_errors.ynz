@@ -52,7 +52,7 @@
 //        calls — to embed the callee's saved-state block at the right offset.
 //        A scalar size alone cannot reconstruct that. Calling with a wrong
 //        layout silently corrupts memory; a clean error here is the safe floor.
-//        See design/future/cross-module-frame-serialization.md for the M3e plan.
+//        See IMP-no-function-coloring.md "Cross-Module Frame Layouts" for the M3e design.
 //
 // The guard fires for ALL cross-module suspending call shapes:
 //
@@ -91,7 +91,7 @@
 //
 // All eight emit a WHAT/WHAT-INSTEAD/WHY diagnostic (exit 1) instead of silently
 // crashing with SIGILL (exit 132). M3e ships full FrameLayout serialization and
-// removes the universal reject (design/future/cross-module-frame-serialization.md).
+// removes the universal reject (IMP-no-function-coloring.md "Cross-Module Frame Layouts").
 
 // -- M3b Phase-4 Error Class: mutate-through-share-param (single-file) --
 //

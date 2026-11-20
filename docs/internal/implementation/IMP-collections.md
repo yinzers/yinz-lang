@@ -31,9 +31,9 @@ The collection types are written `Array<T>`, `Fixed<T>`, `Map<K, V>` and `Channe
 
 **Why**: Golden Rule 7 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `Fixed<T>` requires no annotation — it's what you get when you declare a collection with known content. `Array<T>` is the explicit opt-in for when you need growth.
 
-**Removed**: `collection<T>` type removed — unnecessary complexity. Two collection types are enough. "Collections" still exists as an English umbrella term covering `Fixed<T>`, `Array<T>`, `Map<K,V>` — but it's not a TYPE, just a category name.
+There is no `collection<T>` type: "collections" is an English umbrella term for `Fixed<T>`, `Array<T>` and `Map<K,V>`, not a type.
 
-**No spread operator**: Not included. Compiler handles optimization internally.
+**No spread operator**: the compiler handles optimization internally.
 
 ---
 
@@ -41,7 +41,9 @@ The collection types are written `Array<T>`, `Fixed<T>`, `Map<K, V>` and `Channe
 
 Each operation gets its own line with a named variable.
 
-**Why**: Golden Rule 9. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value. The compiler fuses sequential operations into a single optimized pass anyway, so there's no performance cost for the readability benefit.
+**Why**: Golden Rule 9. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value.
+
+**Operation fusion — designed, not built.** The design: when each intermediate result is used only by the next step, the compiler merges a run such as `filter` → `sort` → `limit` → `map` into one loop with no temporary lists, so the readable form costs nothing (Golden Rule 6). No fusion pass exists today, and the steps themselves (`filter`, `map`, `limit`, `sort`) are not lowered (see "Build status" below), so a run of steps does not compile yet.
 
 ---
 
@@ -54,7 +56,38 @@ Several method names chosen for plain-English readability over functional progra
 - `.get(index)` over `items[n]` — safe access returning `Maybe<T>`; brackets are sugar for `.get()`
 - `.last()` added — mirrors `.first()`, returns `Maybe<T>`
 
-**Why**: Golden Rule 5. Every method name that requires FP background knowledge is a barrier. `.limit`, `.filter`, `.prepend` are plain English instructions anyone can guess.
+Plain English names are the rule (Golden Rule 5): `.limit`, `.filter`, `.prepend` are instructions anyone can guess.
+
+**Build status**: the registry and type checker list `map`, `filter`, `limit`, `append`, `sort` and `unique` on arrays, but codegen does not lower them yet. `ynz build` fails with "array method `<name>` not yet lowered". Everything in this doc about those methods is a design, not shipped behavior.
+
+### Method surface: built and designed
+
+The lowering functions `lower_array_method`, `lower_fixed_method` and `lower_map_method` (`crates/ynz-codegen/src/emit.rs`) handle only these methods; any other name fails with "array method `<name>` not yet lowered in P4a" (a `Fixed<T>`: "fixed method `<name>` not yet lowered in P4a"; a map: "map method `<name>` not yet lowered in P4b").
+
+| Type | Built (`ynz build` compiles) | Designed, not built |
+|---|---|---|
+| `Array<T>` | `count`, `add`, `get`, `first`, `last`, `set`, `contains` | everything in the lists below |
+| `Fixed<T>` | `count`, `get`, `first`, `last`, `set` | `contains`, `concat`, `append`, `prepend`, `filter`, `map`, `sort`, `unique`, `limit`, `find` |
+| `Map<K, V>` | `count`, `has`, `get`, `set` | `remove`, `keys`, `values`, `entries`, `update`, `filter`, `find`, `sort`, `clear` |
+
+Designed array methods that change the array (so only `Array<T>` has them):
+
+- `remove(index)`: removes the element at `index`.
+- `removeFirst()` and `removeLast()`: remove and return the first or last element as `Maybe<T>`.
+
+(The registry currently types `remove` with an element argument and `removeFirst` / `removeLast` as returning `Nothing`; the design above is the intended signature and the registry entry has to change when these are built.)
+
+Designed methods that return a new collection and leave the original untouched, on both `Array<T>` and `Fixed<T>` (a `Fixed<T>` is size-locked, so only methods that build a new collection apply to it):
+
+- `concat(other)`: the two collections joined.
+- `append(item)` and `prepend(item)`: a new collection with `item` at the end or the front.
+- `unique()`, `limit(n)`, `filter(fn)`, `map(fn)`, `sort(fn, order)`: as named above.
+
+Designed map methods:
+
+- `keys()` returns `Array<K>` and `values()` returns `Array<V>`.
+- `entries()` returns an array of entries; each entry has `.key` and `.value`.
+- `remove(key)` deletes one key.
 
 ---
 
@@ -64,31 +97,24 @@ Brackets at a value position desugar to `.get()` (read) or `.set()` (write):
 
 ```ynz
 let p = players[3]              // sugar for players.get(3)         → Maybe<Player>
-let s = scores["alice"]         // sugar for scores.get("alice")    → Maybe<Number>
+let s = scores[`alice`]         // sugar for scores.get(`alice`)    → Maybe<Number>
 let c = name[0]                 // sugar for name.get(0)            → Maybe<String>
 
 players[2] = newPlayer          // sugar for players.set(2, newPlayer)
-scores["bob"] = 75              // sugar for scores.set("bob", 75)
+scores[`bob`] = 75              // sugar for scores.set(`bob`, 75)
 ```
 
 Works on: `Array<T>`, `Fixed<T>`, `Map<K,V>`, `String` (read only — strings are immutable).
 
 Does NOT work on: shape values. Shapes use dot access for fields, and functions are called with dot sugar — brackets at a value position on a shape value are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
 
-**Why bracket sugar:**
-- **Familiarity:** Every JS/Python/C-family dev expects `arr[0]`. Forcing `.get(0)` everywhere creates needless friction.
-- **Safety preserved:** The sugar still returns `Maybe<T>`. The type system enforces handling. Surface looks familiar; semantics stay safe.
-- **No syntax conflict with type parameters:** Different syntax, different position. `Array<Player>` is a TYPE (left of equals or in a type annotation); `players[0]` is a VALUE (right of equals or in an expression). TypeScript proved this distinction works for human readers.
+**Bracket sugar:**
+- It still returns `Maybe<T>`, so the type system enforces handling the absent case.
+- It does not conflict with type parameters: `Array<Player>` is a type (in a type annotation), `players[0]` is a value (in an expression).
 
-Brackets work universally on all four collection types for read; on Map/Array/Fixed for write. Decided: `map["key"]` is allowed (TypeScript does both bracket forms fine).
+Brackets work on all four collection types for read, and on Map/Array/Fixed for write. `map["key"]` is allowed.
 
-**Why dot doesn't work on map keys (the real reason):**
-
-Maps have methods (`.count()`, `.get()`, `.set()`, `.keys()`, `.values()`, `.filter()`, etc.). If keys could be accessed via dot, a key named `count` would collide with the `.count()` method — exactly the JavaScript bug class around `obj.constructor`, `obj.toString`, etc.
-
-Shapes don't have this problem because the user declares the fields in one place, and the compiler can verify no field name collides with a function called through dot sugar. Map keys are runtime user data; method names are compile-time built-ins. The two namespaces can't be unified.
-
-Bracket access keeps the namespaces visually separated: `m["count"]` is unambiguously a key lookup; `m.count()` is unambiguously a method call. No collision possible.
+**Map keys use brackets, never dot.** Maps have methods (`.count()`, `.get()`, `.set()`, `.keys()`, `.values()`, `.filter()`, etc.), so a key named `count` accessed by dot would collide with `.count()`. Map keys are runtime data and method names are compile-time built-ins; brackets keep them apart: `` m[`count`] `` is a key lookup, `m.count()` is a method call. Shapes use dot because the compiler checks their declared field names against the functions callable through dot sugar.
 
 **Out-of-bounds on `.set()`:**
 
@@ -101,7 +127,7 @@ arr[10] = 99
 //   To grow with defaults: use .resize(newSize, defaultValue).
 ```
 
-Sparse-array growth (JS's `arr[100] = "x"` creating `<97 empty items>`) is rejected — it's a footgun, not a feature.
+Writing past the end never grows the array (no sparse growth); out-of-bounds `.set()` is a runtime error.
 
 ---
 
@@ -123,21 +149,19 @@ Three additions to the map API:
 - `.filter(fn)` — returns new map with only matching entries. Callback receives `entry` with `.key` and `.value`.
 - `.find(fn)` — returns `Maybe` entry. Same callback shape.
 
-**Why**: `.set(key, value)` one at a time is verbose when updating multiple keys. `.update({...})` follows the same object-literal syntax used for type construction. Map filter/find fills an obvious gap — there was no way to search a map without calling `.entries()` first.
+`.update({...})` takes the same object-literal syntax used for type construction, and `.filter()` / `.find()` search a map without going through `.entries()` first.
 
 ---
 
 ## `Map<K,V>` Implementation — Swiss Tables, Four-Tier Hashing
 
-Swiss Tables (open-addressing with SIMD metadata scan) are the locked implementation for `Map<K,V>`. No separate chaining, no linked lists. Modeled after Google Abseil, Rust hashbrown, Go 1.24+. Documented because the "easy" implementer choice would be separate chaining; this lock prevents that.
+Swiss Tables (open-addressing with SIMD metadata scan) are the implementation for `Map<K,V>`; there is no separate chaining and no linked list.
 
-### Why Swiss Tables (and not separate chaining)
+### Swiss Tables layout
 
-- **Cache locality**: entries live in the bucket array directly, not in heap-allocated linked-list nodes. Lookup avoids pointer chasing — every probe stays in one or two cache lines instead of jumping to whatever heap address holds a node.
-- **SIMD metadata scan**: a parallel byte array of "control bytes" (one per slot, holding empty/deleted/hash-fingerprint) is searched 16 at a time using a single SSE2/NEON instruction. Match-or-prove-absent in 1-2 cycles instead of N comparisons.
-- **Memory overhead**: no per-entry linked-list infrastructure. ~16 bytes saved per entry. Datadog reported ~70% memory reduction switching Go to Swiss Tables in 1.24.
-
-The 60% microbenchmark win Go reported is mostly (a) cache locality and (b) SIMD scan. Real-world apps see ~1.5% geometric mean — but the win compounds in serialization-heavy code (JSON parsing, index building) where maps dominate.
+- **Cache locality**: entries live in the bucket array directly, so a probe stays in one or two cache lines.
+- **SIMD metadata scan**: a parallel byte array of "control bytes" (one per slot, holding empty/deleted/hash-fingerprint) is searched 16 at a time using a single SSE2/NEON instruction.
+- **Memory overhead**: no per-entry linked-list infrastructure, about 16 bytes saved per entry.
 
 ### Four-tier hashing strategy
 
@@ -153,15 +177,7 @@ Different scenarios get different hashing. The compiler picks based on what it k
 
 ### Default hash function: SipHash-2-4 (safe-by-default)
 
-For the general case (runtime keys, no opt-in), the default is **SipHash-2-4** with a per-process random key — DoS-safe against attacker-controlled input. This matches industry consensus established after the 2011 HashDoS attacks: Python switched to SipHash for `hash()` in 3.4 (2014); Rust HashMap defaults to SipHash 1-3 since 1.0; Ruby switched in 2.0; Perl in 5.18.
-
-Three reasons specific to Yinz to default safe (not fast):
-
-1. **The cases where SipHash overhead matters are the same cases where it's needed.** Yinz's compile-time tiers already eliminate hash function cost from the cases where DoS-safety doesn't matter: shape access (1 instruction, no hash), perfect hashing for static-key maps (no SipHash), identity hash for int-keyed maps (no SipHash). Only `Map<String, V>` with RUNTIME string keys hits the SipHash overhead — and that's overwhelmingly the case where keys come from external input (JSON parsing, HTTP headers, query params, config files = attacker-controlled).
-
-2. **Yinz's target audience is jr devs writing web APIs.** Asking them to know about HashDoS BEFORE they get bitten is teaching at the wrong moment. Defaulting safe means they're protected from a CVE class they don't yet know exists. The fast opt-in is the right teaching moment for senior devs who know their workload's threat model.
-
-3. **Industry consensus.** Rust, Python, Ruby, Perl all default to DoS-safe hashing. The major outlier (Java pre-9) shipped CVE-2011-4858 (denial of service via hash collisions). The 4-84% slowdown Rust devs sometimes complain about (and reach for the `fxhash` crate to escape) is real, but the alternative — every web service exploitable for years — is much worse.
+For the general case (runtime keys, no opt-in), the default is **SipHash-2-4** with a per-process random key, which is DoS-safe against attacker-controlled input. The compile-time tiers already remove the hash cost where DoS-safety does not matter (shape access, perfect hashing for static-key maps, identity hash for `Int` keys), so only `Map<String, V>` with runtime string keys pays it, and those keys usually come from external input (JSON, HTTP headers, query params, config files). Safe is the default so a junior developer is protected from hash-collision attacks before learning they exist; the fast variant is the opt-in for developers who know their threat model.
 
 ### Fast opt-in: xxhash3 — for explicitly-trusted workloads
 
@@ -177,15 +193,13 @@ When the compiler can prove the keys are NOT externally-controlled (e.g., the ma
 
 When the compiler picks perfect hashing or identity hash for a literal, the IDE shows a muted hint: `// perfect hash — zero collisions for these compile-time-known keys`.
 
-Decided: user-selectable hashers rejected. The safe default, the fast opt-in and compiler-chosen perfect/identity hashing cover every case.
+Hashers are never user-selectable: the safe default, the fast opt-in and compiler-chosen perfect/identity hashing cover every case.
 
 ---
 
 ## `Map<K,V>` Iteration Order — Insertion Order
 
-Locked: iteration order is INSERTION ORDER. Same as Python 3.7+, JavaScript Map, Java LinkedHashMap. NOT random (Go, Rust default).
-
-**Why**: random iteration was meant to prevent devs from relying on order. In practice, after 10+ years in production, it caused the "test passes locally, fails in CI" bug class without preventing any meaningful misuse. Every language designed in 2020+ that's revisited the question picked insertion order. Yinz doesn't relitigate.
+Iteration order is INSERTION ORDER, never random, so a test that passes locally gives the same order in CI.
 
 **Cost**: one pointer per entry to track insertion order. Trivial overhead (~8 bytes per entry on 64-bit). Implementation: keep a parallel insertion-order index alongside the Swiss Table bucket array.
 
@@ -193,19 +207,21 @@ If a user genuinely doesn't care about iteration order and wants to skip the ove
 
 ---
 
-## `set<T>` — Unique-Value Collection (PLANNED — not yet implemented)
+## `Set<T>` — Unique-Value Collection (DESIGN NOT YET BUILT)
 
-> **Status**: Direction locked; **co-ships with v0.4** (the linting tier) per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `Map<K,V>` — NOT a stdlib module.
+> **Status**: not shipped. `Set<T>` is not a type the compiler accepts today, and no release is committed for it ([`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) does not list it). The design below is the direction for a core collection **language feature**, sibling to `Map<K,V>` — not a stdlib module.
+>
+> **Ships as one feature, with all four surfaces together:** the `Set<T>` type, the `Array.unique()` method, the `Array<T>` → `Set<T>` auto-promotion (needs the whole-program analysis framework), and the `prefer-set-for-membership` lint with its muted hint (needs the Tier 3 linting). Landing the type alone would leave the teaching surfaces to be bolted on later. The registry entries it needs: `[[primitive_intrinsic]]` for the `Set<T>` methods and `unique`, a `[[lint_rule]]` for `prefer-set-for-membership`, and a `[[muted_hint_domain]]` for the array-to-set hint.
 
-A `set<T>` holds unique values of one type and answers "is value `X` present?" in O(1). It is `Map<K,V>` with keys only — same machinery, no values.
+A `Set<T>` holds unique values of one type and answers "is value `X` present?" in O(1). It is `Map<K,V>` with keys only — same machinery, no values.
 
-### Why it's a distinct type (not `Array` + a rule)
+### A distinct type, not `Array` plus a rule
 
-`Fixed`/`Array` find by **position** (`thing[5]` is O(1); "is `X` present?" is an O(n) scan). A `set` finds by **value** ("is `X` present?" is O(1); there is no position). Enforcing uniqueness on an `Array` would require an O(n) scan per insert → O(n²) to build; a set's by-value (hash) storage makes both uniqueness AND membership O(1). Different access model, different storage — not a constraint bolted onto `Array`. Same reasoning that makes `Map` distinct from `Array`.
+`Fixed`/`Array` find by **position** (`thing[5]` is O(1); "is `X` present?" is an O(n) scan). A `Set` finds by **value** ("is `X` present?" is O(1); there is no position). Its hash storage makes both uniqueness and membership O(1), where an `Array` would need an O(n) scan per insert.
 
 ### No `Fixed` set
 
-Sets are inherently growable (hash-table backed, like `Array`/`Map`), so there is no stack-allocated size-locked set. `set<T>` is the only form. (A compile-time-constant set of literals MAY get a perfect-hash codegen optimization — see map's four-tier hashing — but that's codegen, not a separate `Fixed`-set type.)
+Sets are inherently growable (hash-table backed, like `Array`/`Map`), so there is no stack-allocated size-locked set. `Set<T>` is the only form. (A compile-time-constant set of literals MAY get a perfect-hash codegen optimization — see map's four-tier hashing — but that's codegen, not a separate `Fixed`-set type.)
 
 ### Implementation — shares everything with `Map<K,V>`
 
@@ -214,7 +230,7 @@ A set IS a map with keys only, so it reuses map's locked decisions verbatim:
 - **Four-tier hashing** (SipHash-2-4 safe default → xxhash3 trusted → perfect-hash compile-time-constant → identity for ints). Same auto-pick, same override story.
 - **Insertion-order iteration** (same rationale as map — predictable, no "passes locally / fails in CI").
 
-### Operations (ILLUSTRATIVE — proposed, exact names settled at version turn)
+### Operations (ILLUSTRATIVE — proposed, exact names not settled)
 
 - `set.has(value) -> Boolean` — O(1) membership (pure, no `errors`).
 - `set.add(value)` — inserts; duplicate add is a no-op.
@@ -224,9 +240,9 @@ A set IS a map with keys only, so it reuses map's locked decisions verbatim:
 
 ### `Array.unique()` companion
 
-The one-time "dedupe this list" case is NOT a set — it's a method on `Array`: `array.unique() -> Array<T>` returns a new array with duplicates removed (insertion order preserved), implemented by passing values through a set internally. Ships alongside `set<T>`. Rule of thumb: `.unique()` for one-shot dedup; `set<T>` when you keep the collection and repeatedly query membership.
+The one-time "dedupe this list" case is not a set — it is the `Array` method `array.unique()`, which returns a new array with duplicates removed (insertion order preserved). **Designed but not built:** the registry lists it, but `ynz build` fails with "array method `unique` not yet lowered". Rule of thumb: `.unique()` for one-shot dedup; `Set<T>` when you keep the collection and repeatedly query membership.
 
-### Open questions (decided at version turn)
+### Open questions
 
 - Set-algebra methods: return new sets vs mutate in place (lean: return new, immutable-by-default per stdlib philosophy).
 - Set literal syntax — `{1, 2, 3}` collides with shape/map `{...}` literals; needs disambiguation (same family of problems as map literals).
@@ -234,7 +250,7 @@ The one-time "dedupe this list" case is NOT a set — it's a method on `Array`: 
 
 ### Auto-promotion
 
-`Array<T>` → `set<T>` when the array is used only for membership — see "Auto-promotion: `Array<T>` → `set<T>`" below.
+`Array<T>` → `Set<T>` when the array is used only for membership — see "Auto-promotion: `Array<T>` → `Set<T>`" below.
 
 ---
 
@@ -254,14 +270,12 @@ shape Event {
 
 Same shape, same semantics, ~33% less memory for this example. Multiply by N entries in an `Array<Event>` and the cache benefit compounds.
 
-**Why auto-reorder by default**: Yinz's principle is "fast by design even for inexperienced developers" (Golden Rule 7 + auto-promotion corollary). C/C++ require the user to manually order fields for packing — a perf trap that beginners universally fall into. Rust auto-reorders by default (FFI structs opt out via `#[repr(C)]`); Yinz inherits that pattern but goes further by NOT having an opt-out keyword for pure Yinz code.
+Reordering is the default (Golden Rule 7 and the auto-promotion corollary: fast by design for inexperienced developers).
 
-**Why no opt-out keyword in Yinz**: the only legitimate reasons to pin field layout are:
-1. **FFI to C** — handled by FFI bindings at the boundary, not by polluting the shape declaration. (FFI is v2+ per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md).)
-2. **Wire protocols / file formats** — handled by serializer codegen (per [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 6 — compiler-generated specialized serializers per shape) which decides wire layout independently from internal layout.
-3. **Memory-mapped hardware** — handled by `--kernel` mode infrastructure when v0.3 ships (per [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md)).
-
-None of these require a `layout: c` modifier on the shape itself — the layout constraint comes from the BOUNDARY (FFI, wire, hardware), not from the shape. Yinz can do better than Rust here by handling layout at the boundary, not in the shape declaration. Locked: no user-facing layout-pinning syntax for shapes.
+**There is no keyword to pin a shape's field layout.** The layout constraint comes from the boundary, not from the shape:
+1. **FFI to C** — handled by FFI bindings at the boundary. (FFI is v2+ per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md).)
+2. **Wire protocols / file formats** — handled by compiler-generated specialized serializers per shape ([`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 6), which decide wire layout independently of internal layout.
+3. **Memory-mapped hardware** — handled by `--kernel` mode infrastructure (see [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md)).
 
 **IDE teaching surface**: per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md), when the compiler reorders fields, the IDE shows a muted hint on the shape declaration:
 
@@ -337,11 +351,9 @@ function processData(lend nums: Array<Int>) {
 
 For cross-function multi-step, the user must reach for `.sortStrict()` explicitly on the second-and-later sorts. The IDE muted hint showing "unstable" is the visible warning when this matters; cross-function multi-step is rare enough that the explicit-opt-in cost is acceptable.
 
-### Why type-based auto-pick is the right default
+### Type-based auto-pick
 
-JavaScript's sort was unstable-by-spec from 1995 to ES2019 — 24 years. V8 used QuickSort for arrays >10 elements; SpiderMonkey used a different algorithm. Same code produced different sort orders across browsers AND across array sizes. Applications relying on sort order for deterministic rendering or test comparisons silently broke when array size crossed the threshold or browser changed (https://v8.dev/features/stable-sort).
-
-Java got it right by accident — `Collections.sort()` has been stable since at least JDK 1.4 because objects HAVE hidden state worth preserving. `Arrays.sort(int[])` is unstable because primitives don't. Yinz formalizes this intuition: the compiler picks based on what the type permits.
+The compiler picks stable or unstable from what the element type permits (table above): composite elements (shapes, arrays, maps) sort stably, because equal keys may differ in other fields. Primitives and strings sort unstably, because equal values are interchangeable.
 
 ### Performance characteristics
 
@@ -369,12 +381,12 @@ When stability matters in real code:
 
 1. **Multi-step sorting**: sort by name first, then by age. Stable keeps people alphabetical WITHIN each age group; unstable scrambles them.
 2. **UI rendering**: re-sorting a table by clicking a column header. Stable means equal-valued rows don't jump around — visually less jarring.
-3. **Test reproducibility**: stable sort gives identical output every run on every machine. JavaScript's 24-year unstable-spec window caused a generation of "test passes locally, fails in CI" bugs.
+3. **Test reproducibility**: stable sort gives identical output every run on every machine.
 4. **Audit trails**: sorting log entries by timestamp. Two events with the same timestamp must stay in the order they were logged.
 
 When stability doesn't matter (so unstable wins on speed AND memory):
 - Sorting primitives — equal numbers are interchangeable, no original order between two `5`s
-- Sorting then immediately discarding (e.g., `.sort().first()` to find the minimum)
+- Sorting then reading only the first element (e.g., sort, then take element 0 to find the minimum)
 - Any collection where equal items are truly fungible
 
 The auto-promotion pattern (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)) applies: when the compiler can detect a sort target is a `Fixed<T>` of a primitive type AND the sorted result isn't passed to anything depending on stability, the IDE shows a Tier 3 lint suggestion `prefer-unstable-sort-for-numeric-collections` recommending `.sortUnstable()` for the perf win. No codegen auto-swap (semantics differ — different equal-keyed element ordering); user makes the call.
@@ -385,9 +397,9 @@ The auto-promotion pattern (per [`.claude/rules/auto-promotion.md`](../../../.cl
 
 When a `Map<K, V>` is constructed with a literal initializer where the entry count is known at compile time, the compiler emits codegen that pre-sizes the internal Swiss Table to fit the literal's entries with no-resize headroom. No runtime resize storm.
 
-### Why this matters
+### Effect
 
-Java `HashMap` initialized with `new HashMap()` resizes ~16 times when populated with 1M entries (https://www.baeldung.com/java-hashmap-optimize-performance). Each resize copies all existing entries. Pre-sizing to the known count eliminates all resizes — pure compile-time work that beginners never do because the literal-form constructor doesn't expose a capacity parameter in most languages.
+Each resize copies all existing entries. Pre-sizing to the known count removes every resize, and it is pure compile-time work because the literal form has no capacity parameter to write by hand.
 
 ### Auto-promotion (codegen-only)
 
@@ -404,11 +416,7 @@ A pre-sized map for a 3-entry literal is slightly larger than the smallest possi
 
 ## `Array<T>` Growth Factor — 1.5×
 
-When `Array<T>` runs out of capacity, it grows by **1.5×** (Java/Folly choice). Locked.
-
-**Why 1.5× and not 2×**: with 2× growth, the new allocation is always larger than the sum of all previous allocations — so freed memory from prior reallocations can never be recycled. With 1.5×, after enough reallocations the new allocation can fit into space freed by older ones. Folly's `fbvector` documents this; GCC's `std::vector` (2× growth) does not allow memory reuse.
-
-**Why not 1.125× (Python's choice)**: 1.125× requires ~3× more reallocations than 1.5× to reach the same size (86 vs 29 reallocations to reach 1M elements per Tim Peters' analysis). Each reallocation copies all existing entries — too much CPU waste.
+When `Array<T>` runs out of capacity, it grows by **1.5×**. Growth that is smaller (1.125× needs about 3× more reallocations, each copying every entry) wastes CPU; growth that is larger (2× makes each new block bigger than all freed blocks combined) keeps the allocator from reusing freed memory. 1.5× lets later allocations fit into space freed by earlier ones.
 
 **`Fixed<T>` covers known-size**: if the user knows the final size, they should use `Fixed<T>` from the start (stack-allocated, size-locked, zero growth). The `Array<T>` growth factor only matters when the size is genuinely dynamic. There is no `array.withCapacity(n)` API — `Fixed<T>` IS the answer for "I know the size."
 
@@ -428,7 +436,7 @@ let nums: Array<Int> = [1, 2, 3]   // muted hint: // promoted to fixed — never
                                     // (compiler already emitted Fixed<Int> codegen)
 ```
 
-Why three surfaces (not just two):
+The three surfaces answer different questions:
 - The **muted hint** answers "what did the compiler decide?" — visible always, click to materialize.
 - The **lint suggestion** answers "what should I write in source?" — actionable, recommends rewrite.
 - The **codegen** answers "what runs at runtime?" — invisible, auto-applied.
@@ -445,10 +453,7 @@ Hover tooltip on the yellow lint squiggle:
 
 This hybrid model — auto-promote for perf, muted hint for visibility, lint suggestion for explicit-form teaching — is the canonical Yinz pattern for "stricter form fits AND explicit form is typeable." Same model used by `mutable-when-const-suffices` for `let → const` ([`docs/internal/implementation/IMP-linting.md`](IMP-linting.md)).
 
-Why hybrid (not pure-silent or pure-suggestion):
-- **Pure-silent** (auto-Arc / auto-`wait` style) hides the optimization completely — fine for compiler-internal stuff like reference counting, but misses the teaching opportunity for choices the user can also make explicit.
-- **Pure-suggestion** (lint-only, no auto-promotion) makes the user fix every instance manually before getting the perf win — punishes laziness, slow path stays the default until rewrite.
-- **Hybrid** gets all three — perf is automatic, the inference is visible (muted hint), the explicit form is taught (lint suggestion).
+The hybrid keeps all three: perf is automatic, the inference is visible (muted hint), and the explicit form is taught (lint suggestion). Compiler-internal choices such as auto-Arc and auto-`wait` stay silent because the user cannot write an explicit form.
 
 For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-SoA, where there's no `soa Array<T>` keyword in v0.3), only the lint-suggestion surface applies — the muted-hint protocol requires click-to-make-explicit to produce real Yinz syntax. See ["Auto-SoA layout (v0.3-M5)"](#auto-soa-layout-v03-m5) below and [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) "Two Surfaces for the Same Decision" section.
 
@@ -457,20 +462,12 @@ For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-S
 ## Array element storage — by-value inline (v0.3-M5)
 
 `Array<Shape>` elements are stored **by value, inline** in the array's heap buffer — variable slot
-width = `sizeof(elem)`, exactly like `Array<Int>` stores i64 values inline. Shipped in v0.3-M5
-(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3); shape elements are no longer stored as pointers.
+width = `sizeof(elem)`, exactly like `Array<Int>` stores i64 values inline. Shipped in v0.3-M5;
+shape elements are not stored as pointers.
 
-### The forcing bug
+### Ownership
 
-The old representation stored a shape element as a pointer into the constructing function's stack
-frame. When an `Array<Shape>` crossed a `wait`, the suspended state machine freed its stack and the
-element pointers dangled — a silent miscompile printing stack garbage. The v0.3-M3a interim guard
-(`ArrayShapeRuntimeFieldWithWait`) turned the silent miscompile into a loud compile error; the
-by-value representation fixes the root cause, and the guard was **lifted in v0.3-M5 Phase 3** (see
-[`IMP-concurrency.md`](IMP-concurrency.md) for exactly what the lift removed). The array now OWNS
-its element bytes: the heap buffer survives suspension, so the shapes do too, regardless of
-literal-vs-runtime field values. The bug was latent even without suspension — the array never owned
-what it pointed at (a GR1/GR6 violation), it just usually got away with it.
+The array OWNS its element bytes: the heap buffer survives a `wait`, so the shapes do too, whether their field values are literals or computed at runtime (see [`IMP-concurrency.md`](IMP-concurrency.md) for the `ArrayShapeRuntimeFieldWithWait` guard that this representation lifted).
 
 ### One allocation per buffer (D2)
 
@@ -479,24 +476,18 @@ variant (next section) is the SAME single allocation, segmented per field, with 
 computed at compile time from `cap ×` per-field sizes — a layout variant of one representation,
 never a second substrate (the twin-substrate drift class is eliminated by construction).
 
-Decided: per-element heap cells and LLVM module globals rejected.
+Elements are never separate heap cells or LLVM module globals.
 
 ### Element-blind drop, parity-gated (D6)
 
-`ynz_array_drop` stays element-blind, matching pre-M5 semantics. The migration was gated by an
-alloc=free parity check (`YNZ_ALLOC_COUNTER_OUTPUT`) against the pre-migration baseline, with a
-buffer-visibility entry criterion so the gate could not pass vacuously — it ran green, proving no
-NEW leak class vs the pointer representation. Decided: element-aware drop rejected (until the ownership model's drop story adds guaranteed heap-owned-field freeing).
+`ynz_array_drop` is element-blind: it frees the buffer and does not walk elements. It stays that way until the ownership model's drop story guarantees freeing of heap-owned fields. The alloc=free parity check (`YNZ_ALLOC_COUNTER_OUTPUT`) gates this.
 
 ### `contains` on `Array<Shape>` = field-wise value equality (D12)
 
-By-value storage has no pointer-identity substrate, so the migration forced a semantics pick.
-Value equality is the golden-rules-consistent one: `roster.contains(pirate)` reads as content
-membership (GR4), matches every primitive cell's behavior, and matches the non-OOP
-shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
-`crates/ynz-codegen/src/emit.rs`).
-
-Decided: pointer identity and whole-element memcmp rejected.
+By-value storage has no pointer identity, so `contains` compares by value:
+`roster.contains(pirate)` reads as content membership (GR4) and matches every primitive cell's
+behavior. Implemented as per-field GEP compares (`shape_value_eq`,
+`crates/ynz-codegen/src/emit.rs`), never as pointer identity or a whole-element memcmp.
 
 **String fields compare by content** (`shape_value_eq`; `Array<String>.contains` does the same):
 copy-on-store gives a stored string no stable identity, so an identity compare of a stored copy
@@ -539,9 +530,8 @@ in HS-grad wording — it is a spec callout, never a silent divergence.
 
 ### FFI suppression check — documented vacuous check (D7)
 
-The "no FFI export" admission criterion (roadmap-mandated for the SoA variant) is **vacuously true
-today** — FFI is v2+. The check is kept as a named line in the admission criteria rather than
-deleted and re-invented at v2. Same posture as the serialization note below.
+The "no FFI export" admission criterion is **vacuously true today** — FFI is v2+. The check stays
+a named line in the admission criteria. Same posture as the serialization note below.
 
 ### Benchmark force-mode is harness-only (D8)
 
@@ -557,7 +547,7 @@ code, not prose. v0.8's compile-time serializer codegen (per
 [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 6) reconstructs
 unified values from either layout by reading it: per-field segment offsets are computable from
 `cap ×` field sizes. **No roundtrip test exists until v0.8** — it is vacuous until a serializer
-exists (recorded plan decision; the roadmap's original roundtrip assertion was reframed).
+exists.
 
 ---
 
@@ -566,9 +556,8 @@ exists (recorded plan decision; the roadmap's original roundtrip assertion was r
 When admission criteria hold, the compiler stores a qualifying `Array<Shape>` in Struct-of-Arrays
 (SoA) layout — per-field segments instead of whole-element slots — inside the SAME single
 allocation as the by-value representation above (D2). Zero syntax change; byte-identical program
-output in both scheduling modes. Shipped in v0.3-M5 (plan `2026-07-03-v0-3-m5-auto-soa`, Phases
-4–5), riding the by-value substrate. Graduated here from `SCRATCH-future-auto-soa.md` (now a
-pointer stub). *(Terminology: "Struct-of-Arrays"/"SoA" is the engineering term of art and is fine
+output in both scheduling modes. Shipped in v0.3-M5, riding the by-value substrate.
+*(Terminology: "Struct-of-Arrays"/"SoA" is the engineering term of art and is fine
 in this internal doc; ALL user-facing text says "stored as separate per-field arrays" — see D9
 below.)*
 
@@ -580,17 +569,16 @@ An array is SoA-admitted only when ALL hold; any failure declines safely to the 
    anywhere on the binding declines) — D3. Growth under segmented layout forces a per-segment
    re-layout on every realloc: real cost, zero proven demand. The provable-length rule keeps the
    "length > threshold at the analysis-time proof point" criterion honest instead of guessing
-   runtime sizes. **Rejected:** runtime-length admission (revisit: FR #5, if PGO/adaptive layout
-   ever lands) and grown-array admission (FR #4).
+   runtime sizes. Runtime-length and grown-array admission are not built (runtime-length would
+   need PGO or adaptive layout).
 2. **Escape-decline** — an array passed as an argument, returned, stored into another value, or
    crossing a module boundary is DECLINED (the analysis cannot see all accesses; a
    partial-visibility layout decision is the silent-wrong class) — D4. The shape-level `lend self`
    method filter is retained as defense-in-depth on top; it becomes load-bearing when
-   cross-function propagation lands (FR #3). **Rejected:** cross-function propagation in M5 —
+   cross-function propagation lands. Cross-function propagation is not built:
    interprocedural field-access summaries are their own analysis.
 3. **≤ 2 fields in the UNION of fields accessed across ALL loops over the array** in the owning
-   function; ≥ 3 declines — D5. **Rejected:** per-loop scoring — conflicting per-loop layouts are
-   unimplementable (one array has one layout). Revisit: FR #9.
+   function; ≥ 3 declines — D5. There is no per-loop scoring: one array has one layout.
 4. **No FFI export** — vacuously true today (D7, previous section).
 
 ### One layout authority — padding wins (E3, D11)
@@ -609,7 +597,7 @@ decline it). A byte-layout-asserting both-candidate fixture locks the precedence
 
 Mirrors M4 padding's gate idiom (one predicate, same dual-mode testing story). Kernel mode has
 zero real programs today; divergent kernel×layout states would multiply the fixture matrix for no
-user. Revisit: FR #7.
+user.
 
 ### Teaching surface — Tier 3 lint only, no muted hint (D9)
 
@@ -617,86 +605,49 @@ Auto-SoA is the canonical "no typeable explicit form" auto-promotion
 ([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)): **Tier 3 lint
 YES, muted hint NO** — there is no `soa Array<T>` syntax for click-to-make-explicit to produce.
 The lint rule is `array-using-soa-layout` (`registry/features.toml`), firing on the array
-declaration. The *identifier* is roadmap-locked registry-internal convention (the "soa" acronym is
+declaration. The *identifier* is a registry-internal convention (the "soa" acronym is
 fine there); ALL user-facing hover text is jargon-free — "stored as separate per-field arrays",
 never "struct"/"Struct-of-Arrays" — and is mechanically gated by
 `no_banned_jargon_in_lint_rule_templates` in `crates/ynz-diagnostics/tests/jargon_audit.rs`, which
 audits every `[[lint_rule]]` entry's template text. The hover's WHY cites both honest measurements
 below, never a generic claim. The DAP debugger unified-view over SoA storage is deferred
-(`[[deferred_tooling_feature]] dap-soa-unified-view` — zero DWARF substrate exists; FR #1).
+(`[[deferred_tooling_feature]] dap-soa-unified-view` — zero DWARF substrate exists).
 
-### Honest performance provenance (E14)
+### Performance (E14)
 
-**Current shipped reality (v0.3-M7 onward — see the CHANGELOG entry and the
-`2026-07-04-v0-3-m7-optimizer-pipeline` plan): `ynz build` now runs a real LLVM `default<O2>` pass
-pipeline by default.** The measured -O2 win described below is therefore the win shipped binaries
-actually get today, not a projected/unreached one. `--no-optimize` / `YNZ_NO_OPTIMIZE` remain as an
-opt-out back to the old unoptimized codegen, for anyone who deliberately wants it.
+`ynz build` runs an LLVM `default<O2>` pass pipeline by default (since v0.3-M7); `--no-optimize` / `YNZ_NO_OPTIMIZE` opt out. The correctness claim is unconditional: byte-identical dual-mode output at every measured point, on the one elem_size-aware representation.
 
-The correctness win is unconditional: byte-identical dual-mode output at every measured point, all
-checksum/IR gates green, on the one elem_size-aware representation. The performance claim carries
-a hard caveat, with both measured results stated separately and **never conflated**
-(provenance: [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md),
-"Step 3 calibration verdict"). **These two measurements are historical, pre-M7 methodology** — taken
-back when `ynz build` still emitted at `OptimizationLevel::None` with zero LLVM pass pipeline, to
-separate the correctness win from the (then-unreached) optimizer win:
+The performance claim holds under `-O2`: SoA wins about 3.3x at N=4096 with 2 of 8 fields hot, near the 4x theoretical bandwidth edge. Without the optimizer pipeline the win is not detectable. Raw data: [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md).
 
-- **Baseline measured at the OLD `OptimizationLevel::None` default** (pre-v0.3-M7): net SoA/AoS
-  ratios **1.00–1.18** at every N in {8..4096} — no crossover anywhere; 9 of 10 points trend 4–18%
-  slower with N=16 at parity (0.997), each individually below the ~15% noise floor. Net effect ≈
-  **1.0x — no detectable benefit** at that old baseline.
-- **Identical generated IR under `opt-18 -O2`** (diagnostic, N=4096): SoA wins ≈ **3.3x** net of
-  spawn (10.77 ms AoS vs 3.29 ms SoA), consistent with the 4x theoretical bandwidth edge for
-  2-of-8 hot fields. As of v0.3-M7, this is no longer a diagnostic-only, unreached number — it is
-  the class of win `default<O2>` now delivers in shipped binaries by default.
+`SOA_SIZE_THRESHOLD = 64` is a conservative default, not a crossover-calibrated constant. Re-deriving it from `-O2` crossover data is open work.
 
-`SOA_SIZE_THRESHOLD = 64` shipped at M5 as a **documented conservative default, NOT a
-crossover-calibrated constant** — at the time, there was no O0 crossover to calibrate against, and
-the honest verdict beat a derived number wearing unearned precision. Re-deriving this threshold
-against real -O2 crossover data (now that the pipeline is live) is tracked as forward work — see
-FR #2's revisit trigger below.
+Open perf and safety work on SoA:
 
-Two identified paths toward fully realizing the win, both recorded in plan
-`2026-07-03-v0-3-m5-auto-soa`'s Future Requirements (in prose by FR number — the plan directory
-moves buckets on completion). FR #14 is now moot for the O0 case but the selective-gather fix in
-FR #15 still applies under the live optimizer:
-
-- **FR #15 — selective hot-field-only element materialization**: current codegen gathers ALL
-  declared fields per element access, ignoring the analysis's already-computed hot-field set; a
-  selective gather is a directly perf-relevant fix independent of the optimizer pipeline (requires
-  re-auditing every full-element consumer, so it is its own session).
-- **FR #14 — stale-runtime-archive ABI-check footgun**: the driver embeds
-  `target/{profile}/libynz_runtime.a` with no ABI/version check, so a stale archive silently
-  miscompiles by resolving old-signature symbols by name — an operational guard until the
-  versioned-symbol fix lands (it burned a full Phase 6 diagnosis round).
-
-The optimizer-pipeline dependency (risk E14 / FR #2's revisit trigger) has now landed as of
-v0.3-M7: shipped builds run the LLVM pass pipeline by default, so the measured -O2 win above IS the
-shipped win. The threshold (`SOA_SIZE_THRESHOLD = 64`) still awaits re-derivation from real -O2
-crossover data — that re-calibration is the remaining half of FR #2's trigger.
+- **Selective hot-field gather**: current codegen gathers ALL declared fields per element access, ignoring the analysis's already-computed hot-field set. A selective gather is a direct perf fix independent of the optimizer; it needs every full-element consumer re-audited.
+- **Stale-runtime-archive ABI check**: the driver embeds `target/{profile}/libynz_runtime.a` with no ABI/version check, so a stale archive silently miscompiles by resolving old-signature symbols by name. Versioned symbols would fix it.
 
 ---
 
-## Auto-promotion: `Array<T>` → `set<T>` (membership-only usage)
+## Auto-promotion: `Array<T>` → `Set<T>` (membership-only usage; DESIGN NOT YET BUILT — needs `Set<T>`)
 
-When the compiler proves an `Array<T>` is used ONLY for membership — `.contains()` / `.add()` / `.remove()` / `.size`, with NO indexing, NO reliance on element order, and NO reliance on duplicate storage — the array is doing a set's job at an array's O(n²) cost. Promoting it to `set<T>` storage takes membership + uniqueness from O(n²) → O(n). Real perf win.
+When the compiler proves an `Array<T>` is used ONLY for membership — `.contains()` / `.add()` / `.remove()` / `.size`, with NO indexing, NO reliance on element order, and NO reliance on duplicate storage — the array is doing a set's job at an array's O(n²) cost. Promoting it to `Set<T>` storage takes membership + uniqueness from O(n²) → O(n). Real perf win.
 
 Surfaces (same hybrid model as `Array → Fixed`, with one key difference):
-- **Codegen auto-promotion**: when the proof holds, emit `set<T>` storage. Because the proof needs whole-program escape/usage analysis, it's gated to `--release` (like auto-SoA), not every dev build.
-- **Tier 3 lint suggestion (primary surface)**: `prefer-set-for-membership` — recommends declaring `set<T>` explicitly. This is the *main* surface here, because the real fix is "you reached for the wrong type."
-- **Muted IDE hint**: `set<T>` IS typeable, so the protocol applies — click-to-make-explicit rewrites the declaration to `set<T>`.
+- **Codegen auto-promotion**: when the proof holds, emit `Set<T>` storage. Because the proof needs whole-program escape/usage analysis, it's gated to `--release` (like auto-SoA), not every dev build.
+- **Tier 3 lint suggestion (primary surface)**: `prefer-set-for-membership` — recommends declaring `Set<T>` explicitly. This is the *main* surface here, because the real fix is "you reached for the wrong type."
+- **Muted IDE hint**: `Set<T>` IS typeable, so the protocol applies — click-to-make-explicit rewrites the declaration to `Set<T>`.
 
-**Why the proof is stricter than `Array → Fixed`**: `Fixed` supports every `Array` operation except growth, so promoting is transparent when growth is absent. `set` drops indexing, positional order, AND duplicate storage — so the compiler must prove NONE of those three are observed before it can swap. When it can't prove it, the lint still fires (teaching) but the codegen swap does not (safety).
+**The proof is stricter than `Array → Fixed`**: a `Set` drops indexing, positional order and duplicate storage, so the compiler must prove none of those three is observed before it swaps. When it can't prove it, the lint still fires (teaching) but the codegen swap does not (safety).
 
-### Why `Fixed<T>` is NOT blanket-promoted to `set<T>`
+### `Fixed<T>` is not blanket-promoted to `Set<T>`
 
-The same membership-only *usage* analysis applies to `Fixed`, but promoting `Fixed → set` is **usually a pessimization**, so the compiler does NOT do it by default. Named cost: `Fixed` is small + stack-allocated + cache-hot; a `set` is a heap-allocated hash table. For the small N that `Fixed` is built for, a linear scan over a contiguous stack buffer **beats** a hash lookup (no hashing overhead, no pointer chasing, no heap allocation). Per the auto-promotion rule, we only auto-promote when the stricter form is *unambiguously* better — `Fixed → set` fails that test (it depends on size).
+The membership-only usage analysis also applies to `Fixed`, but the compiler does not promote `Fixed → Set` by default: `Fixed` is small, stack-allocated and cache-hot, and for the small N it is built for, a linear scan over a contiguous stack buffer beats a heap-allocated hash lookup. Auto-promotion only happens when the stricter form is unambiguously better, and this one depends on size.
 
 What the compiler does instead for a membership-checked `Fixed`:
 - **Compile-time-constant contents** (`Fixed<Int> = [1, 5, 10, 42]` used for `.contains()`) → a **perfect-hash or branchless comparison / jump table**, computed at compile time, **zero heap** — strictly better than a runtime `set`. (Ties into the perfect-hash tier of map's four-tier hashing.)
 - **Genuinely large `Fixed` + heavy membership** → a `set` *could* win, but that's a size-threshold heuristic, not a clean promotion; flagged as a possible `--release` analysis, not a default.
 
-So: `Array → set` is a real promotion (arrays are heap + variable-size already, so set storage is a lateral-or-better move); `Fixed → set` is deliberately declined in favor of zero-alloc membership strategies for the small/constant fixeds that are `Fixed`'s whole reason to exist.
+So: `Array → Set` is a real promotion (arrays are heap and variable-size already, so set storage is a lateral-or-better move); `Fixed → Set` is declined in favor of zero-alloc membership strategies for small or constant fixeds.
 
 ---
 
@@ -712,15 +663,9 @@ Companion length methods:
 - `.byteCount()` — UTF-8 byte count
 - `.graphemeCount()` — grapheme cluster count
 
-**Why default to code points:**
-- For typical text (ASCII, simple multilingual), code points match user intuition of "characters."
-- Bytes give wrong results on multi-byte UTF-8 (`"café".get(3)` would return a partial code unit).
-- Graphemes are correct for human-perceived characters but expensive — most code doesn't need that level of correctness.
+**Default is code points**: they match the "characters" of typical text, bytes give a partial code unit on multi-byte UTF-8 (`"café".get(3)`), and graphemes are correct but too expensive to be the default.
 
-**Why no `char` type:**
-- Adds a new concept jr devs must learn (and convert to/from strings).
-- Unicode complications surface immediately: is a `char` a code point? A grapheme? UTF-8 byte? Each answer wrong for some use case.
-- A 1-length string covers every place a "char" would be useful, without the conceptual baggage.
+**There is no `char` type**: a one-character `String` covers every use, and a `char` would force a choice (code point, grapheme or byte) that is wrong for some use case.
 
 ## `Fixed<T, N>` in function signatures (v0.3-M9 C1h)
 

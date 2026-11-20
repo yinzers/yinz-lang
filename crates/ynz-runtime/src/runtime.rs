@@ -1954,7 +1954,7 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
 /// SM-promotion lowering phase — it is NOT part of this runtime-ABI phase. The runtime side
 /// (this function's `extern "C-unwind"` ABI + the `catch_unwind` re-raise in
 /// `ynz_rt_spawn_blocking_joinable`) is complete and pinned by the unit tests below.
-/// deferral-tracked: .claude/plans/active/v0-3-m3d-cpu-parallelization.md Phase 3 (SM-promotion lowering — end-to-end C-unwind resume-fn ABI)
+/// deferral-tracked: v0.3-M3d Phase 3 (SM-promotion lowering — end-to-end C-unwind resume-fn ABI); see `git log --grep=m3d`
 #[no_mangle]
 pub unsafe extern "C-unwind" fn ynz_rt_join_poll(
     handle_ptr: *mut u8,

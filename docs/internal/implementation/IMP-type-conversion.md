@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-type-conversion.md`](../../reference/REF-type-co
 
 All type conversions are dot methods. No `as` keyword. No angle bracket casts. Type `.to` on any value and autocomplete shows all available conversions.
 
-**Why no `as`**: `as` is a programmer keyword that requires knowing the type system to use correctly. Dot methods are autocomplete-discoverable — a developer types `.to` and sees exactly what's available. `value.toNumber()` is self-documenting; `value as Number` requires knowing what `as` does.
+**Conversion is a dot method, not an `as` keyword**: a developer types `.to` and autocomplete shows exactly what is available, and `value.toNumber()` reads on its own.
 
 **Dot-first design (Golden Rule 11)**: If something can be a dot method with autocomplete, it should be. Type conversion is exactly this case.
 
@@ -43,7 +43,7 @@ Conversions that always succeed return the value directly. Conversions that migh
 
 No `condition ? a : b`. The pre-assignment pattern covers the same use case:
 ```
-let value = "default"
+let value = `default`
 if (condition) {
   value = "other"
 }

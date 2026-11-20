@@ -20,18 +20,18 @@ Comprehensive math module. Scientist-grade coverage. Tree shaking means unused f
 ## Number Types
 
 ```
-// number — decimal, always correct (default)
+// Number — decimal, always correct (default)
 let price = 0.1 + 0.2              // 0.3 — exact
 let tax = 19.99 * 0.07             // 1.3993 — exact
 
-// float — fast binary (opt-in)
+// Float — fast binary (opt-in)
 let velocity: Float = 9.81 * 2.5   // fast, may have tiny rounding
 
-// int — whole numbers only
+// Int — whole numbers only
 let count: Int = 42
 ```
 
-IDE warns when float is used for financial values. IDE suggests int for pure integer math.
+IDE warns when `Float` is used for financial values. IDE suggests `Int` for pure integer math.
 
 ---
 
@@ -96,15 +96,15 @@ math.exp2(value)                    // 2^x
 ## Constants
 
 ```
-math.PI                             // 3.14159265358979...
-math.E                              // 2.71828182845904...
-math.TAU                            // 2π
-math.PHI                            // golden ratio 1.61803...
-math.SQRT2
-math.LN2
-math.LN10
-math.INFINITY
-math.NEGATIVE_INFINITY
+math.pi                             // 3.14159265358979...
+math.e                              // 2.71828182845904...
+math.tau                            // 2π
+math.phi                            // golden ratio 1.61803...
+math.sqrt2
+math.ln2
+math.ln10
+math.infinity
+math.negativeInfinity
 ```
 
 ---
@@ -185,16 +185,16 @@ random.uuid()
 ## Physics Constants
 
 ```
-physics.SPEED_OF_LIGHT              // 299792458 m/s
-physics.GRAVITY                     // 9.80665 m/s²
-physics.PLANCK                      // 6.62607015e-34 J⋅s
-physics.BOLTZMANN                   // 1.380649e-23 J/K
-physics.AVOGADRO                    // 6.02214076e23 mol⁻¹
-physics.ELECTRON_MASS               // 9.1093837015e-31 kg
-physics.PROTON_MASS                 // 1.67262192369e-27 kg
-physics.ELEMENTARY_CHARGE           // 1.602176634e-19 C
-physics.VACUUM_PERMITTIVITY         // 8.8541878128e-12 F/m
-physics.VACUUM_PERMEABILITY         // 1.25663706212e-6 N/A²
+physics.speedOfLight                // 299792458 m/s
+physics.gravity                     // 9.80665 m/s²
+physics.planck                      // 6.62607015e-34 J⋅s
+physics.boltzmann                   // 1.380649e-23 J/K
+physics.avogadro                    // 6.02214076e23 mol⁻¹
+physics.electronMass                // 9.1093837015e-31 kg
+physics.protonMass                  // 1.67262192369e-27 kg
+physics.elementaryCharge            // 1.602176634e-19 C
+physics.vacuumPermittivity          // 8.8541878128e-12 F/m
+physics.vacuumPermeability          // 1.25663706212e-6 N/A²
 ```
 
 ---
@@ -223,7 +223,7 @@ let energyCalories = energy.toCalories()
 let pressure = convert.pascals(101325)
 let pressureAtmospheres = pressure.toAtmospheres()
 
-let angle = convert.radians(math.PI)
+let angle = convert.radians(math.pi)
 let angleDegrees = angle.toDegrees()
 ```
 

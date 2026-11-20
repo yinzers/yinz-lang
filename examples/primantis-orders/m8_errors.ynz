@@ -58,8 +58,7 @@ function polish_hidden_in_inline_shape() -> Nothing {
 // (IMP-ownership.md "Teaching text" for the three transfer diagnostics — ConsumedBySend,
 // ParamNeedsGive, TransferNeedsCopy — and IMP-concurrency.md "Teaching text" for
 // HandleChannelArgNeedsBinding), plus the two existing diagnostics `.close()` extends. The
-// seven live-hole probe programs of 2026-09-03 are here as
-// triggers so the class that took three review rounds to name can never silently reopen.
+// triggers below keep each of those diagnostic classes from silently reopening.
 
 shape Bucket {
   rows: Array<Int>
@@ -84,8 +83,8 @@ function m8EatBucket(give owner: Maybe<Array<Int>>) -> Nothing {
   print(owner.exists().toString())
 }
 
-// stash — a `give` position that is NOT the receiver of a UFCS dot-call (probe 1: UFCS
-// non-receiver arguments used to bypass the ownership path entirely).
+// stash — a `give` position that is NOT the receiver of a UFCS dot-call; it goes through the
+// same ownership path as any other `give` argument.
 function m8Stash(lend self: Bucket, give rows: Array<Int>) -> Nothing {
   self.rows = rows
 }
@@ -103,7 +102,7 @@ function m8ConsumedBySendArray() -> Nothing {
 
 // WHY: ConsumedBySend (map) — the same rule for the other owned-heap element kind. The
 // WHAT-INSTEAD's advice (`wire.send(table.copy())`) is executable only because `.copy()` on
-// `Map<K, V>` ships in the same phase (Patrick's ruling, 2026-09-03).
+// `Map<K, V>` has the same `.copy()`.
 function m8ConsumedBySendMap() -> Nothing {
   let wire: Channel<Map<String, Int>> = Channel<Map<String, Int>>(2)
   let table: Map<String, Int> = { `a`: 1 }
@@ -274,7 +273,7 @@ function m8ConstSent() -> Nothing {
 
 // WHY: HandleChannelArgNeedsBinding — the handle form's command channel comes from a call, not
 // a named binding, so nothing outside the task could ever `close()` it: a hard compile ERROR
-// (FRAGO 009 ruling 2), because a warning would leave the hang class live for one spawn shape
+// because a warning would leave the hang class live for one spawn shape
 // while the fix costs one `let`.
 function m8MakeWire() -> Channel<Int> {
   let w: Channel<Int> = Channel<Int>(4)
@@ -311,8 +310,7 @@ function m8CloseWithArgs() -> Nothing {
 // WHY: the use-after-give error for an alias pair consumed by the SAME call — every call form
 // infers all of its arguments before any position consumes, so the read of `other` at
 // position 1 is seen only by the transfer decision, which compares against the classes
-// consumed BEFORE the call (fix round 2, Producer C1: `eat2(rows, other)` used to compile and
-// print `3 3`). `{via}` names `bucket` as what was given away. (C5a: the class-mate is a piece of
+// consumed BEFORE the call, so `eat2(rows, other)` is refused. `{via}` names `bucket` as what was given away. (C5a: the class-mate is a piece of
 // `bucket`; a whole-value alias is refused where it is made.)
 function m8Eat2(give owner: Bucket, give piece: Array<Int>) -> Nothing {
   print(`${owner.rows.count()} ${piece.count()}`)
@@ -340,8 +338,7 @@ function m8SameCallAliasGiveShare() -> Nothing {
 // WHY: there is no `h.close()` — a handle is a message line TO the child, not the channel's
 // lifecycle; the unknown-method list on a HANDLE stays `send(value), receive()` and points
 // at the channel binding (`commands.close()`) as the act. Last in the file on purpose: its
-// asserted phrase lives in the WHAT-INSTEAD, which the renderer used to drop for the final
-// diagnostic (byte spans read as char offsets — fixed in v0.3-M8 Phase 4 fix round 2).
+// asserted phrase lives in the WHAT-INSTEAD of the final diagnostic.
 function m8CloseOnHandle() -> Nothing {
   let commands: Channel<Int> = Channel<Int>(2)
   let h = background m8Doubler(commands)
@@ -350,9 +347,7 @@ function m8CloseOnHandle() -> Nothing {
 
 // WHY: MessageBeforeFailedCheck — `REF-errors.md:171-175` requires a `.failed()` check
 // before reading `.message` (and `.suggestions`/`.trace`/`.source`). `late` here is never
-// checked, so the read is refused at compile time rather than reading garbage at runtime
-// (v0.3-M8 Phase 4 fix round 3, Producer A: this exact read used to `select` past a null
-// error pointer and SIGABRT at runtime instead of failing the build).
+// checked, so the read is refused at compile time rather than reading a null error at runtime.
 function m8MessageBeforeFailedCheck() -> Nothing {
   let wire: Channel<Int> = Channel<Int>(2)
   wire.close()

@@ -21,8 +21,8 @@ Scripting should be as easy as Python. One-file scripts, CLI tools, data process
 
 ```
 let args = cli.args()
-let verbose = cli.flag("verbose")           // -> Boolean
-let port = cli.option("port", "3000")       // -> String (with default)
+let verbose = cli.flag(`verbose`)           // -> Boolean
+let port = cli.option(`port`, `3000`)       // -> String (with default)
 ```
 
 ---
@@ -30,8 +30,8 @@ let port = cli.option("port", "3000")       // -> String (with default)
 ## Terminal Output
 
 ```
-terminal.print("Hello")
-terminal.printColor("Error!", "red")
+terminal.print(`Hello`)
+terminal.printColor(`Error!`, `red`)
 terminal.clear()
 ```
 
@@ -44,9 +44,9 @@ terminal.clear()
 ## Interactive Input
 
 ```
-let name = terminal.ask("What's your name?")
-let confirm = terminal.confirm("Continue?")             // -> Boolean
-let choice = terminal.choose("Pick one:", ["A", "B", "C"])
+let name = terminal.ask(`What's your name?`)
+let confirm = terminal.confirm(`Continue?`)             // -> Boolean
+let choice = terminal.choose(`Pick one:`, [`A`, `B`, `C`])
 ```
 
 ---
@@ -59,7 +59,7 @@ for (item in items) {
   processItem(item)
   bar.advance()
 }
-bar.complete("Done!")
+bar.complete(`Done!`)
 ```
 
 ---

@@ -17,7 +17,7 @@ metadata:
 - **Locked design, v0.1 binary-format-reservation**: the binary format must reserve space for the metadata fields described below NOW. Bake-in-now item.
 - **Locked, v0.2 implementation**: actual population of the metadata happens when v0.2 ships compiled packages.
 
-User spec target: [`docs/reference/REF-packages.md`](../../reference/REF-packages.md) (already exists for source-level package model; this adds the BINARY format spec).
+User spec target: [`docs/internal/implementation/IMP-packages.md`](../implementation/IMP-packages.md) (the source-level package model; this adds the BINARY format spec).
 
 ---
 
@@ -85,7 +85,7 @@ The exact byte layout is a v0.2 implementation detail — this doc establishes t
 
 ## What this is NOT
 
-- **Not the source-level package model** — that's in [`docs/reference/REF-packages.md`](../../reference/REF-packages.md) and [`docs/internal/implementation/IMP-packages.md`](../implementation/IMP-packages.md). Those documents are about `ynz add`, `ynz_modules`, `yinz.toml`, etc.
+- **Not the source-level package model** — that's in [`docs/internal/implementation/IMP-packages.md`](../implementation/IMP-packages.md). That document is about `ynz add`, `ynz_modules`, `yinz.toml`, etc.
 - **Not the package registry** — registry hosting/auth/publishing is a separate v0.2+ design (no doc yet; will be in `docs/internal/implementation/IMP-registry.md` when it's time).
 - **Not an ABI specification** — Yinz packages are compiled per-target-triple. ABI stability across versions isn't promised (per [`docs/internal/implementation/IMP-versioning.md`](../implementation/IMP-versioning.md)'s pre-release delete policy). This is the BINARY metadata format, not a stable wire protocol.
 
@@ -111,4 +111,3 @@ The v0.2 milestone plan must include these. The format-design decision itself ca
 - [`docs/internal/implementation/IMP-no-runtime-mode.md`](../implementation/IMP-no-runtime-mode.md) (consumer of kernel-mode compatibility flags)
 - [`docs/internal/scratchpad/SCRATCH-future-self-references.md`](SCRATCH-future-self-references.md) (consumer of self-referential markers)
 - [`docs/internal/implementation/IMP-ownership.md`](../implementation/IMP-ownership.md) (consumer of ownership signatures for cross-package call-site analysis)
-- [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](../../../.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) "Forward-Compatibility Constraints" (Phase 5 locks the v0.1 obligation)

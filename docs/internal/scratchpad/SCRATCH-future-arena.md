@@ -54,15 +54,15 @@ Arena allocation:
 arena scratch {
   let users: Array<User> = []              // allocated in 'scratch'
   let nameMap: Map<String, User> = {}      // allocated in 'scratch'
-  let buffer: String = ""                  // allocated in 'scratch'
+  let buffer: String = ``                  // allocated in 'scratch'
 
-  process(users.share)
+  process(users)
 }  // scratch (and everything in it) freed in one operation
 ```
 
-Inside an `arena <name> { ... }` block, the default allocator IS the arena. Every constructor call within the block uses the arena unless explicitly overridden. The arena lives for the scope; everything in it dies when the scope exits.
+Inside an `arena <name> { ... }` block, the default allocator IS the arena. Every allocation within the block (such as creating an `Array` or `Map`) uses the arena unless explicitly overridden. The arena lives for the scope; everything in it dies when the scope exits.
 
-The IDE shows muted `.in(scratch)` after each constructor — per the [uniform inference rule](../../../.claude/rules/inference.md), the allocator choice is figured out from context and rendered as a muted hint.
+The IDE shows muted `.in(scratch)` after each allocation — per the [uniform inference rule](../../../.claude/rules/inference.md), the allocator choice is figured out from context and rendered as a muted hint.
 
 ---
 
@@ -71,7 +71,7 @@ The IDE shows muted `.in(scratch)` after each constructor — per the [uniform i
 ```ynz
 arena {
   let temp: Array<Int> = []
-  let bigBuffer: String = ""
+  let bigBuffer: String = ``
   computeStuff(temp, bigBuffer)
 }  // arena wiped here
 ```
@@ -86,7 +86,7 @@ Identical to A1 except no name. Use when no code inside the scope needs to refer
 let scratch: Arena = Arena()                    // manually create an arena
 let users: Array<User> = Array<User>.in(scratch)      // explicit per-allocation
 let names: Map<String, User> = Map<String, User>.in(scratch)
-process(users.share)
+process(users)
 scratch.reset()                          // manually wipe
 ```
 
@@ -138,8 +138,7 @@ The Yinz compiler is a textbook arena workload:
 
 Rust's compiler uses arenas heavily internally. Salsa (our incremental framework) plays well with arena patterns.
 
-**Adding arenas to the Yinz compiler internals is a v0.1 M8 polish task** — likely 2-5x compile-speed improvement for typical projects. Documented in [`.claude/todos.md`](../../../.claude/todos.md) after this plan lands.
-
+**Adding arenas to the Yinz compiler internals is a v0.1 M8 polish task** — likely 2-5x compile-speed improvement for typical projects.
 This is internal compiler work; it has nothing to do with the user-facing arena syntax above. The user-facing syntax is v0.2.
 
 ---
@@ -168,7 +167,7 @@ The v0.2 milestone plan must address: thread safety (arenas are typically single
 
 If/when Option B is implemented:
 
-- Add `Arena()` constructor in stdlib
+- Add an `Arena()` function in stdlib that returns an arena
 - Add `.reset()` method
 - Implement the lifecycle/borrow checker analysis
 - Compile error if Arena is dropped without `.reset()` (or with allocations still live)
@@ -181,5 +180,3 @@ If/when Option B is implemented:
 - [`docs/internal/implementation/IMP-no-runtime-mode.md`](../implementation/IMP-no-runtime-mode.md) (arenas work in kernel mode if user provides base allocator)
 - [`docs/reference/REF-ide-hints.md`](../../reference/REF-ide-hints.md) (muted `.in(arena)` rendering protocol)
 - [`docs/internal/implementation/IMP-ownership.md`](../implementation/IMP-ownership.md) (escape-analysis rules apply to arena-allocated values)
-- [`.claude/todos.md`](../../../.claude/todos.md) (Yinz compiler internals should use arenas — M8 polish task)
-- [`.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md`](../../../.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md) (originating decision)

@@ -43,10 +43,6 @@ const SKIP: &[(&str, &str)] = &[
         "index file, not a feature doc",
     ),
     (
-        "SCRATCH-future-auto-soa.md",
-        "shipped in v0.3-M5 — graduated to IMP-collections.md; file kept as pointer stub, no user-facing token",
-    ),
-    (
         "SCRATCH-future-http-framework.md",
         "deferred_stdlib_api kind, zero M1 entries per schema",
     ),
@@ -69,14 +65,6 @@ const SKIP: &[(&str, &str)] = &[
     (
         "SCRATCH-future-macos-platform-support.md",
         "CI/infra deferral (macOS dropped from matrix), no user-facing token",
-    ),
-    (
-        "SCRATCH-future-cross-module-frame-serialization.md",
-        "shipped in v0.3-M3e — deferred_language_feature entry retired; file kept as design record",
-    ),
-    (
-        "SCRATCH-future-array-by-value-element-storage.md",
-        "shipped in v0.3-M5 — deferred_language_feature entry retired (ArrayShapeRuntimeFieldWithWait lifted); graduated to IMP-collections.md, file kept as pointer stub",
     ),
     (
         "SCRATCH-future-gui-index.md",

@@ -1,10 +1,10 @@
 ---
 name: "REF-scope"
-description: "Variables are block-scoped. File-level declarations are constants only."
+description: "Variables are block-scoped. There are no file-level variables or constants; share a fixed value with a function."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,7 +13,7 @@ metadata:
 
 # Scope
 
-Variables are block-scoped. File-level declarations are constants only.
+Variables are block-scoped. A file holds declarations only (functions, shapes, imports and exports), so there are no file-level variables.
 
 ---
 
@@ -22,7 +22,7 @@ Variables are block-scoped. File-level declarations are constants only.
 A variable lives only inside the block where it's declared. Once the block ends, the variable is gone:
 
 ```
-function process() -> Nothing {
+function process(condition: Boolean) -> Nothing {
   let x = 10                         // lives for the whole function
 
   if (condition) {
@@ -30,13 +30,35 @@ function process() -> Nothing {
     print(x + y)                     // fine — x is accessible from the outer scope
   }
 
-  print(y)                           // COMPILE ERROR: y is not defined here
+  print(y)
+  // COMPILE ERROR: `y` is not defined.
+  // not defined
+  // Check the spelling, or declare it: `let y = ...` — `y` has no declaration in scope. Declare it with `let y = ...` before using it, or check whether it's defined in a file you haven't imported yet.
+}
 
+function entrypoint() -> Nothing {
+  process(true)
+}
+```
+
+A loop body is a block too. A variable declared inside it is new on each pass and is gone after the loop:
+
+```
+function process(items: Array<Int>) -> Nothing {
   for (item in items) {
-    let temp = transform(item)       // new variable each iteration
+    let nextItem = item + 1              // new variable each iteration
+    print(nextItem)
   }
 
-  print(temp)                        // COMPILE ERROR: temp is not defined here
+  print(nextItem)
+  // COMPILE ERROR: `nextItem` is not defined.
+  // not defined
+  // Check the spelling, or declare it: `let nextItem = ...` — `nextItem` has no declaration in scope. Declare it with `let nextItem = ...` before using it, or check whether it's defined in a file you haven't imported yet.
+}
+
+function entrypoint() -> Nothing {
+  let items: Array<Int> = [1, 2, 3]
+  process(items)
 }
 ```
 
@@ -44,70 +66,78 @@ No variable hoisting. No surprises. See a `let`, know exactly where that variabl
 
 ---
 
-## File-level constants
+## No file-level variables
 
-`const` declared outside any function is accessible by all functions in that file:
+A `let` or `const` outside a function is a compile error:
 
 ```
-// player.ynz
+const maxRetries = 3
 
-const MAX_HEALTH = 100
-const MIN_HEALTH = 0
-const RESPAWN_TIME = duration.seconds(5)
+function entrypoint() -> Nothing {
+  print(maxRetries)
+}
+// COMPILE ERROR: Unexpected `const` at the top level.
+// Top-level code must be inside a `function`, `shape`, `import`, or `export` declaration.
+// Yinz programs are made of functions and shapes. Only declarations are allowed at the top level.
+```
+
+To share a fixed value across a whole file, write a function that returns it:
+
+```
+function maxHealth() -> Int {
+  return 100
+}
+
+function minHealth() -> Int {
+  return 0
+}
+
+shape Player {
+  name: String
+  health: Int
+}
 
 function heal(lend player: Player) -> Nothing {
-  player.health = MAX_HEALTH          // accessible
+  player.health = maxHealth()
 }
 
 function isDead(share player: Player) -> Boolean {
-  return player.health <= MIN_HEALTH  // accessible
+  return player.health <= minHealth()
+}
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Alice`, health: 0 }
+  print(isDead(player))
+  heal(player)
+  print(isDead(player))
 }
 ```
 
-Mutable file-level variables are not allowed:
-
-```
-let globalCounter = 0     // COMPILE ERROR: file-level variables must be const.
-const MAX_RETRIES = 3     // fine
-```
-
 ---
 
-## Const expressions — evaluated at compile time
+## Sharing a fixed value across files
 
-File-level constants can use pure function calls as long as all inputs are constant. The compiler evaluates these before the program runs:
-
-```
-// Valid const expressions — compiler evaluates at compile time
-const RESPAWN_TIME = duration.seconds(5)
-const MAX_AREA = math.PI * 100 * 100
-const GREETING = `Hello world`
-const GRAVITY: Float = 9.81
-```
-
-Calls that depend on runtime information are not valid:
-
-```
-const NOW = date.now()                  // COMPILE ERROR: date.now() depends on runtime
-const CONFIG = file.read(`config.ynz`) // COMPILE ERROR: file.read() is I/O
-```
-
-The rule: can the compiler know this value before the program starts? Pure math, pure string operations, and pure stdlib functions with constant arguments — yes. Anything reading from the clock, file system, network, or OS — no.
-
----
-
-## Sharing constants across files
-
-Export a constant to share it across files:
+Export the function, then import it. A project with two files, `constants.ynz` and `entrypoint.ynz`:
 
 ```
 // constants.ynz
-export const MAX_HEALTH = 100
-export const API_URL = `https://api.example.com`
-export const GRAVITY: Float = 9.81
+export function maxHealth() -> Int {
+  return 100
+}
 
-// anywhere else in the project
-import { MAX_HEALTH } from `constants`
+export function apiUrl() -> String {
+  return `https://api.example.com`
+}
 ```
 
-No special global keyword. The module system handles it.
+```
+// entrypoint.ynz
+import { maxHealth, apiUrl } from `constants`
+
+function entrypoint() -> Nothing {
+  print(maxHealth())
+  print(apiUrl())
+}
+```
+
+No special global keyword. The module system handles it. See [Modules](REF-modules.md).

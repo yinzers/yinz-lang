@@ -27,8 +27,8 @@
 //! that does not exist yet. That is a real, separate, feature-shaped piece of work — not
 //! something a producer-alignment fix should grow to cover — so those three fields are refused
 //! at COMPILE TIME with real teaching text ([`EcFieldLowering::Refused`]), never admitted only
-//! to ICE deep in codegen. `.claude/rules/no-duct-tape.md`: a loud, actionable, honest refusal
-//! is a legitimate answer; an internal-error string reached by a correct user program is not.
+//! to ICE deep in codegen. A loud, actionable, honest refusal is a legitimate answer; an
+//! internal-error string reached by a correct user program is not.
 
 /// One of the four `ErrorsCapable` dot-properties gated behind a `.failed()` check
 /// (`REF-errors.md:171-175`). `.failed()` and `.or(default)` are methods (parens), not

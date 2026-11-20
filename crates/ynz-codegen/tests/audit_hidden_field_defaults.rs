@@ -16,7 +16,7 @@
 /// Every `hidden` field declaration in the v0.2.0-m4 codebase uses `= 0` (or `= none`,
 /// or no default expression at all). Concrete list of all hidden-field declarations found:
 ///
-/// - `examples/pirates-roster/entrypoint.ynz:366` — `hidden current: int = 0`
+/// - `examples/pirates-roster/entrypoint.ynz`, shape `InningClock` — `hidden current: int = 0`
 /// - `crates/ynz-driver/tests/fixtures/m4_neg_hidden_field_access.ynz:3` — `hidden balance: int = 0`
 /// - `crates/ynz-driver/tests/fixtures/m7_user_iterable.ynz:8` — `hidden pos: int = 0`
 /// - `crates/ynz-driver/tests/fixtures/m4_hidden_field.ynz:3` — `hidden count: int = 0`

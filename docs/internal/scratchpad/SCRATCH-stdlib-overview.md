@@ -42,7 +42,7 @@ This means: the stdlib can be as comprehensive as we want. Add everything. The c
 
 ## Auto-Import — No Import Statement Needed
 
-The standard library is always available. Developers never write `import { sqrt } from "math"`. They just write `math.sqrt()`. The compiler and IDE know the entire standard library at build time. Tree shaking strips anything unused.
+The standard library is always available. Developers never write ``import { sqrt } from `math` ``. They just write `math.sqrt()`. The compiler and IDE know the entire standard library at build time. Tree shaking strips anything unused.
 
 This applies to all stdlib modules: `math`, `file`, `request`, `server`, `date`, `duration`, `json`, `csv`, `terminal`, `cli`, `path`, `directory`, `random`, `stats`, `convert`, `physics`, `matrix`, `vector`, `tensor`, `vectors`, `env`.
 
@@ -121,7 +121,7 @@ Proposed 2026-06-13. These are NOT promises and NOT designed yet — they're a h
 
 | Candidate | What | Note |
 |---|---|---|
-| **`encoding`** | base64 (std + URL-safe), hex, URL/percent codec | **Already has a design doc** → [encoding.md](SCRATCH-stdlib-encoding.md). `stdlib-design.md` Rule 8 names base64; `request` v0.15 needs URL-encoding. Slot before/with v0.15. |
+| **`encoding`** | base64 (std + URL-safe), hex, URL/percent codec | **Already has a design doc** → [encoding.md](SCRATCH-stdlib-encoding.md). `stdlib-design.md` names base64 in its SIMD bullet; `request` v0.15 needs URL-encoding. Slot before/with v0.15. |
 | **`uuid`** | UUID v4/v7, ULID generation | Ubiquitous, tiny. Pure-compute, no I/O. |
 | **`tls`** | TLS handshake + cert validation | `request` (v0.15) and `server` (v0.21) imply HTTPS — TLS is the module-sized dependency neither currently names. Sequence *before* v0.15. |
 | **auth: password hashing + JWT** | argon2/bcrypt KDF, JWT sign/verify | Distinct from `crypto` v0.17 primitives (SHA/AES/HMAC). Auth is universal. |
@@ -139,12 +139,12 @@ Proposed 2026-06-13. These are NOT promises and NOT designed yet — they're a h
 
 | Candidate | What |
 |---|---|
-| **i18n / `locale`** | locale-aware formatting + message catalogs. Fits the "no platform-default locale" rule (Rule 3) — explicit locale, never silent. |
+| **i18n / `locale`** | locale-aware formatting + message catalogs. Fits the "no platform-default locale" rule (`stdlib-design.md`: defaults are identical on every platform) — explicit locale, never silent. |
 | **validation / schema** | runtime validation at the external-data boundary (parsed JSON → typed `shape`). OPEN: may be a language feature (`shape` + `errors`) rather than a stdlib module — decide before designing. |
 | **test-framework extensions** | property-based testing, fuzzing, benchmarking. Next tier above the `test` keyword (v0.13). |
 | **`dns`** | name resolution; networking floor below `request`. |
-| **caching / LRU** | in-memory bounded cache (Rule 4: bounded by default). |
-| **templating** | HTML/text templating; ties to the GUI/web work (`design/future/gui/`). |
+| **caching / LRU** | in-memory bounded cache (`stdlib-design.md`: bounded by default). |
+| **templating** | HTML/text templating; ties to the GUI/web work (`SCRATCH-future-gui-index.md`). |
 | **observability** | metrics + tracing, above basic `log` (v0.11) / logging framework (v0.23). |
 
 ### v2+ / niche (parked so they're not forgotten)

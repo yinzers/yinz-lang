@@ -1,6 +1,6 @@
 ---
 name: "IMP-maybe"
-description: "Design decisions for Yinz's 'Maybe<T>' built-in generic primitive — its API (.exists(), .value, .or()) and why it shipped in M5 with generics instead of M6 with narrowing."
+description: "Design decisions for Yinz's 'Maybe<T>' built-in generic primitive — its API (.exists(), .value, .or()), its lowering table and its flow-sensitive '.value' rules."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-17"
@@ -30,13 +30,11 @@ See [`docs/reference/REF-maybe.md`](../../reference/REF-maybe.md) for the user-f
 
 ---
 
-## Why `Maybe<T>` ships in M5, not M6
+## `Maybe<T>` is a type-system primitive
 
-The earlier milestone plan put `maybe T` in M6 alongside `options`, union types, and `is Type` narrowing — all "things that affect type narrowing." But `Maybe<T>` is structurally different: it's the return type of `.get()` on every built-in collection. Without `Maybe<T>` in M5, `Array<Int>.get(0)` either has to return `Int` (with a runtime panic on out-of-bounds — wrong shape, eventually requires a rename) or `.get()` ships in M6 (M5 collections would have no safe access until M6 lands).
+`Maybe<T>` is the return type of `.get()` on every built-in collection, so it belongs to the generics engine and not to the narrowing features (unions, `options`, `is Type`). `Array<Int>.get(0)` returns `Maybe<Int>`, and an out-of-bounds index gives `none`, not a runtime panic.
 
-Pulling `Maybe<T>` into M5 produces the cleanest API: `.get()` returns `Maybe<T>` from day 1; no rename, no breaking change. M6 still ships unions / options / narrowing — but `Maybe<T>` is structurally a primitive of the type system, not a narrowing case.
-
-Locked in [`.claude/planning/done/2026-05-17-m5-generics/plan.md`](../../../.claude/planning/done/2026-05-17-m5-generics/plan.md).
+`Maybe<T>` and `T | none` are designed to be one type (the union form rewritten to `Maybe<T>` at type resolution, so there is one encoding). **Built today:** `T | none` stays a plain union (`ast_type_to_type` in `crates/ynz-typeck/src/check.rs` does not rewrite it), so only write `Maybe<T>` where the lowering table below must apply.
 
 ---
 
@@ -57,9 +55,9 @@ The lowering is chosen per concrete T at monomorphization time. The decision is 
 | `Maybe<Maybe<T>>` (nested) | **REJECTED at typeck** — compile error | — | Nested maybe forces a 2-bit tag; almost always a code smell. Compile error suggests flattening. |
 | All other generic-shape instantiations | Tagged union | `struct { i1 has_value, ShapeT value }` | Default — safe but slightly more memory than null-pointer when applicable |
 
-**Why no per-binding override**: the encoding is implementation-detail; users see only `Maybe<T>` and `none`. Adding a `dense<T>` / `pointer-niche<T>` opt-in surface is duct tape — the compiler picks the right one automatically.
+**No per-binding override**: the encoding is an implementation detail; users see only `Maybe<T>` and `none`, and the compiler picks the encoding from the table.
 
-**Why reject `Maybe<Maybe<T>>`**: allowing it forces a 2-bit tag (some-some / some-none / none); that distinction is almost never what the user meant. M5 ships the compile error; if a real use case emerges, this section gets a v0.2+ amendment.
+**`Maybe<Maybe<T>>` is a compile error**: it would need a 2-bit tag (some-some / some-none / none), a distinction a program almost never means.
 
 IR-snapshot tests in `crates/ynz-codegen/tests/snapshots.rs` assert each row of the table produces the expected LLVM type.
 
@@ -103,7 +101,7 @@ The `none` literal produces a type `Maybe<T>` for some unknown T. T is resolved 
 | `if (m.exists()) { closureCapture(() => m.value) }` | NO — closures don't carry the flag | Forward-defensive; closures are v0.3+ anyway. |
 | `m.value` with no surrounding `.exists()` check | NO — compile error | Base case. Suggests both `.exists()` check and `.or(default)`. |
 
-**Why only this subset**: the simple positive/negative/AND cases cover 95% of real usage. Early-return narrowing requires negation-narrowing infrastructure that M6 owns. Reassignment invalidation is mechanical. Closures are deferred.
+**Scope of the subset**: positive, negative and AND forms are narrowed. Early-return narrowing needs negation-narrowing infrastructure that the `if (x is Type)` work (M6) owns. Reassignment invalidation is mechanical. Closures do not carry the flag.
 
 ---
 
@@ -129,11 +127,9 @@ Documented in fixture `crates/ynz-driver/tests/fixtures/m5_cycle_leak.ynz` with 
 
 ---
 
-## Why `Maybe<T>` is built-in, not a stdlib generic
+## `Maybe<T>` is built into the compiler
 
-`Maybe<T>` is the return type of `.get()` on every built-in collection: `Array<T>`, `Fixed<T>`, `Map<K, V>`, `String`. It's also the signature of `.first()`, `.last()`, `.find()`, `.removeFirst()`, `.removeLast()`, and similar collection methods. The type appears EVERYWHERE in the language surface.
-
-If `Maybe<T>` were a stdlib generic (defined in `std/maybe.ynz` and imported), every program would need an implicit prelude that imports it. M5 prefers the simpler model: `Maybe<T>` is a primitive of the type system, defined inside the compiler, with no import needed. This matches `Array<T>` / `Fixed<T>` / `Map<K, V>` (also primitives, also no-import).
+`Maybe<T>` is the return type of `.get()` on every built-in collection (`Array<T>`, `Fixed<T>`, `Map<K, V>`, `String`) and of `.first()`, `.last()`, `.find()`, `.removeFirst()`, `.removeLast()` and similar methods. It is defined inside the compiler and needs no import, like `Array<T>`, `Fixed<T>` and `Map<K, V>`.
 
 `some(value)` constructor: `some(value)` is sugar for "wrap this value as a `Maybe<T>`." Treated like a built-in function but resolved at typeck (no actual runtime call — codegen lowers `some(x)` to the tagged-union construction or pointer-wrap directly).
 
@@ -142,7 +138,6 @@ If `Maybe<T>` were a stdlib generic (defined in `std/maybe.ynz` and imported), e
 ## Cross-References
 
 - [`docs/reference/REF-maybe.md`](../../reference/REF-maybe.md) — user-facing surface
-- [`.claude/planning/done/2026-05-17-m5-generics/plan.md`](../../../.claude/planning/done/2026-05-17-m5-generics/plan.md) — M5 implementation plan (where all of the above tables are locked)
 - [`docs/internal/implementation/IMP-generics.md`](IMP-generics.md) — generics engine that `Maybe<T>` is built on top of
 - [`docs/internal/implementation/IMP-collections.md`](IMP-collections.md) — collections whose `.get()` returns `Maybe<T>`
 - [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) — Rule 2 (compile-time safety) governs the flow-sensitive `.value` check

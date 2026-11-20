@@ -1,10 +1,10 @@
 ---
 name: "REF-generics"
-description: "Sometimes you want a type that works with any type. That's what generics are for."
+description: "Sometimes you want a shape or function that works with any type. That's what generics are for."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,7 +13,7 @@ metadata:
 
 # Generics
 
-Sometimes you want a type that works with any type. That's what generics are for.
+Sometimes you want a shape or function that works with any type. That's what generics are for.
 
 ---
 
@@ -23,7 +23,7 @@ You've been using generics this whole time:
 
 ```
 Array<Player>           // an array that holds Players
-Map<String, Number>     // a map with string keys and number values
+Map<String, Int>        // a map with string keys and Int values
 Fixed<String>           // a fixed array of strings
 ```
 
@@ -31,49 +31,38 @@ The `<T>` part is the generic parameter — it says what type the collection hol
 
 ---
 
-## Defining your own generic types
+## Defining your own generic shapes
 
 Use the same `name<T>` pattern:
 
-```
+```ynz
 shape Box<T> {
   value: T
 }
 
-let playerBox: Box<Player> = { value: somePlayer }
-let numberBox: Box<Number> = { value: 42 }
+function entrypoint() -> Nothing {
+  print(`Box declared`)
+}
 ```
 
-`Box<Player>` is a Box that holds a `Player`. `Box<Number>` holds a `Number`. One definition, works with any type.
+`Box<Int>` is a Box that holds an `Int`. `Box<String>` holds a `String`. One definition works with any type.
+
+Writing a value of your own generic shape, such as `let numberBox: Box<Int> = { value: 42 }`, does not compile yet: the compiler reports "A shape value `{ ... }` cannot produce a `Box<Int>` value." For now, declare generic shapes and use the generic parameters on functions.
 
 ---
 
 ## Multiple type parameters
 
-```
+```ynz
 shape Pair<A, B> {
   first: A
   second: B
 }
 
-let coord: Pair<Number, Number> = { first: 10, second: 20 }
-let entry: Pair<String, Number> = { first: "score", second: 100 }
+function entrypoint() -> Nothing {
+  print(`Pair declared`)
+}
 ```
-
----
-
-## Consistent with built-in collections
-
-The pattern is the same everywhere — your types and the built-in types work the same way:
-
-```
-Array<Player>           // built-in — holds Players
-Box<Player>             // yours — holds a Player
-Pair<String, Number>    // yours — holds a string and a number
-Map<String, Number>     // built-in — maps strings to numbers
-```
-
-One pattern. No special cases.
 
 ---
 
@@ -81,41 +70,55 @@ One pattern. No special cases.
 
 Functions can have type parameters too — same `name<T>` syntax, after the function name:
 
-```
+```ynz
 function identity<T>(give value: T) -> T {
   return value
 }
 
-let n = identity(5)            // T inferred as Int
-let s = identity("hello")      // T inferred as String
+function entrypoint() -> Nothing {
+  let n = identity(5)            // T is Int
+  let s = identity(`hello`)      // T is String
+  print(n.toString())
+  print(s)
+}
 ```
 
-The compiler picks `T` from the argument you pass. You almost never write it explicitly.
+The compiler works out `T` from the argument you pass. You almost never write it yourself.
 
 ---
 
 ## One `T` is one type per call
 
-When two parameters share a type parameter, every argument for them must have that one type. The first argument that fixes `T` (or the explicit `<Type>` you wrote) decides it:
+When two parameters share a type parameter, every argument for them must have that one type. The first argument that sets `T` (or the explicit `<Type>` you wrote) decides it:
 
-```
-shape Tiny { flag: Boolean }
-shape Big { label: String, count: Int }
+```ynz
+shape Tiny {
+  flag: Boolean
+}
+
+shape Big {
+  label: String
+  count: Int
+}
 
 function same<T>(share first: T, share second: T) -> T {
   return second
 }
 
-same(big, big2)        // OK — T is Big for both
-same(big, tiny)        // COMPILE ERROR
-same<Big>(big, tiny)   // COMPILE ERROR
+function entrypoint() -> Nothing {
+  let big: Big = { label: `a`, count: 1 }
+  let big2: Big = { label: `b`, count: 2 }
+  let tiny: Tiny = { flag: true }
+  same(big, big2)        // OK — T is Big for both
+  same(big, tiny)        // COMPILE ERROR
+  same<Big>(big, tiny)   // COMPILE ERROR
+}
 ```
 
 The error names the argument, the type `T` was made, and what made it:
 
 ```
-`tiny` has type `Tiny`, but `same` needs `Big` for `second`: `second` and `first` share the
-type parameter `T`, and the argument `big` for `first` already made it `Big`.
+`tiny` has type `Tiny`, but `same` needs `Big` for `second`: `second` and `first` share the type parameter `T`, and the argument `big` for `first` already made it `Big`.
 ```
 
 The function is compiled for `Big`, so it would read the `Tiny` as a `Big`: wrong values, or memory past the end of the `Tiny`. Pass a `Big` for `second`, or give `first` a `Tiny` too.
@@ -126,66 +129,117 @@ The same comparison applies to every argument of every call form: `f(a, b)`, `a.
 
 ## Multiple type parameters on a function
 
-```
-function pair<A, B>(give first: A, give second: B) -> Pair<A, B> {
-  return { first, second }
+```ynz
+function firstOf<A, B>(give first: A, give second: B) -> A {
+  return first
 }
 
-let coord = pair(10, 20)            // A=Int, B=Int — Pair<Int, Int>
-let entry = pair("score", 100)      // A=String, B=Int — Pair<String, Int>
+function entrypoint() -> Nothing {
+  let winner = firstOf(`score`, 100)      // A is String, B is Int
+  let count = firstOf(10, `ten`)          // A is Int, B is String
+  print(winner)
+  print(count.toString())
+}
 ```
 
 ---
 
 ## Constraints — require the type to follow a contract
 
-If your function needs the type to support certain operations, use `follows` right inside the angle brackets:
+If your function needs the type to support certain functions, write `follows` inside the angle brackets. A contract is a `shape` that lists function signatures:
 
-```
-function sort<T follows Comparable>(share items: Array<T>) -> Array<T> {
-  // T is guaranteed to follow Comparable, so .compare() works
-  // ...
+```ynz
+shape Scorable {
+  score(share self) -> Int
 }
 
-let sorted = sort(players)         // works because Player follows Comparable
-```
+shape Player follows Scorable {
+  name: String
+  points: Int
+}
 
-Multiple constraints — separate with commas:
+function score(share player: Player) -> Int {
+  return player.points
+}
 
-```
-function process<T follows Comparable, Serializable>(share item: T) -> String {
-  // T follows both Comparable AND Serializable
+function pickFirst<T follows Scorable>(give first: T, give second: T) -> T {
+  return first
+}
+
+function entrypoint() -> Nothing {
+  let first: Player = { name: `Ana`, points: 3 }
+  let second: Player = { name: `Bo`, points: 5 }
+  let picked = pickFirst(first, second)
+  print(picked.name)
 }
 ```
 
-If you try to call the function with a type that doesn't follow the contract, the compiler tells you exactly what's missing:
+If you call the function with a shape that does not follow the contract:
+
+```ynz
+shape Scorable {
+  score(share self) -> Int
+}
+
+shape Rookie {
+  name: String
+  points: Int
+}
+
+function pickFirst<T follows Scorable>(give first: T, give second: T) -> T {
+  return first
+}
+
+function entrypoint() -> Nothing {
+  let first: Rookie = { name: `Ana`, points: 3 }
+  let second: Rookie = { name: `Bo`, points: 5 }
+  let picked = pickFirst(first, second)
+  print(picked.name)
+}
+```
+
+the compiler reports:
 
 ```
-shape Player { name: String, health: Number }   // no follows clause
-
-let sorted = sort(players)
-// COMPILE ERROR: Type Player does not follow contract Comparable.
-//
-//   sort<T follows Comparable> requires T to follow Comparable, but Player
-//   does not implement it. To make Player sortable, add a follows clause:
-//
-//     type Player follows Comparable { ... }
-//
-//   Then implement the required compare() method. See docs/reference/REF-operators.md.
+Type `Rookie` does not follow contract `Scorable`.
 ```
+
+Add `follows Scorable` to the shape's declaration and write the functions the contract lists.
+
+Inside the function body, calling the contract's functions on a `T` value (such as `first.score()`) does not compile yet. The compiler reports "`T` does not have a method called `score`."
 
 ---
 
 ## Explicit type parameters — only when needed
 
-In rare cases the compiler can't infer `T` (usually when no arguments use the type). Specify it manually with angle brackets at the call site:
+When no argument tells the compiler what `T` is, write it at the call site with angle brackets:
 
-```
+```ynz
 function createList<T>() -> Array<T> {
   return []
 }
 
-let empty = createList<Player>()       // explicit — there's nothing to infer from
+function entrypoint() -> Nothing {
+  let empty = createList<Int>()       // explicit — there's nothing to work it out from
+  print(empty.count())
+}
 ```
 
-99% of calls don't need this. If you find yourself writing `<T>` at a call site often, the function signature probably has a design issue.
+Without it the program does not compile:
+
+```ynz
+function createList<T>() -> Array<T> {
+  return []
+}
+
+function entrypoint() -> Nothing {
+  let empty = createList()
+  print(empty.count())
+}
+```
+
+The compiler reports:
+
+```
+Cannot work out the type parameter `T` for function `createList` — pass a value or annotate explicitly.
+```

@@ -310,9 +310,9 @@ Writing `switch` gives the warning "`switch` is not a keyword in Yinz." and tell
 Give each step a name:
 
 ```
-let active = players.filter(player => player.health > 0)
-let topTen = active.limit(10)
-let names = topTen.map(player => player.name)
+let firstPlayer = players.first()
+let leader = firstPlayer.or(rookie)
+let leaderName = leader.name
 ```
 
 The compiler joins the steps into one fast pass, so the named version costs nothing.
@@ -343,7 +343,7 @@ Two imports cannot use the same name. Yinz stops you and asks you to rename one:
 import { Player } from `models/game`
 import { Player } from `external/legacy`
 // COMPILE ERROR: Import name `Player` is already bound by a previous import.
-// Use a different local name: `import { Player as otherName } from "..."`
+// Use a different local name: `import { Player as otherName } from `...``
 ```
 
 ### Slow work: no `async`, no `await`

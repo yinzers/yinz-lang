@@ -37,80 +37,56 @@ A language can teach you its syntax. Yinz also wants to teach you to be a BETTER
 
 Yinz combines four things: **easy syntax**, **real systems skills** (ownership, no garbage collector, native compilation), **compile-time safety** (the compiler catches errors before you run the program), and an **editor that explains everything**. The teaching mission ties them together.
 
-**Long-term hope:** Yinz becomes a language for a first computer science course, because it is both easy to start with AND strong enough for real products. Students learn real systems ideas (ownership, type safety, exact arithmetic) and finish with a language they can ship code in.
-
 ---
 
 ## What teaching looks like in practice
 
-### Pattern 1 — Choosing how to store data
+### Pattern 1 — Speed suggestions
 
-```ynz
-let scores: Map<String, Number> = { alice: 90, bob: 85, charlie: 78 }
-// IDE HINT: Every key here is written out in your code, so a shape is
-//           much faster than a map:
-//   shape Scores { alice: Number, bob: Number, charlie: Number }
-//   let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
-//
-// Why: Reading a shape field is one step: the computer jumps straight to it.
-//      Reading a map key means searching for it, which takes roughly 10 to 50
-//      steps. For keys that never change, a shape is about 10x faster AND you
-//      get dot access with autocomplete.
-```
-
-### Pattern 2 — Speed suggestions
+The IDE tells you when a cheaper form of the same code fits.
 
 ```ynz
 let weekdays: Array<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
-// IDE HINT: `weekdays` never grows or shrinks, so the compiler stores it as
-//           a `Fixed<String>`. You can write that yourself:
-//   let weekdays: Fixed<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
-//
-// Why: Nothing in this file calls .add() or .remove() on `weekdays`, so it
-//      never needs room to grow. A `Fixed<String>` lives in the quick memory
-//      a function uses for its own variables, so reading it is faster.
+// IDE HINT: `Array` carries a dotted underline. Hover says:
+//   WHAT:    The compiler stores this value as a fixed-size `Fixed<T>` instead of
+//            a growable `Array<T>`, because nothing in this function ever grows it.
+//   INSTEAD: Write `Fixed` instead of `Array` in the annotation, for example
+//            `let weekdays: Fixed<String> = [...]`.
+//   WHY:     A fixed-size list never has to grow, so it is cheaper to create and
+//            use than a growable `Array`, and writing `Fixed` tells readers its
+//            size will not change.
 ```
 
-### Pattern 3 — The usual Yinz style
+### Pattern 2 — The usual Yinz style
+
+The IDE tells you when a value is never changed, so you can say so with `const`.
 
 ```ynz
 let serverName = `prod-01`
-// IDE HINT: effectively const — never reassigned. You can write that yourself:
-//   const serverName = `prod-01`
-//
-// Why: Nothing gives `serverName` a new value, so `const` tells every reader
-//      it will not change, and the compiler then refuses any later change.
-//      The compiled program is the same, so there is no speed cost.
+// IDE HINT: `let` carries a dotted underline. Hover says:
+//   WHAT:    The compiler treats this `let` as a `const`, because nothing in this
+//            function ever reassigns it, changes it, or lends it out to be changed.
+//   INSTEAD: Write `const` instead of `let`, for example `const serverName = `prod-01``.
+//   WHY:     A value that never changes can be treated as fixed for the whole
+//            function, and writing `const` tells readers at a glance that it will
+//            not change.
 ```
 
-### Pattern 4 — Choosing a number type
+### Pattern 3 — Memory and ownership
+
+The compiler explains an ownership mistake in terms of your own code.
 
 ```ynz
-let price: Float = 19.99
-// IDE HINT: Using Float for financial values may cause rounding errors.
-//   Consider Number for exact arithmetic:
-//     let price: Number = 19.99
-//
-// Why: Float stores numbers in binary, which can't hold most decimal
-//      fractions exactly (0.1 + 0.2 = 0.30000000000000004). Money math that
-//      repeats many times adds up those tiny errors and gives wrong totals.
-//      Number does its math in base 10, so it is exact for any value you
-//      would write by hand. The speed difference is small; the accuracy
-//      difference is large.
-```
+shape Player {
+  name: String
+  health: Int
+}
 
-### Pattern 5 — Memory and ownership
-
-```ynz
-function takeDamage(share player: Player, amount: Number) -> Nothing {
+function takeDamage(share player: Player, amount: Int) -> Nothing {
   player.health = player.health - amount
   // COMPILE ERROR: `player` is declared `share` — read-only — so its fields cannot be changed.
-  //   Change the parameter to `lend player: Player` if this function needs to modify it.
-  //
-  // Why: A `share` parameter is a read-only borrow: the caller keeps ownership
-  //      and trusts the value is unchanged after the call. When a function
-  //      modifies a value, declare `lend` so the change is visible at every
-  //      call site.
+  // Change the parameter to `lend player: Player` if this function needs to modify it.
+  // A `share` parameter is a read-only borrow: the caller keeps ownership and trusts the value is unchanged after the call. When a function modifies a value, declare `lend` so the change is visible at every call site.
 }
 ```
 
@@ -123,11 +99,21 @@ The IDE is not only a place to type code. It teaches just as much as compiler er
 So a developer learns even when their code is **completely correct**:
 
 ```ynz
-let maxHealth = 42            // IDE shows muted ": Int" → teaches how the compiler picks types
-heal(player)                  // IDE shows muted "share" → teaches ownership at call sites
-db.fetch(`users`)             // IDE shows muted "wait" → teaches that the call pauses for the network
-arena scratch {
-  let temp: Array<Int> = []     // IDE shows muted ".in(scratch)" → teaches that memory comes from the arena
+shape Player {
+  name: String
+  health: Int
+}
+
+function heal(lend player: Player) -> Nothing {
+  player.health = 100
+}
+
+function entrypoint() -> Nothing {
+  let maxHealth = 42                                   // IDE shows muted ": Int" → teaches how the compiler picks types
+  let player: Player = { name: `Alice`, health: maxHealth }
+  heal(player)                                         // IDE shows muted "lend" → teaches ownership at call sites
+  sleep(100)                                           // IDE shows muted "wait" → teaches that the call pauses
+  print(player.health)
 }
 ```
 
@@ -142,8 +128,7 @@ Both are required. Error messages fix misunderstandings; muted hints prevent the
 
 **How hints look**:
 
-- Neutral muted (gray): harmless choices — types, how long a value lives, where memory comes from
-- Cautionary muted (red-tinted): choices that change data or affect ownership — `lend`, `give`, and automatic sharing of a value across tasks
+- Muted text: choices the compiler made for you — types, `share`, `lend`, `give`, `wait`
 - Compile errors use the normal error look (red squiggly line plus a message panel), so they never look like muted hints
 
 The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
@@ -156,7 +141,7 @@ The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
 
 Every error, warning and suggestion from the Yinz compiler MUST follow this structure.
 
-```
+```text
 [severity]: [WHAT — a short statement of the problem]
 
   [WHAT TO DO INSTEAD — corrected code, ready to copy]
@@ -171,60 +156,18 @@ This applies to:
 - Compile warnings (Tier 2)
 - IDE suggestions (Tier 3)
 - Lint messages (all tiers)
-- Test failure output
-- Even `panic()` messages from production code (a panic should say what state caused it)
 
 ---
 
-## A Question for Every New Feature
-
-Every new feature, rule, or message must answer four questions:
-
-1. Does it follow the golden rules?
-2. Does it repeat an idea Yinz already has?
-3. Is the default the fastest option?
-4. **Does it teach the user something, or does it just hide complexity?**
-
-The fourth question is the teaching check.
-
-**Things that pass it:** error messages, lint suggestions, IDE hints, even example text in these docs. They inform the user.
-
-**Things that might fail it:** automatic type conversions, global values that appear from nowhere, behavior that happens with no explanation, and anything that hides what the machine is really doing.
-
-If a feature makes it easier to write code without learning why it works, it fails the teaching mission. Yinz should make it easy to write GOOD code AND to understand WHY it is good.
-
----
-
-## What the compiler should teach
-
-The compiler's teaching covers at least these areas:
+## What the compiler teaches
 
 | Area | Examples |
 |------|----------|
-| **Choosing a data layout** | shape or map, array or fixed array, when to use which |
-| **Speed habits** | reserving room up front, avoiding repeated memory requests, why merged steps are fast |
-| **Memory and ownership** | when to use share, lend, give and copy, and why ownership matters |
-| **Number types** | when to use Number, Float or Int, and why exact decimals are the default |
-| **The usual Yinz style** | one step per line instead of chaining, named intermediate values, descriptive function names |
-| **Design habits** | when a shape is better than a map, when a union is better than yes/no flags |
-| **Conventions** | naming (Rule 10), how to handle errors, how to organize modules |
-| **Habits to avoid** | what NOT to do and why (arrays with gaps, deeply nested code, unexplained numbers) |
+| **Choosing a data layout** | `Array` or `Fixed`, when to use which |
+| **Memory and ownership** | when the compiler chose share, lend, give and copy, and why |
+| **The usual Yinz style** | `const` instead of `let` when a value never changes |
 
-Each area has rules in the linter and hints in the IDE. Hints for one module, such as "use `path.join()` instead of joining strings with `+`", arrive with that module.
-
----
-
-## Spotting habits to avoid
-
-Beyond pointing at single lines, the compiler should recognize whole patterns of code that cause trouble and explain why:
-
-- **Values changed all over the place** — "you changed this shape in 4 different functions; consider returning a new value instead, which is easier to follow"
-- **Functions that do too much** — "this function does 5 separate things; consider splitting it"
-- **Unexplained numbers** — "what does 3600 mean here? Consider `60 * 60` or `const secondsPerHour = 3600`"
-- **Deeply nested conditions** — "5 levels of nesting; consider returning early"
-- **Yes/no flags as parameters** — "a boolean flag suggests two different jobs; consider two functions or an `options` type"
-
-Each pattern is a chance to teach. The IDE and compiler don't FORBID these patterns, because sometimes they are right. They suggest the alternative and explain the reasoning.
+The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
 
 ---
 
@@ -235,21 +178,6 @@ The teaching mission applies to these docs too:
 - They are written for a developer who just finished high school, knows JavaScript, and has never done systems programming
 - Examples use realistic code (Player, User, score, health), not foo/bar/x/y
 - Compiler error messages are SHOWN, not just described
-- Each design choice comes with the reason a curious reader would ask about
-
-The docs are a teacher too, not just a reference.
-
----
-
-## Success: schools choose Yinz
-
-Yinz's success isn't measured by GitHub stars or hiring posts. The measure is:
-
-> **Schools choose Yinz for a first programming course, because students learn real systems ideas in their first semester AND finish with a language they can ship real code in.**
-
-That is the bar. Every error message, lint rule and doc example should move toward it.
-
-If a feature would make it HARDER for a beginner to learn programming basics, it doesn't fit Yinz. If a feature actively TEACHES a basic idea, it is exactly what Yinz should have.
 
 ---
 

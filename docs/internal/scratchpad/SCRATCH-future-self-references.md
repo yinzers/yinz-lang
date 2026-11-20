@@ -13,7 +13,7 @@ metadata:
 
 # Self-Referential Shapes — Relative Pointers (Approach A)
 
-**Status**: Locked — Approach A (relative/offset pointers). Patrick confirmed during the design-lockdown conversation (2026-05-14, round 3 of the plan).
+**Status**: Locked — Approach A (relative/offset pointers). Patrick confirmed it (2026-05-14).
 
 **Target**: v0.3+ implementation. Specific milestone TBD when v0.2 ships.
 
@@ -33,7 +33,7 @@ This is genuinely better than Rust. Rust requires `Pin<T>` (Approach C in this d
 
 ## What "self-referential" means
 
-A shape is self-referential when one of its fields holds a pointer or reference that points INTO another field of the same shape instance. Classic example: a node that holds data and a pointer into its own data buffer.
+A shape is self-referential when one of its fields holds a pointer or reference that points INTO another field of the same value. Classic example: a node that holds data and a pointer into its own data buffer.
 
 ```ynz
 shape Node {                         // muted ".self-referential" appears here in IDE
@@ -164,4 +164,3 @@ The v0.3 milestone plan must include:
 - [`docs/internal/implementation/IMP-ownership.md`](../implementation/IMP-ownership.md) (general ownership semantics — self-references extend these)
 - [`docs/reference/REF-ide-hints.md`](../../reference/REF-ide-hints.md) (muted `self-referential` hint protocol)
 - [`docs/internal/scratchpad/SCRATCH-future-designs-index.md`](SCRATCH-future-designs-index.md) (status: locked, v0.3+)
-- [`.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md`](../../../.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md) (originating discussion + Patrick's Approach A confirmation)

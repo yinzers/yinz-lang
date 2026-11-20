@@ -27,7 +27,7 @@ Each doc in this directory has a **Status header** stating one of:
 | Doc | Status | Target | One-line description |
 |-----|--------|--------|----------------------|
 | [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](SCRATCH-future-panic-safety.md) | Locked | v0.2 | Errors auto-propagate; panics auto-isolate to `background` tasks. NO try/catch ever. Drop-on-scope-exit + supervisor pattern. |
-| [`docs/internal/scratchpad/SCRATCH-future-supervisor.md`](SCRATCH-future-supervisor.md) | Locked | v0.2 | Stdlib supervisor helpers (`supervise.alwaysRestart`, `.withBackoff`, `.maxRestarts`, `.onPanic`). Meta-rule: any long-running stdlib loop is supervised by default. |
+| [`docs/internal/scratchpad/SCRATCH-future-supervisor.md`](SCRATCH-future-supervisor.md) | Locked | v0.2 | Stdlib supervisor helpers (`supervise.alwaysRestart` with `backoff:`, `maxRestarts:` and `onPanic:` named parameters). Meta-rule: any long-running stdlib loop is supervised by default. |
 
 **v0.3+ deferred designs**:
 
@@ -36,13 +36,11 @@ Each doc in this directory has a **Status header** stating one of:
 | [`docs/internal/scratchpad/SCRATCH-future-self-references.md`](SCRATCH-future-self-references.md) | Locked (Approach A) | v0.3+ | Self-referential shapes via relative pointers (~1 cycle/access). Opt-in via `self-referential` modifier or compiler-inferred. |
 | [`docs/internal/scratchpad/SCRATCH-future-arena.md`](SCRATCH-future-arena.md) | Locked | v0.2 (A1/A2) + v0.3+ (B) | `arena {}` scope blocks ship v0.2 as the default; explicit `Arena()` + `.reset()` deferred to v0.3+. |
 | [`docs/internal/scratchpad/SCRATCH-future-http-framework.md`](SCRATCH-future-http-framework.md) | Locked | v0.3+ | Supervision-by-default HTTP server. |
-| [`docs/internal/scratchpad/SCRATCH-future-auto-soa.md`](SCRATCH-future-auto-soa.md) | **Shipped v0.3-M5 — graduated** to [`IMP-collections.md`](../implementation/IMP-collections.md#auto-soa-layout-v03-m5); file is a pointer stub | v0.3-M5 (shipped) | Compiler auto-transforms qualifying `Array<shape>` to per-field-segment (SoA) layout for hot loops accessing ≤2 fields. User code unchanged; teaching surface is the Tier 3 lint `array-using-soa-layout` (no muted hint — no typeable form). |
 | [`docs/internal/scratchpad/SCRATCH-future-packages.md`](SCRATCH-future-packages.md) | Locked design, v0.1 binary-format reservation | v0.1 + v0.2 | Binary package format reserves space for may-block metadata, ownership signatures, kernel flags from v0.1; populated in v0.2. |
 | [`docs/internal/scratchpad/SCRATCH-future-release-mode.md`](SCRATCH-future-release-mode.md) | Locked direction | v0.4+ (TBD) | `--release` flag: LLVM `-O3`, strip debug info, disable dev-only flags (`--reveal-sensitive`, `--emit-ir`). Strips dev-only env-var checks via `cfg(release_build)`. |
 | [`docs/internal/scratchpad/SCRATCH-future-string-ptr-len-overhaul.md`](SCRATCH-future-string-ptr-len-overhaul.md) | Locked direction, implementation deferred | TBD (likely v0.5 alongside file I/O) | Migrate strings from NUL-terminated C strings to `{ptr, len}` slices. Removes the NUL-byte footgun, makes `length` O(1). Multi-day rewrite across parser/codegen/runtime/stdlib. |
-| [`docs/internal/scratchpad/SCRATCH-future-doc-generator.md`](SCRATCH-future-doc-generator.md) | Parking lot — direction confirmed | v0.3+ or v0.4+ | `ynz doc` command: generates structured HTML/JSON/Markdown docs from `//` leading comments + type signatures derived from the AST. No `@param` tags — types ARE the structured docs. |
+| [`docs/internal/scratchpad/SCRATCH-future-doc-generator.md`](SCRATCH-future-doc-generator.md) | Parking lot — direction confirmed | v0.3+ or v0.4+ | `ynz doc` command: generates structured HTML/JSON/Markdown docs from `///` leading comments + type signatures derived from the AST. No `@param` tags — types ARE the structured docs. |
 | [`docs/internal/scratchpad/SCRATCH-future-macos-platform-support.md`](SCRATCH-future-macos-platform-support.md) | Deferred (infra) | TBD — needs a Mac | macOS dropped from CI 2026-06-01 (codegen golden tests x86_64-linux-pinned; some failures may be real macOS codegen differences unverifiable from Linux). Re-add `macos-latest` once codegen is validated + per-triple goldens recorded on a Mac. |
-| [`docs/internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md`](SCRATCH-future-cross-module-frame-serialization.md) | Locked, M3e | v0.3-M3e | Full FrameLayout serialization across the export table. Replaces the scalar `composed_frame_size` shortcut; enables re-export chains, shape crossing-locals, and EC×transitive combos across module boundaries. |
 
 ---
 
@@ -52,13 +50,13 @@ Some future topics span several files and get a subfolder instead of one flat do
 
 | Folder | Status | Target | What's in it |
 |--------|--------|--------|--------------|
-| [`docs/internal/scratchpad/SCRATCH-future-gui-index.md`](SCRATCH-future-gui-index.md) | Direction locked | post-v0.5 | GUI & cross-platform apps. Webview-hosted native shell (Tauri/Capacitor model): one HTML/CSS/JS frontend → native binaries for web/desktop/iOS/Android. Files: `architecture.md` (model + decision + rejected alternatives), `capabilities.md` (device APIs + permissions), `build-targets.md` (per-platform compile + WASM web target). |
+| [`docs/internal/scratchpad/SCRATCH-future-gui-index.md`](SCRATCH-future-gui-index.md) | Direction locked | post-v0.5 | GUI & cross-platform apps. Webview-hosted native shell (Tauri/Capacitor model): one HTML/CSS/JS frontend → native binaries for web/desktop/iOS/Android. Files: `SCRATCH-future-gui-architecture.md` (model + decision + rejected alternatives), `SCRATCH-future-gui-capabilities.md` (device APIs + permissions), `SCRATCH-future-gui-build-targets.md` (per-platform compile + WASM web target). |
 
 ---
 
-## Promoted out of `future/` (now load-bearing — see `design/` proper)
+## Promoted to implementation docs (now load-bearing)
 
-Per the "Implementing a locked design" procedure below, these moved out of `future/` once they became load-bearing for active milestone work:
+Per the "Implementing a locked design" procedure below, these moved to `docs/internal/implementation/` once they became load-bearing for active milestone work:
 
 | Was | Now | Why |
 |-----|-----|-----|
@@ -73,7 +71,7 @@ These came up in conversation but were not committed to a design. They live here
 
 - **Formal verification for NASA-grade software** (v3+ research). Yinz's type system + ownership rules give us a head start vs. C, but formal verification is a real research project. Triggered by: an actual user request from a regulated industry, or a specific safety-critical contract.
 - **Option B arenas** (explicit `Arena()` + `.reset()` with lifecycle tracking) — deferred from `arena.md`. Triggered by: a real user workload where A1/A2 scope-blocks aren't expressive enough (per-connection arenas, pooled arenas across iterations).
-- **Self-referential structs alternative B (fix-up on move) or C (pin-in-place)** — Yinz locks Approach A (relative pointers). B and C exist in the discussion record as rejected alternatives. Triggered by: Approach A turning out to have an unforeseen problem during v0.3 implementation.
+- **Self-referential shapes alternative B (fix-up on move) or C (pin-in-place)** — Yinz locks Approach A (relative pointers). B and C exist in the discussion record as rejected alternatives. Triggered by: Approach A turning out to have an unforeseen problem during v0.3 implementation.
 - **GPU dispatch for ML/compute** — referenced in [`docs/internal/implementation/IMP-gpu.md`](../implementation/IMP-gpu.md) as v2+. The teaching-language angle (jr devs writing GPU code via a clean abstraction) is interesting. Triggered by: ML stdlib work begins OR specific user workload.
 - **Cross-crate monomorphization caching** — perf win mentioned during the design-lockdown conversation. Triggered by: v0.2 performance work; benchmark the impact on real workloads first.
 
@@ -84,7 +82,7 @@ These came up in conversation but were not committed to a design. They live here
 - **Adding a v0.2/v0.3 design doc**: write the doc with the Status header, add it to "Designs Locked Here" above, add an entry to [`docs/README.md`](../../README.md) index.
 - **Adding a parking-lot idea**: write a bullet here only. No design doc until the trigger condition fires and Patrick approves implementation.
 - **Promoting parking-lot to locked**: move the entry from "Parking Lot" to "Designs Locked Here", write the design doc, update [`docs/README.md`](../../README.md).
-- **Implementing a locked design**: when the target milestone is planned, copy the design into the milestone plan's context section, then move this file to `design/` proper (out of `future/`) and update [`docs/README.md`](../../README.md).
+- **Implementing a locked design**: when it ships, move its content into `docs/internal/implementation/IMP-<feature>.md` (and `docs/reference/REF-<feature>.md` for user-facing behavior), delete or trim this SCRATCH file so the IMP file is the only home, and update [`docs/README.md`](../../README.md) (see [`.claude/rules/docs-checklist.md`](../../../.claude/rules/docs-checklist.md)).
 
 ---
 

@@ -23,7 +23,7 @@ User spec target: `spec/stdlib/network.md` (when implemented).
 
 The Yinz stdlib HTTP server is **supervised by default**. Request handlers run in isolated `background` tasks. The accept loop is itself supervised — if it crashes, the framework restarts it. The user can override the supervision policy with explicit config, but the default is production-grade resilience.
 
-This applies the [supervisor meta-rule](supervisor.md#default-supervision-rule-meta): any stdlib API owning a long-running loop is supervised by default. HTTP is the canonical example.
+This applies the [supervisor meta-rule](SCRATCH-future-supervisor.md#supervisor--stdlib-helpers--default-supervision-rule): any stdlib API owning a long-running loop is supervised by default. HTTP is the canonical example.
 
 ---
 
@@ -46,8 +46,8 @@ Every HTTP framework in every language eventually grows this. In Yinz, it's the 
 
 ```ynz
 let server = server.listen(8080)
-server.handle("/users", getUsers)
-server.handle("/orders", placeOrder)
+server.handle(`/users`, getUsers)
+server.handle(`/orders`, placeOrder)
 ```
 
 Behind the scenes:
@@ -59,7 +59,7 @@ The IDE shows muted hints indicating the supervision policy:
 
 ```ynz
 let server = server.listen(8080)
-//          ^ muted: " (supervised: per-request isolation, restart accept loop on panic)"
+//          ^ muted: ` (supervised: per-request isolation, restart accept loop on panic)`
 //            hover-tooltip explains the default and shows how to customize
 ```
 
@@ -68,7 +68,7 @@ let server = server.listen(8080)
 ```ynz
 let server = server.listen(8080, supervise: {
   onPanic: (e: Panic, request: Request) => {
-    alerting.page("HTTP handler crashed", e, request.method, request.path)
+    alerting.page(`HTTP handler crashed`, e, request.method, request.path)
   },
   maxAcceptRestarts: 100,
   acceptBackoff: 1.second,
@@ -146,7 +146,7 @@ The v0.3+ milestone plan must address:
 
 - Protocol support: HTTP/1.1 baseline, HTTP/2 for v1.0?, HTTP/3 (QUIC) as a separate milestone?
 - TLS: built-in via system libraries, or stdlib? `https.listen()` separate from `server.listen()`?
-- Routing: simple `server.handle("/path", fn)` for v0.3, more advanced patterns (path params, middleware chains) later?
+- Routing: simple ``server.handle(`/path`, handler)`` for v0.3, more advanced patterns (path params, middleware chains) later?
 - Performance: zero-copy from network buffer to handler? Sendfile for static assets?
 - Static file serving: bundled in `server`, or separate `static.serve()` module?
 - Middleware ordering: how does user compose multiple middleware? Chain syntax? Decorator-style?

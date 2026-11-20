@@ -1,10 +1,10 @@
 ---
 name: "REF-tooling"
-description: "The ynz CLI builds, runs, and watches your code."
+description: "The ynz CLI builds, runs, formats and watches your code."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,95 +13,79 @@ metadata:
 
 # Tooling
 
-The `ynz` CLI builds, runs, and watches your code.
+The `ynz` CLI builds, runs, formats and watches your code. Every command takes a single `.ynz` file or a project folder. A project folder needs a `yinz.toml`.
 
 ---
 
 ## Building
 
+`ynz build` compiles your code into a native program.
+
+```text
+ynz build entrypoint.ynz    // compile one file into a native program
+ynz build .                 // compile the project in this folder
 ```
-ynz build            // compile your project — debug mode (fast compile)
-ynz build --release  // compile with full optimization (slower compile, fastest runtime)
-```
 
-**Debug mode** (`ynz build`) compiles quickly. Use it during development. The binary runs at a decent speed but isn't fully optimized.
+The compiled program lands next to the source file (one file) or in the project folder (project). When the build works, `ynz build` prints `Build succeeded:` and the path of the program.
 
-**Release mode** (`ynz build --release`) turns on full LLVM optimization. Compiles slower. The output binary is as fast as possible — this is what you deploy to production.
+| Flag | What it does |
+|------|--------------|
+| `--no-optimize` | Skips the optimizer for a faster build. The program behaves the same, but runs slower. |
+| `--emit-ir` | Also writes the generated LLVM code next to the program, as `<program>.ll`. |
+| `--json` | Checks your code and prints each compiler message as one JSON object per line, for editors and other tools. It does not produce a program. |
 
-Think of it as: debug = fast to build, release = fast to run.
+`ynz build` exits with `0` on success, `1` when your code has an error, and `2` when something outside your code fails, such as a missing linker.
 
 ---
 
 ## Running
 
+`ynz run` builds your code and runs it in one step.
+
+```text
+ynz run entrypoint.ynz    // compile, run, then delete the program
+ynz run .                 // the same for a project
 ```
-ynz run              // compile in debug mode and run immediately
-ynz run --release    // compile with full optimization and run
-```
+
+| Flag | What it does |
+|------|--------------|
+| `--keep` | Keeps the compiled program after it exits. |
+| `--emit-ir` | Writes the generated LLVM code, as in `ynz build`. |
+| `--reveal-sensitive` | Prints `sensitive` values in plain text instead of `[REDACTED]`. See [Sensitive Values](REF-sensitive.md). |
+
+`ynz run` returns your program's exit code to your shell.
 
 ---
 
-## Watch Mode
+## Watch mode
 
+`ynz watch` rebuilds your project every time you save a file.
+
+```text
+ynz watch .             // rebuild and re-run when you save a file
+ynz watch --check .     // rebuild only; do not run the program
 ```
-ynz watch            // watch for file changes, recompile automatically
-ynz watch --run      // watch, recompile, and restart the program on changes
-```
 
-`ynz watch --run` is the typical development loop for servers and long-running programs:
+When you save a file, the compiler rebuilds the project and runs the new program.
 
-1. You save a file
-2. The compiler detects the change
-3. Only the changed file and anything that depends on it is recompiled
-4. The program restarts with the new binary
+| Flag | What it does |
+|------|--------------|
+| `--check` | Builds but does not run the program. Exits with `1` if the first build fails. |
+| `--json` | Prints watch events as one JSON object per line. |
+| `--no-clear` | Does not clear the terminal between rebuilds. |
 
-The goal is sub-second recompile for typical single-file changes. You save, blink, it's running.
-
-For web servers:
-
-```
-ynz watch --run
-// Save users.ynz → recompile → server restarts → ready
-```
+Stop watching with Ctrl+C.
 
 ---
 
-## Testing
+## Formatting
 
-```
-ynz test                    // run all tests
-ynz test players            // run tests matching "players"
-ynz test --watch            // rerun on file change
-```
+`ynz fmt` rewrites your files in the standard Yinz style.
 
-See [Testing](REF-testing.md) for the full test spec.
-
----
-
-## Package management
-
-```
-ynz add markdown-parser          // install
-ynz add graphics@1.2.0       // specific version
-ynz remove markdown-parser       // uninstall
-ynz update                   // update all
-ynz publish                  // publish to registry
-```
-
-See [Packages](REF-packages.md) for the full package spec.
-
----
-
-## What gets cached
-
-The compiler caches:
-- Type analysis results (only reruns for changed files)
-- Ownership proofs (only reruns for changed ownership paths)
-- Compiled output for unchanged files
-
-A clean build (`ynz build --clean`) clears all caches and compiles from scratch. Use this if something seems wrong with incremental state.
-
-```
-ynz build --clean            // clear caches, full rebuild in debug mode
-ynz build --clean --release  // clear caches, full rebuild in release mode
+```text
+ynz fmt entrypoint.ynz    // rewrite one file in the standard style
+ynz fmt --all .           // format every .ynz file in the project
+ynz fmt --check entrypoint.ynz    // change nothing; exit with 1 if the file would change
+ynz fmt --all --check .   // the same check for every .ynz file in the project
+ynz fmt --stdin           // read code on standard input, print the formatted code
 ```

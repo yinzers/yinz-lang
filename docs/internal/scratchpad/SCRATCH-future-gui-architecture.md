@@ -82,7 +82,7 @@ Electron's reputation isn't the *rendering engine* (that engine is fast) — it'
 
 Yinz provides the shell + bridge; the user brings the frontend framework (or none). Yinz does **not** bundle or bless React/Vue/Svelte. Rationale:
 
-- **Frameworks churn brutally** — jQuery → Angular → React → Vue → Svelte → Solid in ~15 years. Baking one into a systems-language stdlib is `no-duct-tape.md` build-twice debt: you rebuild it the moment the framework falls out of fashion.
+- **Frameworks churn brutally** — jQuery → Angular → React → Vue → Svelte → Solid in ~15 years. Baking one into a systems-language stdlib is build-twice debt: you rebuild it the moment the framework falls out of fashion.
 - **The webview hosts any of them for free** — they're just HTML/CSS/JS to the webview. Supporting "all of them" costs nothing; blessing one costs a permanent maintenance commitment.
 
 This is why the webview model *can* keep the whole web ecosystem — see the next section for why the alternative model can't.
@@ -121,7 +121,7 @@ The good version of this instinct is Alternative B (build our own, don't depend 
 
 For the minority of apps that genuinely need pixel-perfect or native-widget rendering (a graphically demanding iOS app, a game, a creative tool), the answer is **a third-party package** providing an alternative renderer — once the package system exists.
 
-This is deliberately deferred: the package system is not yet built ([`docs/internal/scratchpad/SCRATCH-future-packages.md`](SCRATCH-future-packages.md)). When it ships, nothing in this webview model prevents a community or first-party package from offering a native/pixel renderer as an opt-in alternative. We document the door; we don't build it now. The user-facing "you can bring your own renderer" note belongs in `spec/` only once GUI actually ships (per [`.claude/rules/spec-writing.md`](../../../.claude/rules/spec-writing.md), spec covers shipped features only) — until then it lives here and in the packages doc.
+This is deliberately deferred: the package system is not yet built ([`docs/internal/scratchpad/SCRATCH-future-packages.md`](SCRATCH-future-packages.md)). When it ships, nothing in this webview model prevents a community or first-party package from offering a native/pixel renderer as an opt-in alternative. We document the door; we don't build it now. The user-facing "you can bring your own renderer" note belongs in a `docs/reference/REF-*.md` file only once GUI actually ships (a REF file shows how to use a shipped feature; see [`.claude/rules/docs-checklist.md`](../../../.claude/rules/docs-checklist.md)) — until then it lives here and in the packages doc.
 
 ---
 
@@ -131,4 +131,3 @@ This is deliberately deferred: the package system is not yet built ([`docs/inter
 - [`docs/internal/scratchpad/SCRATCH-future-gui-build-targets.md`](SCRATCH-future-gui-build-targets.md) — per-platform compile + packaging + the WASM web target
 - [`docs/internal/scratchpad/SCRATCH-future-packages.md`](SCRATCH-future-packages.md) — the package system that enables alternative-renderer packages
 - [`docs/internal/implementation/IMP-gpu.md`](../implementation/IMP-gpu.md) — the GPU foundation a future pixel renderer would build on
-- `.claude/rules/no-duct-tape.md` — the named-tradeoff discipline this decision follows

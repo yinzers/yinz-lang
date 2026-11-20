@@ -29,7 +29,7 @@ Deferred features (decided not to ship in v0.1) are documented per-version in [`
 
 The Rust lesson: a second mechanism is never additive — it splits the learning surface, the tooling, and the ecosystem.
 
-**Trigger to decide which mechanism**: when a real Yinz use case needs metaprogramming AND cannot be handled by the compiler's built-in codegen (per [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 6 for serialization), pick the single mechanism. Candidate models to evaluate at decision time:
+**Trigger to decide which mechanism**: when a real Yinz use case needs metaprogramming AND cannot be handled by the compiler's built-in codegen (per [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) on serialization), pick the single mechanism. Candidate models to evaluate at decision time:
 - **Compiler-driven derives only** (no user-facing macro syntax): user marks a `shape` with a derive attribute; compiler generates the implementation. Simpler, less expressive.
 - **Token-level macros** (Rust proc-macro style): user-defined functions that transform AST. More expressive, more complex tooling.
 - **Comptime evaluation** (Zig/D style): functions marked `comptime` execute at compile time, can generate code as values. Different mental model, potentially debugger-friendly.
@@ -48,7 +48,7 @@ When v0.15 (`request`, outbound) and v0.21 (`server`, inbound) come up for imple
 
 **Tier 1 — High-level helpers:** `request.get(url)`, `request.post(url, body)`, `request.put(url, body)`, `request.delete(url)`, `request.websocket(url)`. The common-case API, dot-method-first.
 
-**Tier 2 — Mid-level builder:** `request.build()` returns a configurable Request value; the caller mutates it step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, then `req.send()`). No method chaining per Golden Rule 9.
+**Tier 2 — Mid-level builder:** `request.build()` returns a configurable Request value; the caller mutates it step-by-step (``req.method(`PATCH`)``, `req.header(name, value)`, `req.timeout(5)`, then `req.send()`). No method chaining per Golden Rule 9.
 
 **Tier 3 — Low-level socket access:** `net.tcp.connect(host, port)` returning a raw socket. The floor of the user-accessible network stack. Framework authors can build their own routing layer, their own protocol implementations, anything on top of this. Going lower means FFI (deferred to v2+).
 
@@ -70,7 +70,7 @@ Module-singleton API: `server.route(method, path, handler)`, `server.middleware(
 - Handler signature shape — single `Request` argument vs split (`req`, `params`, `body`)?
 - Middleware composition — ordering rules, short-circuit / abort semantics
 - Path matching — `:id` placeholders, wildcard segments, regex routes?
-- Multi-server-per-process — single singleton enough, or do we need a `Server` instance type for niche cases (admin port + public port)?
+- Multi-server-per-process — single singleton enough, or do we need a `Server` shape you can create several of for niche cases (admin port + public port)?
 - Error handler hook — how does an unhandled `errors` propagation surface as a 5xx?
 - Static file serving — bundled in `server`, or separate module?
 
@@ -202,7 +202,7 @@ The four `symbol`/`name`/`assetClass`/`exchange` trailing comments align in a co
 2. **Blank line breaks the run.** Each contiguous declaration block aligns independently.
 3. **Whole-line comments** (line starts with `//`) are anchored to the surrounding indent level. They do NOT extend or join the trailing-comment alignment.
 4. **Multi-line whole-line comment blocks** (consecutive `//` lines) stay at indent level — never aligned to a trailing-comment column.
-5. Applies inside `shape` field declarations, `options` variants, `const` blocks of homogeneous declarations, and any other "table-like" declaration context. Does NOT apply inside function bodies (statements don't form alignment groups — each statement is its own thing).
+5. Applies inside `shape` field declarations, `options` choices, `const` blocks of homogeneous declarations, and any other "table-like" declaration context. Does NOT apply inside function bodies (statements don't form alignment groups — each statement is its own thing).
 
 **Why this is locked, not configurable**: per v0.2 constraint "`ynz fmt` is opinionated, zero-config" (roadmap `v0-2-dev-loop-tooling.md`). Alignment is either on always or off always. Patrick picked on (this directive).
 

@@ -1,6 +1,6 @@
 ---
 name: "SCRATCH-future-gui-index"
-description: "This folder groups the design for how Yinz builds graphical and cross-platform applications. It's a multi-file topic, so it gets a subfolder under design/future/ rather than one giant file."
+description: "This folder groups the design for how Yinz builds graphical and cross-platform applications. It's a multi-file topic, so it is split across the SCRATCH-future-gui-*.md files rather than one giant file."
 tags:
   - "yinz-compiler"
 created_at: "2026-06-13"
@@ -17,7 +17,7 @@ metadata:
 > **Decision (2026-06-13)**: Yinz ships GUI as a **webview-hosted native shell** (the Tauri/Capacitor model) — one HTML/CSS/JS frontend, compiled into native binaries for web, desktop, iOS, and Android. Yinz owns the native shell, the IPC bridge, the device-capability layer, and the per-platform compile — **not** the frontend framework.
 > **Why this and not pixel-perfect-native**: it covers MOST app use cases and is dramatically more feasible to implement (see `architecture.md` → "Why webview"). A pixel-perfect native renderer (the Flutter model) is documented as a someday-maybe, not the headline.
 
-This folder groups the design for how Yinz builds graphical and cross-platform applications. It's a multi-file topic, so it gets a subfolder under `design/future/` rather than one giant file.
+This folder groups the design for how Yinz builds graphical and cross-platform applications. It's a multi-file topic, so it is split across the `SCRATCH-future-gui-*.md` files rather than one giant file.
 
 ---
 
@@ -51,5 +51,5 @@ These docs capture *what Yinz will build and why*. They are NOT a milestone plan
 
 - [`docs/internal/scratchpad/SCRATCH-future-packages.md`](SCRATCH-future-packages.md) — the package system that will let third parties ship alternative renderers (e.g. a pixel-perfect native UI package) once it exists
 - [`docs/internal/implementation/IMP-gpu.md`](../implementation/IMP-gpu.md) — if Yinz ever builds its own pixel renderer, it builds on the GPU work, not on this webview model
-- `design/future/wasm-target.md` is folded into `build-targets.md` here (the web build IS the WASM target)
+- The old standalone WASM-target design is folded into `SCRATCH-future-gui-build-targets.md` here (the web build IS the WASM target)
 - [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) — the capability API must follow the stdlib rules (pure-named methods pure, no parallel APIs, bounded-by-default, no platform-default config)

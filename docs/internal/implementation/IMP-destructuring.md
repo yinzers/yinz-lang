@@ -23,7 +23,7 @@ Object/type destructuring is supported. Array destructuring is not.
 
 **Why object destructuring is safe**: The compiler knows every field of a type at compile time. `let { name, health } = player` is guaranteed to succeed — `name` and `health` are proven to exist by the type system. No runtime risk.
 
-**Why array destructuring is not allowed**: Array indices are not compile-time guaranteed. `let [first, second] = items` would bypass the `.get()` safety check that enforces `Maybe` returns for potentially out-of-bounds access. The whole point of `.get(index)` is to force handling of the absent case — destructuring would silently undermine that.
+**Array destructuring is not allowed**: array indices are not known at compile time, and `let [first, second] = items` would bypass the `Maybe` that `.get(index)` returns to force handling of the absent case.
 
 **The pattern is consistent**: Objects = compile-time guaranteed fields = safe to destructure. Arrays = runtime-determined indices = use `.get()` which returns `Maybe`.
 
@@ -31,7 +31,7 @@ Object/type destructuring is supported. Array destructuring is not.
 
 ## `as` for Renaming
 
-`let { health as hp } = player` follows the same `as` keyword used in import aliasing (`import { X as Y } from "module"`). One keyword for renaming in all contexts.
+`let { health as hp } = player` follows the same `as` keyword used in import aliasing (`import { X as Y } from `module``). One keyword for renaming in all contexts.
 
 ---
 

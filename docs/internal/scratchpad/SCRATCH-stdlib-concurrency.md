@@ -1,6 +1,6 @@
 ---
 name: "SCRATCH-stdlib-concurrency"
-description: "Short scratchpad note listing the few stdlib additions (e.g. await all()) that support concurrency, clarifying concurrency itself is a language feature, not a stdlib module."
+description: "Short scratchpad note listing the few stdlib additions (e.g. wait all()) that support concurrency, clarifying concurrency itself is a language feature, not a stdlib module."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -17,7 +17,7 @@ metadata:
 
 Standard library additions that support concurrency patterns:
 
-- `await all(task1, task2, ...)` — wait for multiple background tasks at once
+- `wait all(task1, task2, ...)` — wait for multiple background tasks at once
 - Batch processing utilities for parallel loop patterns (design TBD)
 
 See [`docs/internal/implementation/IMP-concurrency.md`](../implementation/IMP-concurrency.md) for complete design decisions, rationale, and open questions.

@@ -1,6 +1,6 @@
 # `examples/pirates-roster/` — Yinz v0.1 Language Showcase
 
-**Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — that's only for multi-entry projects (see `../stadium-fleet/` for that layout, available in v0.22).
+**Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — multi-entry projects are not supported by `ynz build` or `ynz run` yet (`../stadium-fleet/` previews the planned layout and does not build).
 
 **Theme:** Pittsburgh Pirates roster — players (Clemente, Wagner), stats (career hits, batting averages in thousandths, scouting flags), and lineups (starting / bench / IL via `options LineupStatus`). The entrypoint walks M1–M8 features in baseball-flavored context; companion modules (`services/players.ynz` for the `Pirate` shape, `utils/math_extra.ynz` for stat math) export reusable helpers.
 
@@ -21,7 +21,7 @@ source $HOME/.cargo/env
 | **M2** | ✅ shipped | Variables (`let`/`const`), arithmetic (`+ - * / %`), comparison, boolean (`&& \|\| !`), bitwise (`& \| ^ ~ << >>`), primitives (`Int`, `Float`, `Number`, `Boolean`), polymorphic `print`, `.toString()`/`.toNumber()`/`.toFloat()` intrinsics |
 | **M3** | ✅ shipped | `if`/multi-case `if`/`else =>`, `while`, `for (x in range(...))`, early `return`, user-defined functions with params + return types, mutual recursion |
 | **M4** | ✅ shipped | shapes (data + contract signatures), standalone functions taking receivers (UFCS dot-call sugar), ownership (`share`/`lend`/`give` in signatures, inferred at call sites), `.copy()`/`.freeze()`, `extends` (data-only), `follows` contracts, `hidden` fields, `dynamic Foo` runtime polymorphism, M2 catch-up (`Int.max`/`Int.min`/`Number.epsilon`, `.wrappingAdd()`/`.saturatingAdd()`) |
-| **M5** | ✅ shipped | generics (`<T>`), collections (`Array<T>`, `Fixed<T>`, `Map<K,V>`), bracket sugar (`arr[i]`, `m["key"]`) |
+| **M5** | ✅ shipped | generics (`<T>`), collections (`Array<T>`, `Fixed<T>`, `Map<K,V>`), bracket sugar (`arr[i]`, `` m[`key`] ``) |
 | **M6** | ✅ shipped | `options`, union types (`\|`), `Maybe<T>`, `is` narrowing |
 | **M7** | ✅ shipped | full Unicode strings, interpolation, `errors` keyword + cascades, `Iterable<T>` / `FallibleIterable<T>` |
 | **M8** | ✅ shipped | modules (`import`/`export`), doc comments (`///`), `sensitive`, `wait`/`background` concurrency keywords, bignum `Number<N>` for N > 34 |

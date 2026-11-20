@@ -23,6 +23,15 @@ User spec: [`docs/reference/REF-options.md`](../../reference/REF-options.md)
 
 See [`docs/reference/REF-options.md`](../../reference/REF-options.md) for the user-facing surface.
 
+Variants can be separated by commas or by newlines; both forms parse the same, and the newline form reads better with display strings:
+
+```ynz
+options Timeframe {
+    hourly: `Hourly`
+    daily: `Daily`
+}
+```
+
 ---
 
 ## LLVM Lowering
@@ -43,7 +52,7 @@ Multi-case `if` over an options scrutinee lowers to LLVM `switch` on the tag byt
 
 **Display strings**: the `variantName: \`Display String\`` syntax lets the author attach a separate display string to any variant. When present, the display string populates the string table slot instead of the variant identifier. Variants without a display string fall back to the identifier name. This is purely a string-table substitution — the tag value, comparison semantics, and ABI are unchanged. The `OptionsEntry` in the typeck table carries a parallel `display_strings: Vec<Option<String>>` field; `lower_options_to_string` reads `display_strings[i].unwrap_or(&variants[i])` when building the LLVM string global per variant.
 
-**Why not a separate `.displayString()` method**: one string representation per options type is cleaner and avoids the question of which method to call in interpolation. The display string IS the string — if you need both the identifier and the label, access the identifier via the variant name in code (which is free, compile-time) and call `.toString()` for display.
+**One string per options value**: there is no separate `.displayString()` method, so interpolation never has to choose between two. The display string IS the string; the identifier is available by its variant name in code (free, compile-time), and `.toString()` gives the display text.
 
 ---
 
@@ -86,7 +95,10 @@ When using a bare identifier in a position where an options type is expected, th
 
 ```ynz
 players.sort(p => p.health, desc)    // shorthand — compiler infers SortOrder.desc
+players.sort(p => p.health, SortOrder.desc)   // explicit form, also valid
 ```
+
+(`sort` itself is designed, not built; see IMP-collections "Build status". The shorthand rule applies to any call whose parameter is an options type.) IDE autocomplete lists the variants of the expected options type at the call site.
 
 **Ambiguous shorthand** (two visible options types define the same variant name): compile error with locked diagnostic text:
 
@@ -127,17 +139,18 @@ When the scrutinee is a union of two options types (`OptionsA | OptionsB`), the 
 
 ## Single/Empty-Variant Rejection
 
-`options Foo { }` (empty) and `options Foo { only_one }` (single variant) are compile errors:
+`options Foo { }` (empty) and `options Foo { onlyOne }` (single variant) are compile errors. The single-variant error reads:
 
 ```
-COMPILE ERROR: options types need at least 2 variants.
+`options Foo` has only 1 variant — options types need at least 2.
 
-  WHAT INSTEAD: Add a second variant, or use a const if you only need one named value:
-    const ONLY_ONE: Int = 0
+  WHAT INSTEAD: Add a second variant, or use a const if you only need one named value.
 
-  WHY: A single-variant options type has only one possible value — it carries no
-  information. It's almost always the wrong tool.
+  WHY: A single-variant options type has only one possible value and carries no
+  information. It is almost always the wrong tool.
 ```
+
+The empty form reports `` `options Foo` has no variants. `` with the hint ``Add at least 2 variants: `options Status { active, inactive }` ``. Both come from `collect_options` in `crates/ynz-typeck/src/options_table.rs`.
 
 Symmetric with single-variant union rejection (`shape S = A` is also an error).
 

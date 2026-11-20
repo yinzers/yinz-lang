@@ -50,9 +50,9 @@ Yinz has no GC. The goal is to also eliminate the intermediate allocation layers
 
 ## Fix 1: Direct Wire-to-Struct Deserialization
 
-Since the compiler knows the target type at compile time, it generates a direct deserializer — one pass from wire bytes to typed Yinz struct. No intermediate map, no generic object, no two-step conversion.
+Since the compiler knows the target type at compile time, it generates a direct deserializer — one pass from wire bytes to typed Yinz shape value. No intermediate map, no generic object, no two-step conversion.
 
-The compiler generates the exact byte-reading code for a given struct shape once, at compile time. Runtime cost is a straight memory write per field.
+The compiler generates the exact byte-reading code for a given shape once, at compile time. Runtime cost is a straight memory write per field.
 
 ---
 
@@ -102,7 +102,7 @@ GC pressure on bulk inserts (seeding millions of rows from an external API) is j
 
 **Ownership frees memory immediately.** When a batch finishes, its memory is freed at that exact instruction. No GC backlog, no pauses, no main thread involvement. Next batch starts clean.
 
-**No intermediate model layer.** The compiler generates a direct serializer for each type at compile time. Your struct goes straight to wire bytes — no model-instance wrapper.
+**No intermediate model layer.** The compiler generates a direct serializer for each type at compile time. Your shape value goes straight to wire bytes — no model-instance wrapper.
 
 **Result**: same batch sizes, same thread count — memory stays flat because each batch is deterministically freed the moment it's done.
 
@@ -132,11 +132,11 @@ The Yinz compiler authors implement these translations once per supported databa
 The goal is ergonomic CRUD with none of the allocation overhead. These are not in conflict — the convenience layer is a compiler problem, not a runtime problem.
 
 ```
-const quote: Quote = { symbol: "AAPL", price: 189.50, timestamp: date.now() }
+const quote: Quote = { symbol: `AAPL`, price: 189.50, timestamp: date.now() }
 quote.save()
 quote.destroy()
 
-let found = db.find(Quote, { symbol: "AAPL" })
+let found = db.find(Quote, { symbol: `AAPL` })
 ```
 
 The compiler generates `save()` and `destroy()` specifically for `Quote` at compile time — they compile to direct wire bytes for that type's INSERT/DELETE. No generic model instance layer underneath.
@@ -178,16 +178,16 @@ The goal is to push the structured layer far enough that raw SQL is rarely neede
 ❌ **Banned (chained dot-method builder)**:
 ```
 db.find(Order)
-  .where({ status: "shipped" })
-  .orderBy("createdAt", "desc")
+  .where({ status: `shipped` })
+  .orderBy(`createdAt`, `desc`)
   .limit(10)
 ```
 
 ✅ **Yinz style (one top-level dot call + structured options)**:
 ```
 let orders = db.findMany(Order, {
-    where:   { status: "shipped" },
-    orderBy: { createdAt: "desc" },
+    where:   { status: `shipped` },
+    orderBy: { createdAt: `desc` },
     limit:   10,
 })
 ```
@@ -225,11 +225,11 @@ When a user drops to `db.raw()`, they're writing SQL directly. This is where inj
 
 ```
 // compiler blocks this
-let sql = "SELECT * FROM quotes WHERE symbol = " + userInput
+let sql = `SELECT * FROM quotes WHERE symbol = ` + userInput
 db.raw(sql)
 
 // required pattern — parameter passed separately, never interpolated
-db.raw("SELECT * FROM quotes WHERE symbol = ?", userInput)
+db.raw(`SELECT * FROM quotes WHERE symbol = ?`, userInput)
 ```
 
 ### One parameterization mechanism, always safe
@@ -322,7 +322,7 @@ This eliminates an entire class of bugs: a developer runs a migration and forget
 
 ### Diesel — queries that can't be valid don't compile
 
-With schema-first types, the compiler knows the full schema at compile time. Querying a column that doesn't exist is a compile error. Type mismatch between a query result and a struct field is a compile error. The error messages follow Rule 3 — WHAT went wrong, WHAT to do instead, WHY — not Diesel's wall of unreadable trait bounds.
+With schema-first types, the compiler knows the full schema at compile time. Querying a column that doesn't exist is a compile error. Type mismatch between a query result and a shape field is a compile error. The error messages follow Rule 3 — WHAT went wrong, WHAT to do instead, WHY — not Diesel's wall of unreadable trait bounds.
 
 ---
 
@@ -360,21 +360,21 @@ Seeds should be safe to run multiple times without creating duplicates or errors
 
 Sequelize throws untyped exceptions with string error messages that must be caught and parsed manually. Every db call wrapped in try/catch, string matching on `.message` to figure out what went wrong — fragile and exhausting.
 
-Yinz uses the `errors` keyword to make database errors typed at the call site:
+Yinz uses the `errors` keyword to mark every database call that can fail:
 
 ```
-function findUser(id: Number) -> User errors DatabaseError
+function findUser(id: Number) -> User errors
 ```
 
-`DatabaseError` is a first-class type in the stdlib:
+The stdlib would give a failed database call a structured `DatabaseError` value (design only; how a function's error value is typed is not settled):
 
 ```
 shape DatabaseError {
-    summary: String             // short human-readable: "Unique constraint violated on quotes.symbol"
-    suggestions: Array<String>  // ["Check for duplicates before inserting", "Use upsert instead"]
-    code: String | null         // raw DB error code ("23505", "08006", etc.)
-    query: String | null        // sanitized query that triggered the error
-    detail: String | null       // full DB-level detail message
+    summary: String             // short human-readable: `Unique constraint violated on quotes.symbol`
+    suggestions: Array<String>  // [`Check for duplicates before inserting`, `Use upsert instead`]
+    code: Maybe<String>         // raw DB error code (`23505`, `08006`, etc.)
+    query: Maybe<String>        // sanitized query that triggered the error
+    detail: Maybe<String>       // full DB-level detail message
 }
 ```
 
@@ -402,14 +402,14 @@ The raw escape hatch needs a Yinz syntax that:
 **Direction (not fully locked — see Discussion Points)**: a `.raw` method on `db` (better name TBD) is the end goal. The SQL gets passed as a tagged-string-style literal so the compiler/IDE know "this is SQL, treat the content as SQL." Both pieces combine — they're not competing alternatives:
 
 ```
-let result = db.raw(sql`SELECT * FROM orders WHERE status = ?`, "shipped")
+let result = db.raw(sql`SELECT * FROM orders WHERE status = ?`, `shipped`)
 ```
 
 Here `.raw` is the call surface; `sql\`...\`` is how the string is passed so the IDE knows to syntax-highlight inside the backticks and the compiler engages injection-safety + (eventually) compile-time SQL validation. A plain string passed to `.raw` could also be supported — but plain strings get no IDE highlighting and no compile-time SQL checks, so the `sql\`...\`` form is the recommended path.
 
 **Open sub-questions**:
 - Is `.raw` the right name? Candidates: `.sql`, `.execute`, `.exec`. `.raw` is short but doesn't convey "this returns typed rows."
-- If plain strings are also accepted (no `sql\`...\`` tag), is that a parallel-API violation per `stdlib-design.md` Rule 2? Likely yes — pick one form.
+- If plain strings are also accepted (no `sql\`...\`` tag), is that a parallel-API violation per `stdlib-design.md` (one API per capability)? Likely yes — pick one form.
 
 The syntax decision belongs in the v0.10 execution plan's research phase. Whatever is chosen must be a single canonical form.
 
@@ -478,7 +478,7 @@ Discussion seed: lock in the scope-binding API early so the whole stdlib is desi
 ```
 db.transact(function (tx) {
     let order = tx.find(Order, { id: 42 })
-    order.status = "shipped"
+    order.status = `shipped`
     order.save()
     // tx auto-commits on successful function exit, auto-rolls-back on error or panic
 })
@@ -492,9 +492,9 @@ Pattern Patrick wants supported:
 
 ```
 let order = db.find(Order, { id: 42 })
-order.status = "shipped"
+order.status = `shipped`
 order.shippedAt = date.now()
-order.trackingNumber = "1Z999AA..."
+order.trackingNumber = `1Z999AA...`
 order.save()    // one INSERT/UPDATE round-trip, not three
 ```
 
@@ -544,8 +544,8 @@ That registry entry is the SSOT — this section is a cross-reference, not the a
 
 - `db.queryAsync(sql, params) -> Array<T> errors` — non-blocking query; `wait db.queryAsync(...)` suspends the caller while the DB responds.
 - `db.findAsync(Shape, options) -> Array<Shape> errors` — non-blocking structured query.
-- All existing `db.*` methods get `*Async` variants for use inside `wait` call sites.
+- All existing `db.*` methods get `*Async` versions for use inside `wait` call sites.
 
 These back onto Tokio I/O (for Postgres) or DuckDB's async query API (for DuckDB embedded). The state-machine ABI that makes `wait` work was validated in v0.3-M2 using the internal `__testFallibleAsync` intrinsic, which exercises the same errors-through-state-machine path that `db.queryAsync` will use.
 
-**Why deferred**: connection pool state management under suspension, error variant taxonomy (`DatabaseError` design), and the Postgres-vs-DuckDB ABI unification (discussed in "DuckDB-vs-Postgres surface unification" above) all belong to the v0.10 milestone where the full db surface is designed.
+**Why deferred**: connection pool state management under suspension, error kinds (`DatabaseError` design), and the Postgres-vs-DuckDB ABI unification (discussed in "DuckDB-vs-Postgres surface unification" above) all belong to the v0.10 milestone where the full db surface is designed.
