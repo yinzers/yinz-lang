@@ -39,21 +39,28 @@ metadata:
 ## Boolean operators
 
 ```
+let active = true
+let verified = true
+let isAdmin = false
+let isModerator = true
+let loggedIn = true
+let banned = false
+
 if (active && verified) {
-  grantAccess()
+  print(`Access granted`)
 }
 
 if (isAdmin || isModerator) {
-  allowEdit()
+  print(`Editing allowed`)
 }
 
 if (!loggedIn) {
-  redirect(`/login`)
+  print(`Please log in`)
 }
 
 // Combined — add parentheses when it helps
 if (active && (isAdmin || isModerator) && !banned) {
-  grantFullAccess()
+  print(`Full access`)
 }
 ```
 
@@ -68,6 +75,11 @@ A single `|` is for **union types**, not for "or": `shape Shape = Circle | Squar
 Bitwise operators work on the individual bits (the 0s and 1s) of a whole number. They are for permissions, flags, color channels and binary data formats:
 
 ```
+let readFlag = 1
+let writeFlag = 2
+let value = 200
+let mask = 15
+
 let combined = readFlag | writeFlag  // bitwise or — turn on every bit set in either
 let masked = value & 0xFF            // bitwise and — keep only the bits set in both
 let toggled = value ^ mask           // bitwise xor — flip the bits set in mask
@@ -153,6 +165,9 @@ When in doubt, add parentheses.
 The IDE warns you when a line could be misread:
 
 ```
+let isAdmin = false
+let isMember = true
+let hasTicket = true
 let canEnter = isAdmin || isMember && hasTicket
 // IDE HINT: && evaluates before ||.
 // Result is isAdmin || (isMember && hasTicket). Add parentheses to clarify intent.
