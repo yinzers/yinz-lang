@@ -4,7 +4,7 @@ description: "Every Yinz program starts at function entrypoint(). The compiler l
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -29,11 +29,16 @@ function entrypoint() -> Nothing {
 
 ## With error handling
 
+Add `errors` after the return type when something inside the function can fail:
+
 ```
+function loadScore() -> Int errors {
+  return 42
+}
+
 function entrypoint() -> Nothing errors {
-  let config = file.read(`config.ynz`)
-  server.route(`GET`, `/`, indexHandler)
-  server.listen(3000)
+  let score = loadScore()
+  print(score)
 }
 ```
 
@@ -50,36 +55,3 @@ entry = "entrypoint.ynz"    # default — change to any .ynz file
 ```
 
 The function is always called `entrypoint`. The file name is flexible — `app.ynz`, `server.ynz`, whatever makes sense for your project.
-
----
-
-## Command-line arguments
-
-> **Status**: This section uses the `cli` module, which ships in **v0.7**. In v0.1, command-line arguments are not yet available via the standard library.
-
-Arguments come from the standard library, not from `entrypoint`'s parameters:
-
-```
-function entrypoint() -> Nothing {
-  let args = cli.args()                    // all arguments → Array<String>
-  let verbose = cli.flag(`verbose`)        // --verbose flag → Boolean
-  let port = cli.option(`port`, `3000`)   // --port option → String with default
-}
-```
-
-See [Tooling](REF-tooling.md) for the full CLI spec.
-
----
-
-## Exit codes
-
-> **Status**: This section uses the `process` module, which ships in **v0.7**. In v0.1, exit codes are not yet available via the standard library.
-
-```
-function entrypoint() -> Nothing {
-  if (setupFailed) {
-    process.exit(1)    // exit with failure code
-  }
-}
-// Normal completion exits with code 0 automatically
-```
