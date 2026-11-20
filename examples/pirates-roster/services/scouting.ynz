@@ -31,8 +31,10 @@ export function rankRoster(names: array<string>, atBats: array<int>) -> int {
   let aGrades: int = 0
   let i: int = 0
   while (i < names.count()) {
-    let name = names[i].or(`unknown`)
-    let ab = atBats[i].or(0)
+    let foundName = names[i]
+    let name = foundName.or(`unknown`)
+    let foundAtBats = atBats[i]
+    let ab = foundAtBats.or(0)
     let grade = wait fetchScoutGrade(name, ab)
     if (grade.endsWith(`A`)) {
       aGrades = aGrades + 1

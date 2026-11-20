@@ -283,7 +283,8 @@ Use maps when you don't know the keys until the program runs. For fields you kno
 ```
 let wordCounts: map<string, number> = {}
 for (word in words) {
-  let current = wordCounts[word].or(0)
+  let foundCount = wordCounts[word]         // a maybe: the count, or nothing
+  let current = foundCount.or(0)            // a plain number, 0 if the word is new
   wordCounts[word] = current + 1
 }
 ```

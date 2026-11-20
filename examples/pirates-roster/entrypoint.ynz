@@ -115,17 +115,23 @@ function entrypoint() -> nothing {
   let battingAverages: array<int> = [317, 282, 295]
   battingAverages.add(308)
   print(battingAverages.count())
-  print(battingAverages[0].or(-1))
+  let foundFirstAverage = battingAverages[0]            // a maybe: the average, or nothing
+  let firstAverage = foundFirstAverage.or(-1)           // a plain int, -1 if missing
+  print(firstAverage)
   // fixed<T>: stack-allocated, size locked — three retired Pirates numbers
   let retiredNumbers: fixed<int> = [1, 4, 8]
   print(retiredNumbers.count())
-  print(retiredNumbers[2].or(-1))
+  let foundRetiredNumber = retiredNumbers[2]
+  let retiredNumber = foundRetiredNumber.or(-1)
+  print(retiredNumber)
   // maybe<T>: absence without null
   let nextHitter: maybe<int> = none
   print(nextHitter.or(0))
   // map<K,V>: hash map with string keys — Pirates career hit leaders
   let hitLeaders: map<string, int> = { `clemente`: 3000, `wagner`: 3420 }
-  print(hitLeaders[`clemente`].or(0))
+  let foundClementeHits = hitLeaders[`clemente`]
+  let clementeHits = foundClementeHits.or(0)
+  print(clementeHits)
   print(hitLeaders.count())
   // ────── M6: options + unions + narrowing ──────
   print(`M6 — options, unions, narrowing:`)
@@ -1425,7 +1431,8 @@ function m5_soa_demo() -> nothing {
     // (`.add`) or letting the array escape this function would turn it off.
     let i: int = 0
     while (i < 128) {
-      let b = volley[i].or(grounded)
+      let foundBall = volley[i]
+      let b = foundBall.or(grounded)
       volley[i] = { x: b.x + b.vx, y: b.y + b.vy, vx: b.vx, vy: b.vy - gravity, ship: b.ship }
       i = i + 1
     }
@@ -1453,7 +1460,8 @@ function m5_soa_demo() -> nothing {
   // Cold field read AFTER the loops: `ship` never appears in a loop over
   // `volley`, so reading it off a copied-out element leaves the hot-field
   // set at x/y — the layout decision is unaffected.
-  let lead = volley[0].or(grounded)
+  let foundLead = volley[0]
+  let lead = foundLead.or(grounded)
   print(`  lead ball fired from: ${lead.ship}`)
   print(`  lead ball final height:`)
   print(lead.y)
@@ -1507,12 +1515,16 @@ function m5_soa_demo() -> nothing {
   let foreHold: array<int> = [12, 8, 3]
   let captainsManifest: array<array<int>> = [foreHold]
   let quartermastersManifest: array<array<int>> = captainsManifest.copy()
-  let quartermastersFore: array<int> = quartermastersManifest[0].or(foreHold)
+  let foundQuartermastersFore = quartermastersManifest[0]
+  let quartermastersFore: array<int> = foundQuartermastersFore.or(foreHold)
   quartermastersFore.set(0, 99)
-  let captainsFore: array<int> = captainsManifest[0].or(foreHold)
-  let captainsFirstCrate = captainsFore[0].or(-1)
+  let foundCaptainsFore = captainsManifest[0]
+  let captainsFore: array<int> = foundCaptainsFore.or(foreHold)
+  let foundCaptainsFirstCrate = captainsFore[0]
+  let captainsFirstCrate = foundCaptainsFirstCrate.or(-1)
   print(`  captain's fore hold, first crate: ${captainsFirstCrate.toString()}`)
-  let quartermastersFirstCrate = quartermastersFore[0].or(-1)
+  let foundQuartermastersFirstCrate = quartermastersFore[0]
+  let quartermastersFirstCrate = foundQuartermastersFirstCrate.or(-1)
   print(`  quartermaster's fore hold, first crate: ${quartermastersFirstCrate.toString()}`)
 
   // The same rule at a fixed-size list: `fixed<T>` holds its items in one block
@@ -1520,9 +1532,11 @@ function m5_soa_demo() -> nothing {
   let watchBell: fixed<int> = [4, 8, 12]
   let sparebell: fixed<int> = watchBell.copy()
   sparebell.set(0, 1)
-  let watchFirstBell = watchBell[0].or(-1)
+  let foundWatchFirstBell = watchBell[0]
+  let watchFirstBell = foundWatchFirstBell.or(-1)
   print(`  ship's bell, first watch: ${watchFirstBell.toString()}`)
-  let spareFirstBell = sparebell[0].or(-1)
+  let foundSpareFirstBell = sparebell[0]
+  let spareFirstBell = foundSpareFirstBell.or(-1)
   print(`  spare bell, first watch: ${spareFirstBell.toString()}`)
 
   // And where a separate copy could not mean anything, `.copy()` refuses at

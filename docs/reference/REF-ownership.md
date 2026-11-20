@@ -92,7 +92,8 @@ For a list, that includes the items. Copying an `array<array<int>>` gives you a 
 let inner: array<int> = [1, 2, 3]
 let outer: array<array<int>> = [inner]
 let clone: array<array<int>> = outer.copy()
-let cloneRow: array<int> = clone[0].or(inner)
+let foundRow = clone[0]                        // a maybe: the row, or nothing
+let cloneRow: array<int> = foundRow.or(inner)  // a plain list, `inner` if missing
 cloneRow.set(0, 99)
 // outer's first row still starts at 1
 ```
