@@ -87,9 +87,9 @@ These are Yinz's own names — use them freely:
 
 - `errors`, `errors function` — the language's name for the failure system
 - `maybe<T>`, `maybe`, `none` — values that might not exist
-- `follows`, "follows the X contract" — Yinz's word for what other languages call an interface or trait
+- `follows`, "follows the X contract" — how a shape says it provides the functions a contract lists
 - `share` / `lend` / `give` / `copy` / `.freeze` — ownership words
-- `options` — Yinz's word for an enum
+- `options` — a fixed set of named choices
 - `type`, `field`, `method` — basic words that everyone understands
 - `number`, `float`, `int`, `number<N>` — the number type names
 - `array`, `fixed`, `map` — the collection type names
