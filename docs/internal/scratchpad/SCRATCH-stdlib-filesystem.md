@@ -88,7 +88,7 @@ That registry entry is the SSOT — this section is a cross-reference, not the a
 
 These back on to `tokio::fs` in the runtime. The state-machine ABI that makes `wait` work was validated in v0.3-M2 using the internal `__testFallibleAsync` intrinsic — v0.5 inherits a working errors-through-state-machine ABI.
 
-**Why deferred**: file path encoding, error variant design (file-not-found vs permission-denied vs I/O error), and the `errors` propagation shape all belong to the v0.5 file module milestone, not to the state-machine milestone.
+**Why deferred**: file path encoding, error kind design (file-not-found vs permission-denied vs I/O error), and the `errors` propagation shape all belong to the v0.5 file module milestone, not to the state-machine milestone.
 
 ### ⚠️ Performance — I/O backend (DO NOT FORGET at v0.5)
 

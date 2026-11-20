@@ -58,7 +58,7 @@ function loadUser(id: Int) -> User errors {
 }
 ```
 
-If the caller wants to handle a specific error instead of propagating, they use `is` pattern narrowing on the error variant (the v0.1 spec covers this in [`docs/reference/REF-errors.md`](../../reference/REF-errors.md)).
+If the caller wants to handle a specific error instead of propagating, they use `is` pattern narrowing on the error kind (the v0.1 spec covers this in [`docs/reference/REF-errors.md`](../../reference/REF-errors.md)).
 
 ### Panics — unexpected, unrecoverable in scope, indicates a BUG
 

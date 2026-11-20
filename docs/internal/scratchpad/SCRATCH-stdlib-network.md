@@ -127,8 +127,8 @@ That registry entry is the SSOT — this section is a cross-reference, not the a
 
 - `request.getAsync(url) -> Response errors` — non-blocking HTTP GET; `wait request.getAsync(url)` suspends the caller while the network round-trip completes.
 - `request.postAsync(url, options) -> Response errors` — non-blocking HTTP POST.
-- Equivalent `Async` variants for the other HTTP methods.
+- Equivalent `Async` versions for the other HTTP methods.
 
 Async server handlers (inbound) will use the same `wait` pattern — a handler declared `-> Response errors` that calls `wait db.queryAsync(...)` will be compiled as a state machine and suspend per connection without blocking an OS thread per request.
 
-**Why deferred**: connection pooling design, TLS configuration surface, error variant taxonomy (network timeout vs DNS failure vs TLS error), and request/response streaming all belong to the v0.15 milestone where the full HTTP surface is designed. The state-machine ABI that makes `wait` work was validated in v0.3-M2.
+**Why deferred**: connection pooling design, TLS configuration surface, error kinds (network timeout vs DNS failure vs TLS error), and request/response streaming all belong to the v0.15 milestone where the full HTTP surface is designed. The state-machine ABI that makes `wait` work was validated in v0.3-M2.

@@ -544,8 +544,8 @@ That registry entry is the SSOT — this section is a cross-reference, not the a
 
 - `db.queryAsync(sql, params) -> Array<T> errors` — non-blocking query; `wait db.queryAsync(...)` suspends the caller while the DB responds.
 - `db.findAsync(Shape, options) -> Array<Shape> errors` — non-blocking structured query.
-- All existing `db.*` methods get `*Async` variants for use inside `wait` call sites.
+- All existing `db.*` methods get `*Async` versions for use inside `wait` call sites.
 
 These back onto Tokio I/O (for Postgres) or DuckDB's async query API (for DuckDB embedded). The state-machine ABI that makes `wait` work was validated in v0.3-M2 using the internal `__testFallibleAsync` intrinsic, which exercises the same errors-through-state-machine path that `db.queryAsync` will use.
 
-**Why deferred**: connection pool state management under suspension, error variant taxonomy (`DatabaseError` design), and the Postgres-vs-DuckDB ABI unification (discussed in "DuckDB-vs-Postgres surface unification" above) all belong to the v0.10 milestone where the full db surface is designed.
+**Why deferred**: connection pool state management under suspension, error kinds (`DatabaseError` design), and the Postgres-vs-DuckDB ABI unification (discussed in "DuckDB-vs-Postgres surface unification" above) all belong to the v0.10 milestone where the full db surface is designed.

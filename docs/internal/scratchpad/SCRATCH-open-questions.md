@@ -202,7 +202,7 @@ The four `symbol`/`name`/`assetClass`/`exchange` trailing comments align in a co
 2. **Blank line breaks the run.** Each contiguous declaration block aligns independently.
 3. **Whole-line comments** (line starts with `//`) are anchored to the surrounding indent level. They do NOT extend or join the trailing-comment alignment.
 4. **Multi-line whole-line comment blocks** (consecutive `//` lines) stay at indent level — never aligned to a trailing-comment column.
-5. Applies inside `shape` field declarations, `options` variants, `const` blocks of homogeneous declarations, and any other "table-like" declaration context. Does NOT apply inside function bodies (statements don't form alignment groups — each statement is its own thing).
+5. Applies inside `shape` field declarations, `options` choices, `const` blocks of homogeneous declarations, and any other "table-like" declaration context. Does NOT apply inside function bodies (statements don't form alignment groups — each statement is its own thing).
 
 **Why this is locked, not configurable**: per v0.2 constraint "`ynz fmt` is opinionated, zero-config" (roadmap `v0-2-dev-loop-tooling.md`). Alignment is either on always or off always. Patrick picked on (this directive).
 
