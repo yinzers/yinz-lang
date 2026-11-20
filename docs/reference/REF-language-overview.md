@@ -86,7 +86,7 @@ Each section covers one part of the language. They're self-contained — start w
 - [Type Conversion](REF-type-conversion.md) — converting between types with dot methods
 - [Strings](REF-strings.md) — text and interpolation
 - [Errors](REF-errors.md) — handling things that can go wrong
-- [Concurrency](REF-concurrency.md) — running code at the same time, background jobs
+- [Concurrency](REF-concurrency.md) — running code at the same time, background tasks
 - [Modules](REF-modules.md) — importing, exporting, and organizing code across files
 - [Scope](REF-scope.md) — block scoping and file-level constants
 - [Main Function](REF-main.md) — program entry point

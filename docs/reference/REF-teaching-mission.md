@@ -112,18 +112,13 @@ let price: float = 19.99
 ```ynz
 function takeDamage(share player: Player, amount: number) -> nothing {
   player.health = player.health - amount
-  // COMPILE ERROR: Cannot change player — this function only has read-only
-  //   access (share).
-  //   Use lend when a function needs to change a value without taking
-  //   ownership:
-  //     function takeDamage(lend player: Player, amount: number) -> nothing
+  // COMPILE ERROR: `player` is declared `share` — read-only — so its fields cannot be changed.
+  //   Change the parameter to `lend player: Player` if this function needs to modify it.
   //
-  // Why: share means "let me look at this, you keep ownership." It is
-  //      read-only. lend means "let me change this for a moment, then I give
-  //      it back." A function that changes a player's state should use lend.
-  //      This is how Yinz prevents two parts of a program from changing the
-  //      same data at once, without a garbage collector: every function says
-  //      up front what it will do with each value.
+  // Why: A `share` parameter is a read-only borrow: the caller keeps ownership
+  //      and trusts the value is unchanged after the call. When a function
+  //      modifies a value, declare `lend` so the change is visible at every
+  //      call site.
 }
 ```
 

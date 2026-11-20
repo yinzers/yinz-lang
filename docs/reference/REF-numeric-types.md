@@ -79,8 +79,8 @@ let chaotic: number<200> = initialCondition
 
 ```
 let huge: number<5000> = 0.001
-// COMPILE ERROR: number<N> precision is capped at 4096.
-//                Use a precision of 4096 or less.
+// COMPILE ERROR: Expected a precision value between 1 and 4096 inside `number<N>`.
+//                Write `number<34>` for the default 34-digit decimal.
 ```
 
 **Mixing precisions in math** gives the higher precision automatically:

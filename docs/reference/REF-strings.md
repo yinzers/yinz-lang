@@ -118,7 +118,9 @@ You cannot replace a character by its position:
 ```ynz
 let name = `Alice`
 name[0] = `B`
-// COMPILE ERROR: Strings are read-only. To change the value, build a new string:
+// COMPILE ERROR: `string` does not support index assignment.
+//   Index assignment works on `array<T>`, `fixed<T>`, and `map<K, V>`.
+// To change the value, build a new string:
 //   let newName = `B` + name.substring(1)
 // Or give the variable a new value:
 //   name = `Blice`

@@ -46,7 +46,7 @@ You cannot give a `const` a new value after you create it:
 ```
 const maxPlayers: number = 10
 maxPlayers = 20
-// COMPILE ERROR: maxPlayers is const and cannot be reassigned.
+// COMPILE ERROR: `maxPlayers` cannot be changed — it was declared with `const`.
 ```
 
 Use `const` by default. Reach for `let` only when you need to change the value later.
@@ -61,10 +61,10 @@ Use `const` by default. Reach for `let` only when you need to change the value l
 
 ```ynz
 const player: Player = { name: `Patrick`, health: 100 }
-player.health = 50            // COMPILE ERROR: player is const — fields can't change.
-healPlayer(player)            // COMPILE ERROR: player is const — healPlayer's signature is
-                              //   `lend player: Player` which needs to change it.
-                              //   Declare with `let` if the function needs to change it.
+player.health = 50            // COMPILE ERROR: `player` is `const` and its fields cannot be changed.
+healPlayer(player)            // COMPILE ERROR: `player` is `const` — `healPlayer` needs to mutate it
+                              //   but `const` blocks mutation.
+                              //   Declare `player` with `let` if you need `healPlayer` to modify it.
 ```
 
 The compiler rejects all three at compile time. `const` is a complete promise — no exceptions.
@@ -102,8 +102,9 @@ You cannot declare a variable without giving it a value:
 
 ```
 let name: string
-// COMPILE ERROR: name has no value.
-// Every variable must be initialized. Use maybe<string> if the value is optional.
+// COMPILE ERROR: `name` declaration is missing `=`.
+// Write: `let name = value`
+// Every variable must start with a value. Use maybe<string> if the value is optional.
 ```
 
 If a value might not exist, use a `maybe` type — see [Maybe Types](REF-maybe.md).
