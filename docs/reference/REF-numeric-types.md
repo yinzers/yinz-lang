@@ -162,11 +162,10 @@ let pixels: Number = 1920
 ```
 let count: Int = Int.max
 count = count + 1
-// RUNTIME ERROR: Int overflow in '+'.
-//   count was at the max value and would have wrapped.
-//   Use .wrappingAdd() if you want wrap-around behavior on purpose,
-//   or .saturatingAdd() to cap at Int.max.
+// RUNTIME ERROR: Int overflow in '+' at main.ynz:2:9
 ```
+
+The same message appears for `-` and `*`. Use `.wrappingAdd()` if you want wrap-around behavior on purpose, or `.saturatingAdd()` to cap at `Int.max`.
 
 When you want the number to wrap around (jump to the other end of the range) or stop at the limit, ask for it by name:
 

@@ -208,7 +208,7 @@ Every type starts with a capital letter, built-in collections included.
 ```
 let scores: array<Int> = []
 // COMPILE ERROR: `array` is not a type name.
-//   Write `Array`: `Array<Int>`
+//   Write `Array`.
 //   Why: Every type in Yinz starts with a capital letter, built-ins included.
 ```
 

@@ -134,7 +134,7 @@ WARNING: `type` is not a keyword in Yinz.
 
 Every type name starts with a capital letter, built-in types included. Two mistakes get a teaching message.
 
-**A lowercase built-in type name.** Writing `int`, `float`, `number`, `boolean`, `string`, `range`, `maybe`, `array`, `fixed`, `map`, `channel` or `nothing` where a type goes is an error. The editor offers a quick-fix that rewrites the name:
+**A lowercase built-in type name.** Writing `int`, `float`, `number`, `boolean`, `string`, `range`, `maybe`, `array`, `fixed`, `map`, `channel` or `nothing` where a type goes is an error. The editor offers a quick-fix titled ``Write `Int` instead of `int` `` (with the names you wrote) that rewrites the name:
 
 ```
 let health: int = 100
@@ -143,15 +143,15 @@ let health: int = 100
 //   Why: Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
-**A shape named like a built-in type.** A `shape` called `String`, `Map`, `Range` or any other built-in type name is an error:
+**A shape named like a built-in type.** A `shape` or union alias called `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` or `SourceLoc` is an error:
 
 ```
 shape Map {
   name: String
 }
 // COMPILE ERROR: `Map` is a reserved built-in type name.
-//   Pick a different name for your shape, such as `GameMap`.
-//   Why: `Map` already means the built-in key-value type, so a shape with the same name would make every `Map` in your code ambiguous.
+//   Give this shape another name, such as `MyMap` or one that says what it holds.
+//   Why: Yinz already has a built-in type called `Map`. A shape with the same name would make every `Map` in this file ambiguous between your shape and the built-in.
 ```
 
 Functions, modules and variables keep lowercase names, and they may match a type name in lowercase: `range(1, 10)` is a function that returns a `Range`.
@@ -199,7 +199,7 @@ COMPILE ERROR: 'Player' is imported from two places.
 **Example — a good runtime error:**
 
 ```
-RUNTIME ERROR: Int overflow in '+'.
+RUNTIME ERROR: Int overflow in '+' at src/main.ynz:12:5
 
   count was at the maximum value (9223372036854775807) and would have
   wrapped to a negative number.

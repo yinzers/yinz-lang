@@ -81,19 +81,19 @@ let health: int = 100
 //   Why: Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
-The editor offers a quick-fix that rewrites the name for you.
+The editor offers a quick-fix titled ``Write `Int` instead of `int` `` that rewrites the name for you.
 
 ### Shapes cannot reuse a built-in type name
 
-A shape named like a built-in type is a compile error:
+A shape or union alias named like a built-in type is a compile error. The reserved names are `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` and `SourceLoc`:
 
 ```
 shape String {
   value: Int
 }
 // COMPILE ERROR: `String` is a reserved built-in type name.
-//   Pick a different name for your shape, such as `Label`.
-//   Why: `String` already means the built-in text type, so a shape with the same name would make every `String` in your code ambiguous.
+//   Give this shape another name, such as `MyString` or one that says what it holds.
+//   Why: Yinz already has a built-in type called `String`. A shape with the same name would make every `String` in this file ambiguous between your shape and the built-in.
 ```
 
 **Why**: Instant scannability. Any line of code — see a capital letter, it's a type. Don't see one, it's not. Zero ambiguity, no context-reading required. The rule is mechanical and absolute: no threshold, no judgment calls.

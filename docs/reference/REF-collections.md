@@ -540,7 +540,7 @@ function getTopNames(share players: Fixed<Player>, limitCount: Int) -> Array<Str
 ```
 let scores: array<Int> = []
 // COMPILE ERROR: `array` is not a type name.
-//   Write `Array`: `Array<Int>`
+//   Write `Array`.
 //   Why: Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
