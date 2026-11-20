@@ -3,7 +3,7 @@
 //! Both refusals (this one and `TransferNeedsCopy` on a piece stored into a literal) are kept over
 //! a hidden copy — the Chief ruled 2026-11-18: "agreed as long as it follows the golden rules and
 //! foundatinal rule." So the WHY must name this holder, and the advice is a `give` or a written
-//! `.copy()` (Golden Rule 11, Golden Rule 10).
+//! `.copy()` (Golden Rule 3, Golden Rule 7).
 
 mod support;
 
@@ -25,7 +25,7 @@ fn a_share_parameter_stored_into_a_union_local_is_refused_with_the_teaching_text
         "gives it away",
         "Declare it `give` in `keep`'s signature",
         "let held = first.copy()",
-        // The WHY (Golden Rule 11) names this function and the dangling read, not a generic one.
+        // The WHY (Golden Rule 3) names this function and the dangling read, not a generic one.
         "the caller's own binding stays usable after `keep` returns",
         "the caller would be reading memory that is already gone",
     ] {
@@ -62,7 +62,7 @@ fn a_give_parameter_stored_into_a_union_local_is_released() {
 }
 
 // Guards a generic WHY on `TransferNeedsCopy` (Medium: the teaching text is the refusal's whole
-// contract, Golden Rule 11): the WHY must name this holder (`mkm`) and say what goes wrong, not
+// contract, Golden Rule 3): the WHY must name this holder (`mkm`) and say what goes wrong, not
 // offer a menu of places a value might be held.
 #[test]
 fn a_piece_stored_into_a_literal_is_refused_with_a_why_that_names_the_holder() {

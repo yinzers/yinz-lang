@@ -1,6 +1,6 @@
 ---
 name: "REF-naming"
-description: "Design rationale for Yinz's human-readable keyword naming choices (e.g. nothing, none, shape, follows) over traditional CS jargon, per Golden Rule 12."
+description: "The plain-English keywords Yinz uses (nothing, none, shape, follows and more), what each one means, and how names are capitalized."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -11,35 +11,31 @@ metadata:
   type: "reference"
 ---
 
-# Naming — Design Decisions
+# Naming
 
-User spec: [`docs/reference/REF-language-overview.md`](REF-language-overview.md) (golden rules), [`.claude/rules/vocabulary.md`](../../.claude/rules/vocabulary.md)
-
----
-
-## Human-Readable Keywords over Programmer Jargon
-
-Use plain English words instead of CS terms throughout the language:
-
-| CS term | Yinz term | Why |
-|---------|-----------|-----|
-| `void` | `nothing` | Reads like English |
-| `null` / `undefined` | `none` with `maybe` | Explicit optionality |
-| `struct` / `class` / `interface` | `type` | One concept, one word |
-| `enum` | `options` | Non-programmers understand it |
-| `abstract` | `base` | "Base type you build on" |
-| `implements` | `follows` | "Player follows Damageable" |
-| `\|` (union) | `\|` | Same as TypeScript — `Circle \| Square` |
-| `typeof` / `instanceof` | `is` | "if shape is Circle" |
-| `fn` | `function` | Spell it out |
-| `&T` / `&mut T` | `.share` / `.lend` | Dot methods, autocomplete-discoverable |
-| `Result<T,E>` / `?` | `errors` keyword | Auto-propagation |
-
-**Why**: Golden Rule 12. Every keyword that requires CS background knowledge is a barrier to junior developers. Keywords that read like plain English lower the learning curve and make code self-documenting.
+Yinz uses plain English words for its keywords, and capital letters to mark types.
 
 ---
 
-## Capital Letter = Type (Golden Rule 13)
+## Keywords in plain English
+
+| Yinz keyword | What it means | Reads as |
+|--------------|---------------|----------|
+| `nothing` | A function returns no value | `-> nothing` |
+| `none` and `maybe` | A value might be absent | `maybe<string>`: a string, or `none` |
+| `shape` | Declares a named group of fields | `shape Player { name: string }` |
+| `options` | A fixed set of named choices | `options Status { active, banned }` |
+| `base` | A shape that other shapes build on and that you never create directly | `base shape` |
+| `follows` | A shape provides the functions a contract lists (a contract is a list of function signatures) | "Player follows Damageable" |
+| `\|` | A value can be one of several shapes | `Circle \| Square` |
+| `is` | Asks which kind a union value is (a union is a value that can be one of several shapes) | "if shape is Circle" |
+| `function` | Declares a function | `function heal(...)` |
+| `share` and `lend` | How a function uses a value it receives (`share` reads it, `lend` may change it); written in function signatures only | `share player: Player` |
+| `errors` | A function can fail, and the failure goes up to the caller automatically | `-> string errors` |
+
+---
+
+## Capital Letter = Type (Golden Rule 10)
 
 PascalCase is exclusively for types. Everything else is lowercase camelCase — modules, functions, variables, keywords. No exceptions.
 
@@ -61,8 +57,8 @@ Modules and types can share the same base name: `Date` is the type, `date` is th
 ## Comments Syntax
 
 ```
-// single line
-/* multi line */
+// regular comment, one line
+/// doc comment, shown in IDE hover
 ```
 
-No doc-comment syntax yet. See [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md).
+See [`REF-doc-comments.md`](REF-doc-comments.md) for the doc-comment rules.

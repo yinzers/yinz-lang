@@ -4,7 +4,7 @@ description: "Canonical spec for the muted-text IDE hint protocol showing what t
 tags:
   - "yinz-compiler"
 created_at: "2026-05-14"
-updated_at: "2026-07-01"
+updated_at: "2026-11-19"
 status: "active"
 author: "patrick"
 metadata:
@@ -45,6 +45,8 @@ Every semantic the compiler figures out from context gets a muted hint:
 | Function param types (where context allows) | depends on call site | the figured-out type |
 | Ownership at call sites (informational only — no body-level syntax) | `foo(player)` | `share` or `lend` keyword after `player` — purely teaching; click jumps to foo's signature where the modifier IS declared |
 | Wait points on I/O | `db.fetch()` | `wait` keyword before the call |
+| Array that never grows | `let scores: array<int> = [90, 72]` | cyan dotted underline on `array` (see [Replacement hints](#replacement-hints-the-underlined-token)) |
+| Binding that never changes | `let attempts = 3` | cyan dotted underline on `let` (same section) |
 | Lifetimes | always figured out | the lifetime (only shown on request — usually hidden) |
 | Allocator | inside `arena scratch { let a: array<int> = [] }` | `.in(scratch)` after the constructor |
 | Implicit copy points | trivially-copyable values | `.copy` where the copy happens |
@@ -90,7 +92,7 @@ The hint always documents what's happening. The click action varies by category 
 
 ## Hover tooltip format
 
-Every muted hint, on hover, shows a three-part tooltip in the same WHAT / WHAT-INSTEAD / WHY format Golden Rule 11 requires for compiler diagnostics.
+Every muted hint, on hover, shows a three-part tooltip in the same WHAT / WHAT-INSTEAD / WHY format Golden Rule 3 requires for compiler diagnostics.
 
 ### Canonical example — inferred `share` on a `const` binding at a call site
 
@@ -117,6 +119,39 @@ The same canonical text MUST be used wherever this concept surfaces:
 - Design rationale in [`docs/internal/implementation/IMP-ownership.md`](../internal/implementation/IMP-ownership.md) §`const` Deep Immutability section
 
 One canonical explanation lives in one source (typically the rule file or design doc) and every surface re-uses it. This prevents the "doc says X, error says Y, tooltip says Z" drift that plagues every IDE-language ecosystem.
+
+---
+
+## Replacement hints: the underlined token
+
+When the compiler already uses a stricter form than the one you wrote, the IDE adds no text. It puts a cyan dotted underline on the token you wrote (red stays for errors and yellow for lint):
+
+```
+function entrypoint() -> nothing {
+  let highScores: array<int> = [90, 72, 85]
+}
+```
+
+Both the `let` and the `array` are underlined, because nothing reassigns `highScores` and nothing grows it.
+
+The underline colour is the theme colour `yinz.lessonUnderline` (`#4FD1E8` in dark themes, `#0E7490` in light themes). To change it, set it in `workbench.colorCustomizations`:
+
+```json
+"workbench.colorCustomizations": { "yinz.lessonUnderline": "#ff9f1c" }
+```
+
+- **Hover** an underlined token: the three-part explanation (WHAT, WHAT INSTEAD, WHY) for that promotion.
+- **Click** the lightbulb on it: the *Write 'const' instead of 'let'* / *Write 'fixed' instead of 'array'* refactor rewrites exactly that token. After both:
+
+```
+function entrypoint() -> nothing {
+  const highScores: fixed<int> = [90, 72, 85]
+}
+```
+
+The rewrite is optional: the program already behaves this way. A binding that does change has no underline and no rewrite: a `let attempts = 3` followed by `attempts = 4`, or an `array` that gets `highScores.add(60)`.
+
+Protocol surface: the semantic-token modifier `promotable`, hover on the token, and a `refactor.rewrite` code action. No inlay hint is sent for these two domains.
 
 ---
 
@@ -159,8 +194,8 @@ M5 will wire data to 5 of the 9 registry `[[muted_hint_domain]]` entries. The re
 | `variable_type` | **Firing** — `variable_type_hints` pass in `inlay_hint_passes.rs` | Every unannotated `let x = expr` | N/A |
 | `ownership_call_site` | **Firing** — `ownership_call_site_hints` pass | Every call site with a typed callee signature | N/A |
 | `copy_points` | **Firing** — `copy_point_hints` pass | Trivially-copyable arg still live after call | N/A |
-| `array_to_fixed_promotion` | **Firing** — `array_to_fixed_promotion_hints` pass | `let x: array<T> = [...]` with no mutation/growth detected | N/A |
-| `let_to_const_promotion` | **Firing** — `let_to_const_promotion_hints` pass | `let x = ...` with no reassignment/mutation/`.lend` detected | N/A |
+| `array_to_fixed_promotion` | **Firing** as a token marker (no inlay hint) — `array_to_fixed_promotion_hints` pass | `let x: array<T> = [...]` with no mutation/growth detected | N/A |
+| `let_to_const_promotion` | **Firing** as a token marker (no inlay hint) — `let_to_const_promotion_hints` pass | `let x = ...` with no reassignment/mutation/`.lend` detected | N/A |
 | `function_param_type` | **Protocol-only** (empty) | First-class lambdas with inferred param types | [`registry/features.toml`](../../registry/features.toml) `lsp-inlay-hint-function-param-type` |
 | `wait_points` | **Protocol-only** (empty) | `wait`-auto-insertion analysis (I/O suspension) | [`registry/features.toml`](../../registry/features.toml) `lsp-inlay-hint-wait-points` |
 | `lifetimes` | **Protocol-only** (empty) | Explicit lifetime UI (may stay fully implicit) | [`registry/features.toml`](../../registry/features.toml) `lsp-inlay-hint-lifetimes` |
@@ -175,7 +210,7 @@ The 5 detection passes will live in `crates/ynz-typeck/src/inlay_hint_passes.rs`
 ## Cross-references
 
 - [`.claude/rules/inference.md`](../../.claude/rules/inference.md) (the uniform inference rule this protocol implements)
-- [`docs/reference/REF-golden-rules.md`](REF-golden-rules.md) Rule 11 (extended to all teaching surfaces)
+- [`docs/reference/REF-golden-rules.md`](REF-golden-rules.md) Rule 3 (extended to all teaching surfaces)
 - [`docs/reference/REF-teaching-mission.md`](REF-teaching-mission.md) "IDE as a Teaching Surface" section
 - [`docs/reference/REF-compiler-errors.md`](REF-compiler-errors.md) (the three-part diagnostic format hints inherit)
 - [`docs/internal/implementation/IMP-lsp.md`](../internal/implementation/IMP-lsp.md) "Inlay Hints" section (M5 implementation status in full-detail table)

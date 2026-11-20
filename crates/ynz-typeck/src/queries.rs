@@ -484,7 +484,7 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     //
     // Codegen does NOT consume this fixpoint. The auto-parallel write-effect decision uses
     // the type-based conservative floor in `ynz-codegen/src/independence.rs` (any mutable-heap
-    // arg is a potential write, Golden Rule 5 > Rule 10) — sound by construction, with no
+    // arg is a potential write, Golden Rule 2 > Rule 7) — sound by construction, with no
     // name-based classifier to drift out of sync with this fixpoint.
     //
     // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
@@ -600,7 +600,7 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     // v0.3-M7 Phase 2 (FRAGO 002, Patrick-directed 2026-07-16) — reject calls that pass
     // the same value (or overlapping pieces of one value) into two parameter positions
     // where at least one position can modify it. `lend` means exclusive mutable access
-    // for the duration of the call (Golden Rule 5: wrong = caught at compile time).
+    // for the duration of the call (Golden Rule 2: wrong = caught at compile time).
     // Typeck previously accepted `relay(h, h)` against `(share, lend)` while codegen
     // claimed LLVM `noalias` on both parameters — a false claim the optimizer exploits
     // into a silent miscompile (RED fixture `v0_3_m7_p1_share_lend_alias.ynz`).

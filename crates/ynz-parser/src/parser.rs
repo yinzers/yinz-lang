@@ -2601,7 +2601,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     "Expression nesting too deep (max 256 levels).",
-                    "Break this expression into smaller pieces with named `let` bindings — Yinz prefers step-by-step over chains anyway (Golden Rule 7).",
+                    "Break this expression into smaller pieces with named `let` bindings — Yinz prefers step-by-step over chains anyway (Golden Rule 9).",
                     "The parser uses one stack frame per nested expression. At 256 levels we're well past any reasonable code; further nesting would crash the compiler. The limit catches both typos (a million open parens) and adversarial inputs.",
                 ));
                 // Drain tokens to the next statement boundary so recovery doesn't loop.
@@ -3765,7 +3765,7 @@ impl<'a> Parser<'a> {
                     self.current_span(),
                     "Expected a shape name after `shape`.",
                     "Write `shape Name { ... }` — the name must start with a capital letter.",
-                    "Shape names follow Yinz's capital-letter-equals-type rule (Golden Rule 13).",
+                    "Shape names follow Yinz's capital-letter-equals-type rule (Golden Rule 10).",
                 ));
                 self.recover_to_rbrace();
                 let _ = self.expect(&Token::RBrace);

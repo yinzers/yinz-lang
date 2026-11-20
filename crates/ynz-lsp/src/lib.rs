@@ -15,6 +15,7 @@ pub mod references;
 pub mod rename;
 pub mod rename_edit_builder;
 pub mod rename_file;
+pub mod replacement_marker;
 pub mod semantic_tokens;
 pub mod server;
 pub mod state;

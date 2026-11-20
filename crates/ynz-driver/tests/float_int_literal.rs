@@ -1,4 +1,4 @@
-//! Card #419 (Golden Rule 5, silent wrong): an int literal that typeck types as `float`
+//! Card #419 (Golden Rule 2, silent wrong): an int literal that typeck types as `float`
 //! (under a `float` hint) was lowered by codegen as an i64 constant, and the i64 bits were
 //! then stored as f64 bits — `let whole: float = 2` printed a ~1e-323 denormal / zero.
 //! Tier: High (data integrity: wrong value, no diagnostic). Each fixture is one place

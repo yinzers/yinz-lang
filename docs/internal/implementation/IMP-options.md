@@ -19,7 +19,7 @@ User spec: [`docs/reference/REF-options.md`](../../reference/REF-options.md)
 
 ## What `options` is
 
-`options Status { active, inactive, banned }` declares a type with a finite, named set of values. It replaces `enum` — the word "options" is plain English readable by a non-programmer (Golden Rule 12). The compiler knows every variant at compile time and enforces exhaustiveness in multi-case `if` blocks.
+`options Status { active, inactive, banned }` declares a type with a finite, named set of values. It replaces `enum` — the word "options" is plain English readable by a non-programmer (Golden Rule 5). The compiler knows every variant at compile time and enforces exhaustiveness in multi-case `if` blocks.
 
 See [`docs/reference/REF-options.md`](../../reference/REF-options.md) for the user-facing surface.
 
@@ -41,7 +41,7 @@ Multi-case `if` over an options scrutinee lowers to LLVM `switch` on the tag byt
 
 `.toString()` on an options value: the compiler emits a per-type LLVM global `[N x *const u8]` array of string literals indexed by tag. The `.toString()` method indexes by tag and calls `ynz_string_from_static(ptr, len)` to return a heap-owned Yinz string.
 
-**Display strings** (added 2026-05-18): the `variantName: \`Display String\`` syntax lets the author attach a separate display string to any variant. When present, the display string populates the string table slot instead of the variant identifier. Variants without a display string fall back to the identifier name. This is purely a string-table substitution — the tag value, comparison semantics, and ABI are unchanged. The `OptionsEntry` in the typeck table carries a parallel `display_strings: Vec<Option<String>>` field; `lower_options_to_string` reads `display_strings[i].unwrap_or(&variants[i])` when building the LLVM string global per variant.
+**Display strings**: the `variantName: \`Display String\`` syntax lets the author attach a separate display string to any variant. When present, the display string populates the string table slot instead of the variant identifier. Variants without a display string fall back to the identifier name. This is purely a string-table substitution — the tag value, comparison semantics, and ABI are unchanged. The `OptionsEntry` in the typeck table carries a parallel `display_strings: Vec<Option<String>>` field; `lower_options_to_string` reads `display_strings[i].unwrap_or(&variants[i])` when building the LLVM string global per variant.
 
 **Why not a separate `.displayString()` method**: one string representation per options type is cleaner and avoids the question of which method to call in interpolation. The display string IS the string — if you need both the identifier and the label, access the identifier via the variant name in code (which is free, compile-time) and call `.toString()` for display.
 
@@ -161,6 +161,6 @@ See [`docs/internal/implementation/IMP-unions.md`](IMP-unions.md) for the union 
 - [`docs/internal/implementation/IMP-unions.md`](IMP-unions.md) — union types (the structural-variant counterpart)
 - [`docs/internal/implementation/IMP-narrowing.md`](IMP-narrowing.md) — flow-sensitive narrowing (applied to union `is` checks; options multi-case uses exhaustiveness, not narrowing)
 - [`docs/internal/implementation/IMP-control-flow.md`](IMP-control-flow.md) — exhaustiveness enforcement for multi-case `if`; jump-table lowering
-- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 12 — why "options" over "enum"
+- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 5 — why "options" over "enum"
 - `crates/ynz-typeck/src/options_table.rs` — OptionsTable registry (M6 implementation)
 - `crates/ynz-codegen/src/options.rs` — options codegen helpers (M6 implementation)

@@ -1,6 +1,6 @@
 // v0.3-M9 C1f (#423) round 2: a recursive walk peels one link per call with `let rest = head.next`.
 // The binding only reads the field of a `share` parameter, so it is a view of the field and the
-// walk allocates nothing: the cells are the ones building the chain made (Golden Rule 8: a Rust
+// walk allocates nothing: the cells are the ones building the chain made (Golden Rule 6: a Rust
 // borrow costs none; a copy per step costs O(n^2) cells).
 // Correct behavior: prints the sum of the values and the depth.
 shape End {

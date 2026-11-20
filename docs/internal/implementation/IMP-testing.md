@@ -79,7 +79,7 @@ test "creates a user" {
 - `setup` at file level (outside a group) runs before each ungrouped test AND before each test inside any group
 - `teardown` mirrors `setup` semantics in reverse order
 
-**Why `setup` / `teardown` over `beforeEach` / `afterEach`**: Plain English. Matches Golden Rule 12 (human-readable over jargon). A jr dev reads "setup the test environment" / "tear down the test environment" without needing prior context.
+**Why `setup` / `teardown` over `beforeEach` / `afterEach`**: Plain English. Matches Golden Rule 5 (human-readable over jargon). A jr dev reads "setup the test environment" / "tear down the test environment" without needing prior context.
 
 **Why parameterless in v0.13**: Most tests don't need test metadata (current test name, etc.) inside setup. Adding an optional `setup(testInfo) { ... }` form can come later if real use cases surface — it doesn't break the parameterless default.
 
@@ -114,7 +114,7 @@ test "schema validation passes" {           // ungrouped, at file level
 ```
 
 **Why single-level**:
-- **Rule 7 spirit** — Yinz rejects deep method chaining because nested code is hard to scan. Same applies to test structure. Three-level-nested describes in Mocha files are notorious.
+- **Rule 9 spirit** — Yinz rejects deep method chaining because nested code is hard to scan. Same applies to test structure. Three-level-nested describes in Mocha files are notorious.
 - **Setup/teardown scope is unambiguous** — file → group → test. Three clear layers. With nestable groups, "which setup runs?" becomes a question that requires reading the whole file.
 - **Yinz isn't trying to be Jest** — JS test frameworks went nestable because their AST is flexible and the community wanted maximum structure. Yinz is opinionated. One level is enough for any properly-sized test file; if you need more structure, split into multiple files.
 

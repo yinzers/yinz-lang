@@ -4,7 +4,7 @@
 // claimed `noalias` on both parameters; the optimizer hoisted the `src.value` read past
 // the aliased `dst.value = 5` store — printed 1 instead of 5). Phase 2's decided fix is
 // typeck REJECTION: `lend` means exclusive mutable access, so this call is an ownership-
-// contract violation caught at compile time (Golden Rule 5).
+// contract violation caught at compile time (Golden Rule 2).
 //
 // Expected: COMPILE ERROR — "`h` is passed to `relay` twice in the same call".
 shape Box {

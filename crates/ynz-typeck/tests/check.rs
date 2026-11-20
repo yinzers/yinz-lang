@@ -154,7 +154,7 @@ fn conversion_methods_type_check_clean() {
 #[test]
 fn int_literal_infers_as_int() {
     // WHY: `let x = 42` must give x the type `int`, not `number`. This is
-    // Golden Rule 10 (efficiency first) — the default must be the most
+    // Golden Rule 7 (efficiency first) — the default must be the most
     // performant type. If x becomes `number`, arithmetic is decimal-128 overhead.
     let output = assert_errors(
         "function entrypoint() -> nothing { let x = 42\nprint(x.toString()) }",
@@ -4152,7 +4152,7 @@ function entrypoint() -> nothing {
          got: {:#?}",
         out.diagnostics
     );
-    // test-ratchet: P0 reworded SubExprSuspendViolation WHY to state the Golden-Rule-7 rationale;
+    // test-ratchet: P0 reworded SubExprSuspendViolation WHY to state the Golden-Rule-9 rationale;
     // "v0.3-M3" was removed. Assert the new canonical WHY text is present instead.
     assert!(
         subexpr_errors

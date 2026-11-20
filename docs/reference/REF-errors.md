@@ -40,14 +40,14 @@ function double(x: number) -> number {
 
 ---
 
-## Auto-propagation in errors functions
+## Errors flow up automatically
 
-If your function is also marked `errors`, any call to an `errors` function auto-propagates on failure. No boilerplate:
+If your function is also marked `errors`, a failed call to another `errors` function passes its error up to your caller. This is called *auto-propagation*: the error goes up on its own. You write no extra code for it:
 
 ```
 function loadConfig() -> Config errors {
   let raw = readFile(`config.txt`)    // if this fails, the error cascades to the caller automatically
-  let config = parseConfig(raw)       // same — auto-propagates on failure
+  let config = parseConfig(raw)       // same — a failure goes up automatically
   return config                       // only gets here on success
 }
 ```
@@ -56,9 +56,9 @@ You write the happy path. The compiler handles the failure path.
 
 ---
 
-## Logging or recovering before propagating
+## Logging or recovering before the error goes up
 
-Sometimes you want to log a warning, fall back to a default, or retry before letting the error cascade. Just check the result first:
+Sometimes you want to log a warning, fall back to a default, or retry before the error goes up to your caller. Check the result first:
 
 ```
 function loadConfig() -> Config errors {
@@ -73,9 +73,9 @@ function loadConfig() -> Config errors {
 }
 ```
 
-The rule: **if you call `.failed()` or `.message` on the result before using the success value, auto-propagation is suppressed for that variable.** You've taken responsibility for handling it. If you DON'T check, the compiler auto-propagates the first time you use the value.
+The rule: **if you call `.failed()` or `.message` on the result before using the success value, the error no longer goes up automatically for that variable.** You've taken responsibility for handling it. If you DON'T check, the error goes up the first time you use the value.
 
-Same code pattern, two behaviors picked by the compiler from what you wrote. You never have to think "which mode am I in?"
+The same code gives two behaviors, and the compiler picks one from what you wrote. You never have to ask "which mode am I in?"
 
 ---
 
@@ -106,7 +106,7 @@ function loadConfig() -> Config errors {
 
 ## Handling errors in non-errors functions
 
-If your function does NOT declare `errors`, you must explicitly handle every fallible call. The compiler enforces this:
+If your function does NOT declare `errors`, you must handle every call that can fail. The compiler enforces this:
 
 ```
 function loadConfig() -> Config {
@@ -122,7 +122,7 @@ Three ways to handle it:
 
 ```
 function loadConfig() -> Config errors {
-  let raw = readFile(`config.txt`)    // auto-propagates
+  let raw = readFile(`config.txt`)    // a failure goes up automatically
   return parseConfig(raw)
 }
 ```
@@ -131,7 +131,8 @@ function loadConfig() -> Config errors {
 
 ```
 function loadConfig() -> Config {
-  let raw = readFile(`config.txt`).or(`{}`)    // use `{}` if the file can't be read
+  let content = readFile(`config.txt`)          // might fail
+  let raw = content.or(`{}`)                    // use `{}` if the file can't be read
   return parseConfig(raw)
 }
 ```
@@ -151,9 +152,9 @@ function loadConfig() -> Config {
 
 ---
 
-## Dot methods on error results
+## What you can do with an `errors` result
 
-When you call an `errors` function, the result has these methods until you handle the error (or auto-propagation cascades it to the caller):
+When you call an `errors` function, the result has these functions and fields until you handle the error (or it goes up to your caller):
 
 ```ynz
 content.failed()           // did it fail? → boolean
@@ -188,7 +189,7 @@ if (raw.failed()) {
 
 ## The error's call trace
 
-When an error propagates, it carries a full call trace. You can read it as structured data:
+When an error goes up, it carries a full call trace: the list of functions that led to it. You can read it as data:
 
 ```ynz
 let content = readFile(`config.txt`)
@@ -220,7 +221,7 @@ content.source.line    // maybe<int>
 
 The trace captures the full call chain from the function where the error was created up to the current handler.
 
-**Trace truncation:** if the call chain is more than 1024 frames deep, the trace is truncated and a sentinel frame is appended with `line: none` to mark the cutoff. Real programs rarely hit this limit.
+**Long traces are cut off:** if the call chain is more than 1024 frames deep, the trace stops there and ends with one extra frame whose `line` is `none`, to mark the cutoff. Real programs rarely hit this limit.
 
 ---
 
@@ -236,7 +237,8 @@ A function can have both:
 ```
 function findUser(id: string) -> maybe<User> errors {
   let data = readDatabase(id)                              // might fail (connection error)
-  let user = data.filter(u => u.id == id).first()          // might be none (user not found)
+  let matches = data.filter(candidate => candidate.id == id)  // every user with this id
+  let user = matches.first()                               // might be none (user not found)
   return user
 }
 ```
@@ -245,7 +247,7 @@ function findUser(id: string) -> maybe<User> errors {
 
 ## What happens when an error reaches the top
 
-If an error propagates all the way up without being handled, the program stops and prints a clean, readable error:
+If an error goes all the way up without being handled, the program stops and prints a clear message:
 
 ```
 ERROR: Could not read file `config.ynz`
@@ -271,10 +273,10 @@ ERROR: Could not read file `config.ynz`
 Override the default behavior with a custom handler:
 
 ```
-setErrorHandler(e => {
-  log(`[${timestamp()}] ${e.message}`)
-  log(e.trace)
-  sendToMonitoring(e)
+setErrorHandler(error => {
+  log(`[${timestamp()}] ${error.message}`)
+  log(error.trace)
+  sendToMonitoring(error)
 })
 ```
 

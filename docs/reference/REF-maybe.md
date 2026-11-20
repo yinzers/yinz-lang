@@ -19,7 +19,7 @@ Some values might not exist. `maybe` lets you say that in the type system, so th
 
 ## The problem
 
-In a lot of languages, any variable can be `null` — and you only find out at runtime when your program crashes. Yinz makes absence explicit in the type, so the compiler catches it before the code ever runs.
+A value can be missing: a player with no nickname, a file with no contents, a lookup that finds nothing. In Yinz you write that in the type, so the compiler catches a missing value before your program ever runs.
 
 ---
 
@@ -30,7 +30,7 @@ let name: string = `Patrick`             // always has a value, guaranteed
 let nickname: maybe<string> = none       // might not have a value
 ```
 
-`maybe<string>` means: this is either a `string` or it's `none`. The compiler tracks which and forces you to handle the `none` case before you use it.
+`maybe<string>` means: this is either a `string` or it's `none`. The compiler makes you handle the `none` case before you use the value.
 
 ---
 
@@ -56,7 +56,7 @@ Three ways:
 
 ```
 if (nickname.exists()) {
-  print(nickname.value)    // compiler knows it's safe inside this block
+  print(nickname.value)    // safe: the compiler knows there is a value inside this block
 }
 ```
 
@@ -80,7 +80,7 @@ print(nickname.value)
 
 ```
 function findPlayer(share roster: fixed<Player>, name: string) -> maybe<Player> {
-  return roster.find(p => p.name == name)    // .find() returns maybe<T>
+  return roster.find(player => player.name == name)    // .find() returns maybe<T>
 }
 ```
 
@@ -90,7 +90,8 @@ The caller must handle the `maybe`:
 let player = findPlayer(roster, `Alice`)
 
 // Option 1 — use a fallback
-let name = player.or(defaultPlayer).name
+let foundPlayer = player.or(defaultPlayer)
+let name = foundPlayer.name
 
 // Option 2 — check first
 if (player.exists()) {
@@ -114,28 +115,26 @@ let b: string | none = none
 
 ---
 
-## Dot methods
+## Functions you can call on a maybe
 
 ```
 value.exists()      // does it have a value? → boolean
 value.or(default)   // get the value, or the fallback if none → T
-value.value         // get the raw value (compile error without an exists() check)
+value.value         // get the value (compile error without an exists() check)
 ```
 
 ---
 
-## Early-return narrowing (M6)
+## Checking first, then returning early
 
-The compiler also narrows `.value` after an early-return pattern — you don't need to nest the success path inside the `if` block:
+After an early return, the compiler also knows `.value` is safe. You don't need to put the rest of your code inside the `if` block:
 
 ```
 function firstOr(nums: share array<int>) -> int {
   let r = nums.first()               // maybe<int>
-  if (!r.exists()) { return -1 }     // early exit — compiler proves r has a value below
-  return r.value                     // safe: the only way to reach here is if r.exists()
+  if (!r.exists()) { return -1 }     // leaves the function — below this line r must have a value
+  return r.value                     // safe: you only get here if r.exists() was true
 }
 ```
 
-The early return must use `return`, `panic`, or an infinite `loop` — those are the only forms the compiler can prove always exit. A regular function call that returns `nothing` doesn't count.
-
-See [docs/internal/implementation/IMP-narrowing.md](../internal/implementation/IMP-narrowing.md) for the full rules table.
+The early exit must use `return`, `panic`, or an endless `loop`. Those are the only ways the compiler can be sure the function never continues. A normal call to a function that returns `nothing` doesn't count.

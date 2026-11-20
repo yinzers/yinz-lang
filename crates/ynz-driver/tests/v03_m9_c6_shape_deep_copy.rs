@@ -57,7 +57,7 @@ deep_case!(
     "v0_3_m9_c6_shape_moved_array_field.ynz",
     "1\n",
     4,
-    "a shape stored at its last use is copied deep anyway, paying one array per move where Rust moves for free (High: Golden Rule 8 cost)"
+    "a shape stored at its last use is copied deep anyway, paying one array per move where Rust moves for free (High: Golden Rule 6 cost)"
 );
 
 /// Bug: `fixed<Tag>.copy()` copies the block of cells and shares every heap cell and name in it,

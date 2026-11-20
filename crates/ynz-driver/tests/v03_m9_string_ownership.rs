@@ -129,49 +129,49 @@ print_cost_case!(
     printing_an_int_allocates_no_string,
     "v0_3_m9_c3a_no_alloc_print_int.ynz",
     0,
-    "`print(int)` mallocs and frees a heap string per call, which costs more than the thread-local buffer it replaced and more than Rust's `println!` (High: Golden Rule 8 cost regression)"
+    "`print(int)` mallocs and frees a heap string per call, which costs more than the thread-local buffer it replaced and more than Rust's `println!` (High: Golden Rule 6 cost regression)"
 );
 
 print_cost_case!(
     printing_a_float_allocates_no_string,
     "v0_3_m9_c3a_no_alloc_print_float.ynz",
     0,
-    "`print(float)` copies the formatted text into a headered heap string on top of the formatting `String`: two allocations where the base had one (High: Golden Rule 8 cost regression)"
+    "`print(float)` copies the formatted text into a headered heap string on top of the formatting `String`: two allocations where the base had one (High: Golden Rule 6 cost regression)"
 );
 
 print_cost_case!(
     printing_a_number_allocates_no_string,
     "v0_3_m9_c3a_no_alloc_print_number.ynz",
     0,
-    "`print(number)` copies the formatted text into a headered heap string on top of the formatting `String`: two allocations where the base had one (High: Golden Rule 8 cost regression)"
+    "`print(number)` copies the formatted text into a headered heap string on top of the formatting `String`: two allocations where the base had one (High: Golden Rule 6 cost regression)"
 );
 
 print_cost_case!(
     interpolating_an_int_allocates_only_the_result,
     "v0_3_m9_c3a_no_alloc_interp_int.ynz",
     1,
-    "`${int}` mallocs and frees a heap string for the part before appending it to the result (High: Golden Rule 8 cost regression)"
+    "`${int}` mallocs and frees a heap string for the part before appending it to the result (High: Golden Rule 6 cost regression)"
 );
 
 print_cost_case!(
     interpolating_a_float_allocates_only_the_result,
     "v0_3_m9_c3a_no_alloc_interp_float.ynz",
     1,
-    "`${float}` builds a headered heap string for the part before appending it to the result (High: Golden Rule 8 cost regression)"
+    "`${float}` builds a headered heap string for the part before appending it to the result (High: Golden Rule 6 cost regression)"
 );
 
 print_cost_case!(
     interpolating_a_number_allocates_only_the_result,
     "v0_3_m9_c3a_no_alloc_interp_number.ynz",
     1,
-    "`${number}` builds a headered heap string for the part before appending it to the result (High: Golden Rule 8 cost regression)"
+    "`${number}` builds a headered heap string for the part before appending it to the result (High: Golden Rule 6 cost regression)"
 );
 
 print_cost_case!(
     printing_a_shape_allocates_only_its_debug_text,
     "v0_3_m9_c3a_no_alloc_shape_fields.ynz",
     1,
-    "the debug print of a shape builds a heap string for each int/float/number field's text, not only the one debug text (High: Golden Rule 8 cost regression)"
+    "the debug print of a shape builds a heap string for each int/float/number field's text, not only the one debug text (High: Golden Rule 6 cost regression)"
 );
 
 // ---- bignum text must never be read as decimal128: comparisons, unary minus, `if` on a value ----

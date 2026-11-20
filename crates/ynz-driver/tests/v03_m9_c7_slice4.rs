@@ -57,7 +57,7 @@ fn ir_of(program: &str, label: &str, no_optimize: bool) -> String {
 
 #[test]
 fn a_nested_shape_no_take_reads_is_released_without_a_null_check() {
-    // Bug (cost, Golden Rule 8; High: the check is what keeps a taken cell from a double free, so
+    // Bug (cost, Golden Rule 6; High: the check is what keeps a taken cell from a double free, so
     // it must stay where a take exists): a cell release that checks for null where nothing can
     // null the cell costs 0.1-0.25 ns per release over Rust's `Box` drop.
     let ir = ir_of(NESTED_SHAPE_NEVER_TAKEN, "never_taken", true);

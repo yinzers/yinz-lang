@@ -4,7 +4,7 @@ A compiled systems programming language. Rust-level performance, TypeScript-leve
 
 File extension: `.ynz`. Compiler target: LLVM native machine code.
 
-For the language specification, see [`docs/reference/REF-language-overview.md`](docs/reference/REF-language-overview.md).
+For the language specification, see [`docs/reference/REF-language-overview.md`](docs/reference/REF-language-overview.md). All project documentation starts at [`docs/README.md`](docs/README.md).
 
 ---
 
@@ -46,6 +46,8 @@ Add the `LLVM_SYS_181_PREFIX` export to your shell profile on macOS. On Linux it
 
 **Rust stable toolchain:** Install via [rustup](https://rustup.rs).
 
+**Node.js 22:** needed only to build the VSCode extension in [`tooling/vscode-ynz/`](tooling/vscode-ynz/).
+
 ### Build (do this once per compiler change)
 
 ```
@@ -60,6 +62,33 @@ This produces the compiler binary at `target/release/ynz`. Run again whenever yo
 
 ```
 ./target/release/ynz --version
+```
+
+### Dev container
+
+[`docker-compose.yml`](docker-compose.yml) defines a `dev` service (image `ynz-dev`, built from [`Dockerfile`](Dockerfile)). The image holds the full toolchain: Rust (stable, plus nightly with Miri and `rust-src` for the sanitizer lanes), LLVM 18, `cargo-nextest` and Node 22. Compiler build, test and fixture work runs inside this container. The container runs as the `ubuntu` user (uid 1000), so files it writes into the project are owned by host uid 1000.
+
+The bind mount `.:/work` keeps `target/` readable on the host.
+
+```bash
+# Start the dev container (background)
+docker compose up -d dev
+
+# Or run one-shot commands (container exits after each)
+docker compose run --rm dev cargo build --workspace
+docker compose run --rm dev cargo build -p ynz-driver
+docker compose run --rm dev cargo build -p ynz-driver --release
+docker compose run --rm dev cargo build -p ynz-lsp --release
+docker compose run --rm dev cargo test --workspace
+docker compose run --rm dev cargo clippy --workspace -- -D warnings
+docker compose run --rm dev cargo fmt --all
+
+# Run the compiler directly inside a running dev container
+docker compose exec dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
+# → hello, yinz
+
+# VSCode extension build
+docker compose run --rm dev bash -c "cd tooling/vscode-ynz && npm install && npm run build && npx vsce package --no-yarn"
 ```
 
 ---
@@ -137,7 +166,7 @@ ynz --help          # full CLI help
 
 The **Yinz Language** extension provides syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
 
-- **GitHub Release**: download `yinz-0.2.0-m2.vsix` from the [latest release](https://github.com/yinzers/yinz-lang/releases/tag/ynz-vscode-v0.2.0-m2) and run `code --install-extension yinz-0.2.0-m2.vsix`
+- **GitHub Release**: download [`yinz-latest.vsix`](https://github.com/yinzers/yinz-lang/releases/latest/download/yinz-latest.vsix) (a stable URL that always points at the newest release) and run `code --install-extension yinz-latest.vsix`
 - **Manual install**: see [`tooling/vscode-ynz/README.md`](tooling/vscode-ynz/README.md) for local build + install instructions
 
 The extension requires the `ynz-lsp` binary on your PATH: `cargo build -p ynz-lsp --release && cp target/release/ynz-lsp ~/.local/bin/`
@@ -146,12 +175,9 @@ The extension requires the `ynz-lsp` binary on your PATH: `cargo build -p ynz-ls
 
 ## Status
 
-The compiler is in active development. See [`docs/reference/REF-mvp-scope.md`](docs/reference/REF-mvp-scope.md) for the milestone roadmap, and [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) for the (now-shipped) v0.1 implementation plan — active work has moved on to the v0.3 concurrency roadmap, [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
+The compiler is in active development. The current version is **0.3.3** (workspace [`Cargo.toml`](Cargo.toml)). See [`CHANGELOG.md`](CHANGELOG.md) for what each release ships and [`docs/reference/REF-mvp-scope.md`](docs/reference/REF-mvp-scope.md) for the roadmap.
 
-**Current shipped milestones**:
-- M1 ✓ — Hello world end-to-end (tag `v0.1.0-m1`)
-- M2 ✓ — Variables, arithmetic, decimal128 numerics (tag `v0.1.0-m2`)
-- M3 — Control flow + user-defined functions (in progress)
-- M4-M8 — see roadmap
-
-**What works today**: variables (`let`, `const`), arithmetic across `int`/`float`/`number`, `print`, three-part teaching error messages. You can write meaningful programs RIGHT NOW with M2 — try the example above.
+**Shipped so far** (per the changelog):
+- **v0.1** — the core language (M1–M8 language features).
+- **v0.2** — the feature registry, the language server and VSCode extension, `ynz fmt`, and the `ynz watch` rebuild-on-save daemon.
+- **v0.3** — `background` and `wait` concurrency, channels, auto-parallelization, and an LLVM `default<O2>` optimizer pipeline.

@@ -87,7 +87,7 @@ Per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md
 
 ---
 
-## Teaching errors (WHAT / WHAT-INSTEAD / WHY per Golden Rule 11)
+## Teaching errors (WHAT / WHAT-INSTEAD / WHY per Golden Rule 3)
 
 `.decode()` failures must teach, e.g. a bad base64 length:
 - **WHAT**: the input isn't valid base64 (length isn't a multiple of 4 after padding).

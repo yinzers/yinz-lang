@@ -135,7 +135,8 @@ Momentum oscillator. Returns 0-100. Above 70 is traditionally overbought, below 
 let rsi14 = closes.rsi(period: 14)
 let rsi14 = closes.rsi(period: 14, skipWarmup: true)
 
-let current = rsi14.last().or(50)
+let latestRsi = rsi14.last()
+let current = latestRsi.or(50)
 if (current > 70) {
   print("Overbought")
 }
@@ -165,8 +166,10 @@ shape BollingerResultTrimmed {
 let bb = closes.bollinger(period: 20, stdDev: 2.0)
 let bb = closes.bollinger(period: 20, stdDev: 2.0, skipWarmup: true)
 
-let lastClose = closes.last().or(0)
-let upperBand = bb.upper.last().or(0)
+let latestClose = closes.last()
+let lastClose = latestClose.or(0)
+let latestUpper = bb.upper.last()
+let upperBand = latestUpper.or(0)
 if (lastClose > upperBand) {
   print("Price above upper band")
 }
@@ -195,8 +198,10 @@ Commonly used as an intraday benchmark. No warmup period — valid from bar 1.
 ```
 let vwap = bars.vwap()
 
-let lastVwap = vwap.last().or(0)
-let lastClose = closes.last().or(0)
+let latestVwap = vwap.last()
+let lastVwap = latestVwap.or(0)
+let latestClose = closes.last()
+let lastClose = latestClose.or(0)
 if (lastClose > lastVwap) {
   print("Price above VWAP")
 }
@@ -215,7 +220,8 @@ Current bar's volume compared to average volume over a lookback period.
 let rvol = volumes.relVol(lookback: 20)
 let rvol = volumes.relVol(lookback: 20, skipWarmup: true)
 
-let current = rvol.last().or(0)
+let latestRvol = rvol.last()
+let current = latestRvol.or(0)
 if (current > 2.0) {
   print("High relative volume")
 }

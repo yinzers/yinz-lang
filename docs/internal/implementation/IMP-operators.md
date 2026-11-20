@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-operators.md`](../../reference/REF-operators.md)
 
 Operators are syntactic sugar for methods on standard library contracts. No magic method names, no special dispatch rules — the same `follows` system used everywhere else.
 
-**Why not magic methods**: Languages like Python use `__add__`, `__eq__`, `__str__`. These are invisible to autocomplete, require knowing the naming convention, and feel like magic. The `follows` approach is fully transparent — type `.add` and see the method. The operator is sugar for a regular method.
+Decided: Python-style magic method names (`__add__`) rejected; type `.add` and autocomplete shows the function.
 
 **Why stdlib-defined contracts vs built-in operator keywords**: User types follow stdlib contracts (`Addable`, `Equatable`). This means the operator system is extensible without compiler changes — new operator contracts can be added to the stdlib like any other type. The compiler maps `+` → `add()` at the syntax level; everything else is regular type system.
 
@@ -51,28 +51,21 @@ Every type is printable. `print()` never errors.
 
 ## Boolean Operators: `&&`, `||`, `!`
 
-Symbol-based boolean operators — same as JavaScript, TypeScript, C, Java, Go, Rust.
+Symbol-based boolean operators, as in JavaScript and TypeScript. `and`, `or` and `not` are not operators.
 
-**Why English words**: Golden Rule 12. `&&` and `||` are C-style operators that require knowing the convention. `and`, `or`, `not` are immediately readable by anyone who speaks English.
+**Why symbols**: Golden Rule 12 (familiar syntax): JavaScript and TypeScript developers already know `&&`, `||` and `!`.
 
-**`or` disambiguation by context**: `or` serves three roles:
-1. Union type: `type Shape = Circle | Square` (type position)
-2. Boolean OR: `if (admin or mod)` (expression position)
-3. Method: `name.or("default")` (method call)
-
-The parser distinguishes these by position. This is the same approach Python takes — `or` is both a boolean operator and used in expressions with no ambiguity because the parser knows where it is.
+**`|` and `||` stay apart by position**: `|` is a union type in type position (`shape Shape = Circle | Square`) and bitwise OR in an expression; `||` is boolean OR in an expression. The `.or(default)` call is a function, not an operator.
 
 ---
 
 ## Bitwise Operators — Symbols
 
-Bitwise operators use symbols (`&`, `|`, `^`, `~`, `<<`, `>>`) while boolean operators use double-symbols (`&&`, `||`, `!`). This creates a clean, zero-overlap split.
+Bitwise operators use single symbols (`&`, `|`, `^`, `~`, `<<`, `>>`) while boolean operators use double symbols (`&&`, `||`, `!`). The two sets never overlap.
 
-**Why symbols for bitwise**: Bitwise symbols are universal across C, C++, Java, JavaScript, Rust, Go — every language that supports bitwise uses these symbols. Developers who need bitwise operations (systems programmers, game developers) already know them. Renaming to English words would create unnecessary friction for experienced developers without helping junior developers (who won't use bitwise at all).
+**Why symbols for bitwise**: Golden Rule 12 (familiar syntax): every language with bitwise operations spells them this way.
 
-**Why words for boolean**: Boolean logic is used constantly by every developer. Making it English (`and`, `or`, `not`) makes conditions read like sentences. Bitwise is niche; boolean is universal.
-
-**The split is intuitive**: `if (active and verified)` is a condition check. `FLAG_A | FLAG_B` is bit manipulation. Any developer can tell these apart in context.
+**The split is readable**: `if (active && verified)` is a condition check. `flagA | flagB` is bit manipulation.
 
 ---
 

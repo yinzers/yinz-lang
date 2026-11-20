@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-collections.md`](../../reference/REF-collections
 
 `fixed<T>` = stack-allocated, size-locked at creation. `array<T>` = heap-allocated, growable.
 
-**Why**: Golden Rule 10 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `fixed<T>` requires no annotation — it's what you get when you declare a collection with known content. `array<T>` is the explicit opt-in for when you need growth.
+**Why**: Golden Rule 7 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `fixed<T>` requires no annotation — it's what you get when you declare a collection with known content. `array<T>` is the explicit opt-in for when you need growth.
 
 **Removed**: `collection<T>` type removed — unnecessary complexity. Two collection types are enough. "Collections" still exists as an English umbrella term covering `fixed<T>`, `array<T>`, `map<K,V>` — but it's not a TYPE, just a category name.
 
@@ -33,7 +33,7 @@ User spec: [`docs/reference/REF-collections.md`](../../reference/REF-collections
 
 Each operation gets its own line with a named variable.
 
-**Why**: Golden Rule 7. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value. The compiler fuses sequential operations into a single optimized pass anyway, so there's no performance cost for the readability benefit.
+**Why**: Golden Rule 9. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value. The compiler fuses sequential operations into a single optimized pass anyway, so there's no performance cost for the readability benefit.
 
 ---
 
@@ -46,7 +46,7 @@ Several method names chosen for plain-English readability over functional progra
 - `.get(index)` over `items[n]` — safe access returning `maybe<T>`; brackets are sugar for `.get()`
 - `.last()` added — mirrors `.first()`, returns `maybe<T>`
 
-**Why**: Golden Rule 12. Every method name that requires FP background knowledge is a barrier. `.limit`, `.filter`, `.prepend` are plain English instructions anyone can guess.
+**Why**: Golden Rule 5. Every method name that requires FP background knowledge is a barrier. `.limit`, `.filter`, `.prepend` are plain English instructions anyone can guess.
 
 ---
 
@@ -65,20 +65,20 @@ scores["bob"] = 75              // sugar for scores.set("bob", 75)
 
 Works on: `array<T>`, `fixed<T>`, `map<K,V>`, `string` (read only — strings are immutable).
 
-Does NOT work on: `type` instances. Types use dot access for fields and methods — brackets at a value position on a type are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
+Does NOT work on: shape values. Shapes use dot access for fields, and functions are called with dot sugar — brackets at a value position on a shape value are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
 
 **Why bracket sugar:**
 - **Familiarity:** Every JS/Python/C-family dev expects `arr[0]`. Forcing `.get(0)` everywhere creates needless friction.
 - **Safety preserved:** The sugar still returns `maybe<T>`. The type system enforces handling. Surface looks familiar; semantics stay safe.
 - **No syntax conflict with type parameters:** Different syntax, different position. `array<Player>` is a TYPE (left of equals or in a type annotation); `players[0]` is a VALUE (right of equals or in an expression). TypeScript proved this distinction works for human readers.
 
-**Reverses an earlier decision:** the original `docs/internal/implementation/IMP-collections.md` rejected `map["key"]` notation citing visual ambiguity with `array<Player>` type syntax. That argument was weaker than originally stated — TS does both fine. Reversing for consistency: brackets work universally on all four collection types for read; on map/array/fixed for write.
+Brackets work universally on all four collection types for read; on map/array/fixed for write. Decided: `map["key"]` is allowed (TypeScript does both bracket forms fine).
 
 **Why dot doesn't work on map keys (the real reason):**
 
 Maps have methods (`.count()`, `.get()`, `.set()`, `.keys()`, `.values()`, `.filter()`, etc.). If keys could be accessed via dot, a key named `count` would collide with the `.count()` method — exactly the JavaScript bug class around `obj.constructor`, `obj.toString`, etc.
 
-Types don't have this problem because the user defines both fields and methods in one place, and the compiler can verify no collision. Map keys are runtime user data; method names are compile-time built-ins. The two namespaces can't be unified.
+Shapes don't have this problem because the user declares the fields in one place, and the compiler can verify no field name collides with a function called through dot sugar. Map keys are runtime user data; method names are compile-time built-ins. The two namespaces can't be unified.
 
 Bracket access keeps the namespaces visually separated: `m["count"]` is unambiguously a key lookup; `m.count()` is unambiguously a method call. No collision possible.
 
@@ -99,7 +99,7 @@ Sparse-array growth (JS's `arr[100] = "x"` creating `<97 empty items>`) is rejec
 
 ## Methods Added: `.set()` on `array<T>` and `fixed<T>`
 
-Originally `.set()` only existed on maps. For the bracket-write sugar to work consistently, arrays and fixed arrays also need `.set(index, value)`:
+`.set()` exists on maps, arrays and fixed arrays, so the bracket-write sugar works the same everywhere; arrays and fixed arrays take `.set(index, value)`:
 
 - `array<T>.set(lend self, index: int, value: T) -> nothing` — replace at index. Runtime error if out of bounds.
 - `fixed<T>.set(lend self, index: int, value: T) -> nothing` — same. Index out of bounds is a compile error when the index is a literal AND the size is known; runtime error otherwise.
@@ -169,9 +169,7 @@ When the compiler can prove the keys are NOT externally-controlled (e.g., the ma
 
 When the compiler picks perfect hashing or identity hash for a literal, the IDE shows a muted hint: `// perfect hash — zero collisions for these compile-time-known keys`.
 
-### Why not let the user pick from N hashers
-
-C++ template parameters explode when stdlib offers many hashers (`std::unordered_map<K, V, Hash, KeyEqual, Allocator>` with 4 type parameters). Yinz keeps it simple: the safe default covers 95% of use cases (and the cases where overhead matters are exactly the cases that need safety), the fast opt-in covers the security-irrelevant 5%, and the compiler auto-selects perfect/identity hash where it can. No template-parameter explosion.
+Decided: user-selectable hashers rejected. The safe default, the fast opt-in and compiler-chosen perfect/identity hashing cover every case.
 
 ---
 
@@ -189,7 +187,7 @@ If a user genuinely doesn't care about iteration order and wants to skip the ove
 
 ## `set<T>` — Unique-Value Collection (PLANNED — not yet implemented)
 
-> **Status**: Direction locked 2026-06-13; **co-ships with v0.4** (the linting tier) per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `map<K,V>` — NOT a stdlib module.
+> **Status**: Direction locked; **co-ships with v0.4** (the linting tier) per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `map<K,V>` — NOT a stdlib module.
 
 A `set<T>` holds unique values of one type and answers "is value `X` present?" in O(1). It is `map<K,V>` with keys only — same machinery, no values.
 
@@ -248,7 +246,7 @@ shape Event {
 
 Same shape, same semantics, ~33% less memory for this example. Multiply by N entries in an `array<Event>` and the cache benefit compounds.
 
-**Why auto-reorder by default**: Yinz's principle is "fast by design even for inexperienced developers" (Golden Rule 10 + auto-promotion corollary). C/C++ require the user to manually order fields for packing — a perf trap that beginners universally fall into. Rust auto-reorders by default (FFI structs opt out via `#[repr(C)]`); Yinz inherits that pattern but goes further by NOT having an opt-out keyword for pure Yinz code.
+**Why auto-reorder by default**: Yinz's principle is "fast by design even for inexperienced developers" (Golden Rule 7 + auto-promotion corollary). C/C++ require the user to manually order fields for packing — a perf trap that beginners universally fall into. Rust auto-reorders by default (FFI structs opt out via `#[repr(C)]`); Yinz inherits that pattern but goes further by NOT having an opt-out keyword for pure Yinz code.
 
 **Why no opt-out keyword in Yinz**: the only legitimate reasons to pin field layout are:
 1. **FFI to C** — handled by FFI bindings at the boundary, not by polluting the shape declaration. (FFI is v2+ per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md).)
@@ -298,7 +296,7 @@ For the cases where the auto-pick is wrong, two explicit forms:
 - **`.sortFast()`** — forces unstable regardless of element type. Use when the user knows equal items are interchangeable even though they're composite (e.g., `array<Shape>` where the sort key is a UUID and there are no other relevant fields).
 - **`.sortStrict()`** — forces stable regardless of element type. Use when the user knows they need stable behavior even on primitives (the canonical case: multi-step / radix sort, see "Gotcha" below).
 
-Naming follows Golden Rule 12 (human-readable over jargon): `Fast` describes user intent, `Strict` describes the property. Neither uses the word "unstable" (jargon — sounds like "broken" to a non-programmer).
+Naming follows Golden Rule 5 (human-readable over jargon): `Fast` describes user intent, `Strict` describes the property. Neither uses the word "unstable" (jargon — sounds like "broken" to a non-programmer).
 
 ### Multi-step sort detection — compiler upgrades unstable to stable
 
@@ -410,16 +408,16 @@ When `array<T>` runs out of capacity, it grows by **1.5×** (Java/Folly choice).
 
 When the compiler can prove an `array<T>` declaration is never grown (no `.add()`, `.remove()`, `.resize()`, no call to a function whose signature declares `lend` AND may grow the array), THREE things happen:
 
-1. **Codegen auto-promotion (silent perf win)**: the compiler emits `fixed<T, N>` codegen for the binding — stack-allocated, no heap, no growth tracking. The user gets the perf benefit automatically without rewriting source.
+1. **Codegen auto-promotion (silent perf win)**: the compiler emits `fixed<T>` codegen for the binding — stack-allocated, no heap, no growth tracking. The user gets the perf benefit automatically without rewriting source.
 
-2. **Muted IDE hint (informational, always-on)**: per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), the IDE shows a neutral-gray muted hint after the binding (e.g., `// promoted to fixed<int, 3>`). Click-to-make-explicit converts the source to `fixed<int> = [1, 2, 3]`. This surface tells the user the inference happened — they SEE that the compiler made a perf-positive decision, even if they don't act on it. Same protocol as type-inference and ownership-inference muted hints.
+2. **Muted IDE hint (informational, always-on)**: per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), the IDE shows a neutral-gray muted hint after the binding (e.g., `// promoted to fixed — never grown`). Click-to-make-explicit converts the source to `fixed<int> = [1, 2, 3]`. This surface tells the user the inference happened — they SEE that the compiler made a perf-positive decision, even if they don't act on it. Same protocol as type-inference and ownership-inference muted hints.
 
 3. **Tier 3 lint suggestion (visible teaching surface)**: a Tier 3 lint suggestion (yellow squiggle in IDE, surfaced in compile output) recommends rewriting the source as `fixed<T>` explicitly for code-review clarity and future-proofing. Per [`docs/internal/implementation/IMP-linting.md`](IMP-linting.md) rule `prefer-fixed-when-immutable`. This surface is the teaching nudge — the lint says "best practice is to write the stricter form yourself."
 
 ```
-let nums: array<int> = [1, 2, 3]   // muted hint: // promoted to fixed<int, 3>
+let nums: array<int> = [1, 2, 3]   // muted hint: // promoted to fixed — never grown
                                     // yellow squiggle from prefer-fixed-when-immutable
-                                    // (compiler already emitted fixed<int, 3> codegen)
+                                    // (compiler already emitted fixed<int> codegen)
 ```
 
 Why three surfaces (not just two):
@@ -428,12 +426,12 @@ Why three surfaces (not just two):
 - The **codegen** answers "what runs at runtime?" — invisible, auto-applied.
 
 Hover tooltip on the muted hint:
-- **WHAT**: The compiler is treating this `array<int>` as `fixed<int, 3>` because it proved no growth happens. Stack-allocated, no heap, no growth tracking.
+- **WHAT**: The compiler is treating this `array<int>` as `fixed<int>` because it proved no growth happens. Stack-allocated, no heap, no growth tracking.
 - **WHAT INSTEAD**: Click to convert the source to `fixed<int> = [1, 2, 3]`. Behavior identical.
 - **WHY**: `fixed<T>` is the stricter form when the size is known. The compiler picks it automatically when it's safe; the explicit source form makes the choice visible in code review and prevents a future `.add()` from silently switching the codegen back.
 
 Hover tooltip on the yellow lint squiggle:
-- **WHAT**: This `array<int>` is auto-promoted to `fixed<int, 3>` codegen — the perf optimization already happened. This lint is about source-level clarity, not perf.
+- **WHAT**: This `array<int>` is auto-promoted to `fixed<int>` codegen — the perf optimization already happened. This lint is about source-level clarity, not perf.
 - **WHAT INSTEAD**: For explicit code as a best practice, write `fixed<int> = [1, 2, 3]` so the choice is visible to readers.
 - **WHY**: Writing `fixed<T>` explicitly makes the perf characteristic obvious in code review (the next reader sees "stack-allocated, can't grow" without having to trace the access pattern) and prevents a future `.add()` from silently forcing the codegen back to heap allocation — if growth is unintended, the explicit `fixed<T>` makes that future `.add()` a compile error instead of a silent codegen change.
 
@@ -452,9 +450,7 @@ For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-S
 
 `array<Shape>` elements are stored **by value, inline** in the array's heap buffer — variable slot
 width = `sizeof(elem)`, exactly like `array<int>` stores i64 values inline. Shipped in v0.3-M5
-(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3), replacing the original uniform-8-byte-slot
-representation that stored shape elements as pointers. Graduated here from
-`SCRATCH-future-array-by-value-element-storage.md` (now a pointer stub).
+(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3); shape elements are no longer stored as pointers.
 
 ### The forcing bug
 
@@ -466,7 +462,7 @@ by-value representation fixes the root cause, and the guard was **lifted in v0.3
 [`IMP-concurrency.md`](IMP-concurrency.md) for exactly what the lift removed). The array now OWNS
 its element bytes: the heap buffer survives suspension, so the shapes do too, regardless of
 literal-vs-runtime field values. The bug was latent even without suspension — the array never owned
-what it pointed at (a GR3/GR8 violation), it just usually got away with it.
+what it pointed at (a GR1/GR6 violation), it just usually got away with it.
 
 ### One allocation per buffer (D2)
 
@@ -475,37 +471,24 @@ variant (next section) is the SAME single allocation, segmented per field, with 
 computed at compile time from `cap ×` per-field sizes — a layout variant of one representation,
 never a second substrate (the twin-substrate drift class is eliminated by construction).
 
-**Rejected alternatives:**
-- **Per-element heap cells** (the scratch analysis's Option B): one allocation per element violates
-  GR8 (zero-cost), fragments cache lines, multiplies alloc=free accounting, and immediately forces
-  `ynz_array_drop` to become element-aware — the exact leak-hazard class an earlier M3a fix round
-  hit.
-- **LLVM module globals**: stable storage for compile-time-literal-field shapes only — the partial
-  fix whose runtime-field hole WAS the forcing bug.
+Decided: per-element heap cells and LLVM module globals rejected.
 
 ### Element-blind drop, parity-gated (D6)
 
 `ynz_array_drop` stays element-blind, matching pre-M5 semantics. The migration was gated by an
 alloc=free parity check (`YNZ_ALLOC_COUNTER_OUTPUT`) against the pre-migration baseline, with a
 buffer-visibility entry criterion so the gate could not pass vacuously — it ran green, proving no
-NEW leak class vs the pointer representation. **Rejected:** element-aware drop now — YAGNI until
-the ownership model's drop story adds guaranteed heap-owned-field freeing (plan
-`2026-07-03-v0-3-m5-auto-soa` Future Requirements #6). A contingency loud-reject
-(`array<Shape-with-heap-fields>` typeck error) was armed for a parity RED and was not needed.
+NEW leak class vs the pointer representation. Decided: element-aware drop rejected (until the ownership model's drop story adds guaranteed heap-owned-field freeing).
 
 ### `contains` on `array<Shape>` = field-wise value equality (D12)
 
 By-value storage has no pointer-identity substrate, so the migration forced a semantics pick.
 Value equality is the golden-rules-consistent one: `roster.contains(pirate)` reads as content
-membership (GR2), matches every primitive cell's behavior, and matches the non-OOP
+membership (GR4), matches every primitive cell's behavior, and matches the non-OOP
 shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
 `crates/ynz-codegen/src/emit.rs`).
 
-**Rejected alternatives:**
-- **Pointer identity**: has no by-value analogue — there is no stable element pointer to compare.
-- **Whole-element memcmp**: compares garbage padding bytes — both natural alignment padding and
-  M4's false-sharing cache-line pads. Per-field compares are the only layout-honest form; for
-  padded shapes the wrapper GEP at offset 0 is layout-correct.
+Decided: pointer identity and whole-element memcmp rejected.
 
 **String fields compare by content** (`shape_value_eq`; `array<string>.contains` does the same):
 copy-on-store gives a stored string no stable identity, so an identity compare of a stored copy
@@ -735,7 +718,7 @@ Companion length methods:
 
 State in force; the history is in the commits (`git log --grep="fixed<T, N>"`).
 
-- **Cost rule (Golden Rule 8).** A length is a compile-time constant, never a runtime field and never a pointer-and-length pair: `fixed<T, N>` costs what Rust's `[T; N]` costs. Measured on the emitted machine code (`build(a, b, c, d) -> fixed<int, 4>` and `third(xs) -> int`): the same instructions as the Rust program (`mov` + four stores + `ret`; one `mov` + `ret`), no allocation. A `fixed<Shape>` list still keeps one heap cell per item (the existing item representation, unchanged by this work), which Rust's inline `[S; N]` does not.
+- **Cost rule (Golden Rule 6).** A length is a compile-time constant, never a runtime field and never a pointer-and-length pair: `fixed<T, N>` costs what Rust's `[T; N]` costs. Measured on the emitted machine code (`build(a, b, c, d) -> fixed<int, 4>` and `third(xs) -> int`): the same instructions as the Rust program (`mov` + four stores + `ret`; one `mov` + `ret`), no allocation. A `fixed<Shape>` list still keeps one heap cell per item (the existing item representation, unchanged by this work), which Rust's inline `[S; N]` does not.
 - **Type.** `Type::BuiltinFixed.size` is a `FixedLength`: `Known(n)`, `Unknown` (the result of `filter`/`unique`/`limit`/`freeze`, `append`/`prepend`/`concat`), or `OfParam` (the length of an unsized `fixed<T>` parameter: the body is checked once with the placeholder).
 - **One reader of a written `fixed<…>`**: `crates/ynz-typeck/src/fixed_length.rs` (`read_fixed_arguments`). The checker's side (diagnostics, call binding, return-length work) is `check/fixed_lengths.rs`. A length may be written only as the whole type of a parameter, a return value or a shape field (inline shapes included, `check_shape_field_type`); elsewhere, and on any other generic, it is refused (`FixedLengthNotAllowedHere`). A field written without a length is refused (`FixedFieldLengthMissing`).
 - **Return by value.** A `fixed` of known length comes back as `[N x i64]` (plain functions: `abi_return_type`; suspending functions: the cells ride the frame's `Return` region, copied out by the wrapper or the calling state machine). A function whose return type writes no length gets the length every `return` gives, worked out by re-running the body check until no function's length changes (`check`); disagreeing or unknown lengths are refused (`FixedReturnLengthsDiffer`, `FixedReturnLengthUnknown`).

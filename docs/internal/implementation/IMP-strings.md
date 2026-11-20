@@ -138,7 +138,7 @@ This extends [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-de
 
 ## M7 SSO Layout — 24-Byte Struct (ABI Locked)
 
-**Locked 2026-05-18 for M7.** This is ABI-locked — any change requires a semver major bump and a recompile of all dependent binaries.
+**Locked.** This is ABI-locked — any change requires a semver major bump and a recompile of all dependent binaries.
 
 A `YnzString` is exactly 24 bytes with 8-byte alignment. The tag byte lives at offset 23 and is the inline/heap discriminator.
 
@@ -277,8 +277,8 @@ A second CI job is required alongside the normal x86_64 job. This job sets `RUST
 
 - [`docs/internal/implementation/IMP-collections.md`](IMP-collections.md) "String Methods" section (user-facing API)
 - [`docs/reference/REF-strings.md`](../../reference/REF-strings.md) (user spec for string operations)
-- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 4 (compiler does the hard work — SIMD selection)
-- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 10 (efficiency first — UTF-8 is the efficient default for ASCII)
+- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 8 (compiler does the hard work — SIMD selection)
+- [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 7 (efficiency first — UTF-8 is the efficient default for ASCII)
 - `lockin-cpu-bigo.md` Finding #16 (UTF-8 SIMD validation perf gap research)
 - `lockin-type-and-memory.md` Finding #3 (Java UTF-16 21-year cost)
 - `lockin-build-and-crossplat.md` Finding #8 (Python `open()` encoding mistake)

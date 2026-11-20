@@ -15337,7 +15337,7 @@ fn spike_cpu_candidates(
     // `ynz_typeck::cpu_admission::admitted_cpu_group` — the single authority the
     // `parallel_groups` inlay-hint pass also reads. Codegen does NOT re-decide it here: a
     // second composition of the same gate sequence would drift from the hint's composition (the
-    // hint↔binary silent-drift class — see .claude/graveyard.md "Silent Envelope Narrowing").
+    // hint↔binary silent-drift class: a gate narrowed in one place and not the other).
     // When the authority declines (`None`), the whole function lowers sequentially, byte-
     // identical to `--no-auto-parallel`. When it admits, this function maps the admitted group
     // to its representative (first) callee — an EXTRACTION step, not a re-decision.
@@ -27576,7 +27576,7 @@ fn write_and_release_text<'ctx>(
 ///
 /// `int`, `float` and `number` (decimal128) call a runtime print/append entry that formats and
 /// writes straight to the sink: no heap string is built and nothing is released, which is what
-/// keeps `print(n)` at or below its cost before strings carried an owned header (Golden Rule 8).
+/// keeps `print(n)` at or below its cost before strings carried an owned header (Golden Rule 6).
 /// Only `n.toString()` builds an owned string (`to_c_string`). A `T | nothing` union branches on
 /// null and writes `none` or the inner text the same way. Every other type's text comes from
 /// [`to_text`], which says whether it is a heap string it just built (a shape's, array's or map's debug

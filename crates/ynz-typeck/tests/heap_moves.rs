@@ -3,7 +3,7 @@
 // WHY (High tier: memory safety / data integrity): a shape that owns a recursive union's boxes is
 // copied by bytes, and a byte copy shares its boxes with its source; the release (C6) frees each
 // box once. A store that MOVES a value another holder can still reach is a double free; a store
-// that deep-copies a value nobody else holds is a clone where Rust moves (Golden Rule 8). Typeck's
+// that deep-copies a value nobody else holds is a clone where Rust moves (Golden Rule 6). Typeck's
 // record (`TypedModule::heap_moves`) decides, so these tests assert the record directly: no release
 // pass exists yet, so the wrong answer is observable only here and in the allocation counts.
 //
@@ -62,7 +62,7 @@ move_cases! {
     a_binding_moved_into_a_field_is_a_move:
         "function entrypoint() -> nothing {\n  let inner: Inner = { id: 1 }\n  let outer: Outer = { inner: inner, tag: 2 }\n  print(outer.tag)\n}\n",
         [("inner", 4, true)],
-        "a stored binding deep-copied where Rust moves (cost, Rule 8), or a store whose source is still readable moved (double free, High)";
+        "a stored binding deep-copied where Rust moves (cost, Rule 6), or a store whose source is still readable moved (double free, High)";
 
     a_binding_moved_into_a_binding_is_a_move:
         "function entrypoint() -> nothing {\n  let inner: Inner = { id: 1 }\n  let moved = inner\n  print(moved.id)\n}\n",
@@ -92,12 +92,12 @@ move_cases! {
     a_call_result_of_a_function_returning_a_shape_is_a_move_because_return_copies:
         "function make() -> Inner {\n  let inner: Inner = { id: 1 }\n  return inner\n}\nfunction pass(share held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first = make()\n  let second = pass(first)\n  print(second.id)\n}\n",
         [("make()", 2, true), ("pass(first)", 1, true)],
-        "a call result cloned a second time where the callee already returned an owned copy (a `return` of a parameter copies, so the result is fresh: cost, Rule 8), or the returned parameter not copied (double free, High: `v03_m9_c6_borrow_return_param_echo`)";
+        "a call result cloned a second time where the callee already returned an owned copy (a `return` of a parameter copies, so the result is fresh: cost, Rule 6), or the returned parameter not copied (double free, High: `v03_m9_c6_borrow_return_param_echo`)";
 
     a_returned_fresh_literal_is_a_move:
         "function make() -> Inner {\n  return { id: 1 }\n}\nfunction entrypoint() -> nothing {\n  print(make().id)\n}\n",
         [("{ id: 1 }", 1, true)],
-        "a returned literal cloned on return where Rust moves (cost, Rule 8)";
+        "a returned literal cloned on return where Rust moves (cost, Rule 6)";
 
     a_returned_field_read_is_not_a_move:
         "function pick(share outer: Outer) -> Inner {\n  return outer.inner\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n",
@@ -112,5 +112,5 @@ move_cases! {
     a_returned_give_parameter_is_a_move:
         "function own(give held: Inner) -> Inner {\n  return held\n}\nfunction entrypoint() -> nothing {\n  let first: Inner = { id: 1 }\n  let second = own(first)\n  print(second.id)\n}\n",
         [("held", 2, true)],
-        "a returned `give` parameter cloned where the callee owns it and Rust moves (cost, Rule 8)";
+        "a returned `give` parameter cloned where the callee owns it and Rust moves (cost, Rule 6)";
 }

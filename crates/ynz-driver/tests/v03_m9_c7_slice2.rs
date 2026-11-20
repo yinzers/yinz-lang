@@ -578,7 +578,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn binding_a_piece_of_a_fresh_temporary_takes_it_without_a_copy() {
-    // Bug (cost, Golden Rule 8): `let rows = makeBucket().rows` copies the field, where Rust moves
+    // Bug (cost, Golden Rule 6): `let rows = makeBucket().rows` copies the field, where Rust moves
     // it out of the temporary and drops the rest. The one array (header + buffer: 2 allocations)
     // is allocated once, taken by `rows` and freed once (High: a wrong take is a double free).
     at_both_optimization_levels(|no_optimize| {

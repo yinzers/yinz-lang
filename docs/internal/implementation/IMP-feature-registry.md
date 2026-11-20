@@ -290,7 +290,7 @@ The rule's teaching text, severity, and LSP code all have exactly ONE home — t
 | `description` | string | yes | One-sentence description (LSP hover/documentation surface) |
 | `what_template` | string | yes | Parameterized WHAT (`{placeholder}` substitution, same grammar as `diagnostic_template`) |
 | `what_instead_template` | string | yes | Parameterized WHAT-INSTEAD |
-| `why_template` | string | yes | Parameterized WHY — contextual, per Golden Rule 11 |
+| `why_template` | string | yes | Parameterized WHY — contextual, per Golden Rule 3 |
 | `since` | string | yes | Milestone tag (e.g. `"v0.3-M4"`) |
 | `design_doc` | string | yes | Repo-relative path of the design doc that locked the rule |
 
@@ -383,7 +383,7 @@ The generated code (`OUT_DIR/registry.rs`) is `const` arrays with `&'static str`
 
 ## Carve-Outs — When a Parallel Rust Table Is Allowed
 
-The Bouncer pattern ([`.claude/graveyard.md`](../../../.claude/graveyard.md) "scattered-registry-without-SSOT") flags new `pub const`/`pub static` string arrays in `crates/ynz-{diagnostics,typeck,parser}/src/` without a CARVE-OUT comment. The following cases are allowed WITHOUT going through the registry:
+A diff check flags new `pub const`/`pub static` string arrays in `crates/ynz-{diagnostics,typeck,parser}/src/` without a CARVE-OUT comment. The following cases are allowed WITHOUT going through the registry:
 
 ### 1. Test-only intrinsics (`PrimitiveIntrinsicTable::with_test_intrinsic`)
 

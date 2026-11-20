@@ -874,7 +874,7 @@ fn self_value_keyword_lexes_correctly() {
 
 #[test]
 fn self_type_and_self_value_are_distinct() {
-    // WHY: Golden Rule 13 — capital letter = type; lowercase = everything else.
+    // WHY: Golden Rule 10 — capital letter = type; lowercase = everything else.
     // `Self` is the type; `self` is the value. They must lex to different tokens so
     // the parser can enforce where each is valid.
     let self_type = lex_tokens("Self");

@@ -3048,7 +3048,7 @@ fn v03_m3a_p1_shadow_crossing_local() {
     // crossing local `x` must be rejected at typeck with a clean compile error. Codegen
     // assumes one alloca per crossing-local name (the sm_entry alloca); a shadow would
     // require two allocas for the same name, which violates the frame-slot invariant.
-    // The name ambiguity across a suspension boundary also violates Golden Rule 2.
+    // The name ambiguity across a suspension boundary also violates Golden Rule 4.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shadow_crossing_local.ynz"));
     assert_eq!(
         code, 1,
@@ -4714,7 +4714,7 @@ fn v03_m3a_p3_for_shape_loop_var_survives_wait() {
 
 #[test]
 fn v03_m3a_p3_for_shape_loop_var_alloc_one() {
-    // WHY: GR8 invariant — an array<Shape> loop var must add ZERO per-element and
+    // WHY: GR6 invariant — an array<Shape> loop var must add ZERO per-element and
     // per-iteration allocations. Since the v0.3-M5 P2 by-value ABI, shape element
     // BYTES live inline in the (counted, FRAGO 005) array buffer — no per-element
     // globals or heap copies — so the constant is alloc=3 (task frame + array
@@ -6276,8 +6276,8 @@ fn v03_m3d_worth_it_loop_callee_fires() {
 // admitted (FIRE) class with no live `.ynz` fixture would classify fine yet never be proven to
 // produce the right value at runtime. Both runtime matrices below hand-listed which classes
 // FIRE, so adding a newly-admitted class to `cpu_result_abi_supports` did not break the build
-// until someone manually wired a runtime test (graveyard corpse "Hand-Listed Test Over a Closed
-// Enumerable Domain"; the project bar is compile-forced exhaustiveness for this closed domain).
+// until someone manually wired a runtime test (a hand-listed test over a closed enumerable
+// domain was tried and removed; the project bar is compile-forced exhaustiveness for it).
 //
 // `runtime_axis_coverage` closes that gap for BOTH the slice-2 distinct-callee matrix
 // (`v03_m3d_return_class_*`) AND the slice-3 same-callee matrix (`v03_m3d_same_callee_*`): it is
@@ -7500,7 +7500,7 @@ fn v03_m3g_background_fused_group_detach_completes_before_exit_no_leak() {
 // (heap-pointer, wide-value decimal128, i64→i1 bool truncation, error-capable tagged pair)
 // intersects a non-trivial PLACEMENT (if-arm, match-arm) or same-callee distinctness inside an
 // arm. Those intersections are where silent miscompiles hid in this codegen area's history (the
-// Silent-Envelope and parallel-per-type-dispatch corpses). Every FIRE cell asserts 2 spawns +
+// silent envelope narrowing and parallel per-type dispatch). Every FIRE cell asserts 2 spawns +
 // byte-identical; every DECLINE cell asserts 0 spawns + byte-identical. The byte-identical check
 // plus the determinism harness (cross_impl_consistency.rs runs each fixture twice) supply the
 // multiple-run garbage detection for the frame-slot-touching cells. If you relax any
@@ -8853,7 +8853,7 @@ fn v03_m3b_p4_share_read_pair_byte_identical() {
 
 #[test]
 fn v03_m3b_p4_share_read_pair_sequentializes_under_floor() {
-    // test-ratchet: the conservative floor (Golden Rule 5 soundness > Rule 10 perf) forfeits
+    // test-ratchet: the conservative floor (Golden Rule 2 soundness > Rule 7 perf) forfeits
     // read-only-mutable-heap parallelism. A mutable-heap arg is unconditionally a potential
     // aliased write under the floor, which does not trust any per-form ownership classifier
     // (that approach missed five distinct write forms across three gate rounds), so the pair
@@ -9043,7 +9043,7 @@ fn v03_m3b_p4_mutable_heap_share_read_byte_identical() {
 
 #[test]
 fn v03_m3b_p4_mutable_heap_share_read_sequentializes_under_floor() {
-    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
+    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR2 > GR7).
     // A mutable-heap arg is unconditionally a potential write under the floor, so the pair
     // sequentializes (≈300ms) in both modes. The assertion locks that sound behavior.
     //
@@ -9090,7 +9090,7 @@ fn v03_m3b_p4_bare_read_heap_byte_identical() {
 
 #[test]
 fn v03_m3b_p4_bare_read_heap_sequentializes_under_floor() {
-    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
+    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR2 > GR7).
     // A mutable-heap arg is unconditionally a potential write under the floor, so two bare-read
     // heap calls sequentialize (≈300ms) in both modes. The assertion locks that sound behavior.
     //
@@ -11129,9 +11129,8 @@ fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
 //
 // `prepare_bg_arg_for_ctx` used to decide "does the task need a value of its own?" by matching
 // an `Expr::` variant against a `Type::` variant — an explicit `.copy()` of an `array`, and a
-// bare `BgOwnership::Give` on a `map`. Both were wrong in the way `.claude/corpses.md`
-// "Enumerating syntactic sites instead of threading the whole-program ownership analysis"
-// predicts, and the three fixtures below are the three ways they were wrong. Each was verified
+// bare `BgOwnership::Give` on a `map`. Both were wrong in the way enumerating syntactic sites
+// instead of threading the whole-program ownership analysis always is, and the three fixtures below are the three ways they were wrong. Each was verified
 // RED against the pre-fix binary; the numbers in each WHY are that measurement.
 
 #[test]

@@ -1,10 +1,10 @@
 ---
 name: "REF-doc-comments"
-description: "A // comment block immediately above a declaration — with no blank line between it and the declaration — is the doc comment for that item. It shows in IDE hover and in ynz doc generated output."
+description: "A /// comment block immediately above a declaration — with no blank line between it and the declaration — is the doc comment for that item. It shows in IDE hover."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-16"
+updated_at: "2026-11-19"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,49 +13,54 @@ metadata:
 
 # Doc Comments
 
-A `//` comment block immediately above a declaration — with no blank line between it and the declaration — is the doc comment for that item. It shows in IDE hover and in `ynz doc` generated output.
+A `///` comment block immediately above a declaration — with no blank line between it and the declaration — is the doc comment for that item. It shows in IDE hover.
 
-Regular `//` comments anywhere else (inside function bodies, with a blank line above the declaration) are for readers of the source only. The IDE and doc generator ignore them.
+Regular `//` comments are for readers of the source only. The IDE ignores them.
 
 ---
 
 ## On functions
 
 ```ynz
-// Fetches a user by their unique ID.
-// Returns none if the user doesn't exist.
-// Errors on database connection failure.
+/// Fetches a user by their unique ID.
+/// Returns none if the user doesn't exist.
+/// Errors on database connection failure.
 export function fetchUser(id: UserId) -> maybe<User> errors {
-  // This note is inside the body — never shows in hover or docs
+  // This note is a regular comment — never shows in hover
 }
 ```
 
-Hover over a call to `fetchUser` shows the three `//` lines as prose, then the function signature as a colored code block. No `@param` or `@returns` tags needed — the types tell you the structure, the comment tells you the behavior.
+Hover over a call to `fetchUser` and the IDE shows the three `///` lines as text, then the function signature as highlighted code. You don't need `@param` or `@returns` tags: the signature already shows the types, and the comment says what the function does.
 
 ---
 
 ## On shapes
 
+Put a `///` block above the shape, and above any field you want to document:
+
 ```ynz
-// Represents a player in the game world.
+/// Represents a player in the game world.
 export shape Player {
-  name: string          // The player's display name.
-  health: int           // Current HP, clamped 0–100. Never negative.
-  position: Position    // World-space coordinates in meters.
+  /// The player's display name.
+  name: string
+  /// Current health, from 0 to 100. Never negative.
+  health: int
+  /// Where the player stands in the game world, in meters.
+  position: Position
 }
 ```
 
-Hover over `Player` at any use site shows the shape's fields in a colored code block with the doc comment above it.
+Hover over `Player` anywhere you use it and the IDE shows the shape's fields as highlighted code, with the doc comment above them.
 
 ---
 
-## On options types
+## On options
 
 ```ynz
-// The category of a tradable asset on Alpaca.
+/// The category of a tradable asset on Alpaca.
 export options AssetClass {
-  us_equity
-  us_option
+  usEquity
+  usOption
   crypto: `Cryptocurrency`
   ipo:    `IPO Indication of Interest`
 }
@@ -66,24 +71,24 @@ export options AssetClass {
 ## On constants
 
 ```ynz
-// Maximum health any player can have.
-export const MAX_HEALTH = 100
+/// Maximum health any player can have.
+export const maxHealth = 100
 ```
 
 ---
 
 ## The blank-line rule
 
-A blank line between the comment and the declaration breaks the association. The comment becomes free-floating source-only trivia.
+A blank line between the comment and the declaration breaks the association. The comment is then ignored.
 
 ```ynz
-// This will NOT show as a doc comment — blank line breaks it.
+/// This will NOT show as a doc comment — blank line breaks it.
 
 export function greet(share self: Player) -> string {
 ```
 
 ```ynz
-// This WILL show as a doc comment — immediately above with no gap.
+/// This WILL show as a doc comment — immediately above with no gap.
 export function greet(share self: Player) -> string {
 ```
 
@@ -91,13 +96,13 @@ export function greet(share self: Player) -> string {
 
 ## Inside function bodies
 
-`//` inside a function body is always a private implementation note — never a doc comment, regardless of position.
+Use `//` inside a function body. It is always a private note for people reading the file — never a doc comment.
 
 ```ynz
-export function process(share data: array<int>) -> int {
+export function countActive(share players: array<Player>) -> int {
   // This is only visible when reading this file
-  const filtered = data.where(n => n > 0)
-  return filtered.sum()
+  const active = players.filter(player => player.health > 0)
+  return active.count()
 }
 ```
 
@@ -105,4 +110,4 @@ export function process(share data: array<int>) -> int {
 
 ## Non-exported items
 
-Doc comments on non-exported items still show in IDE hover within the same project. They are excluded from `ynz doc` generated output, since external users cannot reach those items.
+A `///` block above a function, shape or options declaration works whether or not it is exported.

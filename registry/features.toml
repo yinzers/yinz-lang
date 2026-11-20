@@ -166,7 +166,7 @@ since = "M8"
 name = "wait"
 token = "Wait"
 since = "M8"
-# Rule 11 hover docs — v0.3-M3b (ordering-barrier semantics locked 2026-06-05)
+# Rule 3 hover docs — v0.3-M3b (ordering-barrier semantics locked 2026-06-05)
 hover_what = "Forces this call to complete before execution continues. Also joins any prior auto-parallel in-flight work. Suspension at I/O points is automatic and does not require `wait`."
 hover_what_instead = "Write `wait foo()` when `foo` must finish before the next statement runs AND the two operations are independent (different resources, no value threaded between them). For data-dependent calls, the compiler already orders them — `wait` is redundant."
 hover_why = "`wait` is an ordering barrier, not a suspension trigger. The compiler auto-inserts suspension at every call that transitively reaches a blocking operation — you never write `wait` for that. `wait` is the tool for causal ordering the compiler cannot infer: charge a payment, THEN send a confirmation email to a different service."
@@ -175,7 +175,7 @@ hover_why = "`wait` is an ordering barrier, not a suspension trigger. The compil
 name = "background"
 token = "Background"
 since = "M8"
-# Rule 11 hover docs — v0.3-M3b (give/copy inference + real routing semantics)
+# Rule 3 hover docs — v0.3-M3b (give/copy inference + real routing semantics)
 hover_what = "Schedules a function to run as a concurrent task outside the current function's lifetime. The compiler infers whether to move or copy each argument based on whether you use it after the call."
 hover_what_instead = "Write `background fn(value)` — the compiler picks `.give` (zero-copy move) when `value` is not used after, or `.copy` when it is. Write `background fn(value.give)` or `background fn(value.copy)` to be explicit. Functions whose parameter is `share` cannot be called via `background` — a shared borrow would dangle if the caller returns first."
 hover_why = "A `background` task runs concurrently with whatever follows the call. Functions that transitively reach a blocking operation route to the I/O thread pool (cooperative scheduling); functions with no blocking calls route to the CPU thread pool. The IDE shows the routing decision as a muted comment at the call site."
@@ -1227,7 +1227,7 @@ triggers = "A measured relay workload where the extra `.copy()` per hop is a rea
 [[deferred_language_feature]]
 name = "seq-cst-ordering-opt-in"
 substitute = "Use the default acquire-release ordering, which is correct for every synchronization pattern that appears in v0.3-M4 user code: channel send/receive handoff and Arc reference counting. Sequential consistency (a global total order across multiple concurrent operations) is needed only for unusual multi-producer/multi-consumer patterns whose correctness contract depends on a global total order — rare even in systems code, and not expressible in v0.3."
-why = "Yinz's channel and shared-state primitives use acquire-release ordering by default (cheaper on ARM, where seq-cst needs barriers on both loads and stores; essentially free on x86; correct for handoff/lock/refcount patterns per IMP-no-function-coloring 'Atomic Ordering Default'). The design doc reserves an explicit named opt-in for the rare global-total-order case (candidate `atomic.add(n).withGlobalOrdering()`, 'final naming TBD when concurrency primitives ship'). v0.3-M4 Phase 0 lock: DEFER the opt-in surface — no v0.3-M4 workload requires seq-cst, the naming is unresolved, and shipping an unused ordering-tunable now would surface memory-ordering jargon (Golden Rule 12) with no consumer. Acquire-release is the shipped default; the opt-in lands when a real workload needs it. The roadmap pre-authorizes this deferral."
+why = "Yinz's channel and shared-state primitives use acquire-release ordering by default (cheaper on ARM, where seq-cst needs barriers on both loads and stores; essentially free on x86; correct for handoff/lock/refcount patterns per IMP-no-function-coloring 'Atomic Ordering Default'). The design doc reserves an explicit named opt-in for the rare global-total-order case (candidate `atomic.add(n).withGlobalOrdering()`, 'final naming TBD when concurrency primitives ship'). v0.3-M4 Phase 0 lock: DEFER the opt-in surface — no v0.3-M4 workload requires seq-cst, the naming is unresolved, and shipping an unused ordering-tunable now would surface memory-ordering jargon (Golden Rule 5) with no consumer. Acquire-release is the shipped default; the opt-in lands when a real workload needs it. The roadmap pre-authorizes this deferral."
 ships_in = "v0.4+"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "A real workload whose correctness contract requires a global total order across multiple concurrent atomic operations (seq-cst), OR the v0.4 concurrency-polish milestone — at which point the named opt-in surface (`.withGlobalOrdering()` or its final name) is designed and shipped."
@@ -1696,7 +1696,7 @@ what_instead_template = "Check which variant it holds first, then use it inside 
 why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. Inside an `is {variant}` arm the compiler knows the tag matched, so `{value}` is a `{variant}` there and can be passed on."
 
 # The two other recoveries of `UnionWhereVariantExpected`, selected by `union_where_variant_expected_diag`
-# so the WHAT-INSTEAD only ever names code that compiles today (Golden Rule 11). They have no
+# so the WHAT-INSTEAD only ever names code that compiles today (Golden Rule 3). They have no
 # `DiagnosticKind` variant of their own: the diagnostic carries `UnionWhereVariantExpected`.
 # `{value}`, `{union}`, `{variant}` and `{needs}` are the base template's slots; `{others}` is the
 # union's other variants, backticked and comma-separated ("`nothing`", "`int`, `string`").
@@ -2617,7 +2617,7 @@ placement_category = "Informational"
 description = "Shows the ownership modifier the compiler picks at a function call site; also fires at background call sites when .copy() arg exceeds 64 bytes to suggest .give instead"
 example_source = "foo(player)"
 example_hint_rendered = "share (read-only — matches foo's signature)"
-# Rule 11 hover docs. One domain, two hint forms, so one tooltip explains both: the ownership word
+# Rule 3 hover docs. One domain, two hint forms, so one tooltip explains both: the ownership word
 # at a call (`share`/`lend`/`give`) and the store hint (`handed to `list``, v0.3-M9 C5a, Patrick
 # 2026-11-13: `git log --grep="hands it over"`). The store wording is the one the ConsumedByStore
 # diagnostic uses ("storing a value hands it over").
@@ -2685,21 +2685,31 @@ domain = "copy_points"
 placement_category = "Addition"
 description = "Shows where a trivially-copyable value is implicitly copied at a call site"
 example_source = "let n: int = 5"
-example_hint_rendered = ".copy (8 bytes, trivially copyable)"
+example_hint_rendered = ".copy() (8 bytes, trivially copyable)"
 
+# Replacement category (not an inlay hint): the compiler already uses the stricter form, so the
+# editor marks the `array` / `let` token the user wrote with a dotted underline (semantic-token
+# modifier `promotable`) instead of adding text. Hover on the token shows this WHAT / WHAT INSTEAD /
+# WHY; the `refactor.rewrite` code action on it writes the stricter keyword into the source.
 [[muted_hint_domain]]
 domain = "array_to_fixed_promotion"
 placement_category = "Replacement"
-description = "Shows when the compiler promotes array<T> to fixed<T> because the value is never grown"
+description = "Marks the `array` in an `array<T>` annotation with a dotted underline when the compiler stores the value as a fixed-size `fixed<T>` because nothing ever grows it"
 example_source = "let nums: array<int> = [1, 2, 3]"
-example_hint_rendered = "// promoted to fixed<int, 3> — never grown"
+example_hint_rendered = "`array` carries a dotted underline; hover shows why, and the rewrite action turns it into `fixed<int>`"
+hover_what = "The compiler stores this value as a fixed-size `fixed<T>` instead of a growable `array<T>`, because nothing in this function ever grows it."
+hover_what_instead = "Write `fixed` instead of `array` in the annotation, for example `let nums: fixed<int> = [1, 2, 3]`, or use the \"Write 'fixed' instead of 'array'\" action on the underlined word. If you do need to add items later, keep `array`."
+hover_why = "A fixed-size list never has to grow, so it is cheaper to create and use than a growable `array`, and writing `fixed` tells readers its size will not change."
 
 [[muted_hint_domain]]
 domain = "let_to_const_promotion"
 placement_category = "Replacement"
-description = "Shows when a let binding is effectively const because it is never reassigned, mutated, or lent"
+description = "Marks a `let` with a dotted underline when the compiler treats the binding as `const` because nothing ever reassigns, changes or lends it"
 example_source = "let count = 5"
-example_hint_rendered = "// effectively const — never reassigned"
+example_hint_rendered = "`let` carries a dotted underline; hover shows why, and the rewrite action turns it into `const count = 5`"
+hover_what = "The compiler treats this `let` as a `const`, because nothing in this function ever reassigns it, changes it, or lends it out to be changed."
+hover_what_instead = "Write `const` instead of `let`, for example `const count = 5`, or use the \"Write 'const' instead of 'let'\" action on the underlined word. If you do need to change it later, keep `let`."
+hover_why = "A value that never changes can be treated as fixed for the whole function, and writing `const` tells readers at a glance that it will not change."
 
 # v0.3-M4: shows the default capacity the compiler fills in for a `channel<T>()` construction with
 # no explicit capacity argument. Addition category — the plain muted `64` renders inside the empty

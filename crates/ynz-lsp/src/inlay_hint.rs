@@ -1,7 +1,11 @@
 //! `textDocument/inlayHint` LSP handler — teaching annotations for the editor.
 //!
-//! Fires 10 of the registry-defined muted-hint domains; the rest return
+//! Fires 8 of the registry-defined muted-hint domains; the rest return
 //! empty lists (protocol-only or awaiting their underlying analysis).
+//!
+//! The two Replacement domains (`array_to_fixed_promotion`,
+//! `let_to_const_promotion`) are not inlay hints: they mark the existing
+//! `array` / `let` token instead — see `replacement_marker`.
 //!
 //! # Firing domains
 //!
@@ -9,9 +13,7 @@
 //! |---|---|---|
 //! | `variable_type` | Addition | `: TypeName` after un-annotated `let` |
 //! | `ownership_call_site` | Informational | `share`/`lend`/`give` after call args |
-//! | `copy_points` | Informational | `.copy (N bytes)` for trivially-copyable args |
-//! | `array_to_fixed_promotion` | Replacement | decoration on never-grown arrays |
-//! | `let_to_const_promotion` | Replacement | decoration on never-mutated lets |
+//! | `copy_points` | Informational | `.copy() (N bytes)` for trivially-copyable args |
 //! | `wait_points` | Addition | muted `wait` before suspending call sites |
 //! | `background_routing` | Informational | I/O-pool vs CPU-pool routing comment |
 //! | `parallel_groups` | Informational | concurrent-statement overlap comment |
@@ -20,7 +22,7 @@
 //!
 //! Every firing hint carries a WHAT / WHAT-INSTEAD / WHY hover tooltip sourced
 //! from the registry via `ynz_registry::lsp_inlay_hint_hover_for`.  Per Golden
-//! Rule 11 (compiler is a teacher), muted annotations without a hover tooltip
+//! Rule 3 (compiler is a teacher), muted annotations without a hover tooltip
 //! are teaching surfaces the user cannot learn from.
 //!
 //! # Registered-but-not-firing domains (empty list, no error)
@@ -46,11 +48,10 @@
 use lsp_types::{
     InlayHint, InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, Position, Range, TextEdit,
 };
-use ynz_diagnostics::{Severity, SourceSpan};
+use ynz_diagnostics::Severity;
 use ynz_typeck::queries::check_query;
 use ynz_typeck::{
-    array_to_fixed_promotion_hints, auto_arc_hints, background_routing_hints,
-    channel_capacity_hints, copy_point_hints, let_to_const_promotion_hints,
+    auto_arc_hints, background_routing_hints, channel_capacity_hints, copy_point_hints,
     ownership_call_site_hints, parallel_group_hints, variable_type_hints, wait_points_hints,
     DEFAULT_CHANNEL_CAPACITY,
 };
@@ -121,44 +122,6 @@ fn type_insertion_edit(
             end: pos,
         },
         new_text: format!(": {type_text}"),
-    }
-}
-
-/// Build the TextEdit that replaces `let` (3 bytes at `let_start`) with `const`.
-fn let_to_const_edit(
-    text: &str,
-    let_start: usize,
-    table: &crate::position::LineTable,
-    encoding: crate::capabilities::PositionEncoding,
-) -> TextEdit {
-    let start = table.byte_offset_to_position(text, let_start.min(text.len()), encoding);
-    let end = table.byte_offset_to_position(text, (let_start + 3).min(text.len()), encoding);
-    TextEdit {
-        range: lsp_types::Range { start, end },
-        new_text: "const".to_string(),
-    }
-}
-
-/// Build the TextEdit that replaces the `array` keyword with `fixed` in a type
-/// annotation, using the byte range carried in the `PromotionHint`.
-///
-/// The `array` token's span comes from `Type::Generic { name_span, .. }` in the
-/// AST — it covers exactly the `array` keyword, never the `<int>` type arguments.
-/// Applying this edit converts `array<int>` → `fixed<int>` while leaving the
-/// element type and initializer untouched, producing valid type-checking source.
-///
-/// Time: O(1).  Space: O(1).
-fn array_to_fixed_edit(
-    text: &str,
-    array_span: SourceSpan,
-    table: &crate::position::LineTable,
-    encoding: crate::capabilities::PositionEncoding,
-) -> TextEdit {
-    let start = table.byte_offset_to_position(text, array_span.start.min(text.len()), encoding);
-    let end = table.byte_offset_to_position(text, array_span.end.min(text.len()), encoding);
-    TextEdit {
-        range: lsp_types::Range { start, end },
-        new_text: "fixed".to_string(),
     }
 }
 
@@ -243,50 +206,9 @@ pub fn inlay_hint_response(
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
             hints.push(make_hint(
                 pos,
-                format!(".copy ({}, trivially copyable)", h.size_text),
+                format!(".copy() ({}, trivially copyable)", h.size_text),
                 InlayHintKind::PARAMETER,
                 "copy_points",
-            ));
-        }
-    }
-
-    // ── Domain 4: array_to_fixed_promotion (Replacement) ─────────────────────
-
-    for h in array_to_fixed_promotion_hints(&state.db, sf) {
-        if !in_viewport(h.position, vp_start, vp_end) {
-            continue;
-        }
-        if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            // Build click-to-make-explicit edit when the `array` keyword span is
-            // available.  `type_keyword_span` is None only when the type annotation
-            // can't be located (graceful no-edit path — no panic, no missing hint).
-            let text_edits = h
-                .type_keyword_span
-                .map(|span| vec![array_to_fixed_edit(text, span, table, state.encoding)]);
-            hints.push(make_hint_with_edit(
-                pos,
-                h.label.clone(),
-                InlayHintKind::TYPE,
-                "array_to_fixed_promotion",
-                text_edits,
-            ));
-        }
-    }
-
-    // ── Domain 5: let_to_const_promotion (Replacement) ───────────────────────
-
-    for h in let_to_const_promotion_hints(&state.db, sf) {
-        if !in_viewport(h.position, vp_start, vp_end) {
-            continue;
-        }
-        if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            let edit = let_to_const_edit(text, h.position, table, state.encoding);
-            hints.push(make_hint_with_edit(
-                pos,
-                h.label.clone(),
-                InlayHintKind::TYPE,
-                "let_to_const_promotion",
-                Some(vec![edit]),
             ));
         }
     }

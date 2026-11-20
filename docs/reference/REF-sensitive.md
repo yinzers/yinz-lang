@@ -22,8 +22,10 @@ Values from environment variables and other secret sources are automatically pro
 `env.get()` returns `sensitive string` by default. No extra annotation needed:
 
 ```
-let apiKey = env.get(`STRIPE_KEY`).or(``)      // sensitive string
-let dbPass = env.get(`DB_PASSWORD`).or(``)     // sensitive string
+let foundApiKey = env.get(`STRIPE_KEY`)         // a maybe: the key, or nothing
+let apiKey = foundApiKey.or(``)                 // sensitive string
+let foundDatabasePassword = env.get(`DB_PASSWORD`)     // a maybe: the password, or nothing
+let databasePassword = foundDatabasePassword.or(``)  // sensitive string
 let appName = `My App`                          // regular string
 ```
 
@@ -31,10 +33,11 @@ let appName = `My App`                          // regular string
 
 ## Auto-redaction in all output
 
-Sensitive values print as `[REDACTED]` everywhere — `print()`, log statements, string interpolation, and default type representations:
+A sensitive value prints as `[REDACTED]` everywhere: `print()`, log lines, text with `${...}` in it, and when you print a whole shape that holds one:
 
 ```
-let apiKey = env.get(`STRIPE_KEY`).or(``)
+let foundApiKey = env.get(`STRIPE_KEY`)
+let apiKey = foundApiKey.or(``)
 
 print(apiKey)                                   // [REDACTED]
 log(`Connecting with key: ${apiKey}`)           // Connecting with key: [REDACTED]
@@ -45,22 +48,24 @@ shape Config {
   port: number
 }
 
-let config: Config = { appName: `MyApp`, apiKey: env.get(`API_KEY`).or(``), port: 3000 }
+let foundConfigKey = env.get(`API_KEY`)
+let configKey = foundConfigKey.or(``)
+let config: Config = { appName: `MyApp`, apiKey: configKey, port: 3000 }
 print(config)
 // Config { appName: `MyApp`, apiKey: [REDACTED], port: 3000 }
 ```
 
 ---
 
-## `.reveal()` — explicit opt-in to access the raw value
+## `.reveal()` — ask for the real value
 
 ```
-// Pass to services that actually need the secret
-let conn = database.connect(dbPass.reveal())
-let res = request.post(url, { headers: { authorization: apiKey.reveal() } })
+// Pass the secret only to code that actually needs it
+let connection = database.connect(databasePassword.reveal())
+let response = request.post(url, { headers: { authorization: apiKey.reveal() } })
 ```
 
-The IDE warns when you reveal in output:
+The IDE warns you when you print a revealed value:
 
 ```
 print(apiKey.reveal())
@@ -75,49 +80,48 @@ print(apiKey.reveal())
 Not just env vars — mark any value sensitive:
 
 ```
-let ssn: sensitive string = sensitive(`123-45-6789`)
-let card: sensitive string = sensitive(rawCardNumber)
+let socialSecurityNumber: sensitive string = sensitive(`123-45-6789`)
+let cardNumber: sensitive string = sensitive(rawCardNumber)
 
-print(ssn)    // [REDACTED]
+print(socialSecurityNumber)    // [REDACTED]
 ```
 
 ---
 
-## Sensitivity propagates through string operations
+## Text made from a sensitive value stays sensitive
 
-String operations on sensitive values stay sensitive. Non-string extractions don't:
+Changing or joining a sensitive string gives another sensitive string. A plain fact about it, such as its length, is not sensitive:
 
 ```
-let key = env.get(`API_KEY`).or(``)    // sensitive string
+let foundKey = env.get(`API_KEY`)      // a maybe: the key, or nothing
+let key = foundKey.or(``)              // sensitive string
 let upper = key.toUpperCase()          // still sensitive string
 let trimmed = key.trim()               // still sensitive string
 let combined = `Bearer ${key}`         // still sensitive string
 
-let length = key.count()               // number — NOT sensitive (length isn't secret)
+let length = key.count()               // int — NOT sensitive (length isn't secret)
 ```
 
 ---
 
 ## Sensitive values in error messages
 
-Error messages that might contain sensitive data are auto-redacted:
+Error messages hide sensitive data automatically:
 
 ```
 // Error output when database connection fails:
 // ERROR: Could not connect to database
 //   URL: [REDACTED]
-//   (use --reveal-sensitive flag for local debugging)
 ```
 
 ---
 
 ## Development flag
 
-> **Status**: The `--reveal-sensitive` flag is locked design but not yet
-> shipped. It targets a future audit batch.
+> **Not available yet.** The `--reveal-sensitive` flag is planned but does not exist today.
 
 ```
 ynz run entrypoint.ynz --reveal-sensitive    // shows all sensitive values in output
 ```
 
-This flag is stripped from release builds. `ynz build --release` makes it unavailable, preventing accidental exposure in production.
+The flag will not work in release builds. `ynz build --release` leaves it out, so secrets can't leak in production by accident.

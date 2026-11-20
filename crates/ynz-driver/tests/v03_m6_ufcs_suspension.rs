@@ -67,7 +67,9 @@ fn ynz_run_with_timeout(name: &str, timeout: Duration) -> (String, String, i32, 
     (stdout, stderr, code, timed_out)
 }
 
-const RUN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Liveness budget, not a performance assertion: an order of magnitude over the observed run so
+/// a contended parallel test lane never flips it.
+const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[test]
 fn v03_m6_ufcs_transitive_suspension_runs_and_exits_zero() {
@@ -119,7 +121,7 @@ fn v03_m6_ufcs_explicit_wait_on_method_call_suspends() {
 #[test]
 fn v03_m6_ufcs_mixed_subexpr_rejects_both_legs() {
     // WHY: suspending calls in sub-expression position are a PERMANENT typeck reject
-    // (Golden Rule 7 / check.rs Check 3). In `fetchBase() + ship.crew()` BOTH legs suspend;
+    // (Golden Rule 9 / check.rs Check 3). In `fetchBase() + ship.crew()` BOTH legs suspend;
     // UFCS parity demands the teaching error fire for the UFCS leg too. Pre-fix: the
     // subexpr-position walker is MethodCall-blind — only `fetchBase` is reported, and the
     // UFCS leg would silently mis-lower synchronously.

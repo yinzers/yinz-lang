@@ -442,7 +442,7 @@ fn red_opt_share_lend_alias_rejected_at_compile_time() {
         assert!(
             stderr.contains(phrase),
             "aliasing rejection diagnostic must contain {phrase:?} (teaching shape, \
-             Golden Rule 11); got:\n{stderr}"
+             Golden Rule 3); got:\n{stderr}"
         );
     }
 }

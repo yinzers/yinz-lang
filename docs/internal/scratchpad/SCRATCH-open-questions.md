@@ -48,7 +48,7 @@ When v0.15 (`request`, outbound) and v0.21 (`server`, inbound) come up for imple
 
 **Tier 1 — High-level helpers:** `request.get(url)`, `request.post(url, body)`, `request.put(url, body)`, `request.delete(url)`, `request.websocket(url)`. The common-case API, dot-method-first.
 
-**Tier 2 — Mid-level builder:** `request.build()` returns a configurable Request value; the caller mutates it step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, then `req.send()`). No method chaining per Golden Rule 7.
+**Tier 2 — Mid-level builder:** `request.build()` returns a configurable Request value; the caller mutates it step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, then `req.send()`). No method chaining per Golden Rule 9.
 
 **Tier 3 — Low-level socket access:** `net.tcp.connect(host, port)` returning a raw socket. The floor of the user-accessible network stack. Framework authors can build their own routing layer, their own protocol implementations, anything on top of this. Going lower means FFI (deferred to v2+).
 

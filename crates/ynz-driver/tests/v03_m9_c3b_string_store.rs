@@ -10,7 +10,7 @@
 //! are what turns red if a release is ever wired to a store that aliased.
 //!
 //! All are High tier (memory safety: a stored string freed twice or freed while another holder
-//! reads it; Golden Rule 8 cost: a copy where Rust moves). One fixture per store kind, three
+//! reads it; Golden Rule 6 cost: a copy where Rust moves). One fixture per store kind, three
 //! tests each: the count (also asserts stdout), and AddressSanitizer at both optimization levels.
 
 mod support;

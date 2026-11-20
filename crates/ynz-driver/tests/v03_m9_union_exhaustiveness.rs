@@ -1,5 +1,5 @@
 //! v0.3-M9 C1d: the union exhaustiveness check counts NON-shape variants. Tier: High (a state
-//! machine over union variants: a missed variant is a silent wrong behavior, Golden Rule 5).
+//! machine over union variants: a missed variant is a silent wrong behavior, Golden Rule 2).
 //!
 //! Pre-fix, `check_stmt_match` skipped every variant that is not a shape, so a match on
 //! `Circle | int` with only `is Circle` and no `else` compiled (the fixture's first test failed

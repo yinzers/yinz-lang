@@ -21,8 +21,8 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Principle | Canonical file | What's in it |
 |-----------|----------------|--------------|
-| **Non-OOP model** | [`.claude/rules/non-oop.md`](../.claude/rules/non-oop.md) | Locked r10–r13 (2026-05-16). Data shapes + standalone functions + UFCS dot-call sugar. NO methods inside shapes. NO `override` keyword. `extends` is data-only inheritance. `follows` checked by structural function-signature matching. `dynamic Foo` for runtime polymorphism. Drift back into OOP is the most common modeling mistake. |
-| **Dot-postfix rule** | [`.claude/rules/dot-postfix.md`](../.claude/rules/dot-postfix.md) | Locked r4 (2026-05-15). `value.field` (no parens) = data access; `value.method()` (parens) = action. Applies to UFCS method calls, `.copy()`, `.freeze()`, intrinsics, type-attached constants. Does NOT apply to ownership modifiers (compiler-inferred at call sites only). |
+| **Non-OOP model** | [`.claude/rules/non-oop.md`](../.claude/rules/non-oop.md) | Data shapes + standalone functions + UFCS dot-call sugar. NO methods inside shapes. NO `override` keyword. `extends` is data-only inheritance. `follows` checked by structural function-signature matching. `dynamic Foo` for runtime polymorphism. Drift back into OOP is the most common modeling mistake. |
+| **Dot-postfix rule** | [`.claude/rules/dot-postfix.md`](../.claude/rules/dot-postfix.md) | `value.field` (no parens) = data access; `value.method()` (parens) = action. Applies to UFCS method calls, `.copy()`, `.freeze()`, intrinsics, type-attached constants. Does NOT apply to ownership modifiers (compiler-inferred at call sites only). |
 | **Examples use real operations** | [`.claude/rules/dot-postfix.md`](../.claude/rules/dot-postfix.md) | Every example in spec/design/plan/rule files MUST use real Yinz operations from the current scope — no invented APIs for illustration. |
 
 ## Language Design
@@ -46,7 +46,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Control flow | [`docs/internal/implementation/IMP-control-flow.md`](internal/implementation/IMP-control-flow.md) | No standalone `else`, multi-case `if`, exhaustiveness, jump table optimization |
 | Scope | [`docs/internal/implementation/IMP-scope.md`](internal/implementation/IMP-scope.md) | Block scoping, no mutable globals, const expressions, export for sharing |
 | Main entry | [`docs/internal/implementation/IMP-main-entry.md`](internal/implementation/IMP-main-entry.md) | `function entrypoint()`, file from yinz.toml, args from stdlib, errors to default handler |
-| Doc comments | [`docs/internal/implementation/IMP-doc-comments.md`](internal/implementation/IMP-doc-comments.md) | Go-model `//` leading comments (no `///`, no block docs), exported items only, field documentation. `ynz doc` generator design in [`docs/internal/scratchpad/SCRATCH-future-doc-generator.md`](internal/scratchpad/SCRATCH-future-doc-generator.md). |
+| Doc comments | [`docs/internal/implementation/IMP-doc-comments.md`](internal/implementation/IMP-doc-comments.md) | `///` leading comments (no block docs), field documentation. `ynz doc` generator design in [`docs/internal/scratchpad/SCRATCH-future-doc-generator.md`](internal/scratchpad/SCRATCH-future-doc-generator.md). |
 | Testing | [`docs/internal/implementation/IMP-testing.md`](internal/implementation/IMP-testing.md) | Built-in `test` keyword, setup/teardown (file+per-test), single-level groups, `assertFails`/`assertPanics`, file-level parallelism |
 | Packages | [`docs/internal/implementation/IMP-packages.md`](internal/implementation/IMP-packages.md) | `ynz add/remove/update`, lock file, yinz_modules, tree shaking |
 | Operators | [`docs/internal/implementation/IMP-operators.md`](internal/implementation/IMP-operators.md) | `follows` contracts, `Self` keyword, `print()` default, `&&`/`\|\|`/`!` symbols, bitwise symbols, no `===` |
@@ -62,31 +62,37 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Modules | [`docs/internal/implementation/IMP-modules.md`](internal/implementation/IMP-modules.md) | `import`/`export`, no defaults, no wildcards, root-relative paths, stdlib auto-import |
 | Configuration | [`docs/internal/implementation/IMP-config.md`](internal/implementation/IMP-config.md) | Three layers, TOML choice, no env splitting, `set` functions |
 | Linting & build | [`docs/internal/implementation/IMP-linting.md`](internal/implementation/IMP-linting.md) | "Compiler IS the linter" — three-tier diagnostics (errors/warnings/suggestions), curated v0.4 rule list, three-part WHAT/INSTEAD/WHY format, customization v1.x |
-| Versioning | [`docs/internal/decisions/ADR-versioning.md`](internal/decisions/ADR-versioning.md) | Pre-release delete policy, post-release major bumps, no backwards compat |
+| Versioning | [`docs/internal/implementation/IMP-versioning.md`](internal/implementation/IMP-versioning.md) | Pre-release delete policy, post-release major bumps, no backwards compat |
 
 ## Compiler & Tooling
 
 | Topic | File | What's in it |
 |-------|------|--------------|
 | Compiler design | [`docs/internal/implementation/IMP-compiler.md`](internal/implementation/IMP-compiler.md) | Incremental builds, IDE language server, no-indexing rationale |
-| Compiler implementation language | [`docs/internal/decisions/ADR-compiler-language.md`](internal/decisions/ADR-compiler-language.md) | Rust + Salsa + inkwell + ariadne + hand-written recursive descent — decision and rationale |
+| Compiler implementation language | [`docs/internal/implementation/IMP-compiler-language.md`](internal/implementation/IMP-compiler-language.md) | Rust + Salsa + inkwell + ariadne + hand-written recursive descent — the compiler stack in force |
 | MVP scope | [`docs/reference/REF-mvp-scope.md`](reference/REF-mvp-scope.md) | Granular 24-version sequence to v1.0 + 3 post-launch versions |
 | Compiler error style | [`docs/reference/REF-compiler-errors.md`](reference/REF-compiler-errors.md) | Required three-part WHAT/WHAT-INSTEAD/WHY format, jargon ban-list, tone guide, multi-error strategy |
 | Formatter (`ynz fmt`) | [`docs/internal/implementation/IMP-fmt.md`](internal/implementation/IMP-fmt.md) | Zero-config canonical formatting, `ynz-fmt` crate, comment attachment rules, LSP format-on-save consumer |
 | Language server (`ynz-lsp`) | [`docs/internal/implementation/IMP-lsp.md`](internal/implementation/IMP-lsp.md) | Salsa-backed JSON-RPC server, capability negotiation, go-to-def/find-refs/rename/format/inlay-hints/code-actions, self-hosting migration plan |
 | Watch daemon (`ynz watch`) | [`docs/internal/implementation/IMP-watch.md`](internal/implementation/IMP-watch.md) | Long-running rebuild-on-save + re-run daemon, shared `CompilerDb` with the LSP, cross-platform process management |
 | Feature registry | [`docs/internal/implementation/IMP-feature-registry.md`](internal/implementation/IMP-feature-registry.md) | [`registry/features.toml`](../registry/features.toml) SSOT for keywords/jargon/intrinsics/deferred-features/hint-domains, `ynz-registry` crate codegen, carve-out policy |
-| Cross-module frame layout (M3e) | [`docs/internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md`](internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md) | Codegen-side `frame_layouts_query` (salsa, `ynz-codegen`) — NOT export-table serialization in typeck. Forced by: (1) separate compilation → no shared LLVM module; (2) shape ABI sizes need LLVM `TargetData` → cannot compute accurately in `ynz-typeck`. One LLVM-accurate computation, used by both emitter and importer (no-duct-tape #7 — kills the lossy typeck reimplementation). Approved 2026-06-05 (Patrick). |
+| Cross-module frame layout (M3e) | [`docs/internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md`](internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md) | Codegen-side `frame_layouts_query` (salsa, `ynz-codegen`) — NOT export-table serialization in typeck. Forced by: (1) separate compilation → no shared LLVM module; (2) shape ABI sizes need LLVM `TargetData` → cannot compute accurately in `ynz-typeck`. One LLVM-accurate computation, used by both emitter and importer (no-duct-tape #7 — kills the lossy typeck reimplementation). |
 
 ## Reference
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Golden rules | [`docs/reference/REF-golden-rules.md`](reference/REF-golden-rules.md) | All 13 rules with full reasoning. Rule 11 expanded — teaching mission. Rule 8 clarification block (zero-cost meaning). Rule 12 union-syntax exception (`\|` not `or`). |
+| Golden rules | [`docs/reference/REF-golden-rules.md`](reference/REF-golden-rules.md) | All 13 rules with full reasoning. Rule 3 expanded — teaching mission. Rule 6 clarification block (zero-cost meaning). Rule 5 union-syntax exception (`\|` not `or`). |
 | Teaching mission | [`docs/reference/REF-teaching-mission.md`](reference/REF-teaching-mission.md) | First-class language goal — compiler as mentor, three-part diagnostic format, IDE as a teaching surface (muted-hint protocol), university-adoption aspiration |
 | IDE hints protocol | [`docs/reference/REF-ide-hints.md`](reference/REF-ide-hints.md) | Muted-text protocol for the v0.2 LSP — what gets hinted, styling rules, tooltip format, the click-to-make-explicit guarantee |
 | Open questions | [`docs/internal/scratchpad/SCRATCH-open-questions.md`](internal/scratchpad/SCRATCH-open-questions.md) | Unresolved design decisions |
 | MVP Scope | [`docs/reference/REF-mvp-scope.md`](reference/REF-mvp-scope.md) | Per-version feature breakdown v0.1–v1.2 + v2+, including deferred features with substitutes and triggers |
+
+## Guides
+
+| Topic | File | What's in it |
+|-------|------|--------------|
+| Coming from TypeScript | [`docs/guides/coming-from-typescript.md`](guides/coming-from-typescript.md) | What changes if you already write TypeScript: a side-by-side table and the habits the compiler corrects (quotes, semicolons, `null`, `throw`, `else`, `async`, imports) |
 
 ## Future Designs (locked, awaiting implementation milestone)
 
@@ -103,9 +109,9 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Compiled-package binary format | [`docs/internal/scratchpad/SCRATCH-future-packages.md`](internal/scratchpad/SCRATCH-future-packages.md) | v0.1 binary-format reservation + v0.2 implementation. May-block metadata, ownership signatures, kernel-mode compatibility flags, allocator requirements, LLVM attribute hints, self-referential markers, doc comments per exported item. |
 | Release-mode builds | [`docs/internal/scratchpad/SCRATCH-future-release-mode.md`](internal/scratchpad/SCRATCH-future-release-mode.md) | v0.4+ — `--release` flag: LLVM `-O3`, strip debug info, disable dev-only flags (`--reveal-sensitive`, `--emit-ir`). Strips dev-only env-var checks via `cfg(release_build)`. |
 | String `{ptr, len}` overhaul | [`docs/internal/scratchpad/SCRATCH-future-string-ptr-len-overhaul.md`](internal/scratchpad/SCRATCH-future-string-ptr-len-overhaul.md) | TBD (likely v0.5 alongside file I/O) — migrate strings from NUL-terminated C strings to `{ptr, len}` slices. Removes embedded-NUL footgun, makes `length` O(1). Multi-day rewrite. |
-| macOS platform support | [`docs/internal/scratchpad/SCRATCH-future-macos-platform-support.md`](internal/scratchpad/SCRATCH-future-macos-platform-support.md) | Deferred — macOS removed from CI 2026-06-01 (codegen golden tests are x86_64-linux-pinned; some macOS failures hint at real codegen differences unverifiable from Linux). Linux x86_64 is the only verified target. Re-add `macos-latest` once macOS codegen is validated + per-triple goldens recorded on a Mac. |
-| GUI & cross-platform apps | `design/future/gui/` (folder) | Post-v0.5 — webview-hosted native shell (Tauri/Capacitor model): one HTML/CSS/JS frontend (user's framework), compiled to native binaries for web/desktop/iOS/Android. Yinz owns the shell + IPC bridge + device-capability layer + per-platform compile (incl. WASM web target), NOT the frontend framework. Decision rationale (covers most use cases + feasible to build) + rejected alternatives (pixel-perfect renderer, "use Flutter") + the "can't snapshot React into native" locked reasoning all in `architecture.md`. Logic is Rust-class native; UI is webview-class (far faster than Electron). |
+| macOS platform support | [`docs/internal/scratchpad/SCRATCH-future-macos-platform-support.md`](internal/scratchpad/SCRATCH-future-macos-platform-support.md) | Deferred — macOS is not in CI (codegen golden tests are x86_64-linux-pinned; some macOS failures hint at real codegen differences unverifiable from Linux). Linux x86_64 is the only verified target. Re-add `macos-latest` once macOS codegen is validated + per-triple goldens recorded on a Mac. |
+| GUI & cross-platform apps | [`docs/internal/scratchpad/SCRATCH-future-gui-index.md`](internal/scratchpad/SCRATCH-future-gui-index.md) | Post-v0.5 — webview-hosted native shell (Tauri/Capacitor model): one HTML/CSS/JS frontend (user's framework), compiled to native binaries for web/desktop/iOS/Android. Yinz owns the shell + IPC bridge + device-capability layer + per-platform compile (incl. WASM web target), NOT the frontend framework. Decided: pixel-perfect renderer rejected. Logic is Rust-class native; UI is webview-class (far faster than Electron). |
 
 ## Standard Library
 
-All stdlib design lives in `design/stdlib/`. See [`docs/internal/scratchpad/SCRATCH-stdlib-overview.md`](internal/scratchpad/SCRATCH-stdlib-overview.md) for the index.
+All stdlib design lives in `docs/internal/scratchpad/SCRATCH-stdlib-*.md`. See [`docs/internal/scratchpad/SCRATCH-stdlib-overview.md`](internal/scratchpad/SCRATCH-stdlib-overview.md) for the index.

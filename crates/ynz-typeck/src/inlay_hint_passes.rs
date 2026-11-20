@@ -7,7 +7,7 @@
 //!
 //! - `variable_type_hints`            — `: TypeName` after un-annotated `let` bindings
 //! - `ownership_call_site_hints`      — `share`/`lend`/`give` after call arguments
-//! - `copy_point_hints`               — `.copy (N bytes)` for trivially-copyable passes
+//! - `copy_point_hints`               — `.copy() (N bytes)` for trivially-copyable passes
 //! - `array_to_fixed_promotion_hints` — decoration on never-grown `array<T>` bindings
 //! - `let_to_const_promotion_hints`   — decoration on never-mutated `let` bindings
 //! - `wait_points_hints`              — muted `wait` before suspending call sites (Addition)
@@ -122,7 +122,7 @@ pub struct OwnershipHint {
 
 /// Trivially-copyable copy-point hint at a function-call argument.
 ///
-/// Rendered as `.copy (N bytes, trivially copyable)` at `position`.
+/// Rendered as `.copy() (N bytes, trivially copyable)` at `position`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CopyHint {
     pub position: usize,
@@ -139,27 +139,39 @@ pub enum PromotionKind {
     LetToConst,
 }
 
-/// Decoration hint for an auto-promotion opportunity.
+/// Auto-promotion opportunity for a `let` binding.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PromotionHint {
-    /// Byte offset of the `let` keyword (the token to decorate).
+    /// Byte offset of the end-of-line anchor the promotion comment renders at
+    /// (just before any trailing `//` comment on the binding's first line).
     pub position: usize,
     pub kind: PromotionKind,
-    /// Short label shown in the hint, e.g. `"// effectively const — never reassigned"`.
+    /// Short label of the end-of-line comment, e.g. `"// effectively const — never reassigned"`.
     pub label: String,
-    /// For `ArrayToFixed` hints: byte range of the `array` keyword in the type
-    /// annotation (e.g. the `array` in `array<int>`), used to build the
-    /// click-to-make-explicit TextEdit that rewrites `array` → `fixed`.
+    /// Byte range of the written token that gets marked and rewritten:
+    /// the `array` in the `array<int>` annotation for `ArrayToFixed`, the `let`
+    /// keyword for `LetToConst`. The click rewrite replaces exactly this range
+    /// with `fixed` / `const`.
     ///
-    /// `None` is the graceful no-edit path (the hint renders as a decoration but
-    /// has nothing to click-replace). Currently `None` is unreachable for
-    /// `ArrayToFixed`: the hint only fires on `array<T>`-annotated bindings, whose
-    /// `Type::Generic` always carries a `name_span`. The Option is kept defensive
-    /// for a future inferred-array promotion (`let nums = [1,2,3]` with no
-    /// annotation), which would have no `array` keyword to locate.
-    /// Always `None` for `LetToConst` hints (they use the `let`-keyword span
-    /// stored in `position` instead — see `let_to_const_edit` in `inlay_hint.rs`).
-    pub type_keyword_span: Option<SourceSpan>,
+    /// `None` when the source has no such token to mark: a `let` the parser
+    /// synthesizes (the loop variables of `for` destructuring and map loops),
+    /// or a future inferred-array promotion with no annotation to rewrite.
+    pub keyword_span: Option<SourceSpan>,
+}
+
+/// Byte range of the `let` keyword that starts the statement at `stmt_start`,
+/// or `None` when the statement does not begin with a written `let`
+/// (parser-synthesized bindings start at their variable name).
+///
+/// Time: O(1).  Space: O(1).
+fn let_keyword_span(text: &str, file: &str, stmt_start: usize) -> Option<SourceSpan> {
+    let rest = text.get(stmt_start..)?;
+    let after_keyword = rest.strip_prefix("let")?;
+    let is_whole_word = after_keyword
+        .chars()
+        .next()
+        .map_or(true, |next| !(next.is_alphanumeric() || next == '_'));
+    is_whole_word.then(|| SourceSpan::new(file, stmt_start, stmt_start + "let".len()))
 }
 
 /// Suspension-point hint at a call site whose callee transitively `suspends`.
@@ -1157,7 +1169,7 @@ fn collect_ownership_hints_expr(
     }
 }
 
-/// Emit `.copy (N bytes, trivially copyable)` hints at trivially-copyable pass sites.
+/// Emit `.copy() (N bytes, trivially copyable)` hints at trivially-copyable pass sites.
 ///
 /// `int`, `float`, `bool`, and `number` values always copy on pass — no heap
 /// allocation, no ownership transfer.  The hint makes this explicit so the user
@@ -1314,17 +1326,16 @@ fn collect_array_hints_block(
                 // `Type::Generic { name_span, .. }` carries the span of the type
                 // constructor name (e.g. `array` in `array<int>`), which is exactly
                 // the byte range the TextEdit must replace with `fixed`.
-                let type_keyword_span =
-                    if let ynz_ast::nodes::Type::Generic { name_span, .. } = ty_ann {
-                        Some(name_span.clone())
-                    } else {
-                        None
-                    };
+                let keyword_span = if let ynz_ast::nodes::Type::Generic { name_span, .. } = ty_ann {
+                    Some(name_span.clone())
+                } else {
+                    None
+                };
                 out.push(PromotionHint {
                     position: hint_position_end_of_stmt_or_before_comment(text, span.start),
                     kind: PromotionKind::ArrayToFixed,
                     label: "// promoted to fixed — never grown".to_string(),
-                    type_keyword_span,
+                    keyword_span,
                 });
             }
         }
@@ -1400,9 +1411,7 @@ fn collect_const_hints_block(
                     position: hint_position_end_of_stmt_or_before_comment(text, span.start),
                     kind: PromotionKind::LetToConst,
                     label: "// effectively const — never reassigned".to_string(),
-                    // LetToConst uses the `let`-keyword span stored in `position`
-                    // via `let_to_const_edit` in `inlay_hint.rs`; no type annotation involved.
-                    type_keyword_span: None,
+                    keyword_span: let_keyword_span(text, &span.file, span.start),
                 });
             }
         }

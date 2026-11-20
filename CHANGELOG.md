@@ -427,7 +427,7 @@ build flag is a permanent escape hatch and the cross-implementation consistency 
 Auto-parallelization is sound by a **type-based conservative floor**: any argument whose
 type is mutable-heap (a `shape`, `array`, `map`, `maybe`, union, or `dynamic`) is treated
 as a potential aliased write, so a statement pair touching one runs sequentially. Golden
-Rule 5 (compile-time safety) outranks Golden Rule 10 (efficiency) — the compiler forfeits
+Rule 2 (compile-time safety) outranks Golden Rule 7 (efficiency) — the compiler forfeits
 read-only-heap overlap rather than risk a data race. Primitive and `string` arguments
 still overlap.
 
@@ -476,7 +476,7 @@ This is v0.3-M3a — the first half of the original M3 plan, split out as its ow
 #### New diagnostics (WHAT/WHAT-INSTEAD/WHY format)
 
 Kept-guard diagnostics reworded (P0) — no more false "ships in v0.3-M3":
-- **`SubExprSuspendViolation`** — reworded WHY states the step-by-step design rationale (Golden Rule 7) and notes M3b auto-parallelization of independent statements.
+- **`SubExprSuspendViolation`** — reworded WHY states the step-by-step design rationale (Golden Rule 9) and notes M3b auto-parallelization of independent statements.
 - **`MutualSuspensionCycle`** — reworded WHY states that self-recursion works and mutual cycles are always restructurable.
 
 New P3 deferral diagnostics (clean compile errors, never silent wrong output):
@@ -645,7 +645,7 @@ v0.3.0-m1 makes `background fn(args)` actually run on a separate OS thread. Prev
 
 - **Parser termination guarantee** — Two `_ =>` arms in `parse_block` and `parse_call` lacked forward-progress guarantees. Fixed with `pos_before` check + forced `advance()` + 10,000-iteration `debug_assert!` cap. Previously-skipped error-gallery fixtures in `ynz-fmt` tests now run.
 - **Corpus determinism harness** — New test suite runs each of 69 corpus files (driver fixtures + examples) twice and asserts byte-identical output. Guards against non-determinism from background thread scheduling.
-- **Keyword hover docs** — `wait` and `background` hover docs updated with WHAT/WHAT-INSTEAD/WHY per Rule 11. Registry `KeywordEntry` schema extended with optional hover fields; backward-compatible (existing keywords use legacy format).
+- **Keyword hover docs** — `wait` and `background` hover docs updated with WHAT/WHAT-INSTEAD/WHY per Rule 3. Registry `KeywordEntry` schema extended with optional hover fields; backward-compatible (existing keywords use legacy format).
 
 #### Fixes
 

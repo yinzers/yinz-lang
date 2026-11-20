@@ -1,10 +1,15 @@
+use std::collections::HashSet;
+
 use lsp_types::{
-    SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensOptions,
+    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensOptions,
     SemanticTokensServerCapabilities,
 };
 use ynz_parser::token::Token;
 
-use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
+use crate::{
+    capabilities::PositionEncoding, position::LineTable, replacement_marker::promotion_marks,
+    state::ServerState,
+};
 
 // ─── Legend ──────────────────────────────────────────────────────────────────
 
@@ -27,6 +32,16 @@ pub const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     SemanticTokenType::COMMENT,   // 9
 ];
 
+/// The ordered list of token modifiers this server emits; the index of each entry
+/// is its bit in `SemanticToken.token_modifiers_bitset`.
+pub const SEMANTIC_TOKEN_MODIFIER_LEGEND: &[SemanticTokenModifier] =
+    &[SemanticTokenModifier::new("promotable")];
+
+/// Bit for `promotable`: the compiler already promoted this `array` / `let` token
+/// (`array` → `fixed`, `let` → `const`). Must match index 0 of
+/// `SEMANTIC_TOKEN_MODIFIER_LEGEND`.
+pub const MODIFIER_PROMOTABLE: u32 = 1 << 0;
+
 const IDX_KEYWORD: u32 = 0;
 const IDX_TYPE: u32 = 1;
 const IDX_FUNCTION: u32 = 2;
@@ -41,7 +56,7 @@ pub fn semantic_tokens_options() -> SemanticTokensServerCapabilities {
     SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
         legend: lsp_types::SemanticTokensLegend {
             token_types: SEMANTIC_TOKEN_LEGEND.to_vec(),
-            token_modifiers: vec![],
+            token_modifiers: SEMANTIC_TOKEN_MODIFIER_LEGEND.to_vec(),
         },
         full: Some(lsp_types::SemanticTokensFullOptions::Bool(true)),
         range: Some(true),
@@ -55,7 +70,7 @@ pub fn semantic_tokens_options() -> SemanticTokensServerCapabilities {
 ///
 /// Walks the lex output linearly — no AST traversal needed. Identifier
 /// classification uses a two-level lookup:
-///   1. Name starts with ASCII uppercase → `TYPE` (Golden Rule 13: capital = type).
+///   1. Name starts with ASCII uppercase → `TYPE` (Golden Rule 10: capital = type).
 ///   2. Name appears in `sig_table` → `FUNCTION`.
 ///   3. Name appears in `options` `variants` list → `ENUM_MEMBER`.
 ///   4. Fallback → `VARIABLE`.
@@ -72,7 +87,17 @@ pub fn semantic_tokens_full_response(
     let lex = ynz_parser::queries::lex_query(&state.db, sf);
     let sig = ynz_typeck::queries::module_signatures_query(&state.db, sf);
 
-    let raw = collect_tokens(&lex.tokens, text, &table, &sig, state.encoding, None);
+    let promotable_starts = promotable_token_starts(state, sf);
+
+    let raw = collect_tokens(
+        &lex.tokens,
+        text,
+        &table,
+        &sig,
+        &promotable_starts,
+        state.encoding,
+        None,
+    );
     Some(SemanticTokens {
         result_id: None,
         data: encode_delta(raw),
@@ -98,11 +123,14 @@ pub fn semantic_tokens_range_response(
     let start_byte = table.position_to_byte_offset(text, range.start, state.encoding)?;
     let end_byte = table.position_to_byte_offset(text, range.end, state.encoding)?;
 
+    let promotable_starts = promotable_token_starts(state, sf);
+
     let raw = collect_tokens(
         &lex.tokens,
         text,
         &table,
         &sig,
+        &promotable_starts,
         state.encoding,
         Some(start_byte..end_byte),
     );
@@ -120,6 +148,18 @@ struct RawToken {
     start: u32,
     length: u32,
     token_type: u32,
+    token_modifiers: u32,
+}
+
+/// Start offsets of the tokens the compiler promoted (`array` → `fixed`,
+/// `let` → `const`); these get the `promotable` modifier.
+///
+/// Time: O(P) over promotion hints.  Space: O(P).
+fn promotable_token_starts(state: &ServerState, sf: ynz_parser::SourceFile) -> HashSet<usize> {
+    promotion_marks(&state.db, sf)
+        .iter()
+        .map(|mark| mark.start)
+        .collect()
 }
 
 /// Classify each lexed token and return absolute-position records.
@@ -128,11 +168,14 @@ struct RawToken {
 /// intersect the range are included. Matches the viewport-filter semantic
 /// used by inlay hints — inclusion is span-based so partial tokens at
 /// the viewport edge ARE included.
+///
+/// A token whose start offset is in `promotable_starts` carries `MODIFIER_PROMOTABLE`.
 fn collect_tokens(
     tokens: &[ynz_parser::token::Spanned<Token>],
     text: &str,
     table: &LineTable,
     sig: &ynz_typeck::queries::SignatureOutput,
+    promotable_starts: &HashSet<usize>,
     encoding: PositionEncoding,
     range_filter: Option<std::ops::Range<usize>>,
 ) -> Vec<RawToken> {
@@ -160,11 +203,18 @@ fn collect_tokens(
             continue;
         }
 
+        let token_modifiers = if promotable_starts.contains(&start) {
+            MODIFIER_PROMOTABLE
+        } else {
+            0
+        };
+
         out.push(RawToken {
             line: pos.line,
             start: pos.character,
             length,
             token_type,
+            token_modifiers,
         });
     }
 
@@ -255,15 +305,15 @@ fn classify_token(tok: &Token, sig: &ynz_typeck::queries::SignatureOutput) -> Op
     }
 }
 
-/// Classify an identifier using Golden Rule 13 and the signature tables.
+/// Classify an identifier using Golden Rule 10 and the signature tables.
 ///
 /// Decision order (first match wins):
-///   1. Starts with ASCII uppercase → TYPE (Golden Rule 13: capital letter = type)
+///   1. Starts with ASCII uppercase → TYPE (Golden Rule 10: capital letter = type)
 ///   2. Found in `sig_table.fns` → FUNCTION
 ///   3. Found as an options variant (checked from imported_options) → ENUM_MEMBER
 ///   4. Fallback → VARIABLE
 fn classify_identifier(name: &str, sig: &ynz_typeck::queries::SignatureOutput) -> u32 {
-    // Golden Rule 13: capital letter = type.
+    // Golden Rule 10: capital letter = type.
     if name.starts_with(|c: char| c.is_ascii_uppercase()) {
         return IDX_TYPE;
     }
@@ -312,7 +362,7 @@ fn encode_delta(mut raw: Vec<RawToken>) -> Vec<SemanticToken> {
             delta_start,
             length: tok.length,
             token_type: tok.token_type,
-            token_modifiers_bitset: 0,
+            token_modifiers_bitset: tok.token_modifiers,
         });
 
         prev_line = tok.line;
@@ -397,6 +447,7 @@ mod tests {
             start: 5,
             length: 3,
             token_type: IDX_KEYWORD,
+            token_modifiers: 0,
         }];
         let encoded = encode_delta(raw);
         assert_eq!(encoded.len(), 1);
@@ -417,12 +468,14 @@ mod tests {
                 start: 4,
                 length: 3,
                 token_type: IDX_KEYWORD,
+                token_modifiers: 0,
             },
             RawToken {
                 line: 0,
                 start: 10,
                 length: 5,
                 token_type: IDX_VARIABLE,
+                token_modifiers: 0,
             },
         ];
         let encoded = encode_delta(raw);
@@ -443,12 +496,14 @@ mod tests {
                 start: 4,
                 length: 3,
                 token_type: IDX_KEYWORD,
+                token_modifiers: 0,
             },
             RawToken {
                 line: 3,
                 start: 7,
                 length: 2,
                 token_type: IDX_NUMBER,
+                token_modifiers: 0,
             },
         ];
         let encoded = encode_delta(raw);

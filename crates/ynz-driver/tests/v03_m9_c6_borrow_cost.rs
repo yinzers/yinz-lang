@@ -2,7 +2,7 @@
 //!
 //! A read of a place someone else owns points at the place when nothing writes the place while
 //! the reader is live, and owns a copy otherwise. Copying where Rust borrows costs more than Rust
-//! (Golden Rule 8), so each pair below pins the count both ways: no write, no copy; a write, one
+//! (Golden Rule 6), so each pair below pins the count both ways: no write, no copy; a write, one
 //! copy. `alloc` and `free` are the runtime's counted allocations (`array` header and buffer are
 //! two each); the copy of a loop item or an argument is released after its iteration or call, the
 //! one of a `let` is released at its scope exit (C7 slice 1), so the frees pinned below include the
@@ -50,7 +50,7 @@ cost_case!(
     "1\n1\n",
     6,
     6,
-    "a loop variable copied per iteration although the body never writes the array (cost, Rule 8)"
+    "a loop variable copied per iteration although the body never writes the array (cost, Rule 6)"
 );
 cost_case!(
     a_loop_that_overwrites_an_item_copies_one_item_per_iteration,
@@ -66,7 +66,7 @@ cost_case!(
     "3\n",
     8,
     8,
-    "a `share` argument copied although no argument of the call writes its collection (cost, Rule 8)"
+    "a `share` argument copied although no argument of the call writes its collection (cost, Rule 6)"
 );
 cost_case!(
     a_share_argument_read_from_a_lent_collection_is_copied_once_and_released,
@@ -82,7 +82,7 @@ cost_case!(
     "3\n",
     2,
     2,
-    "a `let` of a field copied although the field is never written (cost, Rule 8)"
+    "a `let` of a field copied although the field is never written (cost, Rule 6)"
 );
 cost_case!(
     a_let_of_a_field_that_is_overwritten_copies_it_once,
@@ -98,7 +98,7 @@ cost_case!(
     "3\n3\n",
     4,
     4,
-    "a `let` of a field copied because its root lives in a loop body, although the reader dies with it (cost, Rule 8)"
+    "a `let` of a field copied because its root lives in a loop body, although the reader dies with it (cost, Rule 6)"
 );
 cost_case!(
     a_read_that_outlives_its_roots_scope_is_copied_once,
@@ -114,7 +114,7 @@ cost_case!(
     "3\n",
     4,
     4,
-    "a call result copied again where the callee already returned an owned copy (cost, Rule 8)"
+    "a call result copied again where the callee already returned an owned copy (cost, Rule 6)"
 );
 cost_case!(
     a_state_machine_loop_whose_body_writes_nothing_copies_nothing,
@@ -122,7 +122,7 @@ cost_case!(
     "1\n1\n",
     7,
     7,
-    "a state-machine loop variable copied because a `wait` is in the body, although nothing writes the array (cost, Rule 8)"
+    "a state-machine loop variable copied because a `wait` is in the body, although nothing writes the array (cost, Rule 6)"
 );
 cost_case!(
     a_state_machine_loop_that_overwrites_an_item_copies_and_releases_one_item_per_iteration,
@@ -174,7 +174,7 @@ string_cost_case!(
     "2\n1\n",
     (9, 9),
     (2, 2),
-    "a map-entry loop variable cloned per iteration (its array value and its string key) although the body never writes the map (cost, Rule 8)"
+    "a map-entry loop variable cloned per iteration (its array value and its string key) although the body never writes the map (cost, Rule 6)"
 );
 string_cost_case!(
     a_union_loop_whose_body_writes_nothing_copies_no_item,
@@ -182,7 +182,7 @@ string_cost_case!(
     "big-1\n",
     (2, 2),
     (2, 2),
-    "a union loop variable copied per iteration (its string variant cloned) although the body never writes the list (cost, Rule 8)"
+    "a union loop variable copied per iteration (its string variant cloned) although the body never writes the list (cost, Rule 6)"
 );
 cost_case!(
     a_ufcs_receiver_field_nobody_writes_is_not_copied,
@@ -190,7 +190,7 @@ cost_case!(
     "3\n",
     7,
     7,
-    "a dotted UFCS receiver (`world.bucket.total(world.owners)`) copied although no argument of the call writes the world (cost, Rule 8)"
+    "a dotted UFCS receiver (`world.bucket.total(world.owners)`) copied although no argument of the call writes the world (cost, Rule 6)"
 );
 cost_case!(
     a_ufcs_receiver_field_whose_root_is_lent_is_copied_once_and_released,
@@ -206,7 +206,7 @@ cost_case!(
     "2\n",
     6,
     6,
-    "a plain-call `share` argument copied although no argument of the call writes its list (cost, Rule 8)"
+    "a plain-call `share` argument copied although no argument of the call writes its list (cost, Rule 6)"
 );
 cost_case!(
     a_shape_list_element_argument_read_from_a_lent_list_is_copied_once_and_released,
@@ -230,7 +230,7 @@ cost_case!(
     "3\n",
     6,
     6,
-    "a `let` of a `maybe<array>` and of its `.or` copying the payload array although the list is never written (cost, Rule 8)"
+    "a `let` of a `maybe<array>` and of its `.or` copying the payload array although the list is never written (cost, Rule 6)"
 );
 cost_case!(
     a_let_of_a_maybe_map_element_nobody_writes_copies_no_payload,
@@ -238,7 +238,7 @@ cost_case!(
     "1\n",
     12,
     12,
-    "a `let` of a `maybe<map>` and of its `.or` copying the payload map although the list is never written (cost, Rule 8)"
+    "a `let` of a `maybe<map>` and of its `.or` copying the payload map although the list is never written (cost, Rule 6)"
 );
 cost_case!(
     an_argument_of_a_suspending_call_nobody_writes_is_staged_without_a_copy,
@@ -246,5 +246,5 @@ cost_case!(
     "2\n",
     7,
     7,
-    "an argument staged into a suspending callee's frame copied although nothing writes its place (cost, Rule 8)"
+    "an argument staged into a suspending callee's frame copied although nothing writes its place (cost, Rule 6)"
 );

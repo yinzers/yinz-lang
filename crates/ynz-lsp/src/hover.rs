@@ -10,7 +10,11 @@ use ynz_typeck::shapes::ShapeTable;
 use ynz_typeck::type_at_offset::type_of_name_at_offset;
 use ynz_typeck::types::{type_name, type_name_with_length};
 
-use crate::{capabilities::PositionEncoding, position::LineTable};
+use crate::{
+    capabilities::PositionEncoding,
+    position::LineTable,
+    replacement_marker::{mark_at_offset, PromotionMark},
+};
 
 /// Find the token at `byte_offset` in the token stream from a lex result.
 /// Returns `(token_text, span_start, span_end)` or `None` if the offset
@@ -93,6 +97,34 @@ fn doc_for_name<'a>(module: &'a Module, name: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+/// Hover for a token the compiler promoted (`array` → `fixed`, `let` → `const`):
+/// the registry's WHAT / WHAT INSTEAD / WHY for that promotion. Returns `None` when
+/// the cursor is not on a promoted token, so the caller falls through to
+/// `hover_response`; the plain `let` / `array` hover is replaced for that one
+/// token only.
+///
+/// Time: O(M) scan of the promoted-token marks.  Space: O(1).
+pub fn promotion_hover(
+    marks: &[PromotionMark],
+    text: &str,
+    table: &LineTable,
+    byte_offset: usize,
+    encoding: PositionEncoding,
+) -> Option<Hover> {
+    let mark = mark_at_offset(marks, text, byte_offset)?;
+    let markdown = ynz_registry::lsp_inlay_hint_hover_for(mark.domain)?;
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: markdown,
+        }),
+        range: Some(Range {
+            start: table.byte_offset_to_position(text, mark.start, encoding),
+            end: table.byte_offset_to_position(text, mark.end, encoding),
+        }),
+    })
 }
 
 /// Build the LSP `Hover` response for the given cursor position.

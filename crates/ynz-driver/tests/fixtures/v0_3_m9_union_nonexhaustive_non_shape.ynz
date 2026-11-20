@@ -1,6 +1,6 @@
 // v0.3-M9 C1d: a union match that names only the SHAPE variant and has no `else` must not
 // compile when the union also has a NON-shape variant (`int`) — a value of that variant would
-// silently fall through every arm (Golden Rule 5).
+// silently fall through every arm (Golden Rule 2).
 // Correct behavior: compile error `Non-exhaustive union multi-case — 1 variant is not handled:
 // int.`, whose WHAT-INSTEAD suggests `else =>` (an `is int =>` arm is not accepted today).
 // Pre-fix failure: compiled and printed `circle`; the exhaustiveness check skipped every

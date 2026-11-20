@@ -4,7 +4,7 @@
 //! `let rest = head.next` names a place that stays where it is. Copying it into the binding is
 //! what `Clone` does: one new box for every box the value owns, so a recursive walk that peels
 //! one link per call copies the whole tail at every step, O(n²) cells where a Rust borrow costs
-//! none (Golden Rule 8). A read that only READS what it names can point at the place instead,
+//! none (Golden Rule 6). A read that only READS what it names can point at the place instead,
 //! with the language's value semantics unchanged. But the release helper (C6) frees a value when
 //! its place is overwritten, so a read that points at a place the program then writes reads
 //! freed memory. This module is the one record of which reads point and which copy; codegen
@@ -893,7 +893,7 @@ impl<'a> ReadTracker<'a> {
     /// A block was walked: the `let`s in `dying` (declared directly in it) die here, and `inside`
     /// holds every `let` declared anywhere in it. A reader that is a `let` declared outside the
     /// block and points into one that dies would point at a released value once the scope exit
-    /// frees it, so it owns a copy instead: a read must not outlive its root (Golden Rule 8: this
+    /// frees it, so it owns a copy instead: a read must not outlive its root (Golden Rule 6: this
     /// is the one case where a read with no write still copies, pinned by
     /// `v03_m9_c6_borrow_cost`). O(c) for the c candidates.
     pub(crate) fn end_block(

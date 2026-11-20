@@ -506,7 +506,7 @@ fn a_fallback_of_another_length_is_refused_for_or_on_a_received_fixed() {
 }
 
 // Bug: a list of another length reassigned to a binding, or assigned to a sized field, was refused
-// with a message that named `fixed<int>` on both sides, so it read as no mismatch (Golden Rule 11).
+// with a message that named `fixed<int>` on both sides, so it read as no mismatch (Golden Rule 3).
 // Each side shows its length.
 #[test]
 fn a_length_mismatch_on_reassignment_or_field_assignment_names_both_lengths() {

@@ -24,7 +24,7 @@ Three distinct numeric types:
 - `float` — binary floating point. Fast, may have tiny rounding. Opt-in for graphics, physics, ML.
 - `int` — whole numbers only. For counts, indices, anything with no decimal.
 
-**Why `number` as the default**: Eliminates the single most common JavaScript gotcha — floating point imprecision in financial and general math. `0.1 + 0.2 = 0.30000000000000004` is a JavaScript meme for a reason. The safe, correct path is the default path (Golden Rule 10).
+**Why `number` as the default**: Eliminates the single most common JavaScript gotcha — floating point imprecision in financial and general math. `0.1 + 0.2 = 0.30000000000000004` is a JavaScript meme for a reason. The safe, correct path is the default path (Golden Rule 7).
 
 **Why `float` is explicit opt-in**: Performance-sensitive code (graphics, physics, ML) needs binary floats. These developers know they need `float` and why. Junior developers who don't know the difference default to `number`, which is correct for 95% of use cases.
 

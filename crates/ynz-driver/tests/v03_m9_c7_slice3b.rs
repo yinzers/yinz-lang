@@ -79,7 +79,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn a_nested_shape_taken_from_a_temporary_is_not_copied_and_balances() {
-    // Bug (cost, Golden Rule 8; High: a wrong take is a double free): `let taken = make(i).inner`
+    // Bug (cost, Golden Rule 6; High: a wrong take is a double free): `let taken = make(i).inner`
     // deep-copies the nested shape's strings where Rust moves it. 200 calls build 2 strings and one
     // cell each; the `let` and the reassignment must add no string and no cell.
     at_both_optimization_levels(|no_optimize| {

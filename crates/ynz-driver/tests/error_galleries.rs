@@ -1,6 +1,6 @@
 // WHY: Error gallery files are the hands-on review surface for compiler diagnostic
-// quality — per plan-invariants.md `### Demo & Error Gallery`. These tests assert
-// that each gallery file produces its expected diagnostic count and that key error
+// quality — each phase that adds a compile-error class extends its gallery file. These
+// tests assert that each gallery file produces its expected diagnostic count and that key error
 // classes are present by key-phrase. If this count changes, either a new diagnostic
 // class was added (update count + add a key-phrase check) or a diagnostic regressed
 // (compiler bug). Both require deliberate action, not silent drift.
@@ -661,7 +661,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
 
     // Every refusal must carry a real WHAT-INSTEAD, not just a WHAT. These are the concrete
     // things the six refusals tell the reader to do instead; a refusal that loses its fix is
-    // a dead end, which is the failure mode Golden Rule 11 exists to prevent.
+    // a dead end, which is the failure mode Golden Rule 3 exists to prevent.
     for phrase in [
         "let replies: channel<int> = channel<int>()",
         "let second = background worker(orders)",

@@ -65,27 +65,29 @@ STRIPE_KEY=
 Reading env vars in code:
 
 ```
-let dbUrl = env.get("DATABASE_URL")              // -> maybe<string> — might not be set
-let port = env.get("PORT").or("3000")            // use "3000" if PORT isn't set
-let secret = env.get("SECRET_KEY")              // -> maybe<string>
+let dbUrl = env.get(`DATABASE_URL`)              // -> maybe<string> — might not be set
+let foundPort = env.get(`PORT`)                  // a maybe: the text, or nothing
+let port = foundPort.or(`3000`)                  // a plain string, `3000` if PORT isn't set
+let secret = env.get(`SECRET_KEY`)               // -> maybe<string>
 
 if (dbUrl.exists()) {
   let db = database.connect(dbUrl.value)
 }
 ```
 
-**Why env vars?** Secrets and connection strings are different on every machine and environment. They should never be in your code or your compiled binary. The `.env` file lives on the machine and never gets committed. The binary reads it at runtime — different machines, different values, same binary.
+Keep secrets and connection strings in `.env`, never in your code or your compiled program. The `.env` file stays on the machine and is never committed. The program reads it when it starts, so different machines can have different values and run the same compiled program.
 
-**Missing `.env` is fine.** If the file doesn't exist, `env.get()` returns `none` for every key. The program decides how to handle that.
+**A missing `.env` is fine.** If the file doesn't exist, `env.get()` returns `none` for every key. Your program decides what to do about that.
 
-**No environment-specific `.env` files.** No `.env.production`, `.env.staging`, `.env.local`. Just `.env`. Different machines have different `.env` files. If you need different behavior in different environments, check an env var:
+**No environment-specific `.env` files.** No `.env.production`, `.env.staging`, `.env.local`. Just `.env`. Each machine has its own `.env` file. If you need different behavior in different places, check an environment variable:
 
 ```
-let environment = env.get("ENV").or("development")
+let foundEnvironment = env.get(`ENV`)            // a maybe: the name, or nothing
+let environment = foundEnvironment.or(`development`)
 
-let logLevel = "debug"
-if (environment == "production") {
-  logLevel = "error"
+let logLevel = `debug`
+if (environment == `production`) {
+  logLevel = `error`
 }
 setLogLevel(logLevel)
 ```
@@ -100,28 +102,37 @@ Runtime behavior is configured in code, in your `entrypoint()` function, using `
 function entrypoint() -> nothing {
   setShutdownTimeout(duration.minutes(5))
   setShutdownHandler(signal => { ... })
-  setErrorHandler(e => { ... })
+  setErrorHandler(error => { ... })
   setThreadPoolSize(16)
-  setLogLevel("debug")
+  setLogLevel(`debug`)
 
   // ... rest of app
 }
 ```
 
-**Why code and not a config file?** Runtime settings often depend on the environment, command-line arguments, or other conditions. Code handles this naturally:
+What the settings do:
+
+- `setShutdownTimeout` — how long the program may take to finish up after it is asked to stop.
+- `setShutdownHandler` — code that runs when the program is asked to stop, such as saving data.
+- `setErrorHandler` — code that runs when an error reaches the top of your program and nothing else has handled it.
+- `setThreadPoolSize` — how many threads (separate lines of work) the program may use at the same time.
+- `setLogLevel` — how much the program logs.
+
+Runtime settings are code, so they can branch on environment variables, command-line arguments, or any other condition:
 
 ```
 function entrypoint() -> nothing {
-  let env = env.get("ENV").or("development")
+  let foundEnvironment = env.get(`ENV`)
+  let environment = foundEnvironment.or(`development`)
 
-  if (env == "production") {
+  if (environment == `production`) {
     setShutdownTimeout(duration.minutes(2))
-    setLogLevel("error")
+    setLogLevel(`error`)
     setThreadPoolSize(32)
     return
   }
   setShutdownTimeout(duration.seconds(5))
-  setLogLevel("debug")
+  setLogLevel(`debug`)
   setThreadPoolSize(4)
 
   // ... rest of app
@@ -133,7 +144,7 @@ A static config file can't branch. Code can.
 **Different apps, different configs:**
 
 ```
-// Web server — graceful shutdown, more threads
+// Web server — time to finish open requests before shutting down, more threads
 function entrypoint() -> nothing {
   setShutdownTimeout(duration.seconds(30))
   setThreadPoolSize(16)
@@ -148,16 +159,16 @@ function entrypoint() -> nothing {
   })
 }
 
-// Long-running simulation — give it time to checkpoint
+// Long-running simulation — give it time to save its progress
 function entrypoint() -> nothing {
   setShutdownTimeout(duration.minutes(10))
   setShutdownHandler(signal => {
-    log("Checkpointing simulation...")
+    log(`Saving simulation progress...`)
     wait checkpoint(simulationState)
   })
 }
 
-// Quick CLI script — no graceful shutdown needed
+// Quick command-line script — nothing to clean up on shutdown
 function entrypoint() -> nothing {
   setShutdownTimeout(duration.seconds(0))
 }
@@ -176,6 +187,6 @@ function entrypoint() -> nothing {
 | Required var documentation | `.env.example` (committed) | `DATABASE_URL=` |
 | Shutdown timeout | `setShutdownTimeout()` in `entrypoint()` | `setShutdownTimeout(duration.minutes(2))` |
 | Thread pool size | `setThreadPoolSize()` in `entrypoint()` | `setThreadPoolSize(16)` |
-| Error handling behavior | `setErrorHandler()` in `entrypoint()` | `setErrorHandler(e => { ... })` |
-| Shutdown behavior | `setShutdownHandler()` in `entrypoint()` | `setShutdownHandler(s => { ... })` |
-| Environment-specific logic | Code branching in `entrypoint()` | `if (env == "production") { ... }` |
+| Error handling behavior | `setErrorHandler()` in `entrypoint()` | `setErrorHandler(error => { ... })` |
+| Shutdown behavior | `setShutdownHandler()` in `entrypoint()` | `setShutdownHandler(signal => { ... })` |
+| Environment-specific logic | An `if` in `entrypoint()` | ``if (environment == `production`) { ... }`` |

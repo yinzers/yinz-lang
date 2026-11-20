@@ -19,7 +19,7 @@ Design document for the Yinz standard library. Content here is in planning phase
 
 ## Philosophy
 
-The standard library follows all 12 golden rules. Everything is dot-method driven, autocomplete-first, self-documenting, and designed so a jr dev can use it without reading docs. If Python can do it in one line, Yinz should too — but type-safe and compiled.
+The standard library follows all 13 golden rules. Everything is dot-method driven, autocomplete-first, self-documenting, and designed so a jr dev can use it without reading docs. If Python can do it in one line, Yinz should too — but type-safe and compiled.
 
 ---
 

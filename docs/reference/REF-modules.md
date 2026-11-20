@@ -43,7 +43,7 @@ function validateEmail(email: string) -> boolean {
 }
 ```
 
-Two states: exported or private. No `pub`, no `pub(crate)`, no visibility modifiers. Just `export` or nothing.
+Two states: exported or private. Write `export` to share something, or nothing to keep it private.
 
 ---
 
@@ -52,13 +52,13 @@ Two states: exported or private. No `pub`, no `pub(crate)`, no visibility modifi
 The standard library is always available. You don't import it. Just use it:
 
 ```ynz
-let x = math.sqrt(16)          // ships v0.6
-let content = file.read(`data.txt`)  // ships v0.5
-let response = request.get(`https://api.example.com`)  // ships v0.15
-let now = date.now()            // ships v0.9
+let squareRoot = math.sqrt(16)
+let content = file.read(`data.txt`)
+let response = request.get(`https://api.example.com`)
+let now = date.now()
 ```
 
-The compiler knows the entire standard library. The IDE shows stdlib methods in autocomplete automatically. Tree shaking strips anything you don't actually call.
+The compiler knows the entire standard library, and the IDE lists its functions in autocomplete. Your compiled program leaves out anything you don't actually call.
 
 ---
 
@@ -85,9 +85,9 @@ let newUser = users.createUser(data)
 
 Use this when you use many things from the same file, or when you want the origin visible at every call site.
 
-**Note for JavaScript developers**: In JavaScript, `import X from "..."` is a default import. In Yinz, there are no default exports — this syntax imports the entire module as a namespace object. Same syntax, different meaning. `users.fetchUser()` means "call `fetchUser` from the `users` module," not "call a method on a default export."
+This form imports the whole module under one name. `users.fetchUser()` means "call `fetchUser` from the `users` module." Yinz has no default exports.
 
-Both import styles tree-shake the same way. The compiler traces which functions you actually call and strips everything else.
+Both import styles work the same way underneath. The compiler checks which functions you actually call and leaves out the rest.
 
 ---
 
@@ -121,7 +121,7 @@ import { fetchUser } from `../services/users`
 // COMPILE ERROR: Use project-root paths. `services/users` not `../services/users`.
 ```
 
-File path = import path. No configuration, no mapping, no barrel files required.
+The file path is the import path. You don't set anything up, and you don't need a file that gathers other files' exports.
 
 ### Installed packages — just the package name
 
@@ -134,9 +134,9 @@ The compiler knows the difference between your project files and installed packa
 
 ---
 
-## Aliasing — Resolving Name Conflicts
+## Renaming with `as` — Fixing Name Clashes
 
-When two imports have the same name, use `as` to rename one:
+When two imports have the same name, use `as` to give one a new name:
 
 ```
 import { fetchUser as getUser } from `services/users`
@@ -146,7 +146,7 @@ let user = getUser(id)
 let admin = getAdminUser(id)
 ```
 
-Aliasing also works on namespace imports:
+`as` also works when you import a whole module:
 
 ```
 import math as advancedMath from `math`
@@ -158,7 +158,7 @@ import math from `vendor/math-legacy`
 //     import math from `vendor/math-legacy`     ← OK because the other was renamed
 ```
 
-Module imports naturally avoid conflicts without aliasing — the module name itself is the discriminator:
+Whole-module imports rarely clash, because the module name tells the functions apart:
 
 ```
 import users from `services/users`
@@ -168,29 +168,22 @@ let user = users.fetchUser(id)
 let admin = admins.fetchUser(id)    // no conflict — the module name makes it clear
 ```
 
-**If you forget to alias a collision, the compiler refuses to guess.** Last-import-wins (the JavaScript / TypeScript behavior) would silently change which value is used when imports are reordered — that's a bug factory. Yinz errors at the import site and forces you to pick:
+**If two imports clash and you don't rename one, the compiler refuses to guess.** It reports an error at the import and asks you to choose:
 
 ```
 import { Player } from `models/game`
 import { Player } from `external/legacy`
-// COMPILE ERROR: 'Player' is imported from two places.
-//
-//   Line 1: from `models/game`
-//   Line 2: from `external/legacy`
-//
-//   These can't both use the name 'Player' in the same file. Rename one:
-//
-//     import { Player } from `models/game`
-//     import { Player as LegacyPlayer } from `external/legacy`
+// COMPILE ERROR: Import name `Player` is already bound by a previous import.
+// Use a different local name: `import { Player as otherName } from "..."`
 ```
 
-The same rule applies if a local module collides with a standard library name (e.g., a local `math.ynz` file colliding with the built-in `math` module). There's no precedence — alias one or the other.
+The same rule applies if one of your own modules has the same name as a standard library module (for example, a `math.ynz` file next to the built-in `math` module). Neither one wins automatically — rename one with `as`.
 
 ---
 
-## Re-Exporting — Grouped Entry Points
+## Re-Exporting — One Place to Import From
 
-You can collect exports from multiple files and re-export them from one place:
+You can collect exports from several files and export them again from one file:
 
 ```
 // services/index.ynz
@@ -203,17 +196,15 @@ export { processOrder, Order } from `services/orders`
 import { fetchUser, processOrder } from `services`
 ```
 
-When you import from `"services"`, the compiler looks for `services/index.ynz`. Re-exporting is optional — it's just a convenience for large projects.
+When you import from `services`, the compiler looks for `services/index.ynz`. Re-exporting is optional. It is only a convenience for large projects.
 
-> **v0.1 status**: re-export syntax is parsed and type-checked, but cross-file
-> symbol calls (calling a re-exported function from another file) ship in
-> **v0.2**. The syntax is locked; runtime resolution is still being built.
+> **Partly built.** The re-export syntax is read and checked by the compiler. Calling a re-exported function from another file does not work yet.
 
 ---
 
-## Circular References — Not a Problem
+## Files That Import Each Other
 
-Files can import from each other. The compiler handles it automatically through multi-pass compilation.
+Two files can import from each other. The compiler handles it automatically.
 
 ```
 // services/users.ynz
@@ -235,9 +226,9 @@ export shape Order {
 
 This works. No error. No workaround needed.
 
-The compiler scans all files and collects all type signatures before resolving any references. By the time it tries to figure out what `Order` is, it already knows — because it read every file first. The order files are imported doesn't matter.
+The compiler reads every file and collects the names and types they declare before it checks any of them. When it needs to know what `Order` is, it already does. The order of the imports doesn't matter.
 
-This is safe in Yinz because files only contain declarations (types, functions, exports). There's no code that runs when a file is imported. No initialization order to worry about.
+This is safe in Yinz because a file only declares things (shapes, functions, exports). No code runs when a file is imported, so there is no order to get wrong.
 
 ---
 
@@ -250,7 +241,7 @@ export default function fetchUser() { }    // COMPILE ERROR: no default exports
 export function fetchUser() { }            // correct — always named
 ```
 
-**No wildcard imports:**
+**No `*` imports:**
 
 ```
 import * as users from `services/users`   // COMPILE ERROR: use module import instead
@@ -291,12 +282,12 @@ The IDE auto-removes unused imports on save.
 
 ## IDE Auto-Import
 
-The compiler builds an index of every exported symbol across your project and all packages. When you type a name that isn't imported yet:
+The compiler keeps a list of every exported name in your project and in your installed packages. When you type a name that isn't imported yet:
 
 ```
 let user = fetchUser(`abc123`)    // fetchUser not imported yet
 ```
 
-The IDE recognizes it, finds it in the index, and offers to add the import automatically. Accept and the import appears at the top of the file. Delete the usage and the IDE offers to remove the import.
+The IDE finds the name in that list and offers to add the import for you. Accept, and the import appears at the top of the file. Delete the last use of the name, and the IDE offers to remove the import.
 
-Auto-import works because the module system is built for it: project-root-relative paths, explicit named exports, no ambiguity about where anything comes from.
+This works because paths always start at the project root, exports have names, and there is never any doubt about where a name comes from.

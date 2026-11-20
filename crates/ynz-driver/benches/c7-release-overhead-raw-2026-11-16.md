@@ -1,4 +1,4 @@
-# v0.3-M9 C7 — release overhead against pre-C7 Yinz and against Rust (Golden Rule 8 check)
+# v0.3-M9 C7 — release overhead against pre-C7 Yinz and against Rust (Golden Rule 6 check)
 
 Measures what the scope-exit release of C7 costs. Provenance record in the style of
 `rust-equiv-raw-2026-07-17.md`: challenge by rerun, not by citation.

@@ -205,7 +205,7 @@ fn assert_source_refused(label: &str, program: &str, refusal: &str) {
 
 /// The diagnostics `ynz build` prints for `program`, which must fail with a teaching diagnostic:
 /// a refusal a user program can reach is never codegen's "This is a compiler bug" box or an
-/// internal panic (Golden Rule 11).
+/// internal panic (Golden Rule 3).
 fn refused_build_diagnostics(label: &str, program: &str) -> String {
     let directory = tempfile::tempdir().expect("create temp directory");
     let source = directory.path().join("program.ynz");

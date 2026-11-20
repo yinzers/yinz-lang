@@ -13,62 +13,45 @@ metadata:
 
 # Foreign Function Interface (FFI)
 
-Call functions from C libraries, system APIs, and other non-Yinz code.
+Call functions from C libraries, system APIs, and other non-Yinz code. *FFI* stands for foreign function interface: a *foreign* function is one written in another language.
 
-> **Not available yet.** `foreign` is planned for **v2+** — it is not a keyword the compiler
-> recognizes today (writing `foreign` as an identifier works fine; it isn't reserved). Everything
-> below describes the planned design so you know what's coming. Until v2+ ships, if you need C
-> interop (file I/O, networking, math), use the stdlib modules that already wrap C internally —
-> you never see the `foreign` boundary yourself. See
-> [`docs/reference/REF-mvp-scope.md`](REF-mvp-scope.md) (v2+ section) for why it's deferred.
+> **Not available yet.** `foreign` is planned for a later release. The compiler does not recognize it today (you can still use `foreign` as a normal name). The rest of this page describes the planned design. Until then, use the standard modules for file access, networking and math. They already call C code for you, so you never see the foreign boundary yourself.
 
 ---
 
 ## Declaring foreign functions
 
 ```
-foreign function c_sqrt(value: float) -> float from "libm"
-foreign function SDL_Init(flags: int) -> int from "SDL2"
-foreign function curl_easy_perform(handle: int) -> int from "libcurl"
+foreign function sqrt(value: float) -> float from `libm`
+foreign function sdlInit(flags: int) -> int from `SDL2`
+foreign function curlEasyPerform(handle: int) -> int from `libcurl`
 ```
 
 ---
 
-## The rule: always wrap in safe Yinz functions
+## The rule: always call foreign code through a safe Yinz function
 
-Keep the foreign boundary as small as possible. Declare the foreign function, then immediately wrap it in a safe Yinz function that the rest of your code uses:
+Keep the foreign boundary as small as possible. Declare the foreign function, then put a safe Yinz function around it right away, and let the rest of your code call only that function:
 
 ```
-// The foreign declaration — isolated and contained
-foreign function c_read(fd: int, buffer: int, size: int) -> int from "libc"
+// The foreign declaration — kept in one place
+foreign function readFd(fd: int, buffer: int, size: int) -> int from `libc`
 
-// The safe wrapper — this is what everyone else calls
+// The safe function — this is what everyone else calls
 export function readBinaryFile(path: string) -> array<byte> errors {
-  // all the unsafe stuff is contained here
-  // callers see safe Yinz types and the errors system
+  // all the unchecked foreign calls stay in here
+  // callers see normal Yinz types and the errors system
 }
 ```
 
-The foreign call never leaks outside the wrapper. This keeps unsafe code isolated and makes the rest of the codebase analyzable by the compiler.
+The foreign call never escapes the safe function. That keeps unchecked code in one place, so the compiler can still check the rest of your program.
 
 ---
 
 ## What the compiler cannot do with foreign code
 
-The compiler knows nothing about what a foreign function actually does. It cannot analyze foreign code for ownership safety or concurrency safety. As a result:
+The compiler cannot see what a foreign function does. It cannot check it for ownership mistakes or for problems when two tasks run at the same time. So:
 
-- **All foreign calls require `wait`** — the compiler cannot determine if they're safe to run concurrently
-- **Foreign functions are excluded from auto-parallelization**
-- **The compiler warns on every foreign call** — "Foreign call: compiler cannot verify memory safety. Consider wrapping in a safe Yinz function."
-
----
-
-## Why `foreign` over `unsafe`
-
-`foreign` describes what it IS — code from another language. `unsafe` only says it's dangerous without saying why. A junior developer reading `foreign function c_sqrt(...)` immediately understands: this comes from outside Yinz, the compiler can't check it.
-
----
-
-## Type mapping — note
-
-How C types like `void*`, `char*`, and raw pointers map to Yinz types is an open design question. See [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../internal/scratchpad/SCRATCH-open-questions.md).
+- **Every foreign call needs `wait`.** The compiler can't tell whether it is safe to run the call alongside other work.
+- **The compiler never runs a foreign call at the same time as other code on its own.**
+- **The compiler warns on every foreign call:** `Foreign call: compiler cannot verify memory safety. Consider calling it only through a safe Yinz function.`

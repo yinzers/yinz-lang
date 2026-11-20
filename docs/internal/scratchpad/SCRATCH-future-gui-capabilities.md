@@ -16,7 +16,7 @@ metadata:
 > **Status**: Direction locked, API shape open (decided at implementation time).
 > **Audience**: contributors.
 
-The capability layer is where 80% of the real GUI engineering lives, and it never fully "ends" — every OS version changes device APIs. This is the hard, ongoing part, and it's exactly the kind of problem Yinz is good at: a clean unified surface over messy per-platform reality (Golden Rule 4).
+The capability layer is where 80% of the real GUI engineering lives, and it never fully "ends" — every OS version changes device APIs. This is the hard, ongoing part, and it's exactly the kind of problem Yinz is good at: a clean unified surface over messy per-platform reality (Golden Rule 8).
 
 ---
 
@@ -40,7 +40,7 @@ Each device feature (camera, mic, speaker, touch, GPS, notifications, biometrics
 
 This is the Yinz angle that other stacks lack:
 
-- **Undeclared capability = compile error.** A capability your app uses but didn't declare in its manifest fails at *compile* time (Golden Rule 5, compile-time safety), with a teaching diagnostic that names the capability and the per-platform declaration it generates. No "works on my machine, crashes on the user's phone because Info.plist was missing a string."
+- **Undeclared capability = compile error.** A capability your app uses but didn't declare in its manifest fails at *compile* time (Golden Rule 2, compile-time safety), with a teaching diagnostic that names the capability and the per-platform declaration it generates. No "works on my machine, crashes on the user's phone because Info.plist was missing a string."
 - **A runtime denial is a typed `errors` value, not a silent null.** `camera.capture() errors` — if the user denied camera access, the caller *must* handle the denial (the `errors` keyword forces it). No null-deref, no swallowed failure.
 
 The capability declaration is the single source of truth: the compiler reads it to (a) emit the right per-platform permission metadata (Info.plist entries, Android manifest permissions), and (b) gate the API surface so undeclared use can't compile.
@@ -70,4 +70,4 @@ This layer is open-ended maintenance: each new OS release can add, deprecate, or
 - [`docs/internal/scratchpad/SCRATCH-future-gui-architecture.md`](SCRATCH-future-gui-architecture.md) — the bridge these capabilities ride on
 - [`docs/internal/scratchpad/SCRATCH-future-gui-build-targets.md`](SCRATCH-future-gui-build-targets.md) — where per-platform permission metadata is emitted during packaging
 - [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) — the contract this API obeys
-- [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) / [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 11 — teaching diagnostics for undeclared-capability errors
+- [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) / [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 3 — teaching diagnostics for undeclared-capability errors

@@ -766,7 +766,7 @@ fn union_where_variant_expected_is_rendered_from_the_registry() {
     );
 }
 
-// Golden Rule 11: the WHAT-INSTEAD of `UnionWhereVariantExpected` may only name code that
+// Golden Rule 3: the WHAT-INSTEAD of `UnionWhereVariantExpected` may only name code that
 // compiles today. The base template names `if (value) { is Variant => … }`; that is wrong for a
 // value that is not a name, a variant that is not a shape, and a union with no shape variant
 // (it is the variant's own pointer, not a tag box). Each recovery has its own registry template,
@@ -965,7 +965,7 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
 // v0.3-M9 C1e (#421): a plain value that no union box can hold is refused in typeck with a
 // registry teaching diagnostic, never at codegen's "This is a compiler bug" refusal. Each test
 // renders its template from the registry and compiles the code its WHAT-INSTEAD names (Golden
-// Rule 11).
+// Rule 3).
 
 #[test]
 fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
@@ -1126,7 +1126,7 @@ fn argument_conflicts_with_type_parameter_is_rendered_from_the_registry() {
 
 #[test]
 fn argument_conflicts_with_type_parameter_suggestions_compile() {
-    // WHY: Golden Rule 11 — each alternative the WHAT-INSTEAD names must compile today:
+    // WHY: Golden Rule 3 — each alternative the WHAT-INSTEAD names must compile today:
     // `first` given a `Tiny` too, and the explicit type argument changed to `Tiny`.
     assert_compiles(&format!(
         "{SAME_TWO_SHAPES}function entrypoint() -> nothing {{\n\
@@ -1335,7 +1335,7 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
 // ── v0.3-M9 C1h (#433): `fixed<T, N>` in signatures ─────────────────────────────────────────
 //
 // Each refusal is rendered from its registry template (the slots are the ones the emit site
-// fills), and the code its WHAT-INSTEAD names compiles (Golden Rule 11).
+// fills), and the code its WHAT-INSTEAD names compiles (Golden Rule 3).
 
 #[test]
 fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_compiles() {
@@ -1604,7 +1604,7 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
 
 #[test]
 fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_suggestion_compiles() {
-    // WHY: the refusal's text must come from the registry (Golden Rule 11), and the return type
+    // WHY: the refusal's text must come from the registry (Golden Rule 3), and the return type
     // it suggests (the type parameter first) must compile.
     let program = |return_type: &str| {
         format!(
@@ -1655,7 +1655,7 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
 //
 // The refusal's text comes from its registry template for both ways to free the list (an
 // assignment in the body, a call to a function that assigns), and the copy its WHAT-INSTEAD
-// suggests compiles (Golden Rule 11).
+// suggests compiles (Golden Rule 3).
 
 #[test]
 fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment() {

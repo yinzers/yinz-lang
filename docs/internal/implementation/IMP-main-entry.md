@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-main.md`](../../reference/REF-main.md)
 
 The entry function is always `entrypoint`. The entry file is configured in `yinz.toml`.
 
-**Why `entrypoint` over `main`**: `main` is C folklore — you know it means the entry point only because you've been taught it. `entrypoint` is plain English; a developer who's never seen a compiled language immediately understands what the function is. Golden Rule 2 (self-documenting syntax) and Golden Rule 12 (human-readable over programmer jargon) both push in this direction. When two rules point the same way against a competing rule (Golden Rule 6 — familiar syntax), the lower-numbered rules win. Decided 2026-05-18.
+**Why `entrypoint` over `main`**: `main` is C folklore — you know it means the entry point only because you've been taught it. `entrypoint` is plain English; a developer who's never seen a compiled language immediately understands what the function is. Golden Rule 4 (self-documenting syntax) and Golden Rule 5 (human-readable over programmer jargon) both push in this direction. When two rules point the same way against a competing rule (Golden Rule 12 — familiar syntax), the lower-numbered rules win.
 
 **Why the file name is flexible**: Developers organize projects differently. A web server might be `server.ynz`. A CLI tool might be `app.ynz`. Forcing `entrypoint.ynz` is arbitrary. The `entry` field in `yinz.toml` gives flexibility without giving up the fixed function name convention. The canonical default in docs and examples is `entrypoint.ynz` — self-documenting at a glance.
 

@@ -16,8 +16,8 @@
 //
 // Current coverage: M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 (modules, doc comments,
 // sensitive, concurrency keywords, bignum).
-// M4+ sections are added by each milestone's phases per
-// .claude/rules/plan-invariants.md `### Demo & Error Gallery` requirement.
+// M4+ sections are added by each milestone phase that adds executable surface,
+// with the new feature shown in context.
 
 // M8 module imports — bring names from companion modules into scope.
 // Cross-file CALLS ship in v0.2; the syntax and multi-file project structure ship here in v0.1.
@@ -115,17 +115,23 @@ function entrypoint() -> nothing {
   let battingAverages: array<int> = [317, 282, 295]
   battingAverages.add(308)
   print(battingAverages.count())
-  print(battingAverages[0].or(-1))
+  let foundFirstAverage = battingAverages[0]            // a maybe: the average, or nothing
+  let firstAverage = foundFirstAverage.or(-1)           // a plain int, -1 if missing
+  print(firstAverage)
   // fixed<T>: stack-allocated, size locked — three retired Pirates numbers
   let retiredNumbers: fixed<int> = [1, 4, 8]
   print(retiredNumbers.count())
-  print(retiredNumbers[2].or(-1))
+  let foundRetiredNumber = retiredNumbers[2]
+  let retiredNumber = foundRetiredNumber.or(-1)
+  print(retiredNumber)
   // maybe<T>: absence without null
   let nextHitter: maybe<int> = none
   print(nextHitter.or(0))
   // map<K,V>: hash map with string keys — Pirates career hit leaders
   let hitLeaders: map<string, int> = { `clemente`: 3000, `wagner`: 3420 }
-  print(hitLeaders[`clemente`].or(0))
+  let foundClementeHits = hitLeaders[`clemente`]
+  let clementeHits = foundClementeHits.or(0)
+  print(clementeHits)
   print(hitLeaders.count())
   // ────── M6: options + unions + narrowing ──────
   print(`M6 — options, unions, narrowing:`)
@@ -148,9 +154,11 @@ function entrypoint() -> nothing {
   print(isStarter.toString())
   // Fallible conversions — parsing jersey numbers from strings
   let parsedJersey: maybe<int> = `21`.toInt()
-  print(parsedJersey.or(0).toString())
+  let jerseyOrZero = parsedJersey.or(0)
+  print(jerseyOrZero.toString())
   let fromFloat: maybe<int> = 3.14.toInt()
-  print(fromFloat.or(-1).toString())
+  let wholeOrMissing = fromFloat.or(-1)
+  print(wholeOrMissing.toString())
   let fromInt: int = 99.toInt()
   print(fromInt.toString())
   // Early-return narrowing on maybe<T>
@@ -176,11 +184,15 @@ function entrypoint() -> nothing {
   print(slogan.trim())
   print(`go bucs`.toUpperCase())
   print(`THREE RIVERS`.toLowerCase())
-  print(`Pittsburgh`.contains(`burgh`).toString())
-  print(`Pirates`.startsWith(`Pir`).toString())
-  print(`Clemente`.endsWith(`nte`).toString())
+  const hasBurgh = `Pittsburgh`.contains(`burgh`)
+  print(hasBurgh.toString())
+  const startsWithPir = `Pirates`.startsWith(`Pir`)
+  print(startsWithPir.toString())
+  const endsWithNte = `Clemente`.endsWith(`nte`)
+  print(endsWithNte.toString())
   const idx = `Roberto Clemente`.indexOf(`Clemente`)
-  print(idx.or(-1).toString())
+  const idxOrMissing = idx.or(-1)
+  print(idxOrMissing.toString())
   // Code point iteration — 4 code points in "café"
   let charCount = 0
   for (c in `café`) {
@@ -190,10 +202,12 @@ function entrypoint() -> nothing {
   // String splitting — comma-separated career stats (hits,homers,RBIs)
   const careerLine = `3000,240,1305`
   const parts = careerLine.split(`,`)
-  print(parts.count().toString())
+  const careerPartCount = parts.count()
+  print(careerPartCount.toString())
   // errors keyword — fallible function with .or() fallback
   // 127 hits / 400 atBats → .317 batting average (returned in thousandths)
-  const avg = battingAverage(127, 400).or(0)
+  const averageAttempt = battingAverage(127, 400)
+  const avg = averageAttempt.or(0)
   print(avg.toString())
   // errors with .failed() check — would fail if atBats == 0
   const okAvg = battingAverage(50, 200)
@@ -495,7 +509,7 @@ function waitForRosterSlot(n: int) -> int {
 // scheduleCheck — a nested state machine: calls waitForRosterSlot (value-returning
 // SM), then announcePirate (also suspending). Demonstrates inline poll-and-yield:
 // each nested suspending call is driven as an embedded sub-frame — no OS bridge.
-// Step-by-step style (Golden Rule 7) keeps each local's use within a single
+// Step-by-step style (Golden Rule 9) keeps each local's use within a single
 // suspension segment — the clearest form. Frame-backed crossing locals, which
 // span suspension points, are also supported for cases that need them.
 function scheduleCheck(name: string) -> nothing {
@@ -1247,7 +1261,8 @@ function m8_demo() -> nothing {
   let delivered = lineupWire.receive()
   if (delivered.exists()) {
     let lineup = delivered.value
-    print(`  lineup received with ${lineup.count().toString()} jerseys`)
+    let lineupSize = lineup.count()
+    print(`  lineup received with ${lineupSize.toString()} jerseys`)
   }
   let after = lineupWire.receive()
   if (after.exists()) {
@@ -1472,7 +1487,8 @@ function m5_soa_demo() -> nothing {
     // (`.add`) or letting the array escape this function would turn it off.
     let i: int = 0
     while (i < 128) {
-      let b = volley[i].or(grounded)
+      let foundBall = volley[i]
+      let b = foundBall.or(grounded)
       volley[i] = { x: b.x + b.vx, y: b.y + b.vy, vx: b.vx, vy: b.vy - gravity, ship: b.ship }
       i = i + 1
     }
@@ -1500,7 +1516,8 @@ function m5_soa_demo() -> nothing {
   // Cold field read AFTER the loops: `ship` never appears in a loop over
   // `volley`, so reading it off a copied-out element leaves the hot-field
   // set at x/y — the layout decision is unaffected.
-  let lead = volley[0].or(grounded)
+  let foundLead = volley[0]
+  let lead = foundLead.or(grounded)
   print(`  lead ball fired from: ${lead.ship}`)
   print(`  lead ball final height:`)
   print(lead.y)
@@ -1557,19 +1574,29 @@ function m5_soa_demo() -> nothing {
   let noHold: array<int> = []
   let captainsManifest: array<array<int>> = [foreHold]
   let quartermastersManifest: array<array<int>> = captainsManifest.copy()
-  let quartermastersFore: array<int> = quartermastersManifest[0].or(noHold)
+  let foundQuartermastersFore = quartermastersManifest[0]
+  let quartermastersFore: array<int> = foundQuartermastersFore.or(noHold)
   quartermastersFore.set(0, 99)
-  let captainsFore: array<int> = captainsManifest[0].or(noHold)
-  print(`  captain's fore hold, first crate: ${captainsFore[0].or(-1).toString()}`)
-  print(`  quartermaster's fore hold, first crate: ${quartermastersFore[0].or(-1).toString()}`)
+  let foundCaptainsFore = captainsManifest[0]
+  let captainsFore: array<int> = foundCaptainsFore.or(noHold)
+  let foundCaptainsFirstCrate = captainsFore[0]
+  let captainsFirstCrate = foundCaptainsFirstCrate.or(-1)
+  print(`  captain's fore hold, first crate: ${captainsFirstCrate.toString()}`)
+  let foundQuartermastersFirstCrate = quartermastersFore[0]
+  let quartermastersFirstCrate = foundQuartermastersFirstCrate.or(-1)
+  print(`  quartermaster's fore hold, first crate: ${quartermastersFirstCrate.toString()}`)
 
   // The same rule at a fixed-size list: `fixed<T>` holds its items in one block
   // of cells, so copying the cells copies the list.
   let watchBell: fixed<int> = [4, 8, 12]
   let sparebell: fixed<int> = watchBell.copy()
   sparebell.set(0, 1)
-  print(`  ship's bell, first watch: ${watchBell[0].or(-1).toString()}`)
-  print(`  spare bell, first watch: ${sparebell[0].or(-1).toString()}`)
+  let foundWatchFirstBell = watchBell[0]
+  let watchFirstBell = foundWatchFirstBell.or(-1)
+  print(`  ship's bell, first watch: ${watchFirstBell.toString()}`)
+  let foundSpareFirstBell = sparebell[0]
+  let spareFirstBell = foundSpareFirstBell.or(-1)
+  print(`  spare bell, first watch: ${spareFirstBell.toString()}`)
 
   // And where a separate copy could not mean anything, `.copy()` refuses at
   // compile time instead of handing back the same thing. A channel is the line

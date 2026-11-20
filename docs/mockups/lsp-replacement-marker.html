@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Yinz LSP: replacement marker (dotted underline), VS Code Dark Modern</title>
+<style>
+/* Codicons: VS Code's own icon font. Local copy first, CDN fallback for the repo copy. */
+@font-face { font-family: codicon; src: url("codicon.ttf") format("truetype"), url("https://cdn.jsdelivr.net/npm/@vscode/codicons/dist/codicon.ttf") format("truetype"); }
+
+/* Colour roles: VS Code Dark Modern theme tokens (stock), plus one colour the extension contributes (yinz.lessonUnderline). */
+:root {
+  --chrome-bg: #181818;        /* titleBar / activityBar / tabs / statusBar background */
+  --chrome-border: #2b2b2b;    /* panel and bar borders */
+  --editor-bg: #1f1f1f;        /* editor.background */
+  --fg: #cccccc;               /* foreground */
+  --fg-muted: #9d9d9d;         /* descriptionForeground */
+  --fg-dim: #868686;           /* activityBar.inactiveForeground */
+  --line-no: #6e7681;          /* editorLineNumber.foreground */
+  --line-no-active: #cccccc;   /* editorLineNumber.activeForeground */
+  --line-hl-border: #282828;   /* editor.lineHighlightBorder */
+  --guide: #404040;            /* editorIndentGuide.background */
+  --accent: #0078d4;           /* focusBorder, active tab top border, remote button */
+  --widget-bg: #202020;        /* editorWidget.background / editorHoverWidget.background */
+  --widget-border: #454545;    /* editorHoverWidget.border */
+  --code-bg: #2b2b2b;          /* textCodeBlock.background (inline code in hover) */
+  --list-focus: #04395e;       /* list.activeSelectionBackground */
+  --bulb: #ffcc00;             /* editorLightBulb.foreground */
+  --caret: #aeafad;            /* editorCursor.foreground */
+  /* syntax (Dark Modern = Dark+ token colours) */
+  --t-kw: #569cd6; --t-fn: #dcdcaa; --t-var: #9cdcfe; --t-ty: #4ec9b0; --t-num: #b5cea8; --t-op: #d4d4d4;
+  --t-b1: #ffd700; --t-b2: #da70d6;   /* bracket pair colourisation level 1, 2 */
+  /* The replacement marker: dotted cyan underline (yinz.lessonUnderline), dotted (not a squiggle) so it never
+     reads as an error or warning diagnostic. #4FD1E8 on #1f1f1f = 9.12:1, above the 3:1 non-text minimum. */
+  --replacement-marker: #4FD1E8; /* yinz.lessonUnderline (dark default), user-overridable */
+  --mono: "Droid Sans Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace; /* VS Code editor default stack */
+  --ui: -apple-system, "Segoe UI", system-ui, Ubuntu, "DejaVu Sans", sans-serif; /* VS Code workbench stack */
+}
+
+/* THE ONE NEW VISUAL: decoration on the existing token. */
+.sugg {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--replacement-marker);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* ---- page (presentation only, not part of the build) ---- */
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px; background: #111; color: var(--fg); font: 14px/1.45 var(--ui); }
+h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+.lede { margin: 0 0 24px; color: var(--fg-muted); max-width: 80ch; }
+.lede code, figcaption code { font-family: var(--mono); color: var(--fg); }
+.shot { margin: 0 0 32px; width: 1000px; }
+figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
+.ci { font-family: codicon; font-size: 16px; line-height: 1; font-style: normal; -webkit-font-smoothing: antialiased; }
+
+/* ---- VS Code window ---- */
+.win { width: 1000px; height: 440px; display: flex; flex-direction: column; background: var(--editor-bg); border: 1px solid var(--chrome-border); border-radius: 8px; overflow: hidden; font: 13px/1.4 var(--ui); }
+.title { height: 35px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: var(--chrome-bg); border-bottom: 1px solid var(--chrome-border); color: var(--fg-dim); }
+.title .logo { margin-left: 210px; }
+.title .cmd { margin: 0 auto; width: 380px; height: 24px; border: 1px solid #3c3c3c; border-radius: 6px; background: #1f1f1f; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--fg); font-size: 12px; transform: translateX(-60px); }
+.title .cmd .ci { font-size: 14px; color: var(--fg-dim); }
+.body { flex: 1; display: flex; min-height: 0; }
+.activity { width: 48px; flex: none; background: var(--chrome-bg); border-right: 1px solid var(--chrome-border); display: flex; flex-direction: column; align-items: center; padding-top: 4px; }
+.activity .ci { font-size: 24px; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; color: var(--fg-dim); }
+.activity .ci.on { color: #d7d7d7; box-shadow: inset 2px 0 0 var(--accent); }
+.activity .sp { flex: 1; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.tabs { height: 35px; flex: none; display: flex; background: var(--chrome-bg); border-bottom: 1px solid var(--chrome-border); }
+.tab { display: flex; align-items: center; gap: 6px; padding: 0 10px; color: #9d9d9d; border-right: 1px solid var(--chrome-border); }
+.tab.active { background: var(--editor-bg); color: #ffffff; box-shadow: inset 0 1px 0 var(--accent); margin-bottom: -1px; }
+.tab .x { font-size: 14px; margin-left: 8px; color: var(--fg); }
+.tabfill { flex: 1; }
+.tact { color: var(--fg); padding: 0 6px; align-self: center; }
+.ficon { display: inline-flex; width: 14px; height: 14px; border-radius: 3px; background: #8a5cf5; color: #fff; font: 700 10px/14px var(--ui); justify-content: center; }
+.crumbs { height: 22px; flex: none; display: flex; align-items: center; gap: 4px; padding-left: 18px; color: #a9a9a9; font-size: 13px; }
+.crumbs .ci { font-size: 14px; }
+.crumbs .sym { color: #b180d7; }
+
+/* ---- editor ---- */
+.editor { flex: 1; display: flex; font: 14px/19px var(--mono); position: relative; }
+.gutter { width: 66px; flex: none; position: relative; padding-right: 26px; text-align: right; color: var(--line-no); }
+.ln { height: 19px; }
+.ln.cur { color: var(--line-no-active); }
+.bulb { position: absolute; left: 6px; width: 16px; height: 19px; display: flex; align-items: center; color: var(--bulb); font-size: 16px; }
+.content { position: relative; flex: 1; }
+.code { margin: 0; font: inherit; color: var(--t-op); white-space: pre; position: relative; }
+.lh { position: absolute; left: -26px; right: 0; height: 19px; border: 2px solid var(--line-hl-border); }
+.guide { position: absolute; left: 0; width: 1px; background: var(--guide); }
+.kw { color: var(--t-kw); } .fn { color: var(--t-fn); } .var { color: var(--t-var); }
+.ty { color: var(--t-ty); } .num { color: var(--t-num); } .op { color: var(--t-op); }
+.b1 { color: var(--t-b1); } .b2 { color: var(--t-b2); }
+.anchor { position: absolute; width: 0; height: 0; }
+.caret { position: absolute; top: 0; left: 0; width: 2px; height: 19px; background: var(--caret); }
+.ptr { position: absolute; left: 12px; top: -14px; z-index: 3; }
+
+/* ---- stock hover widget ---- */
+.hover { position: absolute; top: 2px; left: 0; z-index: 2; width: 500px; padding: 4px 8px; background: var(--widget-bg); border: 1px solid var(--widget-border); border-radius: 3px; box-shadow: 0 0 8px 2px rgba(0,0,0,.36); color: var(--fg); font: 13px/1.5 var(--ui); white-space: normal; }
+.hover p { margin: 8px 0; }
+.hover strong { font-weight: 700; }
+.hover code { font: 12.5px var(--mono); background: var(--code-bg); padding: 1px 3px; border-radius: 3px; }
+
+/* ---- stock code-action (lightbulb) menu ---- */
+.actions { position: absolute; top: 2px; left: -6px; z-index: 2; min-width: 260px; padding: 4px; background: var(--widget-bg); border: 1px solid var(--widget-border); border-radius: 5px; box-shadow: 0 0 8px 2px rgba(0,0,0,.36); font: 13px/24px var(--ui); white-space: nowrap; }
+.actions .hdr { padding: 0 8px; color: var(--fg-muted); font-size: 12px; font-weight: 600; }
+.actions .item { display: flex; align-items: center; gap: 6px; padding: 0 12px 0 8px; height: 24px; border-radius: 3px; color: var(--fg); }
+.actions .item.focused { background: var(--list-focus); outline: 1px solid var(--accent); outline-offset: -1px; color: #fff; }
+.actions .item .ci { font-size: 16px; }
+
+/* ---- status bar ---- */
+.status { height: 22px; flex: none; display: flex; align-items: center; gap: 14px; background: var(--chrome-bg); border-top: 1px solid var(--chrome-border); color: var(--fg); font-size: 12px; padding-right: 10px; }
+.status .ci { font-size: 14px; vertical-align: -2px; }
+.status .remote { background: var(--accent); color: #fff; height: 22px; width: 36px; display: flex; align-items: center; justify-content: center; }
+.status .sp { flex: 1; }
+</style></head>
+<body>
+<h1>Yinz VS Code extension · Replacement marker</h1>
+<p class="lede">The only new visual is the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>array</code> (line 3). Hover widget, lightbulb and code-action menu are stock VS Code, Dark Modern theme.</p>
+
+<figure class="shot" id="rest">
+<figcaption>0 · At rest: the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>array</code> (line 3) is the only new visual</figcaption>
+<div class="win">
+  <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
+  <div class="body">
+    <div class="activity">
+      <span class="ci on">&#xeaf0;</span><span class="ci">&#xea6d;</span><span class="ci">&#xea68;</span><span class="ci">&#xeb91;</span><span class="ci">&#xeae6;</span>
+      <div class="sp"></div><span class="ci">&#xeb99;</span><span class="ci">&#xeb51;</span>
+    </div>
+    <div class="main">
+      <div class="tabs"><div class="tab active"><span class="ficon">Y</span>main.yinz<span class="ci x">&#xea76;</span></div><div class="tabfill"></div><span class="ci tact">&#xeb56;</span><span class="ci tact">&#xea7c;</span></div>
+      <div class="crumbs">src <span class="ci">&#xeab6;</span> <span class="ficon">Y</span>main.yinz <span class="ci">&#xeab6;</span> <span class="ci sym">&#xea8c;</span>main</div>
+      <div class="editor">
+        <div class="gutter"><div class="ln">1</div><div class="ln">2</div><div class="ln">3</div><div class="ln">4</div><div class="ln">5</div><div class="ln cur">6</div></div>
+        <div class="content">
+          <div class="lh" style="top:95px"></div>
+          <div class="guide" style="top:19px;height:76px"></div>
+          <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
+    <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
+<span class="b1">}</span></pre>
+          <div class="anchor" style="left:1ch;top:95px"><div class="caret"></div></div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="status"><span class="remote ci">&#xeb3a;</span><span><span class="ci">&#xea87;</span> 0 <span class="ci">&#xea6c;</span> 0</span><div class="sp"></div><span>Ln 6, Col 2</span><span>Spaces: 4</span><span>UTF-8</span><span>LF</span><span>Yinz</span><span class="ci">&#xeaa2;</span></div>
+</div>
+</figure>
+<figure class="shot" id="hover-let">
+<figcaption>1 · Mouse over <code>let</code> (line 2): stock hover</figcaption>
+<div class="win">
+  <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
+  <div class="body">
+    <div class="activity">
+      <span class="ci on">&#xeaf0;</span><span class="ci">&#xea6d;</span><span class="ci">&#xea68;</span><span class="ci">&#xeb91;</span><span class="ci">&#xeae6;</span>
+      <div class="sp"></div><span class="ci">&#xeb99;</span><span class="ci">&#xeb51;</span>
+    </div>
+    <div class="main">
+      <div class="tabs"><div class="tab active"><span class="ficon">Y</span>main.yinz<span class="ci x">&#xea76;</span></div><div class="tabfill"></div><span class="ci tact">&#xeb56;</span><span class="ci tact">&#xea7c;</span></div>
+      <div class="crumbs">src <span class="ci">&#xeab6;</span> <span class="ficon">Y</span>main.yinz <span class="ci">&#xeab6;</span> <span class="ci sym">&#xea8c;</span>main</div>
+      <div class="editor">
+        <div class="gutter"><div class="ln">1</div><div class="ln">2</div><div class="ln">3</div><div class="ln">4</div><div class="ln">5</div><div class="ln cur">6</div></div>
+        <div class="content">
+          <div class="lh" style="top:95px"></div>
+          <div class="guide" style="top:19px;height:76px"></div>
+          <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
+    <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
+<span class="b1">}</span></pre>
+          <div class="anchor" style="left:1ch;top:95px"><div class="caret"></div></div>
+          <div class="anchor" style="left:4ch;top:38px"><svg class="ptr" width="14" height="21" viewBox="0 0 14 21" aria-hidden="true"><path d="M1 1v16l4-4 3 7 2.5-1-3-6.6H13z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg><div class="hover" role="tooltip">
+  <p><strong>WHAT:</strong> The compiler treats this <code>let</code> as a <code>const</code>, because nothing in this function ever reassigns it, changes it, or lends it out to be changed.</p>
+  <p><strong>WHAT INSTEAD:</strong> Write <code>const</code> instead of <code>let</code>, for example <code>const count = 5</code>, or use the "Write 'const' instead of 'let'" action on the underlined word. If you do need to change it later, keep <code>let</code>.</p>
+  <p><strong>WHY:</strong> A value that never changes can be treated as fixed for the whole function, and writing <code>const</code> tells readers at a glance that it will not change.</p>
+</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="status"><span class="remote ci">&#xeb3a;</span><span><span class="ci">&#xea87;</span> 0 <span class="ci">&#xea6c;</span> 0</span><div class="sp"></div><span>Ln 6, Col 2</span><span>Spaces: 4</span><span>UTF-8</span><span>LF</span><span>Yinz</span><span class="ci">&#xeaa2;</span></div>
+</div>
+</figure>
+<figure class="shot" id="hover-array">
+<figcaption>2 · Mouse over <code>array</code> (line 3): stock hover</figcaption>
+<div class="win">
+  <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
+  <div class="body">
+    <div class="activity">
+      <span class="ci on">&#xeaf0;</span><span class="ci">&#xea6d;</span><span class="ci">&#xea68;</span><span class="ci">&#xeb91;</span><span class="ci">&#xeae6;</span>
+      <div class="sp"></div><span class="ci">&#xeb99;</span><span class="ci">&#xeb51;</span>
+    </div>
+    <div class="main">
+      <div class="tabs"><div class="tab active"><span class="ficon">Y</span>main.yinz<span class="ci x">&#xea76;</span></div><div class="tabfill"></div><span class="ci tact">&#xeb56;</span><span class="ci tact">&#xea7c;</span></div>
+      <div class="crumbs">src <span class="ci">&#xeab6;</span> <span class="ficon">Y</span>main.yinz <span class="ci">&#xeab6;</span> <span class="ci sym">&#xea8c;</span>main</div>
+      <div class="editor">
+        <div class="gutter"><div class="ln">1</div><div class="ln">2</div><div class="ln">3</div><div class="ln">4</div><div class="ln">5</div><div class="ln cur">6</div></div>
+        <div class="content">
+          <div class="lh" style="top:95px"></div>
+          <div class="guide" style="top:19px;height:76px"></div>
+          <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
+    <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
+<span class="b1">}</span></pre>
+          <div class="anchor" style="left:1ch;top:95px"><div class="caret"></div></div>
+          <div class="anchor" style="left:16ch;top:57px"><svg class="ptr" width="14" height="21" viewBox="0 0 14 21" aria-hidden="true"><path d="M1 1v16l4-4 3 7 2.5-1-3-6.6H13z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg><div class="hover" role="tooltip">
+  <p><strong>WHAT:</strong> The compiler stores this value as a fixed-size <code>fixed&lt;T&gt;</code> instead of a growable <code>array&lt;T&gt;</code>, because nothing in this function ever grows it.</p>
+  <p><strong>WHAT INSTEAD:</strong> Write <code>fixed</code> instead of <code>array</code> in the annotation, for example <code>let nums: fixed&lt;int&gt; = [1, 2, 3]</code>, or use the "Write 'fixed' instead of 'array'" action on the underlined word. If you do need to add items later, keep <code>array</code>.</p>
+  <p><strong>WHY:</strong> A fixed-size list never has to grow, so it is cheaper to create and use than a growable <code>array</code>, and writing <code>fixed</code> tells readers its size will not change.</p>
+</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="status"><span class="remote ci">&#xeb3a;</span><span><span class="ci">&#xea87;</span> 0 <span class="ci">&#xea6c;</span> 0</span><div class="sp"></div><span>Ln 6, Col 2</span><span>Spaces: 4</span><span>UTF-8</span><span>LF</span><span>Yinz</span><span class="ci">&#xeaa2;</span></div>
+</div>
+</figure>
+<figure class="shot" id="action-let">
+<figcaption>3 · Cursor in <code>let</code>, lightbulb clicked: stock code-action menu, Rewrite group</figcaption>
+<div class="win">
+  <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
+  <div class="body">
+    <div class="activity">
+      <span class="ci on">&#xeaf0;</span><span class="ci">&#xea6d;</span><span class="ci">&#xea68;</span><span class="ci">&#xeb91;</span><span class="ci">&#xeae6;</span>
+      <div class="sp"></div><span class="ci">&#xeb99;</span><span class="ci">&#xeb51;</span>
+    </div>
+    <div class="main">
+      <div class="tabs"><div class="tab active"><span class="ficon">Y</span>main.yinz<span class="ci x">&#xea76;</span></div><div class="tabfill"></div><span class="ci tact">&#xeb56;</span><span class="ci tact">&#xea7c;</span></div>
+      <div class="crumbs">src <span class="ci">&#xeab6;</span> <span class="ficon">Y</span>main.yinz <span class="ci">&#xeab6;</span> <span class="ci sym">&#xea8c;</span>main</div>
+      <div class="editor">
+        <div class="gutter"><div class="bulb ci" style="top:19px">&#xea61;</div><div class="ln">1</div><div class="ln cur">2</div><div class="ln">3</div><div class="ln">4</div><div class="ln">5</div><div class="ln">6</div></div>
+        <div class="content">
+          <div class="lh" style="top:19px"></div>
+          <div class="guide" style="top:19px;height:76px"></div>
+          <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
+    <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
+<span class="b1">}</span></pre>
+          <div class="anchor" style="left:6ch;top:19px"><div class="caret"></div></div>
+          <div class="anchor" style="left:4ch;top:38px"><div class="actions" role="menu">
+  <div class="hdr">Rewrite</div>
+  <div class="item focused" role="menuitem"><span class="ci">&#xeb65;</span>Write &#39;const&#39; instead of &#39;let&#39;</div>
+</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="status"><span class="remote ci">&#xeb3a;</span><span><span class="ci">&#xea87;</span> 0 <span class="ci">&#xea6c;</span> 0</span><div class="sp"></div><span>Ln 2, Col 7</span><span>Spaces: 4</span><span>UTF-8</span><span>LF</span><span>Yinz</span><span class="ci">&#xeaa2;</span></div>
+</div>
+</figure>
+<figure class="shot" id="action-array">
+<figcaption>4 · Cursor in <code>array</code>, lightbulb clicked: stock code-action menu, Rewrite group</figcaption>
+<div class="win">
+  <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
+  <div class="body">
+    <div class="activity">
+      <span class="ci on">&#xeaf0;</span><span class="ci">&#xea6d;</span><span class="ci">&#xea68;</span><span class="ci">&#xeb91;</span><span class="ci">&#xeae6;</span>
+      <div class="sp"></div><span class="ci">&#xeb99;</span><span class="ci">&#xeb51;</span>
+    </div>
+    <div class="main">
+      <div class="tabs"><div class="tab active"><span class="ficon">Y</span>main.yinz<span class="ci x">&#xea76;</span></div><div class="tabfill"></div><span class="ci tact">&#xeb56;</span><span class="ci tact">&#xea7c;</span></div>
+      <div class="crumbs">src <span class="ci">&#xeab6;</span> <span class="ficon">Y</span>main.yinz <span class="ci">&#xeab6;</span> <span class="ci sym">&#xea8c;</span>main</div>
+      <div class="editor">
+        <div class="gutter"><div class="bulb ci" style="top:38px">&#xea61;</div><div class="ln">1</div><div class="ln">2</div><div class="ln cur">3</div><div class="ln">4</div><div class="ln">5</div><div class="ln">6</div></div>
+        <div class="content">
+          <div class="lh" style="top:38px"></div>
+          <div class="guide" style="top:19px;height:76px"></div>
+          <pre class="code"><span class="kw">function</span> <span class="fn">main</span><span class="b1">()</span> <span class="b1">{</span>
+    <span class="kw sugg">let</span> <span class="var">count</span> <span class="op">=</span> <span class="num">5</span>
+    <span class="kw">let</span> <span class="var">scores</span><span class="op">:</span> <span class="ty sugg">array</span><span class="op">&lt;</span><span class="ty">int</span><span class="op">&gt;</span> <span class="op">=</span> <span class="b2">[</span><span class="num">90</span><span class="op">,</span> <span class="num">85</span><span class="op">,</span> <span class="num">77</span><span class="b2">]</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">count</span><span class="b2">)</span>
+    <span class="fn">print</span><span class="b2">(</span><span class="var">scores</span><span class="b2">)</span>
+<span class="b1">}</span></pre>
+          <div class="anchor" style="left:18ch;top:38px"><div class="caret"></div></div>
+          <div class="anchor" style="left:16ch;top:57px"><div class="actions" role="menu">
+  <div class="hdr">Rewrite</div>
+  <div class="item focused" role="menuitem"><span class="ci">&#xeb65;</span>Write &#39;fixed&#39; instead of &#39;array&#39;</div>
+</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="status"><span class="remote ci">&#xeb3a;</span><span><span class="ci">&#xea87;</span> 0 <span class="ci">&#xea6c;</span> 0</span><div class="sp"></div><span>Ln 3, Col 19</span><span>Spaces: 4</span><span>UTF-8</span><span>LF</span><span>Yinz</span><span class="ci">&#xeaa2;</span></div>
+</div>
+</figure>
+</body></html>

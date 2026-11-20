@@ -1,6 +1,6 @@
 ---
 name: "REF-destructuring"
-description: "Pull fields out of a type into named variables in one line."
+description: "Pull fields out of a shape value into named variables in one line."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -13,21 +13,21 @@ metadata:
 
 # Destructuring
 
-Pull fields out of a type into named variables in one line.
+Pull fields out of a shape value into named variables in one line.
 
 ---
 
 ## Basic destructuring
 
 ```
-let player: Player = { name: "Alice", health: 100, score: 50 }
+let player: Player = { name: `Alice`, health: 100, score: 50 }
 
 let { name, health } = player
-print(name)    // "Alice"
+print(name)    // Alice
 print(health)  // 100
 ```
 
-The compiler knows the type of `player` at compile time, so it knows every field is guaranteed to exist. No runtime risk.
+The compiler knows which shape `player` is before the program runs, so every field is guaranteed to exist. Nothing can go wrong while the program runs.
 
 ---
 
@@ -82,7 +82,7 @@ print(remainder)  // 1
 
 ## No array destructuring
 
-Array indices are not compile-time guaranteed. Destructuring would bypass the `.get()` safety check. Use `.get()` instead:
+The compiler can't know before the program runs whether an array has an item at a given position. Destructuring would skip the safe `.get()` check. Use `.get()` instead:
 
 ```
 // NOT allowed
@@ -90,8 +90,10 @@ let [first, second] = items
 // COMPILE ERROR: Array destructuring is not allowed. Use .get() for safe index access.
 
 // Safe — .get() returns maybe
-let first = items.get(0).or(defaultItem)
-let second = items.get(1).or(defaultItem)
+let foundFirst = items.get(0)             // a Maybe: the item, or nothing
+let first = foundFirst.or(defaultItem)    // a plain item, defaultItem if missing
+let foundSecond = items.get(1)
+let second = foundSecond.or(defaultItem)
 ```
 
-Object fields are guaranteed by the type system. Array indices are not. Different safety profile, different access pattern.
+A shape's fields always exist. An array position might not. That is why shapes can be destructured and arrays can't.

@@ -76,7 +76,7 @@ fn test_formatting_canonical_file_returns_empty_vec() {
 fn test_formatting_parse_error_file_returns_empty_vec_and_show_message() {
     // WHY: format-on-save on a file with parse errors must BOTH return empty edits
     // AND emit window/showMessage so the user knows WHY nothing happened (Golden
-    // Rule 11 teaching mission — silent empty is duct tape per no-duct-tape.md).
+    // Rule 3 teaching mission — silent empty is duct tape per no-duct-tape.md).
     // This test asserts both sides of the contract.
     let src = "function broken( -> nothing {}\n"; // missing param closing paren
     let (state, uri) = state_single("/tmp/ynz_fmt_broken.ynz", src);

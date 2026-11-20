@@ -15,7 +15,7 @@ metadata:
 
 > Audience: compiler contributors. For user docs, see [`docs/reference/REF-tooling.md`](../../reference/REF-tooling.md) (the `ynz watch` / `ynz watch --run` section).
 
-Cross-references: [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md), [`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md), [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md)
+Cross-references: [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md), [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md), [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md)
 
 ---
 
@@ -384,9 +384,9 @@ Rationale: editor save sequences typically settle within 50ms (empirical: VS Cod
 
 Press `r` to trigger manual rebuild, `q` to quit, etc. Not in M4 — M4 ships a non-interactive loop only. Design pointer: when this ships, the key-reading loop belongs in `event_loop.rs` alongside the file-event loop, not as a separate thread. Registered in [`registry/features.toml`](../../../registry/features.toml) as `ynz-watch-interactive-commands`.
 
-### Config file rejection (explicit)
+### Config file
 
-`.ynzwatch.toml` (or equivalent per-watch config file) was considered and explicitly rejected. Yinz's zero-config ethos means env vars only for tuning. A config file would add discovery logic, schema versioning, and documentation overhead for parameters most users never touch. If real demand emerges, the decision can be revisited. Registered in [`registry/features.toml`](../../../registry/features.toml) as `ynz-watch-config-file` (rejection, not deferral).
+Decided: a per-watch config file (`.ynzwatch.toml`) rejected; tuning is by env vars only. Registered in [`registry/features.toml`](../../../registry/features.toml) as `ynz-watch-config-file` (rejection, not deferral).
 
 ### `yinz.toml` hot-reload (deferred to v0.5)
 
@@ -415,12 +415,12 @@ Phase 6 results will be filled in here after measurement.
 ## Cross-References
 
 - [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md) — salsa architecture; quick-start watch summary
-- [`docs/internal/decisions/ADR-compiler-language.md`](../decisions/ADR-compiler-language.md) — salsa-first architecture; "Why Salsa" section
+- [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md) — salsa-first architecture; "Salsa: one pipeline for CLI and LSP" section
 - [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md) — SSOT for deferred tooling features registered from M4
 - [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) — parallel daemon (ynz-lsp); no shared code with watch (independent daemons, parallel-shippable per roadmap)
 - [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md) — WHAT/WHAT-INSTEAD/WHY format watch diagnostics use
 - [`docs/reference/REF-compiler-errors.md`](../../reference/REF-compiler-errors.md) — banned-jargon source-of-truth; watch must not emit banned words
-- [`docs/internal/decisions/ADR-versioning.md`](../decisions/ADR-versioning.md) — pre-v1.0 breaking-change policy; `--json` schema version strategy
+- [`docs/internal/implementation/IMP-versioning.md`](IMP-versioning.md) — pre-v1.0 breaking-change policy; `--json` schema version strategy
 - [`registry/features.toml`](../../../registry/features.toml) — `ynz-watch-interactive-commands`, `ynz-watch-config-file` deferred entries
 - [`.claude/planning/done/2026-05-20-v0-2-m4-watch/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m4-watch/plan.md) — implementation plan; all constraints + locked decisions
 - [`.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md) — daemon-with-CompilerDb pattern reference

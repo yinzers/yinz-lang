@@ -32,12 +32,13 @@ use crate::{
     folding_range::folding_range_response,
     formatting::{formatting_response, range_formatting_response},
     goto_definition::definition_response,
-    hover::hover_response,
+    hover::{hover_response, promotion_hover},
     inlay_hint::inlay_hint_response,
     position::LineTable,
     references::references_response,
     rename::{prepare_rename_response, rename_response},
     rename_file::did_rename_files,
+    replacement_marker::promotion_marks,
     semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
     state::ServerState,
 };
@@ -288,16 +289,24 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
             let shape_table = sig_output.as_ref().map(|o| &o.shape_table);
             let imported_options = sig_output.as_ref().map(|o| &o.imported_options);
             let module = parse_output.as_ref().map(|p| &p.module);
-            hover_response(
-                &lex.tokens,
-                sig,
-                module,
-                text,
-                table,
-                byte_offset,
-                state.encoding,
-                shape_table,
-                imported_options,
+            let promotion_marks = state
+                .source_file_for(uri)
+                .map(|sf| promotion_marks(&state.db, sf))
+                .unwrap_or_default();
+            promotion_hover(&promotion_marks, text, table, byte_offset, state.encoding).or_else(
+                || {
+                    hover_response(
+                        &lex.tokens,
+                        sig,
+                        module,
+                        text,
+                        table,
+                        byte_offset,
+                        state.encoding,
+                        shape_table,
+                        imported_options,
+                    )
+                },
             )
         });
 

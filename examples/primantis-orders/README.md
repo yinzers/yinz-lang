@@ -1,10 +1,10 @@
-# `examples/primantis-orders/` — Per-Milestone Compile-Error Gallery
+# `examples/primantis-orders/` — Compile-Error Gallery
 
 **Layout: gallery** (loose `.ynz` files, no `yinz.toml`). Not a Yinz project — these files are standalone scripts the compiler ingests one at a time to show error diagnostics.
 
-**Theme:** Primanti's kitchen — orders going sideways during the rush. Each milestone's error classes triggered with restaurant-flavored code (sandwiches, orders, tabs, toppings). Deeper theming on the M1/M2/M4 files; the remaining files have a themed header + light variable renames with the error-trigger patterns kept identical to the originals.
+**Theme:** Primanti's kitchen — orders going sideways during the rush. Each file's error classes triggered with restaurant-flavored code (sandwiches, orders, tabs, toppings). Deeper theming on the M1/M2/M4 files; the remaining files have a themed header + light variable renames with the error-trigger patterns kept identical to the originals.
 
-One file per milestone showing every compile error that milestone's diagnostics can produce. Yinz multi-errors (up to 50 per compile per [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md)), so each file demonstrates many simultaneous diagnostics in one compile run.
+One file per work item that adds compile-error classes, showing every compile error that work item's diagnostics can produce. Yinz multi-errors (up to 50 per compile per [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md)), so each file demonstrates many simultaneous diagnostics in one compile run.
 
 ## How to run
 
@@ -13,12 +13,12 @@ source $HOME/.cargo/env
 ./target/debug/ynz build examples/primantis-orders/m1_errors.ynz   # prints all M1 errors
 ./target/debug/ynz build examples/primantis-orders/m2_errors.ynz   # M1 + M2 errors
 ./target/debug/ynz build examples/primantis-orders/m3_errors.ynz   # M1 + M2 + M3 errors
-# ... and so on per milestone
+# ... and so on, one file per work item
 ```
 
 These files are INTENTIONALLY broken — they're not meant to compile. The point is to see the teaching diagnostics in action.
 
-## What each milestone covers
+## What each file covers
 
 | File | Status | Error classes demonstrated |
 |---|---|---|
@@ -44,7 +44,7 @@ These files are INTENTIONALLY broken — they're not meant to compile. The point
 
 ## Why this exists
 
-[`.claude/rules/plan-invariants.md`](../../.claude/rules/plan-invariants.md) `### Demo & Error Gallery` subsection: every phase that adds new compile-error classes MUST extend the corresponding milestone gallery file with intentional triggers. Each trigger has a `// WHY:` comment naming the diagnostic class. This gives Patrick a visible reference for the language's teaching diagnostics — the human-eyes-on layer that automated snapshot tests can't replace.
+Every work item that adds compile-error classes adds one new gallery file named `<version>_<slug>_errors.ynz`, registered in `crates/ynz-driver/tests/error_galleries.rs`; existing gallery files stay as they are. Each trigger has a `// WHY:` comment naming the diagnostic class. This gives maintainers a visible reference for the language's teaching diagnostics — the human-eyes-on layer that automated snapshot tests can't replace.
 
 ## Companion: `examples/pirates-roster/`
 

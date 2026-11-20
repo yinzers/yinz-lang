@@ -132,6 +132,35 @@ impl HarnessClient {
             .ok();
     }
 
+    /// Send `method` with `params` and return the `result` of its response,
+    /// skipping notifications (diagnostics, progress) that arrive first.
+    /// Panics when the server answers with an error or closes the channel.
+    pub fn request(&self, id: i32, method: &str, params: Value) -> Value {
+        self.conn
+            .sender
+            .send(lsp_server::Message::Request(lsp_server::Request {
+                id: lsp_server::RequestId::from(id),
+                method: method.to_string(),
+                params,
+            }))
+            .unwrap();
+        loop {
+            match self.conn.receiver.recv().unwrap() {
+                lsp_server::Message::Response(response)
+                    if response.id == lsp_server::RequestId::from(id) =>
+                {
+                    assert!(
+                        response.error.is_none(),
+                        "{method} returned an error: {:?}",
+                        response.error
+                    );
+                    return response.result.unwrap_or(Value::Null);
+                }
+                _ => continue,
+            }
+        }
+    }
+
     /// Read the next response from the server (blocks).
     pub fn recv_response(&self) -> Value {
         match self.conn.receiver.recv().unwrap() {

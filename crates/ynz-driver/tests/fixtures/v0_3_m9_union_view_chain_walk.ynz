@@ -1,6 +1,6 @@
 // v0.3-M9 C1f (#423) round 2: `held` is a view of the `share` parameter's field and `chain` is a view
 // read THROUGH `held` (`let b = a.g` with `a` a view): a view of the original root, so reading the
-// chain allocates nothing (Golden Rule 8). The recursive `sum` adds its own views.
+// chain allocates nothing (Golden Rule 6). The recursive `sum` adds its own views.
 // Correct behavior: prints the sum of 0..99, `4950`.
 shape End {
   flag: boolean

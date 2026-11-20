@@ -235,9 +235,9 @@ impl EffectiveOwnershipReport {
 // ── Provenance: what does this expression denote, ownership-wise? ─────────────
 //
 // v0.3-M8 Phase 4 (`IMP-ownership.md` "Where the authority lives", fact 1). ONE exhaustive
-// `Expr` match with NO wildcard arm, in this module — the remedy for the corpse
-// `.claude/corpses.md` "Enumerating syntactic sites instead of threading the whole-program
-// ownership analysis": a new expression form is a compile error in exactly one function
+// `Expr` match with NO wildcard arm, in this module — the remedy for enumerating syntactic
+// sites instead of threading the whole-program ownership analysis (tried and removed: every
+// omitted form is a hole): a new expression form is a compile error in exactly one function
 // until someone classifies it, and no sink inspects syntax again. Every transfer sink
 // (`check_transfer` in check.rs) consumes the four values below and nothing else.
 
@@ -1892,8 +1892,8 @@ fn first_write_site_in_expr(
 // value may exist. Typeck previously ACCEPTED such calls while codegen claimed LLVM
 // `noalias` on both parameters — a false claim the optimizer exploits into a silent
 // miscompile (RED fixture `v0_3_m7_p1_share_lend_alias.ynz`). Patrick's decision
-// (FRAGO 002, 2026-07-16): reject at compile time (Golden Rule 5), with a teaching
-// diagnostic (Golden Rule 11) — rather than merely dropping the attribute, which would
+// (FRAGO 002, 2026-07-16): reject at compile time (Golden Rule 2), with a teaching
+// diagnostic (Golden Rule 3) — rather than merely dropping the attribute, which would
 // leave typeck's unsoundness in place.
 //
 // Write-capability convention: a position counts as write-capable when its declared

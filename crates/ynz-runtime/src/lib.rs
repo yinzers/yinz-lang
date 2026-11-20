@@ -446,7 +446,7 @@ extern "C" {
 // The env var is read ONCE at `ynz_rt_init` time and stored in `ALLOC_COUNTER_ENABLED`
 // (a `static AtomicBool`). Per-alloc cost is a single relaxed atomic load — zero
 // syscall/heap/lock overhead on the hot allocation path. Reading the env var on
-// every allocation (lock + heap + UTF-8 validation) violated Golden Rule 8 (zero-cost).
+// every allocation (lock + heap + UTF-8 validation) violated Golden Rule 6 (zero-cost).
 //
 // Used by Phase 7 composed-single-alloc proof: a 3-level synchronous SM call tree
 // must allocate exactly ONE frame (the root), not one per call.
@@ -521,7 +521,7 @@ static SKIP_RECURSION_DROP: AtomicBool = AtomicBool::new(false);
 /// Reads a `static AtomicBool` set once at `ynz_rt_init`; cost is a single relaxed
 /// atomic load. `SpawnStateFnFuture::drop` runs on every task completion AND
 /// cancellation — a hot path where an env-var read per drop (process-env lock +
-/// String allocation + UTF-8 validation) violates Golden Rule 8 (zero-cost),
+/// String allocation + UTF-8 validation) violates Golden Rule 6 (zero-cost),
 /// exactly like the per-alloc case above.
 #[inline]
 pub(crate) fn skip_recursion_drop() -> bool {

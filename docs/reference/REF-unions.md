@@ -13,7 +13,7 @@ metadata:
 
 # Union Types
 
-A union type is a value that can be one of several different types.
+A union type is a value that can be one of several different types. Each type in the union is called a *variant*.
 
 ---
 
@@ -27,11 +27,11 @@ shape Triangle { base: number, height: number }
 shape Shape = Circle | Square | Triangle
 ```
 
-`|` separates the variants. Same as TypeScript. Reads as "Circle | Square | Triangle."
+`|` separates the variants. It reads as "Circle or Square or Triangle."
 
 ---
 
-## Checking which type it is — `is` tells the compiler which kind
+## Checking which variant you have — `is` tells the compiler which kind
 
 ```
 function getArea(share shape: Shape) -> number {
@@ -43,13 +43,13 @@ function getArea(share shape: Shape) -> number {
 }
 ```
 
-After `is Circle`, the compiler knows `shape` is a `Circle`. Access `.radius` directly — no cast, no `.value`.
+After `is Circle`, the compiler knows `shape` is a `Circle`. Use `.radius` directly — no conversion and no `.value`.
 
 ---
 
 ## `is` checks the exact type in a union
 
-In a union, `is` matches the exact runtime type. Inheritance doesn't change this:
+In a union, `is` matches only the exact type the value has. Sharing fields with `extends` doesn't change this:
 
 ```
 shape User { name: string, email: string }
@@ -65,11 +65,11 @@ function describe(share user: AnyUser) -> string {
 }
 ```
 
-`Admin` does NOT match `is User` in a union, even though `Admin extends User`. This makes union checking predictable — each variant is always distinct.
+`Admin` does NOT match `is User` in a union, even though `Admin extends User`. Each variant is always separate, so you can predict which line runs.
 
 ---
 
-## Outside a union, inheritance works normally
+## Outside a union, an `extends` shape can be used as its parent
 
 ```
 function greet(share user: User) -> string {
@@ -80,11 +80,11 @@ let admin: Admin = { name: `Alice`, email: `a@b.com`, permissions: [`all`] }
 greet(admin)    // fine — Admin extends User, so Admin IS a User here
 ```
 
-The rule: `is` inside a union = exact type match. Inheritance outside unions = normal subtype rules.
+The rule: `is` in a union matches the exact type only. Outside a union, a shape that extends another can be used wherever its parent is expected.
 
 ---
 
-## Unions with inheritance — shared variants
+## Unions of shapes that extend each other
 
 ```
 shape User { name: string, email: string }
@@ -95,7 +95,10 @@ shape AnyUser = Admin | Guest | User
 
 function getAccess(share user: AnyUser) -> string {
   if (user) {
-    is Admin => return user.permissions.first().or(`none`)
+    is Admin => {
+      let firstPermission = user.permissions.first()   // a maybe: the permission, or nothing
+      return firstPermission.or(`none`)
+    }
     is Guest => return `read-only`
     is User => return `basic`
   }
@@ -130,9 +133,9 @@ The suggestion changes with what can be checked. An `is` arm checks a name and n
 
 ---
 
-## Exhaustiveness — all variants must be handled
+## Every variant must be handled
 
-When using multi-case `if` on a union, you must cover every variant — or include `else =>`:
+When you use a multi-case `if` on a union, you must cover every variant, or add an `else =>` line for the rest:
 
 ```
 function getArea(share shape: Shape) -> number {
@@ -144,12 +147,11 @@ function getArea(share shape: Shape) -> number {
 }
 ```
 
-Missing a variant is a compile error. The compiler names which ones are missing:
+Leaving out a variant is a compile error. The compiler tells you which ones are missing:
 
 ```
-// COMPILE ERROR: Non-exhaustive union multi-case — Shape has 3 variants; only 2 are handled.
-// Missing variant: Triangle
-// Add: is Triangle => ...  or add: else => ...
+// COMPILE ERROR: Non-exhaustive union multi-case — 1 variant is not handled: Triangle.
+// Add the missing arms (e.g. `is Triangle =>`) or add an `else =>` default arm.
 ```
 
 A variant that is not a shape (`int`, `string`, …) counts too: `is` arms name shape variants only, so for `Circle | int` the missing `int` is handled with `else =>`. `nothing` is the one exemption: in `T | nothing` a match with only the arms for `T` is complete, because no arm can name `nothing` and skipping the absent case drops no data.
@@ -162,9 +164,10 @@ A variant that is not a shape (`int`, `string`, …) counts too: `is` arms name 
 
 ---
 
-## `|` not words
+## Write unions with `|`
 
 ```
-shape Shape = Circle | Square | Triangle    // correct
-shape Shape = Circle | Square | Triangle  // COMPILE ERROR: use | for union types
+shape Shape = Circle | Square | Triangle
 ```
+
+Use the `|` symbol between variants. Words such as `or` are not accepted.

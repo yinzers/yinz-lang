@@ -4,7 +4,7 @@
 //! `Box<T>` in a Rust enum).
 //!
 //! Tier: High (data integrity: the layout is the contract C6's release helper reads; an
-//! allocation hiding in a hot store is a Golden Rule 8 regression). Each fixture runs its
+//! allocation hiding in a hot store is a Golden Rule 6 regression). Each fixture runs its
 //! operation in a loop, so a per-operation allocation shows as a count that scales with the loop.
 
 mod support;
@@ -107,7 +107,7 @@ fn union_container_store_allocates_like_int() {
 // refuses a read of the source afterwards), as `Box::new(prev)` does in Rust: one cell per box
 // created, no clone. 100 builds x 3 cells.
 // Bug caught: every store deep-cloned the chain it was given (1 + 2 + 3 cells per build, 600),
-// above Rust's cost for a move (Golden Rule 8).
+// above Rust's cost for a move (Golden Rule 6).
 #[test]
 fn recursive_union_store_allocates_one_cell_per_box() {
     assert_eq!(
@@ -275,7 +275,7 @@ fn assert_walk_allocates_nothing(chain_length: u32, walk_output: &str) {
 
 // Bug caught: `let rest = head.next` copied the whole remaining chain at every step of a recursive
 // walk (N(N+1)/2 cells per walk: 55 at N=10, 5050 at N=100), where a Rust borrow costs none
-// (Golden Rule 8). The binding only reads a field of a `share` parameter, so it is a view and the
+// (Golden Rule 6). The binding only reads a field of a `share` parameter, so it is a view and the
 // walks (`sum` and `depth`) allocate nothing: the same cells as only building the chain.
 #[test]
 fn recursive_walk_over_a_field_read_allocates_nothing_at_10_links() {
@@ -288,7 +288,7 @@ fn recursive_walk_over_a_field_read_allocates_nothing_at_100_links() {
 }
 
 // Bug caught: `let b = a.g` with `a` itself a view copied the tail again, O(n) cells per read of a
-// chain of aliases where a Rust borrow of a borrow costs none (Golden Rule 8). `held` and `chain`
+// chain of aliases where a Rust borrow of a borrow costs none (Golden Rule 6). `held` and `chain`
 // are both views of the `share` parameter, so reading the 100-link chain adds no cells.
 #[test]
 fn a_read_through_a_view_allocates_nothing() {

@@ -132,7 +132,7 @@ fn v03_m9_c1g_rework_dynamic_dot_call_without_a_required_argument_is_rejected() 
 #[test]
 fn v03_m9_c1g_rework_dot_call_arity_teaches_the_receiver_in_every_slot() {
     // A dot call counts the value before the dot as the first argument, so "takes 2, but 1 were
-    // given" for `big.useBig()` only makes sense once the text says so (Golden Rule 11: WHAT,
+    // given" for `big.useBig()` only makes sense once the text says so (Golden Rule 3: WHAT,
     // WHAT-INSTEAD and WHY, each tied to this call). TIER: High (a diagnostic that sends the
     // reader to write a second wrong call teaches nothing).
     assert_rejected_with(

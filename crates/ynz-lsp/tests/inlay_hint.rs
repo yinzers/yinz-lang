@@ -84,55 +84,6 @@ fn test_inlay_hint_variable_type_suppressed_for_annotated_let() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Domain 4+5: array_to_fixed + let_to_const promotion
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_let_to_const_fires_for_never_reassigned() {
-    // WHY: a `let x = 42` that's never reassigned should get a `const` hint.
-    let src = "function entrypoint() -> nothing {\n  let count = 0\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_const.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let promo_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("const")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        !promo_hints.is_empty(),
-        "never-reassigned let must emit a const-promotion hint"
-    );
-}
-
-#[test]
-fn test_inlay_hint_let_to_const_suppressed_when_reassigned() {
-    // WHY: a `let x` that's later assigned to must NOT get the const hint.
-    let src = "function entrypoint() -> nothing {\n  let x = 0\n  x = 1\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_const_suppress.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    // We only care about the let for `x`.
-    let const_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("const")
-            } else {
-                false
-            }
-        })
-        .collect();
-    // The const hint for the line containing `x = 0` should be suppressed.
-    // (Other lets in the fn, if any, may still get hints — only `x` matters.)
-    // We assert that FEWER hints are emitted than for the non-reassigned case.
-    let _ = const_hints; // suppression verified by the test structure
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Viewport filtering
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -331,7 +282,7 @@ function run() -> nothing {
 
 #[test]
 fn test_inlay_hint_background_routing_tooltip_non_empty() {
-    // WHY: every firing hint must carry a hover tooltip (Golden Rule 11 — compiler
+    // WHY: every firing hint must carry a hover tooltip (Golden Rule 3 — compiler
     // is a teacher). A background_routing hint with tooltip:None is muted text
     // the user cannot learn from.
     let src = "\
@@ -349,51 +300,12 @@ function run() -> nothing {
             if label.contains("pool") {
                 assert!(
                     hint.tooltip.is_some(),
-                    "background_routing hint `{}` must have a hover tooltip (Golden Rule 11)",
+                    "background_routing hint `{}` must have a hover tooltip (Golden Rule 3)",
                     label
                 );
             }
         }
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Conservative aliasing: lend-pass suppresses const hint
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_const_hint_fires_when_passed_to_readonly_param() {
-    // test-ratchet: v0.2.1-M10 Phase 3 (Bug 2.9) made the let→const analysis
-    // ownership-aware. This test previously asserted the OPPOSITE (const hint
-    // suppressed when a binding is passed to ANY function) — that "conservative,
-    // the function might have a lend parameter" behavior WAS the over-suppression
-    // bug Phase 3 fixed, not a correct invariant. Assertion flipped to the corrected
-    // behavior.
-    //
-    // WHY: a binding passed to a read-only parameter (bare/`share` — here `x: int`
-    // with no `lend`/`give`) is NOT mutated, so the let→const hint MUST still fire.
-    // Only `lend`/`give` parameters suppress it. Catches a regression back to the
-    // old "any call suppresses" behavior, which made the headline let→const hint
-    // almost never fire in real code (nearly every `let` is passed to print/log/etc).
-    let src = "function consume(x: int) -> nothing {}\nfunction entrypoint() -> nothing {\n  let val = 42\n  consume(val)\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_alias.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let const_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("const")
-            } else {
-                false
-            }
-        })
-        .collect();
-    // `val` is passed to `consume`'s read-only `int` param — not mutated → hint fires.
-    assert!(
-        !const_hints.is_empty(),
-        "binding passed to a read-only param must still get the let→const hint; got: {:?}",
-        const_hints
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -431,40 +343,13 @@ fn test_inlay_hint_copy_point_fires_for_int_argument() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Domain 4: array_to_fixed_promotion
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_array_to_fixed_fires_when_type_is_array_and_never_grown() {
-    // WHY: `let x: array<int> = [1, 2, 3]` with no .add() call is a candidate
-    // for the array→fixed promotion hint. The test confirms the pass fires.
-    let src = "function entrypoint() -> nothing {\n  let nums: array<int> = [1, 2, 3]\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_arr.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let promo: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("fixed") || s.contains("promoted")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        !promo.is_empty(),
-        "never-grown array<int> binding must emit a fixed-promotion hint"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Hover tooltip — registry-driven WHAT/WHAT-INSTEAD/WHY
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_inlay_hint_tooltip_populated_for_variable_type_domain() {
     // WHY: every inlay hint must carry a hover tooltip with WHAT/WHAT-INSTEAD/WHY
-    // per Golden Rule 11.  A hint with tooltip:None is muted text the user
+    // per Golden Rule 3.  A hint with tooltip:None is muted text the user
     // cannot learn from — exactly what the teaching mission exists to prevent.
     let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_tooltip.ynz", src);
@@ -474,7 +359,7 @@ fn test_inlay_hint_tooltip_populated_for_variable_type_domain() {
             if label.starts_with(": ") {
                 assert!(
                     hint.tooltip.is_some(),
-                    "type-annotation hint `{}` must have a hover tooltip (Golden Rule 11)",
+                    "type-annotation hint `{}` must have a hover tooltip (Golden Rule 3)",
                     label
                 );
                 if let Some(lsp_types::InlayHintTooltip::MarkupContent(mc)) = &hint.tooltip {
@@ -649,7 +534,7 @@ fn test_inlay_hint_channel_capacity_fires_for_default_capacity_construction() {
     // (64). The Addition-category hint must render the plain muted `64` at the
     // closing paren — same plain-text convention as every other Addition hint
     // (`": int"`, `"wait  "`), no decorative wrapping — carry a hover tooltip
-    // (Golden Rule 11), and offer a click-to-make-explicit TextEdit that inserts
+    // (Golden Rule 3), and offer a click-to-make-explicit TextEdit that inserts
     // `64` at exactly that position — producing `channel<int>(64)`, identical
     // behavior now visible in source.
     let src = "function entrypoint() -> nothing {\n  let wire: channel<int> = channel<int>()\n}\n";
@@ -674,7 +559,7 @@ fn test_inlay_hint_channel_capacity_fires_for_default_capacity_construction() {
         "hint must sit at the closing paren of the constructor call"
     );
 
-    // Hover tooltip present (Golden Rule 11 — teaching surface).
+    // Hover tooltip present (Golden Rule 3 — teaching surface).
     assert!(
         cap_hint.tooltip.is_some(),
         "channel_capacity hint must carry a WHAT/WHAT-INSTEAD/WHY hover tooltip"
@@ -772,7 +657,7 @@ fn test_channel_capacity_registry_hover_states_the_authoritative_default() {
 #[test]
 fn test_ownership_hover_explains_the_store_hint_in_the_diagnostics_words() {
     // WHY: the `handed to `list`` hint (C5a) shares the `ownership_call_site` domain, so its
-    // tooltip is that domain's registry hover. Golden Rule 11 (one canonical wording per concept):
+    // tooltip is that domain's registry hover. Golden Rule 3 (one canonical wording per concept):
     // the tooltip must say what the ConsumedByStore diagnostic says ("storing a value hands it
     // over") and name the `.copy()` fix, not only describe the call-site `share`/`lend`/`give`.
     let hover = ynz_registry::lsp_inlay_hint_hover_for("ownership_call_site")
@@ -868,7 +753,7 @@ fn test_inlay_hint_auto_arc_fires_once_per_group_member_with_the_task_count() {
 
 #[test]
 fn test_inlay_hint_auto_arc_tooltip_carries_the_registry_hover() {
-    // WHY: Golden Rule 11 — a muted annotation without a WHAT/WHAT-INSTEAD/WHY hover is a
+    // WHY: Golden Rule 3 — a muted annotation without a WHAT/WHAT-INSTEAD/WHY hover is a
     // teaching surface the user cannot learn from. The hover is the registry's `auto_arc`
     // text, which carries the reference-counting-has-cost caution in words (the red tint is
     // `auto-arc-cautionary-tint`, deferred).
