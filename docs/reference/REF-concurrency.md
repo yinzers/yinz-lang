@@ -26,13 +26,42 @@ Two keywords and one type are the whole toolkit:
 
 The compiler maps which line needs which value. Lines that don't need each other run at the same time. A line that needs a value waits for it automatically.
 
-```
-function loadDashboard() -> Dashboard errors {
+```ynz
+function fetchCurrentUser() -> Int {
+  sleep(10)
+  return 1
+}
+
+function fetchFeed(user: Int) -> Int {
+  sleep(10)
+  return user + 10
+}
+
+function fetchMessages(user: Int) -> Int {
+  sleep(10)
+  return user + 20
+}
+
+function fetchStats(user: Int) -> Int {
+  sleep(10)
+  return user + 30
+}
+
+function buildDashboard(user: Int, feed: Int, messages: Int, stats: Int) -> Int {
+  return user + feed + messages + stats
+}
+
+function loadDashboard() -> Int {
   let user = fetchCurrentUser()
   let feed = fetchFeed(user)
   let messages = fetchMessages(user)
   let stats = fetchStats(user)
   return buildDashboard(user, feed, messages, stats)
+}
+
+function entrypoint() -> Nothing {
+  let total = loadDashboard()
+  print(total.toString())
 }
 ```
 
@@ -50,7 +79,7 @@ You write 6 lines of normal code. The compiler runs the three independent fetche
 The IDE marks which lines run at the same time and which run one after another, so you can always see what the compiler decided.
 
 ```
-function loadDashboard() -> Dashboard errors {
+function loadDashboard() -> Int {
   let user = fetchCurrentUser()          // ① sequential
   let feed = fetchFeed(user)             // ② ┐
   let messages = fetchMessages(user)     // ② ├ concurrent group
@@ -67,12 +96,20 @@ Hovering over any line shows: "Runs concurrently with lines X and Y. Waits for: 
 
 The compiler uses the ownership words you already write (`share`, `lend`) to tell reads from writes. There are no new rules to learn.
 
-```
-function getUser(share db: Database, id: String) -> User errors
-//               ^^^^^ share = only reads — safe to run alongside other reads
+```ynz
+shape Database {
+  rows: Int
+}
 
-function saveUser(lend db: Database, user: User) -> Nothing errors
-//                ^^^^ lend = may change it — the compiler runs this in the right order
+function countRows(share db: Database) -> Int {
+  // share = only reads — safe to run alongside other reads
+  return db.rows
+}
+
+function addRow(lend db: Database) -> Nothing {
+  // lend = may change it — the compiler runs this in the right order
+  db.rows = db.rows + 1
+}
 ```
 
 `share` on a parameter means the function only reads that value. Several readers can run at the same time.
@@ -91,31 +128,48 @@ Most code never needs `wait`. The compiler orders reads and writes from the owne
 
 **When to use `wait` — ordered side effects:**
 
-```
-function processOrder(order: Order) -> Nothing errors {
-  wait chargePayment(order)          // must complete before anything else
-  sendConfirmationEmail(order)       // only runs after payment succeeds
-  updateInventory(order)             // runs concurrently with email — fine
+```ynz
+function chargePayment(orderId: Int) -> Nothing {
+  sleep(20)
+  print(`charged order ${orderId.toString()}`)
+}
+
+function sendConfirmationEmail(orderId: Int) -> Nothing {
+  print(`emailed order ${orderId.toString()}`)
+}
+
+function updateInventory(orderId: Int) -> Nothing {
+  print(`updated stock for order ${orderId.toString()}`)
+}
+
+function processOrder(orderId: Int) -> Nothing {
+  wait chargePayment(orderId)          // must complete before anything else
+  sendConfirmationEmail(orderId)       // only runs after payment succeeds
+  updateInventory(orderId)             // runs concurrently with email — fine
+}
+
+function entrypoint() -> Nothing {
+  processOrder(1)
 }
 ```
 
-Without `wait`, the compiler would run all three at the same time, because none of them uses another's result. `wait chargePayment(order)` tells the compiler: "finish this before moving on."
-
-**When to use `wait` — external API ordering:**
-
-```
-wait request.post(`api.stripe.com/charge`, chargeData)
-request.post(`api.email.com/send`, receipt)
-```
-
-The compiler can't tell that these two HTTP calls are logically related. They're just two HTTP posts to different URLs. `wait` makes the intended ordering explicit.
+Without `wait`, the compiler would run all three at the same time, because none of them uses another's result. `wait chargePayment(orderId)` tells the compiler: "finish this before moving on."
 
 **When to use `wait` — one request at a time:**
 
-```
-for (page in pageNumbers) {
-  let result = wait fetchPage(page)     // finish each fetch before starting the next
-  results.add(result)
+```ynz
+function fetchPage(page: Int) -> Int {
+  sleep(10)
+  return page * 100
+}
+
+function entrypoint() -> Nothing {
+  let results: Array<Int> = []
+  for (page in range(1, 4)) {
+    let result = wait fetchPage(page)     // finish each fetch before starting the next
+    results.add(result)
+  }
+  print(results.count().toString())
 }
 ```
 
@@ -123,11 +177,21 @@ A loop already runs one pass at a time, so this loop would fetch the pages in or
 
 **When you do NOT need `wait` — data dependencies:**
 
-```
-function buildProfile(id: String) -> Profile errors {
+```ynz
+function fetchUser(id: Int) -> Int {
+  sleep(10)
+  return id + 1000
+}
+
+function fetchPermissions(user: Int) -> Int {
+  sleep(10)
+  return user + 1
+}
+
+function buildProfile(id: Int) -> Int {
   let user = fetchUser(id)
   let permissions = fetchPermissions(user)       // depends on user — auto-waits
-  let profile = buildProfile(user, permissions)  // depends on both — auto-waits
+  let profile = user + permissions               // depends on both — auto-waits
   return profile
 }
 ```
@@ -148,18 +212,29 @@ Separate statements that don't need each other run at the same time. The passes 
 
 **Fire and forget — don't store the result:**
 
-```
-background sendWelcomeEmail(user)
-background logAnalytics(event)
-background retryPayment(payoutId)
-// the function carries on right away — these tasks run on their own
+```ynz
+function sendWelcomeEmail(userId: Int) -> Nothing {
+  sleep(10)
+  print(`welcome email sent to ${userId.toString()}`)
+}
+
+function logAnalytics(eventId: Int) -> Nothing {
+  print(`logged event ${eventId.toString()}`)
+}
+
+function entrypoint() -> Nothing {
+  background sendWelcomeEmail(7)
+  background logAnalytics(3)
+  // the function carries on right away — these tasks run on their own
+  sleep(50)
+}
 ```
 
 Each task runs on its own. If it fails, it has to deal with the failure itself. The caller never waits and never sees the result. This suits small, non-critical tasks such as sending an email or logging.
 
 **Long-running — keep the handle so you can talk to the task:**
 
-```ynz
+```
 let scout = background gradeProspect(requests)
 ```
 
@@ -221,20 +296,34 @@ Need more room? Pass a bigger number: `Channel<Int>(10000)`. There is deliberate
 
 **The value type is fixed when you create the channel.** A `Channel<Int>` carries `Int` values only:
 
+```ynz
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>()
+  wire.send(`three`)
+}
 ```
-wire.send(`three`)
-// COMPILE ERROR: This channel carries `Int` values, but you're sending `String`.
-// Send an `Int` value, or create a `Channel<String>` for this data.
+
+The compiler reports:
+
 ```
+This channel carries `Int` values, but you're sending `String`.
+```
+
+Send an `Int` value, or create a `Channel<String>` for this data.
 
 **The capacity must be at least 1:**
 
+```ynz
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(0)
+}
 ```
-let wire: Channel<Int> = Channel<Int>(0)
-// COMPILE ERROR: A channel's capacity must be at least 1, but got 0.
-// Use a positive capacity: `Channel<Int>(64)`. For very large buffering, pass a
-// large explicit number — there is deliberately no unbounded channel.
+
 ```
+A channel's capacity must be at least 1, but got 0.
+```
+
+Use a positive capacity, such as `Channel<Int>(64)`. For very large buffering, pass a large number. There is no unbounded channel.
 
 **A channel operation gets its own line.** `.send()` and `.receive()` can pause your task, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Putting one inside a bigger expression is a compile error that tells you to move it out into a named variable first.
 
@@ -293,13 +382,28 @@ if (late.failed()) {
 
 `.close()` never pauses your task and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a handle. If you started a task with `let scout = background worker(commands)`, you close `commands`, not `scout`. For that reason the handle form needs the channel stored in a named variable:
 
+```ynz
+function makeWire() -> Channel<Int> {
+  let wire: Channel<Int> = Channel<Int>(4)
+  return wire
+}
+
+function doubler(lend commands: Channel<Int>) -> Int errors {
+  let command = commands.receive()
+  let value = command.or(0)
+  return value * 2
+}
+
+function entrypoint() -> Nothing {
+  let h = background doubler(makeWire())
+}
 ```
-let h = background doubler(makeWire())
-// COMPILE ERROR: `doubler` gets its command channel from `makeWire()`, which is not a named
-// binding — nothing outside the task can ever close that channel.
-// Bind the channel first, then spawn: `let commands = makeWire()` and
-// `let h = background doubler(commands, …)`. Call `commands.close()` when you are done sending.
+
 ```
+`doubler` gets its command channel from `makeWire()`, which is not a named binding — nothing outside the task can ever close that channel.
+```
+
+Bind the channel first (`let commands = makeWire()`), then spawn with `background doubler(commands)`. Call `commands.close()` when you are done sending.
 
 ### Sending an array or a map gives it away
 
@@ -346,13 +450,23 @@ function entrypoint() -> Nothing {
 
 Because of that, the function you start must take a channel parameter to receive messages:
 
+```ynz
+function slowCount() -> Int errors {
+  sleep(10)
+  return 3
+}
+
+function entrypoint() -> Nothing {
+  let counter = background slowCount()
+  counter.send(7)
+}
 ```
-let counter = background slowCount()
-counter.send(7)
-// COMPILE ERROR: This task takes no channel — it has no way to receive messages.
-// Add a `Channel<T>` parameter to the task's function and pass a channel at the
-// spawn: `let h = background worker(commands)` — `h.send(v)` then feeds that channel.
+
 ```
+This task takes no channel — it has no way to receive messages.
+```
+
+Add a `Channel<T>` parameter to the task's function and pass a channel when you start it: `let h = background worker(commands)`. Then `h.send(value)` feeds that channel.
 
 **Receiving FROM the task:** `scout.receive()` gives you the next thing the task delivers. For a function like `gradeProspect` that returns a value, that's its final result. It comes with `errors`, because the task might have failed. Handle it like any other `errors` value (here, `graded.or(0)` falls back to 0).
 
@@ -394,15 +508,25 @@ The compiler works out whether to give away or copy each argument, so you don't 
 **A function whose parameter is `share` cannot be started with `background`:**
 
 ```ynz
-function processData(share data: Data) -> Nothing { ... }
+shape Data {
+  size: Int
+}
 
-background processData(data)
-// COMPILE ERROR: Cannot share with a background task.
-// processData's signature is `share data: Data`, but background tasks
-// may outlive the current function. A shared borrow would dangle.
-// Use a function that takes `give data: Data` instead, or call .copy()
-// on data before passing to a give-signature function.
+function processData(share data: Data) -> Nothing {
+  print(data.size.toString())
+}
+
+function entrypoint() -> Nothing {
+  let data: Data = { size: 10 }
+  background processData(data)
+}
 ```
+
+```
+Cannot use `background` with a function that borrows its arguments.
+```
+
+Change the parameter to `give`, or pass a copy: `background processData(data.copy())` to a function that takes `give`.
 
 A `share` parameter only works while the original owner still has the value. A background task might still be running after the current function returns and the value is gone. So the function you start with `background` must take its parameters as `give`, or the caller passes a `.copy()` (an independent value the task owns).
 
@@ -411,47 +535,85 @@ A `share` parameter only works while the original owner still has the value. A b
 **A union cannot go to a generic parameter of a `background` function.** A task keeps its own copy of a union argument, and it can make that copy only when the function declares the union type. A generic parameter gives the task no union slot to copy into, so the compiler refuses it:
 
 ```ynz
-function eat<T>(held: T) -> Nothing { ... }
+shape Circle {
+  radius: Int
+}
 
-let choice: Circle | Tag = tag
-background eat(choice)
-// COMPILE ERROR: Cannot give the union `Circle | Tag` to `eat`'s generic parameter `held`
-// in a `background` call.
-// Declare `held` as `Circle | Tag` in `eat`'s signature instead of a type parameter,
-// or put the union in a field of a shape and pass the shape.
+shape Tag {
+  label: String
+}
+
+function eat<T>(held: T) -> Nothing {
+  print(`eaten`)
+}
+
+function entrypoint() -> Nothing {
+  let tag: Tag = { label: `a` }
+  let choice: Circle | Tag = tag
+  background eat(choice)
+}
 ```
+
+```
+Cannot give the union `Circle | Tag` to `eat`'s generic parameter `held` in a `background` call.
+```
+
+Declare `held` as `Circle | Tag` in `eat`'s signature instead of a type parameter, or put the union in a field of a shape and pass the shape.
 
 **When the parameter is `give`, the compiler picks give-away or copy for you:**
 
 If you don't use the value after the `background` call, the compiler gives it away (ownership moves to the task):
 
 ```ynz
-function processEvent(give event: WebhookEvent) -> Nothing { ... }
+shape WebhookEvent {
+  id: Int
+  kind: String
+}
 
-function handleWebhook(event: WebhookEvent) -> Response errors {
+function processEvent(give event: WebhookEvent) -> Nothing {
+  print(event.kind)
+}
+
+function handleWebhook(give event: WebhookEvent) -> Int {
   background processEvent(event)             // event not used after — it is given away
-  return response.json({ status: `queued` })
+  return 202
+}
+
+function entrypoint() -> Nothing {
+  let event: WebhookEvent = { id: 1, kind: `push` }
+  let status = handleWebhook(event)
+  print(status.toString())
+  sleep(50)
 }
 ```
 
 If you do use the value after, you call `.copy()` to keep the original:
 
 ```ynz
-function handleWebhook(event: WebhookEvent) -> Response errors {
+shape WebhookEvent {
+  id: Int
+  kind: String
+}
+
+function processEvent(give event: WebhookEvent) -> Nothing {
+  print(event.kind)
+}
+
+function handleWebhook(give event: WebhookEvent) -> Int {
   background processEvent(event.copy())      // explicit copy — the original event stays usable
-  log(`Queued: ${event.id}`)
-  return response.json({ status: `queued`, id: event.id })
+  print(`Queued: ${event.id.toString()}`)
+  return 202
+}
+
+function entrypoint() -> Nothing {
+  let event: WebhookEvent = { id: 1, kind: `push` }
+  let status = handleWebhook(event)
+  print(status.toString())
+  sleep(50)
 }
 ```
 
-**The IDE warns about large copies:**
-
-```ynz
-background processData(hugeDataset.copy())
-const count = hugeDataset.count()
-// IDE WARNING: hugeDataset (~500MB) was copied for the background task.
-// Move hugeDataset.count() above the background call to avoid the copy.
-```
+**The IDE warns about large copies.** When a `.copy()` handed to a `background` task is larger than 64 bytes and you could give the value away instead, the IDE shows a hint at the call suggesting `give`. Move the later use of the value above the `background` call to avoid the copy.
 
 ---
 
@@ -465,7 +627,7 @@ If one operation fails while others are still running:
 - The function ends with the error
 
 ```
-function loadDashboard() -> Dashboard errors {
+function loadDashboard() -> Int errors {
   let user = fetchCurrentUser()
   let feed = fetchFeed(user)
   let messages = fetchMessages(user)    // if this fails while feed is still running:
@@ -474,7 +636,7 @@ function loadDashboard() -> Dashboard errors {
 }
 ```
 
-Because `loadDashboard()` is marked `errors`, the failure goes up to the caller automatically. Same rules as everywhere else.
+Here the four `fetch` functions are the ones from the first example, each marked `errors`. Because `loadDashboard()` is marked `errors`, the failure goes up to the caller automatically. Same rules as everywhere else.
 
 ---
 
@@ -487,11 +649,28 @@ If you have several calculations that don't need each other, the compiler runs t
 on different processor cores at the same time:
 
 ```ynz
-function analyzeGame(game: Game) -> Stats {
-    let hits    = crunchStat(game.hits)
-    let rbi     = crunchStat(game.rbi)
-    let average = crunchStat(game.average)
-    return combineStats(hits, rbi, average)
+function crunchStat(seed: Int) -> Int {
+  let total = 0
+  for (step in range(0, 1000000)) {
+    total = total + (step * seed) % 7
+  }
+  return total
+}
+
+function combineStats(hits: Int, rbi: Int, average: Int) -> Int {
+  return hits + rbi + average
+}
+
+function analyzeGame(hitsSeed: Int, rbiSeed: Int, averageSeed: Int) -> Int {
+  let hits    = crunchStat(hitsSeed)
+  let rbi     = crunchStat(rbiSeed)
+  let average = crunchStat(averageSeed)
+  return combineStats(hits, rbi, average)
+}
+
+function entrypoint() -> Nothing {
+  let result = analyzeGame(2, 3, 5)
+  print(result.toString())
 }
 ```
 
@@ -507,12 +686,12 @@ starting work on another core would take longer than just running it.
 
 Your editor shows what's happening in muted text:
 
-```ynz
-function analyzeGame(game: Game) -> Stats {
-    let hits    = crunchStat(game.hits)    // runs at the same time as line 4, line 5 — separate core
-    let rbi     = crunchStat(game.rbi)     // runs at the same time as line 3, line 5 — separate core
-    let average = crunchStat(game.average) // runs at the same time as line 3, line 4 — separate core
-    return combineStats(hits, rbi, average)
+```
+function analyzeGame(hitsSeed: Int, rbiSeed: Int, averageSeed: Int) -> Int {
+  let hits    = crunchStat(hitsSeed)       // runs at the same time as line 3, line 4 — separate core
+  let rbi     = crunchStat(rbiSeed)        // runs at the same time as line 2, line 4 — separate core
+  let average = crunchStat(averageSeed)    // runs at the same time as line 2, line 3 — separate core
+  return combineStats(hits, rbi, average)
 }
 ```
 
