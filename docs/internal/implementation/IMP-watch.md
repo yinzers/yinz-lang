@@ -13,7 +13,7 @@ metadata:
 
 # `ynz watch` — Architectural Reference
 
-> Audience: compiler contributors. For user docs, see [`docs/reference/REF-tooling.md`](../../reference/REF-tooling.md) (the `ynz watch` / `ynz watch --run` section).
+> Audience: compiler contributors. For user docs, see [`docs/reference/REF-tooling.md`](../../reference/REF-tooling.md) (the `ynz watch` section).
 
 Cross-references: [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md), [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md)
 
