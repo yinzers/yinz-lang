@@ -130,11 +130,11 @@ name[0] = `B`
 
 ## Looping over a string
 
-`for (c in s)` goes through the string one code point at a time. Each `c` is a string of length 1:
+`for (letter in word)` goes through the string one code point at a time. Each `letter` is a string of length 1:
 
 ```ynz
-for (c in `café`) {
-  print(c)    // c, a, f, é  (4 steps — é is one code point)
+for (letter in `café`) {
+  print(letter)    // c, a, f, é  (4 steps — é is one code point)
 }
 ```
 
@@ -171,9 +171,14 @@ s.byteCount()                // 6  (c, a, f, e, and 2 bytes for the accent mark)
 s.count()                    // 5  (code points — the accent mark counts as its own)
 s.graphemeCount()            // 4  (the e and its accent count as one)
 
-s.get(0).value               // c
-s.get(3).value               // e     (just the e, without its accent)
-s.graphemeAt(3).value        // é     (the e with its accent — what a person sees)
+let foundFirst = s.get(0)
+let first = foundFirst.or(``)                // c
+
+let foundFourth = s.get(3)
+let fourth = foundFourth.or(``)              // e     (just the e, without its accent)
+
+let foundGrapheme = s.graphemeAt(3)
+let grapheme = foundGrapheme.or(``)          // é     (the e with its accent — what a person sees)
 ```
 
 And for an emoji made of several people:
@@ -185,8 +190,11 @@ family.byteCount()           // 18  (emoji take many bytes)
 family.count()               // 5   (5 code points)
 family.graphemeCount()       // 1   (one character as a person sees it)
 
-family.get(0).value          // 👨         (just the man, the first code point)
-family.graphemeAt(0).value   // 👨‍👩‍👧     (the whole family — one grapheme)
+let foundPerson = family.get(0)
+let person = foundPerson.or(``)              // 👨         (just the man, the first code point)
+
+let foundFamily = family.graphemeAt(0)
+let wholeFamily = foundFamily.or(``)         // 👨‍👩‍👧     (the whole family — one grapheme)
 ```
 
 ---
