@@ -1,0 +1,17 @@
+[package]
+name = "ynz-pascalcase-codemod"
+description = "Branch-only codemod: renames Yinz built-in type names to PascalCase in type positions (card #573, never merged)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "pascalcase-codemod"
+path = "src/main.rs"
+
+[dependencies]
+ynz-parser      = { workspace = true }
+ynz-diagnostics = { workspace = true }

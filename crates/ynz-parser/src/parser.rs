@@ -47,6 +47,13 @@ pub struct Parser<'a> {
     /// and `advance()` consumes it by clearing this flag (without incrementing `pos`).
     /// The actual `>>` token at `pos` will then be seen on the next call to `peek()`.
     pending_gt: bool,
+    /// PASCALCASE-CODEMOD (branch-only): source span of every identifier or `nothing` token
+    /// the parser consumed as a type name (annotations, generic arguments, union members,
+    /// `is` targets, the callee of a generic call such as `channel<int>(8)`).
+    pub type_name_spans: Vec<SourceSpan>,
+    /// PASCALCASE-CODEMOD (branch-only): span of the receiver identifier in `int.max`-style
+    /// type-attached constant reads. Whether the identifier is a variable is decided by the codemod.
+    pub type_const_receiver_spans: Vec<SourceSpan>,
 }
 
 impl<'a> Parser<'a> {
@@ -60,6 +67,8 @@ impl<'a> Parser<'a> {
             block_depth: 0,
             nesting_too_deep_reported: false,
             pending_gt: false,
+            type_name_spans: Vec::new(),
+            type_const_receiver_spans: Vec::new(),
         }
     }
 
@@ -932,6 +941,7 @@ impl<'a> Parser<'a> {
 
         match self.peek().clone() {
             Token::Nothing => {
+                self.type_name_spans.push(self.current_span());
                 self.advance();
                 Type::Nothing
             }
@@ -972,6 +982,7 @@ impl<'a> Parser<'a> {
             }
             Token::Identifier(name) => {
                 let span = self.current_span();
+                self.type_name_spans.push(span.clone());
                 self.advance();
                 match name.as_str() {
                     "int" => Type::Int,
@@ -1722,6 +1733,7 @@ impl<'a> Parser<'a> {
             self.advance(); // consume `is`
             let ty_span = self.current_span();
             let ty_name = if let Token::Identifier(n) = self.peek().clone() {
+                self.type_name_spans.push(ty_span.clone());
                 let n2 = n.clone();
                 self.advance();
                 n2
@@ -1915,6 +1927,7 @@ impl<'a> Parser<'a> {
             let is_span = self.current_span();
             self.advance(); // consume `is`
             let type_name = if let Token::Identifier(n) = self.peek().clone() {
+                self.type_name_spans.push(self.current_span());
                 let n2 = n.clone();
                 self.advance();
                 n2
@@ -2926,6 +2939,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_call(&mut self, callee: Expr, type_args: Option<Vec<Type>>) -> Expr {
+        // `channel<int>(8)` and `channel()`: `channel` is the built-in type in call position
+        // (typeck dispatches on the name; there is no user function of that name).
+        if let Expr::Ident(callee_name, callee_span) = &callee {
+            if callee_name == "channel" {
+                self.type_name_spans.push(callee_span.clone());
+            }
+        }
         let start = callee.span().start;
         self.advance(); // consume `(`
 
@@ -3092,7 +3112,13 @@ impl<'a> Parser<'a> {
                         "Array elements must be separated by commas. A trailing comma after the last element is also fine: `[a, b, c,]`",
                     ));
                     // Recover by parsing this as the next element anyway.
+                    // PASCALCASE-CODEMOD (branch-only): stop when the element consumed no token;
+                    // `[{{ a: 1 }}]` otherwise loops forever (compiler bug, parked in the report).
+                    let position_before_element = self.pos;
                     elements.push(self.parse_expr(0));
+                    if self.pos == position_before_element {
+                        break;
+                    }
                 }
             }
         }
@@ -3118,6 +3144,7 @@ impl<'a> Parser<'a> {
 
         let saved_pos = self.pos;
         let saved_diags_len = self.diags.len();
+        let saved_type_name_spans_len = self.type_name_spans.len();
 
         self.advance(); // consume `<`
         let mut tokens_consumed: usize = 1;
@@ -3128,6 +3155,7 @@ impl<'a> Parser<'a> {
             if tokens_consumed > 32 {
                 self.pos = saved_pos;
                 self.diags.truncate(saved_diags_len);
+                self.type_name_spans.truncate(saved_type_name_spans_len);
                 return None;
             }
 
@@ -3142,6 +3170,7 @@ impl<'a> Parser<'a> {
                 Token::Eof | Token::RBrace | Token::RParen => {
                     self.pos = saved_pos;
                     self.diags.truncate(saved_diags_len);
+                    self.type_name_spans.truncate(saved_type_name_spans_len);
                     return None;
                 }
                 _ => {
@@ -3152,6 +3181,7 @@ impl<'a> Parser<'a> {
                     if matches!(ty, Type::Error) {
                         self.pos = saved_pos;
                         self.diags.truncate(saved_diags_len);
+                        self.type_name_spans.truncate(saved_type_name_spans_len);
                         return None;
                     }
                     args.push(ty);
@@ -3163,6 +3193,7 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::LParen) {
             self.pos = saved_pos;
             self.diags.truncate(saved_diags_len);
+            self.type_name_spans.truncate(saved_type_name_spans_len);
             return None;
         }
 
@@ -3323,6 +3354,11 @@ impl<'a> Parser<'a> {
 
         // No `(` → field access (pure read, no side effects)
         if !matches!(self.peek(), Token::LParen) {
+            if let Expr::Ident(receiver_name, receiver_span) = &receiver {
+                if matches!(receiver_name.as_str(), "int" | "float" | "number") {
+                    self.type_const_receiver_spans.push(receiver_span.clone());
+                }
+            }
             let end = name_span.end;
             return Expr::FieldAccess {
                 receiver: Box::new(receiver),

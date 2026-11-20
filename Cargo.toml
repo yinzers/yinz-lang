@@ -15,6 +15,7 @@ members = [
     "crates/ynz-tmgrammar",
     "crates/ynz-fmt",
     "crates/ynz-watch",
+    "crates/ynz-pascalcase-codemod",
 ]
 
 [workspace.package]

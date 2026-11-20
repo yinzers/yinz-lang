@@ -2608,6 +2608,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ynz-pascalcase-codemod"
+version = "0.3.4"
+dependencies = [
+ "ynz-diagnostics",
+ "ynz-parser",
+]
+
+[[package]]
 name = "ynz-registry"
 version = "0.3.4"
 dependencies = [

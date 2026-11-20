@@ -67,6 +67,10 @@ pub fn lex_to_bucket(db: &dyn salsa::Database, source: SourceFile) -> Diagnostic
 pub struct ParseOutput {
     pub module: Module,
     pub diagnostics: DiagnosticBucket,
+    /// PASCALCASE-CODEMOD (branch-only): spans of identifiers parsed as type names.
+    pub type_name_spans: Vec<SourceSpan>,
+    /// PASCALCASE-CODEMOD (branch-only): spans of `int`/`float`/`number` receivers of field reads.
+    pub type_const_receiver_spans: Vec<SourceSpan>,
 }
 
 /// Parse a source file.
@@ -78,9 +82,15 @@ pub struct ParseOutput {
 pub fn parse_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<ParseOutput> {
     let lex = lex_query(db, source);
     let path = source.path(db);
+    Arc::new(parse_lexed(path.as_str(), &lex))
+}
 
-    let mut parser = Parser::new(path.as_str(), &lex.tokens);
+/// Parse an already-lexed file. Shared by `parse_query` and the codemod binary.
+pub fn parse_lexed(path: &str, lex: &LexOutput) -> ParseOutput {
+    let mut parser = Parser::new(path, &lex.tokens);
     let module = parser.parse_module();
+    let type_name_spans = std::mem::take(&mut parser.type_name_spans);
+    let type_const_receiver_spans = std::mem::take(&mut parser.type_const_receiver_spans);
 
     // Collect positions where banned-declaration-keyword tokens are valid plain
     // identifiers (shape field names, function parameter names). A BannedKeyword
@@ -102,8 +112,10 @@ pub fn parse_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<ParseOut
         diagnostics.push(d);
     }
 
-    Arc::new(ParseOutput {
+    ParseOutput {
         module,
         diagnostics,
-    })
+        type_name_spans,
+        type_const_receiver_spans,
+    }
 }
