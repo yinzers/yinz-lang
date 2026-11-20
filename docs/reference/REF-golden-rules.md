@@ -71,7 +71,7 @@ The WHY must be **specific to the code in front of you**, not generic. The compi
 >
 > **WHAT INSTEAD**: Nothing to type here — `share` is written only in a function's signature, never at the call. Click to jump to `foo`'s signature, where the `share` keyword is written (or can be added if the signature has none yet).
 >
-> **WHY**: A `const` variable can only give read-only access. If `foo`'s signature declared `lend` (borrow to change it) instead, passing this `const` variable would be a compile error: "cannot lend a const variable."
+> **WHY**: A `const` variable can only give read-only access. If `foo`'s signature declared `lend` (borrow to change it) instead, passing this `const` variable would be a compile error: "`player` is `const` — `foo` needs to mutate it but `const` blocks mutation."
 
 *Why*: People learn at the moment of feedback. A developer who just broke an ownership rule is ready to understand ownership. A developer who just wrote `map<string, number>` with keys that never change is ready to learn why a `shape` is faster. That is the best moment to teach — not in a doc read two weeks earlier, and not after the bug ships. IDE hints bring that coaching to every keystroke, not only to errors.
 
@@ -91,7 +91,7 @@ Every keyword, function, and pattern should be readable by a junior developer wh
 
 *Why*: The stated goal is to be welcoming to junior developers. Every term that needs computer-science background is a barrier. Plain English words are easy to remember and to guess, and need no prior knowledge.
 
-**Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Result = Success | Failure`. `or` is a prose word, while `|` is unambiguous. Boolean operators are symbols too: `&&`, `||`, `!`.
+**Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Outcome = Success | Failure`. `or` is a prose word, while `|` is unambiguous. Boolean operators are symbols too: `&&`, `||`, `!`.
 
 ---
 

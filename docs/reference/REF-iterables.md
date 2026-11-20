@@ -211,7 +211,7 @@ for (num in counter) {
 }
 ```
 
-If getting the next value can fail (a file or the network), follow the fallible contract instead:
+If getting the next value can fail (a file or the network), follow the `FallibleIterable` contract instead:
 
 ```ynz
 shape ApiPager<T> follows FallibleIterable<T> {

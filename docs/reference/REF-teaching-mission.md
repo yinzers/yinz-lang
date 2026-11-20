@@ -161,7 +161,7 @@ Both are required. Error messages fix misunderstandings; muted hints prevent the
 
 The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
 
-**One wording everywhere**: each concept has one standard explanation. A compile error that says "cannot lend a const variable" uses the same wording as the IDE tooltip that explains why `share` was chosen for a `const` value. The explanation is written once and every surface reuses it, so the docs, the error and the tooltip never disagree.
+**One wording everywhere**: each concept has one standard explanation. A compile error that says "`player` is `const` — `foo` needs to mutate it but `const` blocks mutation" uses the same wording as the IDE tooltip that explains why `share` was chosen for a `const` value. The explanation is written once and every surface reuses it, so the docs, the error and the tooltip never disagree.
 
 ---
 

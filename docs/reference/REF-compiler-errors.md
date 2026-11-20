@@ -103,7 +103,7 @@ If a word is the official name of a Yinz feature, use it. The ban-list covers pr
 
 ## Banned Keywords in Your Own Code
 
-This is different from the jargon ban-list above. The jargon ban-list covers WORDS in the messages the compiler prints (a test checks every message). Banned keywords cover words in YOUR source code: if you write one, the compiler stops with a three-part teaching error that points you to the Yinz keyword.
+This is different from the jargon ban-list above. The jargon ban-list covers WORDS in the messages the compiler prints (a test checks every message). Banned keywords cover words in YOUR source code: if you write one, the compiler prints a three-part teaching message that points you to the Yinz keyword.
 
 | If you write | Write this in Yinz |
 |--------------|--------------------|
@@ -116,18 +116,17 @@ This is different from the jargon ban-list above. The jargon ban-list covers WOR
 
 `type` is not on the jargon ban-list, because it appears in many messages in its everyday sense ("return type", "this type"). It is only refused when you use it to declare something in your own code.
 
-The teaching error looks like this:
+The teaching message looks like this:
 
 ```
 type Foo { name: string }
 ^^^^
-COMPILE ERROR: Yinz uses `shape` to declare a group of fields, not `type`.
+WARNING: `type` is not a keyword in Yinz.
 
-  Replace `type Foo { ... }` with `shape Foo { ... }`.
+  Use `shape` to declare a data type: `shape Player { name: string, health: int }`
 
-  `type` is also the everyday word for "what kind of thing this is."
-  `shape` is clear: a shape is the structure of your data. (Golden Rule 4:
-  self-documenting syntax.)
+  Why: `type` is common in TypeScript, but Yinz uses `shape` — one unambiguous keyword
+  for all data type declarations.
 ```
 
 ---
