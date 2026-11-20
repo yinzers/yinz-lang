@@ -294,10 +294,12 @@ function battingAverage(hits: Int, atBats: Int) -> Int errors {
 
 function entrypoint() -> Nothing {
   let attempt = battingAverage(127, 400)
-  let average = attempt.or(0)    // 0 if the call failed
+  let average = attempt.or(0)    // the fallback value, used when the call fails
   print(average)    // 317
 }
 ```
+
+Python's `ZeroDivisionError` is an exception you can catch with `except`. Yinz has no such catch. Dividing by zero is not a failure you can catch: it stops the program with `RUNTIME ERROR: division by zero (Int)`. Check the number before you divide.
 
 To look at the failure yourself, use `.failed()`:
 
@@ -477,7 +479,7 @@ let team: Array<Player> = { name: `Alice`, health: 100 }
 // Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
-Writing past the end by position is an error when the program runs, so use `.add` to grow an `Array`.
+Writing past the end by position stops the whole program with no message, so use `.add` to grow an `Array`.
 
 ### Numbers: `/` on whole numbers stays whole, and `//` is a comment
 
@@ -500,7 +502,7 @@ let total = 0.1 + 0.2
 print(total)    // 0.3
 ```
 
-Use `Int` for whole numbers, `Number` for anything where the exact value matters, and `Float` only when you want fast binary arithmetic and can accept tiny rounding differences. A Python `int` has no size limit. A Yinz `Int` holds about ±9.2 × 10^18, and a result that does not fit stops the task with an `Int overflow` panic.
+Use `Int` for whole numbers, `Number` for anything where the exact value matters, and `Float` only when you want fast binary arithmetic and can accept tiny rounding differences. A Python `int` has no size limit. A Yinz `Int` holds about ±9.2 × 10^18, and a result that does not fit stops the whole program with `RUNTIME ERROR: Int overflow in '<op>' at …`.
 
 ### Operators: `&&`, `||`, `!`, `==` checks types, and no `+=`
 

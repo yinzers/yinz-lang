@@ -14,7 +14,7 @@ metadata:
 
 # Coming from C++
 
-If you write C++, you already think about who owns a value, when it is copied and how fast the result runs. Yinz keeps that: there is no garbage collector, every value has one owner, and the compiler produces fast code. What changes is how much you write and how much the compiler checks for you. There is no `auto`, no `class`, no `virtual`, no `nullptr`, no `throw`, no `std::variant`, no `switch`, no `else`, no `#include`, and no header files. Mistakes that C++ leaves as undefined behavior, such as reading past the end of a `std::vector`, are either compile errors or errors that stop the task with a message. This guide lists the differences, shows both sides, and shows the compiler message you get when an old habit slips in.
+If you write C++, you already think about who owns a value, when it is copied and how fast the result runs. Yinz keeps that: there is no garbage collector, every value has one owner, and the compiler produces fast code. What changes is how much you write and how much the compiler checks for you. There is no `auto`, no `class`, no `virtual`, no `nullptr`, no `throw`, no `std::variant`, no `switch`, no `else`, no `#include`, and no header files. Mistakes that C++ leaves as undefined behavior, such as reading past the end of a `std::vector`, are either compile errors or errors that stop the whole program. This guide lists the differences, shows both sides, and shows the compiler message you get when an old habit slips in.
 
 The compiler teaches as you go. Every message below says what is wrong, what to write instead, and why.
 
@@ -56,7 +56,7 @@ The table and the traps below follow this list, in this order:
 | Choosing between kinds of values | `std::variant<Circle, Square>`<br>`std::visit(visitor, shape)` | `shape Shape = Circle \| Square`<br>`if (shape) { is Circle => ... }` |
 | Named value sets | `enum class Status { Active, Banned };` | `options Status { active, banned }` |
 | Collections and reading by position | `std::vector<int>`, `std::array<int, 3>`, `std::map<std::string, int>`<br>`scores[5]` is undefined behavior; `scores.at(5)` throws | `Array<Int>`, `Fixed<Int>`, `Map<String, Int>`<br>`scores[5]` is a `Maybe<Int>` |
-| Numbers | `int`, `long long`, `unsigned`, `double`<br>signed overflow is undefined behavior | `Int`, `Number`, `Float`<br>overflow stops the task |
+| Numbers | `int`, `long long`, `unsigned`, `double`<br>signed overflow is undefined behavior | `Int`, `Number`, `Float`<br>overflow stops the program |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score++`, `score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`switch (code) { case 200: ... break; default: ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
 | Chaining | `players \| std::views::filter(f) \| std::views::transform(g)` | a `for` loop, one named step per line |
@@ -347,7 +347,7 @@ print(nickname.value)
 
 ### Failures: `errors` replaces `throw`, `try` and `catch`
 
-A function that can fail says so in its signature with the word `errors`. In C++, a function does not say whether it throws, so a caller can forget to catch. In Yinz, the signature says it, and the caller supplies a fallback with `.or(...)`, checks with `.failed()`, or passes the failure up by marking its own function `errors` too. Calling an `errors` function without handling it is a compile error. There is no error type to name.
+A function that can fail says so in its signature with the word `errors`. In C++, a function does not say whether it throws, so a caller can forget to catch. In Yinz, the signature says it, and the caller supplies a fallback with `.or(...)`, checks with `.failed()`, or passes the failure up by marking its own function `errors` too. Using the result of an `errors` function without handling it is a compile error. There is no error type to name.
 
 C++:
 
@@ -382,10 +382,12 @@ function battingAverage(hits: Int, atBats: Int) -> Int errors {
 
 function entrypoint() -> Nothing {
   let attempt = battingAverage(127, 400)
-  let average = attempt.or(0)    // 0 if the call failed
+  let average = attempt.or(0)    // the fallback value, used when the call fails
   print(average)    // 317
 }
 ```
+
+The C++ version throws when `atBats` is zero, and the `catch` sets `average` to 0. Yinz does not work that way. Dividing by zero is not a failure you can catch: it stops the program with `RUNTIME ERROR: division by zero (Int)`. Check the number before you divide.
 
 To look at the failure yourself, use `.failed()`:
 
@@ -407,7 +409,7 @@ print(attempt)
 // Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.
 ```
 
-`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops that one task with a message, not the whole program, and it never turns into undefined behavior.
+`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops the whole program, and it never turns into undefined behavior.
 
 ### Choosing between kinds of values: a union of shapes replaces `std::variant` and `std::visit`
 
@@ -623,14 +625,14 @@ A value written with `{ ... }` is a single shape value, not a collection. Use `[
 ```
 let team: Array<Player> = { name: `Alice`, health: 100 }
 // COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `Array<Player>`.
-// Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
+// Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
-Writing past the end by position is an error when the program runs, so use `.add` to grow an `Array`.
+Writing past the end by position stops the whole program with no message, so use `.add` to grow an `Array`.
 
-### Numbers: one `Int`, an exact `Number`, and overflow stops the task
+### Numbers: one `Int`, an exact `Number`, and overflow stops the program
 
-C++ makes you choose a size and sign. `int` is at least 16 bits and is usually 32, `long long` is at least 64, and `unsigned` wraps around on overflow. In Yinz, `Int` is the whole number type for everyday use, and it holds about ±9.2 × 10^18. A result that does not fit stops the task with an `Int overflow` panic. In C++, overflow of a signed `int` is undefined behavior, so the compiler may assume it never happens:
+C++ makes you choose a size and sign. `int` is at least 16 bits and is usually 32, `long long` is at least 64, and `unsigned` wraps around on overflow. In Yinz, `Int` is the whole number type for everyday use, and it holds about ±9.2 × 10^18. A result that does not fit stops the whole program with `RUNTIME ERROR: Int overflow in '<op>' at …`. In C++, overflow of a signed `int` is undefined behavior, so the compiler may assume it never happens:
 
 ```cpp
 #include <climits>

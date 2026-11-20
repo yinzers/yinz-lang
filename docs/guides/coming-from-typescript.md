@@ -84,7 +84,7 @@ Yinz has one text form: backticks. It supports `${}` and multiple lines.
 ```
 print("hello world")
 // COMPILE ERROR: Double-quoted strings don't exist in Yinz.
-// Use backtick strings instead: `hello` or `Hello ${name}`
+// Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``
 ```
 
 Single quotes get the same error.
@@ -174,7 +174,7 @@ function loadConfig() -> String {
 }
 ```
 
-To pass the failure up instead, mark the calling function `errors` too. Calling an `errors` function without handling it is a compile error.
+To pass the failure up instead, mark the calling function `errors` too. Using the result of an `errors` function without handling it is a compile error.
 
 ### Choosing between kinds of values: `is`, not `instanceof`
 
@@ -208,8 +208,7 @@ Every type starts with a capital letter, built-in collections included.
 ```
 let scores: array<Int> = []
 // COMPILE ERROR: `array` is not a type name.
-//   Write `Array`.
-//   Why: Every type in Yinz starts with a capital letter, built-ins included.
+// Write `Array`. — Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
 Reading by position never crashes. `scores[3]` gives a `Maybe`, so you handle the missing case:
@@ -371,8 +370,6 @@ export default function fetchUser() { }
 // COMPILE ERROR: Yinz does not have default exports.
 // Name the export instead: `export function foo()` or `export const PI = 3.14`.
 ```
-
-``import users from `services/users` `` looks like a default import, but it brings in the whole module under the name `users`. You then write `users.fetchUser()`.
 
 Two imports cannot use the same name. Yinz stops you and asks you to rename one:
 

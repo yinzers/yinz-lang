@@ -56,7 +56,7 @@ The table and the traps below follow this list, in this order:
 | Choosing between kinds of values | `switch s := outline.(type) { case Circle: ... }`<br>`interface`, `any` | `shape Shape = Circle \| Square`<br>`if (shape) { is Circle => ... }` |
 | Named value sets | `const ( StatusActive Status = iota; StatusBanned )` | `options Status { active, banned }` |
 | Collections and reading by position | `[]int`, `[3]int`, `map[string]int`<br>`scores[5]` panics; a missing map key gives `0` | `Array<Int>`, `Fixed<Int>`, `Map<String, Int>`<br>`scores[5]` is a `Maybe<Int>` |
-| Numbers | `int`, `int32`, `uint8`, `float64`<br>overflow wraps around silently | `Int`, `Number`, `Float`<br>overflow stops the task |
+| Numbers | `int`, `int32`, `uint8`, `float64`<br>overflow wraps around silently | `Int`, `Number`, `Float`<br>overflow stops the program |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score++`, `score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`switch code { case 200: ... default: ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
 | Chaining | Go has no chains; you write a `for` loop with `append` | a `for` loop, one named step per line |
@@ -325,7 +325,7 @@ print(nickname.value)
 
 ### Failures: `errors` replaces `(value, error)`, `if err != nil` and `panic`
 
-A function that can fail says so in its signature with the word `errors`. It still returns one value. There is no second `error` result, no `errors.New` to build one and no `if err != nil` after the call. The caller supplies a fallback with `.or(...)`, checks with `.failed()`, or passes the failure up by marking its own function `errors` too. Calling an `errors` function without handling it is a compile error.
+A function that can fail says so in its signature with the word `errors`. It still returns one value. There is no second `error` result, no `errors.New` to build one and no `if err != nil` after the call. The caller supplies a fallback with `.or(...)`, checks with `.failed()`, or passes the failure up by marking its own function `errors` too. Using the result of an `errors` function without handling it is a compile error.
 
 Go:
 
@@ -362,10 +362,12 @@ function battingAverage(hits: Int, atBats: Int) -> Int errors {
 
 function entrypoint() -> Nothing {
   let attempt = battingAverage(127, 400)
-  let average = attempt.or(0)    // 0 if the call failed
+  let average = attempt.or(0)    // the fallback value, used when the call fails
   print(average)    // 317
 }
 ```
+
+The Go version returns an error when `atBats` is zero, and the caller sets `average` to 0. Yinz does not work that way. Dividing by zero is not a failure you can catch: it stops the program with `RUNTIME ERROR: division by zero (Int)`. Check the number before you divide.
 
 To look at the failure yourself, use `.failed()`:
 
@@ -389,7 +391,7 @@ print(attempt)
 // Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.
 ```
 
-`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops that one task, not the whole program. You do not write `panic(...)` for it, because Yinz has no such call. Mark the function `errors` for a failure the caller can expect, and let the compiler stop the task for a bug.
+`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops the whole program. You do not write `panic(...)` for it, because Yinz has no such call. Mark the function `errors` for a failure the caller can expect, and let the compiler stop the program for a bug.
 
 ### Choosing between kinds of values: a union of shapes replaces type switches
 
@@ -611,14 +613,14 @@ A value written with `{ ... }` is a single shape value, not a collection. Use `[
 ```
 let team: Array<Player> = { name: `Alice`, health: 100 }
 // COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `Array<Player>`.
-// Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
+// Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
-Writing past the end by position is an error when the program runs, so use `.add` to grow an `Array`.
+Writing past the end by position stops the whole program with no message, so use `.add` to grow an `Array`.
 
-### Numbers: one `Int`, an exact `Number`, and overflow stops the task
+### Numbers: one `Int`, an exact `Number`, and overflow stops the program
 
-Go makes you choose a size and sign: `int8`, `int32`, `uint64`, and plain `int`, which is 64 bits on a 64-bit computer. In Yinz, `Int` is the whole number type for everyday use, and it holds about ±9.2 × 10^18. A result that does not fit stops the task with an `Int overflow` panic. In Go, the same mistake wraps around with no warning:
+Go makes you choose a size and sign: `int8`, `int32`, `uint64`, and plain `int`, which is 64 bits on a 64-bit computer. In Yinz, `Int` is the whole number type for everyday use, and it holds about ±9.2 × 10^18. A result that does not fit stops the whole program with `RUNTIME ERROR: Int overflow in '<op>' at …`. In Go, the same mistake wraps around with no warning:
 
 ```go
 package main
