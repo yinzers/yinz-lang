@@ -68,7 +68,7 @@ A single `|` is for **union types**, not for "or": `shape Shape = Circle | Squar
 Bitwise operators work on the individual bits (the 0s and 1s) of a whole number. They are for permissions, flags, color channels and binary data formats:
 
 ```
-let combined = FLAG_A | FLAG_B       // bitwise or — turn on every bit set in either
+let combined = readFlag | writeFlag  // bitwise or — turn on every bit set in either
 let masked = value & 0xFF            // bitwise and — keep only the bits set in both
 let toggled = value ^ mask           // bitwise xor — flip the bits set in mask
 let inverted = ~value                // bitwise not — flip every bit
@@ -84,7 +84,7 @@ let halved = value >> 1              // shift right — move bits right, which h
 | Boolean or | `\|\|` | `if (admin \|\| mod)` |
 | Boolean not | `!` | `if (!banned)` |
 | Bitwise and | `&` | `value & 0xFF` |
-| Bitwise or | `\|` | `FLAG_A \| FLAG_B` |
+| Bitwise or | `\|` | `readFlag \| writeFlag` |
 | Bitwise xor | `^` | `value ^ mask` |
 | Bitwise not | `~` | `~value` |
 | Shift left | `<<` | `value << 4` |
@@ -92,25 +92,37 @@ let halved = value >> 1              // shift right — move bits right, which h
 
 **Permissions example:**
 ```
-const READ: int = 1
-const WRITE: int = 2
-const EXECUTE: int = 4
+const readPermission: int = 1
+const writePermission: int = 2
+const executePermission: int = 4
 
-let perms = READ | WRITE              // 3 — has read and write
-if (perms & READ != 0) { ... }        // check a permission
-perms = perms | EXECUTE               // add execute
-perms = perms & ~WRITE                // remove write
+let permissions = readPermission | writePermission     // 3 — has read and write
+let canRead = (permissions & readPermission) != 0      // true — read is one of the permissions
+permissions = permissions | executePermission          // add execute
+permissions = permissions & ~writePermission           // remove write
+print(permissions)                                     // 5
 ```
+
+Put parentheses around `permissions & readPermission`. Without them, `!=` runs first (see the order below), and the compiler stops with an error.
 
 ---
 
 ## No compound assignment or increment
 
 ```
-x += 5     // NOT valid — use x = x + 5
-x -= 1     // NOT valid — use x = x - 1
-x++        // NOT valid — use x = x + 1
-x--        // NOT valid — use x = x - 1
+score += 5       // NOT valid — use score = score + 5
+score -= 1       // NOT valid — use score = score - 1
+score++          // NOT valid — use score = score + 1
+score--          // NOT valid — use score = score - 1
+```
+
+Writing `score += 5` gives this error:
+
+```
+Error: `+=` is not supported in Yinz.
+ 9 │   score += 5
+   │          ─┬
+   │           ╰── Use `x = x + n` instead.
 ```
 
 There is one assignment operator: `=`. Every change to a variable is written out.
@@ -141,9 +153,9 @@ When in doubt, add parentheses.
 The IDE warns you when a line could be misread:
 
 ```
-let check = a || b && c
+let canEnter = isAdmin || isMember && hasTicket
 // IDE HINT: && evaluates before ||.
-// Result is a || (b && c). Add parentheses to clarify intent.
+// Result is isAdmin || (isMember && hasTicket). Add parentheses to clarify intent.
 ```
 
 ---
@@ -262,7 +274,16 @@ print(player)    // Alice (HP: 100)
 `==` checks the types as well as the values. Comparing two different types is a compile error:
 
 ```
-let a: string = `5`
-let b: number = 5
-if (a == b) { }    // COMPILE ERROR: cannot compare string and number
+let input: string = `5`
+let count: int = 5
+if (input == count) { }
+```
+
+The compiler stops with this error:
+
+```
+Error: `==` cannot be used with `string` and `int`.
+ 4 │   if (input == count) { print(1) }
+   │       ───────┬──────
+   │              ╰──────── Check that both sides have the same type.
 ```
