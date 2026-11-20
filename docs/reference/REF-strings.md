@@ -165,19 +165,19 @@ Matching length functions:
 For plain English letters and digits, all three give the same number. They differ for other text:
 
 ```ynz
-let s = `café`               // an `e` followed by a separate accent mark (two code points, one grapheme)
+let word = `café`               // an `e` followed by a separate accent mark (two code points, one grapheme)
 
-s.byteCount()                // 6  (c, a, f, e, and 2 bytes for the accent mark)
-s.count()                    // 5  (code points — the accent mark counts as its own)
-s.graphemeCount()            // 4  (the e and its accent count as one)
+word.byteCount()                // 6  (c, a, f, e, and 2 bytes for the accent mark)
+word.count()                    // 5  (code points — the accent mark counts as its own)
+word.graphemeCount()            // 4  (the e and its accent count as one)
 
-let foundFirst = s.get(0)
+let foundFirst = word.get(0)
 let first = foundFirst.or(``)                // c
 
-let foundFourth = s.get(3)
+let foundFourth = word.get(3)
 let fourth = foundFourth.or(``)              // e     (just the e, without its accent)
 
-let foundGrapheme = s.graphemeAt(3)
+let foundGrapheme = word.graphemeAt(3)
 let grapheme = foundGrapheme.or(``)          // é     (the e with its accent — what a person sees)
 ```
 
@@ -236,10 +236,10 @@ let wholeFamily = foundFamily.or(``)         // 👨‍👩‍👧     (the whol
 Two strings that look the same to a person compare as equal, even when they are stored differently:
 
 ```ynz
-let a = `café`    // an `e` followed by a separate accent mark (2 code points for the é)
-let b = `café`    // one single é code point
+let accentSeparate = `café`    // an `e` followed by a separate accent mark (2 code points for the é)
+let accentJoined = `café`      // one single é code point
 
-a == b             // true — Yinz puts both in the same standard form before comparing
+accentSeparate == accentJoined   // true — Yinz puts both in the same standard form before comparing
 ```
 
 You never need to think about this for ordinary comparisons.

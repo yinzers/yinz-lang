@@ -237,7 +237,7 @@ A function can have both:
 ```
 function findUser(id: string) -> maybe<User> errors {
   let data = readDatabase(id)                              // might fail (connection error)
-  let matches = data.filter(u => u.id == id)               // every user with this id
+  let matches = data.filter(candidate => candidate.id == id)  // every user with this id
   let user = matches.first()                               // might be none (user not found)
   return user
 }
@@ -273,10 +273,10 @@ ERROR: Could not read file `config.ynz`
 Override the default behavior with a custom handler:
 
 ```
-setErrorHandler(e => {
-  log(`[${timestamp()}] ${e.message}`)
-  log(e.trace)
-  sendToMonitoring(e)
+setErrorHandler(error => {
+  log(`[${timestamp()}] ${error.message}`)
+  log(error.trace)
+  sendToMonitoring(error)
 })
 ```
 

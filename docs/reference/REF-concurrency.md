@@ -104,8 +104,8 @@ Without `wait`, the compiler would run all three at the same time, because none 
 **When to use `wait` — external API ordering:**
 
 ```
-wait request.post("api.stripe.com/charge", chargeData)
-request.post("api.email.com/send", receipt)
+wait request.post(`api.stripe.com/charge`, chargeData)
+request.post(`api.email.com/send`, receipt)
 ```
 
 The compiler can't tell that these two HTTP calls are logically related. They're just two HTTP posts to different URLs. `wait` makes the intended ordering explicit.

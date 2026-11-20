@@ -80,7 +80,7 @@ print(nickname.value)
 
 ```
 function findPlayer(share roster: fixed<Player>, name: string) -> maybe<Player> {
-  return roster.find(p => p.name == name)    // .find() returns maybe<T>
+  return roster.find(player => player.name == name)    // .find() returns maybe<T>
 }
 ```
 

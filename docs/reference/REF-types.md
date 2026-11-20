@@ -269,7 +269,7 @@ Code in other files only provides the visible fields when it creates the value:
 
 ```ynz
 // File: entrypoint.ynz
-import { Player, takeDamage } from `./player`
+import { Player, takeDamage } from `player`
 
 const player: Player = { name: `Alice`, health: 100 }
 // damageMultiplier starts at 1.0, internalCache starts empty
