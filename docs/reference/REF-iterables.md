@@ -35,11 +35,11 @@ Most iterables never fail while giving you the next value. Some can: reading a f
 
 ```ynz
 shape Iterable<T> {
-  next(lend self) -> maybe<T>
+  next(lend self) -> Maybe<T>
 }
 
 shape FallibleIterable<T> {
-  next(lend self) -> maybe<T> errors
+  next(lend self) -> Maybe<T> errors
 }
 ```
 
@@ -49,10 +49,10 @@ You almost never need to choose a contract. The compiler picks one from what you
 
 | You're iterating over | Contract |
 |-----------------------|----------|
-| `array<T>`, `fixed<T>` | `Iterable<T>` |
-| `map<K, V>.entries()` | `Iterable<Entry<K, V>>` |
-| `range(start, end)` | `Iterable<int>` |
-| `file.lines(path)` | `FallibleIterable<string>` |
+| `Array<T>`, `Fixed<T>` | `Iterable<T>` |
+| `Map<K, V>.entries()` | `Iterable<Entry<K, V>>` |
+| `range(start, end)` | `Iterable<Int>` |
+| `file.lines(path)` | `FallibleIterable<String>` |
 | `request.stream(url)` | `FallibleIterable<Response>` |
 | Paginated API clients | `FallibleIterable<T>` |
 
@@ -65,9 +65,9 @@ The `for` syntax is the same either way. The difference: a loop that can fail ne
 When you loop over a collection of shapes, you can pull the fields out right in the loop header instead of reading them from the loop variable:
 
 ```ynz
-shape Player { name: string, health: int, score: int }
+shape Player { name: String, health: Int, score: Int }
 
-const players: fixed<Player> = [
+const players: Fixed<Player> = [
     { name: `Alice`, health: 100, score: 50 },
     { name: `Bob`,   health: 80,  score: 30 },
 ]
@@ -127,7 +127,7 @@ for (num in range(1, 1000000)) {
 }
 ```
 
-`range()` is built in. It makes each number only when the loop asks for it, so it never builds an array. It follows the `Iterable<int>` contract.
+`range()` is built in. It makes each number only when the loop asks for it, so it never builds an array. It follows the `Iterable<Int>` contract.
 
 ---
 
@@ -135,8 +135,8 @@ for (num in range(1, 1000000)) {
 
 ```
 // Process a 50GB log file with only one line in memory at a time
-function findErrors(path: string) -> array<string> errors {
-  let errorLines: array<string> = []
+function findErrors(path: String) -> Array<String> errors {
+  let errorLines: Array<String> = []
   for (line in file.lines(path)) {     // each read can fail — the failure goes up automatically
     if (line.contains(`ERROR`)) {
       errorLines.add(line)
@@ -146,7 +146,7 @@ function findErrors(path: string) -> array<string> errors {
 }
 ```
 
-`file.lines()` returns a `FallibleIterable<string>`. It reads one line at a time, and any read can fail (disk error, file closed mid-read, and so on). Because the function is marked `errors`, a failed read ends the function and passes the failure to the caller, just like a failed call to any other `errors` function.
+`file.lines()` returns a `FallibleIterable<String>`. It reads one line at a time, and any read can fail (disk error, file closed mid-read, and so on). Because the function is marked `errors`, a failed read ends the function and passes the failure to the caller, just like a failed call to any other `errors` function.
 
 If you want to keep reading past failures (for example, log them and carry on), use one of these adapters (functions that sit between the file and your loop and change what happens when a read fails):
 
@@ -191,12 +191,12 @@ With any adapter, the enclosing function no longer needs to be `errors`.
 Declare a shape that `follows Iterable<T>`, with its data fields and any `hidden` fields it needs to remember where it is. Then write a standalone `next` function whose signature matches the contract. The compiler checks the match.
 
 ```ynz
-shape CountDown follows Iterable<int> {
-  end: int
-  hidden current: int = 0
+shape CountDown follows Iterable<Int> {
+  end: Int
+  hidden current: Int = 0
 }
 
-function next(lend self: CountDown) -> maybe<int> {
+function next(lend self: CountDown) -> Maybe<Int> {
   if (self.current > self.end) {
     return none
   }
@@ -215,12 +215,12 @@ If getting the next value can fail (a file or the network), follow the `Fallible
 
 ```ynz
 shape ApiPager<T> follows FallibleIterable<T> {
-  baseUrl: string
-  hidden cursor: maybe<string> = none
-  hidden done: boolean = false
+  baseUrl: String
+  hidden cursor: Maybe<String> = none
+  hidden done: Boolean = false
 }
 
-function next(lend self: ApiPager<T>) -> maybe<T> errors {
+function next(lend self: ApiPager<T>) -> Maybe<T> errors {
   if (self.done) {
     return none
   }
@@ -242,8 +242,8 @@ To choose between `Iterable<T>` and `FallibleIterable<T>`, ask one question: can
 
 Most developers never build one. The built-in iterables cover everyday code:
 
-- `array<T>` and `fixed<T>` — go through the items
-- `map<K, V>` — go through the entries (each with `.key` and `.value`)
+- `Array<T>` and `Fixed<T>` — go through the items
+- `Map<K, V>` — go through the entries (each with `.key` and `.value`)
 - `range(start, end)` — a sequence of numbers
 - `file.lines(path)` — the lines of a file, without loading the whole file
 
