@@ -17,6 +17,20 @@ User spec: [`docs/reference/REF-types.md`](../../reference/REF-types.md), [`docs
 
 ---
 
+## Built-in Type Names Are PascalCase
+
+Every type starts with a capital letter, built-ins included: `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe<T>`, `Array<T>`, `Fixed<T>`, `Map<K, V>`, `Channel<T>`, `Nothing`. `MapEntry`, `Frame`, `SourceLoc` and `Self` keep their names. Reason: capital letter = type (Golden Rule 10), so no type name needs an exception.
+
+- **Functions, modules, methods and variables stay lowercase.** `range(a, b)` is a function that returns a `Range`; `.map(fn)` is a method.
+- **Type-attached constants** are read off the type name: `Int.max`, `Number.epsilon`.
+- **`Nothing` is an ordinary type name.** There is no `nothing` keyword.
+- **`Boolean`, not `Bool`.** Golden Rule 5: plain words.
+- **No aliases.** Old lowercase spellings in a type position (`int`, `string`, ...) are a compile error: WHAT "`int` is not a type name.", WHAT INSTEAD "Write `Int`.", WHY "Every type in Yinz starts with a capital letter, built-ins included.", plus an LSP quick-fix (see [`IMP-lsp.md`](IMP-lsp.md)). Backwards-compatibility shims are refused (see [`IMP-versioning.md`](IMP-versioning.md)).
+- **Reserved names.** A user shape named like a built-in (`String`, `Map`, `Range`, ...) is a compile error: "`{Name}` is a reserved built-in type name."
+- **Runtime messages** use the same names: `Int overflow in '+'`, `division by zero (Int)`, `division by zero (Number)`.
+
+---
+
 ## One Keyword: `shape`
 
 `shape` is the only declaration keyword. No `interface`, `struct`, `class`, `type`.
@@ -35,14 +49,14 @@ Single inheritance only. `extends` reuses parent's DATA FIELDS — behavior come
 
 **Example** (v0.1-valid — distinct function names, since same-named functions in one file are a compile error; see the overloading section below):
 ```ynz
-shape Entity { name: string, health: int }
-shape Warrior extends Entity { weapon: string, armor: int }
+shape Entity { name: String, health: Int }
+shape Warrior extends Entity { weapon: String, armor: Int }
 
-function greet(share self: Entity) -> string {
+function greet(share self: Entity) -> String {
   return "Hello, I am " + self.name
 }
 
-function greetWarrior(share self: Warrior) -> string {
+function greetWarrior(share self: Warrior) -> String {
   return "Hello, I am " + self.name + " the warrior, wielding " + self.weapon
 }
 
@@ -79,11 +93,11 @@ w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an 
 There is no `override` keyword in Yinz — methods don't live inside shapes ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), so there's nothing to "override." **Function overloading by argument type** (several standalone functions with the same name but different first-parameter types) is not implemented: the v0.1 typeck function-declaration collision check (`crates/ynz-typeck/src/signatures.rs`) keys the signature table by function **name alone** and unconditionally rejects a second same-named function in the same file, regardless of its parameter types:
 
 ```ynz
-shape Entity { name: string }
-shape Warrior extends Entity { weapon: string }
+shape Entity { name: String }
+shape Warrior extends Entity { weapon: String }
 
-function attack(share self: Entity) -> string { return self.name + " attacks!" }
-function attack(share self: Warrior) -> string { return self.name + " swings " + self.weapon + "!" }
+function attack(share self: Entity) -> String { return self.name + " attacks!" }
+function attack(share self: Warrior) -> String { return self.name + " swings " + self.weapon + "!" }
 // COMPILE ERROR: A function named `attack` is already defined in this file.
 ```
 
@@ -114,41 +128,41 @@ Locked: static dispatch is the default. Dynamic dispatch requires explicit synta
 ```ynz
 // Define a contract — bare-signature declarations only (no `function` keyword, no body)
 shape Comparable {
-  compare(share self, share other: Self) -> int
+  compare(share self, share other: Self) -> Int
 }
 
 // Two shapes that follow the contract — data fields only
 shape Player follows Comparable {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
 shape Item follows Comparable {
-  name: string
-  weight: int
+  name: String
+  weight: Int
 }
 
 // Standalone functions provide the implementations.
 // Compiler verifies these match Comparable's signature when checking `follows`.
 // A file holds one function per name, so Item's `compare` lives in the file that declares Item.
-function compare(share self: Player, share other: Player) -> int {
+function compare(share self: Player, share other: Player) -> Int {
   return self.health - other.health
 }
 
 // A generic function — works on anything that follows Comparable
-function findMax<T follows Comparable>(share items: array<T>) -> maybe<T> {
+function findMax<T follows Comparable>(share items: Array<T>) -> Maybe<T> {
   // ... walk the array, keep the largest per compare()
 }
 
 // CASE A — concrete type known → STATIC DISPATCH (auto-picked, fast)
-let players: array<Player> = [...]
+let players: Array<Player> = [...]
 let best = findMax(players)
 // Compiler generates a specialized findMax just for Player; .compare() is pasted inline.
 // Cost: ~1 CPU instruction per .compare()
 // IDE muted hint: // static dispatch (T = Player)
 
 // CASE B — heterogeneous collection → DYNAMIC DISPATCH (user opt-in via `dynamic`)
-let mixedThings: array<dynamic Comparable> = [player1, item1, player2]
+let mixedThings: Array<dynamic Comparable> = [player1, item1, player2]
 let maxThing = findMax(mixedThings)
 // Compiler can't generate a specialized version — array holds different concrete types.
 // Each .compare() = runtime lookup ("which compare() do I call for THIS element?") + indirect function call.
@@ -162,7 +176,7 @@ Go ships with always-dynamic interface dispatch — even when only one concrete 
 ### When you actually need `dynamic`
 
 Rare in practice. Real cases:
-- **Heterogeneous collections** — UI tree where leaves are buttons, sliders, text boxes (all `Drawable`), stored in `array<dynamic Drawable>` for rendering
+- **Heterogeneous collections** — UI tree where leaves are buttons, sliders, text boxes (all `Drawable`), stored in `Array<dynamic Drawable>` for rendering
 - **Plugin architectures** — types loaded from packages at runtime
 - **Stored callback collections** — arrays of different function-shaped values
 
@@ -180,7 +194,7 @@ let best = findMax(players)        // muted: // static dispatch (T = Player) —
 
 Hover tooltip:
 - **WHAT**: A specialized version of `findMax` was generated for `Player`. The `.compare()` call is pasted directly into the loop body — no function-call jump.
-- **WHAT INSTEAD**: To explicitly force dynamic dispatch (rare — only useful for benchmarking), wrap the input as `array<dynamic Comparable>`.
+- **WHAT INSTEAD**: To explicitly force dynamic dispatch (rare — only useful for benchmarking), wrap the input as `Array<dynamic Comparable>`.
 - **WHY**: The compiler knew the concrete type at this call site. Static dispatch is ~3× faster than runtime lookup in tight loops.
 
 #### Dynamic dispatch — cautionary muted hint (red-tinted per [`.claude/rules/inference.md`](../../../.claude/rules/inference.md))
@@ -190,29 +204,29 @@ let maxThing = findMax(mixedThings)   // muted (red-tinted): // dynamic dispatch
 ```
 
 Hover tooltip:
-- **WHAT**: This call uses runtime lookup because `mixedThings` is `array<dynamic Comparable>` — the concrete type at each iteration isn't known at compile time.
-- **WHAT INSTEAD**: If all elements are actually the same concrete type, switch to `array<Player>` for static dispatch (~3× faster).
+- **WHAT**: This call uses runtime lookup because `mixedThings` is `Array<dynamic Comparable>` — the concrete type at each iteration isn't known at compile time.
+- **WHAT INSTEAD**: If all elements are actually the same concrete type, switch to `Array<Player>` for static dispatch (~3× faster).
 - **WHY**: You wrote `dynamic Comparable` to allow heterogeneous storage. The cost is one runtime lookup + indirect call per `.compare()`.
 
 #### Tier 3 lint when dynamic could have been static
 
 ```ynz
-let things: array<dynamic Comparable> = []   // yellow squiggle from `prefer-static-dispatch-when-monotype`
+let things: Array<dynamic Comparable> = []   // yellow squiggle from `prefer-static-dispatch-when-monotype`
 things.add(player1)
 things.add(player2)
 // All elements are Player. The dynamic wrapper is unnecessary.
 ```
 
-The lint fires when the compiler can prove the `dynamic` collection only ever holds one concrete type. Suggested fix: change to `array<Player>` for the perf win.
+The lint fires when the compiler can prove the `dynamic` collection only ever holds one concrete type. Suggested fix: change to `Array<Player>` for the perf win.
 
 #### Compile errors when contract isn't followed (Rule 3 format)
 
 ```
 COMPILE ERROR: Item is not a Player.
-  Player and Item are different types — array<Player> only holds Players.
+  Player and Item are different types — Array<Player> only holds Players.
 
   To store a mix of Comparable shapes, declare:
-    let things: array<dynamic Comparable> = []
+    let things: Array<dynamic Comparable> = []
 
   This adds runtime dispatch cost (~3× per .compare() call) but allows mixed types.
 ```
@@ -225,11 +239,11 @@ COMPILE ERROR: Foo does not follow Comparable.
 
     1. Declare Foo follows Comparable:
        shape Foo follows Comparable {
-         name: string
+         name: String
        }
 
     2. Provide a standalone compare function matching Comparable's signature:
-       function compare(share self: Foo, share other: Foo) -> int {
+       function compare(share self: Foo, share other: Foo) -> Int {
          // ... return negative, zero, or positive
        }
 
@@ -268,7 +282,7 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 `shape Box<T> { value: T }` — angle bracket generics, same pattern as built-in collections.
 
-**Why**: Consistent with `array<Player>`, `map<string, number>`, `fixed<string>`. One `name<type>` pattern covers both built-in and user-defined generic types. No special cases.
+**Why**: Consistent with `Array<Player>`, `Map<String, Number>`, `Fixed<string>`. One `name<type>` pattern covers both built-in and user-defined generic types. No special cases.
 
 ---
 
@@ -282,13 +296,13 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 ---
 
-## No Null — `maybe` Types
+## No Null — `Maybe` Types
 
-No `null`. No `undefined`. Absence is expressed as `none` and tracked by the type system with `maybe<T>`.
+No `null`. No `undefined`. Absence is expressed as `none` and tracked by the type system with `Maybe<T>`.
 
 **Why**: Null references are the "billion dollar mistake" — entire categories of runtime errors exist only because null can masquerade as any type. Making absence explicit in the type system moves null errors to compile time (Golden Rule 2).
 
-**`maybe<T>` = `T | none`**: Interchangeable syntax. `maybe<string>` is sugar for `string | none`. Both valid everywhere.
+**`Maybe<T>` = `T | none`**: Interchangeable syntax. `Maybe<String>` is sugar for `String | none`. Both valid everywhere.
 
 ---
 
@@ -298,9 +312,9 @@ No `null`. No `undefined`. Absence is expressed as `none` and tracked by the typ
 
 ```ynz
 shape Player {
-  name: string
-  hidden damageMultiplier: number = 1.0
-  hidden internalCache: map<string, number> = {}
+  name: String
+  hidden damageMultiplier: Number = 1.0
+  hidden internalCache: Map<String, Number> = {}
 }
 ```
 
@@ -334,10 +348,10 @@ A shape field can be typed with an inline anonymous shape definition instead of 
 
 ```ynz
 shape Bar {
-    symbol: string
+    symbol: String
     spread: {
-        bid: number
-        ask: number
+        bid: Number
+        ask: Number
     }
 }
 ```

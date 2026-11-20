@@ -28,12 +28,12 @@ v0.1.0 shipped with feature inventories scattered across at least 7 locations:
 | `crates/ynz-diagnostics/src/banned_jargon.rs` | 47 banned jargon words + replacements |
 | `crates/ynz-typeck/src/builtins.rs` | 16 string method names (for "did you mean" suggestions) |
 | `crates/ynz-typeck/src/intrinsics.rs` | Primitive type methods + free functions (PrimitiveIntrinsicTable) |
-| `crates/ynz-typeck/src/check.rs:3698-3707` | 7 type-attached constants (`int.max`, `number.epsilon`, etc.) |
+| `crates/ynz-typeck/src/check.rs:3698-3707` | 7 type-attached constants (`Int.max`, `Number.epsilon`, etc.) |
 | `crates/ynz-codegen/src/emit.rs:4633-4650` | Same 7 type-attached constants (numeric values for LLVM emission) |
 | `crates/ynz-parser/src/lexer.rs:491-690` | ~50 keywords + ~20 banned declaration keywords + ~11 deferred-feature handlers |
 | [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) | Muted-hint domain catalog (design-doc-only, no runtime representation) |
 
-Adding `int.max` in M4 P5 touched five of these locations. No tool or test enforced their consistency. When the v0.2 LSP needs to know "what keywords can autocomplete here?" or "what muted hints should I show?", it has no single place to ask.
+Adding `Int.max` in M4 P5 touched five of these locations. No tool or test enforced their consistency. When the v0.2 LSP needs to know "what keywords can autocomplete here?" or "what muted hints should I show?", it has no single place to ask.
 
 **Solution**: a TOML data file at [`registry/features.toml`](../../../registry/features.toml), parsed by `crates/ynz-registry/build.rs`, which generates typed Rust constants into `OUT_DIR/registry.rs`. Every consumer reads from this one file.
 
@@ -83,7 +83,7 @@ A keyword from another language that Yinz's lexer intercepts and redirects with 
 ```toml
 [[banned_declaration_keyword]]
 name = "class"
-what_instead = "Use `shape` for data and standalone functions for behavior: `shape Player { name: string }` then `function greet(share self: Player) -> string`"
+what_instead = "Use `shape` for data and standalone functions for behavior: `shape Player { name: String }` then `function greet(share self: Player) -> String`"
 why = "Yinz is not object-oriented — there are no classes. Data lives in shapes; behavior lives in standalone functions called via dot-call syntax."
 since = "M4"
 ```
@@ -115,15 +115,15 @@ is_acronym = true
 
 ### `[[primitive_intrinsic]]`
 
-A built-in function or method available on primitive types. Covers `print`, `range`, zero-arg and one-arg methods on `int`/`float`/`number`/`bool`/`string`. Type-checked in `crates/ynz-typeck/src/intrinsics.rs` and `builtins.rs`.
+A built-in function or method available on primitive types. Covers `print`, `range`, zero-arg and one-arg methods on `Int`/`Float`/`Number`/`Boolean`/`String`. Type-checked in `crates/ynz-typeck/src/intrinsics.rs` and `builtins.rs`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Function or method name |
 | `kind` | string | yes | `"print_type"` \| `"free_fn"` \| `"method"` \| `"method_1arg"` |
-| `receiver_type` | string | kind=method | `"int"` \| `"float"` \| `"number"` \| `"bool"` \| `"string"` |
+| `receiver_type` | string | kind=method | `"Int"` \| `"Float"` \| `"Number"` \| `"Boolean"` \| `"string"` |
 | `param_types` | array of strings | free_fn / method_1arg | List of parameter types in order |
-| `return_type` | string | yes (except print_type) | Return type. Use `"nothing"` for void, `"maybe<int>"` etc. for maybe |
+| `return_type` | string | yes (except print_type) | Return type. Use `"Nothing"` for no value, `"Maybe<Int>"` etc. for maybe |
 | `since` | string | yes | Milestone tag |
 
 **Example**:
@@ -131,59 +131,59 @@ A built-in function or method available on primitive types. Covers `print`, `ran
 [[primitive_intrinsic]]
 name = "range"
 kind = "free_fn"
-param_types = ["int"]
-return_type = "range<int>"
+param_types = ["Int"]
+return_type = "Range<Int>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "range"
 kind = "free_fn"
-param_types = ["int", "int"]
-return_type = "range<int>"
+param_types = ["Int", "Int"]
+return_type = "Range<Int>"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "toFloat"
 kind = "method"
-receiver_type = "int"
+receiver_type = "Int"
 param_types = []
-return_type = "float"
+return_type = "Float"
 since = "M3"
 
 [[primitive_intrinsic]]
 name = "wrappingAdd"
 kind = "method_1arg"
-receiver_type = "int"
-param_types = ["int"]
-return_type = "int"
+receiver_type = "Int"
+param_types = ["Int"]
+return_type = "Int"
 since = "M4"
 ```
 
 ### `[[type_attached_constant]]`
 
-A constant accessible as `Type.name` (e.g. `int.max`, `number.epsilon`). Both the type-checker and codegen read this — the type-checker to assign a type, codegen to emit the LLVM constant value.
+A constant accessible as `Type.name` (e.g. `Int.max`, `Number.epsilon`). Both the type-checker and codegen read this — the type-checker to assign a type, codegen to emit the LLVM constant value.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `type_name` | string | yes | `"int"` \| `"float"` \| `"number"` |
+| `type_name` | string | yes | `"Int"` \| `"Float"` \| `"Number"` |
 | `const_name` | string | yes | `"max"` \| `"min"` \| `"epsilon"` |
-| `value_type` | string | yes | Yinz type of the constant (`"int"`, `"float"`, `"number"`) |
-| `value_literal` | string | yes | Numeric value as string (avoids precision loss in TOML). `"9223372036854775807"` for `int.max`. |
+| `value_type` | string | yes | Yinz type of the constant (`"Int"`, `"Float"`, `"Number"`) |
+| `value_literal` | string | yes | Numeric value as string (avoids precision loss in TOML). `"9223372036854775807"` for `Int.max`. |
 | `since` | string | yes | Milestone tag |
 
 **Example**:
 ```toml
 [[type_attached_constant]]
-type_name = "int"
+type_name = "Int"
 const_name = "max"
-value_type = "int"
+value_type = "Int"
 value_literal = "9223372036854775807"
 since = "M4"
 
 [[type_attached_constant]]
-type_name = "number"
+type_name = "Number"
 const_name = "epsilon"
-value_type = "number"
+value_type = "Number"
 value_literal = "1e-33"
 since = "M4"
 ```
@@ -205,8 +205,8 @@ A language feature that is reserved at the lexer/parser level but whose full imp
 ```toml
 [[deferred_language_feature]]
 name = "f32"
-substitute = "Use `float` (f64) for floating-point math. Sized floats ship in v2+ for GPU and embedded work."
-why = "Yinz keeps the numeric type system small in v0.1: `int` (i64), `float` (f64), `number` (decimal128). Sized variants add cognitive load without paying off for typical application code."
+substitute = "Use `Float` (f64) for floating-point math. Sized floats ship in v2+ for GPU and embedded work."
+why = "Yinz keeps the numeric type system small in v0.1: `Int` (i64), `Float` (f64), `Number` (decimal128). Sized variants add cognitive load without paying off for typical application code."
 ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `f32` or `f64` as a type annotation in Yinz source"
@@ -274,7 +274,7 @@ domain = "variable_type"
 placement_category = "Addition"
 description = "Infers the type of a variable from its initializer expression"
 example_source = "let x = 42"
-example_hint_rendered = ": int (from 42)"
+example_hint_rendered = ": Int (from 42)"
 ```
 
 ### `[[lint_rule]]`
