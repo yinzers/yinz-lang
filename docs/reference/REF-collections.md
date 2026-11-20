@@ -717,7 +717,7 @@ Error: Cannot use `.alice` to look up a map key.
    │
  3 │   let aliceScore = scores.alice
    │                           ──┬──
-   │                             ╰──── Map keys are runtime values — use `m["alice"]` to look up a key. For checking existence, use `m.has("alice")`.
+   │                             ╰──── Map keys are runtime values — use `` m[`alice`] `` to look up a key. For checking existence, use `` m.has(`alice`) ``.
    │
    │ Note: Dot access is for shape fields with compile-time-known names. Map keys are dynamic — use bracket syntax.
 ───╯

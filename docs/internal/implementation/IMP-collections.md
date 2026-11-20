@@ -114,7 +114,7 @@ Does NOT work on: shape values. Shapes use dot access for fields, and functions 
 
 Brackets work on all four collection types for read, and on Map/Array/Fixed for write. `map["key"]` is allowed.
 
-**Map keys use brackets, never dot.** Maps have methods (`.count()`, `.get()`, `.set()`, `.keys()`, `.values()`, `.filter()`, etc.), so a key named `count` accessed by dot would collide with `.count()`. Map keys are runtime data and method names are compile-time built-ins; brackets keep them apart: `m["count"]` is a key lookup, `m.count()` is a method call. Shapes use dot because the compiler checks their declared field names against the functions callable through dot sugar.
+**Map keys use brackets, never dot.** Maps have methods (`.count()`, `.get()`, `.set()`, `.keys()`, `.values()`, `.filter()`, etc.), so a key named `count` accessed by dot would collide with `.count()`. Map keys are runtime data and method names are compile-time built-ins; brackets keep them apart: `` m[`count`] `` is a key lookup, `m.count()` is a method call. Shapes use dot because the compiler checks their declared field names against the functions callable through dot sugar.
 
 **Out-of-bounds on `.set()`:**
 

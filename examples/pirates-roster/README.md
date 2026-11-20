@@ -21,7 +21,7 @@ source $HOME/.cargo/env
 | **M2** | ✅ shipped | Variables (`let`/`const`), arithmetic (`+ - * / %`), comparison, boolean (`&& \|\| !`), bitwise (`& \| ^ ~ << >>`), primitives (`Int`, `Float`, `Number`, `Boolean`), polymorphic `print`, `.toString()`/`.toNumber()`/`.toFloat()` intrinsics |
 | **M3** | ✅ shipped | `if`/multi-case `if`/`else =>`, `while`, `for (x in range(...))`, early `return`, user-defined functions with params + return types, mutual recursion |
 | **M4** | ✅ shipped | shapes (data + contract signatures), standalone functions taking receivers (UFCS dot-call sugar), ownership (`share`/`lend`/`give` in signatures, inferred at call sites), `.copy()`/`.freeze()`, `extends` (data-only), `follows` contracts, `hidden` fields, `dynamic Foo` runtime polymorphism, M2 catch-up (`Int.max`/`Int.min`/`Number.epsilon`, `.wrappingAdd()`/`.saturatingAdd()`) |
-| **M5** | ✅ shipped | generics (`<T>`), collections (`Array<T>`, `Fixed<T>`, `Map<K,V>`), bracket sugar (`arr[i]`, `m["key"]`) |
+| **M5** | ✅ shipped | generics (`<T>`), collections (`Array<T>`, `Fixed<T>`, `Map<K,V>`), bracket sugar (`arr[i]`, `` m[`key`] ``) |
 | **M6** | ✅ shipped | `options`, union types (`\|`), `Maybe<T>`, `is` narrowing |
 | **M7** | ✅ shipped | full Unicode strings, interpolation, `errors` keyword + cascades, `Iterable<T>` / `FallibleIterable<T>` |
 | **M8** | ✅ shipped | modules (`import`/`export`), doc comments (`///`), `sensitive`, `wait`/`background` concurrency keywords, bignum `Number<N>` for N > 34 |
