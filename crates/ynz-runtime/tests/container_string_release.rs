@@ -87,7 +87,7 @@ fn a_container_release_frees_its_heap_strings_and_leaves_its_static_ones() {
             ynz_array_push(array, &item as *const *const u8 as *const u8);
         }
         let before = counters();
-        assert_frees_only_the_heap_strings("array<string>", before, 2, 14, || {
+        assert_frees_only_the_heap_strings("Array<String>", before, 2, 14, || {
             ynz_array_release(array, Some(release_string_glue), 0)
         });
         assert_eq!(text(first), "first", "a static item survives the release");
@@ -119,7 +119,7 @@ fn a_container_release_frees_its_heap_strings_and_leaves_its_static_ones() {
             );
         }
         let before = counters();
-        assert_frees_only_the_heap_strings("map<string, string>", before, 4, 24, || {
+        assert_frees_only_the_heap_strings("Map<String, String>", before, 4, 24, || {
             ynz_map_release(map, Some(release_string_glue), Some(release_string_glue), 0)
         });
         for literal in [first, second, third] {

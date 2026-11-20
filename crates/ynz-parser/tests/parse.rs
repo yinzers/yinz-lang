@@ -29,7 +29,7 @@ fn parse_fn_body(source: &str) -> Vec<Stmt> {
 }
 
 fn wrap(inner: &str) -> String {
-    format!("function entrypoint() -> nothing {{ {inner} }}")
+    format!("function entrypoint() -> Nothing {{ {inner} }}")
 }
 
 const FILE: &str = "test.ynz";
@@ -702,7 +702,7 @@ fn m5_type_variant_count_locked() {
             span: span(0, 1),
         },
         Generic {
-            name: "array".into(),
+            name: "Array".into(),
             name_span: span(0, 5),
             args: vec![Int],
             span: span(0, 10),
@@ -809,7 +809,7 @@ fn m6_type_variant_count_locked() {
             span: span(0, 1),
         },
         Generic {
-            name: "array".into(),
+            name: "Array".into(),
             name_span: span(0, 5),
             args: vec![Int],
             span: span(0, 10),
@@ -911,7 +911,7 @@ fn m6_is_arm_produces_is_pattern() {
     // WHY: `is Circle =>` in a multi-case arm must produce MatchPatternKind::Is(TypePath),
     // not a generic Value pattern. Typeck and codegen key on this variant for union narrowing.
     let output = parse(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
   if (x) {
     is Circle => print("circle")
     else => print("other")
@@ -943,7 +943,7 @@ fn m6_is_arm_produces_is_pattern() {
 fn shape_declaration_parses() {
     // WHY: The simplest valid shape must parse cleanly. If this fails,
     // every downstream shape test is meaningless.
-    let output = parse("shape Player { name: string\n health: int }");
+    let output = parse("shape Player { name: String\n health: Int }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -970,7 +970,7 @@ fn shape_declaration_parses() {
 fn base_shape_parses() {
     // WHY: `base shape` is the Yinz form for non-instantiable types. The parser must
     // set is_base=true and not confuse it with a regular shape.
-    let output = parse("base shape Entity { name: string }");
+    let output = parse("base shape Entity { name: String }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::ShapeDecl(s) => {
@@ -985,7 +985,7 @@ fn base_shape_parses() {
 fn shape_with_extends_and_follows_parses() {
     // WHY: `shape Warrior extends Entity follows Damageable` must parse the
     // inheritance and contract declarations correctly into the AST.
-    let output = parse("shape Warrior extends Entity follows Damageable { weapon: string }");
+    let output = parse("shape Warrior extends Entity follows Damageable { weapon: String }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::ShapeDecl(s) => {
@@ -1003,7 +1003,7 @@ fn shape_with_extends_and_follows_parses() {
 #[test]
 fn hidden_field_parses() {
     // WHY: `hidden cache: int` must set is_hidden=true on the FieldDecl.
-    let output = parse("shape Player { name: string\n hidden cache: int }");
+    let output = parse("shape Player { name: String\n hidden cache: Int }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::ShapeDecl(s) => {
@@ -1018,7 +1018,7 @@ fn hidden_field_parses() {
 fn contract_sig_in_shape_parses() {
     // WHY: Bare method signatures `greet(share self) -> string` inside a shape
     // are how contracts are declared. Parser must distinguish them from fields.
-    let output = parse("shape Greetable { greet(share self) -> string }");
+    let output = parse("shape Greetable { greet(share self) -> String }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::ShapeDecl(s) => {
@@ -1039,7 +1039,7 @@ fn anonymous_struct_lit_parses() {
     // WHY: `let p: Player = { name: "Patrick", health: 100 }` — the annotation-only
     // struct literal form — must produce Expr::StructLit with 2 fields.
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> nothing { let p: string = { name: `Patrick` } }");
+    let output = parse("function entrypoint() -> Nothing { let p: String = { name: `Patrick` } }");
     assert_eq!(output.diagnostics.len(), 0, "Struct lit must parse cleanly");
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1065,7 +1065,7 @@ fn anonymous_struct_lit_parses() {
 fn field_access_parses() {
     // WHY: `player.health` must produce Expr::FieldAccess (no parens = pure read
     // per dot-postfix rule). If it accidentally becomes MethodCall, codegen breaks.
-    let output = parse("function entrypoint() -> nothing { let x = player.health }");
+    let output = parse("function entrypoint() -> Nothing { let x = player.health }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1090,7 +1090,7 @@ fn field_access_parses() {
 fn field_assignment_parses() {
     // WHY: `player.health = 50` must produce Stmt::FieldAssign, not Stmt::Assign.
     // If it becomes Stmt::Assign, the typeck won't enforce field-mutation rules.
-    let output = parse("function entrypoint() -> nothing { player.health = 50 }");
+    let output = parse("function entrypoint() -> Nothing { player.health = 50 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1118,7 +1118,7 @@ fn field_assignment_parses() {
 fn copy_postfix_op_parses() {
     // WHY: `value.copy()` must produce Expr::PostfixOp { op: Copy }. This is a
     // body operation (parens required) per the dot-postfix rule.
-    let output = parse("function entrypoint() -> nothing { let b = a.copy() }");
+    let output = parse("function entrypoint() -> Nothing { let b = a.copy() }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1144,7 +1144,7 @@ fn copy_postfix_op_parses() {
 #[test]
 fn freeze_postfix_op_parses() {
     // WHY: `value.freeze()` must produce Expr::PostfixOp { op: Freeze }.
-    let output = parse("function entrypoint() -> nothing { cfg.freeze() }");
+    let output = parse("function entrypoint() -> Nothing { cfg.freeze() }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1167,7 +1167,7 @@ fn freeze_postfix_op_parses() {
 fn dynamic_type_in_type_position_parses() {
     // WHY: `let d: dynamic Damageable = p` — `dynamic Foo` is a valid type annotation.
     // Must produce Type::Dynamic, not Type::Named.
-    let output = parse("function entrypoint() -> nothing { let d: dynamic Foo = p }");
+    let output = parse("function entrypoint() -> Nothing { let d: dynamic Foo = p }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1194,7 +1194,7 @@ fn prefix_form_struct_lit_produces_teaching_diagnostic() {
     // a teaching diagnostic redirecting to the annotation-only form, recover cleanly,
     // and NOT produce an Expr::StructLit (since the prefix form is compile-time banned).
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> nothing { let x = Player { name: `Patrick` } }");
+    let output = parse("function entrypoint() -> Nothing { let x = Player { name: `Patrick` } }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1212,7 +1212,7 @@ fn method_body_inside_shape_produces_diagnostic() {
     // WHY: Yinz is not OOP — method bodies cannot be declared inside shapes.
     // The parser must emit a clear teaching diagnostic and recover.
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("shape Player { function greet() -> string { return `hi` } }");
+    let output = parse("shape Player { function greet() -> String { return `hi` } }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1229,7 +1229,7 @@ fn method_body_inside_shape_produces_diagnostic() {
 fn self_value_in_function_body_parses() {
     // WHY: `self` (lowercase) in an expression position produces Expr::SelfValue.
     // This enables receiver-style functions: `function greet(share self: Player) { print(self.name) }`.
-    let output = parse("function greet(share self: string) -> nothing { print(self) }");
+    let output = parse("function greet(share self: String) -> Nothing { print(self) }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1255,7 +1255,7 @@ fn m4_parse_snapshot() {
     // WHY: Snapshot locks the full M4 AST for a realistic shape-declaration source
     // so any parser regression shows up as an insta diff.
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let source = "shape Player {\n  name: string\n  health: int\n  hidden cache: int\n}\n\nfunction greet(share self: Player) -> string {\n  return self.name\n}\n\nfunction entrypoint() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
+    let source = "shape Player {\n  name: String\n  health: Int\n  hidden cache: Int\n}\n\nfunction greet(share self: Player) -> String {\n  return self.name\n}\n\nfunction entrypoint() -> Nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
     let output = parse(source);
     assert_eq!(
         output.diagnostics.len(),
@@ -1271,7 +1271,7 @@ fn m1_source_parses_to_expected_ast() {
     // A silent change to this snapshot breaks the typeck layer.
     //
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> nothing { print(`hello, yinz`) }");
+    let output = parse("function entrypoint() -> Nothing { print(`hello, yinz`) }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -1284,9 +1284,9 @@ fn m1_source_parses_to_expected_ast() {
 fn m2_source_parses_to_expected_ast() {
     // WHY: this is the exact AST the Phase 4 type-checker depends on for M2.
     // A silent change here means typeck breaks on the M2 smoke test.
-    let source = r#"function entrypoint() -> nothing {
+    let source = r#"function entrypoint() -> Nothing {
   let price = 0.1 + 0.2
-  let count: int = 42
+  let count: Int = 42
   let active = true
   print(price)
   print(count * count - 1)
@@ -1305,7 +1305,7 @@ fn m2_source_parses_to_expected_ast() {
 fn type_annotations_parse_correctly() {
     // WHY: `let x: int = 1` needs to produce Type::Int, not Type::Named("int").
     // If primitive types are not recognized, typeck will fail to match them.
-    let output = parse("function entrypoint() -> nothing { let x: int = 1 }");
+    let output = parse("function entrypoint() -> Nothing { let x: Int = 1 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1327,7 +1327,7 @@ fn type_annotations_parse_correctly() {
 #[test]
 fn number_type_without_brackets_is_34_precision() {
     // WHY: `number` without `[N]` should default to 34 decimal digits.
-    let output = parse("function entrypoint() -> nothing { let x: number = 3.14 }");
+    let output = parse("function entrypoint() -> Nothing { let x: Number = 3.14 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1356,11 +1356,11 @@ fn number_bracket_syntax_produces_migration_diagnostic() {
     // test-ratchet: M8 P0 replaces the old deferral check (which tested `why.contains("v0.7")`)
     // with a migration-diagnostic check. The old test was: `number[128]` → deferral.
     // New behavior: `number[128]` → migration redirect; `number<128>` → deferral.
-    let output = parse("function entrypoint() -> nothing { let x: number[128] = 0 }");
+    let output = parse("function entrypoint() -> Nothing { let x: Number[128] = 0 }");
     assert_eq!(
         output.diagnostics.len(),
         1,
-        "number[N] must produce exactly 1 migration diagnostic"
+        "Number[N] must produce exactly 1 migration diagnostic"
     );
     assert!(
         output.diagnostics[0].what.contains("angle brackets"),
@@ -1368,7 +1368,7 @@ fn number_bracket_syntax_produces_migration_diagnostic() {
         output.diagnostics[0].what
     );
     assert!(
-        output.diagnostics[0].what_instead.contains("number<"),
+        output.diagnostics[0].what_instead.contains("Number<"),
         "Migration diagnostic what-instead must show the angle-bracket form, got: {:?}",
         output.diagnostics[0].what_instead
     );
@@ -1378,11 +1378,11 @@ fn number_bracket_syntax_produces_migration_diagnostic() {
 fn number_angle_bracket_34_accepts() {
     // WHY: `number<34>` is the explicit angle-bracket form of the default precision.
     // It must parse successfully and produce Type::Number{34}.
-    let output = parse("function entrypoint() -> nothing { let x: number<34> = 3.14 }");
+    let output = parse("function entrypoint() -> Nothing { let x: Number<34> = 3.14 }");
     assert_eq!(
         output.diagnostics.len(),
         0,
-        "number<34> must have no diagnostics"
+        "Number<34> must have no diagnostics"
     );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1405,11 +1405,11 @@ fn number_angle_bracket_non34_parses_in_m8() {
     //
     // test-ratchet: M8 P6 changes behavior from "1 deferral diagnostic" to "0 diagnostics".
     // The old test (number_angle_bracket_non34_produces_deferral) is replaced by this one.
-    let output = parse("function entrypoint() -> nothing { let x: number<128> = 0 }");
+    let output = parse("function entrypoint() -> Nothing { let x: Number<128> = 0 }");
     assert_eq!(
         output.diagnostics.len(),
         0,
-        "number<128> must parse without diagnostics in M8 (bignum ships): {:?}",
+        "Number<128> must parse without diagnostics in M8 (bignum ships): {:?}",
         output.diagnostics
     );
 }
@@ -1418,7 +1418,7 @@ fn number_angle_bracket_non34_parses_in_m8() {
 fn mul_binds_tighter_than_add() {
     // WHY: `1 + 2 * 3` must parse as `1 + (2 * 3)`, not `(1 + 2) * 3`.
     // If * and + have the same BP, PEMDAS breaks everywhere.
-    let output = parse("function entrypoint() -> nothing { let x = 1 + 2 * 3 }");
+    let output = parse("function entrypoint() -> Nothing { let x = 1 + 2 * 3 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1450,7 +1450,7 @@ fn mul_binds_tighter_than_add() {
 fn comparison_binds_tighter_than_and() {
     // WHY: `1 < 2 && 3 > 4` must parse as `(1 < 2) && (3 > 4)`.
     // Mixing comparison and boolean operators is a common source of bugs.
-    let output = parse("function entrypoint() -> nothing { let x = 1 < 2 && 3 > 4 }");
+    let output = parse("function entrypoint() -> Nothing { let x = 1 < 2 && 3 > 4 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1493,7 +1493,7 @@ fn comparison_binds_tighter_than_and() {
 fn binary_ops_are_left_associative() {
     // WHY: `1 - 2 - 3` must parse as `(1 - 2) - 3`, not `1 - (2 - 3)`.
     // Right-associativity would silently produce different runtime values.
-    let output = parse("function entrypoint() -> nothing { let x = 1 - 2 - 3 }");
+    let output = parse("function entrypoint() -> Nothing { let x = 1 - 2 - 3 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1530,7 +1530,7 @@ fn binary_ops_are_left_associative() {
 #[test]
 fn or_binds_looser_than_and() {
     // WHY: `a || b && c` must be `a || (b && c)`, matching standard boolean precedence.
-    let output = parse("function entrypoint() -> nothing { let x = a || b && c }");
+    let output = parse("function entrypoint() -> Nothing { let x = a || b && c }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1565,7 +1565,7 @@ fn or_binds_looser_than_and() {
 fn parentheses_override_precedence() {
     // WHY: `(1 + 2) * 3` must parse as `Mul(Add(1,2), 3)`, not `Add(1, Mul(2,3))`.
     // Parentheses are the user's escape valve from the precedence table.
-    let output = parse("function entrypoint() -> nothing { let x = (1 + 2) * 3 }");
+    let output = parse("function entrypoint() -> Nothing { let x = (1 + 2) * 3 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1708,7 +1708,7 @@ fn missing_rhs_produces_diagnostic_and_recovers() {
     // WHY: `let x = 1 +` must emit a diagnostic and still produce a parseable
     // AST. If the parser panics or produces no AST, all other errors in the
     // file are hidden.
-    let output = parse("function entrypoint() -> nothing { let x = 1 + }");
+    let output = parse("function entrypoint() -> Nothing { let x = 1 + }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1722,7 +1722,7 @@ fn missing_rhs_produces_diagnostic_and_recovers() {
 fn missing_let_identifier_produces_diagnostic_and_recovers() {
     // WHY: `let : int = 5` (missing the variable name) must emit a diagnostic
     // but not crash. The block should continue parsing.
-    let output = parse("function entrypoint() -> nothing { let : int = 5 }");
+    let output = parse("function entrypoint() -> Nothing { let : Int = 5 }");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing variable name must produce at least 1 diagnostic"
@@ -1739,7 +1739,7 @@ fn let_type_mismatch_parses_cleanly() {
     // WHY: `let x: int = 1.5` is a TYPE error, not a PARSE error. The parser
     // must accept it without diagnostics — the type checker catches it in P4.
     // If the parser rejects it, P4 never gets to produce the teaching diagnostic.
-    let output = parse("function entrypoint() -> nothing { let x: int = 1.5 }");
+    let output = parse("function entrypoint() -> Nothing { let x: Int = 1.5 }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -1770,7 +1770,7 @@ fn unexpected_rbrace_in_expression_recovers() {
     // WHY: `let x = }` must not eat the `}` that closes the function body.
     // If the parser consumes the `}`, the enclosing block is left unclosed
     // and the rest of the file is misparsed.
-    let output = parse("function entrypoint() -> nothing { let x = }");
+    let output = parse("function entrypoint() -> Nothing { let x = }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1784,7 +1784,7 @@ fn multi_arg_call_parses_cleanly() {
     // WHY: `print(1, 2, 3)` has the wrong arity for M2 but the PARSER must
     // accept it — arity enforcement is typeck's job. If the parser rejects
     // multi-arg calls, the typeck teaching diagnostic about arity is unreachable.
-    let output = parse("function entrypoint() -> nothing { print(1, 2, 3) }");
+    let output = parse("function entrypoint() -> Nothing { print(1, 2, 3) }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -1812,7 +1812,7 @@ fn chained_comparison_parses_as_left_associative() {
     // Typeck will reject this in P4 because `bool < int` is a type error.
     // The test documents that the PARSE result is deterministic — the typeck
     // diagnostic targets the outer `<`, not the inner one.
-    let output = parse("function entrypoint() -> nothing { let x = 1 < 2 < 3 }");
+    let output = parse("function entrypoint() -> Nothing { let x = 1 < 2 < 3 }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -1855,7 +1855,7 @@ fn assignment_parses_as_stmt_assign() {
     // WHY: `x = 5` after a `let x = 0` must parse as Stmt::Assign, not as
     // a bare expression. If assignment is misparsed as Expr::BinOp(Eq, x, 5)
     // the type-checker would see a boolean expression in a statement position.
-    let source = "function entrypoint() -> nothing { let x = 0\nx = 5 }";
+    let source = "function entrypoint() -> Nothing { let x = 0\nx = 5 }";
     let output = parse(source);
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
@@ -1876,7 +1876,7 @@ fn assignment_parses_as_stmt_assign() {
 fn method_call_parses_correctly() {
     // WHY: `count.toString()` must produce MethodCall, not a BinOp(Dot) hack.
     // If method calls are misparsed, the P4 intrinsic dispatch never fires.
-    let output = parse("function entrypoint() -> nothing { let s = count.toString() }");
+    let output = parse("function entrypoint() -> Nothing { let s = count.toString() }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1901,7 +1901,7 @@ fn method_call_parses_correctly() {
 fn unary_neg_parses_correctly() {
     // WHY: `-x` must produce UnaryOp(Neg, x), not BinOp(Sub, _, x).
     // If unary minus is misparsed as subtraction, negation diagnostics are wrong.
-    let output = parse("function entrypoint() -> nothing { let x = -5 }");
+    let output = parse("function entrypoint() -> Nothing { let x = -5 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1936,7 +1936,7 @@ fn missing_arrow_produces_diagnostic_and_recovers() {
 
 #[test]
 fn missing_closing_brace_produces_diagnostic() {
-    let output = parse("function entrypoint() -> nothing { print(\"hi\")");
+    let output = parse("function entrypoint() -> Nothing { print(\"hi\")");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing `}}` must produce at least one diagnostic"
@@ -1946,7 +1946,7 @@ fn missing_closing_brace_produces_diagnostic() {
 
 #[test]
 fn trailing_garbage_after_function_produces_diagnostic() {
-    let output = parse("function entrypoint() -> nothing { } extra }");
+    let output = parse("function entrypoint() -> Nothing { } extra }");
     assert!(
         !output.diagnostics.is_empty(),
         "Trailing garbage must produce at least one diagnostic"
@@ -1972,7 +1972,7 @@ fn hardening_expression_nesting_depth_cap() {
         .spawn(|| {
             let depth = 300usize;
             let source = format!(
-                "function entrypoint() -> nothing {{ let x = {}1{} }}",
+                "function entrypoint() -> Nothing {{ let x = {}1{} }}",
                 "(".repeat(depth),
                 ")".repeat(depth)
             );
@@ -2016,13 +2016,13 @@ fn whitespace_and_comment_only_produces_empty_module() {
 #[test]
 fn wrong_return_type_parses_with_named_type() {
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> string { print(`hi`) }");
+    let output = parse("function entrypoint() -> String { print(`hi`) }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
             assert!(
-                matches!(&f.return_type, Type::Named(n, _) if n == "string"),
-                "Expected Type::Named(\"string\"), got {:?}",
+                matches!(&f.return_type, Type::Named(n, _) if n == "String"),
+                "Expected Type::Named(\"String\"), got {:?}",
                 f.return_type
             );
         }
@@ -2039,14 +2039,14 @@ fn m3_source_parses_to_expected_ast() {
     // WHY: Snapshot locks the full M3 AST shape including function parameters,
     // if/while/for/return, and multi-case match arms. Any silent regression in
     // parser output breaks the typeck and codegen stages that depend on this shape.
-    let source = r#"function fib(n: int) -> int {
+    let source = r#"function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = fib(10)
   print(result)
 }"#;
@@ -2064,7 +2064,7 @@ fn function_with_parameters_parses_correctly() {
     // WHY: `function add(x: int, y: int) -> int { ... }` must produce a
     // FunctionDecl with two Param entries. If params are silently dropped,
     // typeck cannot check argument types at call sites.
-    let output = parse("function add(x: int, y: int) -> int { return x }");
+    let output = parse("function add(x: Int, y: Int) -> Int { return x }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -2086,7 +2086,7 @@ fn function_with_parameters_parses_correctly() {
 fn function_with_no_params_still_parses() {
     // WHY: Zero-parameter functions were the only form in M1/M2. This guards
     // against the M3 parameter parser accidentally requiring at least one param.
-    let output = parse("function entrypoint() -> nothing { }");
+    let output = parse("function entrypoint() -> Nothing { }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert_eq!(f.params.len(), 0),
@@ -2103,7 +2103,7 @@ fn trailing_comma_in_params_is_accepted() {
     // WHY: `function foo(x: int,) -> nothing { }` (trailing comma) must parse
     // cleanly. Trailing commas are ergonomic when adding params line-by-line;
     // rejecting them would be a footgun with no benefit.
-    let output = parse("function foo(x: int,) -> nothing { }");
+    let output = parse("function foo(x: Int,) -> Nothing { }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert_eq!(f.params.len(), 1),
@@ -2120,7 +2120,7 @@ fn duplicate_param_name_produces_diagnostic() {
     // WHY: `function foo(a: int, a: int) -> int { return a }` — two params with
     // the same name — must produce a diagnostic. Silent acceptance would leave
     // typeck to pick one arbitrarily (implementation-defined behavior = bug).
-    let output = parse("function foo(a: int, a: int) -> int { return a }");
+    let output = parse("function foo(a: Int, a: Int) -> Int { return a }");
     assert!(
         !output.diagnostics.is_empty(),
         "Duplicate param name must produce at least 1 diagnostic"
@@ -2138,7 +2138,7 @@ fn ownership_annotation_on_param_parses_correctly() {
     // parse cleanly with no diagnostics, and the param must have ownership=Some(Share).
     // This test replaced the M3 deferral test — ownership annotations now work.
     // test-ratchet: M4 ships ownership modifiers — deferral replaced with success assertion.
-    let output = parse("function foo(share x: int) -> nothing { }");
+    let output = parse("function foo(share x: Int) -> Nothing { }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -2170,7 +2170,7 @@ fn simple_if_parses_correctly() {
     // WHY: `if (cond) { body }` must produce Stmt::If, not Stmt::Match.
     // If disambiguation defaults to multi-case, every simple if in the codebase
     // would fail to parse.
-    let output = parse("function entrypoint() -> nothing { if (x > 0) { print(x) } }");
+    let output = parse("function entrypoint() -> Nothing { if (x > 0) { print(x) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2189,7 +2189,7 @@ fn simple_if_parses_correctly() {
 fn while_loop_parses_correctly() {
     // WHY: `while (cond) { body }` must produce Stmt::While. Regression would
     // mean loops silently become expression statements or fail to parse.
-    let output = parse("function entrypoint() -> nothing { while (x > 0) { x = x - 1 } }");
+    let output = parse("function entrypoint() -> Nothing { while (x > 0) { x = x - 1 } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2209,7 +2209,7 @@ fn for_loop_parses_correctly() {
     // WHY: `for (i in range(0, 5)) { body }` must produce Stmt::For with `var`
     // set to "i" and `iter` as a Call to range. The loop variable and iterable
     // expression are both critical for typeck's `range`-as-only-iterable check.
-    let output = parse("function entrypoint() -> nothing { for (i in range(0, 5)) { print(i) } }");
+    let output = parse("function entrypoint() -> Nothing { for (i in range(0, 5)) { print(i) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2229,7 +2229,7 @@ fn return_with_value_parses_correctly() {
     // WHY: `return expr` must produce Stmt::Return with value Some(expr).
     // If value is None when an expression is present, typeck cannot check
     // the return type against the function signature.
-    let output = parse("function foo() -> int { return 42 }");
+    let output = parse("function foo() -> Int { return 42 }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2249,7 +2249,7 @@ fn return_without_value_parses_correctly() {
     // WHY: `return` alone (no expression) must produce Stmt::Return with value
     // None. This is the only valid form for `-> nothing` functions; typeck
     // uses the None/Some to determine whether a value was provided.
-    let output = parse("function entrypoint() -> nothing { return }");
+    let output = parse("function entrypoint() -> Nothing { return }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2270,7 +2270,7 @@ fn multi_case_if_with_int_arms_parses_as_match() {
     // If the parser always picks simple-if, multi-case `if` becomes syntactically
     // impossible and the entire branching-by-value feature is dead.
     let output =
-        parse("function entrypoint() -> nothing { if (x) { 1 => print(1) 2 => print(2) } }");
+        parse("function entrypoint() -> Nothing { if (x) { 1 => print(1) 2 => print(2) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2297,7 +2297,7 @@ fn multi_case_if_with_else_arm() {
     // else_arm = Some(_). Typeck uses the presence of else_arm to determine
     // whether the multi-case is exhaustive for return-path analysis.
     let output =
-        parse("function entrypoint() -> nothing { if (x) { 1 => print(1) else => print(0) } }");
+        parse("function entrypoint() -> Nothing { if (x) { 1 => print(1) else => print(0) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2323,7 +2323,7 @@ fn multi_case_else_only_parses_as_match() {
     // WHY: `if (x) { else => ... }` (only a catch-all, no value arms) is a
     // valid multi-case `if`. Typeck treats it as an exhaustive match that always
     // executes the else_arm body. Parser must not reject it as malformed.
-    let output = parse("function entrypoint() -> nothing { if (x) { else => print(0) } }");
+    let output = parse("function entrypoint() -> Nothing { if (x) { else => print(0) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -2349,7 +2349,7 @@ fn is_type_arm_produces_is_pattern_no_deferral() {
     // WHY: In M6 P3b, `is Circle =>` is a real implementation — no deferral diagnostic.
     // The parser must produce a MatchPatternKind::Is arm cleanly.
     // (Previously this test checked for a deferral; M6 P3b removes the deferral.)
-    let output = parse("function entrypoint() -> nothing { if (value) { is Circle => print(1) } }");
+    let output = parse("function entrypoint() -> Nothing { if (value) { is Circle => print(1) } }");
     // Parser produces 0 diagnostics — typeck handles semantic validation.
     // (The scrutinee `value` being a string will produce a typeck error, but
     // the PARSER itself is now clean for is-type arms.)
@@ -2379,7 +2379,7 @@ fn if_without_parens_produces_diagnostic() {
     // WHY: `if cond { }` (no parentheses) is a common mistake from languages like
     // Rust/Go. The parser must emit a teaching diagnostic, not silently misbehave.
     // Yinz requires `if (cond)` consistently with `while (cond)` and `for (...)`.
-    let output = parse("function entrypoint() -> nothing { if x > 0 { print(x) } }");
+    let output = parse("function entrypoint() -> Nothing { if x > 0 { print(x) } }");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing parens on if must produce at least 1 diagnostic"
@@ -2391,8 +2391,8 @@ fn multi_function_module_parses_correctly() {
     // WHY: M3 is the first milestone with multi-function modules. Both functions
     // must appear as separate items in the AST. If the parser stops after the
     // first function, mutual recursion and callee lookups in typeck fail silently.
-    let source = r#"function add(a: int, b: int) -> int { return a }
-function entrypoint() -> nothing { let x = add(1, 2) }"#;
+    let source = r#"function add(a: Int, b: Int) -> Int { return a }
+function entrypoint() -> Nothing { let x = add(1, 2) }"#;
     let output = parse(source);
     assert_eq!(output.diagnostics.len(), 0);
     assert_eq!(output.module.items.len(), 2, "Expected 2 function items");
@@ -2403,7 +2403,7 @@ fn nested_if_inside_for_parses_correctly() {
     // WHY: Control-flow nesting is the typical real-program pattern. If nested
     // blocks corrupt the block-end tracking, only the outermost construct works
     // and every realistic program fails to parse.
-    let source = r#"function entrypoint() -> nothing {
+    let source = r#"function entrypoint() -> Nothing {
   for (i in range(0, 5)) {
     if (i > 2) {
       print(i)
@@ -2440,14 +2440,14 @@ fn parse_re_runs_when_source_changes() {
     let sf = SourceFile::new(
         &db,
         FILE.to_string(),
-        "function entrypoint() -> nothing { }".to_string(),
+        "function entrypoint() -> Nothing { }".to_string(),
     );
 
     let items_before = parse_query(&db, sf).module.items.len();
 
     // test-ratchet: M7 P1 — migrated to backtick syntax
     sf.set_text(&mut db)
-        .to("function entrypoint() -> nothing { print(`hi`) }".to_string());
+        .to("function entrypoint() -> Nothing { print(`hi`) }".to_string());
 
     let items_after = parse_query(&db, sf).module.items.len();
     assert_eq!(items_before, 1);
@@ -2490,7 +2490,7 @@ fn m5_generic_fn_single_type_param() {
 fn m5_generic_fn_two_type_params() {
     // WHY: multi-param generics like `pair<A, B>` must produce two separate
     // GenericParam entries. If they collapse to one, `B` is invisible to typeck.
-    let output = parse("function pair<A, B>(give first: A, give second: B) -> nothing { }");
+    let output = parse("function pair<A, B>(give first: A, give second: B) -> Nothing { }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -2507,7 +2507,7 @@ fn m5_generic_fn_with_constraint() {
     // WHY: acceptance criterion — `function sort<T follows Comparable>(...)` must
     // parse with `constraints: [("Comparable", _)]` on T. Without this, typeck
     // cannot verify that the concrete type satisfies the contract.
-    let output = parse("function sort<T follows Comparable>(share items: T) -> nothing { }");
+    let output = parse("function sort<T follows Comparable>(share items: T) -> Nothing { }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -2524,7 +2524,7 @@ fn m5_generic_fn_with_constraint() {
 fn m5_generic_fn_two_params_one_constrained() {
     // WHY: `<T follows Comparable, U>` is two params — T with a constraint, U
     // without. The `,` must terminate T's entry and start U's.
-    let output = parse("function f<T follows Comparable, U>(share a: T, give b: U) -> nothing { }");
+    let output = parse("function f<T follows Comparable, U>(share a: T, give b: U) -> Nothing { }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -2543,7 +2543,7 @@ fn m5_non_generic_fn_has_empty_generics() {
     // WHY: a non-generic function must produce `generics: []`. If it accidentally
     // produces a non-empty list, every typeck path that checks for generic vs
     // non-generic would be wrong.
-    let output = parse("function add(a: int, b: int) -> int { return a }");
+    let output = parse("function add(a: Int, b: Int) -> Int { return a }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert!(f.generics.is_empty()),
@@ -2588,7 +2588,7 @@ fn m5_generic_shape_single_param() {
 fn m5_non_generic_shape_has_empty_generics() {
     // WHY: `shape Player { ... }` must keep `generics: []`. An accidental
     // generic param would confuse the monomorphization table.
-    let output = parse("shape Player { name: int }");
+    let output = parse("shape Player { name: Int }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::ShapeDecl(s) => assert!(s.generics.is_empty()),
@@ -2603,15 +2603,15 @@ fn m5_array_type_annotation() {
     // WHY: acceptance criterion — `let arr: array<int> = ...` must produce
     // `Type::Generic { name: "array", args: [Int] }`. If it stays `Type::Named`,
     // the typeck cannot resolve the element type.
-    let output = parse(&wrap("let arr: array<int> = arr"));
+    let output = parse(&wrap("let arr: Array<Int> = arr"));
     assert_eq!(output.diagnostics.len(), 0);
-    let stmts = parse_fn_body(&wrap("let arr: array<int> = arr"));
+    let stmts = parse_fn_body(&wrap("let arr: Array<Int> = arr"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Generic { name, args, .. }),
             ..
         } => {
-            assert_eq!(name, "array");
+            assert_eq!(name, "Array");
             assert_eq!(args.len(), 1);
             assert!(matches!(args[0], Type::Int));
         }
@@ -2624,7 +2624,7 @@ fn m5_maybe_type_annotation() {
     // WHY: acceptance criterion — `let x: maybe<int> = none` must produce
     // `Type::Maybe { inner: Int }`. The distinct Maybe variant (not Generic)
     // is required so typeck can apply flow-sensitive `.value` rules.
-    let stmts = parse_fn_body(&wrap("let x: maybe<int> = none"));
+    let stmts = parse_fn_body(&wrap("let x: Maybe<Int> = none"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Maybe { inner, .. }),
@@ -2640,7 +2640,7 @@ fn m5_maybe_type_annotation() {
 #[test]
 fn m5_maybe_player_type_annotation() {
     // WHY: `maybe<Player>` (named inner type) must produce `Maybe { inner: Named("Player") }`.
-    let stmts = parse_fn_body(&wrap("let x: maybe<Player> = none"));
+    let stmts = parse_fn_body(&wrap("let x: Maybe<Player> = none"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Maybe { inner, .. }),
@@ -2657,7 +2657,7 @@ fn m5_nested_generic_type() {
     // WHY: `Pair<Pair<int, string>, int>` tests nested angle brackets. The depth
     // cap (16) must not fire here; the type must parse to a Generic with one
     // Generic arg and one Int arg.
-    let stmts = parse_fn_body(&wrap("let x: Pair<Pair<int, int>, int> = x"));
+    let stmts = parse_fn_body(&wrap("let x: Pair<Pair<Int, Int>, Int> = x"));
     match &stmts[0] {
         Stmt::Let {
             ty: Some(Type::Generic { name, args, .. }),
@@ -2679,13 +2679,13 @@ fn m5_nested_generic_type() {
 #[test]
 fn a_whole_number_in_a_generic_argument_list_parses_as_a_length() {
     for written in [0_u64, 1, 4, u32::MAX as u64] {
-        let stmts = parse_fn_body(&wrap(&format!("let x: fixed<int, {written}> = x")));
+        let stmts = parse_fn_body(&wrap(&format!("let x: Fixed<Int, {written}> = x")));
         match &stmts[0] {
             Stmt::Let {
                 ty: Some(Type::Generic { name, args, .. }),
                 ..
             } => {
-                assert_eq!(name, "fixed");
+                assert_eq!(name, "Fixed");
                 assert_eq!(args.len(), 2, "{written}");
                 assert!(matches!(args[0], Type::Int), "{written}");
                 assert!(
@@ -2694,14 +2694,14 @@ fn a_whole_number_in_a_generic_argument_list_parses_as_a_length() {
                     args[1]
                 );
             }
-            other => panic!("expected `fixed` with a length, got {other:?}"),
+            other => panic!("expected `Fixed` with a length, got {other:?}"),
         }
     }
 }
 
 #[test]
 fn a_length_not_closed_by_a_comma_or_angle_bracket_is_refused_once() {
-    for written in ["fixed<int, 3 4>", "fixed<int, 3 int>"] {
+    for written in ["Fixed<Int, 3 4>", "Fixed<Int, 3 Int>"] {
         let output = parse(&wrap(&format!("let x: {written} = x")));
         let refused = output
             .diagnostics
@@ -2721,8 +2721,8 @@ fn m5_generic_type_depth_cap_error() {
     // WHY: the depth cap (16) must produce exactly ONE diagnostic, not a
     // cascade of errors. A cascade would hide the real error in noise.
     // Build 17-deep nesting: `A<A<A<...<int>...>>>`.
-    let deep: String = "A<".repeat(17) + "int" + &">".repeat(17);
-    let source = format!("function entrypoint() -> nothing {{ let x: {deep} = x }}");
+    let deep: String = "A<".repeat(17) + "Int" + &">".repeat(17);
+    let source = format!("function entrypoint() -> Nothing {{ let x: {deep} = x }}");
     let output = parse(&source);
     assert!(
         !output.diagnostics.is_empty(),
@@ -2865,7 +2865,7 @@ fn m5_generic_call_one_type_arg() {
     // WHY: acceptance criterion — `identity<int>(5)` must produce a Call with
     // `type_args: Some([Int])`. Without this, explicit type arguments at call
     // sites are silently dropped and typeck falls back to inference only.
-    let stmts = parse_fn_body(&wrap("let x = identity<int>(5)"));
+    let stmts = parse_fn_body(&wrap("let x = identity<Int>(5)"));
     match &stmts[0] {
         Stmt::Let {
             value: Expr::Call(call),
@@ -2886,7 +2886,7 @@ fn m5_generic_call_two_type_args() {
     // second type arg is dropped, the `B` parameter can't be inferred.
     //
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let stmts = parse_fn_body(&wrap("let x = pair<int, string>(1, `a`)"));
+    let stmts = parse_fn_body(&wrap("let x = pair<Int, String>(1, `a`)"));
     match &stmts[0] {
         Stmt::Let {
             value: Expr::Call(call),
@@ -2895,7 +2895,7 @@ fn m5_generic_call_two_type_args() {
             let args = call.type_args.as_ref().expect("type_args must be Some");
             assert_eq!(args.len(), 2);
             assert!(matches!(args[0], Type::Int));
-            assert!(matches!(args[1], Type::Named(ref n, _) if n == "string"));
+            assert!(matches!(args[1], Type::Named(ref n, _) if n == "String"));
         }
         other => panic!("expected Call with two type_args, got {other:?}"),
     }
@@ -2995,7 +2995,7 @@ fn m5_comparison_in_index_not_generic() {
 fn m5_generic_call_not_confused_by_comparison() {
     // WHY: `foo<int>(x)` must be a generic call even when `foo < int` would also
     // be a valid comparison. The `(` following the `>` disambiguates.
-    let stmts = parse_fn_body(&wrap("let x = foo<int>(5)"));
+    let stmts = parse_fn_body(&wrap("let x = foo<Int>(5)"));
     match &stmts[0] {
         Stmt::Let {
             value: Expr::Call(call),
@@ -3024,15 +3024,15 @@ function identity<T>(give value: T) -> T {
   return value
 }
 
-function sort<T follows Comparable>(share items: array<T>) -> nothing {
+function sort<T follows Comparable>(share items: Array<T>) -> Nothing {
 }
 
-function entrypoint() -> nothing {
-  let x: maybe<int> = none
-  let arr: array<int> = arr
+function entrypoint() -> Nothing {
+  let x: Maybe<Int> = none
+  let arr: Array<Int> = arr
   let first = arr[0]
   arr[0] = 99
-  let y = identity<int>(5)
+  let y = identity<Int>(5)
   let a = arr[0]
   let cmp = a < 10
 }
@@ -3054,7 +3054,7 @@ fn m5_recovery_unclosed_generic_param_list() {
     // WHY: `function foo<` with no closing `>` must produce exactly one diagnostic
     // and still parse the remaining top-level items. A cascade of errors here
     // would drown out the single real mistake.
-    let output = parse("function foo< { } function bar() -> nothing { }");
+    let output = parse("function foo< { } function bar() -> Nothing { }");
     assert!(
         !output.diagnostics.is_empty(),
         "Expected at least one diagnostic"
@@ -3079,7 +3079,7 @@ fn m5_recovery_unclosed_generic_param_list() {
 fn m5_recovery_missing_type_arg_close_bracket() {
     // WHY: `let x: array<int = 5` (missing `>`) must produce a diagnostic but
     // still give the parser enough to continue with the next statement.
-    let output = parse(&wrap("let x: array<int = 5"));
+    let output = parse(&wrap("let x: Array<Int = 5"));
     assert!(
         !output.diagnostics.is_empty(),
         "Expected at least one diagnostic for missing `>`"
@@ -3091,10 +3091,10 @@ fn m5_recovery_generic_call_no_close_angle() {
     // WHY: `foo<int(5)` — paren before `>` — must NOT parse as a generic call
     // (falls back to comparison). The 32-token budget ensures we don't consume
     // the arg list as part of speculative type-arg parsing.
-    let output = parse(&wrap("let x = foo < int > 5"));
+    let output = parse(&wrap("let x = foo < Int > 5"));
     // This is a comparison, not a generic call: (foo < int) > 5
     assert_eq!(output.diagnostics.len(), 0, "comparison must parse cleanly");
-    match &parse_fn_body(&wrap("let x = foo < int > 5"))[0] {
+    match &parse_fn_body(&wrap("let x = foo < Int > 5"))[0] {
         Stmt::Let {
             value: Expr::BinOp {
                 op: BinOpKind::Gt, ..
@@ -3119,14 +3119,14 @@ fn m5_recovery_index_missing_close_bracket() {
 fn m5_maybe_missing_type_arg() {
     // WHY: `maybe` without `<T>` must produce exactly one diagnostic. The error
     // message must guide the user to write `maybe<T>` — not produce a cascade.
-    let output = parse(&wrap("let x: maybe = none"));
+    let output = parse(&wrap("let x: Maybe = none"));
     assert!(
         !output.diagnostics.is_empty(),
-        "Expected diagnostic for bare `maybe`"
+        "Expected diagnostic for bare `Maybe`"
     );
     assert!(
-        output.diagnostics.iter().any(|d| d.what.contains("maybe")),
-        "Diagnostic must mention `maybe`"
+        output.diagnostics.iter().any(|d| d.what.contains("Maybe")),
+        "Diagnostic must mention `Maybe`"
     );
 }
 
@@ -3137,7 +3137,7 @@ fn m7_errors_capable_string_return_type() {
     // WHY: `-> string errors` must set errors_capable = true and wrap the return
     // type in Type::ErrorCapable. If errors_capable stays false, the type checker
     // can never gate propagation checks on fallible functions.
-    let output = parse("function readFile() -> string errors { }");
+    let output = parse("function readFile() -> String errors { }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -3148,7 +3148,7 @@ fn m7_errors_capable_string_return_type() {
         Item::Function(f) => {
             assert!(
                 f.errors_capable,
-                "errors_capable must be true for `-> string errors`"
+                "errors_capable must be true for `-> String errors`"
             );
             assert!(
                 matches!(f.return_type, Type::ErrorCapable { .. }),
@@ -3164,7 +3164,7 @@ fn m7_errors_capable_string_return_type() {
 fn m7_errors_capable_nothing_return_type() {
     // WHY: `-> nothing errors` is valid — a function that performs a side-effectful
     // operation and may fail but has no success value. errors_capable must be true.
-    let output = parse("function writeFile() -> nothing errors { }");
+    let output = parse("function writeFile() -> Nothing errors { }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -3175,7 +3175,7 @@ fn m7_errors_capable_nothing_return_type() {
         Item::Function(f) => {
             assert!(
                 f.errors_capable,
-                "errors_capable must be true for `-> nothing errors`"
+                "errors_capable must be true for `-> Nothing errors`"
             );
             assert!(
                 matches!(f.return_type, Type::ErrorCapable { ref inner, .. } if matches!(**inner, Type::Nothing)),
@@ -3191,7 +3191,7 @@ fn m7_errors_capable_nothing_return_type() {
 fn m7_errors_capable_maybe_string_return_type() {
     // WHY: `-> maybe<string> errors` must produce ErrorCapable wrapping a Maybe type.
     // The two modifiers are orthogonal: maybe = absent value, errors = failure mode.
-    let output = parse("function findUser() -> maybe<string> errors { }");
+    let output = parse("function findUser() -> Maybe<String> errors { }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -3221,7 +3221,7 @@ fn m7_plain_return_type_has_errors_capable_false() {
     // WHY: A plain `-> string` (no `errors` keyword) must leave errors_capable = false.
     // If this flag is accidentally set to true, every function becomes fallible and
     // the typeck gates on error propagation trigger incorrectly everywhere.
-    let output = parse("function getGreeting() -> string { }");
+    let output = parse("function getGreeting() -> String { }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -3232,11 +3232,11 @@ fn m7_plain_return_type_has_errors_capable_false() {
         Item::Function(f) => {
             assert!(
                 !f.errors_capable,
-                "errors_capable must be false for plain `-> string`"
+                "errors_capable must be false for plain `-> String`"
             );
             assert!(
                 matches!(f.return_type, Type::Named(_, _)),
-                "return_type must be Named(string), got {:?}",
+                "return_type must be Named(String), got {:?}",
                 f.return_type
             );
         }
@@ -3249,7 +3249,7 @@ fn m7_errors_capable_inner_type_is_preserved() {
     // WHY: The inner type of ErrorCapable must be the exact type parsed from
     // the return annotation — not wrapped again or replaced. Regression guard for
     // accidental double-wrapping (ErrorCapable(ErrorCapable(T))).
-    let output = parse("function compute() -> int errors { }");
+    let output = parse("function compute() -> Int errors { }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -3580,7 +3580,7 @@ fn m7_errors_keyword_not_after_type_is_ignored() {
     // `let x: string errors` is not valid syntax — the parser doesn't consume `errors`
     // in annotation position. This test guards that `errors` doesn't silently vanish
     // from unexpected positions, producing an error diagnostic instead.
-    let output = parse(&wrap("let x: string errors = foo"));
+    let output = parse(&wrap("let x: String errors = foo"));
     // `string errors` in let-binding type position — `errors` is unexpected there.
     // The parser produces a diagnostic about unexpected token.
     assert!(
@@ -3717,7 +3717,7 @@ fn m7_type_variant_count_locked() {
             span: span(0, 1),
         },
         Generic {
-            name: "array".into(),
+            name: "Array".into(),
             name_span: span(0, 5),
             args: vec![Int],
             span: span(0, 10),
@@ -3749,7 +3749,7 @@ fn m8_doc_comment_attaches_to_function() {
     // WHY: `/// comment\nfunction foo() -> nothing {}` must parse with doc = Some("comment")
     // on the FunctionDecl. If break_after detection breaks or the parser discards the
     // doc buffer too early, doc becomes None and ynz doc (v1.1) loses the information.
-    let output = parse("/// fetches a user.\nfunction entrypoint() -> nothing {}");
+    let output = parse("/// fetches a user.\nfunction entrypoint() -> Nothing {}");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -3778,7 +3778,7 @@ fn m8_doc_comment_attaches_to_function() {
 fn m8_doc_comment_multiline_joins_with_newline() {
     // WHY: `/// line1\n/// line2\nfunction ...` must produce doc = Some("line1\nline2").
     // If the parser only attaches the LAST doc line, multi-line docs lose content.
-    let output = parse("/// line1\n/// line2\nfunction entrypoint() -> nothing {}");
+    let output = parse("/// line1\n/// line2\nfunction entrypoint() -> Nothing {}");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -3793,7 +3793,7 @@ fn m8_doc_comment_blank_line_breaks_attachment() {
     // WHY: `/// orphan\n\nfunction ...` (blank line between) must produce doc = None.
     // The break_after flag from the lexer gates this. If the parser ignores break_after,
     // orphaned docs silently attach to the wrong item.
-    let output = parse("/// orphan\n\nfunction entrypoint() -> nothing {}");
+    let output = parse("/// orphan\n\nfunction entrypoint() -> Nothing {}");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -3810,7 +3810,7 @@ fn m8_doc_comment_blank_line_breaks_attachment() {
 fn m8_doc_comment_on_private_item_silently_preserved() {
     // WHY: Per spec, doc comments on private (non-exported) items are silently preserved
     // in M8 (no warning until v0.4 lint tier). The parser must not drop them.
-    let output = parse("/// private note\nfunction entrypoint() -> nothing {}");
+    let output = parse("/// private note\nfunction entrypoint() -> Nothing {}");
     assert_eq!(
         output.diagnostics.len(),
         0,

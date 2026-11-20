@@ -36,63 +36,63 @@ fn doc_comment_only() {
 
 #[test]
 fn line_comment_before_function() {
-    assert!(tokens_equal("// comment\nfunction foo() -> nothing {}"));
+    assert!(tokens_equal("// comment\nfunction foo() -> Nothing {}"));
 }
 
 #[test]
 fn inline_comment_after_statement() {
     assert!(tokens_equal(
-        "function f() -> nothing { let x = 1 // inline\n }"
+        "function f() -> Nothing { let x = 1 // inline\n }"
     ));
 }
 
 #[test]
 fn multiple_line_comments() {
-    assert!(tokens_equal("// a\n// b\n// c\nfunction f() -> nothing {}"));
+    assert!(tokens_equal("// a\n// b\n// c\nfunction f() -> Nothing {}"));
 }
 
 #[test]
 fn doc_and_line_comment_mixed() {
-    assert!(tokens_equal("/// doc\n// note\nfunction f() -> nothing {}"));
+    assert!(tokens_equal("/// doc\n// note\nfunction f() -> Nothing {}"));
 }
 
 #[test]
 fn comment_inside_function_body() {
     assert!(tokens_equal(
-        "function f() -> nothing {\n  // body comment\n  let x = 1\n}"
+        "function f() -> Nothing {\n  // body comment\n  let x = 1\n}"
     ));
 }
 
 #[test]
 fn comment_between_two_functions() {
     assert!(tokens_equal(
-        "function f() -> nothing {}\n// between\nfunction g() -> nothing {}"
+        "function f() -> Nothing {}\n// between\nfunction g() -> Nothing {}"
     ));
 }
 
 #[test]
 fn comment_in_shape_field() {
     assert!(tokens_equal(
-        "shape Foo {\n  x: int // x field\n  y: int // y field\n}"
+        "shape Foo {\n  x: Int // x field\n  y: Int // y field\n}"
     ));
 }
 
 #[test]
 fn backtick_string_no_comments() {
-    assert!(tokens_equal("function f() -> nothing { let s = `hello` }"));
+    assert!(tokens_equal("function f() -> Nothing { let s = `hello` }"));
 }
 
 #[test]
 fn backtick_string_with_interpolation() {
     assert!(tokens_equal(
-        "function f(name: string) -> nothing { let s = `Hello ${name}!` }"
+        "function f(name: String) -> Nothing { let s = `Hello ${name}!` }"
     ));
 }
 
 #[test]
 fn double_slash_inside_backtick_is_not_a_comment() {
     // `//` inside backtick string content should NOT be captured as a comment
-    let source = "function f() -> nothing { let s = `http://example.com` }";
+    let source = "function f() -> Nothing { let s = `http://example.com` }";
     let (plain, _) = lex(FILE, source);
     let (trivia, comments) = lex_with_trivia(FILE, source);
     assert_eq!(plain, trivia);
@@ -110,26 +110,26 @@ fn only_line_comments_no_decls() {
 #[test]
 fn complex_program() {
     assert!(tokens_equal(
-        "// File header\nfunction greet(name: string) -> nothing {\n  // greeting\n  let msg = `Hello, ${name}!` // inline\n  print(msg)\n}"
+        "// File header\nfunction greet(name: String) -> Nothing {\n  // greeting\n  let msg = `Hello, ${name}!` // inline\n  print(msg)\n}"
     ));
 }
 
 #[test]
 fn comment_at_end_of_file_no_newline() {
-    assert!(tokens_equal("function f() -> nothing {} // trailing"));
+    assert!(tokens_equal("function f() -> Nothing {} // trailing"));
 }
 
 #[test]
 fn doc_comment_multi_line() {
     assert!(tokens_equal(
-        "/// Line one\n/// Line two\nfunction f() -> nothing {}"
+        "/// Line one\n/// Line two\nfunction f() -> Nothing {}"
     ));
 }
 
 #[test]
 fn no_comments_plain_source() {
     assert!(tokens_equal(
-        "function add(a: int, b: int) -> int { return a + b }"
+        "function add(a: Int, b: Int) -> Int { return a + b }"
     ));
 }
 
@@ -194,7 +194,7 @@ fn error_bom_only() {
 
 #[test]
 fn captures_single_line_comment() {
-    let source = "// hello\nfunction f() -> nothing {}";
+    let source = "// hello\nfunction f() -> Nothing {}";
     let (_tokens, comments) = lex_with_trivia(FILE, source);
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].text, "// hello");
@@ -204,7 +204,7 @@ fn captures_single_line_comment() {
 
 #[test]
 fn captures_doc_comment() {
-    let source = "/// my doc\nfunction f() -> nothing {}";
+    let source = "/// my doc\nfunction f() -> Nothing {}";
     let (_tokens, comments) = lex_with_trivia(FILE, source);
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].kind, CommentKind::DocComment);
@@ -216,7 +216,7 @@ fn captures_doc_comment() {
 
 #[test]
 fn captures_multiple_comments() {
-    let source = "// a\n// b\nfunction f() -> nothing {}";
+    let source = "// a\n// b\nfunction f() -> Nothing {}";
     let (_tokens, comments) = lex_with_trivia(FILE, source);
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].text, "// a");
@@ -225,7 +225,7 @@ fn captures_multiple_comments() {
 
 #[test]
 fn comment_spans_are_correct() {
-    let source = "function f() -> nothing { } // inline";
+    let source = "function f() -> Nothing { } // inline";
     let (_tokens, comments) = lex_with_trivia(FILE, source);
     assert_eq!(comments.len(), 1);
     let c = &comments[0];
@@ -236,7 +236,7 @@ fn comment_spans_are_correct() {
 #[test]
 fn inline_comment_does_not_change_tokens() {
     // Inline comment after a statement: token stream must match plain lex
-    let source = "function f() -> int { return 42 // the answer\n}";
+    let source = "function f() -> Int { return 42 // the answer\n}";
     let (plain, _) = lex(FILE, source);
     let (trivia, comments) = lex_with_trivia(FILE, source);
     assert_eq!(plain, trivia);

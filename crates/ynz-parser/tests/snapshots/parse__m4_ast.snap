@@ -25,7 +25,7 @@ Module {
                             end: 21,
                         },
                         ty: Named(
-                            "string",
+                            "String",
                             SourceSpan {
                                 file: "test.ynz",
                                 start: 23,
@@ -138,7 +138,7 @@ Module {
                     },
                 ],
                 return_type: Named(
-                    "string",
+                    "String",
                     SourceSpan {
                         file: "test.ynz",
                         start: 105,

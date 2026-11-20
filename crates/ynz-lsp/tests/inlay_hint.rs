@@ -36,7 +36,7 @@ fn full_range() -> Range {
 #[test]
 fn test_inlay_hint_variable_type_fires_for_unannotated_let() {
     // WHY: a `let x = 42` with no `: int` annotation should produce a TypeHint.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_type.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
     assert!(
@@ -54,8 +54,8 @@ fn test_inlay_hint_variable_type_fires_for_unannotated_let() {
         })
         .collect();
     assert!(
-        labels.iter().any(|l| l.contains(": int")),
-        "type hint must include ': int'; got: {:?}",
+        labels.iter().any(|l| l.contains(": Int")),
+        "type hint must include ': Int'; got: {:?}",
         labels
     );
 }
@@ -63,7 +63,7 @@ fn test_inlay_hint_variable_type_fires_for_unannotated_let() {
 #[test]
 fn test_inlay_hint_variable_type_suppressed_for_annotated_let() {
     // WHY: a `let x: int = 42` already has the annotation — no hint should fire.
-    let src = "function entrypoint() -> nothing {\n  let x: int = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x: Int = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_type_ann.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
     let type_hints: Vec<_> = hints
@@ -91,7 +91,7 @@ fn test_inlay_hint_variable_type_suppressed_for_annotated_let() {
 fn test_inlay_hint_viewport_filter_excludes_out_of_range_hints() {
     // WHY: hints outside the viewport range must not be returned — the client
     // displays only the visible region and doesn't filter server-side results.
-    let src = "function entrypoint() -> nothing {\n  let a = 1\n  let b = 2\n  let c = 3\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let a = 1\n  let b = 2\n  let c = 3\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_vp.ynz", src);
 
     // Full range: should include hints for all three lets.
@@ -130,7 +130,7 @@ fn test_inlay_hint_protocol_only_domains_return_empty_not_error() {
     // interpret errors as "feature broken" and disable the capability entirely.
     // This test exercises the inlay_hint_response on a file where no firing-domain
     // hints exist, verifying that the handler returns an Ok empty list (not panic).
-    let src = "function entrypoint() -> nothing {}\n";
+    let src = "function entrypoint() -> Nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_proto.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
     // No panic = protocol-only domains are handled. Result may be empty.
@@ -149,10 +149,10 @@ fn test_inlay_hint_wait_points_fires_for_implicit_suspending_call() {
     // `doWork` calls `sleep` so it is in suspends_set; `run` calls `doWork`
     // without `wait`, so a wait_points hint must appear.
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function run() -> nothing {
+function run() -> Nothing {
   doWork()
 }
 ";
@@ -181,10 +181,10 @@ fn test_inlay_hint_wait_points_suppressed_when_explicit_wait_written() {
     // redundant hint. Teaching a user to add `wait` when they already wrote it
     // is noise that degrades trust in the teaching surface.
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function run() -> nothing {
+function run() -> Nothing {
   wait doWork()
 }
 ";
@@ -222,10 +222,10 @@ fn test_inlay_hint_background_routing_io_pool_for_suspending_callee() {
     // containing "I/O pool". Reads the same suspends_set SSOT as the codegen
     // routing predicate (emit.rs:9335).
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function run() -> nothing {
+function run() -> Nothing {
   background doWork()
 }
 ";
@@ -254,10 +254,10 @@ fn test_inlay_hint_background_routing_cpu_pool_for_non_suspending_callee() {
     // intrinsic must emit a hint containing "CPU pool". Mirrors the codegen path
     // routing non-suspending callees to `ynz_rt_spawn_blocking`.
     let src = "\
-function helper() -> nothing {
+function helper() -> Nothing {
   print(`working`)
 }
-function run() -> nothing {
+function run() -> Nothing {
   background helper()
 }
 ";
@@ -286,10 +286,10 @@ fn test_inlay_hint_background_routing_tooltip_non_empty() {
     // is a teacher). A background_routing hint with tooltip:None is muted text
     // the user cannot learn from.
     let src = "\
-function helper() -> nothing {
+function helper() -> Nothing {
   print(`task`)
 }
-function run() -> nothing {
+function run() -> Nothing {
   background helper()
 }
 ";
@@ -316,8 +316,8 @@ function run() -> nothing {
 fn test_inlay_hint_ownership_fires_for_share_param() {
     // WHY: a call to a function whose parameter has an explicit `share` modifier
     // should produce an OwnershipHint at the argument position.
-    let src = "function greet(share name: string) -> string { return name }\n\
-               function entrypoint() -> nothing {\n  let msg = greet(`Pat`)\n}\n";
+    let src = "function greet(share name: String) -> String { return name }\n\
+               function entrypoint() -> Nothing {\n  let msg = greet(`Pat`)\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_own.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
     // At minimum, the function must not crash. Ownership hints fire only when
@@ -333,8 +333,8 @@ fn test_inlay_hint_ownership_fires_for_share_param() {
 fn test_inlay_hint_copy_point_fires_for_int_argument() {
     // WHY: passing an `int` literal directly to a function should emit a copy
     // hint because int is trivially copyable (8 bytes, no heap).
-    let src = "function add(a: int, b: int) -> int { return a }\n\
-               function entrypoint() -> nothing {\n  let r = add(1, 2)\n}\n";
+    let src = "function add(a: Int, b: Int) -> Int { return a }\n\
+               function entrypoint() -> Nothing {\n  let r = add(1, 2)\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_copy.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
     // Must not panic. Copy hints fire when the argument expression is typed
@@ -351,7 +351,7 @@ fn test_inlay_hint_tooltip_populated_for_variable_type_domain() {
     // WHY: every inlay hint must carry a hover tooltip with WHAT/WHAT-INSTEAD/WHY
     // per Golden Rule 3.  A hint with tooltip:None is muted text the user
     // cannot learn from — exactly what the teaching mission exists to prevent.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_tooltip.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
     for hint in &hints {
@@ -381,7 +381,7 @@ fn test_inlay_hint_tooltip_populated_for_variable_type_domain() {
 #[test]
 fn test_inlay_hint_response_under_30ms_for_viewport() {
     // WHY: inlay hints render on every keystroke — must not stall the editor.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n  let y = 100\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n  let y = 100\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_perf.ynz", src);
     let start = std::time::Instant::now();
     let _ = inlay_hint_response(&state, &uri, full_range());
@@ -408,19 +408,19 @@ fn test_inlay_hint_background_large_copy_emits_give_hint() {
     // The shape below has 9 fields × 8 bytes = 72 bytes > 64 byte threshold.
     let src = r#"
 shape LargeEvent {
-    a: int
-    b: int
-    c: int
-    d: int
-    e: int
-    f: int
-    g: int
-    h: int
-    i: int
+    a: Int
+    b: Int
+    c: Int
+    d: Int
+    e: Int
+    f: Int
+    g: Int
+    h: Int
+    i: Int
 }
-function process(evt: LargeEvent) -> nothing {
+function process(evt: LargeEvent) -> Nothing {
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let event: LargeEvent = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }
     background process(event.copy())
 }
@@ -447,10 +447,10 @@ fn test_inlay_hint_background_small_copy_no_give_hint() {
     // WHY: the .give hint must NOT fire for small-struct copies (≤ 64 bytes) —
     // only oversized copies get the warning + hint.
     let src = r#"
-shape SmallEvent { name: int }
-function process(evt: SmallEvent) -> nothing {
+shape SmallEvent { name: Int }
+function process(evt: SmallEvent) -> Nothing {
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let event: SmallEvent = { name: 1 }
     background process(event.copy())
 }
@@ -483,14 +483,14 @@ fn test_inlay_hint_background_handle_form_renders_the_inferred_give_label() {
     // label had no reader). The label on the argument is `give`; no `copy` label may sit there.
     let src = "\
 shape Scene {
-  name: string
-  width: int
+  name: String
+  width: Int
 }
-function render(give scene: Scene) -> int {
+function render(give scene: Scene) -> Int {
   wait sleep(1)
   return scene.width
 }
-function run() -> nothing {
+function run() -> Nothing {
   let scene: Scene = { name: `Three Rivers`, width: 6 }
   let h = background render(scene)
   let got = h.receive()
@@ -537,7 +537,7 @@ fn test_inlay_hint_channel_capacity_fires_for_default_capacity_construction() {
     // (Golden Rule 3), and offer a click-to-make-explicit TextEdit that inserts
     // `64` at exactly that position — producing `channel<int>(64)`, identical
     // behavior now visible in source.
-    let src = "function entrypoint() -> nothing {\n  let wire: channel<int> = channel<int>()\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let wire: Channel<Int> = Channel<Int>()\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_chan_default.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
 
@@ -584,7 +584,7 @@ fn test_inlay_hint_channel_capacity_suppressed_for_explicit_capacity() {
     // WHY: `channel<int>(8)` already states its capacity — there is nothing to
     // add, so the Addition-category hint must NOT fire (inverse anti-pattern:
     // annotating what the user already wrote).
-    let src = "function entrypoint() -> nothing {\n  let wire: channel<int> = channel<int>(8)\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let wire: Channel<Int> = Channel<Int>(8)\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_chan_explicit.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
 
@@ -601,7 +601,7 @@ fn test_inlay_hint_channel_capacity_suppressed_for_missing_element_type() {
     // WHY: a bare `channel()` is a missing-element-type COMPILE ERROR with its
     // own teaching text — piling a capacity hint onto erroring source would be
     // noise on top of the diagnostic.
-    let src = "function entrypoint() -> nothing {\n  let wire = channel()\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let wire = Channel()\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_chan_no_elem.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
 
@@ -619,7 +619,7 @@ fn test_inlay_hint_channel_capacity_suppressed_for_wrong_type_arg_count() {
     // construction is ALREADY a compile error with its own teaching text —
     // piling a capacity hint onto erroring source would be noise on top of the
     // diagnostic (same intent as the missing-element-type suppression).
-    let src = "function entrypoint() -> nothing {\n  let wire = channel<int, string>()\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let wire = Channel<Int, String>()\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_chan_two_args.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
 
@@ -690,14 +690,14 @@ fn test_ownership_hover_explains_the_store_hint_in_the_diagnostics_words() {
 
 const AUTO_ARC_GROUP_SRC: &str = "\
 shape Scene {
-  name: string
-  width: int
+  name: String
+  width: Int
 }
-function render(scene: Scene) -> nothing {
+function render(scene: Scene) -> Nothing {
   wait sleep(1)
   print(scene.name)
 }
-function run() -> nothing {
+function run() -> Nothing {
   let scene: Scene = { name: `Three Rivers`, width: 6 }
   background render(scene)
   background render(scene)
@@ -790,14 +790,14 @@ fn test_inlay_hint_auto_arc_silent_for_a_single_spawn() {
     // nothing here either.
     let src = "\
 shape Scene {
-  name: string
-  width: int
+  name: String
+  width: Int
 }
-function render(scene: Scene) -> nothing {
+function render(scene: Scene) -> Nothing {
   wait sleep(1)
   print(scene.name)
 }
-function run() -> nothing {
+function run() -> Nothing {
   let scene: Scene = { name: `Three Rivers`, width: 6 }
   background render(scene)
   print(scene.width)

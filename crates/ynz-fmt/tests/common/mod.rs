@@ -39,7 +39,7 @@ pub fn arb_simple_type() -> impl Strategy<Value = Type> {
         Just(Type::Float),
         Just(Type::Bool),
         Just(Type::Nothing),
-        Just(Type::Named("string".to_string(), zs())),
+        Just(Type::Named("String".to_string(), zs())),
     ]
 }
 

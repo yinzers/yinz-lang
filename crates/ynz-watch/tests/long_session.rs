@@ -162,9 +162,9 @@ fn hard_stop_message_format() {
 fn layer2_periodic_rebuild_triggers_at_threshold() {
     let (mut db, path) = make_db(
         "/tmp/long_session_layer2_test.ynz",
-        "function entrypoint() -> nothing { }\n",
+        "function entrypoint() -> Nothing { }\n",
     );
-    std::fs::write(&path, "function entrypoint() -> nothing { }\n").unwrap();
+    std::fs::write(&path, "function entrypoint() -> Nothing { }\n").unwrap();
 
     // Drive one rebuild to increment the counter.
     let _ = db.run_codegen(&path);
@@ -200,7 +200,7 @@ fn layer2_periodic_rebuild_triggers_at_threshold() {
 fn long_session_10k_rebuilds() {
     serialise_first_rss_call();
     let path = PathBuf::from("/tmp/long_session_10k_test.ynz");
-    let base_src = "function entrypoint() -> nothing { print(`iteration 0`) }\n";
+    let base_src = "function entrypoint() -> Nothing { print(`iteration 0`) }\n";
     std::fs::write(&path, base_src).unwrap();
 
     let (mut db, _) = make_db("/tmp/long_session_10k_test.ynz", base_src);
@@ -212,7 +212,7 @@ fn long_session_10k_rebuilds() {
 
     for i in 1..=10000usize {
         // Mutate source text slightly each iteration via update_source API.
-        let src = format!("function entrypoint() -> nothing {{ print(`iteration {i}`) }}\n");
+        let src = format!("function entrypoint() -> Nothing {{ print(`iteration {i}`) }}\n");
         db.update_source(&path, src);
 
         let _ = db.run_codegen(&path);

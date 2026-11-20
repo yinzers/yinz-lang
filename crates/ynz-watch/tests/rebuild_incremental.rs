@@ -29,7 +29,7 @@ fn rebuild_db_round_trips_source_text() {
     let mut db = make_db(&[
         (
             "/tmp/a.ynz",
-            "function entrypoint() -> nothing { print(42) }\n",
+            "function entrypoint() -> Nothing { print(42) }\n",
         ),
         ("/tmp/b.ynz", "// module b\n"),
     ]);
@@ -39,7 +39,7 @@ fn rebuild_db_round_trips_source_text() {
     let snap = db.source_snapshot();
     assert_eq!(
         snap.get("/tmp/a.ynz").map(String::as_str),
-        Some("function entrypoint() -> nothing { print(42) }\n"),
+        Some("function entrypoint() -> Nothing { print(42) }\n"),
         "source text must round-trip through rebuild_db()"
     );
     assert_eq!(
@@ -76,7 +76,7 @@ fn rebuild_count_resets_after_periodic_rebuild() {
 
     // Simulate the state after N rebuilds: drive run_codegen on valid source.
     let entry = std::path::Path::new("/tmp/a.ynz");
-    db.update_source(entry, "function entrypoint() -> nothing { }\n".to_string());
+    db.update_source(entry, "function entrypoint() -> Nothing { }\n".to_string());
     let _outcome = db.run_codegen(entry);
 
     // Counter should now be 1; threshold of 1 triggers rebuild.

@@ -16,7 +16,7 @@ fn initialize_returns_capabilities() {
 fn did_open_triggers_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    h.did_open("file:///test.ynz", "function entrypoint() -> nothing { }");
+    h.did_open("file:///test.ynz", "function entrypoint() -> Nothing { }");
     // Phase 3: didOpen now triggers publishDiagnostics
     let msg = h.try_recv_timeout(Duration::from_millis(300));
     assert!(
@@ -29,9 +29,9 @@ fn did_open_triggers_publish_diagnostics() {
 fn did_change_triggers_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    h.did_open("file:///test.ynz", "let x: int = 1");
+    h.did_open("file:///test.ynz", "let x: Int = 1");
     h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
-    h.did_change("file:///test.ynz", "let x: int = 2", 2);
+    h.did_change("file:///test.ynz", "let x: Int = 2", 2);
     let msg = h.try_recv_timeout(Duration::from_millis(300));
     assert!(
         msg.is_some(),
@@ -43,7 +43,7 @@ fn did_change_triggers_publish_diagnostics() {
 fn did_close_sends_empty_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    h.did_open("file:///test.ynz", "let x: int = 1");
+    h.did_open("file:///test.ynz", "let x: Int = 1");
     h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
     h.did_close("file:///test.ynz");
     let msg = h.try_recv_timeout(Duration::from_millis(300));
@@ -73,7 +73,7 @@ fn salsa_cache_invalidated_on_did_change() {
     // Open with a known-good program.
     state.open_document(
         uri.clone(),
-        "function entrypoint() -> nothing { }".to_string(),
+        "function entrypoint() -> Nothing { }".to_string(),
     );
     let sf: SourceFile = state.source_file_for(&uri).unwrap();
 
@@ -84,7 +84,7 @@ fn salsa_cache_invalidated_on_did_change() {
     // Update the document — salsa should invalidate the cached query.
     state.update_document(
         &uri,
-        "function entrypoint() -> nothing { let x: int = 99 }".to_string(),
+        "function entrypoint() -> Nothing { let x: Int = 99 }".to_string(),
     );
     let sf2: SourceFile = state.source_file_for(&uri).unwrap();
 

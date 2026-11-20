@@ -79,7 +79,7 @@ fn clean_file_has_no_diagnostic_code() {
     // accidentally create diagnostics for clean code, this is a regression.
     let client = InProcessHarness::new().start_server();
     client.initialize();
-    let src = "function entrypoint() -> nothing { print(`ok`) }\n";
+    let src = "function entrypoint() -> Nothing { print(`ok`) }\n";
     let diags = open_and_get_diagnostics(&client, "file:///test_clean.ynz", src);
     assert!(
         diags.is_empty(),

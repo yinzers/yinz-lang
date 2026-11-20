@@ -436,14 +436,14 @@ fn imported_suspending_after_pair_declines_consistently_across_boundaries() {
 // which matters for the isolation test below (it needs the OLD post-pair gate reachable, not
 // masked by a DIFFERENT decline path).
 const IO_WORK_POST_PAIR_SRC: &str = r#"
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
     if (n < 2) { return n }
     return fib(n - 1) + fib(n - 2)
 }
-function ioWork() -> nothing {
+function ioWork() -> Nothing {
     wait sleep(0)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let a = fib(10)
     let b = fib(11)
     ioWork()
@@ -622,18 +622,18 @@ fn three_int_shape_crossing_local_uses_three_llvm_slots() {
     // the test cannot pass on a silent sizing failure the way n_locals==1 tests can.
     let source = r#"
 shape Point3D {
-  x: int
-  y: int
-  z: int
+  x: Int
+  y: Int
+  z: Int
 }
 
-function caller() -> nothing {
+function caller() -> Nothing {
   let pos: Point3D = { x: 1, y: 2, z: 3 }
   sleep(10)
   print(pos.x.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }
 "#;
@@ -701,17 +701,17 @@ fn bool_bool_shape_crossing_local_uses_one_llvm_slot() {
     // compact structs (bool×bool: typeck 2 slots, LLVM 1 slot).
     let source = r#"
 shape Flags {
-  flag: boolean
-  flag2: boolean
+  flag: Boolean
+  flag2: Boolean
 }
 
-function caller() -> nothing {
+function caller() -> Nothing {
   let flags: Flags = { flag: true, flag2: false }
   sleep(10)
   print(flags.flag.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }
 "#;
@@ -779,14 +779,14 @@ fn circular_import_returns_empty_map_not_infinite_loop() {
     let source_a = r#"
 import { doB } from `b_cycle`
 
-export function doA() -> nothing {
+export function doA() -> Nothing {
   sleep(10)
 }
 "#;
     let source_b = r#"
 import { doA } from `a_cycle`
 
-export function doB() -> nothing {
+export function doB() -> Nothing {
   sleep(10)
 }
 "#;
@@ -817,7 +817,7 @@ fn non_suspending_module_returns_empty_map() {
     // WHY: Modules with no suspending functions must return an empty map (not a crash,
     // not a map with phantom entries). This is the common case for most Yinz modules.
     let source = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(`hello`)
 }
 "#;

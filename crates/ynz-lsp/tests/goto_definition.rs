@@ -68,7 +68,7 @@ fn position_at(src: &str, needle: &str) -> lsp_types::Position {
 
 #[test]
 fn test_goto_def_same_file_function_returns_location() {
-    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let msg = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
     let path = "/tmp/ynz_gotodef_fn.ynz";
     let (state, uri) = state_single(path, src);
     let pos = position_at(src, "greet()"); // offset at call site
@@ -86,7 +86,7 @@ fn test_goto_def_same_file_function_returns_location() {
 
 #[test]
 fn test_goto_def_same_file_shape_returns_location() {
-    let src = "shape Player {\n  name: string\n  health: int\n}\nfunction entrypoint() -> nothing {\n  let p: Player = { name: `Pat`, health: 100 }\n}\n";
+    let src = "shape Player {\n  name: String\n  health: Int\n}\nfunction entrypoint() -> Nothing {\n  let p: Player = { name: `Pat`, health: 100 }\n}\n";
     let path = "/tmp/ynz_gotodef_shape.ynz";
     let (state, uri) = state_single(path, src);
     // Position at `Player` in the type annotation.
@@ -110,7 +110,7 @@ fn test_goto_def_same_file_shape_returns_location() {
 
 #[test]
 fn test_goto_def_whitespace_returns_none() {
-    let src = "function entrypoint() -> nothing {   }\n";
+    let src = "function entrypoint() -> Nothing {   }\n";
     let path = "/tmp/ynz_gotodef_ws.ynz";
     let (state, uri) = state_single(path, src);
     // Position in the whitespace inside the braces.
@@ -123,7 +123,7 @@ fn test_goto_def_whitespace_returns_none() {
 
 #[test]
 fn test_goto_def_keyword_returns_none() {
-    let src = "function entrypoint() -> nothing {}\n";
+    let src = "function entrypoint() -> Nothing {}\n";
     let path = "/tmp/ynz_gotodef_kw.ynz";
     let (state, uri) = state_single(path, src);
     // Position on `function` keyword (offset 0).
@@ -136,7 +136,7 @@ fn test_goto_def_keyword_returns_none() {
 
 #[test]
 fn test_goto_def_integer_literal_returns_none() {
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     let path = "/tmp/ynz_gotodef_int.ynz";
     let (state, uri) = state_single(path, src);
     let pos = position_at(src, "42");
@@ -147,8 +147,8 @@ fn test_goto_def_integer_literal_returns_none() {
 
 #[test]
 fn test_goto_def_cross_file_imported_function_returns_dep_uri() {
-    let dep_src = "export function announce(name: string) -> string {\n  return name\n}\n";
-    let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> nothing {\n  let msg = announce(`Roberto`)\n}\n";
+    let dep_src = "export function announce(name: String) -> String {\n  return name\n}\n";
+    let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> Nothing {\n  let msg = announce(`Roberto`)\n}\n";
     let (state, main_uri, dep_uri, _dir) = state_two_files("players", dep_src, main_src);
 
     let pos = position_at(main_src, "announce(`Roberto`)");
@@ -170,7 +170,7 @@ fn test_goto_def_cross_file_imported_function_returns_dep_uri() {
 
 #[test]
 fn test_goto_def_response_under_100ms() {
-    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let msg = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
     let path = "/tmp/ynz_gotodef_perf.ynz";
     let (state, uri) = state_single(path, src);
     let pos = position_at(src, "greet()");
