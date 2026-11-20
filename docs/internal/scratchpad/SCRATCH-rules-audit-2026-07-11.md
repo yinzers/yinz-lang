@@ -185,14 +185,14 @@ data** — every AI session reads the contradiction and half of them follow the 
   that believes it's conditionally loaded is written verbose ("it'll only load when
   relevant"), which is exactly backwards for an always-on rule.
 - **Scoping candidates** (mechanism proven by vue-website.md):
-  - `examples-structure.md` → `examples/**` + `.claude/planning/**`
+  - `examples-structure.md` → `examples/**`
   - `spec-writing.md` → `docs/reference/**`
   - `docs-checklist.md` → `docs/**`
   - `feature-registry.md` → `registry/**`, `crates/ynz-registry/**`,
-    `crates/ynz-{diagnostics,typeck,parser}/**`, `.claude/planning/**`
-  - `stdlib-design.md` → design-time only; scope to `.claude/planning/**` +
-    `docs/internal/scratchpad/**` (stdlib design happens in plans/scratch, v0.5+)
-  - `plan-invariants.md` → `.claude/planning/**`
+    `crates/ynz-{diagnostics,typeck,parser}/**`
+  - `stdlib-design.md` → design-time only; scope to
+    `docs/internal/scratchpad/**` (stdlib design happens in scratch docs, v0.5+)
+  - `plan-invariants.md` → the plan folder (since deleted, so this rule no longer applies)
   - `authoritative-derivation.md` → `crates/**`
 - **Must stay always-on** (they bind chat-level design conversation, not file edits):
   `vocabulary.md`, `non-oop.md`, `language-design.md`, `naming.md` (post-merge), and the

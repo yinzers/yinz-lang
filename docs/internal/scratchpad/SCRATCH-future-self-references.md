@@ -164,4 +164,3 @@ The v0.3 milestone plan must include:
 - [`docs/internal/implementation/IMP-ownership.md`](../implementation/IMP-ownership.md) (general ownership semantics — self-references extend these)
 - [`docs/reference/REF-ide-hints.md`](../../reference/REF-ide-hints.md) (muted `self-referential` hint protocol)
 - [`docs/internal/scratchpad/SCRATCH-future-designs-index.md`](SCRATCH-future-designs-index.md) (status: locked, v0.3+)
-- [`.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md`](../../../.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md) (originating discussion + Patrick's Approach A confirmation)

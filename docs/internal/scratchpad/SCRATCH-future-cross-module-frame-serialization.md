@@ -13,9 +13,9 @@ metadata:
 
 # Cross-Module Frame Serialization (M3e)
 
-**Status**: Shipped in v0.3-M3e. See [`.claude/planning/done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md`](../../../.claude/planning/done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md)
-for the full execution record (Phases 0–3). Implemented in commit `cbd027e`
-(Phase 2 — the lift) on branch `feat/m3b-auto-parallelization`.
+**Status**: Shipped in v0.3-M3e. Implemented in commit `cbd027e`
+(Phase 2 — the lift) on branch `feat/m3b-auto-parallelization`; the commit history holds the
+execution record.
 
 ---
 
@@ -92,7 +92,7 @@ query is the sound realization: one computation, LLVM-accurate, in the right cra
    the already-handled circular-import case.
 
 5. Delete `compute_composed_frame_size` + `typeck_type_frame_slots` + `FunctionSig.composed_frame_size`
-   (the lossy parallel reimplementation, no-duct-tape #7).
+   (the lossy parallel reimplementation: two computations of one fact, one of them inaccurate).
 
 6. Lift the M3b Phase 1 universal-reject guard once the full danger matrix runs correctly
    through the real compiler.

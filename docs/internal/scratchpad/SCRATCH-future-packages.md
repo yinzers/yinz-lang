@@ -111,4 +111,3 @@ The v0.2 milestone plan must include these. The format-design decision itself ca
 - [`docs/internal/implementation/IMP-no-runtime-mode.md`](../implementation/IMP-no-runtime-mode.md) (consumer of kernel-mode compatibility flags)
 - [`docs/internal/scratchpad/SCRATCH-future-self-references.md`](SCRATCH-future-self-references.md) (consumer of self-referential markers)
 - [`docs/internal/implementation/IMP-ownership.md`](../implementation/IMP-ownership.md) (consumer of ownership signatures for cross-package call-site analysis)
-- [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](../../../.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) "Forward-Compatibility Constraints" (Phase 5 locks the v0.1 obligation)

@@ -138,8 +138,7 @@ The Yinz compiler is a textbook arena workload:
 
 Rust's compiler uses arenas heavily internally. Salsa (our incremental framework) plays well with arena patterns.
 
-**Adding arenas to the Yinz compiler internals is a v0.1 M8 polish task** — likely 2-5x compile-speed improvement for typical projects. Documented in [`.claude/todos.md`](../../../.claude/todos.md) after this plan lands.
-
+**Adding arenas to the Yinz compiler internals is a v0.1 M8 polish task** — likely 2-5x compile-speed improvement for typical projects.
 This is internal compiler work; it has nothing to do with the user-facing arena syntax above. The user-facing syntax is v0.2.
 
 ---
@@ -181,5 +180,3 @@ If/when Option B is implemented:
 - [`docs/internal/implementation/IMP-no-runtime-mode.md`](../implementation/IMP-no-runtime-mode.md) (arenas work in kernel mode if user provides base allocator)
 - [`docs/reference/REF-ide-hints.md`](../../reference/REF-ide-hints.md) (muted `.in(arena)` rendering protocol)
 - [`docs/internal/implementation/IMP-ownership.md`](../implementation/IMP-ownership.md) (escape-analysis rules apply to arena-allocated values)
-- [`.claude/todos.md`](../../../.claude/todos.md) (Yinz compiler internals should use arenas — M8 polish task)
-- [`.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md`](../../../.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md) (originating decision)
