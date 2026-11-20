@@ -238,7 +238,7 @@ pub fn resolve_imports(
                     diags.push(Diagnostic::error(
                         local_name_span.clone(),
                         format!("Import name `{local}` is already bound by a previous import."),
-                        "Use a different local name with `import ns as otherName from \"...\"`",
+                        "Use a different local name with `import ns as otherName from `...``",
                         "Each imported name must be unique in the local scope.",
                     ));
                 }
@@ -310,7 +310,7 @@ fn bind_named_import(
             span,
             format!("Import name `{local}` is already bound by a previous import."),
             format!(
-                "Use a different local name: `import {{ {exported} as otherName }} from \"...\"`"
+                "Use a different local name: `import {{ {exported} as otherName }} from `...``"
             ),
             "Each imported name must be unique in the local scope.",
         ));

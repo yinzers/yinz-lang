@@ -2786,6 +2786,19 @@ fn duplicate_entrypoint_in_project_produces_teaching_diagnostic() {
     );
 }
 
+#[test]
+fn duplicate_import_hint_suggests_backtick_path() {
+    // WHY: the hint once showed `from "..."`, and Yinz rejects double-quoted import
+    // paths, so a user who copied it hit a second error. Medium tier: user-facing diagnostic.
+    let project_root = fixtures_dir().join("m_duplicate_import");
+    let (_stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_ne!(code, 0, "duplicate import must fail to build");
+    assert!(
+        stderr.contains("Use a different local name: `import { Player as otherName } from `...``"),
+        "hint must suggest a backtick path; got:\n{stderr}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // v0.3-M1: sleepBlocking intrinsic end-to-end
 // ─────────────────────────────────────────────────────────────────────────────
