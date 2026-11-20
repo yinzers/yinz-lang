@@ -15,8 +15,14 @@ const PROMOTABLE_MODIFIER = 'promotable';
 // A dotted underline cannot be expressed with semanticTokenColorCustomizations
 // (colour and font style only), so the extension draws it from the very ranges the
 // client already receives as semantic tokens.
+//
+// Blue, in the theme's info colour so it follows the user's theme: red is for errors
+// and yellow for lint, so these lesson hints get a colour of their own. The
+// decoration API takes a ThemeColor only for border/outline/background/colour, not
+// for `textDecoration`, so the underline is a dotted bottom border.
 const promotableDecoration = vscode.window.createTextEditorDecorationType({
-    textDecoration: 'underline dotted',
+    border: '0 0 1px 0 dotted',
+    borderColor: new vscode.ThemeColor('editorInfo.foreground'),
 });
 
 const promotableRanges = (tokens: vscode.SemanticTokens, modifierBit: number): vscode.Range[] => {
