@@ -82,15 +82,18 @@ function outer() -> string errors {
 function splitCount() -> nothing {
   const csv = `a,b,c`
   const parts = csv.split(`,`)
-  print(parts.count().toString())
+  const partCount = parts.count()
+  print(partCount.toString())
 }
 
 // WHY: positive — all M7 features compile and run correctly.
 function m7AllFeaturesOk() -> nothing {
   const s = `Hello, World!`
   print(s.toLowerCase())
-  print(s.contains(`World`).toString())
-  const result = safeDivide(10, 2).or(0)
+  const hasWorld = s.contains(`World`)
+  print(hasWorld.toString())
+  const attempt = safeDivide(10, 2)
+  const result = attempt.or(0)
   print(result.toString())
   let r = range(0, 2)
   for (i in r) {

@@ -148,9 +148,11 @@ function entrypoint() -> nothing {
   print(isStarter.toString())
   // Fallible conversions — parsing jersey numbers from strings
   let parsedJersey: maybe<int> = `21`.toInt()
-  print(parsedJersey.or(0).toString())
+  let jerseyOrZero = parsedJersey.or(0)
+  print(jerseyOrZero.toString())
   let fromFloat: maybe<int> = 3.14.toInt()
-  print(fromFloat.or(-1).toString())
+  let wholeOrMissing = fromFloat.or(-1)
+  print(wholeOrMissing.toString())
   let fromInt: int = 99.toInt()
   print(fromInt.toString())
   // Early-return narrowing on maybe<T>
@@ -176,11 +178,15 @@ function entrypoint() -> nothing {
   print(slogan.trim())
   print(`go bucs`.toUpperCase())
   print(`THREE RIVERS`.toLowerCase())
-  print(`Pittsburgh`.contains(`burgh`).toString())
-  print(`Pirates`.startsWith(`Pir`).toString())
-  print(`Clemente`.endsWith(`nte`).toString())
+  const hasBurgh = `Pittsburgh`.contains(`burgh`)
+  print(hasBurgh.toString())
+  const startsWithPir = `Pirates`.startsWith(`Pir`)
+  print(startsWithPir.toString())
+  const endsWithNte = `Clemente`.endsWith(`nte`)
+  print(endsWithNte.toString())
   const idx = `Roberto Clemente`.indexOf(`Clemente`)
-  print(idx.or(-1).toString())
+  const idxOrMissing = idx.or(-1)
+  print(idxOrMissing.toString())
   // Code point iteration — 4 code points in "café"
   let charCount = 0
   for (c in `café`) {
@@ -190,10 +196,12 @@ function entrypoint() -> nothing {
   // String splitting — comma-separated career stats (hits,homers,RBIs)
   const careerLine = `3000,240,1305`
   const parts = careerLine.split(`,`)
-  print(parts.count().toString())
+  const careerPartCount = parts.count()
+  print(careerPartCount.toString())
   // errors keyword — fallible function with .or() fallback
   // 127 hits / 400 atBats → .317 batting average (returned in thousandths)
-  const avg = battingAverage(127, 400).or(0)
+  const averageAttempt = battingAverage(127, 400)
+  const avg = averageAttempt.or(0)
   print(avg.toString())
   // errors with .failed() check — would fail if atBats == 0
   const okAvg = battingAverage(50, 200)
@@ -1244,7 +1252,8 @@ function m8_demo() -> nothing {
   let delivered = lineupWire.receive()
   if (delivered.exists()) {
     let lineup = delivered.value
-    print(`  lineup received with ${lineup.count().toString()} jerseys`)
+    let lineupSize = lineup.count()
+    print(`  lineup received with ${lineupSize.toString()} jerseys`)
   }
   let after = lineupWire.receive()
   if (after.exists()) {
@@ -1501,16 +1510,20 @@ function m5_soa_demo() -> nothing {
   let quartermastersFore: array<int> = quartermastersManifest[0].or(foreHold)
   quartermastersFore.set(0, 99)
   let captainsFore: array<int> = captainsManifest[0].or(foreHold)
-  print(`  captain's fore hold, first crate: ${captainsFore[0].or(-1).toString()}`)
-  print(`  quartermaster's fore hold, first crate: ${quartermastersFore[0].or(-1).toString()}`)
+  let captainsFirstCrate = captainsFore[0].or(-1)
+  print(`  captain's fore hold, first crate: ${captainsFirstCrate.toString()}`)
+  let quartermastersFirstCrate = quartermastersFore[0].or(-1)
+  print(`  quartermaster's fore hold, first crate: ${quartermastersFirstCrate.toString()}`)
 
   // The same rule at a fixed-size list: `fixed<T>` holds its items in one block
   // of cells, so copying the cells copies the list.
   let watchBell: fixed<int> = [4, 8, 12]
   let sparebell: fixed<int> = watchBell.copy()
   sparebell.set(0, 1)
-  print(`  ship's bell, first watch: ${watchBell[0].or(-1).toString()}`)
-  print(`  spare bell, first watch: ${sparebell[0].or(-1).toString()}`)
+  let watchFirstBell = watchBell[0].or(-1)
+  print(`  ship's bell, first watch: ${watchFirstBell.toString()}`)
+  let spareFirstBell = sparebell[0].or(-1)
+  print(`  spare bell, first watch: ${spareFirstBell.toString()}`)
 
   // And where a separate copy could not mean anything, `.copy()` refuses at
   // compile time instead of handing back the same thing. A channel is the line
