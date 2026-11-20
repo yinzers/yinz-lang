@@ -113,7 +113,7 @@ pub extern "C" fn ynz_decimal_to_string(a: *const D128) -> *const u8 {
 /// Called by compiled code on integer overflow.
 ///
 /// `op_name` is a static C string (null-terminated) describing the operation,
-/// e.g. `"int overflow in '+'"`. `file` is the source file name; `line` and
+/// e.g. `"Int overflow in '+'"`. `file` is the source file name; `line` and
 /// `col` are 1-based source positions.
 ///
 /// # Safety
@@ -311,7 +311,7 @@ pub extern "C" fn ynz_float_print(x: f64) {
     if core::fmt::Write::write_fmt(&mut stack_text, format_args!("{x}")).is_err() {
         // Unreachable while F64_DISPLAY_MAX_BYTES holds (a test pins it); never print cut text.
         eprintln!(
-            "INTERNAL ERROR: the text of a float is longer than {F64_DISPLAY_MAX_BYTES} bytes. \
+            "INTERNAL ERROR: the text of a Float is longer than {F64_DISPLAY_MAX_BYTES} bytes. \
              This is a compiler bug — please file an issue at \
              https://github.com/yinz-lang/yinz/issues with the source file attached."
         );
@@ -331,7 +331,7 @@ pub unsafe extern "C" fn ynz_float_append(builder: *mut u8, x: f64) {
     if write!(builder_bytes(builder), "{x}").is_err() {
         // Writing into a `Vec` cannot fail.
         eprintln!(
-            "INTERNAL ERROR: appending the text of a float to a string builder failed. \
+            "INTERNAL ERROR: appending the text of a Float to a String builder failed. \
              This is a compiler bug — please file an issue at \
              https://github.com/yinz-lang/yinz/issues with the source file attached."
         );
@@ -1072,7 +1072,7 @@ pub unsafe extern "C" fn ynz_map_new_decimal_keys(elem_size: i64) -> *mut YnzMap
 fn check_map_elem_size(elem_size: i64) {
     if elem_size <= 0 {
         eprintln!(
-            "INTERNAL ERROR: map created with a non-positive element size \
+            "INTERNAL ERROR: Map created with a non-positive element size \
                   ({elem_size}). This is a compiler bug — please file an issue at \
                   https://github.com/yinz-lang/yinz/issues with the source file attached."
         );
@@ -1866,7 +1866,7 @@ pub struct YnzArray {
 pub unsafe extern "C" fn ynz_array_new(elem_size: i64) -> *mut YnzArray {
     if elem_size <= 0 {
         eprintln!(
-            "INTERNAL ERROR: array created with a non-positive element size \
+            "INTERNAL ERROR: Array created with a non-positive element size \
                   ({elem_size}). This is a compiler bug — please file an issue at \
                   https://github.com/yinz-lang/yinz/issues with the source file attached."
         );
@@ -1908,7 +1908,7 @@ pub unsafe extern "C" fn ynz_array_new(elem_size: i64) -> *mut YnzArray {
 pub unsafe extern "C" fn ynz_array_new_sized(elem_size: i64, cap: i64) -> *mut YnzArray {
     if elem_size <= 0 || cap <= 0 {
         eprintln!(
-            "INTERNAL ERROR: sized array created with a non-positive element size \
+            "INTERNAL ERROR: sized Array created with a non-positive element size \
                   or capacity (elem_size {elem_size}, cap {cap}). This is a compiler \
                   bug — please file an issue at \
                   https://github.com/yinz-lang/yinz/issues with the source file attached."
