@@ -53,14 +53,14 @@ shape Entity { name: String, health: Int }
 shape Warrior extends Entity { weapon: String, armor: Int }
 
 function greet(share self: Entity) -> String {
-  return "Hello, I am " + self.name
+  return `Hello, I am ${self.name}`
 }
 
 function greetWarrior(share self: Warrior) -> String {
-  return "Hello, I am " + self.name + " the warrior, wielding " + self.weapon
+  return `Hello, I am ${self.name} the warrior, wielding ${self.weapon}`
 }
 
-const w: Warrior = { name: "Aragorn", health: 100, weapon: "sword", armor: 50 }
+const w: Warrior = { name: `Aragorn`, health: 100, weapon: `sword`, armor: 50 }
 w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an overload
 ```
 

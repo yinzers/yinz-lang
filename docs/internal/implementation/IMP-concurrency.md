@@ -115,8 +115,8 @@ sendConfirmationEmail(order)   // SendGrid (different resource) — only starts 
 
 External API calls where the compiler can't see the relationship:
 ```
-wait request.post("stripe.com/charge", data)
-request.post("email.com/send", receipt)
+wait request.post(`stripe.com/charge`, data)
+request.post(`email.com/send`, receipt)
 ```
 
 **When `wait` is NOT necessary**:
@@ -174,7 +174,7 @@ background retryPayment(payoutId)
 **Long-running** — store the handle, communicate via `.send()`/`.receive()`:
 ```
 let monitor = background watchHealth()
-monitor.send("get-status")
+monitor.send(`get-status`)
 let status = monitor.receive()
 ```
 
@@ -272,23 +272,23 @@ What the IDE shows:
 **Same connection = sequential** (compiler sees same `lend` target):
 ```
 function saveOrder(lend db: Database, order: Order) -> Nothing errors {
-  db.insert("orders", order)           // sequential — same lend target
-  db.insert("audit_log", order.log)    // sequential — same lend target
+  db.insert(`orders`, order)           // sequential — same lend target
+  db.insert(`auditLog`, order.log)     // sequential — same lend target
 }
 ```
 
 **Two connections = concurrent by default** (different `lend` targets):
 ```
 function crossDbSync(lend db1: Database, lend db2: Database) -> Nothing errors {
-  db1.insert("users", user)            // concurrent with db2 — different lend targets
-  db2.insert("users_backup", user)     // concurrent with db1
+  db1.insert(`users`, user)            // concurrent with db2 — different lend targets
+  db2.insert(`usersBackup`, user)      // concurrent with db1
 }
 ```
 
 Use `wait` if ordering between connections matters:
 ```
-wait db1.insert("users", user)
-db2.insert("users_backup", user)
+wait db1.insert(`users`, user)
+db2.insert(`usersBackup`, user)
 ```
 
 **Connection pool**: pool-managed connections are handled by the pool — the compiler doesn't control which physical connection each call gets. Pooled calls to the same logical database may parallelize. Transactions handle ordering within a connection at the DB level; the compiler's auto-sequencing aligns naturally with transaction behavior.

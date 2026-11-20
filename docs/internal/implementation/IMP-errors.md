@@ -42,7 +42,7 @@ Inside an `errors` function, calls to other `errors` functions return the error-
 ```ynz
 // Happy path — auto-propagation, error-capable type invisible
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")           // raw briefly: String errors-capable
+  let raw = readFile(`config.txt`)           // raw briefly: String errors-capable
   let parsed = parseConfig(raw)              // ← first use of success value
                                              //   compiler auto-propagates raw here
                                              //   from this point: raw is plain String
@@ -51,9 +51,9 @@ function loadConfig() -> Config errors {
 
 // Explicit handling — user opts in by checking first
 function loadConfigWithLog() -> Config errors {
-  let raw = readFile("config.txt")
+  let raw = readFile(`config.txt`)
   if (raw.failed()) {                        // ← check first
-    log.warn("config missing: " + raw.message)
+    log.warn(`config missing: ${raw.message}`)
     return Config.default()
   }
   return parseConfig(raw)                    // raw narrowed to String after the if
@@ -64,7 +64,7 @@ function loadConfigWithLog() -> Config errors {
 
 ```ynz
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")
+  let raw = readFile(`config.txt`)
   let parsed = parseConfig(raw)              // raw auto-propagated here
   if (raw.failed()) { ... }                  // ← designed to be a compile error
 }

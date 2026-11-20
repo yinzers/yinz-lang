@@ -115,8 +115,8 @@ A refusal is a real answer and it is loud: a user who can see the refusal is bet
 
 ```ynz
 let config: ConfigBuilder = { rules: [] }
-config.addRule("a", 1)
-config.addRule("b", 2)
+config.addRule(`a`, 1)
+config.addRule(`b`, 2)
 config.freeze()                       // lock from this point forward
 runApp(config)                         // config still usable for reads (share inferred); no further mutation
 ```
