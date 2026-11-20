@@ -29,20 +29,32 @@ function entrypoint() -> Nothing {
 
 ## With error handling
 
-Add `errors` after the return type when something inside the function can fail:
+`entrypoint` always returns `Nothing`, and you cannot add `errors` to it. Handle every call that can fail inside it. Here `.or(0)` supplies a fallback value:
 
 ```
 function loadScore() -> Int errors {
   return 42
 }
 
-function entrypoint() -> Nothing errors {
-  let score = loadScore()
+function entrypoint() -> Nothing {
+  let result = loadScore()
+  let score = result.or(0)
   print(score)
 }
 ```
 
-Errors that aren't handled cascade all the way up to the default error handler — it prints a clean call trace and exits with code 1.
+Adding `errors` to `entrypoint` is a compile error:
+
+```
+function entrypoint() -> Nothing errors {
+  print(`Hello`)
+}
+// COMPILE ERROR: `entrypoint` must return `Nothing`, but this declares it returns `Nothing errors`.
+// Change the return type to `Nothing`: `function entrypoint() -> Nothing`
+// `entrypoint` is where the program starts. It runs and exits — it does not return a value to a caller.
+```
+
+See [Errors](REF-errors.md) for the other ways to handle a failure.
 
 ---
 
