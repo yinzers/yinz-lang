@@ -137,12 +137,14 @@ now.utcOffset
 ## Duration Type
 
 ```
-let meeting = duration.hours(2).minutes(30)
+let twoHours = duration.hours(2)
+let meeting = twoHours.minutes(30)
 let later = now.add(meeting)
 let remaining = deadline.durationUntil(now)
 print(remaining.humanize())              // "3 days, 4 hours"
 
-duration.seconds(90).humanize()          // "1 minute, 30 seconds"
+let ninetySeconds = duration.seconds(90)
+print(ninetySeconds.humanize())          // "1 minute, 30 seconds"
 remaining.totalSeconds()
 remaining.totalMinutes()
 remaining.totalHours()

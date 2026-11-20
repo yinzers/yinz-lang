@@ -342,7 +342,10 @@ Worked examples (the gallery renders these; `crates/ynz-driver/tests/error_galle
 
 ```ynz
 shape Bucket { rows: array<int> }
-function eat(give rows: array<int>) -> nothing { print(rows.count().toString()) }
+function eat(give rows: array<int>) -> nothing {
+  let rowCount = rows.count()
+  print(rowCount.toString())
+}
 function pick(share b: Bucket) -> array<int> { return b.rows }
 
 function entrypoint() -> nothing {

@@ -190,7 +190,7 @@ For the synchronization patterns that actually appear in user code (handoff via 
 
 ### Surface for users
 
-Per Golden Rule 5 (no jargon), Yinz does NOT expose `memory_order_seq_cst` or `memory_order_acquire` as user-visible names. The default ordering applies automatically to channel/atomic operations. Users who genuinely need the global-total-order guarantee opt in via a named API: candidate `atomic.add(n).withGlobalOrdering()` (final naming TBD when concurrency primitives ship in v0.2). The compiler does NOT expose memory ordering as a tunable parameter to non-systems users.
+Per Golden Rule 5 (no jargon), Yinz does NOT expose `memory_order_seq_cst` or `memory_order_acquire` as user-visible names. The default ordering applies automatically to channel/atomic operations. Users who genuinely need the global-total-order guarantee opt in via a named API: candidate `let ordered = atomic.add(n)` followed by `ordered.withGlobalOrdering()` as a separate step (final naming TBD when concurrency primitives ship in v0.2). The compiler does NOT expose memory ordering as a tunable parameter to non-systems users.
 
 ### Tradeoff
 

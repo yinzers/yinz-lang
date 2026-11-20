@@ -41,8 +41,9 @@ let pretty = json.stringify(data, indent: 2)
 let records = csv.parseAs<SalesRecord>(file.read("data.csv"))
 let q4 = records.filter(r => r.quarter == "Q4")
 let sorted = q4.sort(r => r.revenue, desc)
-let total = q4.map(r => r.revenue).sum()
-let avg = q4.map(r => r.revenue).average()
+let revenues = q4.map(r => r.revenue)
+let total = revenues.sum()
+let avg = revenues.average()
 
 let byRegion = records.groupBy(r => r.region)
 ```

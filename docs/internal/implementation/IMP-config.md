@@ -53,7 +53,9 @@ Runtime behavior (`setShutdownTimeout`, `setThreadPoolSize`, `setErrorHandler`, 
 **Why**: Runtime settings often depend on other values — environment variables, command-line arguments, conditions. A static config file can't branch on these. Code handles branching naturally:
 
 ```
-if (env.get("ENV").or("dev") == "production") {
+let foundEnvironment = env.get("ENV")
+let environment = foundEnvironment.or("dev")
+if (environment == "production") {
   setThreadPoolSize(32)
 } else {
   setThreadPoolSize(4)
