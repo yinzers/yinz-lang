@@ -18,7 +18,7 @@ If you write Go, a lot of Yinz will feel familiar: plain keywords, small program
 
 The compiler teaches as you go. Every message below says what is wrong, what to write instead, and why.
 
-A note on the examples: a `// COMPILE ERROR: (pending ynz build run)` line marks a message that has not been copied from the real compiler yet. The mistake is real, but the exact message is not shown here until it is. Go examples do not show the Go compiler's messages; a comment says what Go does.
+A note on the examples: Go examples do not show the Go compiler's messages; a comment says what Go does.
 
 ## The concept list
 
@@ -59,7 +59,7 @@ The table and the traps below follow this list, in this order:
 | Numbers | `int`, `int32`, `uint8`, `float64`<br>overflow wraps around silently | `Int`, `Number`, `Float`<br>overflow stops the task |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score++`, `score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`switch code { case 200: ... default: ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | Go has no chains; you write a `for` loop with `append` | one named step per line: `filter`, `limit`, `map` |
+| Chaining | Go has no chains; you write a `for` loop with `append` | a `for` loop, one named step per line |
 | Files and imports | `package services`<br>`import "myapp/services"`<br>`FetchUser` (capital letter exports), `func main()` | `` import { fetchUser } from `services/users` ``<br>`export function`<br>`function entrypoint()` |
 | Slow work | `go fetch()`, `sync.WaitGroup`<br>`chan int`, `wire <- 2`, `<-wire` | plain `function`; `wait` and `background` only when you need them<br>`Channel<Int>`, `wire.send(2)`, `wire.receive()` |
 | Copies | `b := a` copies a struct, but a slice, a map or a pointer is shared<br>`slices.Clone(a)` | `let b = a` hands the value over<br>`a.copy()` |
@@ -92,17 +92,7 @@ function startRound() -> Nothing {
 // Change `const maxPlayers = ...` to `let maxPlayers = ...` if you need to reassign it.
 ```
 
-There is no `:=` and no `var`:
-
-```
-health := 100
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-var health = 100
-// COMPILE ERROR: (pending ynz build run)
-```
+There is no `:=` and no `var`. Both are Go habits, and the compiler gives only general errors for them, so remember the rule instead: write `let health = 100`.
 
 Inside a function you do not write the type; the compiler works it out, as `:=` does. Write a type when you want one, after a colon: `let health: Int = 100`.
 
@@ -145,18 +135,14 @@ let greeting = "Hello"
 // Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``
 ```
 
-There is no `fmt.Sprintf` and no `%s` or `%d` placeholders. Put the value inside the text with `${}`:
-
-```
-let greeting = fmt.Sprintf(`Hello %s`, name)
-// COMPILE ERROR: (pending ynz build run)
-```
+There is no `fmt.Sprintf` and no `%s` or `%d` placeholders. Put the value inside the text with `${}`, as in `` `Hello ${name}` ``.
 
 `fmt.Println` takes any number of values and puts a space between them. In Yinz, `print` is a function that takes exactly one value:
 
 ```
 print(`Health:`, health)
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `print` takes 1 argument, but 2 were given.
+// Call it with one value: `print(value)`
 ```
 
 Write ``print(`Health: ${health}`)`` instead.
@@ -230,19 +216,17 @@ function entrypoint() -> Nothing {
 }
 ```
 
-`struct` is not valid in Yinz:
+`struct` is not valid in Yinz. Writing `type Player struct {` gives errors, and among them this warning:
 
 ```
 type Player struct {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `struct` is not a keyword in Yinz.
+// `struct` not valid here
 ```
 
-Neither is a method with a receiver:
+Its hint says: "Use `shape` to declare a data type: `shape Player { name: String, health: Int }`".
 
-```
-function (player: Player) heal(amount: Int) -> Nothing {
-// COMPILE ERROR: (pending ynz build run)
-```
+A method with a receiver, such as `func (p *Player) Heal(...)`, is not valid either. The compiler gives only general errors for it, so remember the rule instead: write a standalone function whose first parameter is `self`, as `heal` does above.
 
 ### Functions: `share`, `lend` and `give` replace `*Player` and `Player` receivers
 
@@ -286,15 +270,11 @@ In Yinz, the compiler stops you when a function that only reads tries to change 
 function heal(share self: Player, amount: Int) -> Nothing {
   self.health = self.health + amount
 }
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `self` is declared `share` — read-only — so its fields cannot be changed.
+// Change the parameter to `lend self: Player` if this function needs to modify it.
 ```
 
-`*` and `&` in a signature are not valid:
-
-```
-function heal(player: *Player, amount: Int) -> Nothing {
-// COMPILE ERROR: (pending ynz build run)
-```
+`*` and `&` in a signature are not valid. The compiler gives only general errors for them, so remember the rule instead: write `share`, `lend` or `give` in front of the parameter, and no `*`.
 
 ### Missing values: `Maybe<T>` and `none` replace `nil`
 
@@ -339,12 +319,7 @@ print(nickname.value)
 // Add a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.
 ```
 
-`nil` does not exist:
-
-```
-let nickname: Maybe<String> = nil
-// COMPILE ERROR: (pending ynz build run)
-```
+`nil` does not exist. Write `none`: `let nickname: Maybe<String> = none`. The compiler gives only general errors for `nil`, so remember the rule.
 
 `Maybe` means "no value" is a normal outcome. When the caller must deal with a failure, use `errors`. Go's `value, found := scores["Alice"]` is also a `Maybe`: the Collections trap shows it.
 
@@ -401,12 +376,7 @@ if (checked.failed()) {
 }
 ```
 
-Two results are not valid in a signature:
-
-```
-function battingAverage(hits: Int, atBats: Int) -> (Int, Error) {
-// COMPILE ERROR: (pending ynz build run)
-```
+Two results, as in `-> (Int, Error)`, are not valid in a signature. The compiler gives only general errors for them, so remember the rule: one return type, and add the word `errors` after it.
 
 To pass a failure up, write `errors` on the calling function. Go's `return 0, err` has no match, because there is nothing to return by hand.
 
@@ -419,12 +389,7 @@ print(attempt)
 // Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.
 ```
 
-`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops that one task, not the whole program. You do not write `panic` for it:
-
-```
-panic(`bad health`)
-// COMPILE ERROR: (pending ynz build run)
-```
+`errors` is for failures the caller can expect, such as a file that is not there. A bug, such as an overflowing `Int`, stops that one task, not the whole program. You do not write `panic(...)` for it, because Yinz has no such call. Mark the function `errors` for a failure the caller can expect, and let the compiler stop the task for a bug.
 
 ### Choosing between kinds of values: a union of shapes replaces type switches
 
@@ -439,7 +404,7 @@ import "fmt"
 
 type Circle struct{ Radius int }
 type Square struct{ Side int }
-type Triangle struct{ Base, Height int }
+type Triangle struct{ BaseLength, Height int }
 
 type Shape any
 
@@ -452,6 +417,10 @@ func describe(outline Shape) {
 	case Triangle:
 		fmt.Println("triangle")
 	}
+}
+
+func main() {
+	describe(Circle{Radius: 3}) // circle, radius 3
 }
 ```
 
@@ -467,7 +436,7 @@ shape Square {
 }
 
 shape Triangle {
-  base: Int
+  baseLength: Int
   height: Int
 }
 
@@ -486,7 +455,14 @@ function describe(share outline: Shape) -> Nothing {
     }
   }
 }
+
+function entrypoint() -> Nothing {
+  let circle: Circle = { radius: 3 }
+  describe(circle)    // circle, radius 3
+}
 ```
+
+`base` is a reserved word, so a field cannot use that name; the Triangle field is called `baseLength`.
 
 A forgotten kind is an error, and the compiler names it:
 
@@ -499,11 +475,12 @@ if (outline) {
 // Add the missing arms (e.g. `is Triangle =>`) or add an `else =>` default arm.
 ```
 
-The Go forms are not valid:
+Go's type switch is not valid. Writing `switch outline.(type) {` gives errors, and among them this warning:
 
 ```
 switch outline.(type) {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `switch` is not a keyword in Yinz.
+// Use multi-case `if` with `=>` arms: `if (value) { 1 => ...; 2 => ...; else => ... }`
 ```
 
 A Go `interface` also describes what a value can do, such as having a `Heal` method. That is a separate topic in Yinz, called contracts and written with `follows`. This guide does not cover it.
@@ -560,17 +537,9 @@ function entrypoint() -> Nothing {
 
 This prints `online`. In Go, `Status(7)` is a valid `Status` and nothing checks that your `switch` covers every constant. In Yinz, the compiler checks that your `if` handles every name in the set.
 
-`iota` does not exist:
+`iota` does not exist, and a `const ( ... )` group is not how Yinz lists names. The compiler gives only general errors for it, so remember the rule: use `options`, as above.
 
-```
-const (
-  active = iota
-  banned
-)
-// COMPILE ERROR: (pending ynz build run)
-```
-
-Writing `enum` gives this first message:
+Writing `enum` gives errors, and among them this warning:
 
 ```
 enum Status {
@@ -635,17 +604,7 @@ The everyday functions have new names, and they are called with a dot:
 | `slices.Contains(scores, 88)` | `scores.contains(88)` |
 | `scores[len(scores)-1]`, panics when empty | `scores.last()`, a `Maybe` |
 
-Go's collection names are not valid:
-
-```
-let scores: []Int = [70, 85, 92]
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-let total = len(scores)
-// COMPILE ERROR: (pending ynz build run)
-```
+Go's collection names are not valid. `[]Int` gives only general errors, so remember the rule: write `Array<Int>`. There is no `len(...)` either; write `scores.count()`.
 
 A value written with `{ ... }` is a single shape value, not a collection. Use `[...]` to make one:
 
@@ -682,8 +641,10 @@ A size such as `int32` is not a Yinz type:
 
 ```
 let health: int32 = 100
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `int32` is not a known type.
 ```
+
+Use `Int`.
 
 Whole-number division works as in Go: `/` on two `Int` values gives an `Int`, and the decimals are cut off. `//` starts a comment, so it is not an operator:
 
@@ -718,8 +679,10 @@ Use `Int` for whole numbers, `Number` for anything where the exact value matters
 
 ```
 let price: float64 = 24.5
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `float64` is not a known type.
 ```
+
+Use `Float` or `Number`.
 
 ### Operators: `&&`, `||`, `!` and `==` match Go, and `++` and `+=` do not exist
 
@@ -768,7 +731,8 @@ score = score + 5
 
 ```
 score++
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `++` is not supported in Yinz.
+// Use `x = x + 1` instead.
 ```
 
 ### Branching: no `else`, no `switch`
@@ -809,7 +773,8 @@ A condition without parentheses is not valid:
 
 ```
 if health <= 0 {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: Expected `(` after `if`.
+// Write `if (condition) { ... }` with the condition in parentheses.
 ```
 
 An `else` block is not valid:
@@ -820,8 +785,10 @@ if (health <= 0) {
 } else {
   return `alive`
 }
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE ERROR: `else` cannot appear here.
 ```
+
+Yinz has no `else` block, so end the first branch with `return` and carry on below it.
 
 When you cannot return, set a value first and change it. This replaces Go's `message := "in danger"` followed by an `if` that changes it, and Go has no `if` that gives a value either:
 
@@ -868,11 +835,12 @@ function describeStatus(statusCode: Int) -> Nothing {
 }
 ```
 
-Writing `switch` gives this error:
+Writing `switch` gives errors, and among them this warning:
 
 ```
 switch statusCode {
-// COMPILE ERROR: (pending ynz build run)
+// COMPILE WARNING: `switch` is not a keyword in Yinz.
+// Use multi-case `if` with `=>` arms: `if (value) { 1 => ...; 2 => ...; else => ... }`
 ```
 
 ### Chaining: a loop with `append` becomes named steps
@@ -995,12 +963,7 @@ function entrypoint() -> Nothing {
 
 Names are private unless you mark them. A capital letter no longer means "exported": `export` does, and there are no default exports. Every Yinz program starts at `function entrypoint()`, where Go has `func main()`.
 
-A `package` line is not valid:
-
-```
-package services
-// COMPILE ERROR: (pending ynz build run)
-```
+A `package` line is not valid. The compiler gives only general errors for it, so remember the rule: leave it out, and let the file's path be its name.
 
 Two imports cannot use the same name. Yinz stops you and asks you to rename one:
 
@@ -1128,17 +1091,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-The Go words are flagged:
-
-```
-go relayScores(wire)
-// COMPILE ERROR: (pending ynz build run)
-```
-
-```
-wire <- 2
-// COMPILE ERROR: (pending ynz build run)
-```
+The Go words are not valid. `go relayScores(wire)` gives only general errors, so remember the rule: write `background relayScores(wire)`. `wire <- 2` gives a misleading error, because the compiler reads `<` as a comparison and says it cannot be used with a Channel. Write `wire.send(2)` instead.
 
 ### Copies: `let b = a` hands the value over, and `.copy()` replaces sharing by accident
 
@@ -1179,12 +1132,7 @@ let total = scores.count()
 print(total)    // 3
 ```
 
-`slices.Clone` does not exist:
-
-```
-let backup = slices.Clone(scores)
-// COMPILE ERROR: (pending ynz build run)
-```
+`slices.Clone` does not exist in Yinz. It gives only general errors, so remember the rule: write `scores.copy()`.
 
 Passing a value to a function is not a store: the signature decides, with `share`, `lend` or `give` as the Functions trap shows. The same hand-over rule applies when you store a shape value in an array. In Go, `append(path, start)` copies `start`, and a later change to `start` does not reach the slice. In Yinz, you ask for the copy:
 
