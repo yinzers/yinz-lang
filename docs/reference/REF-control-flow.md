@@ -31,10 +31,10 @@ if (player.banned) {
 
 Parentheses around the condition are required. Curly braces always required.
 
-There is no `else` block. Instead, use early returns to handle one case and fall through to the other:
+There is no `else` block. Instead, handle one case and return, then let the code carry on for the other case:
 
 ```
-// Early return pattern
+// Return early
 function describe(share player: Player) -> string {
   if (player.health <= 0) {
     return `dead`
@@ -43,10 +43,10 @@ function describe(share player: Player) -> string {
 }
 ```
 
-When you can't return (not in a function, or you need to continue after both cases), use pre-assignment:
+When you can't return (you are not in a function, or you need to keep going after both cases), set a starting value first and change it inside the `if`:
 
 ```
-// Pre-assignment pattern
+// Set a starting value, then change it
 let message = `in danger`
 if (player.health > 50) {
   message = `healthy`
@@ -54,13 +54,13 @@ if (player.health > 50) {
 print(message)
 ```
 
-Two patterns, zero `else` blocks. This keeps code flat and readable.
+Two patterns, zero `else` blocks. Your code stays flat and easy to read.
 
 ---
 
 ## Early returns — the main way to handle branches
 
-Return early to handle edge cases first. The happy path stays at the left margin with no nesting:
+Handle the unusual cases first and return. The normal path then stays at the left edge with no extra indenting:
 
 ```
 function processPlayer(lend player: Player) -> nothing {
@@ -103,21 +103,21 @@ Boolean conditions use three symbols:
 
 | Symbol | Meaning |
 |--------|---------|
-| `&&` | boolean AND |
-| `\|\|` | boolean OR |
-| `!` | boolean NOT |
+| `&&` | and: both sides must be true |
+| `\|\|` | or: at least one side must be true |
+| `!` | not: flips true to false and false to true |
 
-Note: `|` (single pipe) is for union types (`shape Shape = Circle | Square`), not boolean OR. `||` (double pipe) is boolean OR in expressions.
+A single `|` is for union types (`shape Shape = Circle | Square`), not for "or". In conditions, use `||` for "or".
 
 ---
 
-## Multi-case `if` — replaces switch and match
+## Multi-case `if` — compare one value to several cases
 
-When you need to match a value against several cases, use multi-case `if` with `=>` arrows inside the block. No `switch`. No `match`. Same keyword, different form.
+When you want to compare one value against several cases, use a multi-case `if`, with `=>` arrows inside the block. There is no `switch` and no `match`. It is the same `if` keyword in a different form.
 
-The compiler tells them apart: `=>` inside the block = multi-case matching.
+The compiler tells them apart: `=>` inside the block means multi-case.
 
-**Matching on `options` values:**
+**Comparing `options` values:**
 
 ```
 if (status) {
@@ -127,7 +127,7 @@ if (status) {
 }
 ```
 
-**Matching on union types — `is` tells the compiler which kind it is:**
+**Comparing the kinds in a union — `is` tells the compiler which kind it is:**
 
 ```
 if (shape) {
@@ -137,9 +137,9 @@ if (shape) {
 }
 ```
 
-After `is Circle`, the compiler knows `shape` is a `Circle`. Access `.radius` directly — no cast, no `.value`.
+After `is Circle`, the compiler knows `shape` is a `Circle`. Use `.radius` directly — no conversion and no `.value`.
 
-**Matching on values — use `else =>` as catch-all:**
+**Comparing plain values — use `else =>` for everything else:**
 
 ```
 if (statusCode) {
@@ -152,7 +152,7 @@ if (statusCode) {
 
 `else =>` is only valid inside multi-case `if` blocks. It is never a standalone `else { }` block.
 
-**Multiline cases — wrap in curly braces:**
+**A case with several lines — use curly braces:**
 
 ```
 if (shape) {
@@ -172,9 +172,9 @@ if (shape) {
 
 ---
 
-## Exhaustiveness — compiler enforced for options and unions
+## Every case must be handled — for options and unions
 
-For `options` types and union types, the compiler verifies every case is handled:
+For `options` and for unions, the compiler checks that you handled every case:
 
 ```
 if (shape) {
@@ -185,7 +185,7 @@ if (shape) {
 }
 ```
 
-For value matching (numbers, strings), exhaustiveness isn't enforced — use `else =>` as a catch-all.
+For plain values (numbers, strings), the compiler can't list every possible value, so it doesn't check. Use `else =>` to cover everything else.
 
 ---
 
@@ -197,7 +197,7 @@ for (player in players) {
 }
 ```
 
-`player` is a new variable scoped to the loop. Its type is inferred from the collection.
+`player` is a new variable that exists only inside the loop. The compiler works out its type from the collection.
 
 ---
 
