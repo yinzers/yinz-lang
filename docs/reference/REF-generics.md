@@ -41,14 +41,13 @@ shape Box<T> {
 }
 
 function entrypoint() -> Nothing {
-  let numberBox: Box<Int> = { value: 42 }
-  let nameBox: Box<String> = { value: `Ana` }
-  print(numberBox.value.toString())
-  print(nameBox.value)
+  print(`Box declared`)
 }
 ```
 
 `Box<Int>` is a Box that holds an `Int`. `Box<String>` holds a `String`. One definition works with any type.
+
+Writing a value of your own generic shape, such as `let numberBox: Box<Int> = { value: 42 }`, does not compile yet: the compiler reports "A shape value `{ ... }` cannot produce a `Box<Int>` value." For now, declare generic shapes and use the generic parameters on functions.
 
 ---
 
@@ -61,10 +60,7 @@ shape Pair<A, B> {
 }
 
 function entrypoint() -> Nothing {
-  let coord: Pair<Int, Int> = { first: 10, second: 20 }
-  let entry: Pair<String, Int> = { first: `score`, second: 100 }
-  print(coord.first.toString())
-  print(entry.first)
+  print(`Pair declared`)
 }
 ```
 
@@ -122,8 +118,7 @@ function entrypoint() -> Nothing {
 The error names the argument, the type `T` was made, and what made it:
 
 ```
-`tiny` has type `Tiny`, but `same` needs `Big` for `second`: `second` and `first` share the
-type parameter `T`, and the argument `big` for `first` already made it `Big`.
+`tiny` has type `Tiny`, but `same` needs `Big` for `second`: `second` and `first` share the type parameter `T`, and the argument `big` for `first` already made it `Big`.
 ```
 
 The function is compiled for `Big`, so it would read the `Tiny` as a `Big`: wrong values, or memory past the end of the `Tiny`. Pass a `Big` for `second`, or give `first` a `Tiny` too.
@@ -135,20 +130,15 @@ The same comparison applies to every argument of every call form: `f(a, b)`, `a.
 ## Multiple type parameters on a function
 
 ```ynz
-shape Pair<A, B> {
-  first: A
-  second: B
-}
-
-function pair<A, B>(give first: A, give second: B) -> Pair<A, B> {
-  return { first, second }
+function firstOf<A, B>(give first: A, give second: B) -> A {
+  return first
 }
 
 function entrypoint() -> Nothing {
-  let coord = pair(10, 20)            // Pair<Int, Int>
-  let entry = pair(`score`, 100)      // Pair<String, Int>
-  print(coord.first.toString())
-  print(entry.first)
+  let winner = firstOf(`score`, 100)      // A is String, B is Int
+  let count = firstOf(10, `ten`)          // A is Int, B is String
+  print(winner)
+  print(count.toString())
 }
 ```
 
@@ -172,23 +162,39 @@ function score(share player: Player) -> Int {
   return player.points
 }
 
-function bestScore<T follows Scorable>(share first: T, share second: T) -> Int {
-  return score(first)
+function pickFirst<T follows Scorable>(give first: T, give second: T) -> T {
+  return first
+}
+
+function entrypoint() -> Nothing {
+  let first: Player = { name: `Ana`, points: 3 }
+  let second: Player = { name: `Bo`, points: 5 }
+  let picked = pickFirst(first, second)
+  print(picked.name)
 }
 ```
 
 If you call the function with a shape that does not follow the contract:
 
 ```ynz
+shape Scorable {
+  score(share self) -> Int
+}
+
 shape Rookie {
   name: String
   points: Int
 }
 
+function pickFirst<T follows Scorable>(give first: T, give second: T) -> T {
+  return first
+}
+
 function entrypoint() -> Nothing {
   let first: Rookie = { name: `Ana`, points: 3 }
   let second: Rookie = { name: `Bo`, points: 5 }
-  print(bestScore(first, second).toString())
+  let picked = pickFirst(first, second)
+  print(picked.name)
 }
 ```
 
@@ -199,6 +205,8 @@ Type `Rookie` does not follow contract `Scorable`.
 ```
 
 Add `follows Scorable` to the shape's declaration and write the functions the contract lists.
+
+Inside the function body, calling the contract's functions on a `T` value (such as `first.score()`) does not compile yet. The compiler reports "`T` does not have a method called `score`."
 
 ---
 
@@ -217,7 +225,20 @@ function entrypoint() -> Nothing {
 }
 ```
 
-Without it the compiler reports:
+Without it the program does not compile:
+
+```ynz
+function createList<T>() -> Array<T> {
+  return []
+}
+
+function entrypoint() -> Nothing {
+  let empty = createList()
+  print(empty.count().toString())
+}
+```
+
+The compiler reports:
 
 ```
 Cannot work out the type parameter `T` for function `createList` — pass a value or annotate explicitly.
