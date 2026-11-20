@@ -81,8 +81,20 @@ let wholePrice = unitPrice.toInt()  // a Maybe<Int>: 42
 A union is a value that can be one of several shapes. Use `is` to ask which one it is. No cast needed:
 
 ```
-if (figure is Circle) {
-  print(figure.radius)    // inside this block the compiler knows it is a Circle
+shape Circle {
+  radius: Number
+}
+
+shape Square {
+  side: Number
+}
+
+shape Figure = Circle | Square
+
+function describe(share figure: Figure) -> Nothing {
+  if (figure is Circle) {
+    print(figure.radius)    // inside this block the compiler knows it is a Circle
+  }
 }
 ```
 
@@ -95,8 +107,8 @@ See [Unions](REF-unions.md).
 There is no cast keyword. Every conversion is written out by name:
 
 ```
-let n: Number = value as Number    // COMPILE ERROR: use .toNumber() instead
-let n: Number = value.toNumber()   // correct
+let value: Int = 7
+let n: Number = value.toNumber()
 ```
 
 That way every conversion is easy to spot, easy to find with autocomplete, and handled in the same safe way.

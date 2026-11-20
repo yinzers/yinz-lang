@@ -120,10 +120,15 @@ let name = `Alice`
 name[0] = `B`
 // COMPILE ERROR: `String` does not support index assignment.
 //   Index assignment works on `Array<T>`, `Fixed<T>`, and `Map<K, V>`.
-// To change the value, build a new string:
-//   let newName = `B` + name.substring(1)
-// Or give the variable a new value:
-//   name = `Blice`
+//   Only built-in collection types support `collection[index] = value` syntax.
+```
+
+To change the text, give the variable a new value or build a new string:
+
+```ynz
+let name = `Alice`
+let newName = `B` + name.substring(1, 5)
+name = `Blice`
 ```
 
 ---
