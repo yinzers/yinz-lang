@@ -30,7 +30,7 @@ let normalized = tensor.normalize()
 ## Model Inference
 
 ```
-let model = model.load("model.onnx")
+let model = model.load(`model.onnx`)
 let prediction = model.predict(inputTensor)
 ```
 

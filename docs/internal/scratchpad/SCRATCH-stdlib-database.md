@@ -132,11 +132,11 @@ The Yinz compiler authors implement these translations once per supported databa
 The goal is ergonomic CRUD with none of the allocation overhead. These are not in conflict — the convenience layer is a compiler problem, not a runtime problem.
 
 ```
-const quote: Quote = { symbol: "AAPL", price: 189.50, timestamp: date.now() }
+const quote: Quote = { symbol: `AAPL`, price: 189.50, timestamp: date.now() }
 quote.save()
 quote.destroy()
 
-let found = db.find(Quote, { symbol: "AAPL" })
+let found = db.find(Quote, { symbol: `AAPL` })
 ```
 
 The compiler generates `save()` and `destroy()` specifically for `Quote` at compile time — they compile to direct wire bytes for that type's INSERT/DELETE. No generic model instance layer underneath.
@@ -178,16 +178,16 @@ The goal is to push the structured layer far enough that raw SQL is rarely neede
 ❌ **Banned (chained dot-method builder)**:
 ```
 db.find(Order)
-  .where({ status: "shipped" })
-  .orderBy("createdAt", "desc")
+  .where({ status: `shipped` })
+  .orderBy(`createdAt`, `desc`)
   .limit(10)
 ```
 
 ✅ **Yinz style (one top-level dot call + structured options)**:
 ```
 let orders = db.findMany(Order, {
-    where:   { status: "shipped" },
-    orderBy: { createdAt: "desc" },
+    where:   { status: `shipped` },
+    orderBy: { createdAt: `desc` },
     limit:   10,
 })
 ```
@@ -225,11 +225,11 @@ When a user drops to `db.raw()`, they're writing SQL directly. This is where inj
 
 ```
 // compiler blocks this
-let sql = "SELECT * FROM quotes WHERE symbol = " + userInput
+let sql = `SELECT * FROM quotes WHERE symbol = ` + userInput
 db.raw(sql)
 
 // required pattern — parameter passed separately, never interpolated
-db.raw("SELECT * FROM quotes WHERE symbol = ?", userInput)
+db.raw(`SELECT * FROM quotes WHERE symbol = ?`, userInput)
 ```
 
 ### One parameterization mechanism, always safe
@@ -370,9 +370,9 @@ The stdlib would give a failed database call a structured `DatabaseError` value 
 
 ```
 shape DatabaseError {
-    summary: String             // short human-readable: "Unique constraint violated on quotes.symbol"
-    suggestions: Array<String>  // ["Check for duplicates before inserting", "Use upsert instead"]
-    code: Maybe<String>         // raw DB error code ("23505", "08006", etc.)
+    summary: String             // short human-readable: `Unique constraint violated on quotes.symbol`
+    suggestions: Array<String>  // [`Check for duplicates before inserting`, `Use upsert instead`]
+    code: Maybe<String>         // raw DB error code (`23505`, `08006`, etc.)
     query: Maybe<String>        // sanitized query that triggered the error
     detail: Maybe<String>       // full DB-level detail message
 }
@@ -402,7 +402,7 @@ The raw escape hatch needs a Yinz syntax that:
 **Direction (not fully locked — see Discussion Points)**: a `.raw` method on `db` (better name TBD) is the end goal. The SQL gets passed as a tagged-string-style literal so the compiler/IDE know "this is SQL, treat the content as SQL." Both pieces combine — they're not competing alternatives:
 
 ```
-let result = db.raw(sql`SELECT * FROM orders WHERE status = ?`, "shipped")
+let result = db.raw(sql`SELECT * FROM orders WHERE status = ?`, `shipped`)
 ```
 
 Here `.raw` is the call surface; `sql\`...\`` is how the string is passed so the IDE knows to syntax-highlight inside the backticks and the compiler engages injection-safety + (eventually) compile-time SQL validation. A plain string passed to `.raw` could also be supported — but plain strings get no IDE highlighting and no compile-time SQL checks, so the `sql\`...\`` form is the recommended path.
@@ -478,7 +478,7 @@ Discussion seed: lock in the scope-binding API early so the whole stdlib is desi
 ```
 db.transact(function (tx) {
     let order = tx.find(Order, { id: 42 })
-    order.status = "shipped"
+    order.status = `shipped`
     order.save()
     // tx auto-commits on successful function exit, auto-rolls-back on error or panic
 })
@@ -492,9 +492,9 @@ Pattern Patrick wants supported:
 
 ```
 let order = db.find(Order, { id: 42 })
-order.status = "shipped"
+order.status = `shipped`
 order.shippedAt = date.now()
-order.trackingNumber = "1Z999AA..."
+order.trackingNumber = `1Z999AA...`
 order.save()    // one INSERT/UPDATE round-trip, not three
 ```
 

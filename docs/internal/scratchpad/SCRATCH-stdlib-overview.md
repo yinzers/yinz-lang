@@ -42,7 +42,7 @@ This means: the stdlib can be as comprehensive as we want. Add everything. The c
 
 ## Auto-Import — No Import Statement Needed
 
-The standard library is always available. Developers never write `import { sqrt } from "math"`. They just write `math.sqrt()`. The compiler and IDE know the entire standard library at build time. Tree shaking strips anything unused.
+The standard library is always available. Developers never write ``import { sqrt } from `math` ``. They just write `math.sqrt()`. The compiler and IDE know the entire standard library at build time. Tree shaking strips anything unused.
 
 This applies to all stdlib modules: `math`, `file`, `request`, `server`, `date`, `duration`, `json`, `csv`, `terminal`, `cli`, `path`, `directory`, `random`, `stats`, `convert`, `physics`, `matrix`, `vector`, `tensor`, `vectors`, `env`.
 

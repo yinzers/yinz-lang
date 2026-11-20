@@ -20,17 +20,17 @@ metadata:
 All file operations use the `errors` system.
 
 ```
-let content = file.read("data.txt")                      // -> String errors
-let lines = file.readLines("data.txt")                   // -> Array<String> errors (loads all lines)
-let lazyLines = file.lines("data.txt")                   // -> Iterable<String> errors (lazy — one line at a time)
-let bytes = file.readBytes("image.png")                  // -> Array<Byte> errors
+let content = file.read(`data.txt`)                      // -> String errors
+let lines = file.readLines(`data.txt`)                   // -> Array<String> errors (loads all lines)
+let lazyLines = file.lines(`data.txt`)                   // -> Iterable<String> errors (lazy — one line at a time)
+let bytes = file.readBytes(`image.png`)                  // -> Array<Byte> errors
 
-file.write("output.txt", content)                        // -> Nothing errors
-file.appendLine("log.txt", "new entry")                  // -> Nothing errors
+file.write(`output.txt`, content)                        // -> Nothing errors
+file.appendLine(`log.txt`, `new entry`)                  // -> Nothing errors
 
-if (file.exists("config.ynz")) { ... }
-let size = file.size("data.txt")                         // -> Int errors
-let modified = file.lastModified("data.txt")             // -> Date errors
+if (file.exists(`config.ynz`)) { ... }
+let size = file.size(`data.txt`)                         // -> Int errors
+let modified = file.lastModified(`data.txt`)             // -> Date errors
 ```
 
 ---
@@ -38,9 +38,9 @@ let modified = file.lastModified("data.txt")             // -> Date errors
 ## Directory Operations
 
 ```
-let files = directory.list("/path/to/dir")               // -> Array<String> errors
-directory.create("/path/to/new")                         // -> Nothing errors
-directory.delete("/path/to/old")                         // -> Nothing errors
+let files = directory.list(`/path/to/dir`)               // -> Array<String> errors
+directory.create(`/path/to/new`)                         // -> Nothing errors
+directory.delete(`/path/to/old`)                         // -> Nothing errors
 ```
 
 ---
@@ -48,10 +48,10 @@ directory.delete("/path/to/old")                         // -> Nothing errors
 ## Path Utilities
 
 ```
-let full = path.join("src", "utils", "helpers.ynz")
-let ext = path.extension("photo.jpg")                    // "jpg"
-let name = path.filename("/app/src/entrypoint.ynz")            // "entrypoint.ynz"
-let dir = path.directory("/app/src/entrypoint.ynz")            // "/app/src"
+let full = path.join(`src`, `utils`, `helpers.ynz`)
+let ext = path.extension(`photo.jpg`)                    // `jpg`
+let name = path.filename(`/app/src/entrypoint.ynz`)            // `entrypoint.ynz`
+let dir = path.directory(`/app/src/entrypoint.ynz`)            // `/app/src`
 ```
 
 ---
@@ -82,7 +82,7 @@ That registry entry is the SSOT — this section is a cross-reference, not the a
 
 **Planned async surface (ships with v0.5 file module)**:
 
-- `readFileAsync(path) -> String errors` — non-blocking file read; `wait readFileAsync("data.txt")` suspends the caller while the OS reads the file; thread is freed during the I/O.
+- `readFileAsync(path) -> String errors` — non-blocking file read; ``wait readFileAsync(`data.txt`)`` suspends the caller while the OS reads the file; thread is freed during the I/O.
 - `writeFileAsync(path, content) -> Nothing errors` — non-blocking file write.
 - `readBytesAsync(path) -> Array<Byte> errors` — non-blocking binary read.
 

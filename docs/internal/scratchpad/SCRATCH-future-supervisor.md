@@ -47,7 +47,7 @@ supervise.alwaysRestart(
   processOrders,
   maxRestarts: 10,
   maxRestartsWindow: 1.minute,
-  onGiveUp: (e) => alerting.page("processOrders died permanently", e),
+  onGiveUp: (e) => alerting.page(`processOrders died permanently`, e),
 )
 
 // One-shot: spawn the task, observe panics but do NOT restart.
@@ -58,7 +58,7 @@ let handle = supervise.watch(processOrders, onPanic: (e) => log.error(e))
 supervise.pool(
   processOrders,
   count: 8,
-  onPanic: (worker, e) => log.error("worker ${worker.id} crashed", e),
+  onPanic: (worker, e) => log.error(`worker ${worker.id} crashed`, e),
 )
 ```
 

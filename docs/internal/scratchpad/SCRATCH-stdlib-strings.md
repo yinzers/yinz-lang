@@ -178,7 +178,7 @@ Replaces all occurrences of `old` with `new`. Returns a new string. `is_nfc_know
 ### For-loop over string
 
 ```ynz
-for c in "café" {
+for c in `café` {
   // c is a 1-character string (one code point per step)
 }
 ```

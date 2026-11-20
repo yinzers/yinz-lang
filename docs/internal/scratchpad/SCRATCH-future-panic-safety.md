@@ -52,7 +52,7 @@ Errors flow through normal control flow. No `try/catch` — errors auto-propagat
 
 ```ynz
 function loadUser(id: Int) -> User errors {
-  let data = readFile("user-${id}.json")   // if readFile fails, this returns the error
+  let data = readFile(`user-${id}.json`)   // if readFile fails, this returns the error
   let user = parseUser(data)               // same — auto-propagation
   return user
 }
@@ -63,13 +63,13 @@ If the caller wants to handle a specific error instead of propagating, they use 
 ### Panics — unexpected, unrecoverable in scope, indicates a BUG
 
 ```ynz
-panic("market data desync detected — refusing to continue")  // explicit
+panic(`market data desync detected — refusing to continue`)  // explicit
 let item = array.get(5)  // returns maybe T — the array might be too short
                          // (no panic; the user explicitly handles maybe)
 
 // What CAN panic implicitly:
 let result = 10 / divisor   // panics if divisor == 0 (programmer should have checked)
-let x = invariant_was_supposed_to_hold   // hit "unreachable" code → panic
+let x = invariantWasSupposedToHold       // hit `unreachable` code → panic
 ```
 
 Panics are NOT in function signatures. They represent "the program reached a state where its assumptions are broken." The caller has no good recovery — recovery requires fresh state.
@@ -122,8 +122,8 @@ Patterns from Erlang/BEAM and BullMQ. The parent of a `background` task gets not
 ```ynz
 let task = background processOrder(order)
 task.onPanic((e: Panic) => {
-  log.error("order processing crashed: ${e.message}")
-  metrics.bump("order.panic")
+  log.error(`order processing crashed: ${e.message}`)
+  metrics.bump(`order.panic`)
   // task is already dead; we just observed and logged
 })
 
@@ -172,13 +172,13 @@ background processOrder(order)
 let task = background processOrder(order)
 let result = task.waitForResult()       // blocks until done; returns T errors
 if (result.failed()) {
-  log.warn("order failed: ${result.message}")
+  log.warn(`order failed: ${result.message}`)
 }
 
 // Supervised — onPanic and onError attached as separate method calls, not chained
 let task = background processOrder(order)
-task.onPanic((e) => log.error("panic: ${e.message}"))
-task.onError((e) => log.warn("error: ${e.message}"))
+task.onPanic((e) => log.error(`panic: ${e.message}`))
+task.onError((e) => log.warn(`error: ${e.message}`))
 
 // OR via stdlib supervisor helpers (see docs/internal/scratchpad/SCRATCH-future-supervisor.md)
 supervise.alwaysRestart(processOrder, onError: (e) => log.warn(e))

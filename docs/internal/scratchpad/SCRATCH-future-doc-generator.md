@@ -96,8 +96,8 @@ The category of a tradable asset on Alpaca.
 Choices
   usEquity    — U.S. equity (stock)
   usOption    — U.S. options contract
-  crypto      — Cryptocurrency  (display: "Cryptocurrency")
-  ipo         — IPO indication of interest  (display: "IPO Indication of Interest")
+  crypto      — Cryptocurrency  (display: `Cryptocurrency`)
+  ipo         — IPO indication of interest  (display: `IPO Indication of Interest`)
 ```
 
 ---

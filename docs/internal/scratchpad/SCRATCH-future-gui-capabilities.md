@@ -27,7 +27,7 @@ Each device feature (camera, mic, speaker, touch, GPS, notifications, biometrics
 1. **One unified Yinz API** — dot-first, self-documenting, the same on every platform. The jr dev writes this once and it works everywhere:
    ```
    // ILLUSTRATIVE — proposed future syntax, not yet implemented
-   const photo = camera.capture() errors      // errors surfaces "denied" / "no device"
+   const photo = camera.capture() errors      // errors surfaces `denied` / `no device`
    const here  = location.current() errors
    haptics.buzz(duration.ms(50))
    ```

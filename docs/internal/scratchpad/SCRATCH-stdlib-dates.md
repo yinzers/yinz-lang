@@ -25,8 +25,8 @@ Design goals: similar feel to dayjs but built-in, fully typed, compiled.
 let now = date.now()
 let birthday = date.from(1990, 6, 15)                   // year, month, day — NOT zero-indexed
 let withTime = date.from(2026, 5, 11, 14, 30, 0)        // year, month, day, hour, minute, second
-let parsed = date.parse("2026-05-11")                    // ISO string
-let parsed2 = date.parse("May 11, 2026")                 // natural language
+let parsed = date.parse(`2026-05-11`)                    // ISO string
+let parsed2 = date.parse(`May 11, 2026`)                 // natural language
 let fromTimestamp = date.fromUnix(1715000000)
 let fromMillis = date.fromMillis(1715000000000)
 ```
@@ -91,7 +91,7 @@ now.hour                    // 14
 now.minute                  // 30
 now.second                  // 0
 now.millisecond             // 0
-now.dayOfWeek               // "Monday"
+now.dayOfWeek               // `Monday`
 now.dayOfWeekNumber         // 1 (Monday=1, Sunday=7)
 now.dayOfYear               // 131
 now.weekOfYear              // 20
@@ -107,16 +107,16 @@ now.daysInMonth()           // 31
 ## Formatting
 
 ```
-now.format("MMMM D, YYYY")              // "May 11, 2026"
-now.format("MM/DD/YY")                  // "05/11/26"
-now.format("YYYY-MM-DD")               // "2026-05-11"
-now.format("h:mm A")                    // "2:30 PM"
-now.format("HH:mm:ss")                 // "14:30:00"
-now.format("dddd")                      // "Monday"
-now.toISO()                              // "2026-05-11T14:30:00Z"
+now.format(`MMMM D, YYYY`)              // `May 11, 2026`
+now.format(`MM/DD/YY`)                  // `05/11/26`
+now.format(`YYYY-MM-DD`)               // `2026-05-11`
+now.format(`h:mm A`)                    // `2:30 PM`
+now.format(`HH:mm:ss`)                 // `14:30:00`
+now.format(`dddd`)                      // `Monday`
+now.toISO()                              // `2026-05-11T14:30:00Z`
 now.toUnix()
 now.toMillis()
-now.toRelative()                         // "3 hours ago" / "in 2 days"
+now.toRelative()                         // `3 hours ago` / `in 2 days`
 ```
 
 ---
@@ -124,9 +124,9 @@ now.toRelative()                         // "3 hours ago" / "in 2 days"
 ## Time Zones
 
 ```
-let eastern = now.inTimeZone("America/New_York")
+let eastern = now.inTimeZone(`America/New_York`)
 let utc = now.toUTC()
-let tokyo = now.inTimeZone("Asia/Tokyo")
+let tokyo = now.inTimeZone(`Asia/Tokyo`)
 let local = utcDate.toLocal()
 now.timeZone
 now.utcOffset
@@ -141,10 +141,10 @@ let twoHours = duration.hours(2)
 let meeting = twoHours.minutes(30)
 let later = now.add(meeting)
 let remaining = deadline.durationUntil(now)
-print(remaining.humanize())              // "3 days, 4 hours"
+print(remaining.humanize())              // `3 days, 4 hours`
 
 let ninetySeconds = duration.seconds(90)
-print(ninetySeconds.humanize())          // "1 minute, 30 seconds"
+print(ninetySeconds.humanize())          // `1 minute, 30 seconds`
 remaining.totalSeconds()
 remaining.totalMinutes()
 remaining.totalHours()

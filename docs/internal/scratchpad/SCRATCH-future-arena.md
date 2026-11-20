@@ -54,7 +54,7 @@ Arena allocation:
 arena scratch {
   let users: Array<User> = []              // allocated in 'scratch'
   let nameMap: Map<String, User> = {}      // allocated in 'scratch'
-  let buffer: String = ""                  // allocated in 'scratch'
+  let buffer: String = ``                  // allocated in 'scratch'
 
   process(users)
 }  // scratch (and everything in it) freed in one operation
@@ -71,7 +71,7 @@ The IDE shows muted `.in(scratch)` after each allocation — per the [uniform in
 ```ynz
 arena {
   let temp: Array<Int> = []
-  let bigBuffer: String = ""
+  let bigBuffer: String = ``
   computeStuff(temp, bigBuffer)
 }  // arena wiped here
 ```
