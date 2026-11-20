@@ -21,8 +21,8 @@ When the compiler works something out for you, the IDE shows what it decided as 
 
 | What the compiler worked out | Example source | Muted hint shows |
 |---|---|---|
-| The type of a variable | `let x = 42` | `: Int` after `x` |
-| Who holds a value at a call | `foo(player)` | `share`, `lend` or `give` after `player`. Click jumps to `foo`'s signature, where the word is written. |
+| The type of a variable | `let score = 42` | `: Int` after `score` |
+| Who holds a value at a call | `printName(player)` | `share`, `lend` or `give` after `player`. Click jumps to `printName`'s signature, where the word is written. |
 | A store that hands a value over | `list.add(a)` | `handed to` and the place |
 | A copy of a small value | `let n: Int = 5` | `.copy()` where the copy happens |
 | A pause on a slow call | `fetchFeed(user)` | `wait` before the call |
@@ -47,8 +47,8 @@ Most hints complete to Yinz you could have typed. Click one to write it into you
 
 ```ynz
 function entrypoint() -> Nothing {
-  let x = 42                    // muted ": Int" after x
-                                // click → becomes `let x: Int = 42`
+  let score = 42                // muted ": Int" after score
+                                // click → becomes `let score: Int = 42`
 }
 ```
 
@@ -60,14 +60,14 @@ shape Player {
   health: Int
 }
 
-function foo(share p: Player) -> Nothing {
-  print(p.name)
+function printName(share player: Player) -> Nothing {
+  print(player.name)
 }
 
 function entrypoint() -> Nothing {
   const player: Player = { name: `Patrick`, health: 100 }
-  foo(player)                   // muted "share" after player
-                                // click → the IDE jumps to foo's signature
+  printName(player)             // muted "share" after player
+                                // click → the IDE jumps to printName's signature
 }
 ```
 

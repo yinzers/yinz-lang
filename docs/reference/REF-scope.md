@@ -46,14 +46,14 @@ A loop body is a block too. A variable declared inside it is new on each pass an
 ```
 function process(items: Array<Int>) -> Nothing {
   for (item in items) {
-    let temp = item + 1              // new variable each iteration
-    print(temp)
+    let nextItem = item + 1              // new variable each iteration
+    print(nextItem)
   }
 
-  print(temp)
-  // COMPILE ERROR: `temp` is not defined.
+  print(nextItem)
+  // COMPILE ERROR: `nextItem` is not defined.
   // not defined
-  // Check the spelling, or declare it: `let temp = ...` — `temp` has no declaration in scope. Declare it with `let temp = ...` before using it, or check whether it's defined in a file you haven't imported yet.
+  // Check the spelling, or declare it: `let nextItem = ...` — `nextItem` has no declaration in scope. Declare it with `let nextItem = ...` before using it, or check whether it's defined in a file you haven't imported yet.
 }
 
 function entrypoint() -> Nothing {
