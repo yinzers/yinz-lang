@@ -149,9 +149,9 @@ See [`docs/internal/scratchpad/SCRATCH-future-designs-index.md`](../scratchpad/S
 
 ---
 
-## v0.3 Implementation notes
+## Open questions
 
-The v0.3 milestone plan must address:
+Still open for `--kernel` mode:
 
 - Exact flag name: `--kernel` vs `--bare` vs `--no-runtime`. Probably `--kernel` since that's what users searching for "Yinz embedded" will type.
 - Runtime-injection API design: function pointers? Trait-like contracts? Global static-init?

@@ -158,8 +158,7 @@ When M4 lands, codegen MUST emit:
 - `readonly` on every parameter inferred from a `const` binding at the call site (even if the signature is bare and the modifier was inferred from body usage)
 - `noalias` on every parameter the borrow checker has proven non-aliased (most of them for `share`/`lend`/`give` per ownership rules)
 
-Failure to emit these attributes is a perf regression even if the program is correct. The M4 plan's `### Performance` invariant subsection explicitly asserts this.
-
+Failure to emit these attributes is a perf regression even if the program is correct.
 ### Forward-compatibility for shapes (M4)
 
 When `shape` declarations land in M4, field assignment (`player.field = x`) becomes parseable. The typeck must reject field assignment when the receiver is a `const` binding, with a teaching error pointing the user to declare `let` if they need mutation. This is item #2 above and is the single biggest gap the design-lockdown plan was created to prevent.
@@ -576,13 +575,13 @@ With every sink threaded through `check_transfer`, a transferred allocation has 
 
 Outside the guarantee, named: relaying a RECEIVED owned-heap value — `let got = wire.receive()` then `other.send(got.value)` — where `got.value` is a piece of `got` (a `Maybe<T>` field access, `Provenance::Reaches`), so `TransferNeedsCopy` fires and the relay pays `.copy()` this milestone.
 
-**Two doors are closed** (M8 Future Requirements #9 and #10, one fix at one producer). Both shared one design gap: two per-type dispatches answering "give me an independent copy of this heap value" agreed only by comment, and both defaulted to handing back the receiver's own pointer.
+**Two doors are closed** (the aliased-container door and the `.copy()` types, one fix at one producer). Both shared one design gap: two per-type dispatches answering "give me an independent copy of this heap value" agreed only by comment, and both defaulted to handing back the receiver's own pointer.
 
-- **FR#9's container door.** `bucket.add(rows)` into an aliased container was reachable because
+- **The container door.** `bucket.add(rows)` into an aliased container was reachable because
   an `Array<pointer-elem>` `background` argument was passed through un-cloned. Such an argument
   is now copied — items included — so the task's container and its rows are its own, and the
   ladder can no longer free something the spawner still points at.
-- **FR#10's `.copy()` types.** `maybe`, union, `fixed`, `dynamic` and the rest no longer sit in
+- **The `.copy()` types.** `maybe`, union, `fixed`, `dynamic` and the rest no longer sit in
   an alias arm. Each is either a real copy or a compile-time refusal (`ynz_typeck::owned_copy`),
   so there is no type whose `.copy()` compiles into an alias for provenance to hold at arm's
   length.
@@ -664,7 +663,7 @@ function entrypoint() -> Nothing {
 
 - [`IMP-concurrency.md`](IMP-concurrency.md) "Channel Close — End-of-Stream Semantics" → "`send()` gives its payload" (the channel instance of sink 1; the `ChannelElemDrop` link; the runtime release protocol this section does not replace).
 - `crates/ynz-typeck/src/effective_ownership.rs` — the module every fact above extends; [`authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md).
-- v0.3-M8 plan Phase 2 (design), Phase 4 (implementation), Future Requirements #9 and #10.
+- v0.3-M8 Phase 2 (design) and Phase 4 (implementation): `git log --grep=m8-p2`, `git log --grep=m8-p4`.
 
 ---
 
@@ -672,7 +671,7 @@ function entrypoint() -> Nothing {
 
 Code is cited by function name; a line range, where given, is at `d1dd8d8`.
 
-**Status**: designed (`git log --grep=m8-p2` for the design rounds); **implemented in v0.3-M8 Phase 5** (the plan's Phase 5 block and `audit.md` entry `m8-p5-20260904-a1`). This is the section [`IMP-no-function-coloring.md`](IMP-no-function-coloring.md) §Runtime item 4 cites. Where it lives in the tree: the group admission is `admit_arc_group_for` in `crates/ynz-typeck/src/check.rs` (recording `BgOwnership::Arc { group, first, last }` through the ONE spawn-argument recording function, `record_spawn_arg_ownership`); the type floor is `arc_shareable` in `crates/ynz-typeck/src/types.rs`; the emission is the `Arc` arm of `prepare_bg_arg_for_ctx` plus `release_pending_arc_transients` in `crates/ynz-codegen/src/emit.rs` (the `ynz_arc_*` symbols are declared on first use so a program with no group emits byte-identical IR — declared bare like every sibling runtime decl); the task-side release is `BG_ARG_KIND_ARC_SHAPE` (`crates/ynz-abi`) in the drop ladder and the CPU-arm closure free; the hint is `auto_arc_hints` in `crates/ynz-typeck/src/inlay_hint_passes.rs`; the runtime substrate is `crates/ynz-runtime/src/arc.rs` (v0.3-M4), model-checked under loom by `loom_tests::loom_arc_group_*`. Fixtures: `crates/ynz-driver/tests/v03_m8_auto_arc.rs`. The registry entry `auto-arc-codegen-emission` is narrowed to the residual list at the end of this section.
+**Status**: designed (`git log --grep=m8-p2` for the design rounds); **implemented in v0.3-M8 Phase 5** (`git log --grep=m8-p5`). This is the section [`IMP-no-function-coloring.md`](IMP-no-function-coloring.md) §Runtime item 4 cites. Where it lives in the tree: the group admission is `admit_arc_group_for` in `crates/ynz-typeck/src/check.rs` (recording `BgOwnership::Arc { group, first, last }` through the ONE spawn-argument recording function, `record_spawn_arg_ownership`); the type floor is `arc_shareable` in `crates/ynz-typeck/src/types.rs`; the emission is the `Arc` arm of `prepare_bg_arg_for_ctx` plus `release_pending_arc_transients` in `crates/ynz-codegen/src/emit.rs` (the `ynz_arc_*` symbols are declared on first use so a program with no group emits byte-identical IR — declared bare like every sibling runtime decl); the task-side release is `BG_ARG_KIND_ARC_SHAPE` (`crates/ynz-abi`) in the drop ladder and the CPU-arm closure free; the hint is `auto_arc_hints` in `crates/ynz-typeck/src/inlay_hint_passes.rs`; the runtime substrate is `crates/ynz-runtime/src/arc.rs` (v0.3-M4), model-checked under loom by `loom_tests::loom_arc_group_*`. Fixtures: `crates/ynz-driver/tests/v03_m8_auto_arc.rs`. The registry entry `auto-arc-codegen-emission` is narrowed to the residual list at the end of this section.
 
 ### What `EffectiveOwnership::Reads` proves, and the one honest extension
 
@@ -764,4 +763,4 @@ The red-tint styling stays under `auto-arc-cautionary-tint` (no per-hint tint pa
 - [`IMP-no-function-coloring.md`](IMP-no-function-coloring.md) §Runtime item 4 — the pointer this section resolves; "False Sharing Auto-Padding" — the transform whose throughput benefit arrives with this emission.
 - [`IMP-concurrency.md`](IMP-concurrency.md) "Ownership with Background Tasks — Why `.share` Fails" — the inference table this refines.
 - `registry/features.toml` `auto-arc-codegen-emission`, `auto-arc-cautionary-tint`, `[[muted_hint_domain]] auto_arc`.
-- v0.3-M8 plan Phase 2 (design), Phase 5 (implementation), risk R2 (signed override), Future Requirement #5.
+- v0.3-M8 Phase 2 (design) and Phase 5 (implementation): `git log --grep=m8-p2`, `git log --grep=m8-p5`.

@@ -97,7 +97,7 @@ Without coalescing, one save generates 3-4 raw events. `notify-debouncer-mini` c
 
 **Single coalescing layer (locked)**:
 
-Watch uses `notify-debouncer-mini` as the ONLY coalescing mechanism. There is NO second dedup layer in `event_loop.rs`. The debouncer is the single source of truth. This was explicitly locked after plan-review concern about double-dedup complexity causing missed events.
+Watch uses `notify-debouncer-mini` as the ONLY coalescing mechanism. There is NO second dedup layer in `event_loop.rs`. The debouncer is the single source of truth. A second dedup layer risked missed events.
 
 **File removal handling**:
 
@@ -265,7 +265,7 @@ The `notify` watcher subscribes to `.ynz` files only. `yinz.toml` is read once a
 
 ## Memory Defense
 
-Three layers protect against long-session memory growth (all three locked; see Constraints in plan `v0-2-m4-watch.md`):
+Three layers protect against long-session memory growth (all three locked):
 
 ### Layer 1: Salsa LRU Caps
 
@@ -400,7 +400,7 @@ Watch currently reads `yinz.toml` once at boot. Hot-reload (picking up file addi
 
 ## Measurement (Phase 6)
 
-Performance ceilings are measured in Phase 6 against the following protocol (per Performance Invariants in the plan file):
+Performance ceilings are measured in Phase 6 against the following protocol (the performance invariants):
 
 - **Hardware**: GitHub Actions `ubuntu-latest` runner
 - **Build profile**: release
@@ -417,7 +417,7 @@ Phase 6 results will be filled in here after measurement.
 - [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md) — salsa architecture; quick-start watch summary
 - [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md) — salsa-first architecture; "Salsa: one pipeline for CLI and LSP" section
 - [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md) — SSOT for deferred tooling features registered from M4
-- [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) — parallel daemon (ynz-lsp); no shared code with watch (independent daemons, parallel-shippable per roadmap)
+- [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) — parallel daemon (ynz-lsp); no shared code with watch (independent daemons)
 - [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md) — WHAT/WHAT-INSTEAD/WHY format watch diagnostics use
 - [`docs/reference/REF-compiler-errors.md`](../../reference/REF-compiler-errors.md) — banned-jargon source-of-truth; watch must not emit banned words
 - [`docs/internal/implementation/IMP-versioning.md`](IMP-versioning.md) — pre-v1.0 breaking-change policy; `--json` schema version strategy

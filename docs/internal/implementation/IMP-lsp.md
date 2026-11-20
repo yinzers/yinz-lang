@@ -179,7 +179,7 @@ The Yinz compiler enforces WHAT/WHAT-INSTEAD/WHY structure in every diagnostic (
 
 VSCode renders plaintext newlines as soft breaks in squiggle tooltips. The format is verified by Phase 3's integration tests, which assert the LSP message contains each substring.
 
-**Structured `Diagnostic.data` field** (v0.2-M5): if the client supports it, the data field will carry the three components as a JSON object, enabling per-client custom rendering of WHAT/WHAT-INSTEAD/WHY in a richer UI. The plaintext `message` stays as the canonical fallback. See the Deferrals table in the M2 plan.
+**Structured `Diagnostic.data` field** (v0.2-M5): if the client supports it, the data field will carry the three components as a JSON object, enabling per-client custom rendering of WHAT/WHAT-INSTEAD/WHY in a richer UI. The plaintext `message` stays as the canonical fallback.
 
 **Delimiter collision mitigation** (two layers):
 1. Registry consistency test asserts no diagnostic template field contains `"WHAT INSTEAD:"` or `"\n\nWHY:"` as a substring.
@@ -376,14 +376,14 @@ Progress tokens will be unique per request (monotonic counter). `ProgressTracker
 
 Will be added as an opt-in flag on `ynz build` in Phase 9. Will suppress ariadne human output; emits NDJSON to stdout. Default `ynz build` output is byte-identical to pre-M5 (flag is strictly opt-in).
 
-**Schema** (locked in plan; emits `schema_version: "v0.2.0-m5-unstable"` until Phase 12 drops the `-unstable` suffix at the v0.2.0 tag-cut):
+**Schema** (locked; emits `schema_version: "v0.2.0-m5-unstable"` until Phase 12 drops the `-unstable` suffix at the v0.2.0 tag-cut):
 
 ```json
 {"type": "diagnostic", "schema_version": "v0.2.0-m5-unstable", "severity": "error" | "warning" | "suggestion", "kind": "<DiagnosticKindName>", "code": "<DiagnosticKindName>", "span": {"file": "<absolute-path>", "start_byte": 0, "end_byte": 10}, "message": "<WHAT>\n\nWHAT INSTEAD: ...\n\nWHY: ...", "data": {"what": "...", "what_instead": "...", "why": "..."}}
 {"type": "summary", "schema_version": "v0.2.0-m5-unstable", "errors": 0, "warnings": 0, "suggestions": 0, "exit_code": 0}
 ```
 
-**Field semantics** (locked in plan; implemented in Phase 9):
+**Field semantics** (locked):
 - `span.file`: absolute filesystem path (UTF-8)
 - `span.start_byte` / `span.end_byte`: UTF-8 byte offsets, 0-indexed, half-open (start inclusive, end exclusive)
 - `severity`: lowercase string literal (`"error"` / `"warning"` / `"suggestion"`)

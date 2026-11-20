@@ -429,8 +429,8 @@ For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-S
 ## Array element storage — by-value inline (v0.3-M5)
 
 `Array<Shape>` elements are stored **by value, inline** in the array's heap buffer — variable slot
-width = `sizeof(elem)`, exactly like `Array<Int>` stores i64 values inline. Shipped in v0.3-M5
-(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3); shape elements are no longer stored as pointers.
+width = `sizeof(elem)`, exactly like `Array<Int>` stores i64 values inline. Shipped in v0.3-M5;
+shape elements are not stored as pointers.
 
 ### Ownership
 
@@ -497,9 +497,8 @@ in HS-grad wording — it is a spec callout, never a silent divergence.
 
 ### FFI suppression check — documented vacuous check (D7)
 
-The "no FFI export" admission criterion (roadmap-mandated for the SoA variant) is **vacuously true
-today** — FFI is v2+. The check is kept as a named line in the admission criteria rather than
-deleted and re-invented at v2. Same posture as the serialization note below.
+The "no FFI export" admission criterion is **vacuously true today** — FFI is v2+. The check stays
+a named line in the admission criteria. Same posture as the serialization note below.
 
 ### Benchmark force-mode is harness-only (D8)
 
@@ -515,7 +514,7 @@ code, not prose. v0.8's compile-time serializer codegen (per
 [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 6) reconstructs
 unified values from either layout by reading it: per-field segment offsets are computable from
 `cap ×` field sizes. **No roundtrip test exists until v0.8** — it is vacuous until a serializer
-exists (recorded plan decision; the roadmap's original roundtrip assertion was reframed).
+exists.
 
 ---
 
@@ -524,9 +523,8 @@ exists (recorded plan decision; the roadmap's original roundtrip assertion was r
 When admission criteria hold, the compiler stores a qualifying `Array<Shape>` in Struct-of-Arrays
 (SoA) layout — per-field segments instead of whole-element slots — inside the SAME single
 allocation as the by-value representation above (D2). Zero syntax change; byte-identical program
-output in both scheduling modes. Shipped in v0.3-M5 (plan `2026-07-03-v0-3-m5-auto-soa`, Phases
-4–5), riding the by-value substrate. Graduated here from `SCRATCH-future-auto-soa.md` (now a
-pointer stub). *(Terminology: "Struct-of-Arrays"/"SoA" is the engineering term of art and is fine
+output in both scheduling modes. Shipped in v0.3-M5, riding the by-value substrate.
+*(Terminology: "Struct-of-Arrays"/"SoA" is the engineering term of art and is fine
 in this internal doc; ALL user-facing text says "stored as separate per-field arrays" — see D9
 below.)*
 
@@ -538,17 +536,16 @@ An array is SoA-admitted only when ALL hold; any failure declines safely to the 
    anywhere on the binding declines) — D3. Growth under segmented layout forces a per-segment
    re-layout on every realloc: real cost, zero proven demand. The provable-length rule keeps the
    "length > threshold at the analysis-time proof point" criterion honest instead of guessing
-   runtime sizes. **Rejected:** runtime-length admission (revisit: FR #5, if PGO/adaptive layout
-   ever lands) and grown-array admission (FR #4).
+   runtime sizes. Runtime-length and grown-array admission are not built (runtime-length would
+   need PGO or adaptive layout).
 2. **Escape-decline** — an array passed as an argument, returned, stored into another value, or
    crossing a module boundary is DECLINED (the analysis cannot see all accesses; a
    partial-visibility layout decision is the silent-wrong class) — D4. The shape-level `lend self`
    method filter is retained as defense-in-depth on top; it becomes load-bearing when
-   cross-function propagation lands (FR #3). **Rejected:** cross-function propagation in M5 —
+   cross-function propagation lands. Cross-function propagation is not built:
    interprocedural field-access summaries are their own analysis.
 3. **≤ 2 fields in the UNION of fields accessed across ALL loops over the array** in the owning
-   function; ≥ 3 declines — D5. **Rejected:** per-loop scoring — conflicting per-loop layouts are
-   unimplementable (one array has one layout). Revisit: FR #9.
+   function; ≥ 3 declines — D5. There is no per-loop scoring: one array has one layout.
 4. **No FFI export** — vacuously true today (D7, previous section).
 
 ### One layout authority — padding wins (E3, D11)
@@ -567,7 +564,7 @@ decline it). A byte-layout-asserting both-candidate fixture locks the precedence
 
 Mirrors M4 padding's gate idiom (one predicate, same dual-mode testing story). Kernel mode has
 zero real programs today; divergent kernel×layout states would multiply the fixture matrix for no
-user. Revisit: FR #7.
+user.
 
 ### Teaching surface — Tier 3 lint only, no muted hint (D9)
 
@@ -575,63 +572,26 @@ Auto-SoA is the canonical "no typeable explicit form" auto-promotion
 ([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)): **Tier 3 lint
 YES, muted hint NO** — there is no `soa Array<T>` syntax for click-to-make-explicit to produce.
 The lint rule is `array-using-soa-layout` (`registry/features.toml`), firing on the array
-declaration. The *identifier* is roadmap-locked registry-internal convention (the "soa" acronym is
+declaration. The *identifier* is a registry-internal convention (the "soa" acronym is
 fine there); ALL user-facing hover text is jargon-free — "stored as separate per-field arrays",
 never "struct"/"Struct-of-Arrays" — and is mechanically gated by
 `no_banned_jargon_in_lint_rule_templates` in `crates/ynz-diagnostics/tests/jargon_audit.rs`, which
 audits every `[[lint_rule]]` entry's template text. The hover's WHY cites both honest measurements
 below, never a generic claim. The DAP debugger unified-view over SoA storage is deferred
-(`[[deferred_tooling_feature]] dap-soa-unified-view` — zero DWARF substrate exists; FR #1).
+(`[[deferred_tooling_feature]] dap-soa-unified-view` — zero DWARF substrate exists).
 
-### Honest performance provenance (E14)
+### Performance (E14)
 
-**Current shipped reality (v0.3-M7 onward — see the CHANGELOG entry and the
-`2026-07-04-v0-3-m7-optimizer-pipeline` plan): `ynz build` now runs a real LLVM `default<O2>` pass
-pipeline by default.** The measured -O2 win described below is therefore the win shipped binaries
-actually get today, not a projected/unreached one. `--no-optimize` / `YNZ_NO_OPTIMIZE` remain as an
-opt-out back to the old unoptimized codegen, for anyone who deliberately wants it.
+`ynz build` runs an LLVM `default<O2>` pass pipeline by default (since v0.3-M7); `--no-optimize` / `YNZ_NO_OPTIMIZE` opt out. The correctness claim is unconditional: byte-identical dual-mode output at every measured point, on the one elem_size-aware representation.
 
-The correctness win is unconditional: byte-identical dual-mode output at every measured point, all
-checksum/IR gates green, on the one elem_size-aware representation. The performance claim carries
-a hard caveat, with both measured results stated separately and **never conflated**
-(provenance: [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md),
-"Step 3 calibration verdict"). **These two measurements are historical, pre-M7 methodology** — taken
-back when `ynz build` still emitted at `OptimizationLevel::None` with zero LLVM pass pipeline, to
-separate the correctness win from the (then-unreached) optimizer win:
+The performance claim is measured under `-O2`: SoA wins about 3.3x at N=4096 (10.77 ms AoS vs 3.29 ms SoA, identical generated IR, 2 of 8 fields hot), consistent with the 4x theoretical bandwidth edge. Without the optimizer pipeline the win was not detectable (SoA/AoS ratios 1.00–1.18 at every N from 8 to 4096; raw data in [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md)).
 
-- **Baseline measured at the OLD `OptimizationLevel::None` default** (pre-v0.3-M7): net SoA/AoS
-  ratios **1.00–1.18** at every N in {8..4096} — no crossover anywhere; 9 of 10 points trend 4–18%
-  slower with N=16 at parity (0.997), each individually below the ~15% noise floor. Net effect ≈
-  **1.0x — no detectable benefit** at that old baseline.
-- **Identical generated IR under `opt-18 -O2`** (diagnostic, N=4096): SoA wins ≈ **3.3x** net of
-  spawn (10.77 ms AoS vs 3.29 ms SoA), consistent with the 4x theoretical bandwidth edge for
-  2-of-8 hot fields. As of v0.3-M7, this is no longer a diagnostic-only, unreached number — it is
-  the class of win `default<O2>` now delivers in shipped binaries by default.
+`SOA_SIZE_THRESHOLD = 64` is a conservative default, not a crossover-calibrated constant. Re-deriving it from `-O2` crossover data is open work.
 
-`SOA_SIZE_THRESHOLD = 64` shipped at M5 as a **documented conservative default, NOT a
-crossover-calibrated constant** — at the time, there was no O0 crossover to calibrate against, and
-the honest verdict beat a derived number wearing unearned precision. Re-deriving this threshold
-against real -O2 crossover data (now that the pipeline is live) is tracked as forward work — see
-FR #2's revisit trigger below.
+Open perf and safety work on SoA:
 
-Two identified paths toward fully realizing the win, both recorded in plan
-`2026-07-03-v0-3-m5-auto-soa`'s Future Requirements (in prose by FR number — the plan directory
-moves buckets on completion). FR #14 is now moot for the O0 case but the selective-gather fix in
-FR #15 still applies under the live optimizer:
-
-- **FR #15 — selective hot-field-only element materialization**: current codegen gathers ALL
-  declared fields per element access, ignoring the analysis's already-computed hot-field set; a
-  selective gather is a directly perf-relevant fix independent of the optimizer pipeline (requires
-  re-auditing every full-element consumer, so it is its own session).
-- **FR #14 — stale-runtime-archive ABI-check footgun**: the driver embeds
-  `target/{profile}/libynz_runtime.a` with no ABI/version check, so a stale archive silently
-  miscompiles by resolving old-signature symbols by name — an operational guard until the
-  versioned-symbol fix lands (it burned a full Phase 6 diagnosis round).
-
-The optimizer-pipeline dependency (risk E14 / FR #2's revisit trigger) has now landed as of
-v0.3-M7: shipped builds run the LLVM pass pipeline by default, so the measured -O2 win above IS the
-shipped win. The threshold (`SOA_SIZE_THRESHOLD = 64`) still awaits re-derivation from real -O2
-crossover data — that re-calibration is the remaining half of FR #2's trigger.
+- **Selective hot-field gather**: current codegen gathers ALL declared fields per element access, ignoring the analysis's already-computed hot-field set. A selective gather is a direct perf fix independent of the optimizer; it needs every full-element consumer re-audited.
+- **Stale-runtime-archive ABI check**: the driver embeds `target/{profile}/libynz_runtime.a` with no ABI/version check, so a stale archive silently miscompiles by resolving old-signature symbols by name. Versioned symbols would fix it.
 
 ---
 
