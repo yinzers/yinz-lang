@@ -23,6 +23,15 @@ User spec: [`docs/reference/REF-options.md`](../../reference/REF-options.md)
 
 See [`docs/reference/REF-options.md`](../../reference/REF-options.md) for the user-facing surface.
 
+Variants can be separated by commas or by newlines; both forms parse the same, and the newline form reads better with display strings:
+
+```ynz
+options Timeframe {
+    hourly: `Hourly`
+    daily: `Daily`
+}
+```
+
 ---
 
 ## LLVM Lowering
@@ -86,7 +95,10 @@ When using a bare identifier in a position where an options type is expected, th
 
 ```ynz
 players.sort(p => p.health, desc)    // shorthand — compiler infers SortOrder.desc
+players.sort(p => p.health, SortOrder.desc)   // explicit form, also valid
 ```
+
+(`sort` itself is designed, not built; see IMP-collections "Build status". The shorthand rule applies to any call whose parameter is an options type.) IDE autocomplete lists the variants of the expected options type at the call site.
 
 **Ambiguous shorthand** (two visible options types define the same variant name): compile error with locked diagnostic text:
 

@@ -94,6 +94,27 @@ Aliasing resolves naming collisions (a local `Player` and a third-party `Player`
 
 ---
 
+## Re-Exporting — One Place to Import From
+
+A file can collect exports from several files and export them again, so a folder has one import point:
+
+```ynz
+// services/index.ynz
+export { fetchUser, createUser, User } from `services/users`
+export { processOrder, Order } from `services/orders`
+```
+
+```ynz
+// Other files import from the folder:
+import { fetchUser, processOrder } from `services`
+```
+
+Importing from `services` makes the compiler look for `services/index.ynz`. Re-exporting is optional.
+
+**Status: partly built.** The compiler reads and checks the re-export syntax. Calling a re-exported function from another file does not work yet, so import from the file that declares the function until it does.
+
+---
+
 ## Duplicate Import Names — Compile Error, Force Aliasing
 
 When two imports bring the same name (or namespace) into the same file, the compiler refuses to pick one. The diagnostic text below is from `crates/ynz-typeck/src/resolve_import.rs`; I did not run it through `ynz build` in this lane (pending verification).

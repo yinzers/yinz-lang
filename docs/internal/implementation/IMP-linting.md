@@ -61,6 +61,20 @@ severity = "error"
 no-internal-imports = { package = "ynz-lint-boundaries", version = "1.0" }
 ```
 
+**Strictness levels (designed, not built).** One setting picks how much the terminal shows:
+
+```toml
+[lint]
+level = "balanced"               # "relaxed", "balanced", "strict"
+treat_warnings_as_errors = false
+```
+
+- **relaxed**: errors only. For exploratory code and early prototypes.
+- **balanced**: errors and warnings in the terminal, suggestions in the IDE only. The default.
+- **strict**: all three tiers in the terminal, warnings treated as errors. For CI and mature codebases.
+
+**Status:** no `[lint]` key is read from `yinz.toml` today (no match in `crates/`), so the per-rule table above and these levels are both designs. The rules that do ship are the `[[lint_rule]]` entries in `registry/features.toml`.
+
 **Philosophy**: Catch real bugs and enforce code quality. Don't police style preferences. Every rule prevents an actual problem or teaches a pattern. The developer should feel helped, not harassed.
 
 **Why suggestions are IDE-only by default**: Suggestions are the most subjective tier. Showing them in terminal output during CI would be too noisy and push developers to disable the whole system. IDE-only keeps them visible during development without friction in automated pipelines.

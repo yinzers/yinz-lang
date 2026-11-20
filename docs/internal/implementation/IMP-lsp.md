@@ -291,7 +291,9 @@ The following LSP capabilities were out of scope for v0.2-M2 and shipped in v0.2
 
 **What it will do**: LSP returns `InlayHint` objects for the viewport range, showing what the compiler figured out automatically. See **Inlay Hints** section below for the full 9-domain breakdown.
 
-**Performance design**: request includes `range` parameter (viewport). Server filters to hints whose byte-offset falls within the viewport. Salsa-cached per-file typeck pass; re-render is cheap.
+**Performance design**: request includes `range` parameter (viewport). Server filters to hints whose byte-offset falls within the viewport. Salsa-cached per-file typeck pass; re-render is cheap. Hints update on every keystroke, so the server recomputes incrementally per Salsa query and never re-analyzes the whole program.
+
+**Hint kinds**: hints are served through the standard `textDocument/inlayHint` capability, so any editor that follows the language server protocol can draw them. Type, lifetime and allocator hints use the `Type` kind; the ownership and `wait` hints have no matching standard kind, so they use `Other` or a custom kind (check against the current protocol version when changing this). Users choose which hint domains to see through editor settings; the protocol defines what exists, not what is shown.
 
 **What is NOT in M5**: inlay hints inside macro expansions (no macros in v0.1); configurable per-domain toggle (v0.3+ IDE preferences).
 
