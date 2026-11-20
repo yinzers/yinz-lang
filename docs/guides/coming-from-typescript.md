@@ -48,9 +48,9 @@ The table and the traps below follow this list, in this order:
 | Text | `'Hi'`, `"Hi"`, `` `Hi ${name}` `` | `` `Hi ${name}` `` (backticks only) |
 | Comments and line endings | `/* note */` and `;` | `// note`, `/// doc comment`, no `;` |
 | Data structures | `interface Player { name: string }`<br>`class Player { name: string }` | `shape Player { name: String }` |
-| Functions | `function heal(p: Player): void { }` | `function heal(lend player: Player) -> Nothing { }` |
+| Functions | `function heal(player: Player): void { }` | `function heal(lend player: Player) -> Nothing { }` |
 | Missing values | `string \| null`, `undefined` | `Maybe<String>`, `none` |
-| Failures | `throw new Error('no file')`<br>`try { } catch (e) { }` | `function load() -> String errors { }`<br>`content.failed()`, `content.or(...)` |
+| Failures | `throw new Error('no file')`<br>`try { } catch (err) { }` | `function load() -> String errors { }`<br>`content.failed()`, `content.or(...)` |
 | Choosing between kinds of values | `type Shape = Circle \| Square`<br>`if (shape instanceof Circle)` | `shape Shape = Circle \| Square`<br>`if (shape) { is Circle => ... }` |
 | Named value sets | `enum Status { Active, Banned }` | `options Status { active, banned }` |
 | Collections and reading by position | `string[]`, `Array<string>`<br>`Record<string, number>`<br>`scores[3]` is a number | `Array<String>`, `Fixed<String>`<br>`Map<String, Number>`<br>`scores[3]` is a `Maybe<Number>` |

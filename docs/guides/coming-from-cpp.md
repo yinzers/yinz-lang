@@ -672,10 +672,10 @@ C++'s `double` is binary, so `0.1 + 0.2` is not exactly `0.3`. `std::cout` hides
 #include <iostream>
 
 int main() {
-    double a = 0.1;
-    double b = 0.2;
-    std::cout << a + b << '\n';                         // 0.3
-    std::cout << std::setprecision(17) << a + b << '\n'; // 0.30000000000000004
+    double tenth = 0.1;
+    double fifth = 0.2;
+    std::cout << tenth + fifth << '\n';                         // 0.3
+    std::cout << std::setprecision(17) << tenth + fifth << '\n'; // 0.30000000000000004
 }
 ```
 

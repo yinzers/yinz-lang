@@ -50,10 +50,10 @@ The table and the traps below follow this list, in this order:
 | Text | `"Hi"`, `` `raw text` `` (no `${}`)<br>`fmt.Sprintf("Hi %s", name)` | `` `Hi ${name}` `` (backticks only) |
 | Comments and line endings | `// note`, `/* note */`<br>`;` ends a statement, but you leave it out | `// note`, `/// doc comment`, no `;` |
 | Data structures | `type Player struct { Name string }` | `shape Player { name: String }` |
-| Functions | `func (p *Player) Heal(amount int) { }`<br>`func (p Player) Show() string { }` | `function heal(lend self: Player, amount: Int) -> Nothing { }`<br>`function show(share self: Player) -> String { }` |
+| Functions | `func (player *Player) Heal(amount int) { }`<br>`func (player Player) Show() string { }` | `function heal(lend self: Player, amount: Int) -> Nothing { }`<br>`function show(share self: Player) -> String { }` |
 | Missing values | `nil`, `*string`<br>`value, found := scores["Alice"]` | `Maybe<String>`, `none`<br>`nickname.value` after `if (nickname.exists()) { }` |
 | Failures | `(int, error)`, `errors.New("...")`<br>`if err != nil { return 0, err }`, `panic("...")` | `function load() -> String errors { }`<br>`content.failed()`, `content.or(...)` |
-| Choosing between kinds of values | `switch s := outline.(type) { case Circle: ... }`<br>`interface`, `any` | `shape Shape = Circle \| Square`<br>`if (shape) { is Circle => ... }` |
+| Choosing between kinds of values | `switch circle := outline.(type) { case Circle: ... }`<br>`interface`, `any` | `shape Shape = Circle \| Square`<br>`if (shape) { is Circle => ... }` |
 | Named value sets | `const ( StatusActive Status = iota; StatusBanned )` | `options Status { active, banned }` |
 | Collections and reading by position | `[]int`, `[3]int`, `map[string]int`<br>`scores[5]` panics; a missing map key gives `0` | `Array<Int>`, `Fixed<Int>`, `Map<String, Int>`<br>`scores[5]` is a `Maybe<Int>` |
 | Numbers | `int`, `int32`, `uint8`, `float64`<br>overflow wraps around silently | `Int`, `Number`, `Float`<br>overflow stops the program |
@@ -170,7 +170,7 @@ A function gives back a value with `return value`, as in Go.
 
 ### Data structures: `shape` holds the fields, and behavior goes in functions
 
-A `shape` lists fields and nothing else, one per line. In Go, a `struct` has fields, and you attach methods to it with a receiver in parentheses: `func (p *Player) Heal(...)`. In Yinz there are no receivers. A method is a standalone function, and `player.heal(20)` is shorthand for `heal(player, 20)`, so you still get autocomplete after the dot.
+A `shape` lists fields and nothing else, one per line. In Go, a `struct` has fields, and you attach methods to it with a receiver in parentheses: `func (player *Player) Heal(...)`. In Yinz there are no receivers. A method is a standalone function, and `player.heal(20)` is shorthand for `heal(player, 20)`, so you still get autocomplete after the dot.
 
 You build a value by writing its fields. The type goes after the name, and field names are camelCase.
 
@@ -186,8 +186,8 @@ type Player struct {
 	Health int
 }
 
-func (p *Player) Heal(amount int) {
-	p.Health += amount
+func (player *Player) Heal(amount int) {
+	player.Health += amount
 }
 
 func main() {
@@ -226,7 +226,7 @@ type Player struct {
 
 Its hint says: "Use `shape` to declare a data type: `shape Player { name: String, health: Int }`".
 
-A method with a receiver, such as `func (p *Player) Heal(...)`, is not valid either. The compiler gives only general errors for it, so remember the rule instead: write a standalone function whose first parameter is `self`, as `heal` does above.
+A method with a receiver, such as `func (player *Player) Heal(...)`, is not valid either. The compiler gives only general errors for it, so remember the rule instead: write a standalone function whose first parameter is `self`, as `heal` does above.
 
 ### Functions: `share`, `lend` and `give` replace `*Player` and `Player` receivers
 
@@ -254,8 +254,8 @@ type Player struct {
 	Health int
 }
 
-func (p Player) Heal(amount int) {
-	p.Health += amount // changes a copy; the caller never sees it
+func (player Player) Heal(amount int) {
+	player.Health += amount // changes a copy; the caller never sees it
 }
 
 func main() {
@@ -412,9 +412,9 @@ type Triangle struct{ BaseLength, Height int }
 type Shape any
 
 func describe(outline Shape) {
-	switch s := outline.(type) {
+	switch circle := outline.(type) {
 	case Circle:
-		fmt.Println("circle, radius", s.Radius)
+		fmt.Println("circle, radius", circle.Radius)
 	case Square:
 		fmt.Println("square")
 	case Triangle:
@@ -665,9 +665,9 @@ package main
 import "fmt"
 
 func main() {
-	a := 0.1
-	b := 0.2
-	fmt.Println(a + b) // 0.30000000000000004
+	tenth := 0.1
+	fifth := 0.2
+	fmt.Println(tenth + fifth) // 0.30000000000000004
 }
 ```
 
