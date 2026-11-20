@@ -260,6 +260,8 @@ Bind what you import: ``import { init } from `some-module` ``.
 
 ## Unused imports
 
+Importing a name and never using it is a warning, not an error.
+
 ```ynz
 // services/users.ynz
 export function fetchUser(id: Int) -> String {
