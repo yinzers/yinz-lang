@@ -50,7 +50,7 @@ The foreign call never escapes the wrapper. That keeps unchecked code in one pla
 
 ## What the compiler cannot do with foreign code
 
-The compiler cannot see what a foreign function does. It cannot check it for ownership mistakes or for problems when two jobs run at the same time. So:
+The compiler cannot see what a foreign function does. It cannot check it for ownership mistakes or for problems when two tasks run at the same time. So:
 
 - **Every foreign call needs `wait`.** The compiler can't tell whether it is safe to run the call alongside other work.
 - **Foreign calls never run at the same time as other lines on their own.**

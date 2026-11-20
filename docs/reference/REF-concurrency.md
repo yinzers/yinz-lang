@@ -13,12 +13,12 @@ metadata:
 
 # Concurrency
 
-Yinz runs code concurrently for you. *Concurrently* means several jobs make progress at the same time. You write normal code that reads top to bottom. The compiler works out what each line needs and runs lines that don't need each other at the same time.
+Yinz runs code concurrently for you. *Concurrently* means several tasks make progress at the same time. A *task* is a piece of work that runs on its own. You write normal code that reads top to bottom. The compiler works out what each line needs and runs lines that don't need each other at the same time.
 
 Two keywords and one type are the whole toolkit:
 - `wait` — finish something before the next line runs
-- `background` — start a job that keeps going after this function returns
-- `channel<T>` — pass values from one job to another safely
+- `background` — start a task that keeps going after this function returns
+- `channel<T>` — pass values from one task to another safely
 
 ---
 
@@ -142,9 +142,9 @@ Separate statements that don't need each other run at the same time. The passes 
 
 ---
 
-## `background` — jobs that keep going after this function returns
+## `background` — tasks that keep going after this function returns
 
-`background` starts a job on its own. The current function doesn't wait for it, and the job can still be running after the function returns.
+`background` starts a task on its own. The current function doesn't wait for it, and the task can still be running after the function returns.
 
 **Fire and forget — don't store the result:**
 
@@ -152,24 +152,24 @@ Separate statements that don't need each other run at the same time. The passes 
 background sendWelcomeEmail(user)
 background logAnalytics(event)
 background retryPayment(payoutId)
-// the function carries on right away — these jobs run on their own
+// the function carries on right away — these tasks run on their own
 ```
 
-Each job runs on its own. If it fails, it has to deal with the failure itself. The caller never waits and never sees the result. This suits small, non-critical jobs such as sending an email or logging.
+Each task runs on its own. If it fails, it has to deal with the failure itself. The caller never waits and never sees the result. This suits small, non-critical tasks such as sending an email or logging.
 
-**Long-running — keep the handle so you can talk to the job:**
+**Long-running — keep the handle so you can talk to the task:**
 
 ```ynz
 let scout = background gradeProspect(requests)
 ```
 
-If you store the result of `background`, you get a **handle**: a line you can use to talk to the running job with `.send()` and `.receive()`. If you don't store it, the job is fire-and-forget. It is the same keyword either way. Handles are built on channels, so read the next section first, then see "Talking to a background task" below.
+If you store the result of `background`, you get a **handle**: a line you can use to talk to the running task with `.send()` and `.receive()`. If you don't store it, the task is fire-and-forget. It is the same keyword either way. Handles are built on channels, so read the next section first, then see "Talking to a background task" below.
 
 ---
 
 ## Channels — sending values between tasks
 
-A channel carries values of one type from one job to another. You create one with `channel<T>()`, where `T` is the type of value it carries:
+A channel carries values of one type from one task to another. You create one with `channel<T>()`, where `T` is the type of value it carries:
 
 ```ynz
 let scores: channel<int> = channel<int>()        // holds up to 64 values (the default)
@@ -178,7 +178,7 @@ let names: channel<string> = channel<string>(8)  // holds up to 8 values
 
 The number is the channel's **capacity** — how many values it can hold at once. Leave the parens empty and you get the default of 64. The IDE shows the default as a muted `64` hint inside the empty parens; click it to write `64` into your source.
 
-One job puts values in with `.send(value)`. Another job takes them out with `.receive()`:
+One task puts values in with `.send(value)`. Another task takes them out with `.receive()`:
 
 ```ynz
 function relayScores(lend wire: channel<int>) -> nothing {
@@ -201,11 +201,11 @@ function entrypoint() -> nothing {
 }
 ```
 
-`relayScores` runs as a background job and puts three scores into the channel. `entrypoint` takes them out one at a time. If the channel is empty when you call `.receive()`, your job pauses until a value arrives. You never write locking or waiting code — the channel does it for you.
+`relayScores` runs as a background task and puts three scores into the channel. `entrypoint` takes them out one at a time. If the channel is empty when you call `.receive()`, your task pauses until a value arrives. You never write locking or waiting code — the channel does it for you.
 
 **`.receive()` gives you a `maybe<T>`, not a plain `T`.** A channel can be closed (see "Closing a channel" below). Once it is closed and empty, `.receive()` returns `none` instead of waiting forever. So you read a delivery the way you read any `maybe` value: `.or(fallback)` when you just want a default, or `.exists()` and `.value` when you need to know the stream has ended.
 
-**A channel is the one value you can hand to a background job and keep using yourself.** Both sides share the same channel safely — that is the point of a channel. (Every other value must be given away or copied — see "Ownership with background jobs" below.)
+**A channel is the one value you can hand to a background task and keep using yourself.** Both sides share the same channel safely — that is the point of a channel. (Every other value must be given away or copied — see "Ownership with background tasks" below.)
 
 ### Every channel has a size limit
 
@@ -236,7 +236,7 @@ let wire: channel<int> = channel<int>(0)
 // large explicit number — there is deliberately no unbounded channel.
 ```
 
-**A channel operation gets its own line.** `.send()` and `.receive()` can pause your job, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Putting one inside a bigger expression is a compile error that tells you to move it out into a named variable first.
+**A channel operation gets its own line.** `.send()` and `.receive()` can pause your task, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Putting one inside a bigger expression is a compile error that tells you to move it out into a named variable first.
 
 **A channel can carry these values:** `int`, `float`, `boolean`, `string`, `number`, `array<T>`, and `map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and building the shape again on the receiving side.
 
@@ -291,7 +291,7 @@ if (late.failed()) {
 - A send that was already waiting for room when the channel closed still goes through. Close means no *new* sends. It does not throw away what was already on its way.
 - A channel you never close keeps working as before: `.receive()` waits until a value arrives.
 
-`.close()` never pauses your job and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a handle. If you started a job with `let h = background worker(commands)`, you close `commands`, not `h`. For that reason the handle form needs the channel stored in a named variable:
+`.close()` never pauses your task and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a handle. If you started a task with `let h = background worker(commands)`, you close `commands`, not `h`. For that reason the handle form needs the channel stored in a named variable:
 
 ```
 let h = background doubler(makeWire())
@@ -303,7 +303,7 @@ let h = background doubler(makeWire())
 
 ### Sending an array or a map gives it away
 
-An `int`, a `string`, or a `number` is copied into the channel — your variable keeps working after the send. An `array<T>` or a `map<K, V>` is different: the channel hands the *same* value to whichever job receives it, so `send()` gives it away and the compiler refuses any later use of that variable:
+An `int`, a `string`, or a `number` is copied into the channel — your variable keeps working after the send. An `array<T>` or a `map<K, V>` is different: the channel hands the *same* value to whichever task receives it, so `send()` gives it away and the compiler refuses any later use of that variable:
 
 ```ynz
 let rows: array<int> = [1, 2, 3]
@@ -323,7 +323,7 @@ Two more rules follow from the same idea:
 
 ## Talking to a background task — handles
 
-Storing the result of `background` gives you a **handle** — a two-way line to the running job:
+Storing the result of `background` gives you a **handle** — a two-way line to the running task:
 
 ```ynz
 function gradeProspect(lend requests: channel<int>) -> int errors {
@@ -342,7 +342,7 @@ function entrypoint() -> nothing {
 }
 ```
 
-**Sending TO the job:** `scout.send(21)` delivers into the **first `channel<T>` parameter** of the function you started. Here that's `requests`, so inside the job, `requests.receive()` reads what you sent. That's the whole rule: the job reads its messages from its first channel parameter. There is no hidden mailbox.
+**Sending TO the task:** `scout.send(21)` delivers into the **first `channel<T>` parameter** of the function you started. Here that's `requests`, so inside the task, `requests.receive()` reads what you sent. That's the whole rule: the task reads its messages from its first channel parameter. There is no hidden mailbox.
 
 Because of that, the function you start must take a channel parameter to receive messages:
 
@@ -354,15 +354,15 @@ counter.send(7)
 // spawn: `let h = background worker(commands)` — `h.send(v)` then feeds that channel.
 ```
 
-**Receiving FROM the job:** `scout.receive()` gives you the next thing the job delivers. For a function like `gradeProspect` that returns a value, that's its final result. It comes with `errors`, because the job might have failed. Handle it like any other `errors` value (here, `graded.or(0)` falls back to 0).
+**Receiving FROM the task:** `scout.receive()` gives you the next thing the task delivers. For a function like `gradeProspect` that returns a value, that's its final result. It comes with `errors`, because the task might have failed. Handle it like any other `errors` value (here, `graded.or(0)` falls back to 0).
 
 One more rule: the handle form needs a function that can pause (one that uses `wait` or a channel, or calls something that does). For a plain calculation that never pauses, use fire-and-forget `background crunch()`. Handles for those are not supported yet, and the compile error says so.
 
 ---
 
-## Ownership with background jobs
+## Ownership with background tasks
 
-A background job can still be running after the current function returns. This changes how ownership works.
+A background task can still be running after the current function returns. This changes how ownership works.
 
 The compiler works out whether to give away or copy each argument, so you don't have to write `.give` or `.copy` yourself. The IDE shows its choice as a muted hint at the call.
 
@@ -379,13 +379,13 @@ background processData(data)
 // on data before passing to a give-signature function.
 ```
 
-A `share` parameter only works while the original owner still has the value. A background job might still be running after the current function returns and the value is gone. So the function you start with `background` must take its parameters as `give`, or the caller passes a `.copy()` (an independent value the job owns).
+A `share` parameter only works while the original owner still has the value. A background task might still be running after the current function returns and the value is gone. So the function you start with `background` must take its parameters as `give`, or the caller passes a `.copy()` (an independent value the task owns).
 
-**The one exception: `channel<T>` parameters.** A channel is made to be held by two jobs at once, so passing a channel to a background job is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
+**The one exception: `channel<T>` parameters.** A channel is made to be held by two tasks at once, so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
 
 **When the parameter is `give`, the compiler picks give-away or copy for you:**
 
-If you don't use the value after the `background` call, the compiler gives it away (ownership moves to the job):
+If you don't use the value after the `background` call, the compiler gives it away (ownership moves to the task):
 
 ```ynz
 function processEvent(give event: WebhookEvent) -> nothing { ... }
@@ -487,8 +487,8 @@ decided, so you know what is running at the same time.
 
 ```
 wait           // finish this before the next line
-background     // start a job that keeps going after this function returns
-channel<T>     // pass values between jobs safely
+background     // start a task that keeps going after this function returns
+channel<T>     // pass values between tasks safely
 ```
 
 Two keywords and one type. Everything else is automatic. The compiler works out which lines
