@@ -138,7 +138,7 @@ fn handle_form_program(
         (
             "function launch() -> nothing",
             "  sleepBlocking(150)",
-            "function entrypoint() -> nothing {\n  launch()\n}\n",
+            "function entrypoint() -> Nothing {\n  launch()\n}\n",
         )
     };
     format!(
@@ -165,8 +165,8 @@ function work(give value: {value_type}) -> nothing {{
 #[test]
 fn a_handle_form_spawn_releases_the_consumed_original_once() {
     let shape = "shape Barge {
-  name: string
-  tonnage: int
+  name: String
+  tonnage: Int
 }
 ";
     for suspending_spawner in [false, true] {
@@ -281,8 +281,8 @@ function entrypoint() -> nothing {{
 #[test]
 fn a_maybe_received_from_a_handle_is_owned_by_its_binding() {
     let shape = "shape Part {
-  name: string
-  qty: int
+  name: String
+  qty: Int
 }
 ";
     let cases = [
@@ -352,17 +352,17 @@ function entrypoint() -> nothing {{
 /// it, and the program still balances (no double free of the buffer).
 #[test]
 fn a_number_received_from_a_handle_is_not_freed_by_its_binding() {
-    let source = "function pick() -> number<20> {
+    let source = "function pick() -> Number<20> {
   wait sleep(5)
   return 2.5
 }
 
-function pickFail() -> number<20> errors {
+function pickFail() -> Number<20> errors {
   wait sleep(5)
   return 3.5
 }
 
-function consume() -> nothing errors {
+function consume() -> Nothing errors {
   let h = background pick()
   let m = h.receive()
   print(m)
@@ -372,7 +372,7 @@ function consume() -> nothing errors {
   print(`done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = consume()
   if (r.failed()) {
     print(`failed`)
@@ -422,36 +422,36 @@ function entrypoint() -> nothing {{
 #[test]
 fn an_unbound_errors_temporary_of_a_suspending_statement_is_released() {
     let source = "shape Part {
-  name: string
-  qty: int
+  name: String
+  qty: Int
 }
 
-function label(n: int) -> string errors {
+function label(n: Int) -> String errors {
   return `abc${n}`
 }
 
-function listing(n: int) -> array<string> errors {
+function listing(n: Int) -> Array<String> errors {
   return [`a${n}`, `b`]
 }
 
-function table(n: int) -> map<string, string> errors {
+function table(n: Int) -> Map<String, String> errors {
   return { `k`: `v${n}` }
 }
 
-function part(n: int) -> Part errors {
+function part(n: Int) -> Part errors {
   let made: Part = { name: `p${n}`, qty: n }
   return made
 }
 
-function slow(first: int) -> int {
+function slow(first: Int) -> Int {
   wait sleep(1)
   return first
 }
 
-function entrypoint() -> nothing {
-  let fallbackText: string = `x`
-  let fallbackList: array<string> = []
-  let fallbackTable: map<string, string> = {}
+function entrypoint() -> Nothing {
+  let fallbackText: String = `x`
+  let fallbackList: Array<String> = []
+  let fallbackTable: Map<String, String> = {}
   let fallbackPart: Part = { name: `f`, qty: 0 }
   let first = wait slow(label(1).or(fallbackText).count())
   let second = wait slow(listing(2).or(fallbackList).count())
@@ -474,26 +474,26 @@ function entrypoint() -> nothing {
 #[test]
 fn a_type_parameter_copy_instantiated_as_a_maybe_is_released() {
     let source = "shape Row {
-  name: string
+  name: String
 }
 
-function burn<T>(share value: T) -> nothing {
-  let items: array<T> = []
+function burn<T>(share value: T) -> Nothing {
+  let items: Array<T> = []
   value.copy()
   items.get(0).or(value.copy())
   print(1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let n = 4
-  let names: array<string> = [`a ${n}`]
-  let found: maybe<string> = names.get(0)
+  let names: Array<String> = [`a ${n}`]
+  let found: Maybe<String> = names.get(0)
   burn(found)
-  let numbers: array<int> = [n]
-  let number: maybe<int> = numbers.get(0)
+  let numbers: Array<Int> = [n]
+  let number: Maybe<Int> = numbers.get(0)
   burn(number)
-  let rows: array<Row> = [{ name: `b ${n}` }]
-  let row: maybe<Row> = rows.get(0)
+  let rows: Array<Row> = [{ name: `b ${n}` }]
+  let row: Maybe<Row> = rows.get(0)
   burn(row)
   print(2)
 }
@@ -509,11 +509,11 @@ function entrypoint() -> nothing {
 #[test]
 fn an_unbound_errors_temporary_is_released_for_every_inner_type() {
     let preamble = "shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 ";
@@ -521,7 +521,7 @@ shape Thing = Tiny | Big
     let cases = [
         (
             "string",
-            "function produce(n: int) -> string errors {
+            "function produce(n: Int) -> String errors {
   return `abc${n}`
 }",
             "let fallback: string = `x`",
@@ -530,8 +530,8 @@ shape Thing = Tiny | Big
         ),
         (
             "decimal",
-            "function produce(n: int) -> number<20> errors {
-  let made: number<20> = 2.5
+            "function produce(n: Int) -> Number<20> errors {
+  let made: Number<20> = 2.5
   return made
 }",
             "let fallback: number<20> = 0.5",
@@ -540,8 +540,8 @@ shape Thing = Tiny | Big
         ),
         (
             "bignum",
-            "function produce(n: int) -> number<40> errors {
-  let made: number<40> = 2.5
+            "function produce(n: Int) -> Number<40> errors {
+  let made: Number<40> = 2.5
   return made
 }",
             "let fallback: number<40> = 0.5",
@@ -550,7 +550,7 @@ shape Thing = Tiny | Big
         ),
         (
             "union",
-            "function produce(n: int) -> Thing errors {
+            "function produce(n: Int) -> Thing errors {
   let big: Big = { label: `l${n}`, count: n }
   return big
 }",
@@ -561,8 +561,8 @@ shape Thing = Tiny | Big
         ),
         (
             "maybe_union",
-            "function produce(n: int) -> maybe<Thing> errors {
-  let things: array<Thing> = []
+            "function produce(n: Int) -> Maybe<Thing> errors {
+  let things: Array<Thing> = []
   let big: Big = { label: `l${n}`, count: n }
   things.add(big)
   let found = things.get(0)

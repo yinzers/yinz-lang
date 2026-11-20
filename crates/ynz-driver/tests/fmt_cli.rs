@@ -106,7 +106,7 @@ fn check_noncanonical_exits_1_and_prints_would_reformat() {
 #[test]
 fn stdin_happy_path_exits_0_and_writes_stdout() {
     // WHY: --stdin reads from stdin and writes formatted output to stdout.
-    let source = "function  f( )  ->  nothing  { }\n";
+    let source = "function  f( )  ->  Nothing  { }\n";
     let out = ynz()
         .arg("fmt")
         .arg("--stdin")
@@ -217,7 +217,7 @@ fn all_with_one_broken_file_continues_and_exits_1() {
 
     // Add a non-canonical good file
     let good = dir.path().join("reformat_me.ynz");
-    std::fs::write(&good, "function  g()  ->  nothing  { }\n").unwrap();
+    std::fs::write(&good, "function  g()  ->  Nothing  { }\n").unwrap();
 
     ynz()
         .arg("fmt")
@@ -247,7 +247,7 @@ fn check_plus_stdin_rejected_by_clap() {
         .arg("fmt")
         .arg("--check")
         .arg("--stdin")
-        .write_stdin("function f() -> nothing { }")
+        .write_stdin("function f() -> Nothing { }")
         .assert()
         .failure();
 }

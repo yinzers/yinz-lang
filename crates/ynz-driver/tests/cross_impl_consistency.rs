@@ -291,7 +291,7 @@ mod bounded_run_kills_the_whole_tree {
         // A generated-shaped program that never halts on its own — no `background`, no channel,
         // just an unconditional loop. `x` is read every iteration so nothing about it is
         // optimized to a no-op.
-        let src = "function entrypoint() -> nothing {\n  \
+        let src = "function entrypoint() -> Nothing {\n  \
                     let x = 0\n  \
                     while (true) {\n    \
                     x = x + 1\n  \

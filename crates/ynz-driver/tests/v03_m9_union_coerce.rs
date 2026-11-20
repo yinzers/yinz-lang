@@ -266,11 +266,11 @@ fn v03_m9_union_coerce_suspending_let_cpu_promoted_is_refused() {
 /// every-mode corpus sweep would report as a divergence.
 const PROMOTED_CALLEE_PROGRAM: &str = r#"
 shape Circle {
-  name: string
+  name: String
 }
-shape Mixed = Circle | int
+shape Mixed = Circle | Int
 
-function show(share m: Mixed) -> string {
+function show(share m: Mixed) -> String {
   if (m) {
     is Circle => {
       return `circle ${m.name}`
@@ -281,7 +281,7 @@ function show(share m: Mixed) -> string {
   }
 }
 
-function leaf(n: int) -> int {
+function leaf(n: Int) -> Int {
   let t = 0
   let i = 0
   while (i < n) {
@@ -291,13 +291,13 @@ function leaf(n: int) -> int {
   return t
 }
 
-function combine() -> int {
+function combine() -> Int {
   let a = leaf(10)
   let b = leaf(11)
   return a + b
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
   let m: Mixed = combine()
   print(show(m))
@@ -367,9 +367,9 @@ fn v03_m9_union_coerce_suspending_return_cpu_promoted_is_refused() {
     // reached the `return` arm's panic instead of the teaching refusal. Tier: High.
     let program = PROMOTED_CALLEE_PROGRAM
         .replace(
-            "function entrypoint() -> nothing {\n  wait sleep(1)\n  let m: Mixed = combine()\n  print(show(m))\n}",
+            "function entrypoint() -> Nothing {\n  wait sleep(1)\n  let m: Mixed = combine()\n  print(show(m))\n}",
             "function pick() -> Mixed {\n  wait sleep(1)\n  return combine()\n}\n\n\
-             function entrypoint() -> nothing {\n  let m = pick()\n  print(show(m))\n}",
+             function entrypoint() -> Nothing {\n  let m = pick()\n  print(show(m))\n}",
         );
     assert!(
         program.contains("return combine()"),

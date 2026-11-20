@@ -35,7 +35,7 @@ enum SpawnSite {
     InLoop,
 }
 
-const TAG: &str = "shape Tag {\n  name: string\n  id: int\n}\n";
+const TAG: &str = "shape Tag {\n  name: String\n  id: Int\n}\n";
 
 fn program(case: &Case, suspending_callee: bool, spawns: usize, site: SpawnSite) -> String {
     let callee_body = if suspending_callee {
@@ -291,7 +291,7 @@ release_cases!(
     shape_with_every_kind_of_field,
     "a shape copy's string, array, map, nested shape and `maybe` fields are copied but not released, or shared with the original and released twice (High)",
     Case {
-        declarations: "shape Tag {\n  name: string\n  id: int\n}\nshape Bundle {\n  label: string\n  rows: array<int>\n  table: map<string, int>\n  inner: Tag\n  note: maybe<string>\n  id: int\n}\n",
+        declarations: "shape Tag {\n  name: String\n  id: Int\n}\nshape Bundle {\n  label: String\n  rows: Array<Int>\n  table: Map<String, Int>\n  inner: Tag\n  note: Maybe<String>\n  id: Int\n}\n",
         value_type: "Bundle",
         setup: "  let labels: array<string> = [`n`]\n  let rows: array<int> = [1, 2]\n  let table: map<string, int> = {}\n  table.set(`k`, 1)\n  let inner: Tag = { name: `i`, id: 2 }\n  let value: Bundle = { label: `l`, rows: rows, table: table, inner: inner, note: labels.get(0), id: 3 }\n",
         read: "  print(value.id)\n",
@@ -346,7 +346,7 @@ release_cases!(
     shape_with_a_union_field,
     "a shape's union slot copy (string variant) is shared with the original or never freed (High)",
     Case {
-        declarations: "shape Circle {\n  radius: float\n}\nshape Box {\n  held: Circle | string\n  id: int\n}\n",
+        declarations: "shape Circle {\n  radius: Float\n}\nshape Box {\n  held: Circle | String\n  id: Int\n}\n",
         value_type: "Box",
         setup: "  let value: Box = { held: `boxed`, id: 1 }\n",
         read: "  print(value.id)\n",
@@ -357,7 +357,7 @@ release_cases!(
     shape_with_a_channel_field,
     "a shape copy shares its channel field without taking a counted reference, so the task's release gives back a reference it never held and frees the channel under the spawner (High)",
     Case {
-        declarations: "shape Wire {\n  line: channel<int>\n  id: int\n}\n",
+        declarations: "shape Wire {\n  line: Channel<Int>\n  id: Int\n}\n",
         value_type: "Wire",
         setup: "  let line: channel<int> = channel<int>(2)\n  let value: Wire = { line: line, id: 1 }\n",
         read: "  print(value.id)\n",

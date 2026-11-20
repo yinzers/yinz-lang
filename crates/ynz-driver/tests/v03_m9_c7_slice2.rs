@@ -58,21 +58,21 @@ macro_rules! case {
 // ── Item 1: a move site nulls the founder's slot at the take ────────────────────────────────
 
 const STORE_ADD: &str = "
-function keep(flag: boolean) -> array<array<int>> {
-  let rows: array<array<int>> = []
-  let item: array<int> = [1, 2]
+function keep(flag: Boolean) -> Array<Array<Int>> {
+  let rows: Array<Array<Int>> = []
+  let item: Array<Int> = [1, 2]
   if (flag) {
     rows.add(item)
   }
   return rows
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let kept: array<array<int>> = keep(true)
-    let dropped: array<array<int>> = keep(false)
+    let kept: Array<Array<Int>> = keep(true)
+    let dropped: Array<Array<Int>> = keep(false)
     total = total + kept.count() + dropped.count()
     i = i + 1
   }
@@ -89,12 +89,12 @@ case!(
 );
 
 const STORE_SET: &str = "
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let table: map<string, array<int>> = {}
-    let item: array<int> = [i, i]
+    let table: Map<String, Array<Int>> = {}
+    let item: Array<Int> = [i, i]
     if (i % 2 == 0) {
       table.set(`k`, item)
     }
@@ -115,22 +115,22 @@ case!(
 
 const STORE_FIELD: &str = "
 shape Bucket {
-  rows: array<int>
-  tag: int
+  rows: Array<Int>
+  tag: Int
 }
 
-function fill(flag: boolean) -> int {
+function fill(flag: Boolean) -> Int {
   let bucket: Bucket = { rows: [0], tag: 1 }
-  let item: array<int> = [1, 2]
+  let item: Array<Int> = [1, 2]
   if (flag) {
     bucket.rows = item
   }
   return bucket.rows.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + fill(true) + fill(false)
     i = i + 1
@@ -148,18 +148,18 @@ case!(
 );
 
 const STORE_INDEX: &str = "
-function fill(flag: boolean) -> int {
-  let grid: array<array<int>> = [[0]]
-  let item: array<int> = [1, 2]
+function fill(flag: Boolean) -> Int {
+  let grid: Array<Array<Int>> = [[0]]
+  let item: Array<Int> = [1, 2]
   if (flag) {
     grid[0] = item
   }
   return grid[0].or([]).count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + fill(true) + fill(false)
     i = i + 1
@@ -177,21 +177,21 @@ case!(
 );
 
 const GIVE_AND_RETURN: &str = "
-function eat(give rows: array<int>) -> int {
+function eat(give rows: Array<Int>) -> Int {
   return rows.count()
 }
 
-function pass(flag: boolean) -> int {
-  let rows: array<int> = [1, 2, 3]
+function pass(flag: Boolean) -> Int {
+  let rows: Array<Int> = [1, 2, 3]
   if (flag) {
     return eat(rows)
   }
   return rows.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + pass(true) + pass(false)
     i = i + 1
@@ -209,21 +209,21 @@ case!(
 );
 
 const STRING_STORED_ON_ONE_PATH: &str = "
-function collect(flag: boolean) -> array<string> {
-  let rows: array<string> = []
-  let word: string = `row`.toUpperCase()
+function collect(flag: Boolean) -> Array<String> {
+  let rows: Array<String> = []
+  let word: String = `row`.toUpperCase()
   if (flag) {
     rows.add(word)
   }
   return rows
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let kept: array<string> = collect(true)
-    let dropped: array<string> = collect(false)
+    let kept: Array<String> = collect(true)
+    let dropped: Array<String> = collect(false)
     total = total + kept.count() + dropped.count()
     i = i + 1
   }
@@ -240,15 +240,15 @@ case!(
 );
 
 const STRING_BORROWED_AT_LAST_USE: &str = "
-function size(share text: string) -> int {
+function size(share text: String) -> Int {
   return text.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let word: string = `row`.toUpperCase()
+    let word: String = `row`.toUpperCase()
     total = total + size(word)
     i = i + 1
   }
@@ -267,15 +267,15 @@ case!(
 // ── Item 3: `give` parameters are released by the callee, the spawn ladder stops freeing them ──
 
 const SPAWN_GIVE: &str = "
-function worker(give text: string, give rows: array<array<int>>, tag: int) -> nothing {
+function worker(give text: String, give rows: Array<Array<Int>>, tag: Int) -> Nothing {
   print(text.count() + rows.count())
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
   while (i < 5) {
-    let text: string = `row`.toUpperCase()
-    let rows: array<array<int>> = [[1, 2], [3]]
+    let text: String = `row`.toUpperCase()
+    let rows: Array<Array<Int>> = [[1, 2], [3]]
     background worker(text, rows, i)
     i = i + 1
   }
@@ -293,10 +293,10 @@ case!(
 // ── Item 4: a reassignment frees the old value ───────────────────────────────────────────────
 
 const REASSIGN_OLD: &str = "
-function entrypoint() -> nothing {
-  let rows: array<int> = [0]
-  let label: string = `a`.toUpperCase()
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [0]
+  let label: String = `a`.toUpperCase()
+  let i: Int = 0
   while (i < 20) {
     rows = [i, i]
     label = label.toLowerCase()
@@ -315,9 +315,9 @@ case!(
 );
 
 const REASSIGN_MOVED_FROM: &str = "
-function entrypoint() -> nothing {
-  let first: array<int> = [1, 2]
-  let second: array<int> = first
+function entrypoint() -> Nothing {
+  let first: Array<Int> = [1, 2]
+  let second: Array<Int> = first
   first = [3]
   print(first.count() + second.count())
 }
@@ -333,19 +333,19 @@ case!(
 
 const REASSIGN_SHAPE: &str = "
 shape Tag {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
-function makeTag(label: string, size: int) -> Tag {
+function makeTag(label: String, size: Int) -> Tag {
   let made: Tag = { name: label.toUpperCase(), size: size }
   return made
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tag: Tag = makeTag(`a`, 0)
-  let i: int = 0
-  let total: int = 0
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     tag = makeTag(`tag`, i)
     total = total + tag.name.count() + tag.size
@@ -367,13 +367,13 @@ case!(
 
 const MUST_COPY_LET: &str = "
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
     let rows = bucket.rows
@@ -395,19 +395,19 @@ case!(
 
 const SHAPE_FROM_PIECE_VIEW: &str = "
 shape Tag {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
-function makeTag(label: string) -> Tag {
+function makeTag(label: String) -> Tag {
   let made: Tag = { name: label.toUpperCase(), size: 1 }
   return made
 }
 
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [makeTag(`a`), makeTag(`b`)]
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [makeTag(`a`), makeTag(`b`)]
+  let i: Int = 0
+  let total: Int = 0
   while (i < 10) {
     let fallback: Tag = makeTag(`z`)
     let picked: Tag = tags[i % 2].or(fallback)
@@ -428,19 +428,19 @@ case!(
 
 const SHAPE_FROM_PIECE_COPY: &str = "
 shape Tag {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
-function makeTag(label: string) -> Tag {
+function makeTag(label: String) -> Tag {
   let made: Tag = { name: label.toUpperCase(), size: 1 }
   return made
 }
 
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [makeTag(`a`), makeTag(`b`)]
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [makeTag(`a`), makeTag(`b`)]
+  let i: Int = 0
+  let total: Int = 0
   while (i < 10) {
     let picked: Tag = tags[0].or(makeTag(`z`))
     tags[0] = makeTag(`c`)
@@ -462,17 +462,17 @@ case!(
 // ── Item 6: a temporary no binding holds is freed at the end of its statement ───────────────
 
 const TEMP_FRESH: &str = "
-function makeRows() -> array<int> {
-  let rows: array<int> = [1, 2, 3]
+function makeRows() -> Array<Int> {
+  let rows: Array<Int> = [1, 2, 3]
   return rows
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + makeRows().count()
-    let note: string = `n=${i.toString()}`
+    let note: String = `n=${i.toString()}`
     total = total + note.count()
     i = i + 1
   }
@@ -490,8 +490,8 @@ case!(
 
 const TEMP_PIECE: &str = "
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
 function makeBucket() -> Bucket {
@@ -499,9 +499,9 @@ function makeBucket() -> Bucket {
   return bucket
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + makeBucket().rows.count()
     i = i + 1
@@ -519,14 +519,14 @@ case!(
 );
 
 const TEMP_LOOP_CELL: &str = "
-function makeRows() -> array<array<int>> {
-  let rows: array<array<int>> = [[1], [2, 3]]
+function makeRows() -> Array<Array<Int>> {
+  let rows: Array<Array<Int>> = [[1], [2, 3]]
   return rows
 }
 
-function entrypoint() -> nothing {
-  let total: int = 0
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
+  let i: Int = 0
   while (i < 10) {
     for (row in makeRows()) {
       total = total + row.count()
@@ -561,8 +561,8 @@ fn an_imported_calls_unbound_result_is_freed_at_statement_end() {
 
 const TAKE_PIECE: &str = "
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
 function makeBucket() -> Bucket {
@@ -570,8 +570,8 @@ function makeBucket() -> Bucket {
   return bucket
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = makeBucket().rows
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = makeBucket().rows
   print(rows.count())
 }
 ";
@@ -595,7 +595,7 @@ fn binding_a_piece_of_a_fresh_temporary_takes_it_without_a_copy() {
 // ── Item 7: an early return inside a loop releases the loop variable's copy ─────────────────
 
 const LOOP_EARLY_RETURN: &str = "
-function first(rows: array<array<int>>) -> int {
+function first(rows: Array<Array<Int>>) -> Int {
   for (row in rows) {
     rows[0] = [9]
     return row.count()
@@ -603,11 +603,11 @@ function first(rows: array<array<int>>) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let rows: array<array<int>> = [[1], [2]]
+    let rows: Array<Array<Int>> = [[1], [2]]
     total = total + first(rows)
     i = i + 1
   }
@@ -626,14 +626,14 @@ case!(
 // ── Item 8: provenance must not read a builtin as a user function ───────────────────────────
 
 const BUILTIN_OR_SHADOWED: &str = "
-function or(share first: array<int>, share second: array<int>) -> array<int> {
+function or(share first: Array<Int>, share second: Array<Int>) -> Array<Int> {
   return first.copy()
 }
 
-function entrypoint() -> nothing {
-  let rows: array<array<int>> = [[1, 2]]
+function entrypoint() -> Nothing {
+  let rows: Array<Array<Int>> = [[1, 2]]
   let found = rows.get(0)
-  let backup: array<int> = [7]
+  let backup: Array<Int> = [7]
   let picked = found.or(backup)
   let again = or(backup, backup)
   print(picked.count())
@@ -653,7 +653,7 @@ case!(
 
 const FIELD_READ_OUTLIVES_OWNER: &str = "
 shape Bucket {
-  rows: array<int>
+  rows: Array<Int>
 }
 
 function make() -> Bucket {
@@ -661,8 +661,8 @@ function make() -> Bucket {
   return bucket
 }
 
-function pick(condition: boolean) -> int {
-  let cell: array<int> = make().rows
+function pick(condition: Boolean) -> Int {
+  let cell: Array<Int> = make().rows
   if (condition) {
     let owner: Bucket = make()
     cell = owner.rows
@@ -670,9 +670,9 @@ function pick(condition: boolean) -> int {
   return cell.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + pick(true) + pick(false)
     i = i + 1
@@ -690,7 +690,7 @@ case!(
 );
 
 const LOOP_EARLY_RETURN_MAP: &str = "
-function first(table: map<string, array<int>>) -> int {
+function first(table: Map<String, Array<Int>>) -> Int {
   for (entry in table) {
     table.set(`other`, [9])
     return entry.value.count()
@@ -698,11 +698,11 @@ function first(table: map<string, array<int>>) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let table: map<string, array<int>> = { `a`: [1, 2] }
+    let table: Map<String, Array<Int>> = { `a`: [1, 2] }
     total = total + first(table)
     i = i + 1
   }
@@ -721,18 +721,18 @@ case!(
 // ── Item 3: every owner of an alias class that escapes is released ──────────────────────────
 
 const JOINED_OWNERS_ESCAPE: &str = "
-function eat(give rows: array<array<int>>) -> int {
+function eat(give rows: Array<Array<Int>>) -> Int {
   return rows.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let rows: array<array<int>> = [[1, 2]]
-    let backup: array<int> = [7]
-    let picked: array<int> = rows[0].or(backup)
-    let seen: int = picked.count()
+    let rows: Array<Array<Int>> = [[1, 2]]
+    let backup: Array<Int> = [7]
+    let picked: Array<Int> = rows[0].or(backup)
+    let seen: Int = picked.count()
     total = total + eat(rows) + seen
     i = i + 1
   }
@@ -749,18 +749,18 @@ case!(
 );
 
 const JOINED_OWNERS_RETURNED: &str = "
-function choose(share rows: array<array<int>>) -> array<int> {
-  let backup: array<int> = [7]
-  let picked: array<int> = rows[0].or(backup)
+function choose(share rows: Array<Array<Int>>) -> Array<Int> {
+  let backup: Array<Int> = [7]
+  let picked: Array<Int> = rows[0].or(backup)
   return picked
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let rows: array<array<int>> = [[1, 2]]
-    let chosen: array<int> = choose(rows)
+    let rows: Array<Array<Int>> = [[1, 2]]
+    let chosen: Array<Int> = choose(rows)
     total = total + chosen.count()
     i = i + 1
   }
@@ -780,26 +780,26 @@ case!(
 
 const TAKE_FROM_GENERIC_RESULT: &str = "
 shape Bag {
-  label: string
-  items: array<int>
+  label: String
+  items: Array<Int>
 }
 
 function pickSecond<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function viaGet<T>(share all: array<T>, share fallback: T) -> T {
+function viaGet<T>(share all: Array<T>, share fallback: T) -> T {
   return all.get(0).or(fallback)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a: Bag = { label: `a${1}`, items: [1, 2] }
   let b: Bag = { label: `b${2}`, items: [3] }
-  let all: array<Bag> = [{ label: `c${3}`, items: [4, 5, 6] }]
-  let name: string = pickSecond(a, b).label
-  let rows: array<int> = pickSecond(a, b).items
-  let name2: string = viaGet(all, a).label
-  let rows2: array<int> = viaGet(all, a).items
+  let all: Array<Bag> = [{ label: `c${3}`, items: [4, 5, 6] }]
+  let name: String = pickSecond(a, b).label
+  let rows: Array<Int> = pickSecond(a, b).items
+  let name2: String = viaGet(all, a).label
+  let rows2: Array<Int> = viaGet(all, a).items
   print(name)
   print(rows.count())
   print(name2)

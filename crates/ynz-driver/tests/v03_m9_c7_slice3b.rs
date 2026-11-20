@@ -54,19 +54,19 @@ macro_rules! case {
 
 const TAKE_NESTED_SHAPE: &str = "
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 shape Wrap {
   inner: Tag
-  label: string
+  label: String
 }
-function make(index: int) -> Wrap {
+function make(index: Int) -> Wrap {
   let tag: Tag = { name: `t${index}`, id: index }
   return { inner: tag, label: `l${index}` }
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   let kept: Tag = { name: `k`, id: 7 }
   for (index in range(0, 100)) {
     let taken: Tag = make(index).inner
@@ -100,24 +100,24 @@ fn a_nested_shape_taken_from_a_temporary_is_not_copied_and_balances() {
 
 const TAKE_A_NESTED_SHAPE_OF_A_NESTED_SHAPE: &str = "
 shape Leaf {
-  name: string
-  numbers: array<int>
+  name: String
+  numbers: Array<Int>
 }
 shape Branch {
   leaf: Leaf
-  label: string
+  label: String
 }
 shape Trunk {
   branch: Branch
-  note: string
+  note: String
 }
-function grow(index: int) -> Trunk {
+function grow(index: Int) -> Trunk {
   let leaf: Leaf = { name: `leaf${index}`, numbers: [index, 1] }
   let branch: Branch = { leaf: leaf, label: `branch${index}` }
   return { branch: branch, note: `note${index}` }
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (index in range(0, 50)) {
     let branch: Branch = grow(index).branch
     let leaf: Leaf = grow(index).branch.leaf
@@ -139,16 +139,16 @@ case!(
 
 const A_REASSIGNED_MAYBE_COPIES_AT_EVERY_EVENT: &str = r"
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{ name: `a${1}`, id: 1 }, { name: `b${2}`, id: 2 }]
-  let names: array<string> = [`aa-${1}`, `bb-${2}`]
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{ name: `a${1}`, id: 1 }, { name: `b${2}`, id: 2 }]
+  let names: Array<String> = [`aa-${1}`, `bb-${2}`]
+  let total: Int = 0
   for (round in range(0, 50)) {
-    let held: maybe<Tag> = tags.get(0)
-    let label: maybe<string> = names.get(0)
+    let held: Maybe<Tag> = tags.get(0)
+    let label: Maybe<String> = names.get(0)
     held = tags.get(1)
     label = names.get(1)
     total = total + held.or({ name: `z`, id: 0 }).id + label.or(`q`).count()
@@ -167,14 +167,14 @@ case!(
 
 const A_REASSIGNED_ARRAY_COPIES_AT_EVERY_EVENT: &str = r"
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
-  let total: int = 0
+  let total: Int = 0
   for (round in range(0, 50)) {
-    let rows: array<int> = [round]
+    let rows: Array<Int> = [round]
     rows = bucket.rows
     total = total + rows.count()
   }
@@ -193,14 +193,14 @@ case!(
 // ── Item 6: an errors-capable local that is reassigned releases its old result ──────────────
 
 const AN_ERRORS_CAPABLE_LOCAL_REASSIGNED_RELEASES_THE_OLD_RESULT: &str = r"
-function load(index: int) -> string errors {
+function load(index: Int) -> String errors {
   return `value-${index}`
 }
-function loadRows(index: int) -> array<int> errors {
+function loadRows(index: Int) -> Array<Int> errors {
   return [index, index]
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   let result = load(0)
   let rows = loadRows(0)
   for (index in range(0, 50)) {
@@ -210,7 +210,7 @@ function entrypoint() -> nothing {
       print(`bad`)
     }
     total = total + result.count()
-    let taken: string = result
+    let taken: String = result
     total = total + taken.count()
     result = load(index + 1)
     total = total + result.or(`x`).count() + rows.or([]).count()
@@ -230,24 +230,24 @@ case!(
 // ── Item 2: a function hands back an owned channel reference ────────────────────────────────
 
 const CHANNELS_HANDED_BACK_AND_RELAYED: &str = "
-function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
+function firstChan(share chans: Array<Channel<Int>>) -> Maybe<Channel<Int>> {
   return chans.first()
 }
-function relay(share chans: array<channel<int>>) -> maybe<channel<int>> {
+function relay(share chans: Array<Channel<Int>>) -> Maybe<Channel<Int>> {
   let held = firstChan(chans)
   return held
 }
-function passOn(share ch: channel<int>) -> channel<int> {
+function passOn(share ch: Channel<Int>) -> Channel<Int> {
   return ch
 }
-function relayChannel(share ch: channel<int>) -> channel<int> {
+function relayChannel(share ch: Channel<Int>) -> Channel<Int> {
   let held = passOn(ch)
   return held
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 20)) {
-    let chans: array<channel<int>> = [channel<int>()]
+    let chans: Array<Channel<Int>> = [Channel<Int>()]
     let got = relay(chans)
     for (item in chans) {
       let same = relayChannel(item)
@@ -300,11 +300,11 @@ fn a_maybe_channel_an_imported_function_returns_outlives_its_arguments_owner() {
 // ── Item 5: a `MapEntry` spawned to a task keeps its own decimal key ────────────────────────
 
 const A_MAP_ENTRY_WITH_A_DECIMAL_KEY_IS_SPAWNED: &str = "
-function work(e: MapEntry<number<10>, int>) -> nothing {
+function work(e: MapEntry<Number<10>, Int>) -> Nothing {
   print(e.key)
 }
-function entrypoint() -> nothing {
-  let table: map<number<10>, int> = { 1.5: 1, 2.5: 2, 3.5: 3 }
+function entrypoint() -> Nothing {
+  let table: Map<Number<10>, Int> = { 1.5: 1, 2.5: 2, 3.5: 3 }
   for (entry in table) {
     background work(entry)
   }
@@ -405,14 +405,14 @@ fn typeck_refuses_every_way_a_map_entry_outlives_its_iteration() {
 
 const A_RECURSIVE_UNION_BOX_REPLACED_UNDER_A_VIEW: &str = "
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
-  label: string
+  value: Int
+  label: String
   next: Node | End
 }
-function describe(share link: Node | End) -> int {
+function describe(share link: Node | End) -> Int {
   if (link) {
     is Node => {
       return link.value + link.label.count()
@@ -423,8 +423,8 @@ function describe(share link: Node | End) -> int {
   }
   return 0
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 20)) {
     let stop: End = { flag: true }
     let tail: End = { flag: false }
@@ -455,15 +455,15 @@ case!(
 
 const A_NESTED_CELL_REPLACED_OR_RELEASED_UNDER_A_VIEW: &str = "
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 shape Holder {
   inner: Tag
-  label: string
+  label: String
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 20)) {
     let first: Tag = { name: `n${round}`, id: round }
     let holder: Holder = { inner: first, label: `w${round}` }
@@ -493,25 +493,25 @@ case!(
 
 const A_UNION_RETURNED_FROM_A_LOCAL: &str = "
 shape Circle {
-  label: string
+  label: String
 }
 shape Square {
-  side: int
+  side: Int
 }
 shape Figure = Circle | Square
-function make(index: int) -> Figure {
+function make(index: Int) -> Figure {
   let circle: Circle = { label: `c${index}` }
   let figure: Figure = circle
   return figure
 }
-function relay(index: int) -> Figure {
+function relay(index: Int) -> Figure {
   let inner = make(index)
   return inner
 }
 function pick(share figure: Figure) -> Figure {
   return figure
 }
-function area(share figure: Figure) -> int {
+function area(share figure: Figure) -> Int {
   if (figure) {
     is Circle => {
       return figure.label.count()
@@ -522,8 +522,8 @@ function area(share figure: Figure) -> int {
   }
   return 0
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (index in range(0, 50)) {
     let first = make(index)
     let second = relay(index)

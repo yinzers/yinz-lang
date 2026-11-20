@@ -33,18 +33,18 @@ function entrypoint() -> nothing {
 
 const NESTED_SHAPE_TAKEN: &str = "
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
 shape Wrap {
   inner: Tag
-  count: int
+  count: Int
 }
-function make(index: int) -> Wrap {
+function make(index: Int) -> Wrap {
   let tag: Tag = { name: `t${index}`, id: index }
   return { inner: tag, count: 3 }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let taken: Tag = make(5).inner
   print(taken.id)
 }
@@ -87,9 +87,9 @@ fn a_nested_shape_a_take_reads_is_released_behind_a_null_check_and_balances() {
 // ── Slice 4: a union of heap variants carries a tag ─────────────────────────────────────────
 
 const THE_REPRODUCER: &str = "
-function entrypoint() -> nothing {
-  let a: string | array<int> = `x`
-  let b: string | array<int> = [1, 2]
+function entrypoint() -> Nothing {
+  let a: String | Array<Int> = `x`
+  let b: String | Array<Int> = [1, 2]
   print(1)
 }
 ";
@@ -115,29 +115,29 @@ fn a_union_of_a_string_and_an_array_releases_the_variant_it_holds() {
 }
 
 const A_UNION_HOLDING_A_CHANNEL: &str = "
-function keep(share value: string | channel<int>) -> int {
+function keep(share value: String | Channel<Int>) -> Int {
   return 1
 }
-function relay(share value: string | channel<int>) -> string | channel<int> {
+function relay(share value: String | Channel<Int>) -> String | Channel<Int> {
   return value
 }
-function make(flag: boolean) -> string | channel<int> {
+function make(flag: Boolean) -> String | Channel<Int> {
   if (flag) {
     return `hello`
   }
-  let made: channel<int> = channel<int>()
+  let made: Channel<Int> = Channel<Int>()
   return made
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 5)) {
-    let a: string | channel<int> = channel<int>()
-    let b: string | channel<int> = `x${round}`
-    let ch: channel<int> = channel<int>()
-    let c: string | channel<int> = ch
-    let d: string | channel<int> = make(false)
-    let e: string | channel<int> = make(true)
-    let f: string | channel<int> = relay(a)
+    let a: String | Channel<Int> = Channel<Int>()
+    let b: String | Channel<Int> = `x${round}`
+    let ch: Channel<Int> = Channel<Int>()
+    let c: String | Channel<Int> = ch
+    let d: String | Channel<Int> = make(false)
+    let e: String | Channel<Int> = make(true)
+    let f: String | Channel<Int> = relay(a)
     total = total + keep(a) + keep(b) + keep(c) + keep(d) + keep(e) + keep(f)
   }
   print(total)
@@ -168,32 +168,32 @@ fn a_union_holding_a_channel_gives_its_reference_back_once() {
 
 const PARAMETER_RETURN_STORE_AND_REASSIGN: &str = "
 shape Holder {
-  held: string | array<int>
-  label: string
+  held: String | Array<Int>
+  label: String
 }
-function keep(share value: string | array<int>) -> int {
+function keep(share value: String | Array<Int>) -> Int {
   return 1
 }
-function consume(give value: string | array<int>) -> int {
+function consume(give value: String | Array<Int>) -> Int {
   return 2
 }
-function make(flag: boolean) -> string | array<int> {
+function make(flag: Boolean) -> String | Array<Int> {
   if (flag) {
     return `hello`
   }
   return [1, 2, 3]
 }
-function relay(share value: string | array<int>) -> string | array<int> {
+function relay(share value: String | Array<Int>) -> String | Array<Int> {
   return value
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 20)) {
-    let a: string | array<int> = make(true)
-    let b: string | array<int> = make(false)
+    let a: String | Array<Int> = make(true)
+    let b: String | Array<Int> = make(false)
     total = total + keep(a) + keep(b)
-    let c: string | array<int> = relay(a)
-    let d: string | array<int> = `d${round}`
+    let c: String | Array<Int> = relay(a)
+    let d: String | Array<Int> = `d${round}`
     total = total + consume(d)
     let holder: Holder = { held: b, label: `l${round}` }
     a = make(false)
@@ -228,14 +228,14 @@ fn a_union_of_heap_variants_balances_through_parameter_return_store_and_reassign
 
 const A_SHARED_UNION_RETURNED: &str = "
 shape Circle {
-  radius: int
+  radius: Int
 }
-function relay(share value: Circle | string) -> Circle | string {
+function relay(share value: Circle | String) -> Circle | String {
   return value
 }
-function entrypoint() -> nothing {
-  let a: Circle | string = `x${1}`
-  let c: Circle | string = relay(a)
+function entrypoint() -> Nothing {
+  let a: Circle | String = `x${1}`
+  let c: Circle | String = relay(a)
   print(1)
 }
 ";
@@ -254,12 +254,12 @@ fn a_string_variant_a_return_copies_is_not_freed_by_both_owners() {
 }
 
 const A_UNION_OF_A_STRING_AND_AN_INT: &str = "
-function keep(share value: string | int) -> int {
+function keep(share value: String | Int) -> Int {
   return 1
 }
-function entrypoint() -> nothing {
-  let a: string | int = 5
-  let b: string | int = `x`
+function entrypoint() -> Nothing {
+  let a: String | Int = 5
+  let b: String | Int = `x`
   print(keep(a) + keep(b))
 }
 ";
@@ -287,15 +287,15 @@ fn a_union_of_a_string_and_a_scalar_does_not_free_the_scalar_as_a_string() {
 
 const A_UNION_LOCAL_STORED_INTO_A_RECURSIVE_FIELD: &str = "
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
-  label: string
+  value: Int
+  label: String
   next: Node | End
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 20)) {
     let stop: End = { flag: true }
     let tail: End = { flag: false }
@@ -338,35 +338,35 @@ fn a_union_local_stored_into_a_recursive_union_field_leaves_no_box_shell() {
 
 const SUSPENDING_FUNCTIONS_PASS_AND_RETURN_A_HEAP_UNION: &str = "
 shape Holder {
-  held: string | array<int>
-  label: string
+  held: String | Array<Int>
+  label: String
 }
-function keep(share value: string | array<int>) -> int {
+function keep(share value: String | Array<Int>) -> Int {
   wait sleep(1)
   return 1
 }
-function make(flag: boolean) -> string | array<int> {
+function make(flag: Boolean) -> String | Array<Int> {
   wait sleep(1)
   if (flag) {
     return `hello`
   }
   return [1, 2, 3]
 }
-function take(give value: string | array<int>) -> int {
+function take(give value: String | Array<Int>) -> Int {
   wait sleep(1)
   return 2
 }
-function relay(share value: string | array<int>) -> string | array<int> {
+function relay(share value: String | Array<Int>) -> String | Array<Int> {
   wait sleep(1)
   return value
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
   wait make(true)
-  let a: string | array<int> = `x`
-  let first: int = wait keep(a)
-  let b: string | array<int> = [1]
-  let second: int = wait take(b)
+  let a: String | Array<Int> = `x`
+  let first: Int = wait keep(a)
+  let b: String | Array<Int> = [1]
+  let second: Int = wait take(b)
   let h: Holder = { held: `s`, label: `l` }
   print(first + second)
 }
@@ -390,21 +390,21 @@ fn a_suspending_function_passes_and_returns_a_heap_union_without_a_stale_read() 
 
 const A_UNION_CALL_RESULT_STORED_INTO_A_RECURSIVE_FIELD: &str = "
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
-  label: string
+  value: Int
+  label: String
   next: Node | End
 }
-function build(round: int) -> Node | End {
+function build(round: Int) -> Node | End {
   let tail: End = { flag: false }
   let second: Node = { value: 9, label: `second${round}`, next: tail }
   let wrapped: Node | End = second
   return wrapped
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 20)) {
     let stop: End = { flag: true }
     let head: Node = { value: 1, label: `head${round}`, next: stop }

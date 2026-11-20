@@ -87,20 +87,20 @@ case!(
 
 const MAYBE_LOCALS_OF_EVERY_PAYLOAD_KIND_ARE_RELEASED: &str = r"
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
-function entrypoint() -> nothing {
-  let names: array<string> = [`aa`, `bb`]
-  let tags: array<Tag> = [{ name: `n`, id: 1 }]
-  let rows: array<array<int>> = [[1, 2]]
-  let nums: array<number<34> > = [1.50]
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let names: Array<String> = [`aa`, `bb`]
+  let tags: Array<Tag> = [{ name: `n`, id: 1 }]
+  let rows: Array<Array<Int>> = [[1, 2]]
+  let nums: Array<Number<34> > = [1.50]
+  let total: Int = 0
   for (i in range(0, 100)) {
-    let first: maybe<string> = names.get(0)
-    let tag: maybe<Tag> = tags.get(0)
-    let row: maybe<array<int>> = rows.get(0)
-    let num: maybe<number<34> > = nums.get(0)
+    let first: Maybe<String> = names.get(0)
+    let tag: Maybe<Tag> = tags.get(0)
+    let row: Maybe<Array<Int>> = rows.get(0)
+    let num: Maybe<Number<34> > = nums.get(0)
     total = total + first.or(`x`).count() + tag.or({ name: `z`, id: 0 }).id + row.or([]).count()
   }
   print(total)
@@ -117,21 +117,21 @@ case!(
 
 const A_MAYBE_REASSIGNED_FROM_A_CALL_RELEASES_THE_VALUE_IT_REPLACES: &str = r"
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
-function findTag(share tags: array<Tag>, index: int) -> maybe<Tag> {
+function findTag(share tags: Array<Tag>, index: Int) -> Maybe<Tag> {
   return tags.get(index)
 }
-function findName(share names: array<string>, index: int) -> maybe<string> {
+function findName(share names: Array<String>, index: Int) -> Maybe<String> {
   return names.get(index)
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{ name: `a${1}`, id: 1 }, { name: `b${2}`, id: 2 }]
-  let names: array<string> = [`aa-${1}`, `bb-${2}`]
-  let held: maybe<Tag> = findTag(tags, 0)
-  let label: maybe<string> = findName(names, 0)
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{ name: `a${1}`, id: 1 }, { name: `b${2}`, id: 2 }]
+  let names: Array<String> = [`aa-${1}`, `bb-${2}`]
+  let held: Maybe<Tag> = findTag(tags, 0)
+  let label: Maybe<String> = findName(names, 0)
+  let total: Int = 0
   for (index in range(0, 50)) {
     held = findTag(tags, index % 2)
     label = findName(names, index % 2)
@@ -153,13 +153,13 @@ case!(
 
 const A_UNION_LOCAL_A_GIVEN_UNION_AND_A_REASSIGNED_UNION_ARE_RELEASED: &str = r"
 shape Circle {
-  label: string
+  label: String
 }
 shape Square {
-  side: int
+  side: Int
 }
 shape Figure = Circle | Square
-function describe(give figure: Figure) -> int {
+function describe(give figure: Figure) -> Int {
   if (figure) {
     is Circle => {
       return figure.label.count()
@@ -170,8 +170,8 @@ function describe(give figure: Figure) -> int {
   }
   return 0
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   let other: Circle = { label: `x` }
   let kept: Figure = other
   for (index in range(0, 50)) {
@@ -206,21 +206,21 @@ case!(
 
 const FIXED_LISTS_OF_STRINGS_SHAPES_AND_ARRAYS_ARE_RELEASED_WITH_THEIR_ITEMS: &str = r"
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (index in range(0, 50)) {
-    let names: fixed<string> = [`a${index}`, `b${index}`]
+    let names: Fixed<String> = [`a${index}`, `b${index}`]
     let first: Tag = { name: `t${index}`, id: index }
     let second: Tag = { name: `u${index}`, id: 1 }
-    let tags: fixed<Tag> = [first, second]
-    let row: array<int> = [index]
-    let other: array<int> = [1, 2]
-    let rows: fixed<array<int> > = [row, other]
+    let tags: Fixed<Tag> = [first, second]
+    let row: Array<Int> = [index]
+    let other: Array<Int> = [1, 2]
+    let rows: Fixed<Array<Int> > = [row, other]
     names.set(0, `c${index}`)
-    let fallback: string = `f`
+    let fallback: String = `f`
     total = total + names[0].or(fallback).count() + rows.count() + tags.count()
   }
   print(total)
@@ -237,14 +237,14 @@ case!(
 
 const A_FIXED_LIST_OF_UNIONS_RELEASES_THE_ITEM_AN_OVERWRITE_REPLACES: &str = r"
 shape Circle {
-  label: string
+  label: String
 }
 shape Square {
-  side: int
+  side: Int
 }
 shape Figure = Circle | Square
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (index in range(0, 50)) {
     let circle: Circle = { label: `c${index}` }
     let square: Square = { side: 2 }
@@ -252,7 +252,7 @@ function entrypoint() -> nothing {
     let first: Figure = circle
     let second: Figure = square
     let third: Figure = other
-    let figs: fixed<Figure> = [first, second]
+    let figs: Fixed<Figure> = [first, second]
     figs.set(0, third)
     total = total + figs.count()
   }
@@ -271,18 +271,18 @@ case!(
 // ── Item 1: errors-capable locals ───────────────────────────────────────────────────────────
 
 const AN_ERRORS_CAPABLE_LOCAL_IS_RELEASED_THROUGH_ITS_ORIGINAL_SLOT: &str = r"
-function load(index: int) -> string errors {
+function load(index: Int) -> String errors {
   return `value-${index}`
 }
-function loadRows(index: int) -> array<int> errors {
+function loadRows(index: Int) -> Array<Int> errors {
   return [index, index]
 }
-function relay(index: int) -> string errors {
+function relay(index: Int) -> String errors {
   let inner = load(index)
   return inner
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (index in range(0, 50)) {
     let first = load(index)
     let rows = loadRows(index)
@@ -302,18 +302,18 @@ case!(
 );
 
 const A_STRING_TAKEN_FROM_AN_ERRORS_CAPABLE_RESULT_IS_NOT_RELEASED_TWICE: &str = r"
-function load(index: int) -> string errors {
+function load(index: Int) -> String errors {
   return `value-${index}`
 }
-function twin(index: int) -> int errors {
+function twin(index: Int) -> Int errors {
   let first = load(index)
   let second = first
-  let one: string = first
-  let two: string = second
+  let one: String = first
+  let two: String = second
   return one.count() + two.count()
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (index in range(0, 50)) {
     total = total + twin(index).or(0)
   }

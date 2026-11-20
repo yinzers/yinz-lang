@@ -12,11 +12,11 @@ use support::assert_source_balanced_and_asan_clean as assert_balanced;
 
 const CREW: &str = "
 shape Crew {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
-function later(value: int) -> int {
+function later(value: Int) -> Int {
   wait sleep(1)
   return value
 }
@@ -56,14 +56,14 @@ function entrypoint() -> nothing {{
 
 const PIRATE: &str = "
 shape Badge {
-  label: string
+  label: String
 }
 shape Pirate {
   badge: Badge
-  rank: int
+  rank: Int
 }
 
-function later(value: int) -> int {
+function later(value: Int) -> Int {
   wait sleep(1)
   return value
 }
@@ -102,12 +102,12 @@ function entrypoint() -> nothing {{
 }
 
 const NAMES: &str = "
-function later(value: int) -> int {
+function later(value: Int) -> Int {
   wait sleep(1)
   return value
 }
 
-function firstName(names: array<string>) -> maybe<string> {
+function firstName(names: Array<String>) -> Maybe<String> {
   return names.get(0)
 }
 ";
@@ -143,12 +143,12 @@ function entrypoint() -> nothing {{
 }
 
 const LISTS: &str = "
-function later(value: int) -> int {
+function later(value: Int) -> Int {
   wait sleep(1)
   return value
 }
 
-function makeList() -> fixed<string> {
+function makeList() -> Fixed<String> {
   return [`p-${1}`, `q-${2}`]
 }
 ";
@@ -184,15 +184,15 @@ function entrypoint() -> nothing {{
 
 const THINGS: &str = "
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -204,7 +204,7 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function later(value: int) -> int {
+function later(value: Int) -> Int {
   wait sleep(1)
   return value
 }
@@ -252,21 +252,21 @@ function entrypoint() -> nothing {{
 fn shape_call_result_staged_into_a_suspending_callee_survives_the_callee_wait() {
     let source = "
 shape Crew {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
 function makeCrew() -> Crew {
   return { name: `ab`.toUpperCase(), size: 3 }
 }
 
-function readLater(share crew: Crew) -> int {
+function readLater(share crew: Crew) -> Int {
   wait sleep(5)
   return crew.size
 }
 
-function entrypoint() -> nothing {
-  let size: int = wait readLater(makeCrew())
+function entrypoint() -> Nothing {
+  let size: Int = wait readLater(makeCrew())
   print(size)
 }
 ";
@@ -280,17 +280,17 @@ function entrypoint() -> nothing {
 fn shape_given_away_on_one_path_is_released_once_across_a_wait() {
     let source = "
 shape Crew {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
-function consume(give crew: Crew) -> int {
+function consume(give crew: Crew) -> Int {
   return crew.size
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let crew: Crew = { name: `ab`.toUpperCase(), size: 3 }
-  let flag: int = `1`.toInt().or(0)
+  let flag: Int = `1`.toInt().or(0)
   if (flag == 1) {
     print(consume(crew))
   }
@@ -354,14 +354,14 @@ function entrypoint() -> nothing {{
 #[test]
 fn maybe_given_away_on_one_path_is_released_once_across_a_wait() {
     let source = "
-function consume(give name: maybe<string>) -> int {
+function consume(give name: Maybe<String>) -> Int {
   return name.or(`none`).count()
 }
 
-function entrypoint() -> nothing {
-  let names: array<string> = [`a-${1}`, `b-${2}`]
-  let found: maybe<string> = names.get(0)
-  let flag: int = `1`.toInt().or(0)
+function entrypoint() -> Nothing {
+  let names: Array<String> = [`a-${1}`, `b-${2}`]
+  let found: Maybe<String> = names.get(0)
+  let flag: Int = `1`.toInt().or(0)
   if (flag == 1) {
     print(consume(found))
   }
@@ -377,9 +377,9 @@ function entrypoint() -> nothing {
 #[test]
 fn fixed_list_reassigned_and_updated_before_a_wait_is_released_once() {
     let source = "
-function entrypoint() -> nothing {
-  let list: fixed<string> = [`p-${1}`, `q-${2}`]
-  let other: fixed<string> = [`r-${3}`, `s-${4}`]
+function entrypoint() -> Nothing {
+  let list: Fixed<String> = [`p-${1}`, `q-${2}`]
+  let other: Fixed<String> = [`r-${3}`, `s-${4}`]
   list = other
   list.set(0, `t-${5}`)
   print(list.count())
@@ -414,12 +414,12 @@ function entrypoint() -> nothing {{
 
 const STAGED_CREW: &str = "
 shape Crew {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 
 function makeCrew() -> Crew {
@@ -430,12 +430,12 @@ function makeTiny() -> Tiny {
   return { flag: true }
 }
 
-function takeLater(give crew: Crew) -> int {
+function takeLater(give crew: Crew) -> Int {
   wait sleep(5)
   return crew.size
 }
 
-function readTinyLater(share tiny: Tiny) -> int {
+function readTinyLater(share tiny: Tiny) -> Int {
   wait sleep(5)
   if (tiny.flag) {
     return 1

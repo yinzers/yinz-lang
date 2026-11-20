@@ -34,8 +34,8 @@ enum Argument {
     ShapeIntoUnion,
 }
 
-const DECLARATIONS: &str = "shape Circle {\n  radius: float\n}\nshape Tag {\n  name: string\n}\n\
-                            shape Box {\n  choice: Circle | Tag\n  id: int\n}\n";
+const DECLARATIONS: &str = "shape Circle {\n  radius: Float\n}\nshape Tag {\n  name: String\n}\n\
+                            shape Box {\n  choice: Circle | Tag\n  id: Int\n}\n";
 
 fn union_spawn_program(callee: Callee, argument: Argument, tasks: usize) -> String {
     let wait_for_the_spawner = match callee {

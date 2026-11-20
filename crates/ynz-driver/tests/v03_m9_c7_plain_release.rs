@@ -16,13 +16,13 @@ use support::{
 };
 
 const BLOCK_ENDS: &str = "
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 100) {
-    let per: array<int> = [i]
+    let per: Array<Int> = [i]
     if (i > 50) {
-      let extra: array<int> = [i, i]
+      let extra: Array<Int> = [i, i]
       total = total + extra.count()
     }
     total = total + per.count()
@@ -43,20 +43,20 @@ fn block_ends_release_the_array_of_each_block_once() {
 }
 
 const FOR_LOOPS: &str = "
-function entrypoint() -> nothing {
-  let rows: array<int> = [1, 2, 3]
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
+  let total: Int = 0
   for (row in rows) {
-    let doubled: array<int> = [row, row]
+    let doubled: Array<Int> = [row, row]
     total = total + doubled.count()
   }
   for (index in range(3)) {
-    let pair: array<int> = [index, index]
+    let pair: Array<Int> = [index, index]
     total = total + pair.count()
   }
-  let names: array<string> = [`a`, `b`]
+  let names: Array<String> = [`a`, `b`]
   for (name in names) {
-    let shout: string = name.toUpperCase()
+    let shout: String = name.toUpperCase()
     total = total + shout.count()
   }
   print(total)
@@ -74,22 +74,22 @@ fn for_loop_bodies_release_their_locals_per_iteration() {
 }
 
 const MATCH_ARMS: &str = "
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 30) {
-    let pick: int = i % 3
+    let pick: Int = i % 3
     if (pick) {
       0 => {
-        let zero: array<int> = [i]
+        let zero: Array<Int> = [i]
         total = total + zero.count()
       }
       1 => {
-        let one: array<int> = [i, i]
+        let one: Array<Int> = [i, i]
         total = total + one.count()
       }
       else => {
-        let other: array<int> = [i, i, i]
+        let other: Array<Int> = [i, i, i]
         total = total + other.count()
       }
     }
@@ -109,11 +109,11 @@ fn match_arms_release_their_locals() {
 }
 
 const MAP_LOCAL: &str = "
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 50) {
-    let scores: map<string, int> = { `alice`: i, `bob`: 2 }
+    let scores: Map<String, Int> = { `alice`: i, `bob`: 2 }
     total = total + scores[`alice`].or(0) + scores.count()
     i = i + 1
   }
@@ -133,14 +133,14 @@ fn a_map_local_is_released_with_its_keys() {
 
 const SHAPE_LOCAL: &str = "
 shape Tag {
-  name: string
-  size: int
+  name: String
+  size: Int
 }
 
-function entrypoint() -> nothing {
-  let stem: string = `tag`
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let stem: String = `tag`
+  let i: Int = 0
+  let total: Int = 0
   while (i < 50) {
     let tag: Tag = { name: stem.toUpperCase(), size: i }
     total = total + tag.name.count() + tag.size
@@ -161,13 +161,13 @@ fn a_flat_shape_local_releases_its_fields_not_its_region() {
 }
 
 const EARLY_RETURN: &str = "
-function pick(stopAt: int) -> int {
-  let anchor: array<int> = [1, 2, 3]
-  let i: int = 0
+function pick(stopAt: Int) -> Int {
+  let anchor: Array<Int> = [1, 2, 3]
+  let i: Int = 0
   while (i < 3) {
-    let per: array<int> = [i, i]
+    let per: Array<Int> = [i, i]
     if (i == stopAt) {
-      let marker: array<int> = [7]
+      let marker: Array<Int> = [7]
       return per.count() + anchor.count() + marker.count() - 1
     }
     i = i + 1
@@ -175,9 +175,9 @@ function pick(stopAt: int) -> int {
   return anchor.count()
 }
 
-function entrypoint() -> nothing {
-  let round: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let round: Int = 0
+  let total: Int = 0
   while (round < 40) {
     total = total + pick(round % 5)
     round = round + 1
@@ -198,11 +198,11 @@ fn an_early_return_releases_every_open_frame_exactly_once() {
 }
 
 const MAIN_RETURN: &str = "
-function entrypoint() -> nothing {
-  let outer: array<int> = [1, 2]
-  let words: string = `done`.toUpperCase()
+function entrypoint() -> Nothing {
+  let outer: Array<Int> = [1, 2]
+  let words: String = `done`.toUpperCase()
   if (outer.count() == 2) {
-    let inner: array<int> = [3]
+    let inner: Array<Int> = [3]
     print(words)
     print(inner.count())
     return
@@ -222,14 +222,14 @@ fn main_releases_every_open_binding_at_its_return() {
 }
 
 const GENERIC_BODY: &str = "
-function describe<T>(value: T) -> int {
-  let scratch: array<int> = [1, 2, 3]
+function describe<T>(value: T) -> Int {
+  let scratch: Array<Int> = [1, 2, 3]
   return scratch.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + describe(i)
     i = i + 1
@@ -249,19 +249,19 @@ fn a_generic_instance_releases_its_concrete_locals() {
 }
 
 const ERRORS_PLAIN: &str = "
-function inner() -> int errors {
+function inner() -> Int errors {
   return 4
 }
 
-function outer() -> int errors {
-  let scratch: array<int> = [1, 2]
+function outer() -> Int errors {
+  let scratch: Array<Int> = [1, 2]
   let value = inner()
   return value + scratch.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
     total = total + outer().or(0)
     i = i + 1
@@ -281,19 +281,19 @@ fn an_errors_capable_plain_function_releases_its_locals() {
 }
 
 const STRING_TAKEN_BY_STORE: &str = "
-function collect() -> array<string> {
-  let rows: array<string> = []
-  let i: int = 0
+function collect() -> Array<String> {
+  let rows: Array<String> = []
+  let i: Int = 0
   while (i < 20) {
-    let row: string = `row`.toUpperCase()
+    let row: String = `row`.toUpperCase()
     rows.add(row)
     i = i + 1
   }
   return rows
 }
 
-function entrypoint() -> nothing {
-  let rows: array<string> = collect()
+function entrypoint() -> Nothing {
+  let rows: Array<String> = collect()
   print(rows.count().toString())
   print(rows[3].or(`none`))
 }
@@ -314,18 +314,18 @@ fn a_string_a_store_took_is_not_released_by_its_old_binding() {
 }
 
 const STRING_TAKEN_ON_SOME_PATHS: &str = "
-function keep(flag: boolean) -> array<string> {
-  let rows: array<string> = []
-  let row: string = `kept`.toUpperCase()
+function keep(flag: Boolean) -> Array<String> {
+  let rows: Array<String> = []
+  let row: String = `kept`.toUpperCase()
   if (flag) {
     rows.add(row)
   }
   return rows
 }
 
-function entrypoint() -> nothing {
-  let a: array<string> = keep(true)
-  let b: array<string> = keep(false)
+function entrypoint() -> Nothing {
+  let a: Array<String> = keep(true)
+  let b: Array<String> = keep(false)
   print(a.count().toString())
   print(b.count().toString())
   print(a[0].or(`none`))
@@ -347,15 +347,15 @@ fn a_string_taken_on_some_paths_is_never_released_under_its_new_holder() {
 }
 
 const STRING_GIVEN: &str = "
-function consume(give text: string) -> int {
+function consume(give text: String) -> Int {
   return text.count()
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let text: string = `item`.toUpperCase()
+    let text: String = `item`.toUpperCase()
     total = total + consume(text)
     i = i + 1
   }
@@ -373,16 +373,16 @@ fn a_given_string_is_released_by_at_most_one_side() {
 }
 
 const STRING_RETURNED: &str = "
-function label(index: int) -> string {
-  let text: string = `label`.toUpperCase()
+function label(index: Int) -> String {
+  let text: String = `label`.toUpperCase()
   return text
 }
 
-function entrypoint() -> nothing {
-  let i: int = 0
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
+  let total: Int = 0
   while (i < 20) {
-    let got: string = label(i)
+    let got: String = label(i)
     total = total + got.count()
     i = i + 1
   }
@@ -404,12 +404,12 @@ const GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY: &str = "
 function ident<T>(share value: T) -> T {
   return value
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (round in range(0, 10)) {
-    let kept: array<int> = [round]
-    let bound: array<int> = ident(kept)
-    let from_literal: array<int> = ident([round, 1])
+    let kept: Array<Int> = [round]
+    let bound: Array<Int> = ident(kept)
+    let from_literal: Array<Int> = ident([round, 1])
     total = total + bound.count() + from_literal.count()
     total = total + ident([round, 1, 2]).count()
   }
@@ -444,19 +444,19 @@ fn a_generic_call_result_and_its_argument_temporary_are_released() {
 
 const A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS: &str = "
 shape Row {
-  name: string
-  vals: array<int>
+  name: String
+  vals: Array<Int>
 }
-function find(share rows: array<Row>, index: int) -> maybe<Row> {
+function find(share rows: Array<Row>, index: Int) -> Maybe<Row> {
   return rows.get(index)
 }
-function findName(share names: array<string>, index: int) -> maybe<string> {
+function findName(share names: Array<String>, index: Int) -> Maybe<String> {
   return names.get(index)
 }
-function entrypoint() -> nothing {
-  let rows: array<Row> = [{ name: `a${1}`, vals: [1] }, { name: `b${2}`, vals: [2, 3] }]
-  let names: array<string> = [`x${1}`, `y${2}`]
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let rows: Array<Row> = [{ name: `a${1}`, vals: [1] }, { name: `b${2}`, vals: [2, 3] }]
+  let names: Array<String> = [`x${1}`, `y${2}`]
+  let total: Int = 0
   for (index in range(0, 6)) {
     let fallback: Row = { name: `d`, vals: [] }
     if (find(rows, index).exists()) {
@@ -497,13 +497,13 @@ fn a_returned_maybe_nothing_binds_is_released_at_the_statement_end() {
 
 const A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM: &str = "
 shape Circle {
-  label: string
+  label: String
 }
 shape Square {
-  side: int
+  side: Int
 }
 shape Figure = Circle | Square
-function mk(index: int) -> Figure {
+function mk(index: Int) -> Figure {
   if (index % 2 == 0) {
     let circle: Circle = { label: `circle${index}` }
     return circle
@@ -511,8 +511,8 @@ function mk(index: int) -> Figure {
   let square: Square = { side: index }
   return square
 }
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   let current: Figure = mk(0)
   for (index in range(0, 10)) {
     if (current) {

@@ -15,7 +15,7 @@ use support::{
 };
 
 /// A function that overwrites the stack the producing functions just left.
-const CLOBBER: &str = "function clobber(seed: int) -> int {\n  let plusOne = seed + 1\n  \
+const CLOBBER: &str = "function clobber(seed: Int) -> Int {\n  let plusOne = seed + 1\n  \
                        let doubled = plusOne * 2\n  let tripled = doubled * 3\n  \
                        return tripled + doubled + plusOne\n}\n\n";
 
@@ -50,8 +50,8 @@ fn program(functions: &str, entrypoint_body: &str) -> String {
 fn array_of_numbers_returned_from_its_producer() {
     // Bug caught: cells pointing into the dead producer frame (garbage at -O0). Tier: High.
     let source = program(
-        "function make(amount: number) -> array<number> {\n  \
-         let doubled: number = amount * 2.0\n  let values: array<number> = [amount, doubled]\n  \
+        "function make(amount: Number) -> Array<Number> {\n  \
+         let doubled: Number = amount * 2.0\n  let values: Array<Number> = [amount, doubled]\n  \
          return values\n}\n",
         "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let values = make(amount)\n  \
          let scratch = clobber(5)\n  let fallback: number = 0.0\n  \
@@ -94,8 +94,8 @@ fn copy_of_an_array_of_numbers_is_independent_of_a_later_set() {
 fn map_of_numbers_returned_from_its_producer() {
     // Bug caught: map value cells pointing into the dead producer frame. Tier: High.
     let source = program(
-        "function make(amount: number) -> map<int, number> {\n  \
-         let doubled: number = amount * 2.0\n  let table: map<int, number> = {}\n  \
+        "function make(amount: Number) -> Map<Int, Number> {\n  \
+         let doubled: Number = amount * 2.0\n  let table: Map<Int, Number> = {}\n  \
          table.set(1, amount)\n  table.set(2, doubled)\n  return table\n}\n",
         "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let table = make(amount)\n  \
          let scratch = clobber(5)\n  let fallback: number = 0.0\n  \
@@ -109,9 +109,9 @@ fn array_of_arrays_of_numbers_returned_from_its_producer() {
     // Bug caught: the inner array's cells dangling although the outer array is by value.
     // Tier: High.
     let source = program(
-        "function make(amount: number) -> array<array<number>> {\n  \
-         let doubled: number = amount * 2.0\n  let inner: array<number> = [amount, doubled]\n  \
-         let outer: array<array<number>> = [inner]\n  return outer\n}\n",
+        "function make(amount: Number) -> Array<Array<Number>> {\n  \
+         let doubled: Number = amount * 2.0\n  let inner: Array<Number> = [amount, doubled]\n  \
+         let outer: Array<Array<Number>> = [inner]\n  return outer\n}\n",
         "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let outer = make(amount)\n  \
          let scratch = clobber(5)\n  let fallback: number = 0.0\n  let row = outer[0].or([])\n  \
          print(`${row[1].or(fallback)} ${scratch}`)\n",
@@ -124,10 +124,10 @@ fn maybe_number_read_from_an_element_survives_its_array_and_the_next_read() {
     // Bug caught: a `maybe<number>` bound from an element read keeping a pointer into the
     // per-site read buffer, which the next read at the same site overwrites. Tier: High.
     let source = program(
-        "function pick(share values: array<number>, position: int) -> maybe<number> {\n  \
+        "function pick(share values: Array<Number>, position: Int) -> Maybe<Number> {\n  \
          return values.get(position)\n}\n\
-         function make(amount: number) -> array<number> {\n  \
-         let doubled: number = amount * 2.0\n  let values: array<number> = [amount, doubled]\n  \
+         function make(amount: Number) -> Array<Number> {\n  \
+         let doubled: Number = amount * 2.0\n  let values: Array<Number> = [amount, doubled]\n  \
          return values\n}\n",
         "  let seed: number = 1.5\n  let amount: number = seed + 1.0\n  let values = make(amount)\n  \
          let first = pick(values, 0)\n  let second = pick(values, 1)\n  \
@@ -161,8 +161,8 @@ fn channel_of_numbers_delivers_each_sent_value() {
     // Bug caught: a sent number still pointing at the producer's loop-body slot, so every
     // receive read the last value. Tier: High.
     let source = program(
-        "function produce(line: channel<number>) -> nothing {\n  let seed: number = 1.5\n  \
-         for (round in range(0, 3)) {\n    let step: number = seed * 2.0\n    seed = seed + 1.0\n    \
+        "function produce(line: Channel<Number>) -> Nothing {\n  let seed: Number = 1.5\n  \
+         for (round in range(0, 3)) {\n    let step: Number = seed * 2.0\n    seed = seed + 1.0\n    \
          line.send(step)\n  }\n}\n",
         "  let line: channel<number> = channel<number>(4)\n  produce(line)\n  \
          let fallback: number = 0.0\n  for (round in range(0, 3)) {\n    let got = line.receive()\n    \
@@ -176,8 +176,8 @@ fn map_entry_values_copied_out_of_a_loop_survive_the_loop() {
     // Bug caught: a map loop's per-turn value buffer escaping into an array of numbers.
     // Tier: High.
     let source = program(
-        "function make(seed: number) -> map<string, number> {\n  \
-         let doubled: number = seed * 2.0\n  let table: map<string, number> = {}\n  \
+        "function make(seed: Number) -> Map<String, Number> {\n  \
+         let doubled: Number = seed * 2.0\n  let table: Map<String, Number> = {}\n  \
          table.set(`a`, seed)\n  table.set(`b`, doubled)\n  return table\n}\n",
         "  let seed: number = 1.5\n  let table = make(seed)\n  let kept: array<number> = []\n  \
          for (entry in table) {\n    kept.add(entry.value)\n  }\n  let scratch = clobber(5)\n  \
@@ -317,19 +317,19 @@ fn union_variant_holding_a_number_survives_container_return_and_spawn() {
     // refused: "can't be stored in a union yet") pointing into the building frame, in an array
     // of unions, as a returned union, or as a spawned task's argument. Tier: High.
     let source = program(
-        "shape Circle {\n  radius: float\n}\nshape Boxed {\n  value: number\n}\n\
+        "shape Circle {\n  radius: Float\n}\nshape Boxed {\n  value: Number\n}\n\
          shape Thing = Circle | Boxed\n\n\
-         function describe(share held: Thing) -> number {\n  let fallback: number = 0.0\n  \
+         function describe(share held: Thing) -> Number {\n  let fallback: Number = 0.0\n  \
          if (held) {\n    is Boxed => {\n      return held.value\n    }\n    is Circle => {\n      \
          return fallback\n    }\n  }\n  return fallback\n}\n\n\
-         function make(seed: number) -> array<Thing> {\n  let doubled: number = seed * 2.0\n  \
+         function make(seed: Number) -> Array<Thing> {\n  let doubled: Number = seed * 2.0\n  \
          let first: Boxed = { value: seed }\n  let second: Boxed = { value: doubled }\n  \
-         let items: array<Thing> = []\n  let one: Thing = first\n  let two: Thing = second\n  \
+         let items: Array<Thing> = []\n  let one: Thing = first\n  let two: Thing = second\n  \
          items.add(one)\n  items.add(two)\n  return items\n}\n\n\
-         function produce(seed: number) -> Thing {\n  let doubled: number = seed * 2.0\n  \
+         function produce(seed: Number) -> Thing {\n  let doubled: Number = seed * 2.0\n  \
          let boxed: Boxed = { value: doubled }\n  let wrapped: Thing = boxed\n  return wrapped\n}\n\n\
-         function slow(held: Thing) -> nothing {\n  wait sleep(80)\n  print(`task ${describe(held)}`)\n}\n\n\
-         function launch(seed: number) -> nothing {\n  let doubled: number = seed * 2.0\n  \
+         function slow(held: Thing) -> Nothing {\n  wait sleep(80)\n  print(`task ${describe(held)}`)\n}\n\n\
+         function launch(seed: Number) -> Nothing {\n  let doubled: Number = seed * 2.0\n  \
          let boxed: Boxed = { value: doubled }\n  let wrapped: Thing = boxed\n  \
          background slow(wrapped)\n}\n",
         "  let seed: number = 1.5\n  let items = make(seed)\n  let single = produce(seed)\n  \
@@ -364,8 +364,8 @@ fn map_keyed_by_numbers_returned_from_its_producer() {
     // compares addresses and always misses.
     // Tier: High.
     let source = program(
-        "function keyed() -> map<number, string> {\n  let table: map<number, string> = {}\n  \
-         let price: number = 2.5\n  table.set(price, `two and a half`)\n  return table\n}\n",
+        "function keyed() -> Map<Number, String> {\n  let table: Map<Number, String> = {}\n  \
+         let price: Number = 2.5\n  table.set(price, `two and a half`)\n  return table\n}\n",
         "  let table = keyed()\n  let scratch = clobber(3)\n  for (entry in table) {\n    \
          print(entry.key)\n  }\n  let probe: number = 2.5\n  \
          print(table[probe].or(`missing`))\n  print(scratch)\n",

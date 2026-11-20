@@ -24,15 +24,15 @@ use support::{build_asan_from_ir, build_source, run_asan_binary_counted};
 
 const SHAPES: &str = "\
 shape Tag {
-  label: string
-  nums: array<int>
+  label: String
+  nums: Array<Int>
 }
 shape Big {
-  name: string
-  weight: int
+  name: String
+  weight: Int
 }
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Thing = Big | Tiny
 ";
