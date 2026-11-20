@@ -4,7 +4,7 @@ description: "Every Yinz program starts at function entrypoint(). The compiler l
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -29,15 +29,32 @@ function entrypoint() -> Nothing {
 
 ## With error handling
 
+`entrypoint` always returns `Nothing`, and you cannot add `errors` to it. Handle every call that can fail inside it. Here `.or(0)` supplies a fallback value:
+
 ```
-function entrypoint() -> Nothing errors {
-  let config = file.read(`config.ynz`)
-  server.route(`GET`, `/`, indexHandler)
-  server.listen(3000)
+function loadScore() -> Int errors {
+  return 42
+}
+
+function entrypoint() -> Nothing {
+  let result = loadScore()
+  let score = result.or(0)
+  print(score)
 }
 ```
 
-Errors that aren't handled cascade all the way up to the default error handler — it prints a clean call trace and exits with code 1.
+Adding `errors` to `entrypoint` is a compile error:
+
+```
+function entrypoint() -> Nothing errors {
+  print(`Hello`)
+}
+// COMPILE ERROR: `entrypoint` must return `Nothing`, but this declares it returns `Nothing errors`.
+// Change the return type to `Nothing`: `function entrypoint() -> Nothing`
+// `entrypoint` is where the program starts. It runs and exits — it does not return a value to a caller.
+```
+
+See [Errors](REF-errors.md) for the other ways to handle a failure.
 
 ---
 
@@ -50,36 +67,3 @@ entry = "entrypoint.ynz"    # default — change to any .ynz file
 ```
 
 The function is always called `entrypoint`. The file name is flexible — `app.ynz`, `server.ynz`, whatever makes sense for your project.
-
----
-
-## Command-line arguments
-
-> **Status**: This section uses the `cli` module, which ships in **v0.7**. In v0.1, command-line arguments are not yet available via the standard library.
-
-Arguments come from the standard library, not from `entrypoint`'s parameters:
-
-```
-function entrypoint() -> Nothing {
-  let args = cli.args()                    // all arguments → Array<String>
-  let verbose = cli.flag(`verbose`)        // --verbose flag → Boolean
-  let port = cli.option(`port`, `3000`)   // --port option → String with default
-}
-```
-
-See [Tooling](REF-tooling.md) for the full CLI spec.
-
----
-
-## Exit codes
-
-> **Status**: This section uses the `process` module, which ships in **v0.7**. In v0.1, exit codes are not yet available via the standard library.
-
-```
-function entrypoint() -> Nothing {
-  if (setupFailed) {
-    process.exit(1)    // exit with failure code
-  }
-}
-// Normal completion exits with code 0 automatically
-```

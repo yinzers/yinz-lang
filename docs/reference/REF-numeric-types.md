@@ -25,6 +25,9 @@ Yinz has three numeric types. Pick the one that matches what your values represe
 let price = 0.1 + 0.2              // 0.3 — exact, not 0.30000000000000004
 let tax = 19.99 * 0.07             // 1.3993 — exact
 let change = 100.00 - 99.99        // 0.01 — exact
+print(price)
+print(tax)
+print(change)
 ```
 
 Use `Number` for anything where the exact value matters: money, measurements, user-facing numbers, or any case where you're not sure which type to pick.
@@ -39,13 +42,13 @@ That isn't a bug. `Float` stores decimal numbers in **binary** (base 2, the 0s a
 
 It's the same reason `1/3` is `0.3333333...` forever in everyday base 10: it never ends. In binary, `0.1` is:
 
-```
+```text
 0.0001100110011001100110011001100110011...   (the 0011 repeats forever)
 ```
 
 A computer has to stop somewhere, so it stores the closest value it can. For `0.1` as a 64-bit `Float`, that is:
 
-```
+```text
 0.1000000000000000055511151231257827021181583404541015625
                   ↑ what's actually in memory, not 0.1
 ```
@@ -64,23 +67,22 @@ For science, physics simulations, or any work that needs more than 34 digits of 
 
 ```
 let position: Number<70> = 0.0000000000000001
-let chaotic: Number<200> = initialCondition
+let precise: Number<200> = 1.5
+print(position)
+print(precise)
 ```
 
 `N` is the number of significant digits (the digits that count, ignoring leading zeros).
 
-| Range | Speed |
-|-------|-------|
-| `Number` (the same as `Number<34>`) | Fastest |
-| `Number<N>` for N ≤ 34 | Fastest |
-| `Number<N>` for N > 34 | Slower per operation, but still bounded |
+`Number` is the same as `Number<34>`.
 
 **Maximum precision: `Number<4096>`.** Larger values are a compile error:
 
 ```
 let huge: Number<5000> = 0.001
 // COMPILE ERROR: Expected a precision value between 1 and 4096 inside `Number<N>`.
-//                Write `Number<34>` for the default 34-digit decimal.
+// Write `Number<34>` for the default 34-digit decimal.
+// The number in `Number<N>` sets how many decimal digits of precision you get.
 ```
 
 **Mixing precisions in math** gives the higher precision automatically:
@@ -89,15 +91,7 @@ let huge: Number<5000> = 0.001
 let shortValue: Number<34> = 1.0
 let longValue: Number<100> = 2.0
 let total = shortValue + longValue    // total is Number<100> — no precision lost
-```
-
-**Assigning to a lower precision** rounds the value and gives a compiler warning:
-
-```
-let high: Number<100> = 0.123456789012345678901234567890
-let low: Number<34> = high
-// COMPILER WARNING: assigning Number<100> to Number<34> will round to 34 digits.
-//   If this is intentional, the warning can be silenced. Otherwise widen the target.
+print(total)
 ```
 
 ---
@@ -107,21 +101,20 @@ let low: Number<34> = high
 `Float` stores numbers in binary. It is faster than `Number`, but it has the binary rounding errors described above:
 
 ```
-let velocity: Float = 9.81 * 2.5    // fast — tiny rounding is acceptable here
-let angle: Float = math.sin(1.5)    // graphics/physics — speed over precision
+let gravityPull: Float = 9.81
+let seconds: Float = 2.5
+let velocity: Float = gravityPull * seconds    // fast — tiny rounding is acceptable here
+print(velocity)                                // 24.525000000000002
+
+let width: Float = 1.5
+let twice: Float = 2.0
+let height: Float = width * twice              // graphics/physics — speed over precision
+print(height)
 ```
 
 Use `Float` when:
 - You're doing graphics, physics, or simulations
 - You've measured that `Number` is too slow and a tiny rounding error is acceptable
-
-The IDE warns you if `Float` looks wrong:
-
-```
-let price: Float = 19.99
-// IDE HINT: Using Float for financial values may cause rounding errors.
-// Consider using Number for exact arithmetic.
-```
 
 ---
 
@@ -133,6 +126,7 @@ let price: Float = 19.99
 let count: Int = 42
 let index: Int = 0
 let score: Int = 100
+print(count + index + score)
 ```
 
 Range: `Int.min` to `Int.max` — roughly ±9.2 × 10^18 (about nine quintillion). That is plenty for any count you'd write by hand.
@@ -141,18 +135,10 @@ Assigning a decimal to an `Int` is a compile error:
 
 ```
 let count: Int = 3.5
-// COMPILE ERROR: 3.5 is not a whole number. Int only holds whole numbers.
-// Use Number or Float for decimal values.
+// COMPILE ERROR: This value is `Number`, but `count` is declared as `Int`.
+// Change the annotation to `Number`, or use a different value.
+// The value on the right side must match the type annotation on the left.
 ```
-
-The IDE suggests `Int` when you use `Number` for something that is clearly a whole number:
-
-```
-let pixels: Number = 1920
-// IDE HINT: Number (decimal) is slower for pure integer math.
-// Consider Int for whole numbers.
-```
-
 ---
 
 ## Int overflow
@@ -162,10 +148,16 @@ let pixels: Number = 1920
 ```
 let count: Int = Int.max
 count = count + 1
-// RUNTIME ERROR: Int overflow in '+' at main.ynz:2:9
+// RUNTIME ERROR: Int overflow in '+' at <file>:<line>:<column>
+//
+//   The value wrapped past the maximum (or minimum) for this type.
+//
+//   Use .wrappingAdd() if wrap-around is intentional.
+//
+//   Why: Yinz panics on integer overflow by default to prevent silent data corruption.
 ```
 
-The same message appears for `-` and `*`. Use `.wrappingAdd()` if you want wrap-around behavior on purpose, or `.saturatingAdd()` to cap at `Int.max`.
+The `<file>:<line>:<column>` part stands for the file path and source position the message prints. The same message appears for `-` and `*`.
 
 When you want the number to wrap around (jump to the other end of the range) or stop at the limit, ask for it by name:
 
@@ -173,6 +165,8 @@ When you want the number to wrap around (jump to the other end of the range) or 
 let x: Int = Int.max
 let wrapped = x.wrappingAdd(1)      // wraps to Int.min
 let capped = x.saturatingAdd(1)     // stays at Int.max
+print(wrapped)
+print(capped)
 ```
 
 Subtract and multiply work the same way:
@@ -211,6 +205,9 @@ If you don't write a type, the compiler picks a numeric type from the value:
 let playerCount = 42       // the compiler picks Int
 let taxRate = 0.07         // the compiler picks Number
 let gravity: Float = 9.81  // you asked for Float
+print(playerCount)
+print(taxRate)
+print(gravity)
 ```
 
 Mixing numeric types in one expression is a compile error — you must convert one side yourself:
@@ -218,11 +215,19 @@ Mixing numeric types in one expression is a compile error — you must convert o
 ```
 let a: Int = 42
 let b: Number = 1.5
-let c = a + b        // COMPILE ERROR: `+` cannot be used with `Int` and `Number`.
-                     // Convert the `Int` to `Number`: `a.toNumber() + b`
-                     // Both sides of an expression must have the same type.
+let c = a + b
+// COMPILE ERROR: `+` cannot be used with `Int` and `Number`.
+// Convert the `Int` to `Number`: `myInt.toNumber() + myNumber`
+// Yinz does not convert between types automatically. Both sides of an expression must have the same type.
+```
 
-let c = a.toNumber() + b   // OK: Number + Number = Number
+Write the conversion out and the same expression builds:
+
+```
+let a: Int = 42
+let b: Number = 1.5
+let c = a.toNumber() + b   // Number + Number = Number
+print(c)                   // 43.5
 ```
 
 Because every conversion is written out, you never lose precision or change how a number behaves without seeing it.

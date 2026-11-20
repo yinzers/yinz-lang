@@ -4,7 +4,7 @@ description: "User-facing reference listing every Yinz operator (arithmetic, com
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -17,7 +17,7 @@ metadata:
 
 ## All operators at a glance
 
-```
+```text
 // Arithmetic
 +    -    *    /    %
 
@@ -39,21 +39,28 @@ metadata:
 ## Boolean operators
 
 ```
+let active = true
+let verified = true
+let isAdmin = false
+let isModerator = true
+let loggedIn = true
+let banned = false
+
 if (active && verified) {
-  grantAccess()
+  print(`Access granted`)
 }
 
 if (isAdmin || isModerator) {
-  allowEdit()
+  print(`Editing allowed`)
 }
 
 if (!loggedIn) {
-  redirect(`/login`)
+  print(`Please log in`)
 }
 
 // Combined — add parentheses when it helps
 if (active && (isAdmin || isModerator) && !banned) {
-  grantFullAccess()
+  print(`Full access`)
 }
 ```
 
@@ -68,6 +75,11 @@ A single `|` is for **union types**, not for "or": `shape Shape = Circle | Squar
 Bitwise operators work on the individual bits (the 0s and 1s) of a whole number. They are for permissions, flags, color channels and binary data formats:
 
 ```
+let readFlag = 1
+let writeFlag = 2
+let value = 200
+let mask = 15
+
 let combined = readFlag | writeFlag  // bitwise or — turn on every bit set in either
 let masked = value & 0xFF            // bitwise and — keep only the bits set in both
 let toggled = value ^ mask           // bitwise xor — flip the bits set in mask
@@ -109,21 +121,32 @@ Put parentheses around `permissions & readPermission`. Without them, `!=` runs f
 
 ## No compound assignment or increment
 
-```
-score += 5       // NOT valid — use score = score + 5
-score -= 1       // NOT valid — use score = score - 1
-score++          // NOT valid — use score = score + 1
-score--          // NOT valid — use score = score - 1
-```
-
-Writing `score += 5` gives this error:
+`+=`, `-=`, `++` and `--` do not exist. Write the whole assignment out:
 
 ```
-Error: `+=` is not supported in Yinz.
- 9 │   score += 5
-   │          ─┬
-   │           ╰── Use `x = x + n` instead.
+let score: Int = 1
+score = score + 5    // not `score += 5`
+score = score - 1    // not `score -= 1`
+print(score)
 ```
+
+Writing `score += 5` is a compile error:
+
+```
+let score: Int = 1
+score += 5
+// COMPILE ERROR: `+=` is not supported in Yinz.
+// Use `x = x + n` instead.
+// Compound assignment and increment operators are not part of the Yinz language. Step-by-step assignment on its own line makes the intent explicit.
+```
+
+The other three give the same kind of message with their own first line and fix:
+
+| You write | Error | Use instead |
+|-----------|-------|-------------|
+| `score -= 1` | `-=` is not supported in Yinz. | `x = x - n` |
+| `score++` | `++` is not supported in Yinz. | `x = x + 1` |
+| `score--` | `--` is not supported in Yinz. | `x = x - 1` |
 
 There is one assignment operator: `=`. Every change to a variable is written out.
 
@@ -148,123 +171,92 @@ Precedence is the order in which operators run when a line has more than one. Th
 12. ||                   // boolean or
 ```
 
-When in doubt, add parentheses.
-
-The IDE warns you when a line could be misread:
+When in doubt, add parentheses. `&&` runs before `||`, so `isAdmin || isMember && hasTicket` means `isAdmin || (isMember && hasTicket)`:
 
 ```
+let isAdmin = false
+let isMember = true
+let hasTicket = true
 let canEnter = isAdmin || isMember && hasTicket
-// IDE HINT: && evaluates before ||.
-// Result is isAdmin || (isMember && hasTicket). Add parentheses to clarify intent.
+print(canEnter)    // true
 ```
 
----
+Bitwise `&` runs after `!=`, so a missing pair of parentheses is a compile error:
 
-## Using operators on your own shapes
-
-> **Not available yet.** Using `+`, `==` and similar operators on your own shapes is planned but not built. Until then, write the functions yourself and call them by name, such as `add(a, b)`. The rest of this section describes the planned design.
-
-The standard library will define a contract for each operator. A contract lists the signature of the function that a shape must provide. Those functions are written on their own at the top level of a file, not inside the shape.
-
-```ynz
-// Contracts — signatures only (no `function` keyword, no body)
-shape Addable {
-  add(share self, share other: Self) -> Self
-}
-
-shape Equatable {
-  equals(share self, share other: Self) -> Boolean
-}
-
-shape Comparable follows Equatable {
-  compareTo(share self, share other: Self) -> Int
-}
-
-shape Printable {
-  toString(share self) -> String
-}
 ```
-
-`Self` is a reserved keyword that means "the shape that follows this contract."
-
-**Example:**
-
-```ynz
-// The shape lists its fields and the contracts it follows; no function bodies here
-shape Vector2D follows Addable, Equatable, Printable {
-  x: Number
-  y: Number
-}
-
-// Standalone functions supply the behavior
-// The compiler checks that they match each contract's signature
-function add(share self: Vector2D, share other: Vector2D) -> Vector2D {
-  return { x: self.x + other.x, y: self.y + other.y }
-}
-
-function equals(share self: Vector2D, share other: Vector2D) -> Boolean {
-  return self.x == other.x && self.y == other.y
-}
-
-function toString(share self: Vector2D) -> String {
-  return `(${self.x}, ${self.y})`
-}
-
-const a: Vector2D = { x: 1, y: 2 }
-const b: Vector2D = { x: 3, y: 4 }
-
-const c = a + b          // calls add(a, b)
-const same = a == b      // calls equals(a, b)
-print(a)                 // calls toString(a)
+let permissions: Int = 3
+let readPermission: Int = 1
+let canRead = permissions & readPermission != 0
+// COMPILE ERROR: `&` cannot be used with `Int` and `Boolean`.
+// Check that both sides have the same type.
+// Yinz does not convert between types automatically. Both sides of an expression must have the same type.
 ```
-
-**Which function each operator calls:**
-
-| Operator | Contract | Function name |
-|----------|----------|---------------|
-| `+` | `Addable` | `add` |
-| `-` | `Subtractable` | `subtract` |
-| `*` | `Multipliable` | `multiply` |
-| `/` | `Divisible` | `divide` |
-| `==` | `Equatable` | `equals` |
-| `<` `>` `<=` `>=` | `Comparable` | `compareTo` |
-| `print(x)` | `Printable` | `toString` |
-
-When you use an operator, the compiler finds the function by its name and the type of its first parameter. `a + b` means the same as `add(a, b)`.
 
 ---
 
 ## `print()` always works
 
-You can print any value. You don't need a `Printable` contract or your own `toString` function.
+You can print any value. You don't need any extra code.
 
 **Shapes** print as `ShapeName { field: value, field: value }`:
 
 ```ynz
-print(player)    // Player { name: Alice, health: 100 }
-```
-
-**Arrays** print as `[elem1, elem2, ...]`. Large arrays are capped at 20 elements:
-
-```ynz
-print(scores)               // [82, 91, 74, 88]
-print(bigArray)             // [1, 2, 3, ..., 20, ... and 980 more]
-```
-
-**Options** print their display text if one was declared, otherwise the choice's name:
-
-```ynz
-print(Timeframe.daily)      // Daily    (if declared as daily: `Daily`)
-print(Status.active)        // active   (no display text declared)
-```
-
-To change how a shape prints, write a standalone `toString(share self: YourShape) -> String` function and use `${...}` in a backtick string:
-
-```ynz
-function toString(share self: Player) -> String {
-    return `${self.name} (HP: ${self.health})`
+shape Player {
+  name: String
+  health: Int
 }
-print(player)    // Alice (HP: 100)
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Alice`, health: 100 }
+  print(player)    // Player { name: Alice, health: 100 }
+}
+```
+
+**Arrays** print as `[elem1, elem2, ...]`. An array with more than 20 items prints the first 20, then how many more there are:
+
+```ynz
+let scores: Array<Int> = [82, 91, 74, 88]
+print(scores)               // [82, 91, 74, 88]
+
+let bigArray: Array<Int> = []
+let next: Int = 0
+while (next < 1000) {
+  bigArray.add(next)
+  next = next + 1
+}
+print(bigArray)             // [0, 1, 2, ... 19, ... and 980 more]
+```
+
+**Options** cannot be printed directly. Turn the choice into a string with `.toString()` first. The result is the display text if one was declared, otherwise the choice's name:
+
+```ynz
+options Timeframe {
+  daily: `Daily`
+  weekly
+}
+
+function entrypoint() -> Nothing {
+  print(Timeframe.daily.toString())     // Daily    (declared as daily: `Daily`)
+  print(Timeframe.weekly.toString())    // weekly   (no display text declared)
+}
+```
+
+To print a shape your own way, write a function that returns a `String` and use `${...}` in a backtick string:
+
+```ynz
+shape Player {
+  name: String
+  health: Int
+}
+
+function describe(share self: Player) -> String {
+  return `${self.name} (HP: ${self.health})`
+}
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Alice`, health: 100 }
+  print(player.describe())    // Alice (HP: 100)
+}
 ```
 
 ---
@@ -277,13 +269,7 @@ print(player)    // Alice (HP: 100)
 let input: String = `5`
 let count: Int = 5
 if (input == count) { print(1) }
-```
-
-The compiler stops with this error:
-
-```
-Error: `==` cannot be used with `String` and `Int`.
- 4 │   if (input == count) { print(1) }
-   │       ───────┬──────
-   │              ╰──────── Check that both sides have the same type.
+// COMPILE ERROR: `==` cannot be used with `String` and `Int`.
+// Check that both sides have the same type.
+// Yinz does not convert between types automatically. Both sides of an expression must have the same type.
 ```

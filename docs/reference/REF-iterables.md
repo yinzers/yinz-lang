@@ -1,62 +1,53 @@
 ---
 name: "REF-iterables"
-description: "for loops work on any type that follows the Iterable contract. Arrays, fixed arrays, and maps all work by default — you never need to think about this for everyday code."
+description: "for loops work on arrays, fixed arrays, maps, ranges, strings and any shape with a next function."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-16"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
   type: "reference"
 ---
 
+
 # Iterables
 
-`for` loops work on any type that follows the `Iterable` contract. Arrays, fixed arrays, and maps all work by default — you never need to think about this for everyday code.
+`for` loops work on arrays, fixed arrays, maps, ranges, strings and any shape that has a `next` function. For everyday code you never need to think about how.
 
 ---
 
 ## How for loops work
 
 ```ynz
-for (player in players) {
-  print(player.name)
+function entrypoint() -> Nothing {
+  let names: Array<String> = [`Alice`, `Bob`]
+
+  for (name in names) {
+    print(name)
+  }
 }
 ```
 
-The loop asks `players` for its next value again and again, using the function `next(players)`. It stops when `next` returns `none`. You can also write the call as `players.next()`; both forms do the same thing. That one function is the whole `Iterable` contract.
+Output:
 
----
-
-## Two contracts — one that cannot fail, one that can
-
-Most iterables never fail while giving you the next value. Some can: reading a file or paging through a web API can hit a disk error or a network timeout. Yinz has one contract for each. A contract lists only the function signatures a shape must provide, with no `function` keyword and no body:
-
-```ynz
-shape Iterable<T> {
-  next(lend self) -> Maybe<T>
-}
-
-shape FallibleIterable<T> {
-  next(lend self) -> Maybe<T> errors
-}
+```text
+Alice
+Bob
 ```
 
-`next` returns the next value, or `none` when there are no more. For `FallibleIterable`, `next` can also fail.
+The loop asks the collection for its next value again and again. It stops when there are no more.
 
-You almost never need to choose a contract. The compiler picks one from what you loop over:
+You can loop over:
 
-| You're iterating over | Contract |
-|-----------------------|----------|
-| `Array<T>`, `Fixed<T>` | `Iterable<T>` |
-| `Map<K, V>.entries()` | `Iterable<Entry<K, V>>` |
-| `range(start, end)` | `Iterable<Int>` |
-| `file.lines(path)` | `FallibleIterable<String>` |
-| `request.stream(url)` | `FallibleIterable<Response>` |
-| Paginated API clients | `FallibleIterable<T>` |
-
-The `for` syntax is the same either way. The difference: a loop that can fail needs your function to be marked `errors`, or you handle the failures yourself.
+| You're looping over | Each pass gives you |
+|---------------------|---------------------|
+| `Array<T>`, `Fixed<T>` | the next item |
+| `Map<K, V>` | a key and a value: `for ((key, value) in scores)` |
+| `range(start, end)` | the next `Int` |
+| a `String` | the next character |
+| a shape with a `next` function | whatever `next` returns (see below) |
 
 ---
 
@@ -65,24 +56,43 @@ The `for` syntax is the same either way. The difference: a loop that can fail ne
 When you loop over a collection of shapes, you can pull the fields out right in the loop header instead of reading them from the loop variable:
 
 ```ynz
-shape Player { name: String, health: Int, score: Int }
+shape Player {
+  name: String
+  health: Int
+  score: Int
+}
 
-const players: Fixed<Player> = [
+function entrypoint() -> Nothing {
+  let players: Fixed<Player> = [
     { name: `Alice`, health: 100, score: 50 },
-    { name: `Bob`,   health: 80,  score: 30 },
-]
+    { name: `Bob`, health: 80, score: 30 }
+  ]
 
-// One variable — read fields from it
-for (player in players) {
+  // One variable — read fields from it
+  for (player in players) {
     print(player.name)
     print(player.health)
-}
+  }
 
-// Pull the fields out — name and health become variables
-for ({ name, health } in players) {
+  // Pull the fields out — name and health become variables
+  for ({ name, health } in players) {
     print(name)
     print(health)
+  }
 }
+```
+
+Output:
+
+```text
+Alice
+100
+Bob
+80
+Alice
+100
+Bob
+80
 ```
 
 Both forms do the same thing. Pulling fields out is shorthand for reading `player.name` and `player.health` yourself.
@@ -90,19 +100,62 @@ Both forms do the same thing. Pulling fields out is shorthand for reading `playe
 You can rename a field with `as`:
 
 ```ynz
-for ({ name as playerName, health as hp } in players) {
+shape Player {
+  name: String
+  health: Int
+}
+
+function entrypoint() -> Nothing {
+  let players: Fixed<Player> = [
+    { name: `Alice`, health: 100 },
+    { name: `Bob`, health: 80 }
+  ]
+
+  for ({ name as playerName, health as hp } in players) {
     print(playerName)
     print(hp)
+  }
 }
+```
+
+Output:
+
+```text
+Alice
+100
+Bob
+80
 ```
 
 You don't have to pull out every field — list only the ones you need:
 
 ```ynz
-for ({ name } in players) {
+shape Player {
+  name: String
+  health: Int
+  score: Int
+}
+
+function entrypoint() -> Nothing {
+  let players: Fixed<Player> = [
+    { name: `Alice`, health: 100, score: 50 },
+    { name: `Bob`, health: 80, score: 30 }
+  ]
+
+  for ({ name } in players) {
     print(name)   // health and score exist, but you didn't ask for them
+  }
 }
 ```
+
+Output:
+
+```text
+Alice
+Bob
+```
+
+See [Destructuring](REF-destructuring.md).
 
 ---
 
@@ -111,130 +164,94 @@ for ({ name } in players) {
 `range()` accepts one or two arguments:
 
 ```ynz
-// Two-argument form: start (inclusive) to end (exclusive)
-for (num in range(1, 10)) {
-  print(num)    // 1, 2, 3, ..., 9
-}
-
-// One-argument form: 0 (inclusive) to end (exclusive)
-for (num in range(5)) {
-  print(num)    // 0, 1, 2, 3, 4
-}
-
-// Large range — almost zero memory
-for (num in range(1, 1000000)) {
-  print(num)
-}
-```
-
-`range()` is built in. It makes each number only when the loop asks for it, so it never builds an array. It follows the `Iterable<Int>` contract.
-
----
-
-## File lines — read huge files without loading them
-
-```
-// Process a 50GB log file with only one line in memory at a time
-function findErrors(path: String) -> Array<String> errors {
-  let errorLines: Array<String> = []
-  for (line in file.lines(path)) {     // each read can fail — the failure goes up automatically
-    if (line.contains(`ERROR`)) {
-      errorLines.add(line)
-    }
+function entrypoint() -> Nothing {
+  // Two-argument form: start (inclusive) to end (exclusive)
+  for (num in range(1, 4)) {
+    print(num)    // 1, 2, 3
   }
-  return errorLines
-}
-```
 
-`file.lines()` returns a `FallibleIterable<String>`. It reads one line at a time, and any read can fail (disk error, file closed mid-read, and so on). Because the function is marked `errors`, a failed read ends the function and passes the failure to the caller, just like a failed call to any other `errors` function.
-
-If you want to keep reading past failures (for example, log them and carry on), use one of these adapters (functions that sit between the file and your loop and change what happens when a read fails):
-
-```ynz
-// Skip lines that failed to read — drops each failure and moves on
-const firstPassLines = file.lines(path)
-const readableLines = firstPassLines.orSkipFailures()
-for (line in readableLines) {
-  if (line.contains(`ERROR`)) { print(line) }
-}
-
-// Skip and log each failure to the error output — call .logSkippedFailuresTo() first, then .orSkipFailures()
-const secondPassLines = file.lines(path)
-const loggedLines = secondPassLines.logSkippedFailuresTo(terminal.stderr)
-const survivingLines = loggedLines.orSkipFailures()
-for (line in survivingLines) {
-  if (line.contains(`ERROR`)) { print(line) }
-}
-
-// Get each step as a success-or-failure value, decide per line
-const thirdPassLines = file.lines(path)
-const lineResults = thirdPassLines.withErrors()
-for (result in lineResults) {
-  if (result.failed()) {
-    log.warn(`bad line: ${result.message}`)
-  } else {
-    if (result.value.exists()) {
-      print(result.value.value)
-    }
+  // One-argument form: 0 (inclusive) to end (exclusive)
+  for (num in range(3)) {
+    print(num)    // 0, 1, 2
   }
 }
 ```
 
-With any adapter, the enclosing function no longer needs to be `errors`.
+Output:
 
-**`.orSkipFailures()` is silent** — it drops failed lines and writes nothing. If you want a log, call `.logSkippedFailuresTo(sink)` first and then `.orSkipFailures()` on its result. `terminal.stderr` and `terminal.stdout` are built-in places to log to. You can also pass any value that follows the `LogSink` contract (one with a `.write(message)` function).
+```text
+1
+2
+3
+0
+1
+2
+```
+
+`range()` is built in. Both arguments must be `Int`. It makes each number only when the loop asks for it, so it never builds an array.
 
 ---
 
 ## Building your own iterable
 
-Declare a shape that `follows Iterable<T>`, with its data fields and any `hidden` fields it needs to remember where it is. Then write a standalone `next` function whose signature matches the contract. The compiler checks the match.
+Declare a shape, with its data fields and any `hidden` fields it needs to remember where it is. Then write a standalone `next` function that takes the shape as `lend self` and returns `Maybe<T>`. The loop calls `next(board)` until it returns `none`.
 
 ```ynz
-shape CountDown follows Iterable<Int> {
-  end: Int
-  hidden current: Int = 0
+shape Scoreboard {
+  scores: Array<Int>
+  hidden position: Int = 0
 }
 
-function next(lend self: CountDown) -> Maybe<Int> {
-  if (self.current > self.end) {
-    return none
+function next(lend self: Scoreboard) -> Maybe<Int> {
+  let result = self.scores.get(self.position)
+  self.position = self.position + 1
+  return result
+}
+
+function entrypoint() -> Nothing {
+  let board: Scoreboard = { scores: [50, 40, 30] }
+  for (score in board) {
+    print(score)    // 50, 40, 30
   }
-  const value = self.end - self.current
-  self.current = self.current + 1
-  return value
-}
-
-const counter: CountDown = { end: 5 }
-for (num in counter) {
-  print(num)    // 5, 4, 3, 2, 1, 0
 }
 ```
 
-If getting the next value can fail (a file or the network), follow the `FallibleIterable` contract instead:
+Output:
+
+```text
+50
+40
+30
+```
+
+A shape with no `next` function cannot be looped over:
 
 ```ynz
-shape ApiPager<T> follows FallibleIterable<T> {
-  baseUrl: String
-  hidden cursor: Maybe<String> = none
-  hidden done: Boolean = false
+shape Roster {
+  title: String
 }
 
-function next(lend self: ApiPager<T>) -> Maybe<T> errors {
-  if (self.done) {
-    return none
+function entrypoint() -> Nothing {
+  let roster: Roster = { title: `Pirates` }
+  for (item in roster) {
+    print(item)
   }
-  const url = self.buildUrl()
-  const response = request.get(url)   // can fail — the failure goes up automatically
-  self.cursor = response.nextCursor
-  self.done = response.nextCursor.exists() == false
-  return response.item
 }
 ```
 
-To choose between `Iterable<T>` and `FallibleIterable<T>`, ask one question: can getting the next value fail while the program runs? If yes, use `FallibleIterable<T>`. If no, use `Iterable<T>`. The compiler reports an error if you read a file or call the network inside a `next` that is not allowed to fail.
+The compiler stops with:
 
-`next` is a standalone function, not something stored inside the iterable. The `for` loop calls `next(iterator)`, which you can also write as `iterator.next()`.
+```text
+Error: `Roster` cannot be iterated — it does not follow `Iterable<T>`.
+   ╭─[ main.ynz:7:16 ]
+   │
+ 7 │   for (item in roster) {
+   │                ───┬──
+   │                   ╰──── Add `function next(lend self: Roster) -> Maybe<T>` to make it iterable.
+   │
+   │ Note: For a `for` loop to work on a custom shape, the shape needs a standalone `next` function returning `Maybe<T>`. When the iterator is done, return `none`.
+───╯
+```
 
 ---
 
@@ -243,8 +260,7 @@ To choose between `Iterable<T>` and `FallibleIterable<T>`, ask one question: can
 Most developers never build one. The built-in iterables cover everyday code:
 
 - `Array<T>` and `Fixed<T>` — go through the items
-- `Map<K, V>` — go through the entries (each with `.key` and `.value`)
+- `Map<K, V>` — go through the keys and values
 - `range(start, end)` — a sequence of numbers
-- `file.lines(path)` — the lines of a file, without loading the whole file
 
-Custom iterables are for library authors and for cases like making values on demand or reading a stream of data.
+Custom iterables are for library authors and for cases like making values on demand.
