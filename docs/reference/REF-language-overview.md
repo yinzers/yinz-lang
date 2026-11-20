@@ -24,11 +24,11 @@ You write clean, simple code. The compiler turns it into fast, safe machine code
 ```ynz
 shape Player {
   name: String
-  health: Number
+  health: Int
 }
 
 // Functions are written on their own; player.takeDamage(5) is a shortcut for takeDamage(player, 5)
-function takeDamage(lend self: Player, amount: Number) -> Nothing {
+function takeDamage(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health - amount
 }
 
@@ -88,11 +88,8 @@ Each section covers one part of the language. They're self-contained — start w
 - [Configuration](REF-config.md) — the `yinz.toml` project file
 - [Coming from TypeScript](../guides/coming-from-typescript.md) — a guide to what changes if you already write TypeScript
 - [Tooling](REF-tooling.md) — ynz build, ynz run, ynz watch, ynz fmt
-- [Testing](REF-testing.md) — checking your code
-- [Packages](REF-packages.md) — sharing code
 - [Operators](REF-operators.md) — math, comparison, boolean operators (`&&` `||` `!`), bitwise operators
 - [Sensitive Values](REF-sensitive.md) — hiding secrets automatically with the `sensitive` modifier
 - [Iterables](REF-iterables.md) — making your own shapes work in `for` loops with `follows Iterable`
-- [FFI](REF-ffi.md) — calling C libraries and system APIs
 - [Linting](REF-linting.md) — errors, warnings, and suggestions the compiler catches
 - [Performance](REF-performance.md) — why Yinz is fast
