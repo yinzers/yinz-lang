@@ -371,7 +371,7 @@ See [`docs/internal/implementation/IMP-testing.md`](../internal/implementation/I
 
 - **Substitute used pre-v0.14+**: Users are responsible for test isolation. `setup file { db.connect(...) }` opens a per-file connection. Files that genuinely share state should be designed differently or use `--serial` mode.
 - **Trigger to land**: v0.14+ if real demand surfaces (e.g., a project with massive test files that need within-file parallelism, or users reporting they can't isolate cross-file state cleanly).
-- **Locked design**: See [`docs/internal/implementation/IMP-testing.md`](../internal/implementation/IMP-testing.md) and [`docs/reference/REF-testing.md`](REF-testing.md)
+- **Locked design**: See [`docs/internal/implementation/IMP-testing.md`](../internal/implementation/IMP-testing.md)
 
 > **⚠️ DO NOT FORGET** (checklist at top): `test` keyword activated in registry (was `[[deferred_language_feature]]` — promote it); `[[primitive_intrinsic]]` entries for all assertion functions; `ynz test` CLI output follows WHAT/WHAT-INSTEAD/WHY format for assertion failures; assertion failures must show actual vs expected values clearly; extension integration (test results in Problems panel); stdlib example with a real test suite; spec + design docs.
 
@@ -611,7 +611,7 @@ The `foreign` keyword and machinery to call C / C++ / Rust libraries from Yinz.
 
 - **Substitute used pre-v2**: Stdlib modules that need C interop (file I/O, networking, math) call C internally via compiler-private mechanisms. Users don't see this. If a user genuinely needs to call a third-party C library, they have to wait for v2+ or contribute to the stdlib.
 - **Trigger to land**: v2+ work begins OR a stdlib gap creates a real need.
-- **Locked design**: See [`docs/internal/implementation/IMP-ffi.md`](../internal/implementation/IMP-ffi.md) and [`docs/reference/REF-ffi.md`](REF-ffi.md)
+- **Locked design**: See [`docs/internal/implementation/IMP-ffi.md`](../internal/implementation/IMP-ffi.md)
 - **Registry entries**: `[[deferred_language_feature]]` name `foreign` — DONE M1 P5b
 
 ### GPU dispatch (locked design, deferred from v0.1)
