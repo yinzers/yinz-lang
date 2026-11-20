@@ -60,6 +60,15 @@ Use `const` by default. Reach for `let` only when you need to change the value l
 - **Letting a function change it**: you can't pass a `const` value to a function whose signature declares `lend` or `give`, because those words let the function change or take the value, and the compiler won't allow that
 
 ```ynz
+shape Player {
+  name: String
+  health: Int
+}
+
+function healPlayer(lend player: Player) -> Nothing {
+  player.health = 100
+}
+
 const player: Player = { name: `Patrick`, health: 100 }
 player.health = 50            // COMPILE ERROR: `player` is `const` and its fields cannot be changed.
 healPlayer(player)            // COMPILE ERROR: `player` is `const` — `healPlayer` needs to mutate it
