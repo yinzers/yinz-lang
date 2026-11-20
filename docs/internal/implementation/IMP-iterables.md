@@ -25,15 +25,15 @@ Custom iteration uses the existing `follows` contract system. No special iterato
 
 ---
 
-## `next(lend self) -> maybe<T>` — Ownership and Maybe
+## `next(lend self) -> Maybe<T>` — Ownership and Maybe
 
-The `next` function takes `lend self` (it modifies the iterator's internal state — current position, buffer, etc.) and returns `maybe<T>` (`none` signals end-of-sequence).
+The `next` function takes `lend self` (it modifies the iterator's internal state — current position, buffer, etc.) and returns `Maybe<T>` (`none` signals end-of-sequence).
 
-**Why `maybe<T>` over a separate sentinel**: `maybe<T>` is the language's universal way to express "this might not exist." Using it for end-of-sequence is consistent. `none` = no more items = natural English.
+**Why `Maybe<T>` over a separate sentinel**: `Maybe<T>` is the language's universal way to express "this might not exist." Using it for end-of-sequence is consistent. `none` = no more items = natural English.
 
 **Why `lend self`**: Iterators are stateful by nature — they track a current position. `lend self` is the correct ownership modifier for a function that modifies the iterator value.
 
-Per the non-OOP model ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), `next` is a STANDALONE FUNCTION — not a method inside the iterator shape. The contract declares its bare signature; each iterator's implementation lives as a standalone `function next(lend self: MyIterator) -> maybe<T> { ... }`.
+Per the non-OOP model ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), `next` is a STANDALONE FUNCTION — not a method inside the iterator shape. The contract declares its bare signature; each iterator's implementation lives as a standalone `function next(lend self: MyIterator) -> Maybe<T> { ... }`.
 
 ---
 
@@ -43,13 +43,13 @@ Built-in collections formally follow `Iterable<T>` through compiler-synthesized 
 
 | Wrapper | Source | Contract-T | Stack-allocated? |
 |---|---|---|---|
-| `ArrayIter<T>` | `array<T>` | `T` | Yes — alloca, no `ynz_alloc` |
-| `FixedIter<T, N>` | `fixed<T, N>` | `T` | Yes |
-| `MapIter<K, V>` | `map<K, V>` | `MapEntry<K, V>` |  Yes |
+| `ArrayIter<T>` | `Array<T>` | `T` | Yes — alloca, no `ynz_alloc` |
+| `FixedIter<T, N>` | `Fixed<T, N>` | `T` | Yes |
+| `MapIter<K, V>` | `Map<K, V>` | `MapEntry<K, V>` |  Yes |
 | `StringCodePointIter` | `string` | `string` (1 code point per step) | Yes |
 | `Range` | `range(start, end)` | `int` | Yes (Range IS the iterator — not wrapped) |
 
-**`Range`** is a user-visible shape (not synthesized). It follows `Iterable<int>` directly with hidden state fields. Storable, passable, returnable as of M7 (M3 restriction removed).
+**`Range`** is a user-visible shape (not synthesized). It follows `Iterable<Int>` directly with hidden state fields. Storable, passable, returnable as of M7 (M3 restriction removed).
 
 **User-defined iterables** are NOT wrapped — they ARE the iterator. The shape follows the contract; the compiler verifies a matching standalone `next()` function exists.
 
@@ -64,10 +64,10 @@ Built-in collections formally follow `Iterable<T>` through compiler-synthesized 
 Iterator state (current position, buffers, page numbers) is tracked with `hidden` fields with defaults. This is what `hidden` was designed for — implementation details that the caller shouldn't see or set.
 
 ```
-shape Range follows Iterable<int> {
-  start: int
-  end: int
-  hidden current: int = 0    // iterator state — caller never sets this
+shape Range follows Iterable<Int> {
+  start: Int
+  end: Int
+  hidden current: Int = 0    // iterator state — caller never sets this
   ...
 }
 ```
@@ -81,11 +81,11 @@ Resolved: two separate contracts. In-memory iteration uses `Iterable<T>`; iterat
 ```ynz
 // Contracts use bare-signature form (no `function` keyword, no body)
 shape Iterable<T> {
-  next(lend self) -> maybe<T>
+  next(lend self) -> Maybe<T>
 }
 
 shape FallibleIterable<T> {
-  next(lend self) -> maybe<T> errors
+  next(lend self) -> Maybe<T> errors
 }
 ```
 
@@ -93,11 +93,11 @@ shape FallibleIterable<T> {
 
 | Source | Contract |
 |--------|----------|
-| `array<T>.items()` | `Iterable<T>` |
-| `fixed<T>.items()` | `Iterable<T>` |
-| `map<K,V>.entries()` | `Iterable<Entry<K,V>>` |
-| `range(start, end)` | `Iterable<int>` |
-| `file.lines(path)` | `FallibleIterable<string>` |
+| `Array<T>.items()` | `Iterable<T>` |
+| `Fixed<T>.items()` | `Iterable<T>` |
+| `Map<K,V>.entries()` | `Iterable<Entry<K,V>>` |
+| `range(start, end)` | `Iterable<Int>` |
+| `file.lines(path)` | `FallibleIterable<String>` |
 | `request.stream(url)` | `FallibleIterable<Response>` |
 | Paginated API clients | `FallibleIterable<T>` |
 
@@ -112,10 +112,10 @@ The for loop syntax is identical for both contracts. The compiler checks the ite
 ```ynz
 // Skip failed iterations silently (logs the error, continues to next item)
 let fileLines = file.lines(path)
-let lines = fileLines.orSkipFailures()               // Iterable<string>
+let lines = fileLines.orSkipFailures()               // Iterable<String>
 
 // Get each step's success-or-failure as a value
-let results = fileLines.withErrors()                 // Iterable<Result<string>>
+let results = fileLines.withErrors()                 // Iterable<Result<String>>
 ```
 
 These let users iterate fallible sources from non-errors functions when they have a specific recovery strategy.
@@ -137,13 +137,13 @@ loggedIter.orSkipFailures()
 
 ```ynz
 shape LogSink {
-  write(lend self, message: string) -> nothing
+  write(lend self, message: String) -> Nothing
 }
 ```
 
 In M7, `terminal.stderr` and `terminal.stdout` follow `LogSink`. The v0.5+ stdlib expands this to file sinks and user-defined sinks.
 
-`.withErrors()` returns `Iterable<maybe<T> errors>` (NOT `Iterable<Result<T>>`). `Result` is on the banned-jargon list. Each iteration step yields an errors-capable maybe-value; the user inspects it with standard `.failed()` / `.message` / `.or()` machinery. Example:
+`.withErrors()` returns `Iterable<Maybe<T> errors>` (NOT `Iterable<Result<T>>`). `Result` is on the banned-jargon list. Each iteration step yields an errors-capable maybe-value; the user inspects it with standard `.failed()` / `.message` / `.or()` machinery. Example:
 
 ```ynz
 let fileLines = file.lines(path)
@@ -163,7 +163,7 @@ No new shape is needed — this reuses M7's own errors-capable mechanism uniform
 
 **Why two contracts instead of one with optional `errors`:**
 
-Yinz's `follows` contracts require method signatures to match exactly. There's no language-level mechanism for "this method returns `maybe<T>` OR `maybe<T> errors`" — adding one would complicate every `follows` contract for one feature. Two explicit contracts is simpler and matches the user's mental model: "is this iterator infallible or fallible?"
+Yinz's `follows` contracts require method signatures to match exactly. There's no language-level mechanism for "this method returns `Maybe<T>` OR `Maybe<T> errors`" — adding one would complicate every `follows` contract for one feature. Two explicit contracts is simpler and matches the user's mental model: "is this iterator infallible or fallible?"
 
 Decided: a single contract that always returns `errors`, and swallowing errors as `none`, rejected.
 
@@ -173,11 +173,11 @@ Decided: a single contract that always returns `errors`, and swallowing errors a
 // In-memory data — implements the infallible contract.
 // Shape declaration holds data fields only; standalone function provides the implementation.
 shape CircularBuffer<T> follows Iterable<T> {
-  items: array<T>
-  hidden position: int = 0
+  items: Array<T>
+  hidden position: Int = 0
 }
 
-function next(lend self: CircularBuffer<T>) -> maybe<T> {
+function next(lend self: CircularBuffer<T>) -> Maybe<T> {
   if (self.items.count() == 0) { return none }
   const value = self.items[self.position]
   self.position = (self.position + 1) % self.items.count()
@@ -186,11 +186,11 @@ function next(lend self: CircularBuffer<T>) -> maybe<T> {
 
 // I/O data — implements the fallible contract.
 shape ApiPager<T> follows FallibleIterable<T> {
-  cursor: maybe<string>
+  cursor: Maybe<String>
   hidden done: boolean = false
 }
 
-function next(lend self: ApiPager<T>) -> maybe<T> errors {
+function next(lend self: ApiPager<T>) -> Maybe<T> errors {
   if (self.done) { return none }
   const response = request.get(self.buildUrl())   // can fail
   self.cursor = response.nextCursor
@@ -224,7 +224,7 @@ for ((k, v) in scores) {
 }
 ```
 
-Both forms desugar identically at codegen — the tuple-destructure form is parser sugar only. `MapIter<K, V>.next()` still returns `maybe<MapEntry<K, V>>`; the desugar step inserts the field-access bindings before the loop body.
+Both forms desugar identically at codegen — the tuple-destructure form is parser sugar only. `MapIter<K, V>.next()` still returns `Maybe<MapEntry<K, V>>`; the desugar step inserts the field-access bindings before the loop body.
 
 ---
 
@@ -234,12 +234,12 @@ For built-in wrappers, the `T` in `Iterable<T>` or `FallibleIterable<T>` is:
 
 | Source | Wrapper | Contract | T |
 |---|---|---|---|
-| `array<T>` | `ArrayIter<T>` | `Iterable<T>` | concrete T |
-| `fixed<T, N>` | `FixedIter<T, N>` | `Iterable<T>` | concrete T |
-| `map<K, V>` | `MapIter<K, V>` | `Iterable<MapEntry<K, V>>` | `MapEntry<K, V>` |
-| `string` | `StringCodePointIter` | `Iterable<string>` | `string` (1 code point) |
-| `range(start, end)` | `Range` (self) | `Iterable<int>` | `int` |
-| `file.lines(path)` | (user-visible) | `FallibleIterable<string>` | `string` |
+| `Array<T>` | `ArrayIter<T>` | `Iterable<T>` | concrete T |
+| `Fixed<T, N>` | `FixedIter<T, N>` | `Iterable<T>` | concrete T |
+| `Map<K, V>` | `MapIter<K, V>` | `Iterable<MapEntry<K, V>>` | `MapEntry<K, V>` |
+| `string` | `StringCodePointIter` | `Iterable<String>` | `string` (1 code point) |
+| `range(start, end)` | `Range` (self) | `Iterable<Int>` | `int` |
+| `file.lines(path)` | (user-visible) | `FallibleIterable<String>` | `string` |
 
 User shapes follow `Iterable<T>` or `FallibleIterable<T>` directly — no wrapper. The concrete `T` is whatever their `next()` function returns inside the `maybe`.
 

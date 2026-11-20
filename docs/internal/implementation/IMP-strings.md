@@ -15,7 +15,7 @@ metadata:
 
 User spec: [`docs/reference/REF-strings.md`](../../reference/REF-strings.md) (indexing API, methods).
 
-This file locks the internal-encoding decision and SIMD implementation strategy for the built-in `string` type. The user-facing API (`.byteAt()`, `.get()` by code point, `.graphemeAt()`, `.count()`/`.byteCount()`/`.graphemeCount()`) is documented in [`docs/internal/implementation/IMP-collections.md`](IMP-collections.md) "String Methods" section and [`docs/reference/REF-strings.md`](../../reference/REF-strings.md). This doc covers what's UNDERNEATH that API.
+This file locks the internal-encoding decision and SIMD implementation strategy for the built-in `String` type. The user-facing API (`.byteAt()`, `.get()` by code point, `.graphemeAt()`, `.count()`/`.byteCount()`/`.graphemeCount()`) is documented in [`docs/internal/implementation/IMP-collections.md`](IMP-collections.md) "String Methods" section and [`docs/reference/REF-strings.md`](../../reference/REF-strings.md). This doc covers what's UNDERNEATH that API.
 
 ---
 
@@ -168,16 +168,16 @@ A `YnzString` is exactly 24 bytes with 8-byte alignment. The tag byte lives at o
 
 ## String Ownership and Release
 
-Current state (v0.3, before the 24-byte layout lands): a `string` value is one `ptr` to NUL-terminated UTF-8 bytes. A `u64` header sits in front of the first byte (`STRING_HEADER_BYTES = 8`, `STATIC_STRING_HEADER = 0`, `crates/ynz-abi/src/lib.rs:204-216`):
+Current state (v0.3, before the 24-byte layout lands): a `String` value is one `ptr` to NUL-terminated UTF-8 bytes. A `u64` header sits in front of the first byte (`STRING_HEADER_BYTES = 8`, `STATIC_STRING_HEADER = 0`, `crates/ynz-abi/src/lib.rs:204-216`):
 
 | Header | Bytes are | Source |
 |---|---|---|
 | `STATIC_STRING_HEADER` (0) | static, never freed (a static string is the only kind never freed; every heap string is released by its owner) | literals, `true`/`false`, options display names, the `none`/placeholder debug text, error-message literals, `[REDACTED]` |
-| any other value | heap, owned; the value is the byte capacity (length + NUL, never 0) | every string the runtime allocates: interpolation, string methods, `int`/`float`/`number` `.toString()`, bignum results |
+| any other value | heap, owned; the value is the byte capacity (length + NUL, never 0) | every string the runtime allocates: Interpolation, string methods, `int`/`float`/`number` `.toString()`, bignum results |
 
 Rules:
 
-- Every string source that can reach Yinz code carries the header: codegen emits static strings as `{ i64 0, [N x i8] }` (`build_static_string`, `crates/ynz-codegen/src/emit.rs:35909-35942`), and `heap_string_buffer` (`crates/ynz-runtime/src/lib.rs:642-655`, the one string allocator, counted by `YNZ_ALLOC_COUNTER`) writes the capacity. Compiler-internal C strings (panic text, file names, debug-print fragments) are not `string` values and have no header.
+- Every string source that can reach Yinz code carries the header: codegen emits static strings as `{ i64 0, [N x i8] }` (`build_static_string`, `crates/ynz-codegen/src/emit.rs:35909-35942`), and `heap_string_buffer` (`crates/ynz-runtime/src/lib.rs:642-655`, the one string allocator, counted by `YNZ_ALLOC_COUNTER`) writes the capacity. Compiler-internal C strings (panic text, file names, debug-print fragments) are not `String` values and have no header.
 - `ynz_string_release(ptr)` (`crates/ynz-runtime/src/lib.rs:657-689`) is the one release entry point: null and static bytes are no-ops; heap bytes are freed and counted. It accepts any string, so a caller never needs to know where one came from. Codegen calls it from the one release helper (`Cg::release_fn`, `emit.rs:29334-29345`; the string arm of `release_step`, `emit.rs:28990-29053`) at every scope exit that releases a string (`IMP-ownership.md` "The one release helper").
 - A heap string has exactly one owner when it is released. A store guarantees that with the rule in "Storing a string" below.
 - A conversion result is never shared: two `.toString()` results alive together are two strings.
@@ -188,7 +188,7 @@ Rules:
 
 One rule, applied at every place that keeps a string: **a store takes a string by move when typeck's record says nothing else can reach it, and otherwise by an owned copy.** The record is `TypedModule::string_moves` (`StringMoves`, `crates/ynz-typeck/src/string_ownership.rs:46-52`, filled by the one liveness walk `record_moves_and_reads`, `:96-118`); codegen reads it and decides nothing itself. The copy is `OwnedCopy::StringClone` (`owned_copy_plan`, `crates/ynz-typeck/src/owned_copy.rs:147-332`; the runtime entry `ynz_string_clone`, `crates/ynz-runtime/src/lib.rs:691-708`, a fresh counted heap string with the same bytes), made through the one `emit_owned_copy` seam (`crates/ynz-codegen/src/emit.rs:28103-28387`). Codegen reaches that seam through one function, `own_string_for_store` (`emit.rs:22446-22464`: a string remembered as movable is taken as it is, any other is copied); there is no second copy routine. A string missing from the record is copied, so a gap in the record costs an allocation, never a double free.
 
-The stores that take the rule: a `let`/`const` binding and an assignment, a shape field, an array literal element, `add` and index assignment, a `fixed` element, a map key (stored by raw pointer) and a map value, a channel `send`, a `background` argument, a value entering a union slot (`let`, field, argument, `.or()` fallback), a `return`, and the payload of a `maybe<string>` that is bound, stored or returned.
+The stores that take the rule: a `let`/`const` binding and an assignment, a shape field, an array literal element, `add` and index assignment, a `fixed` element, a map key (stored by raw pointer) and a map value, a channel `send`, a `background` argument, a value entering a union slot (`let`, field, argument, `.or()` fallback), a `return`, and the payload of a `Maybe<string>` that is bound, stored or returned.
 
 | An expression is | When | Store |
 |---|---|---|
@@ -198,7 +198,7 @@ The stores that take the rule: a `let`/`const` binding and an assignment, a shap
 
 A function returns an owned string, so a caller binds a call result by move; inside the callee a returned local at its last use moves and anything else is copied at the `return`. A `share`, `lend` or bare string parameter is never movable: the caller owns it. A `give` string parameter is the exception: the call hands the string over (the checker refuses any later read of the caller's binding), so the callee owns and releases it and the caller's release plan omits that binding as moved (`Omitted(Moved)`, or `ReleaseIfLive` when only some paths gave it). Exactly one side releases. Only a string that founds its own class follows the give; a string joined to a shape's class (a `let` of a field read) owns a copy the give does not take, so its own scope releases it. See `IMP-ownership.md`, "Strings".
 
-Containers copy their strings with themselves, all the way down. `.copy()` and a `background` copy of a shape (every heap field: `string`, nested shape, `array`, `map`, `maybe`, envelope union, `fixed` cells), a `map<string, V>` or `map<K, string>` (keys and values), an `array<string>`, a `fixed<string>`, an `array<Shape>` whose shape has `string` fields, and a `maybe<string>` or `maybe<Shape>` payload each give the copy strings of its own. The emitters are `deepen_shape_fields` (`emit.rs:5924-6002`), `emit_array_elem_deep_copy` (`emit.rs:28739-28852`), `emit_map_values_deep_copy` (`emit.rs:28555-28727`) and `emit_fixed_item_cells_copy` (`emit.rs:28451-28547`). An auto-Arc spawn group's block holds one such copy of the shape's strings for all its tasks, and the last `ynz_arc_free` releases it (`emit.rs:24601-24628`; `IMP-ownership.md` "What the block owns"). Equality follows: string fields (`shape_value_eq`, `emit.rs:7791-8108`, the string arm at `:8037-8048`) and `array<string>.contains` (`lower_array_method`, `emit.rs:33875-34099`, the string arm at `:34025`) compare by content, since a stored copy has no pointer identity with its source.
+Containers copy their strings with themselves, all the way down. `.copy()` and a `background` copy of a shape (every heap field: `String`, nested shape, `array`, `map`, `maybe`, envelope union, `fixed` cells), a `map<string, V>` or `map<K, string>` (keys and values), an `Array<string>`, a `fixed<string>`, an `Array<Shape>` whose shape has `String` fields, and a `Maybe<string>` or `Maybe<Shape>` payload each give the copy strings of its own. The emitters are `deepen_shape_fields` (`emit.rs:5924-6002`), `emit_array_elem_deep_copy` (`emit.rs:28739-28852`), `emit_map_values_deep_copy` (`emit.rs:28555-28727`) and `emit_fixed_item_cells_copy` (`emit.rs:28451-28547`). An auto-Arc spawn group's block holds one such copy of the shape's strings for all its tasks, and the last `ynz_arc_free` releases it (`emit.rs:24601-24628`; `IMP-ownership.md` "What the block owns"). Equality follows: String fields (`shape_value_eq`, `emit.rs:7791-8108`, the string arm at `:8037-8048`) and `Array<string>.contains` (`lower_array_method`, `emit.rs:33875-34099`, the string arm at `:34025`) compare by content, since a stored copy has no pointer identity with its source.
 
 ### The scope-exit release pass
 
@@ -209,7 +209,7 @@ The pass exists. Typeck decides, once, which binding releases what on which exit
 - A binding read at its last use by something that is not a store (a `print`, a call argument that is only read) still owns its string and is released.
 - Every stored string is released by its owner once: the binding, field, element, map cell, envelope or channel slot that holds it.
 
-Cost: clone where Rust clones, move where Rust moves. Above Rust only where a borrowed string is stored that Rust would keep as `&str` (a literal, a field or parameter read, an `.or()` result), and where a `maybe<string>` or `maybe<Shape>` payload is bound or stored (Rust keeps an `Option<&T>`).
+Cost: clone where Rust clones, move where Rust moves. Above Rust only where a borrowed string is stored that Rust would keep as `&str` (a literal, a field or parameter read, an `.or()` result), and where a `Maybe<string>` or `Maybe<Shape>` payload is bound or stored (Rust keeps an `Option<&T>`).
 
 Test: `v03_m9_c3b_string_store` counts heap strings for each store kind and runs each under AddressSanitizer at both optimization levels.
 
