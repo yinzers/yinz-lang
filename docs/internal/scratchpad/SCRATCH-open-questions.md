@@ -29,7 +29,7 @@ Deferred features (decided not to ship in v0.1) are documented per-version in [`
 
 The Rust lesson: a second mechanism is never additive — it splits the learning surface, the tooling, and the ecosystem.
 
-**Trigger to decide which mechanism**: when a real Yinz use case needs metaprogramming AND cannot be handled by the compiler's built-in codegen (per [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 6 for serialization), pick the single mechanism. Candidate models to evaluate at decision time:
+**Trigger to decide which mechanism**: when a real Yinz use case needs metaprogramming AND cannot be handled by the compiler's built-in codegen (per [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) on serialization), pick the single mechanism. Candidate models to evaluate at decision time:
 - **Compiler-driven derives only** (no user-facing macro syntax): user marks a `shape` with a derive attribute; compiler generates the implementation. Simpler, less expressive.
 - **Token-level macros** (Rust proc-macro style): user-defined functions that transform AST. More expressive, more complex tooling.
 - **Comptime evaluation** (Zig/D style): functions marked `comptime` execute at compile time, can generate code as values. Different mental model, potentially debugger-friendly.
@@ -70,7 +70,7 @@ Module-singleton API: `server.route(method, path, handler)`, `server.middleware(
 - Handler signature shape — single `Request` argument vs split (`req`, `params`, `body`)?
 - Middleware composition — ordering rules, short-circuit / abort semantics
 - Path matching — `:id` placeholders, wildcard segments, regex routes?
-- Multi-server-per-process — single singleton enough, or do we need a `Server` instance type for niche cases (admin port + public port)?
+- Multi-server-per-process — single singleton enough, or do we need a `Server` shape you can create several of for niche cases (admin port + public port)?
 - Error handler hook — how does an unhandled `errors` propagation surface as a 5xx?
 - Static file serving — bundled in `server`, or separate module?
 

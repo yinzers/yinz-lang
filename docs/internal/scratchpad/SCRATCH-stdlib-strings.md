@@ -89,7 +89,7 @@ Number of grapheme clusters. `O(n)` via `unicode-segmentation`.
 .contains(substr: String) -> Boolean
 ```
 
-Returns `true` if `substr` appears anywhere in `self`. For patterns ≥ 16 bytes, uses SIMD-accelerated `memchr::memmem`. For patterns ≤ 15 bytes, uses scalar scan. Pure read. No allocation. `stdlib-design.md` Rule 1: no I/O.
+Returns `true` if `substr` appears anywhere in `self`. For patterns ≥ 16 bytes, uses SIMD-accelerated `memchr::memmem`. For patterns ≤ 15 bytes, uses scalar scan. Pure read. No allocation. `stdlib-design.md`: a plain-read name does no I/O.
 
 **Ownership:** `share self, share substr`.
 

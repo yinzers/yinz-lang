@@ -56,13 +56,13 @@ arena scratch {
   let nameMap: Map<String, User> = {}      // allocated in 'scratch'
   let buffer: String = ""                  // allocated in 'scratch'
 
-  process(users.share)
+  process(users)
 }  // scratch (and everything in it) freed in one operation
 ```
 
-Inside an `arena <name> { ... }` block, the default allocator IS the arena. Every constructor call within the block uses the arena unless explicitly overridden. The arena lives for the scope; everything in it dies when the scope exits.
+Inside an `arena <name> { ... }` block, the default allocator IS the arena. Every allocation within the block (such as creating an `Array` or `Map`) uses the arena unless explicitly overridden. The arena lives for the scope; everything in it dies when the scope exits.
 
-The IDE shows muted `.in(scratch)` after each constructor — per the [uniform inference rule](../../../.claude/rules/inference.md), the allocator choice is figured out from context and rendered as a muted hint.
+The IDE shows muted `.in(scratch)` after each allocation — per the [uniform inference rule](../../../.claude/rules/inference.md), the allocator choice is figured out from context and rendered as a muted hint.
 
 ---
 
@@ -86,7 +86,7 @@ Identical to A1 except no name. Use when no code inside the scope needs to refer
 let scratch: Arena = Arena()                    // manually create an arena
 let users: Array<User> = Array<User>.in(scratch)      // explicit per-allocation
 let names: Map<String, User> = Map<String, User>.in(scratch)
-process(users.share)
+process(users)
 scratch.reset()                          // manually wipe
 ```
 
@@ -167,7 +167,7 @@ The v0.2 milestone plan must address: thread safety (arenas are typically single
 
 If/when Option B is implemented:
 
-- Add `Arena()` constructor in stdlib
+- Add an `Arena()` function in stdlib that returns an arena
 - Add `.reset()` method
 - Implement the lifecycle/borrow checker analysis
 - Compile error if Arena is dropped without `.reset()` (or with allocations still live)

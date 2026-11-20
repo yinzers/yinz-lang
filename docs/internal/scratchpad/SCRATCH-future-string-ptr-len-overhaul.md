@@ -97,7 +97,7 @@ This state is correct + safe for v0.1's workloads. The overhaul lands when one o
 
 - **Representation**: thin pointer + separate length, OR fat pointer (`{ptr, len}` struct)? Rust uses fat pointers for `&str`; Swift uses a more elaborate tagged representation. Probably fat pointer for Yinz simplicity.
 - **Mutability**: `String` (owned, mutable) vs `&str` (borrowed, immutable) distinction? Or a single `string` type that's always owned-immutable in Yinz's model? Yinz currently has one `string` type — keep it that way unless a real need surfaces.
-- **Encoding**: stay UTF-8-only (per [`docs/reference/REF-strings.md`](../../reference/REF-strings.md) and stdlib-design.md Rule 3). No change.
+- **Encoding**: stay UTF-8-only (per [`docs/reference/REF-strings.md`](../../reference/REF-strings.md) and the stdlib-design.md rule that text is always UTF-8). No change.
 - **Concatenation semantics**: `a + b` allocates a new string today; preserve that. Document the perf cost.
 - **C-ABI shim**: where does the shim live — in `ynz-runtime` (where the C calls happen) or a separate `ynz-ffi` crate?
 
@@ -107,7 +107,7 @@ This state is correct + safe for v0.1's workloads. The overhaul lands when one o
 
 - [`docs/reference/REF-strings.md`](../../reference/REF-strings.md) — the user-facing string spec; SSO layout already anticipates this
 - [`docs/internal/implementation/IMP-strings.md`](../implementation/IMP-strings.md) — the design rationale for UTF-8 + SSO + locale-invariant case ops
-- [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 3 (no platform-default encoding) — overhaul keeps UTF-8 default
-- [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 8 (SIMD where available) — `{ptr, len}` enables SIMD-friendly bulk byte ops
+- [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) (identical defaults on every platform; text is always UTF-8) — overhaul keeps UTF-8 default
+- [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) (SIMD where available) — `{ptr, len}` enables SIMD-friendly bulk byte ops
 - `crates/ynz-parser/src/lexer.rs` (Batch 5a.6 NUL reject) — relax this when the overhaul ships
 - `crates/ynz-codegen/src/emit.rs` (codegen NUL defense-in-depth) — remove when overhaul ships

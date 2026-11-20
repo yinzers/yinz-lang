@@ -33,7 +33,7 @@ This is genuinely better than Rust. Rust requires `Pin<T>` (Approach C in this d
 
 ## What "self-referential" means
 
-A shape is self-referential when one of its fields holds a pointer or reference that points INTO another field of the same shape instance. Classic example: a node that holds data and a pointer into its own data buffer.
+A shape is self-referential when one of its fields holds a pointer or reference that points INTO another field of the same value. Classic example: a node that holds data and a pointer into its own data buffer.
 
 ```ynz
 shape Node {                         // muted ".self-referential" appears here in IDE

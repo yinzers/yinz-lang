@@ -50,9 +50,9 @@ Yinz has no GC. The goal is to also eliminate the intermediate allocation layers
 
 ## Fix 1: Direct Wire-to-Struct Deserialization
 
-Since the compiler knows the target type at compile time, it generates a direct deserializer — one pass from wire bytes to typed Yinz struct. No intermediate map, no generic object, no two-step conversion.
+Since the compiler knows the target type at compile time, it generates a direct deserializer — one pass from wire bytes to typed Yinz shape value. No intermediate map, no generic object, no two-step conversion.
 
-The compiler generates the exact byte-reading code for a given struct shape once, at compile time. Runtime cost is a straight memory write per field.
+The compiler generates the exact byte-reading code for a given shape once, at compile time. Runtime cost is a straight memory write per field.
 
 ---
 
@@ -102,7 +102,7 @@ GC pressure on bulk inserts (seeding millions of rows from an external API) is j
 
 **Ownership frees memory immediately.** When a batch finishes, its memory is freed at that exact instruction. No GC backlog, no pauses, no main thread involvement. Next batch starts clean.
 
-**No intermediate model layer.** The compiler generates a direct serializer for each type at compile time. Your struct goes straight to wire bytes — no model-instance wrapper.
+**No intermediate model layer.** The compiler generates a direct serializer for each type at compile time. Your shape value goes straight to wire bytes — no model-instance wrapper.
 
 **Result**: same batch sizes, same thread count — memory stays flat because each batch is deterministically freed the moment it's done.
 
@@ -322,7 +322,7 @@ This eliminates an entire class of bugs: a developer runs a migration and forget
 
 ### Diesel — queries that can't be valid don't compile
 
-With schema-first types, the compiler knows the full schema at compile time. Querying a column that doesn't exist is a compile error. Type mismatch between a query result and a struct field is a compile error. The error messages follow Rule 3 — WHAT went wrong, WHAT to do instead, WHY — not Diesel's wall of unreadable trait bounds.
+With schema-first types, the compiler knows the full schema at compile time. Querying a column that doesn't exist is a compile error. Type mismatch between a query result and a shape field is a compile error. The error messages follow Rule 3 — WHAT went wrong, WHAT to do instead, WHY — not Diesel's wall of unreadable trait bounds.
 
 ---
 
@@ -360,21 +360,21 @@ Seeds should be safe to run multiple times without creating duplicates or errors
 
 Sequelize throws untyped exceptions with string error messages that must be caught and parsed manually. Every db call wrapped in try/catch, string matching on `.message` to figure out what went wrong — fragile and exhausting.
 
-Yinz uses the `errors` keyword to make database errors typed at the call site:
+Yinz uses the `errors` keyword to mark every database call that can fail:
 
 ```
-function findUser(id: Number) -> User errors DatabaseError
+function findUser(id: Number) -> User errors
 ```
 
-`DatabaseError` is a first-class type in the stdlib:
+The stdlib would give a failed database call a structured `DatabaseError` value (design only; how a function's error value is typed is not settled):
 
 ```
 shape DatabaseError {
     summary: String             // short human-readable: "Unique constraint violated on quotes.symbol"
     suggestions: Array<String>  // ["Check for duplicates before inserting", "Use upsert instead"]
-    code: String | null         // raw DB error code ("23505", "08006", etc.)
-    query: String | null        // sanitized query that triggered the error
-    detail: String | null       // full DB-level detail message
+    code: Maybe<String>         // raw DB error code ("23505", "08006", etc.)
+    query: Maybe<String>        // sanitized query that triggered the error
+    detail: Maybe<String>       // full DB-level detail message
 }
 ```
 
@@ -409,7 +409,7 @@ Here `.raw` is the call surface; `sql\`...\`` is how the string is passed so the
 
 **Open sub-questions**:
 - Is `.raw` the right name? Candidates: `.sql`, `.execute`, `.exec`. `.raw` is short but doesn't convey "this returns typed rows."
-- If plain strings are also accepted (no `sql\`...\`` tag), is that a parallel-API violation per `stdlib-design.md` Rule 2? Likely yes — pick one form.
+- If plain strings are also accepted (no `sql\`...\`` tag), is that a parallel-API violation per `stdlib-design.md` (one API per capability)? Likely yes — pick one form.
 
 The syntax decision belongs in the v0.10 execution plan's research phase. Whatever is chosen must be a single canonical form.
 
