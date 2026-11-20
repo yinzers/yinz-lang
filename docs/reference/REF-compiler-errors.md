@@ -125,8 +125,7 @@ WARNING: `type` is not a keyword in Yinz.
 
   Use `shape` to declare a data type: `shape Player { name: string, health: int }`
 
-  Why: `type` is common in TypeScript, but Yinz uses `shape` — one unambiguous keyword
-  for all data type declarations.
+  Why: Yinz uses `shape` — one unambiguous keyword for all data type declarations.
 ```
 
 ---
