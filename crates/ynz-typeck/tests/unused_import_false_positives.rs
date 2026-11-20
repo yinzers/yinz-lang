@@ -108,7 +108,7 @@ fn options_variant_access_does_not_warn_unused_import() {
     let dep = r#"export options Timeframe { fiveMinute: `Five Minute`, daily: `Daily` }"#;
     let main = r#"
 import { Timeframe } from `timeframes`
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     print(Timeframe.fiveMinute.toString())
 }
 "#;
@@ -127,20 +127,20 @@ fn is_narrowing_does_not_warn_unused_import() {
     // but never inserted it into referenced_names. An import used exclusively
     // via `is TypeName` was false-positive flagged as unused.
     let dep = r#"
-export shape Circle { radius: int }
-export shape Square { side: int }
+export shape Circle { radius: Int }
+export shape Square { side: Int }
 export shape Polygon = Circle | Square
 "#;
     let main = r#"
 import { Circle } from `shapes`
 import { Polygon } from `shapes`
-function area(s: Polygon) -> int {
+function area(s: Polygon) -> Int {
     if (s is Circle) {
         return 3
     }
     return 0
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("shapes", dep, main);
     assert_no_unused_import_warning(&db, sf, "Circle");
@@ -158,19 +158,19 @@ fn follows_contract_does_not_warn_unused_import() {
     // referenced_names and was incorrectly flagged as unused.
     let dep = r#"
 export shape Damageable {
-    takeDamage(lend self, amount: int) -> nothing
+    takeDamage(lend self, amount: Int) -> Nothing
 }
 "#;
     let main = r#"
 import { Damageable } from `contracts`
 shape Player follows Damageable {
-    name: string
-    health: int
+    name: String
+    health: Int
 }
-function takeDamage(lend self: Player, amount: int) -> nothing {
+function takeDamage(lend self: Player, amount: Int) -> Nothing {
     self.health = self.health - amount
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("contracts", dep, main);
     assert_no_unused_import_warning(&db, sf, "Damageable");
@@ -198,16 +198,16 @@ fn extends_parent_does_not_warn_unused_import() {
     // "m8-typeck-cross-file-resolution".
     let dep = r#"
 export shape Entity {
-    name: string
-    health: int
+    name: String
+    health: Int
 }
 "#;
     let main = r#"
 import { Entity } from `world`
 shape Warrior extends Entity {
-    weapon: string
+    weapon: String
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("world", dep, main);
     assert_no_unused_import_warning(&db, sf, "Entity");
@@ -229,9 +229,9 @@ fn shape_field_type_does_not_warn_unused_import() {
 import { Status } from `statuses`
 shape Bar {
     status: Status
-    value: int
+    value: Int
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("statuses", dep, main);
     assert_no_unused_import_warning(&db, sf, "Status");
@@ -252,7 +252,7 @@ fn module_const_type_annotation_does_not_warn_unused_import() {
     let main = r#"
 import { Status } from `statuses`
 export const DEFAULT: Status = Status.active
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("statuses", dep, main);
     assert_no_unused_import_warning(&db, sf, "Status");
@@ -271,17 +271,17 @@ fn dynamic_contract_does_not_warn_unused_import() {
     // annotation was thus incorrectly flagged as unused.
     let dep = r#"
 export shape Damageable {
-    takeDamage(lend self, amount: int) -> nothing
+    takeDamage(lend self, amount: Int) -> Nothing
 }
 "#;
     let main = r#"
 import { Damageable } from `contracts`
-function attackAll(targets: array<dynamic Damageable>) -> nothing {
+function attackAll(targets: Array<dynamic Damageable>) -> Nothing {
     for (t in targets) {
         t.takeDamage(10)
     }
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("contracts", dep, main);
     assert_no_unused_import_warning(&db, sf, "Damageable");
@@ -289,7 +289,7 @@ function entrypoint() -> nothing { }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.5 — generic type position (`Container<int>`)
+// Bug 2.5 — generic type position (`Container<Int>`)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -309,10 +309,10 @@ fn concrete_shape_as_field_type_does_not_warn_unused_import() {
     let main = r#"
 import { Priority } from `priorities`
 shape Task {
-    name: string
+    name: String
     priority: Priority
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("priorities", dep, main);
     assert_no_unused_import_warning(&db, sf, "Priority");
@@ -331,7 +331,7 @@ fn genuinely_unused_import_still_warns() {
     let dep = r#"export options Status { active: `Active`, inactive: `Inactive` }"#;
     let main = r#"
 import { Status } from `statuses`
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     print(`hello`)
 }
 "#;
@@ -353,17 +353,17 @@ fn dual_pattern_use_does_not_mask_sibling_unused_import() {
     // `UnusedThing` is imported but never referenced. After the fix, `Entity`
     // must NOT be flagged, and `UnusedThing` MUST still be flagged.
     let dep = r#"
-export shape Entity { name: string health: int }
+export shape Entity { name: String health: Int }
 export options Rarity { common: `Common`, rare: `Rare` }
 "#;
     let main = r#"
 import { Entity } from `world`
 import { Rarity } from `world`
 shape Warrior extends Entity {
-    weapon: string
+    weapon: String
     baseEntity: Entity
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("world", dep, main);
     // Entity is used (extends + field type): no warning.
@@ -389,7 +389,7 @@ fn module_const_imported_type_tracked_no_new_diagnostic() {
     let main = r#"
 import { Priority } from `priorities`
 export const DEFAULT_PRIORITY: Priority = Priority.low
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("priorities", dep, main);
     let output = ynz_typeck::check_query(&db, sf);
@@ -437,7 +437,7 @@ shape Wrapper<T> {
     value: T
     status: Status
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("statuses", dep, main);
     let output = ynz_typeck::check_query(&db, sf);
@@ -473,14 +473,14 @@ fn union_alias_rhs_member_does_not_warn_unused_import() {
     // without explicitly walking alias_ty those member names are invisible to
     // referenced_names.
     let dep = r#"
-export shape SouthSideEvent { name: string }
-export shape StripeDistrictEvent { name: string }
+export shape SouthSideEvent { name: String }
+export shape StripeDistrictEvent { name: String }
 "#;
     let main = r#"
 import { SouthSideEvent } from `pgh_events`
 import { StripeDistrictEvent } from `pgh_events`
 shape PghEvent = SouthSideEvent | StripeDistrictEvent
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("pgh_events", dep, main);
     assert_no_unused_import_warning(&db, sf, "SouthSideEvent");
@@ -494,14 +494,14 @@ fn union_alias_rhs_with_options_member_does_not_warn_unused_import() {
     // type as a union member (Type::Options rather than Type::Shape). Confirms the
     // fix handles both shape and options variants in the resolved Type::Union.
     let dep = r#"
-export shape Scored { points: int }
+export shape Scored { points: Int }
 export options Grade { high: `High`, low: `Low` }
 "#;
     let main = r#"
 import { Scored } from `results`
 import { Grade } from `results`
 shape Assessment = Scored | Grade
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     let (db, sf, dir) = two_file_db("results", dep, main);
     assert_no_unused_import_warning(&db, sf, "Scored");
@@ -527,10 +527,10 @@ fn module_const_undefined_type_emits_no_new_diagnostic_vs_head() {
     // the total diagnostic count is 0, proving the const walk adds nothing.
     let main = r#"
 export const MAGIC: UndefinedType = 42
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#;
     // Single-file db: the dep file is a no-op placeholder.
-    let (db, sf, dir) = two_file_db("placeholder", "function placeholder() -> nothing {}", main);
+    let (db, sf, dir) = two_file_db("placeholder", "function placeholder() -> Nothing {}", main);
     let output = ynz_typeck::check_query(&db, sf);
     // Phase 0's diagnostic-free walker must not introduce any diagnostic for this
     // const — matching HEAD's zero-diagnostic behavior for module-level consts.

@@ -11,14 +11,14 @@ use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput};
 
 /// A callee that takes ownership of its argument (`give`), for programs that give a binding away.
-pub const EAT: &str = "function eat(give rows: array<int>) -> nothing {
+pub const EAT: &str = "function eat(give rows: Array<Int>) -> Nothing {
   print(rows.count().toString())
 }\n";
 
 pub fn run(source: &str) -> CheckOutput {
     let db = CompilerDb::default();
     // Every program needs an `entrypoint`; the cases under test are the other functions.
-    let program = format!("{source}\nfunction entrypoint() -> nothing {{\n}}\n");
+    let program = format!("{source}\nfunction entrypoint() -> Nothing {{\n}}\n");
     let source_file = SourceFile::new(&db, "test.ynz".to_string(), program.clone());
     let output = (*check_query(&db, source_file)).clone();
     // Every program checked here must leave a whole transfer record (a hole is a checker bug).

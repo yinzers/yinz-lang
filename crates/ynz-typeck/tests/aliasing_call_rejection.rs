@@ -51,18 +51,18 @@ fn assert_aliasing_rejected(source: &str, expected_phrase: &str) {
     );
 }
 
-const BOX_SHAPE: &str = "shape Box {\n  value: int\n}\n";
+const BOX_SHAPE: &str = "shape Box {\n  value: Int\n}\n";
 
 #[test]
 fn same_value_as_share_and_lend_is_rejected() {
     // WHY: the exact RED-fixture shape — `relay(h, h)` against `(share, lend)`.
     let src = format!(
         "{BOX_SHAPE}
-function relay(share src: Box, lend dst: Box) -> nothing {{
+function relay(share src: Box, lend dst: Box) -> Nothing {{
   dst.value = 5
   dst.value = src.value
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let h: Box = {{ value: 1 }}
   relay(h, h)
   print(h.value.toString())
@@ -77,12 +77,12 @@ fn same_value_as_two_lends_is_rejected() {
     // so the exclusivity each position needs is doubly violated.
     let src = format!(
         "{BOX_SHAPE}
-function swap(lend a: Box, lend b: Box) -> nothing {{
-  let t: int = a.value
+function swap(lend a: Box, lend b: Box) -> Nothing {{
+  let t: Int = a.value
   a.value = b.value
   b.value = t
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let h: Box = {{ value: 1 }}
   swap(h, h)
   print(h.value.toString())
@@ -98,11 +98,11 @@ fn same_value_as_two_shares_is_accepted() {
     // legitimate pattern for no soundness gain.
     let src = format!(
         "{BOX_SHAPE}
-function larger(share a: Box, share b: Box) -> int {{
+function larger(share a: Box, share b: Box) -> Int {{
   if (a.value > b.value) {{ return a.value }}
   return b.value
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let h: Box = {{ value: 1 }}
   print(larger(h, h).toString())
 }}"
@@ -117,10 +117,10 @@ fn same_value_into_bare_mutating_param_is_rejected() {
     // the declared modifier, or the inferred-lend case slips through unsound.
     let src = format!(
         "{BOX_SHAPE}
-function bumpBoth(a: Box, share b: Box) -> nothing {{
+function bumpBoth(a: Box, share b: Box) -> Nothing {{
   a.value = a.value + b.value
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let h: Box = {{ value: 1 }}
   bumpBoth(h, h)
   print(h.value.toString())
@@ -138,11 +138,11 @@ fn same_value_into_two_bare_mutating_params_is_rejected() {
     // `noalias` on both positions — the exact silent-miscompile shape FRAGO 002 locks.
     let src = format!(
         "{BOX_SHAPE}
-function bumpBoth(a: Box, b: Box) -> nothing {{
+function bumpBoth(a: Box, b: Box) -> Nothing {{
   a.value = a.value + 1
   b.value = b.value + 1
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let h: Box = {{ value: 1 }}
   bumpBoth(h, h)
   print(h.value.toString())
@@ -156,16 +156,16 @@ fn overlapping_field_path_with_lend_is_rejected() {
     // WHY: `player.pet` is part of `player` — a write through the whole reaches the
     // part, so a prefix-overlapping pair is the same conflict as an identical pair.
     let src = "shape Pet {
-  age: int
+  age: Int
 }
 shape Player {
-  score: int
+  score: Int
   pet: Pet
 }
-function groom(lend whole: Player, share part: Pet) -> nothing {
+function groom(lend whole: Player, share part: Pet) -> Nothing {
   whole.score = whole.score + part.age
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { score: 0, pet: { age: 3 } }
   groom(p, p.pet)
   print(p.score.toString())
@@ -179,10 +179,10 @@ fn distinct_values_share_and_lend_is_accepted() {
     // pair alone — two independent values into (share, lend) is the normal case.
     let src = format!(
         "{BOX_SHAPE}
-function relay(share src: Box, lend dst: Box) -> nothing {{
+function relay(share src: Box, lend dst: Box) -> Nothing {{
   dst.value = src.value
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let a: Box = {{ value: 1 }}
   let b: Box = {{ value: 2 }}
   relay(a, b)
@@ -198,10 +198,10 @@ fn ufcs_receiver_aliasing_arg_is_rejected() {
     // forms must reject identically or the sugar becomes a soundness loophole.
     let src = format!(
         "{BOX_SHAPE}
-function relay(share src: Box, lend dst: Box) -> nothing {{
+function relay(share src: Box, lend dst: Box) -> Nothing {{
   dst.value = src.value
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let h: Box = {{ value: 1 }}
   h.relay(h)
   print(h.value.toString())
@@ -212,13 +212,13 @@ function entrypoint() -> nothing {{
 
 #[test]
 fn same_scalar_value_twice_is_accepted() {
-    // WHY: int/float/bool pass by value — two copies can never touch the same
+    // WHY: Int/float/bool pass by value — two copies can never touch the same
     // storage, so the aliasing rule must not fire on scalars.
-    let src = "function add(a: int, b: int) -> int {
+    let src = "function add(a: Int, b: Int) -> Int {
   return a + b
 }
-function entrypoint() -> nothing {
-  let n: int = 4
+function entrypoint() -> Nothing {
+  let n: Int = 4
   print(add(n, n).toString())
 }";
     assert_clean(src);
@@ -231,10 +231,10 @@ fn rejection_diagnostic_carries_teaching_shape() {
     // with no compiler jargon.
     let src = format!(
         "{BOX_SHAPE}
-function relay(share src: Box, lend dst: Box) -> nothing {{
+function relay(share src: Box, lend dst: Box) -> Nothing {{
   dst.value = src.value
 }}
-function entrypoint() -> nothing {{
+function entrypoint() -> Nothing {{
   let h: Box = {{ value: 1 }}
   relay(h, h)
 }}"

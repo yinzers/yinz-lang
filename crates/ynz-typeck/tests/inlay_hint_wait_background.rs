@@ -66,10 +66,10 @@ fn test_wait_points_fires_for_call_to_suspending_fn() {
     // `sleep` and is therefore in `suspends_set`. The pass must emit a
     // WaitPointHint at `doWork()`'s byte position inside `run`.
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function run() -> nothing {
+function run() -> Nothing {
   doWork()
 }
 ";
@@ -87,10 +87,10 @@ fn test_wait_points_suppressed_for_non_suspending_fn() {
     // WHY: `helper()` calls only `print`, which is NOT in `suspends_set`.
     // No WaitPointHint should fire for `helper()`.
     let src = "\
-function helper() -> nothing {
+function helper() -> Nothing {
   print(`hello`)
 }
-function run() -> nothing {
+function run() -> Nothing {
   helper()
 }
 ";
@@ -109,10 +109,10 @@ fn test_wait_points_suppressed_when_explicit_wait_present() {
     // WHY: `wait doWork()` — the user already wrote `wait`, so the pass must
     // NOT emit a redundant hint for this call site.
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function run() -> nothing {
+function run() -> Nothing {
   wait doWork()
 }
 ";
@@ -131,10 +131,10 @@ fn test_wait_points_position_is_before_call_start() {
     // WHY: Addition-placement hints render BEFORE the call — the hint byte
     // position must be <= the first byte of the call expression.
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function run() -> nothing {
+function run() -> Nothing {
   doWork()
 }
 ";
@@ -166,10 +166,10 @@ fn test_background_routing_io_pool_for_suspending_callee() {
     // a routing hint labelled "I/O pool". This mirrors the codegen routing
     // predicate at emit.rs:9335 that routes suspending callees to `ynz_rt_spawn`.
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function run() -> nothing {
+function run() -> Nothing {
   background doWork()
 }
 ";
@@ -191,10 +191,10 @@ fn test_background_routing_cpu_pool_for_non_suspending_callee() {
     // intrinsic must emit a routing hint labelled "CPU pool". Mirrors the
     // codegen path that routes non-suspending callees to `ynz_rt_spawn_blocking`.
     let src = "\
-function helper() -> nothing {
+function helper() -> Nothing {
   print(`working`)
 }
-function run() -> nothing {
+function run() -> Nothing {
   background helper()
 }
 ";
@@ -213,10 +213,10 @@ fn test_background_routing_fires_exactly_once_per_spawn_site() {
     // WHY: one `background` expression = one routing comment. Double-emitting
     // would produce duplicate annotations in the editor.
     let src = "\
-function task() -> nothing {
+function task() -> Nothing {
   print(`task`)
 }
-function run() -> nothing {
+function run() -> Nothing {
   background task()
 }
 ";
@@ -234,7 +234,7 @@ function run() -> nothing {
 fn test_background_routing_no_hints_for_plain_fn_with_no_background() {
     // WHY: a function with no `background` spawn emits no routing hints.
     let src = "\
-function run() -> nothing {
+function run() -> Nothing {
   print(`no background here`)
 }
 ";
@@ -258,11 +258,11 @@ fn test_wait_points_fires_for_call_buried_in_binop() {
     // buried in either operand.  `let x = doWork() + 1` must fire a hint for
     // `doWork` even though the call is the LHS of an addition.
     let src = "\
-function doWork() -> int {
+function doWork() -> Int {
   wait sleep(100)
   return 1
 }
-function run() -> nothing {
+function run() -> Nothing {
   let x = doWork() + 1
 }
 ";
@@ -281,12 +281,12 @@ fn test_wait_points_fires_for_call_buried_in_struct_lit_field() {
     // and any suspending call in a struct field was silently skipped.
     // `let v = { result: doWork() }` must fire a hint for `doWork`.
     let src = "\
-shape Wrapper { result: int }
-function doWork() -> int {
+shape Wrapper { result: Int }
+function doWork() -> Int {
   wait sleep(100)
   return 1
 }
-function run() -> nothing {
+function run() -> Nothing {
   let v: Wrapper = { result: doWork() }
 }
 ";
@@ -310,13 +310,13 @@ fn test_wait_points_suppressed_with_suspending_arg_still_fires_for_inner() {
     // recursion arm were deleted from `collect_wait_point_hints_expr_no_top`, the
     // `otherWork` hint would disappear and this test would fail.
     let src = "\
-function doWork() -> nothing {
+function doWork() -> Nothing {
   wait sleep(100)
 }
-function otherWork() -> nothing {
+function otherWork() -> Nothing {
   wait sleep(50)
 }
-function run() -> nothing {
+function run() -> Nothing {
   wait doWork(otherWork())
 }
 ";
@@ -354,13 +354,13 @@ fn test_wait_points_fires_for_imported_suspending_callee() {
     // a suspension point.  The hint and the binary diverged for every cross-module
     // suspending call.
     let dep_src = "\
-export function slow() -> nothing {
+export function slow() -> Nothing {
   wait sleep(200)
 }
 ";
     let main_src = "\
 import { slow } from `services/ops`
-function run() -> nothing {
+function run() -> Nothing {
   slow()
 }
 ";
@@ -382,13 +382,13 @@ fn test_background_routing_io_pool_for_imported_suspending_callee() {
     // The effective set (local + imported-suspending from module_signatures_query)
     // must be used so hint and binary always agree.
     let dep_src = "\
-export function slow() -> nothing {
+export function slow() -> Nothing {
   wait sleep(200)
 }
 ";
     let main_src = "\
 import { slow } from `services/ops`
-function run() -> nothing {
+function run() -> Nothing {
   background slow()
 }
 ";

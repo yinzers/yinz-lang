@@ -66,7 +66,7 @@ fn m7_range_stored_in_let_is_clean() {
     // being stored. `let r = range(0, 10)` must now be valid. Regression here
     // would prevent passing ranges to functions or using them as first-class values.
     check_no_diags(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
     let r = range(0, 10)
 }"#,
     );
@@ -74,13 +74,13 @@ fn m7_range_stored_in_let_is_clean() {
 
 #[test]
 fn m7_range_passed_to_function_is_clean() {
-    // WHY: range values must be passable as function arguments. Without this,
+    // WHY: Range values must be passable as function arguments. Without this,
     // any function that accepts a Range would be unusable.
     check_no_diags(
-        r#"function useRange(give r: range) -> nothing {
+        r#"function useRange(give r: Range) -> Nothing {
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     useRange(range(0, 5))
 }"#,
     );
@@ -91,7 +91,7 @@ fn m7_range_for_loop_still_works() {
     // WHY: non-regression — for-loop over range must still work after removing
     // the M3 special-case restriction. The element type must still be int.
     check_no_diags(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
     for (i in range(0, 10)) {
         print(i)
     }
@@ -104,7 +104,7 @@ fn m7_range_wrong_arity_still_errors() {
     // WHY: removing the outside-for restriction must not accidentally remove
     // arg-count checking. range() with 3 args must still fail.
     check_diag_count(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
     for (i in range(0, 5, 1)) { print(i) }
 }"#,
         1,
@@ -119,7 +119,7 @@ fn m7_for_loop_over_string_yields_string_element() {
     // Without this, string iteration would be unsupported and the for-loop would
     // emit a "not yet supported" error.
     check_no_diags(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
     let word = `café`
     for (c in word) {
         print(c)
@@ -132,7 +132,7 @@ fn m7_for_loop_over_string_yields_string_element() {
 fn m7_for_loop_over_string_literal_is_clean() {
     // WHY: iterating over a string literal (not a variable) must work.
     check_no_diags(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
     for (c in `hello`) {
         print(c)
     }
@@ -140,15 +140,15 @@ fn m7_for_loop_over_string_literal_is_clean() {
     );
 }
 
-// ── 3. For-loop over array<T> still works (non-regression) ──────────────────
+// ── 3. For-loop over Array<T> still works (non-regression) ──────────────────
 
 #[test]
 fn m7_for_loop_over_array_still_works() {
     // WHY: non-regression — Iterable<T> protocol changes must not break
     // existing for-loop dispatch over built-in collections.
     check_no_diags(
-        r#"function entrypoint() -> nothing {
-    let nums: array<int> = [1, 2, 3]
+        r#"function entrypoint() -> Nothing {
+    let nums: Array<Int> = [1, 2, 3]
     for (n in nums) {
         print(n)
     }
@@ -158,10 +158,10 @@ fn m7_for_loop_over_array_still_works() {
 
 #[test]
 fn m7_for_loop_over_fixed_still_works() {
-    // WHY: non-regression for fixed<T> iteration.
+    // WHY: non-regression for Fixed<T> iteration.
     check_no_diags(
-        r#"function entrypoint() -> nothing {
-    let nums: fixed<int> = [1, 2, 3]
+        r#"function entrypoint() -> Nothing {
+    let nums: Fixed<Int> = [1, 2, 3]
     for (n in nums) {
         print(n)
     }
@@ -173,20 +173,20 @@ fn m7_for_loop_over_fixed_still_works() {
 
 #[test]
 fn m7_for_loop_over_shape_with_next_fn_works() {
-    // WHY: a user shape with a standalone next() returning maybe<T> must be
+    // WHY: a user shape with a standalone next() returning Maybe<T> must be
     // iterable via for-loop. The loop variable must have element type T.
     // The next() function simply returns none — we're testing dispatch, not logic.
     check_no_diags(
         r#"shape Counter {
-    current: int
-    limit: int
+    current: Int
+    limit: Int
 }
 
-function next(lend self: Counter) -> maybe<int> {
+function next(lend self: Counter) -> Maybe<Int> {
     return none
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let c: Counter = { current: 0, limit: 3 }
     for (n in c) {
         print(n)
@@ -202,10 +202,10 @@ fn m7_for_loop_over_shape_without_next_fn_produces_error() {
     // next() function, causing a linker or runtime failure.
     check_diag_count(
         r#"shape Player {
-    name: string
+    name: String
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let p: Player = { name: `Patrick` }
     for (x in p) {
         print(x)
@@ -221,10 +221,10 @@ fn m7_for_loop_shape_without_next_error_mentions_iterable() {
     // by defining a next() function. Without this guidance, the user has no hint.
     check_has_diag(
         r#"shape Widget {
-    id: int
+    id: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let w: Widget = { id: 1 }
     for (x in w) {
         print(x)
@@ -237,17 +237,17 @@ function entrypoint() -> nothing {
 #[test]
 fn m7_for_loop_shape_next_returns_wrong_type_produces_error() {
     // WHY: if next() returns a non-maybe type, it doesn't satisfy Iterable<T>.
-    // The error must explain that next() must return maybe<T>.
+    // The error must explain that next() must return Maybe<T>.
     check_diag_count(
         r#"shape BadIter {
-    pos: int
+    pos: Int
 }
 
-function next(lend self: BadIter) -> int {
+function next(lend self: BadIter) -> Int {
     return self.pos
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let b: BadIter = { pos: 0 }
     for (x in b) {
         print(x)
@@ -259,24 +259,24 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m7_for_loop_shape_next_wrong_type_error_mentions_maybe() {
-    // WHY: the error for a next() with wrong return type must mention maybe<T>
+    // WHY: the error for a next() with wrong return type must mention Maybe<T>
     // to guide the user toward the correct signature.
     check_has_diag(
         r#"shape BadIter {
-    pos: int
+    pos: Int
 }
 
-function next(lend self: BadIter) -> int {
+function next(lend self: BadIter) -> Int {
     return self.pos
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let b: BadIter = { pos: 0 }
     for (x in b) {
         print(x)
     }
 }"#,
-        "maybe",
+        "Maybe",
     );
 }
 
@@ -288,26 +288,26 @@ fn m7_frame_file_field_returns_string() {
     // error occurred. Wrong type would break any code that prints or compares
     // the file name from an error trace.
     check_no_diags(
-        r#"function getFile(give frame: Frame) -> string {
+        r#"function getFile(give frame: Frame) -> String {
     return frame.file
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }"#,
     );
 }
 
 #[test]
 fn m7_frame_line_field_returns_maybe_int() {
-    // WHY: Frame.line is maybe<int> because some frames (e.g. macro-generated code)
+    // WHY: Frame.line is Maybe<Int> because some frames (e.g. macro-generated code)
     // may not have a source line. Accessing it as a plain int would require
     // unsafe unwrapping.
     check_no_diags(
-        r#"function getLine(give frame: Frame) -> maybe<int> {
+        r#"function getLine(give frame: Frame) -> Maybe<Int> {
     return frame.line
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }"#,
     );
 }
@@ -321,11 +321,11 @@ fn m7_frame_has_three_fields_accessible() {
     // The typeck dispatch for .file and .line is sufficient to verify the
     // Frame built-in shape is wired up correctly.
     check_no_diags(
-        r#"function getFrameInfo(give frame: Frame) -> string {
+        r#"function getFrameInfo(give frame: Frame) -> String {
     return frame.file
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }"#,
     );
 }
@@ -334,24 +334,24 @@ function entrypoint() -> nothing {
 fn m7_source_loc_file_field_returns_string() {
     // WHY: SourceLoc.file is string — same as Frame.file, holds the filename.
     check_no_diags(
-        r#"function getSrcFile(give loc: SourceLoc) -> string {
+        r#"function getSrcFile(give loc: SourceLoc) -> String {
     return loc.file
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }"#,
     );
 }
 
 #[test]
 fn m7_source_loc_line_field_returns_maybe_int() {
-    // WHY: SourceLoc.line is maybe<int> for the same reason as Frame.line.
+    // WHY: SourceLoc.line is Maybe<Int> for the same reason as Frame.line.
     check_no_diags(
-        r#"function getSrcLine(give loc: SourceLoc) -> maybe<int> {
+        r#"function getSrcLine(give loc: SourceLoc) -> Maybe<Int> {
     return loc.line
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }"#,
     );
 }
@@ -361,11 +361,11 @@ fn m7_frame_unknown_field_produces_error() {
     // WHY: Frame has exactly three fields. Accessing an unknown field must produce
     // an error with the available field names listed.
     check_diag_count(
-        r#"function getBad(give frame: Frame) -> string {
+        r#"function getBad(give frame: Frame) -> String {
     return frame.notAField
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }"#,
         1,
     );
@@ -375,11 +375,11 @@ function entrypoint() -> nothing {
 fn m7_source_loc_unknown_field_produces_error() {
     // WHY: SourceLoc has exactly two fields. Unknown field access must error.
     check_diag_count(
-        r#"function getBad(give loc: SourceLoc) -> string {
+        r#"function getBad(give loc: SourceLoc) -> String {
     return loc.notAField
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }"#,
         1,
     );
@@ -391,8 +391,8 @@ function entrypoint() -> nothing {
 fn m7_for_loop_over_map_still_works() {
     // WHY: non-regression — map iteration producing MapEntry<K,V> must still work.
     check_no_diags(
-        r#"function entrypoint() -> nothing {
-    let m: map<string, int> = { `a`: 1, `b`: 2 }
+        r#"function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `a`: 1, `b`: 2 }
     for (entry in m) {
         print(entry.key)
         print(entry.value)

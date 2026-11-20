@@ -26,7 +26,7 @@ fn let_mutated_only_in_else_arm_does_not_get_let_to_const_hint() {
     // was invisible and the false "effectively const" hint fired.  After the fix,
     // the walker visits the else arm and records the mutation — no hint.
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 0
   if (count) {
     1 => {}
@@ -54,7 +54,7 @@ fn let_not_mutated_in_any_arm_still_gets_let_to_const_hint() {
     // WHY: When the else => arm exists but does NOT mutate the binding, the
     // promotion hint should still fire.  Verifies the fix didn't over-suppress.
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let count = 0
   if (count) {
     1 => {}
@@ -87,8 +87,8 @@ fn array_grown_in_else_arm_does_not_get_array_to_fixed_hint() {
     // so the method call on `nums` was invisible.  The false array→fixed hint fired.
     // After the fix the walker visits the else arm and records `nums` as mutated.
     let src = r#"
-function entrypoint() -> nothing {
-  let nums: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [1, 2, 3]
   if (nums) {
     1 => {}
     else => {
@@ -115,8 +115,8 @@ fn array_not_grown_in_any_arm_still_gets_array_to_fixed_hint() {
     // WHY: Ensures the fix doesn't suppress correct promotion hints when the else
     // arm exists but does not grow the array.
     let src = r#"
-function entrypoint() -> nothing {
-  let nums: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [1, 2, 3]
   if (nums) {
     1 => {}
     else => {
