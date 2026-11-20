@@ -63,8 +63,8 @@ Use `const` by default. Reach for `let` only when you need to change the value l
 const player: Player = { name: `Patrick`, health: 100 }
 player.health = 50            // COMPILE ERROR: player is const — fields can't change.
 healPlayer(player)            // COMPILE ERROR: player is const — healPlayer's signature is
-                              //   `lend player: Player` which needs mutable access.
-                              //   Declare with `let` if the function needs to modify it.
+                              //   `lend player: Player` which needs to change it.
+                              //   Declare with `let` if the function needs to change it.
 ```
 
 The compiler rejects all three at compile time. `const` is a complete promise — no exceptions.
