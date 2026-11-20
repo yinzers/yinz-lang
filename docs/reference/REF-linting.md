@@ -61,6 +61,11 @@ function getName(share player: Player) -> String {
     return player.name
   }
 }
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Ana`, active: true }
+  print(getName(player))
+}
 ```
 
 ```
@@ -106,6 +111,11 @@ shape User {
 
 function greet(share user: Maybe<User>) -> Nothing {
   print(user.name)
+}
+
+function entrypoint() -> Nothing {
+  let user: Maybe<User> = { name: `Ana` }
+  greet(user)
 }
 ```
 
@@ -205,6 +215,10 @@ function finish() -> String {
   return `done`
   print(`after return`)
 }
+
+function entrypoint() -> Nothing {
+  print(finish())
+}
 ```
 
 ```
@@ -244,8 +258,9 @@ Remove the name from the import, or use it.
 **A banned keyword:**
 
 ```ynz
-type Player {
-  name: String
+function entrypoint() -> Nothing {
+  let type = `player`
+  print(type)
 }
 ```
 
@@ -253,7 +268,7 @@ type Player {
 `type` is not a keyword in Yinz.
 ```
 
-Declare data with `shape`. See [REF-compiler-errors.md](REF-compiler-errors.md).
+The compiler warns each time the word appears, then reads it as an ordinary name. Declare data with `shape`, not `type`. A declaration that starts with `type Player { ... }` also fails to parse. See [REF-compiler-errors.md](REF-compiler-errors.md).
 
 ---
 
@@ -278,6 +293,23 @@ function entrypoint() -> Nothing {
 Write `wait sleep(100)` instead. Your function pauses just the same, and the thread stays free to run other tasks.
 
 **Shapes used by different background tasks.** The rule `cross-thread-fields-not-padded` fires when different `background` tasks use fields of a shape whose layout the compiler cannot pad because another file can see it:
+
+```ynz
+export shape Counters {
+  hits: Int
+  misses: Int
+}
+
+function record(give counters: Counters) -> Nothing {
+  wait sleep(1)
+  print(counters.hits.toString())
+}
+
+function entrypoint() -> Nothing {
+  let counters: Counters = { hits: 3, misses: 1 }
+  background record(counters)
+}
+```
 
 ```
 Fields of `Counters` are used by different background tasks, but the compiler could not add cache-line padding to it.
