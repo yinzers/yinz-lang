@@ -40,7 +40,7 @@ Most developers don't bother parallelizing reads — they write sequential code 
 
 This is the authoritative statement of what `wait` means. Two different jobs were historically conflated — they are separate, and only the second is `wait`'s job.
 
-**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — in v0.3 that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see [`docs/internal/implementation/IMP-no-function-coloring.md`](IMP-no-function-coloring.md)). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly — that shipped in v0.3-M2.
+**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — today that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see [`docs/internal/implementation/IMP-no-function-coloring.md`](IMP-no-function-coloring.md)). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly.
 
 **Ordering is also mostly automatic.** The compiler orders operations it can prove are dependent:
 - **Data dependency** — if B uses A's result, B waits for A. (No `wait` needed.)
@@ -204,7 +204,7 @@ The compiler auto-selects `.give` or `.copy` based on usage after the `backgroun
 - Value NOT used after → compiler moves (`.give`). Zero copy overhead.
 - Value IS used after → compiler copies (`.copy`). Caller keeps the original.
 
-Developers can always force an independent copy explicitly: `background process(data.copy())`. There is no body-level `.give` form (ownership words are signature-only — [`IMP-ownership.md`](IMP-ownership.md) read-first note; `PostfixOpKind` is `Copy | Freeze`, checked against the parser in v0.3-M8 Phase 2, `git log --grep=m8-p2`); the give direction is what the compiler already does for a value the caller never reads again.
+Developers can always force an independent copy explicitly: `background process(data.copy())`. There is no body-level `.give` form (ownership words are signature-only — [`IMP-ownership.md`](IMP-ownership.md) read-first note; `PostfixOpKind` is `Copy | Freeze`, checked against the parser, `git log --grep=m8-p2`); the give direction is what the compiler already does for a value the caller never reads again.
 
 The IDE warns on large copies so developers can restructure if needed.
 
@@ -216,7 +216,7 @@ The IDE warns on large copies so developers can restructure if needed.
 | Large value, unused after | `.give` | Zero |
 | Large value, used after | `.copy` + IDE warning | Developer restructures or accepts |
 | Developer writes `.copy()` at the spawn | `.copy()` — independent copy for that task | Copy cost |
-| ≥ 2 spawns in one block read the same shape value, nothing writes it between them | one refcount-shared copy (auto-Arc — [`IMP-ownership.md`](IMP-ownership.md) "Auto-Arc — Sharing Topology"; Phase 5) | One copy + an atomic bump per task |
+| ≥ 2 spawns in one block read the same shape value, nothing writes it between them | one refcount-shared copy (auto-Arc — [`IMP-ownership.md`](IMP-ownership.md) "Auto-Arc — Sharing Topology") | One copy + an atomic bump per task |
 | Callee declares `share`/`lend` on a non-channel parameter | COMPILE ERROR (`check.rs:~3470`) | — |
 
 ---
@@ -299,7 +299,7 @@ Full database stdlib design (connection pooling, transactions, query builder, mi
 
 ## Scope Boundaries — Deliberate Constraints and Deferrals
 
-M3a lifted the `LocalCrossesWait` guard (scalars, shapes, strings, arrays can now cross a `wait`). Two cases were deliberately left as compile errors; one is deferred to a later milestone.
+Scalars, shapes, strings and arrays can cross a `wait` (the `LocalCrossesWait` guard is lifted for them). The cases below stay deliberate compile errors.
 
 ### `ShadowsCrossingLocal` — same name re-declared around a suspension (deferred, clean compile error today)
 
@@ -364,7 +364,7 @@ The same two shapes apply to **parameters**: a parameter `p` occupies a frame sl
 
 **Why the guard is still there**: slots, crossing allocas and `cg.locals` are keyed by name, and typeck now makes every binding's name unique for codegen, so the collisions the guard was written for cannot happen in generated code. The guard (`ShadowsCrossingLocal`) is kept unchanged because removing it is a language change, not a codegen fix. The user-level workaround is still: use distinct names.
 
-**What it costs to lift** (small): delete the `ShadowsCrossingLocal` check and its parameter mirror in typeck and update the spec. Slot identity needs no further codegen change (per-binding names, v0.3-M9 C4).
+**What it costs to lift** (small): delete the `ShadowsCrossingLocal` check and its parameter mirror in typeck and update the spec. Slot identity needs no further codegen change (per-binding names).
 
 **Trigger**: user demand for re-using a name around a suspension in a program that cannot be restructured.
 
@@ -399,7 +399,7 @@ shape FlatOuter { childValue: Int, score: Int }
 
 A suspending function (one whose body contains a `wait`) cannot yet return a `Shape` or `Shape errors` value by value. These two return types require a variable-size EC/shape return-staging slot entangled with the pre-existing non-suspending shape-return base bug.
 
-**`-> Number errors` is fully supported** as of M3a Phase 1. A 16-byte staging slot is reserved in the composed frame (after own-local slots, before child sub-frames) when the function returns `-> Number errors`. The resume function writes the i128 decimal to that slot, points the EC ok-word at it, and the staging slot is freed when the frame drops (alloc=1/free=1 — no leak). See the frame-layout comments in `crates/ynz-codegen/src/emit.rs` `build_frame_layouts`.
+**`-> Number errors` is fully supported.** A 16-byte staging slot is reserved in the composed frame (after own-local slots, before child sub-frames) when the function returns `-> Number errors`. The resume function writes the i128 decimal to that slot, points the EC ok-word at it, and the staging slot is freed when the frame drops (alloc=1/free=1 — no leak). See the frame-layout comments in `crates/ynz-codegen/src/emit.rs` `build_frame_layouts`.
 
 **Why each remaining variant fails without the guard**:
 
@@ -407,7 +407,7 @@ A suspending function (one whose body contains a `wait`) cannot yet return a `Sh
 
 - **`-> Shape errors`** (shape success value in an EC return): needs variable-size staging (shape size varies per declaration) and is also entangled with the pre-existing non-suspending `-> Shape` return base bug (shapes returned by value produce garbage for int fields even without suspension). Fixing the non-suspending bug first is the prerequisite.
 
-**What IS supported** (verified clean in Phase 1):
+**What IS supported**:
 
 | Return type | Suspending function | Status |
 |---|---|---|
@@ -442,7 +442,7 @@ The frame-slot classifier in codegen handles Int, Boolean, Float, Number, String
 
 - **`Fixed<T>` binding (crossing local)**: fixed arrays are stack-allocated allocas in the resume function's stack frame. When the resume function returns to the scheduler after a `wait`, that stack frame is freed. The crossing-local frame slot holds a dangling pointer — reading elements after resume is UB. (`Fixed<T>` as a for-loop iterator is caught separately by `FixedArrayIterWithWait`.) Registry entry: `fixed-crossing-local-with-wait`.
 
-- **`Fixed<T, N>` in a function that waits or may run as a task (v0.3-M9 C1h)**: such a function is built once, so a `fixed` parameter without a written length has no length for its body. It is refused where the body asks for the length (`FixedLengthMissingInTaskFunction`, `unsized_lengths_of_once_only_functions`, `crates/ynz-typeck/src/check.rs:1463-1517`; pinned by `a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of` in `crates/ynz-typeck/tests/fixed_length_signatures.rs`); a function that never asks for it is not refused (`a_function_built_once_that_never_asks_for_the_length_is_not_refused`, same file). A `Fixed<String>` (or any `fixed` whose items own heap) received from a task and kept across a later `wait` is a `cannot yet cross a `wait`` error, because its release would walk cells in a dead resume-function stack frame (`is_errors_of_fixed_with_heap_items`, `check.rs:12398-12408`; the guard, `check.rs:2568-2579`; `a_received_fixed_of_strings_cannot_cross_a_later_wait`, same test file). **Both are refused, pending Chief's ruling.**
+- **`Fixed<T, N>` in a function that waits or may run as a task**: such a function is built once, so a `fixed` parameter without a written length has no length for its body. It is refused where the body asks for the length (`FixedLengthMissingInTaskFunction`, `unsized_lengths_of_once_only_functions`, `crates/ynz-typeck/src/check.rs:1463-1517`; pinned by `a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of` in `crates/ynz-typeck/tests/fixed_length_signatures.rs`); a function that never asks for it is not refused (`a_function_built_once_that_never_asks_for_the_length_is_not_refused`, same file). A `Fixed<String>` (or any `fixed` whose items own heap) received from a task and kept across a later `wait` is a `cannot yet cross a `wait`` error, because its release would walk cells in a dead resume-function stack frame (`is_errors_of_fixed_with_heap_items`, `check.rs:12398-12408`; the guard, `check.rs:2568-2579`; `a_received_fixed_of_strings_cannot_cross_a_later_wait`, same test file). **Both are refused; supporting them is undecided.**
 
 - **`range` binding (crossing local)**: a range binding (`let r = range(0,3)`) is stored on the resume function's stack as a pair of bounds (i64 lo, i64 hi). When the function suspends the stack frame is freed; the crossing-local frame slot holds a dangling pointer on the next resume. Iterating that dangling range produces zero iterations — silent wrong output. The wait-inside-body form is caught separately by `StoredRangeWithWait`; this guard catches the case where the wait is at the TOP LEVEL before the loop. Registry entry: `range-crossing-local-with-wait`.
 
@@ -499,23 +499,13 @@ because `-O0` lowers i128 ops alignment-indifferently.
 
 ### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (built, with `background-handle-form`)
 
-**SHIPPED v0.3-M4 (Phase 2)** — the deferral this section recorded is resolved: the copy-before-free fix landed WITH the `background-handle-form` feature, exactly per this section's own "landing WITH the `background-handle-form` feature" gating below. The paragraphs that follow preserve the M3b-era design record; the shipped mechanism is described under "How it was lifted."
+The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reconstructs the `{i64, i64}` EC struct from the frame's return slot and then calls `free_frame`. For `-> Number errors`, the ok-word points into the composed frame's 16-byte staging slot, which `free_frame` frees, so the wrapper's returned ok-pointer is invalid after it returns. This is safe for the fire-and-forget `background` statement, which discards the EC result without dereferencing the ok-pointer.
 
-The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reconstructs the `{i64, i64}` EC struct from the frame's return slot and then calls `free_frame`. For `-> Number errors`, the ok-word in that struct points into the composed frame's 16-byte staging slot — a region freed by `free_frame`. The returned struct's ok-pointer is therefore invalid after the wrapper returns.
+A caller that collects the result must copy it before `free_frame`. The handle form `let h = background ecFn()` does this. The inline-poll path (a suspending caller composing another `-> T errors` suspending function through the state-machine resume path) gives each `let` binding its own per-binding stable storage for a wide ok-value (copy-on-bind), so two bindings of the same `-> Number errors` callee never share its staging slot.
 
-This is **safe** because the only reachable caller of the wrapper is `background` (fire-and-forget), which discards the EC result entirely without dereferencing the ok-pointer. There is **no way to collect a `background` task's result in M3b**: the handle form `let h = background ecFn()` is rejected by typeck ("Capturing the output of background is not yet supported"), and the collection syntax (`.send`/`.receive`) ships separately with the `background-handle-form` feature. Until handle-collection lands, this copy-before-free path is **unreachable** — the deferral is vacuous in M3b and stays gated on background-handle collection.
+**How collection works**: the completion value is extracted from the frame's return slot inside `HandleStateFnFuture::poll`'s Ready arm — strictly BEFORE the embedded future's `Drop` frees the frame. A frame-interior wide ok-value (the `-> Number errors` staging slot) is copied to a handle-owned heap buffer and the ok-word repointed at it; the buffer is freed exactly once, at handle drop. One refinement over the paragraph above's prediction: the collected-vs-discarded distinction is keyed at COMPILE time on the spawn form (a handle spawn always extracts + copies; the bare fire-and-forget spawn path is byte-for-byte untouched) — there is deliberately NO runtime "was `.receive()` called yet" conditional anywhere. See `crates/ynz-runtime/src/handle.rs` ("R8 — copy-before-free, compile-time spawn-form-keyed").
 
-A caller that **collects** the result — reads the ok-word and uses the pointed-at value — must copy it BEFORE `free_frame`. Implementing that read-before-free + copy requires the scheduler to know whether a spawned task's result is collected or discarded, and when the collection happens relative to the frame lifetime. That knowledge only exists once the `background` handle-collection form (`.send`/`.receive`) ships.
-
-**Workaround**: use the inline-poll path — a suspending caller that calls another `-> T errors` suspending function composes the callee inline via the state-machine resume path. Only `background` hits the standalone wrapper, and there is no syntax to collect its `-> T errors` result until background-handle collection ships.
-
-Note: the inline-poll path had its own same-callee reuse hole: when two `let` bindings called the same `-> Number errors` function, both bindings' ok-words pointed into the same callee staging slot, so the second call clobbered the first binding's value before it was read. This hole is closed (v0.3-M3f) via copy-on-bind — each binding now receives its own per-binding stable storage for the wide ok-value before the next call can reuse the staging slot. The `background` wrapper's staging-slot deferral below is a separate concern: it applies only to the standalone EC wrapper emitted for `background`-spawned callees, not to the inline-poll path.
-
-**How it was lifted** (SHIPPED v0.3-M4 Phase 2, landing WITH the `background-handle-form` feature): the completion value is extracted from the frame's return slot inside `HandleStateFnFuture::poll`'s Ready arm — strictly BEFORE the embedded future's `Drop` frees the frame. A frame-interior wide ok-value (the `-> Number errors` staging slot) is copied to a handle-owned heap buffer and the ok-word repointed at it; the buffer is freed exactly once, at handle drop. One refinement over the paragraph above's prediction: the collected-vs-discarded distinction is keyed at COMPILE time on the spawn form (a handle spawn always extracts + copies; the bare fire-and-forget spawn path is byte-for-byte untouched) — there is deliberately NO runtime "was `.receive()` called yet" conditional anywhere. See `crates/ynz-runtime/src/handle.rs` ("R8 — copy-before-free, compile-time spawn-form-keyed").
-
-**Trigger (satisfied v0.3-M4)**: collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle — shipped with the `background-handle-form` feature.
-
-The registry deferral entry (`ec-wrapper-collect-on-completion`) was retired when this shipped — see the retirement note in [`registry/features.toml`](../../../registry/features.toml); the living design record is this section plus `crates/ynz-runtime/src/handle.rs`.
+The registry deferral entry `ec-wrapper-collect-on-completion` is retired (see the retirement note in [`registry/features.toml`](../../../registry/features.toml)); the design record is this section plus `crates/ynz-runtime/src/handle.rs`.
 
 ---
 
