@@ -41,7 +41,7 @@ Use the `test` keyword with a description:
 ```
 // player.test.ynz
 
-import { Player, healPlayer } from `models/player`
+import { Player, healPlayer, takeDamage } from `models/player`
 
 test `new player has full health` {
   let player: Player = { name: `Alice`, health: 100 }
@@ -56,7 +56,7 @@ test `healing doesn't exceed max health` {
 
 test `damage reduces health` {
   let player: Player = { name: `Alice`, health: 100 }
-  player.takeDamage(30)
+  takeDamage(player, 30)
   assert(player.health == 70)
 }
 ```
@@ -178,11 +178,11 @@ let error = assertFails(createUser({ email: `not-an-email` }))
 assert(error.message.contains(`invalid email`))
 
 // assertPanics — catches ONLY panics
-let panic = assertPanics(processUnchecked(badInput))
-assert(panic.message.contains(`null`))
+let panic = assertPanics(averageScore(totalScore, 0))
+assert(panic.message.contains(`division by zero`))
 ```
 
-`assertFails` catches only errors, and `assertPanics` catches only panics. If a typo in your own test code causes a panic, it always reaches the test runner with the full list of calls that led to it, so you see exactly where the test broke.
+A *panic* is a crash that stops the running task when your code has a bug, such as dividing by zero. `assertFails` catches only errors, and `assertPanics` catches only panics. If a typo in your own test code causes a panic, it always reaches the test runner with the full list of calls that led to it, so you see exactly where the test broke.
 
 Both `assertFails` and `assertPanics` return the failure they caught so you can look at it. It has `.message`, `.trace` (the list of calls that led to the failure), and `.source` (`{ file, line }`).
 
