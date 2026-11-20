@@ -4,7 +4,7 @@ description: "The compiler catches problems at three levels. Errors block compil
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-16"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -15,277 +15,274 @@ metadata:
 
 The compiler catches problems at three levels. Errors block compilation. Warnings compile but flag something to fix. Suggestions are informational — shown in the IDE, not in the terminal by default.
 
-The philosophy: catch real bugs, enforce code quality, don't police style. Every rule prevents an actual problem — nothing is enforced just because "that's how it's usually done."
+Every rule prevents a real problem. Nothing is enforced just because "that's how it's usually done."
 
-**Note on the examples below:** This file is a catalog — each example is abbreviated to fit a one-or-two-line summary of the rule it shows. The actual compiler output includes the full three-part diagnostic (WHAT happened, WHAT to do instead, WHY) per [`docs/reference/REF-compiler-errors.md`](REF-compiler-errors.md). So when you see `ERROR: Cannot add to a fixed array` here, the real output also shows the suggested fix (`Use Array<Number> if it needs to grow`) and the reason behind the rule.
+Each message the compiler prints has three parts: WHAT happened, WHAT to do instead, and WHY. This page shows the first part, the WHAT line, for each example. See [REF-compiler-errors.md](REF-compiler-errors.md) for the full format.
 
 ---
 
 ## Errors — code won't compile
 
-These are things that would definitely break at runtime or violate a language guarantee:
+**A value you gave away:**
 
-**Ownership violations:**
 ```ynz
-let data = loadData()
-consume(data)            // compiler infers `give` from consume's signature
-print(data)
-// ERROR: data was transferred to consume() above (consume takes `give data: Data`).
-//        It no longer exists here. Use .copy() if you need to keep it.
+shape Player {
+  name: String
+  health: Int
+}
+
+function retire(give player: Player) -> Nothing {
+  print(player.name)
+}
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Ana`, health: 100 }
+  retire(player)
+  print(player.name)
+}
 ```
 
-**Missing return paths:**
 ```
+`player` was already given away and cannot be used here.
+```
+
+Call `.copy()` before giving the value away if you need it in both places.
+
+**A path that does not return:**
+
+```ynz
+shape Player {
+  name: String
+  active: Boolean
+}
+
 function getName(share player: Player) -> String {
   if (player.active) {
     return player.name
   }
-  // ERROR: not all code paths return a string.
 }
 ```
 
-**Type mismatches:**
 ```
-let count: Number = "hello"
-// ERROR: expected Number, got String.
+`getName` must return a `String` on every path, but some paths fall off the end without returning.
 ```
 
-**Unhandled errors in a non-errors function:**
-```
-function load() -> Config {
-  let raw = file.read("config.txt")
-  // ERROR: file.read() can fail but load() is not marked errors.
-  // Handle the error or add "errors" to this function.
+**A value of the wrong type:**
+
+```ynz
+function entrypoint() -> Nothing {
+  let count: Int = `hello`
 }
 ```
 
-**Unhandled maybe:**
 ```
-let user: Maybe<User> = findUser(id)
-print(user.name)
-// ERROR: user is Maybe<User> — value might be none.
-// Use user.or(default).name or check user.exists() first.
+This value is `String`, but `count` is declared as `Int`.
 ```
 
-**Mutating a const:**
+**A failure that nothing handles:**
+
+```ynz
+function loadScore() -> Int errors {
+  return 42
+}
+
+function entrypoint() -> Nothing {
+  print(loadScore())
+}
 ```
-const name = "Patrick"
-name = "Alice"
-// ERROR: name is const and cannot be reassigned.
+
+```
+This function can fail, but the failure is not handled here.
+```
+
+Mark the calling function `errors`, give a fallback with `.or(default)`, or check `.failed()`.
+
+**A `Maybe` used as if it always had a value:**
+
+```ynz
+shape User {
+  name: String
+}
+
+function greet(share user: Maybe<User>) -> Nothing {
+  print(user.name)
+}
+```
+
+```
+`Maybe<User>` does not have a field called `name`.
+```
+
+Check `user.exists()` first and then read `user.value`, or give a fallback with `user.or(default)`.
+
+**Changing a `const`:**
+
+```ynz
+function entrypoint() -> Nothing {
+  const name = `Patrick`
+  name = `Alice`
+}
+```
+
+```
+`name` cannot be changed — it was declared with `const`.
 ```
 
 **Mixed types in a collection:**
+
+```ynz
+function entrypoint() -> Nothing {
+  let stuff = [42, `hello`, true]
+}
 ```
-let stuff = [42, "hello", true]
-// ERROR: cannot mix types in a collection. All elements must be the same type.
+
 ```
+Element 2 has type `String`, but the array expects `Int`.
+```
+
+All elements of an array must have the same type.
 
 **Adding to a fixed array:**
-```
-let nums: Fixed<Number> = [1, 2, 3]
-nums.add(4)
-// ERROR: Cannot add to a fixed array.
-// Fixed<Number> is size-locked. Use Array<Number> if it needs to grow.
+
+```ynz
+function entrypoint() -> Nothing {
+  let nums: Fixed<Int> = [1, 2, 3]
+  nums.add(4)
+}
 ```
 
-**Direct array indexing — use .get() instead:**
 ```
-let item = items[5]
-// ERROR: Direct index access is not allowed.
-// Use items.get(5) for safe access — it returns Maybe<T> and handles out-of-bounds.
+`Fixed<Int>` does not have a method called `add`.
 ```
 
-All collection access uses `.get(index)` which returns `Maybe<T>`. The compiler enforces that you handle the case where the index doesn't exist. No out-of-bounds crashes.
-
-**Naming convention violations:**
-```
-function FetchUser() -> User { }
-// ERROR: function names must be lowercase camelCase. Did you mean fetchUser()?
-
-type player { }
-// ERROR: type names must be PascalCase. Did you mean Player?
-```
+`Fixed<Int>` is size-locked. Use `Array<Int>` if the list needs to grow.
 
 **Sharing with a background task:**
+
 ```ynz
-background processData(data)
-// ERROR: processData's signature says `share data: Data`, but background tasks
-//        may outlive this function — sharing isn't safe across that boundary.
-//        Change processData to take `give data: Data` (it will own the value)
-//        OR call data.copy() to give it an independent copy.
+shape Report {
+  title: String
+}
+
+function processReport(share report: Report) -> Nothing {
+  print(report.title)
+}
+
+function entrypoint() -> Nothing {
+  let report: Report = { title: `Weekly` }
+  background processReport(report)
+}
 ```
+
+```
+Cannot use `background` with a function that borrows its arguments.
+```
+
+A `background` task can outlive the function that started it. Take the parameter as `give`, or pass `report.copy()` to a function that takes `give`. See [REF-concurrency.md](REF-concurrency.md).
+
+**A lowercase built-in type name:**
+
+```ynz
+function entrypoint() -> Nothing {
+  let health: int = 100
+}
+```
+
+```
+`int` is not a type name.
+```
+
+Write `Int`. See [REF-naming.md](REF-naming.md).
 
 ---
 
 ## Warnings — compiles, but fix this
 
-These are real problems that won't crash immediately but indicate something wrong:
+**Unreachable code:**
 
-**Unused variables:**
+```ynz
+function finish() -> String {
+  return `done`
+  print(`after return`)
+}
 ```
-let temp = calculateSomething()
-// WARNING: temp is declared but never used.
+
 ```
+This code will never run.
+```
+
+Remove the code after `return`, or move the `return` below it.
 
 **Unused import:**
-```
-import { fetchUser, createUser } from "services/users"
-// WARNING: createUser is imported but never used.
-```
 
-**Unused function parameter:**
-```
-function process(share user: User, share config: Config) -> Nothing {
-  print(user.name)
-  // WARNING: config is never used in this function.
+```ynz
+// services/users.ynz
+export function fetchUser(id: Int) -> String {
+  return `user ${id.toString()}`
+}
+
+export function createUser(id: Int) -> String {
+  return `new user ${id.toString()}`
 }
 ```
 
-**Unused export:**
-```
-export function deleteUser(id: String) -> Nothing errors { }
-// WARNING: deleteUser is exported but never imported anywhere in the project.
-```
+```ynz
+// entrypoint.ynz
+import { fetchUser, createUser } from `services/users`
 
-**Unreachable code:**
-```
-function process() -> String {
-  return "done"
-  log("after return")
-  // WARNING: unreachable code after return statement.
+function entrypoint() -> Nothing {
+  print(fetchUser(1))
 }
 ```
 
-**Variable shadowing:**
 ```
-let name = "Patrick"
-if (condition) {
-  let name = "Alice"
-  // WARNING: name shadows the outer variable declared on line 1.
+`createUser` is imported but never used.
+```
+
+Remove the name from the import, or use it.
+
+**A banned keyword:**
+
+```ynz
+type Player {
+  name: String
 }
 ```
 
-**Prefer const:**
 ```
-let count = 42
-// count is never reassigned
-// WARNING: count is never mutated. Consider const count = 42.
+`type` is not a keyword in Yinz.
 ```
 
-**Empty error handling — silently swallowing an error:**
-```
-let data = fetchData(url)
-if (data.failed()) {
-  // WARNING: error caught but nothing is done with it.
-  // Log it, return it, or handle it — don't silently ignore failures.
-}
-```
-
-**Identical branches — both paths return the same value:**
-```
-if (active) {
-  return defaultConfig
-}
-return defaultConfig
-// WARNING: both code paths return the same value. The condition has no effect.
-```
-
-**Condition always true or false:**
-```
-const debug = false
-if (debug) {
-  // WARNING: condition is always false — this code never runs.
-}
-```
-
-**Unnecessary `wait`:**
-```
-let user = fetchUser(id)
-let perms = wait fetchPermissions(user)
-// WARNING: wait is unnecessary here. fetchPermissions(user) depends on user
-// and would auto-wait via the dependency graph. Remove wait for cleaner code.
-```
-
-**Recommended graceful-shutdown pattern (informational):**
-```
-while (true) {
-  let job = jobQueue.next()
-  job.process()
-}
-// SUGGESTION: This loop has no graceful shutdown path. For long-running
-//             background tasks, prefer:
-//   while (process.isRunning()) {
-//     let job = jobQueue.next()
-//     job.process()
-//   }
-//
-// Why: process.isRunning() returns false on shutdown signals (SIGTERM,
-//      SIGINT, SIGHUP), letting the loop exit cleanly before the process
-//      terminates. Without it, the OS forcibly kills the process, which
-//      can leave resources in a bad state.
-```
+Declare data with `shape`. See [REF-compiler-errors.md](REF-compiler-errors.md).
 
 ---
 
 ## Suggestions — IDE only by default
 
-These are informational. The IDE shows them. The terminal doesn't, unless you've enabled strict mode.
+Suggestions are informational. The IDE shows them. The terminal does not.
 
-**Performance: consider fixed instead of array:**
-```
-let players: Array<Player> = [p1, p2, p3]
-// players never calls .add() or .remove()
-// SUGGESTION: players is never modified after creation. Consider Fixed<Player> for better performance.
-```
+**An array that never grows, and a variable that never changes.** When nothing grows an `Array<T>` after it is created, the compiler stores it as `Fixed<T>`. When nothing reassigns a `let`, the compiler treats it as `const`. The IDE underlines the `Array` or the `let` you wrote with a dotted line. Hover for the explanation. The lightbulb action rewrites the word for you. See [REF-ide-hints.md](REF-ide-hints.md).
 
-**Performance: consider type instead of map:**
-```
-let stats: Map<String, Number> = { health: 100, attack: 50, defense: 30 }
-// SUGGESTION: all keys are known at compile time. Consider defining a type for direct field access.
-```
+**Blocking sleep.** The rule `prefer-yielding-sleep` fires on `sleepBlocking` in programs that have a scheduler:
 
-**Duplicate code:**
-```
-function calcBonus(share p: Player) -> Number { return p.health * 2 }
-function calcScore(share p: Player) -> Number { return p.health * 2 }
-// SUGGESTION: identical logic. Consider consolidating into one function.
-```
-
-**Large copy for background task:**
-```
-background processData(data)
-print(data.count())
-// SUGGESTION: data (~500MB) was copied for the background task.
-// Move the .count() call above the background line to avoid the copy.
-```
-
-**Function complexity:**
-```
-function handleEverything(...) -> Nothing {
-  // SUGGESTION: cyclomatic complexity is high. Consider breaking this into smaller functions.
+```ynz
+function entrypoint() -> Nothing {
+  sleepBlocking(100)
 }
 ```
 
-**Debug prints left in code:**
 ```
-print("got here")
-// SUGGESTION: debug print — remove before production?
+`sleepBlocking` parks the current thread — it sits idle and runs nothing else until the time is up.
 ```
 
----
+Write `wait sleep(100)` instead. Your function pauses just the same, and the thread stays free to run other tasks.
 
-## Configuring strictness
+**Shapes used by different background tasks.** The rule `cross-thread-fields-not-padded` fires when different `background` tasks use fields of a shape whose layout the compiler cannot pad because another file can see it:
 
-In `yinz.toml`:
-
-```toml
-[lint]
-level = "balanced"               # "relaxed", "balanced", "strict"
-treat_warnings_as_errors = false
+```
+Fields of `Counters` are used by different background tasks, but the compiler could not add cache-line padding to it.
 ```
 
-**relaxed** — errors only. Nothing else. Good for exploratory code or very early prototypes.
+Keep hot cross-task state in a shape declared in the same file and not exported. The compiler pads that kind of shape automatically.
 
-**balanced** — errors + warnings in terminal, suggestions in IDE only. The default.
-
-**strict** — all three levels in terminal, warnings treated as errors. Good for CI pipelines and mature codebases.
+**Arrays stored as separate per-field arrays.** The rule `array-using-soa-layout` tells you when the compiler stores a large, never-grown `Array` of shape values as one block of memory per field because your loops read at most two fields. There is nothing to change. The program behaves the same either way.
