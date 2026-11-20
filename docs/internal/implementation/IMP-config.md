@@ -1,6 +1,6 @@
 ---
 name: "IMP-config"
-description: "Design rationale for Yinz's three-layer configuration model (yinz.toml, .env, runtime set functions) and why TOML was chosen over JSON or YAML."
+description: "Design rationale for Yinz's three-layer configuration model (yinz.toml, .env, runtime set functions) and the choice of TOML for project config."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -30,11 +30,9 @@ Configuration lives in three distinct layers:
 
 ---
 
-## TOML over JSON or YAML
+## `yinz.toml` Is TOML
 
-Decided: JSON and YAML rejected.
-
-**Why TOML**: Designed specifically for config files. Comments allowed. Explicit types with no implicit coercion. Not whitespace-sensitive. Used by Rust (Cargo.toml), Python (pyproject.toml). Clean and predictable.
+Project config is TOML: made for config files, allows comments, has explicit types with no implicit coercion, and is not whitespace-sensitive.
 
 ---
 
@@ -62,4 +60,4 @@ if (environment == "production") {
 }
 ```
 
-A JSON/TOML file cannot express this. Code already can.
+A static file cannot express this; code can.

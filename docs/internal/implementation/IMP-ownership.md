@@ -166,8 +166,6 @@ When `shape` declarations land in M4, field assignment (`player.field = x`) beco
 
 Cross-references:
 - [`docs/reference/REF-variables.md`](../../reference/REF-variables.md) "What const blocks" section (user-facing)
-- [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](../../../.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) Forward-Compatibility Constraints (locked decisions for M4+)
-
 ---
 
 ## No Direct Array Indexing — `.get(index)` Returns `Maybe<T>`

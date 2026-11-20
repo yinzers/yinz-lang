@@ -33,9 +33,9 @@ Ships in v0.13 per [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-s
 
 Test functions use a dedicated `test` keyword with a string description, not a function named `test_something` or a callback passed to a `describe()` function.
 
-**Why a string description over a function name**: Test names that are readable English sentences produce readable output. `test "new player has full health"` produces output that non-developers can read. `func TestNewPlayerHasFullHealth(t *testing.T)` is Go-style verbosity. `it("should have full health", () => ...)` is callback soup.
+**The name is a string description**: readable English sentences produce readable output, and `test "new player has full health"` can be read by non-developers.
 
-**Why not `function`**: Test functions have different semantics — they're discovered and run by the test runner, not called by other code. A distinct keyword makes this clear. `test` reads like English: "test: new player has full health."
+**`test` is its own keyword, not `function`**: test functions are discovered and run by the test runner, not called by other code. `test` reads like English: "test: new player has full health."
 
 ---
 
@@ -43,7 +43,7 @@ Test functions use a dedicated `test` keyword with a string description, not a f
 
 `assert(condition)`, `assertEqual(actual, expected)` — standalone functions, not chained methods.
 
-**Why**: Method chaining on assertions (`expect(value).toBe(100)`) is clever but harder to read than `assertEqual(player.health, 100)`. Standalone assertion functions read like English instructions. Consistent with the language's preference for step-by-step over chaining.
+`assertEqual(player.health, 100)` reads like an English instruction and follows the language's step-by-step-over-chaining rule (Golden Rule 9).
 
 ---
 

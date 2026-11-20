@@ -43,7 +43,7 @@ Multi-case `if` over an options scrutinee lowers to LLVM `switch` on the tag byt
 
 **Display strings**: the `variantName: \`Display String\`` syntax lets the author attach a separate display string to any variant. When present, the display string populates the string table slot instead of the variant identifier. Variants without a display string fall back to the identifier name. This is purely a string-table substitution — the tag value, comparison semantics, and ABI are unchanged. The `OptionsEntry` in the typeck table carries a parallel `display_strings: Vec<Option<String>>` field; `lower_options_to_string` reads `display_strings[i].unwrap_or(&variants[i])` when building the LLVM string global per variant.
 
-**Why not a separate `.displayString()` method**: one string representation per options type is cleaner and avoids the question of which method to call in interpolation. The display string IS the string — if you need both the identifier and the label, access the identifier via the variant name in code (which is free, compile-time) and call `.toString()` for display.
+**One string per options value**: there is no separate `.displayString()` method, so interpolation never has to choose between two. The display string IS the string; the identifier is available by its variant name in code (free, compile-time), and `.toString()` gives the display text.
 
 ---
 

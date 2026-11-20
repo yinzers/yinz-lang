@@ -321,7 +321,7 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 
 **Both pause the calling code for `ms`. The difference is whether the THREAD is wasted.** The win from yielding only appears when there's other work to run; in a single-purpose program doing one thing, the observable behavior is identical.
 
-**Naming history:** these shipped in M1/M2 as `sleepMs` (blocking) and `sleepAsync` (yielding). Both are mis-named: `sleepAsync` smuggles the `async` jargon the language exists to hide (Golden Rule 5 + [`.claude/rules/vocabulary.md`](../../../.claude/rules/vocabulary.md) — Yinz uses `wait`, never `async`/`await`), `wait sleepAsync` states "suspend" twice, and `sleepMs`/`sleepAsync` mix naming bases (unit vs mechanism). Renamed to `sleep` (yielding default) + `sleepBlocking` (blocking exception names its danger, per `stdlib-design.md` Rule 1). The rename is cheapest pre-external-users (M3 kickoff or standalone PR).
+**Naming:** the yielding sleep is `sleep` (no `async` jargon, per Golden Rule 5 and [`.claude/rules/vocabulary.md`](../../../.claude/rules/vocabulary.md): Yinz uses `wait`, never `async`/`await`). The blocking exception is `sleepBlocking`, so its name states the danger (`stdlib-design.md` Rule 1).
 
 **Symmetric teaching (the language steers you to the right tool per context):**
 
@@ -330,7 +330,7 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 | **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`. **SHIPPED and confirmed live** (v0.3-M1, re-verified v0.3-M6): the `Expr::Wait` arm (`crates/ynz-typeck/src/check.rs:2726-2732`) rejects `wait <anything>` before recursing into the callee, so `wait sleep(ms)` produces exactly this diagnostic, with WHAT-INSTEAD "Remove the keyword or build without `--kernel`." A bare `sleep(ms)` with no `wait` (a separate, also-live arm, `check.rs:3108-3118`) gets the more specific WHAT-INSTEAD "Use `sleepBlocking` for blocking sleep." The same kernel-mode-suspension rejection also covers every bare auto-suspending user-function call (`check.rs:3234-3241`) and its UFCS dot-call form (`check.rs:4849-4857`) — under the no-coloring model, ALL suspending calls, not just explicit `wait`, are rejected under `--kernel`. See [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md). |
 | **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. **SHIPPED v0.3-M4** (rides the `[[lint_rule]]` infra built there, kernel-gated off; M4's `background` handle-form also removed the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent ([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)). |
 
-Execution was tracked in [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md) ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope); the normal-mode lint shipped in v0.3-M4, and the `--kernel` compile-error row above is likewise live (the rejection arms in `check.rs` are shipped, not pending).
+Both rows are live: the normal-mode lint shipped in v0.3-M4, and the rejection arms in `check.rs` give the `--kernel` compile error.
 
 ---
 

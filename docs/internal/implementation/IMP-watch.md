@@ -15,7 +15,7 @@ metadata:
 
 > Audience: compiler contributors. For user docs, see [`docs/reference/REF-tooling.md`](../../reference/REF-tooling.md) (the `ynz watch` / `ynz watch --run` section).
 
-Cross-references: [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md), [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md), [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md)
+Cross-references: [`docs/internal/implementation/IMP-compiler.md`](IMP-compiler.md), [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md)
 
 ---
 
@@ -422,6 +422,5 @@ Phase 6 results will be filled in here after measurement.
 - [`docs/reference/REF-compiler-errors.md`](../../reference/REF-compiler-errors.md) — banned-jargon source-of-truth; watch must not emit banned words
 - [`docs/internal/implementation/IMP-versioning.md`](IMP-versioning.md) — pre-v1.0 breaking-change policy; `--json` schema version strategy
 - [`registry/features.toml`](../../../registry/features.toml) — `ynz-watch-interactive-commands`, `ynz-watch-config-file` deferred entries
-- [`.claude/planning/done/2026-05-20-v0-2-m4-watch/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m4-watch/plan.md) — implementation plan; all constraints + locked decisions
-- [`.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md) — daemon-with-CompilerDb pattern reference
-- [`.claude/planning/done/2026-05-20-v0-2-m3-fmt/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m3-fmt/plan.md) — library + CLI shape reference; cross-platform test patterns
+- [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) — daemon-with-CompilerDb pattern reference
+- [`docs/internal/implementation/IMP-fmt.md`](IMP-fmt.md) — library + CLI shape reference

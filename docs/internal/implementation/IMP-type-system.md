@@ -356,7 +356,7 @@ shape Bar {
 }
 ```
 
-**Why no keyword**: `{` in type position is unambiguous — no other Yinz type annotation uses it. The compiler infers "this is an anonymous shape type." No extra ceremony.
+**No keyword**: `{` in type position is unambiguous (no other Yinz type annotation uses it), so the compiler reads it as an anonymous shape type.
 
 **How it works**: The compiler synthesizes a name (`__anon_Bar_spread`) and registers the anonymous shape as a real named shape. All downstream passes (typeck, codegen, print) see an ordinary named shape — zero special cases in the backend.
 

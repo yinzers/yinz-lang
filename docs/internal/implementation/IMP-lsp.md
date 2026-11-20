@@ -16,9 +16,7 @@ metadata:
 This doc is for **compiler contributors and milestone implementers**, not Yinz language users. It covers how `ynz-lsp` is structured, why it works the way it does, and what is deferred to v0.2-M5.
 
 User spec reference: N/A (tooling internals)
-Plan reference: [`.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md) (M2); [`.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md) (M5)
-
-Cross-references: [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../.claude/rules/inference.md), [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md)
+Cross-references: [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../.claude/rules/inference.md)
 
 ---
 
@@ -74,7 +72,7 @@ Rationale: salsa inputs require `&mut db` access. Salsa is `Send` but not `Sync`
 - If `didChange` arrives while a previous response is being computed: the worker drains pending mutations BEFORE replying. The in-flight response reflects state N-1 but is sent unmodified; the next request sees post-mutation state.
 - For requests the LSP spec marks cancellable (`completion`, `hover`): `$/cancelRequest` is handled BEST-EFFORT. If the query hasn't started (still queued), it's dropped and a `RESPONSE_ERROR_REQUEST_CANCELLED` is returned. If already running, it completes; the client receives the late response (LSP spec permits this).
 
-**v0.2-M5 note:** When go-to-def / rename / find-refs scale horizontally (multi-window, background analysis), this model is revisited with salsa snapshots. See [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md) M5 entry.
+**v0.2-M5 note:** When go-to-def / rename / find-refs scale horizontally (multi-window, background analysis), this model is revisited with salsa snapshots.
 
 ---
 
@@ -222,7 +220,7 @@ This mirrors the self-hosting plan in [`docs/internal/implementation/IMP-feature
 
 ## Shipped in v0.2-M5
 
-The following LSP capabilities were out of scope for v0.2-M2 and shipped in v0.2-M5 ([`.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md)):
+The following LSP capabilities were out of scope for v0.2-M2 and shipped in v0.2-M5:
 
 - `textDocument/definition` — go-to-def (cross-file span lookup via `symbol_lookup.rs`)
 - `textDocument/references` — find-refs (cross-file use-site tracking)

@@ -25,11 +25,9 @@ User spec: [`docs/reference/REF-ffi.md`](../../reference/REF-ffi.md)
 
 ---
 
-## `foreign` Keyword over `unsafe`
+## The `foreign` Keyword
 
-`foreign function name(...) from "library"` — the keyword describes what the code IS, not just that it's dangerous.
-
-**Why not `unsafe`**: `unsafe` (Rust's approach) tells you something is dangerous without telling you why. `foreign` tells you why — this code comes from another language. A junior developer reading `foreign function c_sqrt(...)` immediately understands the nature of the call. Golden Rule 5.
+`foreign function name(...) from "library"` — the keyword says where the code comes from (another language), which tells a junior developer reading `foreign function c_sqrt(...)` why the call needs care. Golden Rule 5.
 
 ---
 
@@ -45,7 +43,7 @@ The foreign declaration is never used directly by the rest of the codebase. It's
 
 The compiler cannot analyze foreign code. It doesn't know if a foreign function has side effects, blocks, or modifies shared state. Requiring `wait` prevents the auto-parallelization system from accidentally racing foreign calls.
 
-**Why not just exclude from parallelization silently**: Silent exclusion from parallelization would hide a potential performance issue. Requiring `wait` makes the exclusion explicit — the developer sees `wait c_read(...)` and knows this is a sequential call.
+**The exclusion is explicit**: the developer sees `wait c_read(...)` and knows this is a sequential call.
 
 ---
 
