@@ -1,6 +1,6 @@
 ---
 name: "IMP-functions"
-description: "Design decisions for Yinz function syntax: the 'function' keyword over 'fn', explicit '-> nothing' return type, and rejecting tuples in favor of named return types."
+description: "Design decisions for Yinz function syntax: the 'function' keyword over 'fn', explicit '-> Nothing' return type, and rejecting tuples in favor of named return types."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -25,11 +25,11 @@ User spec: [`docs/reference/REF-functions.md`](../../reference/REF-functions.md)
 
 ---
 
-## `-> nothing` over `void`
+## `-> Nothing` over `void`
 
-Functions that don't return a value declare `-> nothing`. Always required — no omitting the return type.
+Functions that don't return a value declare `-> Nothing`. Always required — no omitting the return type.
 
-**Why**: `void` is CS jargon that means nothing to a non-programmer. `nothing` reads like English — "this function returns nothing." Requiring it explicitly eliminates ambiguity in team codebases about whether a missing return type means void or was forgotten.
+**Why**: `void` is CS jargon that means nothing to a non-programmer. `Nothing` reads like English — "this function returns nothing." Requiring it explicitly eliminates ambiguity in team codebases about whether a missing return type means void or was forgotten.
 
 ---
 
@@ -62,7 +62,7 @@ p => { ... }                    // multi-line — types inferred
 Python's mutable default argument bug (`def append(x, lst=[])` sharing one list across all callers) cannot occur in Yinz. The ownership system prevents it by construction: a default value like `= []` creates an owned value. The first call that omits the argument takes ownership — moves it in. There is nothing left for a second call to share.
 
 ```ynz
-function addTo(items: array<string>, list: array<string> = []) -> array<string> {
+function addTo(items: Array<String>, list: Array<String> = []) -> Array<String> {
   ...
 }
 ```

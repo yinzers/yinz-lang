@@ -39,7 +39,7 @@ The goal: Yinz should eventually be usable for chipset code, OS kernels, and NAS
 - A custom output device (UART, framebuffer, system log)
 - A custom panic handler (kernel oops, firmware halt-and-flash-LED)
 
-Without `--kernel` mode, Yinz's `array<T>` would secretly require malloc and silently fail to link in these environments. Compile-time enforcement is the only safe path.
+Without `--kernel` mode, Yinz's `Array<T>` would secretly require malloc and silently fail to link in these environments. Compile-time enforcement is the only safe path.
 
 ---
 
@@ -49,10 +49,10 @@ Any language feature or stdlib API that requires the runtime becomes a COMPILE E
 
 | Feature | Default behavior | `--kernel` behavior |
 |---------|------------------|---------------------|
-| `array<T>` (growable) | Heap allocation via libc malloc | COMPILE ERROR unless `.in(myAllocator)` provided |
-| `map<K, V>` | Heap allocation | COMPILE ERROR unless allocator provided |
-| `string` (growable) | Heap allocation | COMPILE ERROR unless allocator provided |
-| `fixed<T>` | Stack allocation | Always works (no heap needed) |
+| `Array<T>` (growable) | Heap allocation via libc malloc | COMPILE ERROR unless `.in(myAllocator)` provided |
+| `Map<K, V>` | Heap allocation | COMPILE ERROR unless allocator provided |
+| `String` (growable) | Heap allocation | COMPILE ERROR unless allocator provided |
+| `Fixed<T>` | Stack allocation | Always works (no heap needed) |
 | `print()` / `println()` | libc stdio | COMPILE ERROR unless `runtime.setStdout(myWriter)` |
 | `background` (spawn task) | Runtime scheduler | COMPILE ERROR unless `runtime.setScheduler(myScheduler)` |
 | `wait` (I/O suspension) | Runtime suspension | COMPILE ERROR unless scheduler provided |
@@ -60,7 +60,7 @@ Any language feature or stdlib API that requires the runtime becomes a COMPILE E
 | Auto-`Arc` (cross-thread shared state) | Standard atomic refcount | COMPILE ERROR unless allocator + thread primitives |
 | `arena {}` blocks | Compiler-managed scratchpad | Always works (uses user-provided allocator if no default) |
 
-`fixed<T>`, primitive math, control flow, function calls, `shape` declarations, and value semantics all work in `--kernel` mode — they don't depend on the runtime.
+`Fixed<T>`, primitive math, control flow, function calls, `shape` declarations, and value semantics all work in `--kernel` mode — they don't depend on the runtime.
 
 ---
 
@@ -76,12 +76,12 @@ runtime.setAllocator(MyKernelAllocator)
 runtime.setStdout(MySerialWriter)
 
 // Custom panic handler
-runtime.setPanicHandler((info: PanicInfo) -> nothing {
+runtime.setPanicHandler((info: PanicInfo) -> Nothing {
   // log panic to firmware NVRAM, halt CPU, etc.
 })
 
 // Once configured, normal Yinz code works
-let buffer: array<int> = []              // uses MyKernelAllocator
+let buffer: Array<Int> = []              // uses MyKernelAllocator
 println("kernel booting")              // uses MySerialWriter
 ```
 
@@ -94,15 +94,15 @@ The runtime-injection APIs are themselves stdlib items — they're heap-free (th
 Following Golden Rule 3's three-part format:
 
 ```
-let buffer = array<int>()
-// COMPILE ERROR: array<T> requires a heap allocator — not available in --kernel mode.
+let buffer = Array<Int>()
+// COMPILE ERROR: Array<T> requires a heap allocator — not available in --kernel mode.
 //
-//   Use fixed<T, N> for stack-allocated storage with a compile-time-known size,
-//   or provide a custom allocator: array<int>.in(myKernelAllocator).
+//   Use Fixed<T, N> for stack-allocated storage with a compile-time-known size,
+//   or provide a custom allocator: Array<Int>.in(myKernelAllocator).
 //
-//   Kernels don't have an OS-provided allocator. fixed<T, N> uses stack memory
+//   Kernels don't have an OS-provided allocator. Fixed<T, N> uses stack memory
 //   (size locked at compile time). For dynamic sizing, plug in your kernel's
-//   allocator via array<int>.in(...) — the language ships allocator-injection
+//   allocator via Array<Int>.in(...) — the language ships allocator-injection
 //   for exactly this scenario. See docs/internal/implementation/IMP-no-runtime-mode.md.
 ```
 
@@ -117,7 +117,7 @@ Every new feature states what it needs at runtime and whether it works in the no
 Examples:
 
 - `shape` declarations (M4): runtime-independent. Always works in `--kernel`.
-- `array<T>` (M5): requires allocator. `--kernel` requires explicit `.in(allocator)` parameter on every construction.
+- `Array<T>` (M5): requires allocator. `--kernel` requires explicit `.in(allocator)` parameter on every construction.
 - `errors` keyword (M7): runtime-independent (just type-system flow). Always works.
 - `background` task spawning (M8 parsing-only, v0.2 implementation): requires scheduler. `--kernel` requires custom scheduler injection.
 

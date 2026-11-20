@@ -1,6 +1,6 @@
 ---
 name: "IMP-narrowing"
-description: "Design decisions for Yinz's compile-time type narrowing — the flow-sensitive rules table governing when '.value' (maybe<T>) and 'is' (union) narrowing are granted across control flow."
+description: "Design decisions for Yinz's compile-time type narrowing — the flow-sensitive rules table governing when '.value' (Maybe<T>) and 'is' (union) narrowing are granted across control flow."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-18"
@@ -19,7 +19,7 @@ User spec: [`docs/reference/REF-maybe.md`](../../reference/REF-maybe.md) (for `.
 
 ## What narrowing is
 
-Narrowing is compile-time tracking of which type a value has been proven to be inside a given block. After the compiler proves a fact about a binding (e.g., "this `maybe<T>` has a value" or "this `Shape` is a `Circle`"), it widens the binding's type inside the proven block to the narrower form — allowing safe access without explicit casts or runtime checks.
+Narrowing is compile-time tracking of which type a value has been proven to be inside a given block. After the compiler proves a fact about a binding (e.g., "this `Maybe<T>` has a value" or "this `Shape` is a `Circle`"), it widens the binding's type inside the proven block to the narrower form — allowing safe access without explicit casts or runtime checks.
 
 M6 extends M5's narrow subset of narrowing to the full rules table below.
 
@@ -31,16 +31,16 @@ Full rules table — every form the compiler tracks in M6.
 
 | Form | Narrowing granted? | Notes |
 |---|---|---|
-| `if (m.exists()) { m.value }` | YES — `m` is `T` (not `maybe<T>`) inside then-block | Bread-and-butter case. Shipped in M5. |
+| `if (m.exists()) { m.value }` | YES — `m` is `T` (not `Maybe<T>`) inside then-block | Bread-and-butter case. Shipped in M5. |
 | `if (!m.exists()) { ... } else { m.value }` | YES — `m` is `T` inside else-block | Negative form, symmetric. Shipped in M5. |
 | `if (m.exists() && other) { m.value }` | YES — `&&` propagates flag; both RHS and body see `m` narrowed | Shipped in M5. |
 | `if (other && m.exists()) { m.value }` | YES — order doesn't matter for AND | Shipped in M5. |
 | `if (m.exists() \|\| other) { m.value }` | **NO** — `\|\|` does NOT propagate single-branch narrowing | See "||  non-propagation" below. M6 adds the locked diagnostic. |
-| `if (a.exists() && b.exists()) { a.value; b.value }` | YES — independent flags per binding | Each `maybe` binding gets its own narrowing fact. |
+| `if (a.exists() && b.exists()) { a.value; b.value }` | YES — independent flags per binding | Each `Maybe` binding gets its own narrowing fact. |
 | `if (m.exists()) { return ... } m.value` | YES — early-return narrowing (M6) | After the `if` block whose then-branch always exits via a recognized exit form, `m` is proven to be `T` for the rest of the enclosing block. |
 | `if (m.exists()) { panic("...") } m.value` | YES — `panic` is a recognized exit form | Same as `return`. |
 | `if (m.exists()) { loop { ... } } m.value` | YES — infinite loop is a recognized exit form | Only `loop { }` with no `break` — the compiler proves no exit from the loop body. |
-| `if (m.exists()) { someFn() } m.value` | **NO** — non-recognized exit | `someFn()` returning `nothing` does NOT prove exit. See "recognized-exit set" below. |
+| `if (m.exists()) { someFn() } m.value` | **NO** — non-recognized exit | `someFn()` returning `Nothing` does NOT prove exit. See "recognized-exit set" below. |
 | `if (x is Foo) { x.bar }` (x: `Foo \| Bar`) | YES — `x` is narrowed to `Foo` inside then-block | M6 union narrowing. |
 | `if (!(x is Foo)) { ... } else { x.bar }` (x: `Foo \| Bar`) | YES — `x` is narrowed to `Foo` inside else-block | Negative union narrowing. |
 | `if (!(x is Foo)) { return } x.bar` (x: `Foo \| Bar`) | YES — early-return narrows to `Foo` after the if | Combines early-return with union narrowing. |
@@ -59,12 +59,12 @@ Full rules table — every form the compiler tracks in M6.
 **LOCKED in M6** — only these forms count as a recognized exit for early-return narrowing:
 
 1. `return <expr>` — explicit return with a value
-2. `return` — bare return (in a `nothing`-returning function)
+2. `return` — bare return (in a `Nothing`-returning function)
 3. `panic(msg)` — diverges; never returns
 4. `loop { /* body with no `break` */ }` — infinite loop; never exits
 
 **NOT in the recognized-exit set** (even if the user "knows" the function diverges):
-- `someFn()` — any user function returning `nothing`; the typeck cannot prove it diverges
+- `someFn()` — any user function returning `Nothing`; the typeck cannot prove it diverges
 - `print(...)`, logging calls, any side-effect-only call
 - `if (condition) { return }` — conditional return; the condition may be false
 
@@ -79,7 +79,7 @@ Rationale: the compiler can only prove divergence for constructs whose semantics
 >   2. `if (!m.exists()) { panic("unreachable") }` — explicit panic
 >   or restructure to: `if (m.exists()) { use(m.value) }`
 >
-> **WHY**: Only `return`, `panic`, and infinite loops are proven to never continue past the if-block. Other calls — even ones returning `nothing` — might return normally, leaving `m` still possibly-none in the tail.
+> **WHY**: Only `return`, `panic`, and infinite loops are proven to never continue past the if-block. Other calls — even ones returning `Nothing` — might return normally, leaving `m` still possibly-none in the tail.
 
 ---
 
@@ -113,7 +113,7 @@ This is the most common narrowing rule users get wrong. The diagnostic is the te
 
 ## Reassignment Invalidation
 
-Any assignment `m = expr` inside a block clears all narrowing facts about `m`. The compiler treats reassignment conservatively — even if `expr` has type `maybe<T>` that is provably non-none, the existing fact is cleared and `m` goes back to requiring a new proof.
+Any assignment `m = expr` inside a block clears all narrowing facts about `m`. The compiler treats reassignment conservatively — even if `expr` has type `Maybe<T>` that is provably non-none, the existing fact is cleared and `m` goes back to requiring a new proof.
 
 Rationale: tracking the provenance of every assignment would require alias analysis well beyond v0.1 scope. The conservative rule is safe and catches real bugs.
 
@@ -124,7 +124,7 @@ Rationale: tracking the provenance of every assignment would require alias analy
 Only the OUTERMOST if-block's exit contributes a narrowing fact to the enclosing block's tail:
 
 ```ynz
-function example(m: maybe<int>) -> int {
+function example(m: Maybe<Int>) -> Int {
   if (!m.exists()) {               // outer if — recognized exit path
     if (someCondition()) { return -99 }  // inner if — does NOT add narrowing to outer tail
     return -1                      // outer if exits here
@@ -180,28 +180,28 @@ These hints are not emitted in M6 (LSP is v0.2 work). M6 only builds the typeck 
 
 ## M7 — Errors-Capable Narrowing Rules
 
-M7 extends the narrowing table with `errors`-capable values (parallel to `maybe<T>`). These use the same `NarrowingTable` infrastructure as M6 — a new "errors-capable" fact per binding.
+M7 extends the narrowing table with `errors`-capable values (parallel to `Maybe<T>`). These use the same `NarrowingTable` infrastructure as M6 — a new "errors-capable" fact per binding.
 
 | Form | Narrowing granted? | Notes |
 |---|---|---|
 | `if (e.failed()) { e.message }` | YES — inside then-block, `e` is narrowed to "failed" state; `.message` / `.suggestions` / `.trace` / `.source` accessible | Bread-and-butter case. |
 | `if (!e.failed()) { ... } else { e.message }` | YES — `e` is narrowed to "failed" state in else-block | Negative form. |
-| `if (e.failed()) { return ... } use(e)` | YES — early-return narrowing: after the if, `e` is narrowed to its success type | Same early-return machinery as `maybe<T>`. |
-| `if (e.failed()) { panic(...) } use(e)` | YES — panic is a recognized exit form | Parallel to `maybe<T>` rule. |
+| `if (e.failed()) { return ... } use(e)` | YES — early-return narrowing: after the if, `e` is narrowed to its success type | Same early-return machinery as `Maybe<T>`. |
+| `if (e.failed()) { panic(...) } use(e)` | YES — panic is a recognized exit form | Parallel to `Maybe<T>` rule. |
 | `let result = e; result.failed()` | YES for `result` (not `e`) — the narrowing tracks the binding | Assignment to a new binding re-tracks. |
 | `use(e)` without prior `.failed()` check (inside `errors` fn) | AUTO-PROPAGATION — compiler emits early return at this point; `e` is narrowed to success type after | The "eager feel" of the hybrid model. |
 | `use(e)` without prior `.failed()` check (outside `errors` fn) | COMPILE ERROR — must handle | Forces `.or()`, `.failed()` check, or caller `errors`. |
 | `if (e.failed()) { ... }` AFTER `use(e)` | COMPILE ERROR — check-after-use | `e` was already narrowed to success type at `use(e)`; `.failed()` no longer applies. Named diagnostic: "check-after-use". |
 | `e.message` without `.failed()` check in scope | COMPILE ERROR — `.message` requires "failed" narrowing proof | Access to `.message`/`.suggestions`/`.trace`/`.source` gated by narrowing. |
-| `if (e.failed() && other) { e.message }` | YES — `&&` propagates; inside body both facts hold | Same as `maybe<T>` `&&` rule. |
-| `if (e.failed() \|\| other) { e.message }` | **NO** — `\|\|` does NOT propagate single-branch narrowing | Same as `maybe<T>` `\|\|` rule. Same diagnostic wording adapted for `errors`. |
+| `if (e.failed() && other) { e.message }` | YES — `&&` propagates; inside body both facts hold | Same as `Maybe<T>` `&&` rule. |
+| `if (e.failed() \|\| other) { e.message }` | **NO** — `\|\|` does NOT propagate single-branch narrowing | Same as `Maybe<T>` `\|\|` rule. Same diagnostic wording adapted for `errors`. |
 | `e = newResult; use(e)` | AUTO-PROPAGATION tracks the new binding | Reassignment resets the narrowing fact for `e`. |
-| `if (e.failed()) { mutatingFn(e.lend); e.message }` | **NO** — `lend` call invalidates the fact | Same rule as `maybe<T>`. |
-| `if (e.failed()) { readFn(e.share); e.message }` | YES — `share` does NOT invalidate | Same rule as `maybe<T>`. |
+| `if (e.failed()) { mutatingFn(e.lend); e.message }` | **NO** — `lend` call invalidates the fact | Same rule as `Maybe<T>`. |
+| `if (e.failed()) { readFn(e.share); e.message }` | YES — `share` does NOT invalidate | Same rule as `Maybe<T>`. |
 | `for x in fallibleIter` (inside `errors` fn) | AUTO-PROPAGATION per step — each step's failure auto-propagates to caller | `FallibleIterable` for-loop is syntactic sugar over `errors`-capable `next()` calls. |
 | `for x in fallibleIter` (outside `errors` fn without adapter) | COMPILE ERROR — fallible for-loop in non-errors context | Must use `.orSkipFailures()` / `.withErrors()` adapter OR mark caller `errors`. |
 
-**Parallel to `maybe<T>`:** the errors-capable narrowing is the same machinery, second flavor. The `NarrowingTable` stores a fact-per-binding; for `maybe<T>` the fact is "exists"; for `errors`-capable the fact is "not-failed (success) / failed / unknown (pre-check)". The early-return narrowing algorithm is identical — only the fact type changes.
+**Parallel to `Maybe<T>`:** the errors-capable narrowing is the same machinery, second flavor. The `NarrowingTable` stores a fact-per-binding; for `Maybe<T>` the fact is "exists"; for `errors`-capable the fact is "not-failed (success) / failed / unknown (pre-check)". The early-return narrowing algorithm is identical — only the fact type changes.
 
 **"Check-after-use" diagnostic (exact wording):**
 

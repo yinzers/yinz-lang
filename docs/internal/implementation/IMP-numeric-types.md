@@ -1,6 +1,6 @@
 ---
 name: "IMP-numeric-types"
-description: "Design rationale for Yinz's three numeric types (number, float, int), why decimal number is the default, and how they are implemented without external arithmetic crates."
+description: "Design rationale for Yinz's three numeric types (Number, Float, Int), why decimal number is the default, and how they are implemented without external arithmetic crates."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -72,7 +72,7 @@ let huge: Number<5000> = 0.001
 
 **Why 4096:**
 - Covers gravitational wave numerics (~200 digits), QCD calculations (~50 digits), and far exceeds any realistic physics workload.
-- Memory per value bounded at ~1.7 KB — predictable, fits in `fixed<T>` without surprise.
+- Memory per value bounded at ~1.7 KB — predictable, fits in `Fixed<T>` without surprise.
 - Multiplication cost bounded — at N=4096 with Karatsuba, still microseconds. No surprise milliseconds-per-op.
 - Yinz's character is "predictable performance" — unbounded precision means unbounded per-op cost. Cap exists to preserve that character.
 
@@ -105,12 +105,12 @@ Standard double precision. Same as JS `Number`, Rust `f64`, C `double`. Hardware
 
 ## `Int` — Signed 64-bit (i64)
 
-Range: ±9.2 × 10^18. Covers any count a human writes by hand. Signed because unsigned types are footguns (`array.count() - 1` on empty arrays — classic underflow bug).
+Range: ±9.2 × 10^18. Covers any count a human writes by hand. Signed because unsigned types are footguns (`Array.count() - 1` on empty arrays — classic underflow bug).
 
 **Overflow behavior: panic by default, in both debug and release.**
 
 ```ynz
-let count: Int = int.max
+let count: Int = Int.max
 count = count + 1
 // RUNTIME ERROR: Integer overflow at line 3.
 //   count was at max value and would have wrapped.
@@ -120,10 +120,10 @@ count = count + 1
 **Explicit escape valves as dot methods** when wrap or saturate is the intended behavior:
 - `.wrappingAdd(n)` — wraps to min/max on overflow
 - `.wrappingMul(n)` — same
-- `.saturatingAdd(n)` — caps at int.max / int.min
+- `.saturatingAdd(n)` — caps at Int.max / Int.min
 - `.saturatingMul(n)` — same
 - (Same suffix pattern for any operation that can overflow.)
 
 **Why panic over wrap:** Wrapping is almost always a bug, not a feature. Making the bug loud at the call site is better than silent corruption downstream. Users who genuinely want wrap (rare — usually cryptography, hashing) get to ask for it explicitly with `.wrappingAdd()`. That visibility is good — code review can spot it.
 
-**Sized variants (`int<N>`, `uint<N>`):** Deferred to v2+ — see `docs/reference/REF-mvp-scope.md#v2--deferred-features`.
+**Sized variants (`Int<N>`, `UInt<N>`):** Deferred to v2+ — see `docs/reference/REF-mvp-scope.md#v2--deferred-features`.

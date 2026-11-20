@@ -68,9 +68,9 @@ Three things Rust gave up that Yinz keeps:
 The compiler can analyze pure Yinz code. It CANNOT analyze C code linked via FFI — we can't know whether `printf` blocks without knowing what's behind it. So FFI boundaries must declare `may-block` explicitly:
 
 ```ynz
-foreign function printf(format: string) -> int may-block
-foreign function read(fd: int, buf: pointer, n: int) -> int may-block
-foreign function memcpy(dst: pointer, src: pointer, n: int) -> pointer    // not annotated → doesn't block
+foreign function printf(format: String) -> Int may-block
+foreign function read(fd: Int, buf: pointer, n: Int) -> Int may-block
+foreign function memcpy(dst: pointer, src: pointer, n: Int) -> pointer    // not annotated → doesn't block
 ```
 
 This is one line per C function declared. Far less burden than Rust's `async fn` propagation. The compiler treats `may-block` foreign functions as if they were Yinz functions calling I/O intrinsics — call graph propagation works the same way.
@@ -97,32 +97,32 @@ When a downstream project consumes a compiled Yinz package, the compiler reads t
 
 ## Channel/Queue Primitives — Bounded by Default, Capacity Auto-Inferred
 
-**Implementation milestone**: SHIPPED v0.3-M4 — `channel<T>()` / `channel<T>(N)` construction, bounded-by-construction typeck + codegen, the kernel-mode gate, the muted default-capacity hint, and send/recv suspension (bare-channel and `background` handle-form) are all live. The default capacity is the locked constant `64` (`DEFAULT_CHANNEL_CAPACITY` in `ynz-typeck` — the single authoritative source per [`.claude/rules/authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md)).
+**Implementation milestone**: SHIPPED v0.3-M4 — `Channel<T>()` / `Channel<T>(N)` construction, bounded-by-construction typeck + codegen, the kernel-mode gate, the muted default-capacity hint, and send/recv suspension (bare-channel and `background` handle-form) are all live. The default capacity is the locked constant `64` (`DEFAULT_CHANNEL_CAPACITY` in `ynz-typeck` — the single authoritative source per [`.claude/rules/authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md)).
 
-`channel<T>()` constructs a bounded channel with a compiler-chosen default capacity. `channel<T>(N)` overrides with an explicit number. There is NO unbounded constructor — to express unbounded, write `channel<T>(int.max)` and a comment explaining why.
+`Channel<T>()` constructs a bounded channel with a compiler-chosen default capacity. `Channel<T>(N)` overrides with an explicit number. There is NO unbounded constructor — to express unbounded, write `Channel<T>(Int.max)` and a comment explaining why.
 
 This is the auto-promotion pattern (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)):
 - **Codegen**: compiler emits the chosen capacity (default or explicit)
 - **Muted IDE hint**: always shows the capacity AND whether it was default or user-set, so the bounded-ness is visible at every channel construction
-- **Explicit override**: `channel<T>(N)` when the default is wrong for this workload
+- **Explicit override**: `Channel<T>(N)` when the default is wrong for this workload
 
 ```ynz
 // Source the user wrote:
-let queue: channel<Order> = channel<Order>()
+let queue: Channel<Order> = Channel<Order>()
 
 // IDE rendering (muted text appears INSIDE the empty parens — addition placement
 // per .claude/rules/inference.md "Three Placement Categories"):
-let queue: channel<Order> = channel<Order>(64)     // `64` rendered muted (plain
+let queue: Channel<Order> = Channel<Order>(64)     // `64` rendered muted (plain
                                                     // text, like every Addition hint)
                                                     // hover tooltip:
                                                     //   WHAT: capacity = 64 (default)
-                                                    //   WHAT INSTEAD: write channel<Order>(N) for a different bound
+                                                    //   WHAT INSTEAD: write Channel<Order>(N) for a different bound
                                                     //   WHY: 64 is sized for typical workloads — backpressure surfaces
                                                     //        within seconds of sustained overproduction
                                                     // click-to-make-explicit: writes "64" into source
 
 // Override case — source already has the number, no muted hint needed:
-let bigQueue: channel<Frame> = channel<Frame>(1000)
+let bigQueue: Channel<Frame> = Channel<Frame>(1000)
 ```
 
 The muted `64` appears in the position where the user would have typed it, not as a comment after the line. Click → "64" gets typed into the source. This is the addition-placement pattern from [`.claude/rules/inference.md`](../../../.claude/rules/inference.md).
@@ -174,7 +174,7 @@ This rule applies to **writes into a queue** (`.send()` / channel push). It does
 
 - [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 4 (bounded by default) — channel/queue is the canonical instance of this rule.
 - `lockin-concurrency.md` Findings #12 (Erlang) and #16 (Node.js streams2) for the source pain.
-- [`IMP-concurrency.md`](IMP-concurrency.md) "Channel Close — End-of-Stream Semantics" — the other half of the channel contract: `.close()`, `receive()` as `maybe<T>` on a bare channel (`none` = end of stream; the handle's `receive()` stays `T errors` because it carries the task's own failure), `send()` giving its owned-heap payload, and the deferred auto-close (designed v0.3-M8; ships Phase 4).
+- [`IMP-concurrency.md`](IMP-concurrency.md) "Channel Close — End-of-Stream Semantics" — the other half of the channel contract: `.close()`, `receive()` as `Maybe<T>` on a bare channel (`none` = end of stream; the handle's `receive()` stays `T errors` because it carries the task's own failure), `send()` giving its owned-heap payload, and the deferred auto-close (designed v0.3-M8; ships Phase 4).
 
 ---
 
@@ -206,7 +206,7 @@ Acquire-release is weaker than sequential consistency. Code that relies on seq-c
 
 ## False Sharing Auto-Padding — Locked Pre-v0.3
 
-When the compiler detects that a `shape` type crosses a thread boundary at a `background` spawn site, it emits the shape with 64-byte cache-line alignment and inserts padding between independently-accessed fields to prevent false sharing. Detection keys on the LEGAL crossing set — `give`/`copy` arguments, `channel<T>` conduit element types, and callee return types at `background` spawn sites — because `.share`/`.lend` across `background` is a hard compile error as of v0.3-M4 (see [`IMP-concurrency.md`](IMP-concurrency.md) "Ownership with Background Tasks — Why `.share` Fails"); the intent ("ownership crossing thread boundaries") is realized on the legal modifier set.
+When the compiler detects that a `shape` type crosses a thread boundary at a `background` spawn site, it emits the shape with 64-byte cache-line alignment and inserts padding between independently-accessed fields to prevent false sharing. Detection keys on the LEGAL crossing set — `give`/`copy` arguments, `Channel<T>` conduit element types, and callee return types at `background` spawn sites — because `.share`/`.lend` across `background` is a hard compile error as of v0.3-M4 (see [`IMP-concurrency.md`](IMP-concurrency.md) "Ownership with Background Tasks — Why `.share` Fails"); the intent ("ownership crossing thread boundaries") is realized on the legal modifier set.
 
 **Why**: Two atomic variables placed in the same 64-byte cache line cause writes to either variable to invalidate the entire cache line for all cores — even though no data is actually shared. Production measurements show a 3.1× throughput collapse from false sharing on lock-free queue head/tail pointers (https://alic.dev/blog/false-sharing). The fix (128-byte isolation) recovers the full 3.1×. The compiler has all the information needed to apply this automatically.
 
@@ -223,8 +223,8 @@ Yinz uses **compile-time-assisted safe-point preemption**: the compiler turns lo
 ### The three-part shipped architecture (v0.3-M7)
 
 1. **State-machine-function loop back edges — codegen poll-yield (NEW, v0.3-M7).** Inside an *admitted* state-machine (may-suspend) function, every qualifying loop back edge is a genuine suspension point: codegen emits `br (ynz_rt_check_preempt(waker_ctx)), yield, header` — the yield stores the resume point through the existing suspension machinery (`store_resume_point` + the per-statement crossing-local flush discipline) and returns Pending; the continuation state reloads and re-enters at the loop header. The budget check wakes the task from OFF the worker thread before the Pending returns (a remote wake via the blocking pool), so a yield is a fair requeue — Tokio's LIFO fast path would otherwise let the yielding task starve its siblings (the tokio `yield_now` self-wake problem).
-   - **Qualifying loops**: `while`, and `for` over a literal `range(...)`, an `array<T>`, or a `map<K, V>`. **Named exclusions** (these loop forms keep pre-M7 behavior — a budget-ticking call with no yield): `for` over `fixed<T>` (stack-backed elements cannot survive a suspension — the same hazard the FixedArrayIterWithWait check rejects for explicit waits), and `for` over a string / shape-iterable / stored-range variable (the state-machine walker's non-frame-backed fallback forms).
-   - **Per-function admission (safe default: decline = byte-identical pre-M7 behavior)**: a function is admitted only when treating its loop back edges as suspension points forces no un-frame-backable type (`fixed<T>` / `maybe` / `union` / `dynamic` / nested-shape shape) to cross a suspension, no non-qualifying `for` form wraps a qualifying loop, and no two `for` loops share a loop-variable name across different element types (the name-keyed frame-slot machinery would collide). Declined functions are part of residual (3) below. The admission verdict is computed once in typeck (`back_edge_yield_admitted`) and threaded to every consumer — routing, suspension-point counting, and crossing-local collection all read the ONE producer.
+   - **Qualifying loops**: `while`, and `for` over a literal `range(...)`, an `Array<T>`, or a `Map<K, V>`. **Named exclusions** (these loop forms keep pre-M7 behavior — a budget-ticking call with no yield): `for` over `Fixed<T>` (stack-backed elements cannot survive a suspension — the same hazard the FixedArrayIterWithWait check rejects for explicit waits), and `for` over a string / shape-iterable / stored-range variable (the state-machine walker's non-frame-backed fallback forms).
+   - **Per-function admission (safe default: decline = byte-identical pre-M7 behavior)**: a function is admitted only when treating its loop back edges as suspension points forces no un-frame-backable type (`Fixed<T>` / `maybe` / `union` / `dynamic` / nested-shape shape) to cross a suspension, no non-qualifying `for` form wraps a qualifying loop, and no two `for` loops share a loop-variable name across different element types (the name-keyed frame-slot machinery would collide). Declined functions are part of residual (3) below. The admission verdict is computed once in typeck (`back_edge_yield_admitted`) and threaded to every consumer — routing, suspension-point counting, and crossing-local collection all read the ONE producer.
 2. **Non-state-machine CPU-bound work — blocking-pool routing (already shipped, unchanged).** A plain synchronous function has no frame, cannot return Pending, and has nothing to resume — no yield mechanism exists or can exist for it under the no-coloring design. Its protection is CPU-admission routing (below): tasks whose call graph contains zero may-block calls run on the blocking pool, off the I/O workers.
 3. **The named residual — CPU-heavy code no mechanism covers.** (a) CPU-heavy code inside a non-SM function that a may-suspend task calls: it runs on an I/O worker with no yield until it returns — admission routing is a heuristic over the *task's* call graph, not a per-function guarantee. (b) Loop-free CPU-bound recursion inside a state-machine function (no back edge to yield at) — the shape call-site checks would have covered. (c) Loops in *declined* SM functions and the excluded loop forms above. These are recorded residuals (the v0.3-M7 plan's Future Requirements), not silent gaps.
 

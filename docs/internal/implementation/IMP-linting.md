@@ -175,8 +175,8 @@ These enforce Yinz language fundamentals. Violating them creates ambiguity that 
 | `type-naming` | Types must start with capital letter (Golden Rule 10). `type player` is an error. |
 | `variable-naming` | Variables/functions/modules must start with lowercase. `function FetchUser` is an error. |
 | `duplicate-import-name` | Same name imported twice without alias. Forces explicit disambiguation. |
-| `out-of-bounds-literal` | `fixed<T>` of size N, accessed with literal index ≥ N. |
-| `out-of-precision-literal` | `number<N>` with N > 4096 (the cap from [`docs/internal/implementation/IMP-numeric-types.md`](IMP-numeric-types.md)). |
+| `out-of-bounds-literal` | `Fixed<T>` of size N, accessed with literal index ≥ N. |
+| `out-of-precision-literal` | `Number<N>` with N > 4096 (the cap from [`docs/internal/implementation/IMP-numeric-types.md`](IMP-numeric-types.md)). |
 
 ### Tier 2 — Warnings (compile succeeds, message visible)
 
@@ -208,10 +208,10 @@ The "compiler-as-teacher" tier. About code quality, performance, and pedagogy, n
 
 | Rule | Suggests |
 |------|----------|
-| `use-int-for-whole-numbers` | `let count: number = 0` for a counter — suggest `int` (faster) |
-| `avoid-float-for-finance` | `let price: float = 19.99` — suggest `number` (exact decimal) |
-| `use-shape-for-static-keys` | `map<string, V>` literal with all-string-literal keys — suggest a `shape` |
-| `prefer-fixed-when-immutable` | `array<T>` that never calls `.add()` or `.remove()` — compiler auto-promotes to `fixed<T>` codegen silently; lint suggests writing `fixed<T>` explicitly for source clarity. Hybrid model — see [`docs/internal/implementation/IMP-collections.md`](IMP-collections.md) "Auto-promotion" section |
+| `use-int-for-whole-numbers` | `let count: Number = 0` for a counter — suggest `Int` (faster) |
+| `avoid-float-for-finance` | `let price: Float = 19.99` — suggest `Number` (exact decimal) |
+| `use-shape-for-static-keys` | `Map<String, V>` literal with all-string-literal keys — suggest a `shape` |
+| `prefer-fixed-when-immutable` | `Array<T>` that never calls `.add()` or `.remove()` — compiler auto-promotes to `Fixed<T>` codegen silently; lint suggests writing `Fixed<T>` explicitly for source clarity. Hybrid model — see [`docs/internal/implementation/IMP-collections.md`](IMP-collections.md) "Auto-promotion" section |
 | `max-function-length` | Functions over 50 lines (default, configurable) — suggest splitting |
 | `max-nesting-depth` | More than 4 levels of nesting (configurable) — suggest restructuring |
 | `long-parameter-list` | 5+ params (configurable) — suggest options object pattern |
@@ -243,7 +243,7 @@ Every lint diagnostic — errors, warnings, suggestions — follows the WHAT / W
 SUGGESTION: This map's keys are all compile-time string literals.
 
   Consider a type instead:
-    shape Scores { alice: number, bob: number, charlie: number }
+    shape Scores { alice: Number, bob: Number, charlie: Number }
     let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
 
   Why: Type field access compiles to a direct memory offset (~1 instruction).

@@ -19,15 +19,15 @@ User spec: [`docs/reference/REF-sensitive.md`](../../reference/REF-sensitive.md)
 
 ## `sensitive` as a Type Modifier, Not a Wrapper Type
 
-`sensitive string` is a modifier on an existing type, like `maybe`. Not a wrapper type like `Secret<String>`.
+`sensitive String` is a modifier on an existing type, like `Maybe`. Not a wrapper type like `Secret<String>`.
 
-**Why**: `maybe<T>` established the idea of a built-in type modifier in the language — a keyword that changes an existing type's meaning without a wrapper shape. `sensitive string` follows that same idea, with its own bare-prefix syntax (`sensitive T`, no angle brackets — unlike `maybe<T>`'s generic-style brackets) — readable, composable, consistent. A `Secret<string>` wrapper would require special unwrapping syntax instead of the intuitive `.reveal()`.
+**Why**: `Maybe<T>` established the idea of a built-in type modifier in the language — a keyword that changes an existing type's meaning without a wrapper shape. `sensitive String` follows that same idea, with its own bare-prefix syntax (`sensitive T`, no angle brackets — unlike `Maybe<T>`'s generic-style brackets) — readable, composable, consistent. A `Secret<String>` wrapper would require special unwrapping syntax instead of the intuitive `.reveal()`.
 
 ---
 
-## `env.get()` Returns `sensitive string` by Default
+## `env.get()` Returns `sensitive String` by Default
 
-Environment variables are the primary source of secrets. Making `env.get()` return `sensitive string` automatically means developers don't have to remember to annotate secrets — the safe path is the default path.
+Environment variables are the primary source of secrets. Making `env.get()` return `sensitive String` automatically means developers don't have to remember to annotate secrets — the safe path is the default path.
 
 **Why this matters**: The most common security mistake is not intentionally logging secrets — it's accidentally including them in debug output, error messages, or log statements. Making accidental exposure impossible by default is better than making it possible but documented as bad practice.
 
