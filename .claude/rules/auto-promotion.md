@@ -9,7 +9,7 @@ When the compiler can prove a stricter or faster form fits the user's actual usa
 ## Surfaces
 
 - **Codegen promotion:** emit the stricter form when it has a measurable benefit (speed, memory, safety). Why: the user gains without rewriting source.
-- **Muted IDE hint:** show it when the explicit form is typeable Yinz syntax. Why: click-to-make-explicit must produce real source.
+- **IDE hint:** show it when the explicit form is typeable Yinz syntax. Why: click-to-make-explicit must produce real source.
 - **Tier 3 lint suggestion:** suggest the explicit form when it helps code review. Why: a later edit then breaks compilation instead of silently regressing.
 
 If no typeable explicit form exists (auto struct-of-arrays layout), use codegen plus lint only. If the difference exists only at compile time, use the lint only. Example: an `Array<T>` never grown becomes `Fixed<T>`, with all three surfaces.
@@ -34,7 +34,7 @@ Every new feature, stdlib type or optimization answers these in its design doc:
 - Is there a stricter or faster form the compiler can prove fits? If not, say so. Why: it shows the question was considered, not forgotten.
 - Which surfaces apply, by the criteria above?
 - The lint rule name, as `prefer-X-when-Y`.
-- What the muted hint shows inline, and the hover text (WHAT, WHAT INSTEAD, WHY).
+- What the IDE hint shows inline, and the hover text (WHAT, WHAT INSTEAD, WHY).
 - The teaching error when the proof fails (`.add()` on a `Fixed<T>` explains why and suggests `Array<T>`).
 - The override analysis below.
 
@@ -48,7 +48,7 @@ When the compiler picks between forms, weigh both directions: force the auto-pic
 - **Is the direction possible at all?** Forcing static dispatch on an unknown type is impossible, and forcing `Arc` with no thread crossing is pointless. Why: the compiler cannot manufacture knowledge, and unneeded cost helps no one.
 - **Would it be a second API for the same capability?** That is banned: skip it or redesign it. Why: parallel APIs split the stdlib.
 - **Does it weaken safety?** Then the name says so (a fast hash on attacker-controlled keys). Why: the risk must be visible at the call site.
-- **Is it discoverable?** The muted hint or lint offers it as the WHAT INSTEAD. Why: users cannot use an override they never see.
+- **Is it discoverable?** The IDE hint or lint offers it as the WHAT INSTEAD. Why: users cannot use an override they never see.
 - **Does it add a runtime dependency?** It must still work in `--kernel`. Why: kernel mode has no runtime.
 - **Is the pick ABI-locked?** That rules out an override only after v1.0; before it, breaking changes are allowed. Why: an override on a locked ABI would force every dependent binary to recompile.
 

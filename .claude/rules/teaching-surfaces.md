@@ -1,10 +1,10 @@
 ---
 name: Yinz Teaching Surfaces Protocol
-description: "Applies when a change touches a diagnostic, hover, lint suggestion or muted hint (`Diagnostic::`, registry hover, what/why fields, `inlay_hint`), or the lexer's `lex_one` handlers for other languages' characters."
+description: "Applies when a change touches a diagnostic, hover, lint suggestion or IDE hint (`Diagnostic::`, registry hover, what/why fields, `inlay_hint`), or the lexer's `lex_one` handlers for other languages' characters."
 trigger: relevance
 ---
 
-Every user-facing diagnostic, hover, lint suggestion and muted hint answers three slots. Grade each slot on its own. Why: a string that nails WHAT but fumbles WHY is still non-conformant.
+Every user-facing diagnostic, hover, lint suggestion and IDE hint answers three slots. Grade each slot on its own. Why: a string that nails WHAT but fumbles WHY is still non-conformant.
 
 - **WHAT states the problem the user actually hit, in plain English:** not a category label and never a raw tool-output dump (a linker's stderr as the WHAT or WHY). Why: tool output belongs in the message body, not the teaching slot.
 - **WHAT-INSTEAD is a fix the user can do and copy** ("Rename one of them, e.g. `count2`"). A restated rule ("Each parameter must have a unique name") is a WHY in disguise. Why: the test is "can the user do this?"
