@@ -17,13 +17,75 @@ User spec: [`docs/reference/REF-operators.md`](../../reference/REF-operators.md)
 
 ---
 
-## Operator Overloading via `follows` Contracts
+## Operator Overloading via `follows` Contracts (designed, not built)
 
-Operators are syntactic sugar for methods on standard library contracts. No magic method names, no special dispatch rules — the same `follows` system used everywhere else.
+**Status:** `+`, `==` and the other operators on a user shape are not built. No `Addable`, `Equatable` or similar contract exists in the compiler or the registry (grep over `crates/` and `registry/`), so a program using `a + b` on two shapes does not compile. Until it ships, write the function and call it by name (`add(a, b)`).
 
-Decided: Python-style magic method names (`__add__`) rejected; type `.add` and autocomplete shows the function.
+Operators are syntactic sugar for standalone functions on standard library contracts. No magic method names, no special dispatch rules — the same `follows` system used everywhere else.
 
 **Why stdlib-defined contracts vs built-in operator keywords**: User types follow stdlib contracts (`Addable`, `Equatable`). This means the operator system is extensible without compiler changes — new operator contracts can be added to the stdlib like any other type. The compiler maps `+` → `add()` at the syntax level; everything else is regular type system.
+
+**The contracts (designed).** A contract is a shape of bare signatures; the functions are written at the top level of a file, never inside the shape:
+
+```ynz
+shape Addable {
+  add(share self, share other: Self) -> Self
+}
+
+shape Equatable {
+  equals(share self, share other: Self) -> Boolean
+}
+
+shape Comparable follows Equatable {
+  compareTo(share self, share other: Self) -> Int
+}
+
+shape Printable {
+  toString(share self) -> String
+}
+```
+
+A shape opts in with `follows`, and standalone functions supply the behavior; the compiler checks each signature against the contract:
+
+```ynz
+shape Vector2D follows Addable, Equatable, Printable {
+  x: Number
+  y: Number
+}
+
+function add(share self: Vector2D, share other: Vector2D) -> Vector2D {
+  return { x: self.x + other.x, y: self.y + other.y }
+}
+
+function equals(share self: Vector2D, share other: Vector2D) -> Boolean {
+  return self.x == other.x && self.y == other.y
+}
+
+function toString(share self: Vector2D) -> String {
+  return `(${self.x}, ${self.y})`
+}
+
+const a: Vector2D = { x: 1, y: 2 }
+const b: Vector2D = { x: 3, y: 4 }
+
+const c = a + b          // calls add(a, b)
+const same = a == b      // calls equals(a, b)
+print(a)                 // calls toString(a)
+```
+
+**Which function each operator calls (designed):**
+
+| Operator | Contract | Function name |
+|----------|----------|---------------|
+| `+` | `Addable` | `add` |
+| `-` | `Subtractable` | `subtract` |
+| `*` | `Multipliable` | `multiply` |
+| `/` | `Divisible` | `divide` |
+| `==` | `Equatable` | `equals` |
+| `<` `>` `<=` `>=` | `Comparable` | `compareTo` |
+| `print(x)` | `Printable` | `toString` |
+
+The compiler finds the function by its name and the type of its first parameter, so `a + b` means exactly `add(a, b)`.
 
 ---
 
