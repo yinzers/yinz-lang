@@ -11,6 +11,7 @@ metadata:
   type: "reference"
 ---
 
+
 # Iterables
 
 `for` loops work on arrays, fixed arrays, maps, ranges, strings and any shape that has a `next` function. For everyday code you never need to think about how.
@@ -19,12 +20,21 @@ metadata:
 
 ## How for loops work
 
-```
-let names: Array<String> = [`Alice`, `Bob`]
+```ynz
+function entrypoint() -> Nothing {
+  let names: Array<String> = [`Alice`, `Bob`]
 
-for (name in names) {
-  print(name)
+  for (name in names) {
+    print(name)
+  }
 }
+```
+
+Output:
+
+```text
+Alice
+Bob
 ```
 
 The loop asks the collection for its next value again and again. It stops when there are no more.
@@ -45,7 +55,7 @@ You can loop over:
 
 When you loop over a collection of shapes, you can pull the fields out right in the loop header instead of reading them from the loop variable:
 
-```
+```ynz
 shape Player {
   name: String
   health: Int
@@ -72,23 +82,77 @@ function entrypoint() -> Nothing {
 }
 ```
 
+Output:
+
+```text
+Alice
+100
+Bob
+80
+Alice
+100
+Bob
+80
+```
+
 Both forms do the same thing. Pulling fields out is shorthand for reading `player.name` and `player.health` yourself.
 
 You can rename a field with `as`:
 
-```
-for ({ name as playerName, health as hp } in players) {
-  print(playerName)
-  print(hp)
+```ynz
+shape Player {
+  name: String
+  health: Int
 }
+
+function entrypoint() -> Nothing {
+  let players: Fixed<Player> = [
+    { name: `Alice`, health: 100 },
+    { name: `Bob`, health: 80 }
+  ]
+
+  for ({ name as playerName, health as hp } in players) {
+    print(playerName)
+    print(hp)
+  }
+}
+```
+
+Output:
+
+```text
+Alice
+100
+Bob
+80
 ```
 
 You don't have to pull out every field — list only the ones you need:
 
-```
-for ({ name } in players) {
-  print(name)   // health and score exist, but you didn't ask for them
+```ynz
+shape Player {
+  name: String
+  health: Int
+  score: Int
 }
+
+function entrypoint() -> Nothing {
+  let players: Fixed<Player> = [
+    { name: `Alice`, health: 100, score: 50 },
+    { name: `Bob`, health: 80, score: 30 }
+  ]
+
+  for ({ name } in players) {
+    print(name)   // health and score exist, but you didn't ask for them
+  }
+}
+```
+
+Output:
+
+```text
+Alice
+Bob
 ```
 
 See [Destructuring](REF-destructuring.md).
@@ -99,16 +163,29 @@ See [Destructuring](REF-destructuring.md).
 
 `range()` accepts one or two arguments:
 
-```
-// Two-argument form: start (inclusive) to end (exclusive)
-for (num in range(1, 10)) {
-  print(num)    // 1, 2, 3, ..., 9
-}
+```ynz
+function entrypoint() -> Nothing {
+  // Two-argument form: start (inclusive) to end (exclusive)
+  for (num in range(1, 4)) {
+    print(num)    // 1, 2, 3
+  }
 
-// One-argument form: 0 (inclusive) to end (exclusive)
-for (num in range(5)) {
-  print(num)    // 0, 1, 2, 3, 4
+  // One-argument form: 0 (inclusive) to end (exclusive)
+  for (num in range(3)) {
+    print(num)    // 0, 1, 2
+  }
 }
+```
+
+Output:
+
+```text
+1
+2
+3
+0
+1
+2
 ```
 
 `range()` is built in. Both arguments must be `Int`. It makes each number only when the loop asks for it, so it never builds an array.
@@ -117,34 +194,39 @@ for (num in range(5)) {
 
 ## Building your own iterable
 
-Declare a shape, with its data fields and any `hidden` fields it needs to remember where it is. Then write a standalone `next` function that takes the shape as `lend self` and returns `Maybe<T>`. The loop calls `next(counter)` until it returns `none`.
+Declare a shape, with its data fields and any `hidden` fields it needs to remember where it is. Then write a standalone `next` function that takes the shape as `lend self` and returns `Maybe<T>`. The loop calls `next(board)` until it returns `none`.
 
-```
-shape CountDown {
-  end: Int
-  hidden current: Int = 0
+```ynz
+shape Scoreboard {
+  scores: Array<Int>
+  hidden position: Int = 0
 }
 
-function next(lend self: CountDown) -> Maybe<Int> {
-  if (self.current >= self.end) {
-    return none
-  }
-  let value = self.end - self.current
-  self.current = self.current + 1
-  return value
+function next(lend self: Scoreboard) -> Maybe<Int> {
+  let result = self.scores.get(self.position)
+  self.position = self.position + 1
+  return result
 }
 
 function entrypoint() -> Nothing {
-  let counter: CountDown = { end: 5 }
-  for (num in counter) {
-    print(num)    // 5, 4, 3, 2, 1
+  let board: Scoreboard = { scores: [50, 40, 30] }
+  for (score in board) {
+    print(score)    // 50, 40, 30
   }
 }
+```
+
+Output:
+
+```text
+50
+40
+30
 ```
 
 A shape with no `next` function cannot be looped over:
 
-```
+```ynz
 shape Roster {
   title: String
 }
@@ -155,9 +237,20 @@ function entrypoint() -> Nothing {
     print(item)
   }
 }
-// COMPILE ERROR: `Roster` cannot be iterated — it does not follow `Iterable<T>`.
-// Add `function next(lend self: Roster) -> Maybe<T>` to make it iterable.
-// For a `for` loop to work on a custom shape, the shape needs a standalone `next` function returning `Maybe<T>`. When the iterator is done, return `none`.
+```
+
+The compiler stops with:
+
+```text
+Error: `Roster` cannot be iterated — it does not follow `Iterable<T>`.
+   ╭─[ main.ynz:7:16 ]
+   │
+ 7 │   for (item in roster) {
+   │                ───┬──
+   │                   ╰──── Add `function next(lend self: Roster) -> Maybe<T>` to make it iterable.
+   │
+   │ Note: For a `for` loop to work on a custom shape, the shape needs a standalone `next` function returning `Maybe<T>`. When the iterator is done, return `none`.
+───╯
 ```
 
 ---
