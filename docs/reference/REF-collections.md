@@ -4,7 +4,7 @@ description: "Three ways to hold multiple values."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-16"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -21,18 +21,22 @@ Three ways to hold multiple values.
 
 ```
 Fixed<String>           // fixed size: the size is set when you create it. Fastest.
-Array<Player>           // growable: add and remove items freely
-Map<String, Number>     // key-value pairs: look up a value by its key
+Array<Player>           // growable: add items freely
+Map<String, Int>        // key-value pairs: look up a value by its key
 ```
 
-All collections are typed. Every element must be the same type:
-
-```
-let stuff = [42, `hello`, true]
-// COMPILE ERROR: Cannot mix types in a collection. Pick one type.
-```
+All collections are typed. Every element must be the same type.
 
 The syntax is the same for all three: a capitalized name, then the type of the items in `<>`. No exceptions.
+
+The examples on this page use this shape:
+
+```
+shape Player {
+  name: String
+  health: Int
+}
+```
 
 ---
 
@@ -43,7 +47,7 @@ The syntax is the same for all three: a capitalized name, then the type of the i
 Use `Fixed<T>` when you know the size up front:
 
 ```
-let rgb: Fixed<Number> = [255, 128, 0]
+let rgb: Fixed<Int> = [255, 128, 0]
 let names: Fixed<String> = [`Alice`, `Bob`, `Charlie`]
 let players: Fixed<Player> = [
   { name: `Alice`, health: 100 },
@@ -51,15 +55,7 @@ let players: Fixed<Player> = [
 ]
 ```
 
-You cannot add or remove elements:
-
-```
-rgb.add(50)
-// COMPILE ERROR: Cannot add to a fixed array.
-// Fixed<Number> is size-locked. Use Array<Number> if it needs to grow.
-```
-
-Pick `Array<T>` when the list can grow.
+A `Fixed<T>` has no `.add()`. Use `Array<T>` when the list can grow.
 
 ### `Fixed<T>` and `Fixed<T, N>` in function signatures
 
@@ -96,8 +92,8 @@ Passing a list of the wrong length is a compile error:
 ```
 let scores: Fixed<Int> = [1, 2, 3]
 let result = sumOfFour(scores)
-// COMPILE ERROR: `scores` holds 3 items, but `sumOfFour` takes exactly 4 for `scores`.
-// Pass a list of 4 items, or change `scores` to `Fixed<Int>` so `sumOfFour` takes a list of any length.
+// COMPILE ERROR: `scores` holds 3 items, but `sumOfFour` takes exactly 4 items for `scores`
+// Pass a list of 4 items, or change `scores` to `Fixed<Int>` so `sumOfFour` takes a list of any length
 ```
 
 #### A `Fixed` list in a shape field
@@ -126,14 +122,14 @@ rgb.set(1, 200)         // same thing, longer form
 
 ## Array<T> — growable lists
 
-`Array<T>` can grow and shrink. It lives in the heap (flexible memory that can change size):
+`Array<T>` can grow. It lives in the heap (flexible memory that can change size):
 
 ```
 let roster: Array<Player> = []
 roster.add({ name: `Alice`, health: 100 })
 roster.add({ name: `Bob`, health: 80 })
-roster.remove(0)        // remove by index
-roster[0] = newPlayer   // replace element at index 0
+roster[0] = { name: `Carol`, health: 90 }    // replace the element at index 0
+let rosterSize = roster.count()              // 2
 ```
 
 ---
@@ -143,8 +139,10 @@ roster[0] = newPlayer   // replace element at index 0
 Reading by index uses brackets, which is shorthand for `.get()`. Both forms return `Maybe<T>` — never a bare value, so an index that is too big can't crash your program:
 
 ```
-let thirdPlayer = players[3]         // shorthand for players.get(3)
-let samePlayer = players.get(3)      // same thing, longer form
+let roster: Array<Player> = [{ name: `Alice`, health: 100 }]
+
+let thirdPlayer = roster[3]          // shorthand for roster.get(3)
+let samePlayer = roster.get(3)       // same thing, longer form
 // both return: Maybe<Player>
 
 if (thirdPlayer.exists()) {
@@ -155,7 +153,8 @@ if (thirdPlayer.exists()) {
 Or give it a default, so you get a plain `Player` back:
 
 ```
-let foundPlayer = players.get(5)                // a maybe: the Player, or nothing
+let defaultPlayer: Player = { name: `Guest`, health: 1 }
+let foundPlayer = roster.get(5)                 // a maybe: the Player, or nothing
 let player = foundPlayer.or(defaultPlayer)      // always a Player
 ```
 
@@ -170,28 +169,11 @@ The same rule applies to all collections — `Array<T>`, `Fixed<T>`, `Map<K, V>`
 Writes use the same shorthand — brackets turn into `.set()`:
 
 ```
-players[2] = newPlayer       // shorthand for players.set(2, newPlayer)
-scores[`alice`] = 75          // shorthand for scores.set(`alice`, 75)
+roster[0] = { name: `Dana`, health: 70 }      // shorthand for roster.set(0, ...)
+scores[`alice`] = 75                          // shorthand for scores.set(`alice`, 75)
 ```
 
-Writing past the end is an error when the program runs. It does not leave empty slots behind:
-
-```
-let scores: Array<Number> = [1, 2, 3]
-scores[10] = 99
-// RUNTIME ERROR: index 10 out of bounds (scores.count() == 3).
-//   .set() replaces existing elements only.
-//   To append: use .add(99).
-//   To grow with default values: use .resize(newSize, defaultValue).
-```
-
-Fixed arrays catch out-of-bounds at compile time when the index is a literal:
-
-```
-let rgb: Fixed<Number> = [255, 128, 0]
-rgb[5] = 100
-// COMPILE ERROR: index 5 out of bounds. rgb has 3 elements.
-```
+`.set()` replaces an element that already exists. Writing past the end of an `Array<T>` stops the program when it runs; use `.add()` to put an item at the end.
 
 ---
 
@@ -211,8 +193,7 @@ let start: Position = { x: 1.0, y: 2.0 }
 path.add(start)
 start.x = 99.0
 // COMPILE ERROR: `start` was stored in `path` and cannot be used here — storing a value hands it over.
-//   If you still need `start` after the store, store a copy instead: `path.add(start.copy())`.
-//   If you only need it before the store, put this line above the store.
+// If you still need `start` after the store, store a copy instead: `path.add(start.copy())`. If you only need it before the store, put this line above the store.
 ```
 
 If you want to keep changing `start`, store a copy. The stored copy keeps the values it had when
@@ -224,9 +205,7 @@ start.x = 99.0
 // The element inside path still has x == 1.0.
 ```
 
-If you're coming from JavaScript, watch out: in JavaScript, the array and `start` would share one
-object, so setting `start.x = 99.0` would change what the array sees. In Yinz, one value never has
-two names, so you choose: hand it over, or store a copy.
+In Yinz, one value never has two names, so you choose: hand it over, or store a copy.
 
 To change a stored element, write through the collection:
 
@@ -238,27 +217,16 @@ path[0] = { x: 99.0, y: 2.0 }
 
 ## Functions you call with a dot — on both fixed and array
 
-Write these after the collection, like `players.count()`:
+Write these after the collection, like `roster.count()`:
 
 ```
-.filter(fn)         // filter — returns new collection where fn returns true
-.sort(fn, order)    // sorted copy — order is asc or desc (see Options)
-.map(fn)            // transform — returns new collection of results
 .get(index)         // item at position → Maybe<T> (safe, returns none if out of bounds)
-.set(index, value)  // replace item at position — runtime error if out of bounds
+.set(index, value)  // replace item at position
 .first()            // first item → Maybe<T>
 .last()             // last item → Maybe<T>
-.find(fn)           // first item matching condition → Maybe<T>
 .count()            // number of items → Int
-.unique()           // deduplicated copy
-.limit(n)           // cap to the first N items — returns new collection of at most N
 .contains(value)    // is this value in the collection? → Boolean
-.concat(other)      // combined copy — does not modify original
-.append(item)       // new collection with item added at the end
-.prepend(item)      // new collection with item added at the front
 ```
-
-`.concat()`, `.append()`, and `.prepend()` work on `Fixed<T>` because they return new collections. The original stays untouched.
 
 `.set()` works on `Fixed<T>` because it replaces an existing element without changing size.
 
@@ -267,7 +235,7 @@ Write these after the collection, like `players.count()`:
 `.contains(value)` tells you whether a value is in the collection:
 
 ```
-let scores: Fixed<Number> = [70, 85, 92]
+let scores: Fixed<Int> = [70, 85, 92]
 let hasPerfect = scores.contains(100)
 // hasPerfect is false
 ```
@@ -282,17 +250,12 @@ matches — but the two kinds of fields match differently:
 When every field is a number, it works the way you'd expect:
 
 ```
-shape Position {
-  x: Number
-  y: Number
-}
-
 let path: Array<Position> = [
-  { x: 0, y: 0 },
-  { x: 5, y: 3 },
+  { x: 0.0, y: 0.0 },
+  { x: 5.0, y: 3.0 },
 ]
 
-let step: Position = { x: 5, y: 3 }
+let step: Position = { x: 5.0, y: 3.0 }
 let visited = path.contains(step)
 // visited is true — step's fields match the second entry,
 // even though step was built separately
@@ -302,44 +265,26 @@ String fields are stricter. A string built at runtime is its own stored value, s
 match — even when the text is identical:
 
 ```
-shape Player {
-  name: String
-  health: Int
-}
-
-let roster: Array<Player> = [
+let team: Array<Player> = [
   { name: `Alice`, health: 100 },
 ]
 
 let prefix: String = `Ali`
 let lookalike: Player = { name: `${prefix}ce`, health: 100 }
-let found = roster.contains(lookalike)
+let found = team.contains(lookalike)
 // found is false — lookalike's name was built at runtime, so it is not
-// the same stored string as the roster entry's name, even though both
+// the same stored string as the team entry's name, even though both
 // read `Alice`
 ```
-
-To match text by what it says, use `.find(fn)` instead — `==` on strings compares the text
-itself:
-
-```
-let alice = roster.find(player => player.name == `Alice`)
-// alice.exists() is true
-```
-
-Want to match on a condition instead of a whole value? Use `.find(fn)` the same way.
 
 ---
 
 ## Functions you call with a dot — array only
 
-These change the array itself, so they only work on a list that can change size:
+This one changes the array itself, so it only works on a list that can change size:
 
 ```
 .add(item)              // add item at end
-.remove(index)          // remove by index
-.removeFirst()          // remove and return first item → Maybe<T>
-.removeLast()           // remove and return last item → Maybe<T>
 ```
 
 ---
@@ -349,7 +294,8 @@ These change the array itself, so they only work on a list that can change size:
 Use maps when you don't know the keys until the program runs. For fields you know in advance, define a `shape` — it's faster.
 
 ```
-let wordCounts: Map<String, Number> = {}
+let wordCounts: Map<String, Int> = {}
+let words: Array<String> = [`ahead`, `behind`, `ahead`]
 for (word in words) {
   let foundCount = wordCounts[word]         // a maybe: the count, or nothing
   let current = foundCount.or(0)            // a plain number, 0 if the word is new
@@ -362,38 +308,30 @@ Functions you call on a map:
 ```
 .get(key)             // → Maybe<V> (might not exist — see Maybe Types)
 .set(key, value)      // add or update one key
-.update({...})        // add or update multiple keys at once
 .has(key)             // does the key exist? → Boolean
-.remove(key)          // delete by key
-.keys()               // → Array<K>
-.values()             // → Array<V>
-.entries()            // → array of key-value pairs (each has .key and .value)
-.sort(fn, order)      // sorted copy
-.filter(fn)           // new map with only matching entries — fn receives entry with .key and .value
-.find(fn)             // first matching entry → a `Maybe` holding the entry (has .key and .value)
 .count()              // → number of entries (Int)
 ```
 
 **Brackets work on maps too:**
 
 ```
-scores[`alice`]              // shorthand for scores.get(`alice`) → Maybe<Number>
+scores[`alice`]              // shorthand for scores.get(`alice`) → Maybe<Int>
 scores[`alice`] = 75         // shorthand for scores.set(`alice`, 75)
 ```
 
-**A `Number` key matches the number as stored.** A map keeps a `Number` key in its own slot and finds a key by comparing the stored digits, so `1.0` set twice is one key, while `1.0` and `1.00` are two (`1.0 == 1.00` is still `true`; a map key does not use `==`). A key computed to the same value and scale, such as `0.5 + 0.5` for `1.0`, is the same key. Matching `1.0` and `1.00` as one key is not decided yet. `.contains` on an `Array<Number>` still compares with `==`, so it finds `1.00` for `1.0`.
+**A `Number` key matches the number as stored.** A map keeps a `Number` key in its own slot and finds a key by comparing the stored digits, so `1.0` set twice is one key, while `1.0` and `1.00` are two (`1.0 == 1.00` is still `true`; a map key does not use `==`). A key computed to the same value and scale, such as `0.5 + 0.5` for `1.0`, is the same key. `.contains` on an `Array<Number>` still compares with `==`, so it finds `1.00` for `1.0`.
 
-**A map keeps each key in one slot.** The slot is 8 bytes for an `Int`, a `Boolean`, a `Float` or a `String`, and 16 bytes for a `Number` of up to 34 digits. Any other key type is refused at compile time. A `Number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live (a shape or array key is not supported yet). Either way a lookup with a key equal to one you stored would miss, because it lives at another address:
+**A map keeps each key in one slot.** The slot is 8 bytes for an `Int`, a `Boolean`, a `Float` or a `String`, and 16 bytes for a `Number` of up to 34 digits. Any other key type is refused at compile time. A `Number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live. Either way a lookup with a key equal to one you stored would miss, because it lives at another address:
 
 ```
 let totals: Map<Number<50>, Int> = {}
 // COMPILE ERROR: A `Map` cannot be keyed by `Number<50>`.
 // Key the map by an `Int` or a `String` id, or by a `Number` of at most 34 digits (`Number<34>`).
 
-let labels: Map<Point, String> = {}
-// COMPILE ERROR: A `Map` can't be keyed by `Point` yet.
-// Key the map by one of its fields (an `Int` id or a `String` name) and keep the `Point`
-// as the map's value: `Map<String, Point>`.
+let labels: Map<Position, String> = {}
+// COMPILE ERROR: A `Map` can't be keyed by `Position` yet.
+// Key the map by one of its fields (an `Int` id or a `String` name) and keep the `Position`
+// as the map's value: `Map<String, Position>`.
 
 let sessions: Map<sensitive String, Int> = {}
 // COMPILE ERROR: A `Map` cannot be keyed by `sensitive String`.
@@ -401,27 +339,7 @@ let sessions: Map<sensitive String, Int> = {}
 // and keep the secret as the map's value: `Map<String, sensitive String>`.
 ```
 
-A `sensitive String` is refused for a different reason than its slot: a map would free the key as an ordinary string and compare keys with a comparison that is not constant-time. A `sensitive String` key stays refused: that is by design, not a missing feature.
-
-**Bulk update with `.update({...})`:**
-
-```
-let scores: Map<String, Number> = { alice: 50, bob: 60 }
-
-scores.update({ alice: 75, charlie: 40 })
-// Result: alice=75 (updated), bob=60 (untouched), charlie=40 (added)
-```
-
-**Filtering and finding in a map:**
-
-```
-let expensive = prices.filter(entry => entry.value > 100)       // new map — only items over $100
-let aliceEntry = scores.find(entry => entry.key == `alice`)      // a Maybe holding the entry
-
-if (aliceEntry.exists()) {
-  print(`${aliceEntry.value.key}: ${aliceEntry.value.value}`)
-}
-```
+A `sensitive String` is refused for a different reason than its slot: a map would free the key as an ordinary string and compare keys with a comparison that is not constant-time. A `sensitive String` key stays refused.
 
 ---
 
@@ -433,30 +351,24 @@ One rule decides whether to use `.` or `[]`:
 |--------|--------------|
 | `player.fieldName` | Reads a field of a shape. The name is fixed when you write the code. |
 | `player.functionName()` | Calls a function on a shape or collection |
-| `players[index]` | Reads by position → `Maybe<T>` (shorthand for `.get(index)`) |
+| `roster[index]` | Reads by position → `Maybe<T>` (shorthand for `.get(index)`) |
 | `` scores[`key`] `` | Reads by key → `Maybe<V>` (shorthand for `.get(key)`) |
 | `word[index]` | Reads one character of a string → `Maybe<String>` (shorthand for `.get(index)`) |
 
 Shapes and collections are different things. Using brackets on a shape, or a dot to read a map key, both fail:
 
 ```
-shape Player { name: String, health: Number }
 let player: Player = { name: `Alice`, health: 100 }
 let name = player[`name`]
-// COMPILE ERROR: Bracket access is for collections (Array, Fixed, Map, String).
-//                Use dot access on types: player.name
+// COMPILE ERROR: `Player` does not support bracket access.
+// Bracket access works on `Array<T>`, `Fixed<T>`, `Map<K, V>`, and `String`.
+// Use `.get(index)` on built-in collections or access shape fields with dot notation.
 
-let scores: Map<String, Number> = { alice: 50 }
-scores.alice
-// COMPILE ERROR: Dot access is for methods, not map keys.
-//   Use scores[`alice`] for the value at the `alice` key.
-//   If you actually have a fixed set of known keys, consider using a shape
-//   instead — it's faster AND gives you dot access:
-//
-//     shape Scores { alice: Number, bob: Number }
-//     scores.alice         // works — alice is a compile-time field
-//
-//   See "Use shapes instead of maps for known fields" below.
+let scores: Map<String, Int> = { alice: 50 }
+let aliceScore = scores.alice
+// COMPILE ERROR: Cannot use `.alice` to look up a map key.
+// Map keys are runtime values — use `m["alice"]` to look up a key. For checking existence, use `m.has("alice")`.
+// Dot access is for shape fields with compile-time-known names. Map keys are dynamic — use bracket syntax.
 ```
 
 The simple rule: **use a dot for names you write in the code; use brackets for keys and positions you look up while the program runs.**
@@ -468,15 +380,16 @@ The simple rule: **use a dot for names you write in the code; use brackets for k
 If you know all the keys when you write the code, use a `shape`. Reading a field is faster than looking up a key:
 
 ```
-// Slower — known fields in a map
-let stats: Map<String, Number> = { health: 100, attack: 50 }
+// Known fields in a map
+let mapStats: Map<String, Int> = { health: 100, attack: 50 }
 
-// Faster — a shape
-shape Stats { health: Number, attack: Number }
+// A shape
+shape Stats {
+  health: Int
+  attack: Int
+}
 let stats: Stats = { health: 100, attack: 50 }
 ```
-
-The compiler will suggest this when it sees a map with all-literal keys.
 
 ---
 
@@ -485,14 +398,10 @@ The compiler will suggest this when it sees a map with all-literal keys.
 Don't nest collection types inline. Name the inner shape:
 
 ```
-// Hard to read
-let data: Map<String, Map<String, Number>> = { ... }
-
-// Clear — name each layer
 shape PlayerScores {
-  kills: Number
-  deaths: Number
-  assists: Number
+  kills: Int
+  deaths: Int
+  assists: Int
 }
 let scoreboard: Map<String, PlayerScores> = {
   alice: { kills: 10, deaths: 3, assists: 7 },
@@ -507,28 +416,14 @@ let scoreboard: Map<String, PlayerScores> = {
 Each operation gets its own line with a named variable. The name documents what that step produces:
 
 ```
-let active = players.filter(player => player.health > 0)
-let ranked = active.sort(player => player.health, desc)
-let top = ranked.limit(10)
-let names = top.map(player => player.name)
-```
-
-The compiler sees that each result is only used once, so it combines the four steps into one fast pass and builds no temporary lists. You get readable code AND fast code.
-
-Early returns fit naturally into this pattern:
-
-```
-function getTopNames(share players: Fixed<Player>, limitCount: Int) -> Array<String> {
-  let active = players.filter(player => player.health > 0)
-
-  if (active.count() == 0) {
-    return []
+let scores: Array<Int> = [45, 80, 92, 60]
+let passing: Array<Int> = []
+for (score in scores) {
+  if (score >= 60) {
+    passing.add(score)
   }
-
-  let ranked = active.sort(player => player.health, desc)
-  let top = ranked.limit(limitCount)
-  return top.map(player => player.name)
 }
+let passingCount = passing.count()    // 3
 ```
 
 ---
@@ -549,11 +444,9 @@ A capital letter always means a type, whether it is built in (`Array`, `Fixed`, 
 **A shape value is not an array — use `[...]` to make a collection:**
 
 ```
-shape Player { name: String, health: Int }
-
 let team: Array<Player> = { name: `Alice`, health: 100 }
 // COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `Array<Player>`.
-// Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
+// Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
 **A shape is not a collection:**
@@ -561,5 +454,5 @@ let team: Array<Player> = { name: `Alice`, health: 100 }
 ```
 let team: Player = []
 // COMPILE ERROR: `[]` is an array literal, but `Player` is a shape — a single value, not a collection.
-// Use `Array<Player>` if you want a list: `let team: Array<Player> = []`
+// Use `Array<Player>` if you want a list: `let ... : Array<Player> = []`
 ```
