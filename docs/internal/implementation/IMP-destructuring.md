@@ -31,7 +31,7 @@ Object/type destructuring is supported. Array destructuring is not.
 
 ## `as` for Renaming
 
-`let { health as hp } = player` follows the same `as` keyword used in import aliasing (`import { X as Y } from "module"`). One keyword for renaming in all contexts.
+`let { health as hp } = player` follows the same `as` keyword used in import aliasing (`import { X as Y } from `module``). One keyword for renaming in all contexts.
 
 ---
 

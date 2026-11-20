@@ -184,7 +184,7 @@ Real problems that don't break immediately but indicate bugs.
 
 | Rule | Catches |
 |------|---------|
-| `unused-imports` | `import { foo } from "..."` where `foo` isn't used |
+| `unused-imports` | `import { foo } from `...`` where `foo` isn't used |
 | `unused-variables` | `let x = ...` where `x` is never read |
 | `unused-private-functions` | Functions defined but never called within the file |
 | `unused-private-types` | Types defined but never referenced |
