@@ -289,7 +289,7 @@ For the three that hold other values inside them, it depends on what is inside:
 
 - **`Array<T>`** copies its items too, however deep they go — unless an item is something that cannot be copied at all (a `Channel`, say), and then the whole copy is refused.
 - **`Fixed<T>`** holds its items in one block with no separate piece to follow, so it copies lists of simple values and shapes, and refuses a `Fixed` of lists or maps.
-- **`Maybe<T>`** copies when what is inside is a simple value, a number, or a shape. `Maybe<Array<Int>>`, `Maybe<Map<String, Int>>`, `Maybe<Fixed<Int>>` and a `Maybe` of a `Maybe` are refused today — those are the natural things to wrap, so you will meet this. Copy the piece instead:
+- **`Maybe<T>`** copies when what is inside is a simple value, a number, or a shape. `Maybe<Array<Int>>`, `Maybe<Map<String, Int>>`, `Maybe<Fixed<Int>>` and a `Maybe` of a `Maybe` are refused today — those are the natural things to hold, so you will meet this. Copy the piece instead:
 
 ```ynz
 let rows: Maybe<Array<Int>> = none

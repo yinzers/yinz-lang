@@ -584,7 +584,7 @@ false
 
 **A `Number` key matches the number as stored.** A map keeps a `Number` key in its own slot and finds a key by comparing the stored digits, so `1.0` set twice is one key, while `1.0` and `1.00` are two (`1.0 == 1.00` is still `true`; a map key does not use `==`). A key computed to the same value and scale, such as `0.5 + 0.5` for `1.0`, is the same key. `.contains` on an `Array<Number>` still compares with `==`, so it finds `1.00` for `1.0`.
 
-**A map keeps each key in one slot.** The slot is 8 bytes for an `Int`, a `Boolean`, a `Float` or a `String`, and 16 bytes for a `Number` of up to 34 digits. Any other key type is refused at compile time. A `Number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live. Either way a lookup with a key equal to one you stored would miss, because it lives at another address:
+**A map keeps each key in one slot.** The slot is 8 bytes for an `Int`, a `Boolean`, a `Float` or a `String`, and 16 bytes for a `Number` of up to 34 digits. Any other key type is refused at compile time. A `Number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live. In both cases a lookup with a key equal to one you stored would miss, because it lives at another address:
 
 ```ynz
 function entrypoint() -> Nothing {

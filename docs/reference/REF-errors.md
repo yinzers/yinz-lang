@@ -157,7 +157,7 @@ Error: This function can fail, but the failure is not handled here.
 
 Three ways to handle it:
 
-**Option 1 — Let the error go up to the caller (mark your function as errors)**
+**Choice 1 — Let the error go up to the caller (mark your function as errors)**
 
 ```ynz
 function safeDivide(a: Int, b: Int) -> Int errors {
@@ -183,7 +183,7 @@ Output:
 5
 ```
 
-**Option 2 — Use a default value**
+**Choice 2 — Use a default value**
 
 ```ynz
 function safeDivide(a: Int, b: Int) -> Int errors {
@@ -207,7 +207,7 @@ Output:
 5
 ```
 
-**Option 3 — Check and handle explicitly**
+**Choice 3 — Check and handle explicitly**
 
 ```ynz
 function safeDivide(a: Int, b: Int) -> Int errors {

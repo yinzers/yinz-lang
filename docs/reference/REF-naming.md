@@ -90,7 +90,7 @@ The editor offers a quick-fix titled ``Write `Int` instead of `int` `` that rewr
 
 ### Shapes cannot reuse a built-in type name
 
-A shape or union alias named like a built-in type is a compile error. The reserved names are `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` and `SourceLoc`:
+A shape or union named like a built-in type is a compile error. The reserved names are `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` and `SourceLoc`:
 
 ```ynz
 shape String {

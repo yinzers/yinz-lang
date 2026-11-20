@@ -310,7 +310,7 @@ There is no unlimited channel. When a producer fills the channel faster than the
 
 In the example above the capacity is 1: `relayScores` sends the first score, then pauses on the second send until `entrypoint` receives the first. This slow-down is called **backpressure**: a fast sender is made to wait for a slow receiver.
 
-**A paused producer is backpressure working correctly, not a freeze.** The producer isn't stuck. It is waiting for the receiver to catch up, and it continues the moment a slot opens. Without the limit, a fast producer would quietly fill up memory until the program crashed.
+**A paused producer is backpressure working correctly, not a freeze.** The producer isn't stuck. It is waiting for the receiver to keep up, and it continues the moment a slot opens. Without the limit, a fast producer would quietly fill up memory until the program crashed.
 
 Need more room? Pass a bigger number: `Channel<Int>(10000)`. There is deliberately no "unlimited" option.
 
@@ -407,7 +407,7 @@ The channel is closed — close() was called, so this value cannot be delivered.
 ```
 
 - Calling `.close()` again does nothing — it is safe to close twice.
-- A send that was already waiting for room when the channel closed still goes through. Close means no *new* sends. It does not throw away what was already on its way.
+- A send that was already waiting for room when the channel closed still goes through. Close means no *new* sends. It does not discard what was already on its way.
 - A channel you never close keeps working as before: `.receive()` waits until a value arrives.
 
 `.close()` never pauses your task and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a handle. If you started a task with `let scout = background worker(commands)`, you close `commands`, not `scout`. For that reason the handle form needs the channel stored in a named variable:
@@ -566,7 +566,7 @@ Change the parameter to `give`, or pass a copy: `background processData(data.cop
 
 A `share` parameter only works while the original owner still has the value. A background task might still be running after the current function returns and the value is gone. So the function you start with `background` must take its parameters as `give`, or the caller passes a `.copy()` (an independent value the task owns).
 
-**The one exception: `Channel<T>` parameters.** A channel is made to be held by two tasks at once, so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
+**The one special case: `Channel<T>` parameters.** A channel is made to be held by two tasks at once, so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
 
 **A union cannot go to a generic parameter of a `background` function.** A task keeps its own copy of a union argument, and it can make that copy only when the function declares the union type. A generic parameter gives the task no union slot to copy into, so the compiler refuses it:
 

@@ -19,7 +19,7 @@ A value marked `sensitive` is protected from accidental logging. It prints as `[
 
 ## Marking a value as sensitive
 
-Wrap the value in `sensitive(...)` and give the variable a `sensitive String` type:
+Put the value inside `sensitive(...)` and give the variable a `sensitive String` type:
 
 ```
 let apiKey: sensitive String = sensitive(`sk-test-12345`)

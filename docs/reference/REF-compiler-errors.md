@@ -138,7 +138,7 @@ function entrypoint() -> Nothing {
   Why: Write `Int`. — Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
-**A shape named like a built-in type.** A `shape` or union alias called `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` or `SourceLoc` is an error:
+**A shape named like a built-in type.** A `shape` or union called `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` or `SourceLoc` is an error:
 
 ```ynz
 shape Map {

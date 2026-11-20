@@ -183,11 +183,11 @@ function entrypoint() -> Nothing {
   let scores: Array<Int> = [3, 5, 7]
   let best = firstScore(scores)
 
-  // Option 1 — use a fallback
+  // Choice 1 — use a fallback
   let bestOrZero = best.or(0)
   print(bestOrZero)
 
-  // Option 2 — check first
+  // Choice 2 — check first
   if (best.exists()) {
     print(best.value)
   }
