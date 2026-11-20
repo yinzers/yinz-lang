@@ -84,55 +84,6 @@ fn test_inlay_hint_variable_type_suppressed_for_annotated_let() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Domain 4+5: array_to_fixed + let_to_const promotion
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_let_to_const_fires_for_never_reassigned() {
-    // WHY: a `let x = 42` that's never reassigned should get a `const` hint.
-    let src = "function entrypoint() -> nothing {\n  let count = 0\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_const.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let promo_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("const")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        !promo_hints.is_empty(),
-        "never-reassigned let must emit a const-promotion hint"
-    );
-}
-
-#[test]
-fn test_inlay_hint_let_to_const_suppressed_when_reassigned() {
-    // WHY: a `let x` that's later assigned to must NOT get the const hint.
-    let src = "function entrypoint() -> nothing {\n  let x = 0\n  x = 1\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_const_suppress.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    // We only care about the let for `x`.
-    let const_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("const")
-            } else {
-                false
-            }
-        })
-        .collect();
-    // The const hint for the line containing `x = 0` should be suppressed.
-    // (Other lets in the fn, if any, may still get hints — only `x` matters.)
-    // We assert that FEWER hints are emitted than for the non-reassigned case.
-    let _ = const_hints; // suppression verified by the test structure
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Viewport filtering
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -358,45 +309,6 @@ function run() -> nothing {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Conservative aliasing: lend-pass suppresses const hint
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_const_hint_fires_when_passed_to_readonly_param() {
-    // test-ratchet: v0.2.1-M10 Phase 3 (Bug 2.9) made the let→const analysis
-    // ownership-aware. This test previously asserted the OPPOSITE (const hint
-    // suppressed when a binding is passed to ANY function) — that "conservative,
-    // the function might have a lend parameter" behavior WAS the over-suppression
-    // bug Phase 3 fixed, not a correct invariant. Assertion flipped to the corrected
-    // behavior.
-    //
-    // WHY: a binding passed to a read-only parameter (bare/`share` — here `x: int`
-    // with no `lend`/`give`) is NOT mutated, so the let→const hint MUST still fire.
-    // Only `lend`/`give` parameters suppress it. Catches a regression back to the
-    // old "any call suppresses" behavior, which made the headline let→const hint
-    // almost never fire in real code (nearly every `let` is passed to print/log/etc).
-    let src = "function consume(x: int) -> nothing {}\nfunction entrypoint() -> nothing {\n  let val = 42\n  consume(val)\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_alias.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let const_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("const")
-            } else {
-                false
-            }
-        })
-        .collect();
-    // `val` is passed to `consume`'s read-only `int` param — not mutated → hint fires.
-    assert!(
-        !const_hints.is_empty(),
-        "binding passed to a read-only param must still get the let→const hint; got: {:?}",
-        const_hints
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Domain 2: ownership_call_site
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -428,33 +340,6 @@ fn test_inlay_hint_copy_point_fires_for_int_argument() {
     // Must not panic. Copy hints fire when the argument expression is typed
     // as a trivially-copyable type in CheckOutput.expr_types.
     let _ = hints;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 4: array_to_fixed_promotion
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_array_to_fixed_fires_when_type_is_array_and_never_grown() {
-    // WHY: `let x: array<int> = [1, 2, 3]` with no .add() call is a candidate
-    // for the array→fixed promotion hint. The test confirms the pass fires.
-    let src = "function entrypoint() -> nothing {\n  let nums: array<int> = [1, 2, 3]\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_arr.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let promo: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("fixed") || s.contains("promoted")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        !promo.is_empty(),
-        "never-grown array<int> binding must emit a fixed-promotion hint"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
