@@ -86,7 +86,7 @@ The compiler infers type parameters from argument types at the call site. Users 
 ```ynz
 // Inference (99% of calls):
 let x = identity(5)                    // T inferred as Int
-let p = pair("alice", 42)              // A=String, B=Int inferred
+let p = pair(`alice`, 42)              // A=String, B=Int inferred
 let sorted = sort(players)             // T inferred as Player
 
 // Explicit only when no argument carries T (createList is a function you define):

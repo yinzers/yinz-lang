@@ -34,7 +34,7 @@ doOtherThing()
 
 Pre-assignment (when you can't return):
 ```
-let value = "default"
+let value = `default`
 if (condition) {
   value = "other"
 }

@@ -43,7 +43,7 @@ Conversions that always succeed return the value directly. Conversions that migh
 
 No `condition ? a : b`. The pre-assignment pattern covers the same use case:
 ```
-let value = "default"
+let value = `default`
 if (condition) {
   value = "other"
 }

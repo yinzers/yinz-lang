@@ -82,7 +82,7 @@ runtime.setPanicHandler((info: PanicInfo) -> Nothing {
 
 // Once configured, normal Yinz code works
 let buffer: Array<Int> = []              // uses MyKernelAllocator
-println("kernel booting")              // uses MySerialWriter
+print(`kernel booting`)                // uses MySerialWriter
 ```
 
 The runtime-injection APIs are themselves stdlib items — they're heap-free (they just store function pointers in known locations the compiler-emitted code references).

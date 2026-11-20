@@ -97,11 +97,11 @@ Brackets at a value position desugar to `.get()` (read) or `.set()` (write):
 
 ```ynz
 let p = players[3]              // sugar for players.get(3)         → Maybe<Player>
-let s = scores["alice"]         // sugar for scores.get("alice")    → Maybe<Number>
+let s = scores[`alice`]         // sugar for scores.get(`alice`)    → Maybe<Number>
 let c = name[0]                 // sugar for name.get(0)            → Maybe<String>
 
 players[2] = newPlayer          // sugar for players.set(2, newPlayer)
-scores["bob"] = 75              // sugar for scores.set("bob", 75)
+scores[`bob`] = 75              // sugar for scores.set(`bob`, 75)
 ```
 
 Works on: `Array<T>`, `Fixed<T>`, `Map<K,V>`, `String` (read only — strings are immutable).

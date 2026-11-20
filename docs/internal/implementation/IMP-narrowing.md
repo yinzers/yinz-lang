@@ -211,7 +211,7 @@ M7 extends the narrowing table with `errors`-capable values (parallel to `Maybe<
 >
 > **WHAT INSTEAD**: Move the `.failed()` check above the first use:
 > ```ynz
-> let raw = readFile("config.txt")
+> let raw = readFile(`config.txt`)
 > if (raw.failed()) { return Config.default() }
 > let parsed = parseConfig(raw)
 > ```
