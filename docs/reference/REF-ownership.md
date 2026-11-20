@@ -35,13 +35,13 @@ That's the contract. Anyone reading the signature knows what happens to the valu
 
 ## You don't type the mode at the call site
 
-When you call a function, you just pass the value normally. The compiler reads the callee's signature and figures out what to do — share, lend, or give. The IDE shows what was inferred as muted text so you can see what's happening:
+When you call a function, you just pass the value normally. The compiler reads the callee's signature and figures out what to do — share, lend, or give. The IDE shows what it chose as muted text so you can see what's happening:
 
 ```ynz
 greet(name)           // IDE shows muted `share` — read-only access
 print(message)        // IDE shows muted `share` — read-only access
-rename(player)        // IDE shows muted `lend` (red-tinted) — function modifies player
-consume(data)         // IDE shows muted `give` (red-tinted) — function takes ownership
+rename(player)        // IDE shows muted `lend` — function modifies player
+consume(data)         // IDE shows muted `give` — function takes ownership
 ```
 
 Hovering on any muted hint shows a tooltip explaining WHAT it means, WHAT INSTEAD you'd write to make it explicit (on the function signature, not the call site), and WHY the compiler chose it.
@@ -55,7 +55,7 @@ There is no body-level syntax for these three modes — they exist only in signa
 Once a function takes ownership via `give`, you can't use the value anymore. The compiler catches this:
 
 ```ynz
-consume(data)              // give inferred from consume's signature — data transferred
+consume(data)              // consume's signature says `give` — data transferred
 print(data)
 // COMPILE ERROR: data was transferred to consume() on the previous line.
 // It no longer exists here. Use .copy() if you need to keep a copy.
@@ -142,7 +142,7 @@ print(matrix.count())
 
 ## `const` bindings get extra protection
 
-A `const` binding can only be shared (read). The compiler refuses to infer `lend` or `give` for a `const` value:
+A `const` binding can only be shared (read). The compiler refuses to pass a `const` value to a function that asks for `lend` or `give`:
 
 ```ynz
 const player: Player = { name: `Patrick`, health: 100 }
@@ -233,8 +233,8 @@ After `.freeze()`, the binding behaves like `const` for the rest of its scope. T
 
 | What | Where it lives | When you type it |
 |---|---|---|
-| `share` / `lend` / `give` | Function signatures only | Always at signatures; never at call sites (compiler infers there) |
+| `share` / `lend` / `give` | Function signatures only | Always at signatures; never at call sites (the compiler reads the signature there) |
 | `.copy()` | Body expression | When you need a value of your own that nobody else can reach |
 | `.freeze()` | Body expression | When you want to lock a binding from further mutation mid-function |
 
-The compiler does the heavy lifting at call sites. The IDE shows what was inferred. You learn ownership by reading your own code with hints turned on.
+The compiler does the heavy lifting at call sites. The IDE shows what the compiler chose. You learn ownership by reading your own code with hints turned on.
