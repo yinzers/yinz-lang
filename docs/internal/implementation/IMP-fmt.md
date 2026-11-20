@@ -118,7 +118,7 @@ ynz fmt --stdin          Read source on stdin, write formatted to stdout
 
 The lexer (`crates/ynz-parser/src/lexer.rs:73`) currently skips `//` line comments via `skip_whitespace_and_comments()` — only `///` doc-comments survive into the AST as `Token::DocComment`. The formatter must reconstruct `//` comment positions.
 
-**Approach**: additive `lex_with_trivia()` function in `ynz-parser` — same lexer logic but a `Vec<Comment>` captures every `//` + `///` token with its byte-span. Implementation: internal `Lexer::lex_capturing(trivia: bool)` method shared by both `lex()` (trivia=false) and `lex_with_trivia()` (trivia=true). Single source of truth; no parallel copy.
+**Approach**: additive `lex_with_trivia()` function in `ynz-parser` — same lexer logic but a `Vec<Comment>` captures every `//` + `///` token with its byte-span. Implementation: Internal `Lexer::lex_capturing(trivia: bool)` method shared by both `lex()` (trivia=false) and `lex_with_trivia()` (trivia=true). Single source of truth; no parallel copy.
 
 ```rust
 // crates/ynz-parser/src/trivia.rs
@@ -287,14 +287,14 @@ LOC: prettier 421 / rustfmt 376 (10.7% difference — nominally favors rustfmt).
 
 ```diff
 - function computeScore(
--   name: string,
--   health: int,
--   attack: int,
--   defense: int,
--   speed: int,
--   level: int
-- ) -> int {
-+ function computeScore(name: string, health: int, attack: int, defense: int, speed: int, level: int) -> int {
+-   name: String,
+-   health: Int,
+-   attack: Int,
+-   defense: Int,
+-   speed: Int,
+-   level: Int
+- ) -> Int {
++ function computeScore(name: String, health: Int, attack: Int, defense: Int, speed: Int, level: Int) -> Int {
 ```
 
 Prettier output (top) is canonical for any user. Rustfmt output (bottom) is only canonical if the original was single-line — a different user writing the same function multi-line would get the top form.

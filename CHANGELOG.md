@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- Every built-in type now starts with a capital letter: `Int`, `Float`, `Number` (and `Number<N>`), `Boolean`, `String`, `Range`, `Maybe<T>`, `Array<T>`, `Fixed<T>`, `Map<K, V>`, `Channel<T>` and `Nothing`. Functions, modules, methods and variables stay lowercase, so `range(a, b)` still creates a `Range` and `.map(...)` is still a method. Type constants follow the type name: `Int.max`.
+- The old lowercase spellings (`int`, `string`, `array<T>`, ...) are a compile error. The message names the replacement ("`int` is not a type name. Write `Int`.") and the editor offers a quick-fix. There are no aliases, so update existing code.
+- `Boolean` is the one name for the true/false type; `Bool` is not a type.
+- `nothing` is no longer a keyword: `Nothing` is an ordinary type name.
+- A shape named like a built-in type (`String`, `Map`, `Range`, ...) is a compile error: "`{Name}` is a reserved built-in type name."
+- `Channel<Int>(8)` creates a channel: a type name followed by parentheses works like a shape literal.
+- Runtime messages use the new names: `Int overflow in '+'`, `division by zero (Int)`, `division by zero (Number)`.
+- The VS Code grammar highlights built-in type names (scope `support.type.builtin.ynz`) and no longer highlights `nothing` as a keyword.
+
 ## [0.3.4] — 2026-11-19 — M8 Concurrency Completion + M9 Concurrency Foundations
 
 Commit range: v0.3.3..v0.3.4.

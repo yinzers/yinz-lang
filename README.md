@@ -100,7 +100,7 @@ Once the compiler binary exists, write any `.ynz` file and run it.
 **Example** — save this as `hello.ynz`:
 
 ```
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let name = "Patrick"
   let age = 35
   print("hello, world")

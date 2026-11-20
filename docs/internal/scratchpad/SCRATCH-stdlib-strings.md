@@ -13,7 +13,7 @@ metadata:
 
 # Standard Library — String Module (M7)
 
-Per-method documentation for the M7 string API. All methods are on the built-in `string` type — no import needed.
+Per-method documentation for the M7 string API. All methods are on the built-in `String` type — no import needed.
 
 User spec: [`docs/reference/REF-strings.md`](../../reference/REF-strings.md)
 
@@ -24,7 +24,7 @@ User spec: [`docs/reference/REF-strings.md`](../../reference/REF-strings.md)
 ### `.get(n)` / `s[n]`
 
 ```
-.get(n: int) -> maybe string
+.get(n: Int) -> Maybe<String>
 ```
 
 Returns the code point at index `n` as a 1-character string. `none` if out of bounds. `O(n)` scan from start (UTF-8 storage). Bracket sugar `s[n]` desugars to `.get(n)`.
@@ -34,7 +34,7 @@ Returns the code point at index `n` as a 1-character string. `none` if out of bo
 ### `.byteAt(n)`
 
 ```
-.byteAt(n: int) -> maybe int
+.byteAt(n: Int) -> Maybe<Int>
 ```
 
 Returns the raw UTF-8 byte at byte-offset `n` as an integer (0–255). `none` if out of bounds. `O(1)` direct memory access — no UTF-8 scanning.
@@ -44,7 +44,7 @@ Returns the raw UTF-8 byte at byte-offset `n` as an integer (0–255). `none` if
 ### `.graphemeAt(n)`
 
 ```
-.graphemeAt(n: int) -> maybe string
+.graphemeAt(n: Int) -> Maybe<String>
 ```
 
 Returns the grapheme cluster at grapheme-index `n` as a string (may be multiple code points). `none` if out of bounds. Uses `unicode-segmentation` crate for cluster boundaries.
@@ -58,7 +58,7 @@ Returns the grapheme cluster at grapheme-index `n` as a string (may be multiple 
 ### `.count()`
 
 ```
-.count() -> int
+.count() -> Int
 ```
 
 Number of Unicode code points. `O(n)` UTF-8 scan.
@@ -66,7 +66,7 @@ Number of Unicode code points. `O(n)` UTF-8 scan.
 ### `.byteCount()`
 
 ```
-.byteCount() -> int
+.byteCount() -> Int
 ```
 
 Number of UTF-8 bytes. `O(1)` for heap strings (stored in `len` field); `O(1)` for inline strings (tag byte encodes length).
@@ -74,7 +74,7 @@ Number of UTF-8 bytes. `O(1)` for heap strings (stored in `len` field); `O(1)` f
 ### `.graphemeCount()`
 
 ```
-.graphemeCount() -> int
+.graphemeCount() -> Int
 ```
 
 Number of grapheme clusters. `O(n)` via `unicode-segmentation`.
@@ -86,7 +86,7 @@ Number of grapheme clusters. `O(n)` via `unicode-segmentation`.
 ### `.contains(substr)`
 
 ```
-.contains(substr: string) -> boolean
+.contains(substr: String) -> Boolean
 ```
 
 Returns `true` if `substr` appears anywhere in `self`. For patterns ≥ 16 bytes, uses SIMD-accelerated `memchr::memmem`. For patterns ≤ 15 bytes, uses scalar scan. Pure read. No allocation. `stdlib-design.md` Rule 1: no I/O.
@@ -96,7 +96,7 @@ Returns `true` if `substr` appears anywhere in `self`. For patterns ≥ 16 bytes
 ### `.indexOf(substr)`
 
 ```
-.indexOf(substr: string) -> maybe int
+.indexOf(substr: String) -> Maybe<Int>
 ```
 
 Returns the byte-offset of the first occurrence of `substr`, or `none`. Same SIMD/scalar dispatch as `.contains`.
@@ -106,7 +106,7 @@ Returns the byte-offset of the first occurrence of `substr`, or `none`. Same SIM
 ### `.startsWith(prefix)`
 
 ```
-.startsWith(prefix: string) -> boolean
+.startsWith(prefix: String) -> Boolean
 ```
 
 Returns `true` if `self` starts with `prefix`. Byte-level prefix check. `O(prefix.byteCount())`.
@@ -114,7 +114,7 @@ Returns `true` if `self` starts with `prefix`. Byte-level prefix check. `O(prefi
 ### `.endsWith(suffix)`
 
 ```
-.endsWith(suffix: string) -> boolean
+.endsWith(suffix: String) -> Boolean
 ```
 
 Returns `true` if `self` ends with `suffix`. Byte-level suffix check.
@@ -126,7 +126,7 @@ Returns `true` if `self` ends with `suffix`. Byte-level suffix check.
 ### `.toUpperCase()`
 
 ```
-.toUpperCase() -> string
+.toUpperCase() -> String
 ```
 
 Locale-invariant Unicode case folding (uppercase). Result `is_nfc_known = false` (case folding may produce NFD). Uses `unicase` crate tables. Allocates a new string.
@@ -134,7 +134,7 @@ Locale-invariant Unicode case folding (uppercase). Result `is_nfc_known = false`
 ### `.toLowerCase()`
 
 ```
-.toLowerCase() -> string
+.toLowerCase() -> String
 ```
 
 Locale-invariant Unicode case folding (lowercase). Result `is_nfc_known = false`. Uses `unicase` crate tables. Allocates a new string.
@@ -142,7 +142,7 @@ Locale-invariant Unicode case folding (lowercase). Result `is_nfc_known = false`
 ### `.substring(start, end)`
 
 ```
-.substring(start: int, end: int) -> string
+.substring(start: Int, end: Int) -> String
 ```
 
 Returns a new string containing code points `[start, end)`. `start` and `end` are code-point indices. Bounds-clamped (no panic; clamped result may be empty). Allocates if result > 23 bytes; SSO inline otherwise. Result `is_nfc_known = true` if source was NFC-known AND boundaries are code-point boundaries.
@@ -150,7 +150,7 @@ Returns a new string containing code points `[start, end)`. `start` and `end` ar
 ### `.trim()`
 
 ```
-.trim() -> string
+.trim() -> String
 ```
 
 Returns a new string with leading and trailing Unicode whitespace removed. Byte-level for ASCII whitespace (fast path); full Unicode for non-ASCII whitespace. Result `is_nfc_known = true` if source was NFC-known.
@@ -158,15 +158,15 @@ Returns a new string with leading and trailing Unicode whitespace removed. Byte-
 ### `.split(separator)`
 
 ```
-.split(separator: string) -> array<string>
+.split(separator: String) -> Array<String>
 ```
 
-Splits `self` on every occurrence of `separator`. Returns an `array<string>`. Empty separator is a compile error. Each piece: `is_nfc_known = true` if source was NFC-known.
+Splits `self` on every occurrence of `separator`. Returns an `Array<String>`. Empty separator is a compile error. Each piece: `is_nfc_known = true` if source was NFC-known.
 
 ### `.replace(old, new)`
 
 ```
-.replace(old: string, new: string) -> string
+.replace(old: String, new: String) -> String
 ```
 
 Replaces all occurrences of `old` with `new`. Returns a new string. `is_nfc_known = true` only if source AND `new` were both NFC-known.
@@ -196,7 +196,7 @@ Uses `StringCodePointIter` wrapper shape. Default = code points. For grapheme it
 | `ynz_string_codepoint_at(s, n) -> {tag, value}` | Code point access (UTF-8 walk) |
 | `ynz_string_grapheme_at(s, n) -> YnzString` | Grapheme access (unicode-segmentation) |
 | `ynz_string_contains(s, substr) -> bool` | SIMD search |
-| `ynz_string_index_of(s, substr) -> {tag, value}` | SIMD search, maybe<int> |
+| `ynz_string_index_of(s, substr) -> {tag, value}` | SIMD search, Maybe<Int> |
 | `ynz_string_to_upper(s) -> YnzString` | Case fold |
 | `ynz_string_to_lower(s) -> YnzString` | Case fold |
 | `ynz_string_builder_new() -> Builder` | Interpolation / multi-concat |

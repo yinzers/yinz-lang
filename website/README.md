@@ -76,7 +76,7 @@ docker compose exec web bun run sync-grammar
 
 The vendored copy in `app/assets/grammars/` is checked into git so developers can browse the site without running the sync first. If the VSCode extension grammar changes, pull main and run sync-grammar — the prebuild hook handles it automatically otherwise.
 
-**Grammar coverage as of Phase 4**: keywords, comments, numbers, booleans/null, string template literals (backtick), banned/deferred keyword highlighting. Function names and type names are not yet in the grammar — these appear in plain foreground color. See PR description for coverage gaps.
+**Grammar coverage as of Phase 4**: keywords, comments, numbers, booleans/null, string template literals (backtick), banned/deferred keyword highlighting. Built-in type names (`Int`, `String`, `Array`, ...) are highlighted (`support.type.builtin.ynz`). Function names and user-declared type names are not yet in the grammar — these appear in plain foreground color. See PR description for coverage gaps.
 
 ---
 

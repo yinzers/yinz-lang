@@ -117,6 +117,6 @@ import { Player } from "external/legacy"
 
 Same rule applies to namespace imports (`import request from "..."` collisions) and to local-vs-stdlib name collisions (a local module named `math` colliding with `stdlib/math`).
 
-**Why**: Silent picking is a TypeScript / JavaScript footgun — last-import-wins semantics cause subtle bugs when refactors reorder imports. Forcing the user to disambiguate makes the code's intent explicit and refactor-safe. Same principle as `maybe`: if there's ambiguity, the compiler refuses to guess.
+**Why**: Silent picking is a TypeScript / JavaScript footgun — last-import-wins semantics cause subtle bugs when refactors reorder imports. Forcing the user to disambiguate makes the code's intent explicit and refactor-safe. Same principle as `Maybe`: if there's ambiguity, the compiler refuses to guess.
 
 **Resolution implication for stdlib vs local**: there's no special precedence rule. If a project happens to define a local `math` module, the compiler errors at the import site and forces the user to alias. No silent shadowing of stdlib.

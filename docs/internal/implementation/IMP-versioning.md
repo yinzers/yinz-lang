@@ -28,6 +28,7 @@ Pre-release, a replaced design is deleted from its doc. Docs hold no "superseded
 - A breaking change ships as a major version bump.
 - There are no backwards-compatibility shims, no deprecation cycles and no "acceptable for now" compatibility layers.
 - A version number tells callers whether to update; a clean codebase beats a padded API.
+- Renaming a language name (for example the built-in types to PascalCase) is a breaking change like any other: the old spelling becomes a teaching error with an editor quick-fix, never an alias.
 - When a major version will remove something, the current version marks it `deprecated` for exactly one major version of warning. The deprecated thing is not kept beyond that.
 
 Before v1.0, breaking changes (including compiled ABI and the `--json` schema) are allowed between releases; see the stdlib corollary in [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) (never ship a "v2 alongside v1": fix v1 in place pre-1.0).

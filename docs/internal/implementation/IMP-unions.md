@@ -35,7 +35,7 @@ The lowering is chosen per concrete variant set at codegen time. The decision is
 |---|---|---|
 | All variants are heap-allocated shapes (`ynz_alloc`-backed) AND no `none` variant | Pointer-niche: `{ i8 tag, ptr data }` where tag identifies which shape `data` points to | One pointer + one tag byte; no max-payload waste. Used when every payload is a single pointer. |
 | Mixed value-type and heap variants, OR any variant has a value-type payload >1 pointer | Tagged struct: `{ i8 tag, [maxPayloadSize x i8] payload, padding }` aligned to max(alignof variant) | Single representation; payload area sized for largest variant; alignment correct for all. |
-| `T \| none` (any T) | NOT a union per M6 codegen — this IS `maybe<T>` and uses M5's lowering table | Avoids double-encoding; the `T | none` form at typeck time is rewritten to `maybe<T>`. See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md). |
+| `T \| none` (any T) | NOT a union per M6 codegen — this IS `Maybe<T>` and uses M5's lowering table | Avoids double-encoding; the `T | none` form at typeck time is rewritten to `Maybe<T>`. See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md). |
 | Single-variant union (`shape S = A`) | **REJECTED at typeck** — compile error | Degenerate; see "Single-variant rejection" below. |
 | 2 to 255 variants | Tag is `i8` | One byte covers up to 256 distinct variants |
 | 256+ variants | Tag is `i16`, but **COMPILE ERROR** with teaching hint | 256+ union variants is almost certainly a code smell. Hint suggests refactoring. |
@@ -69,9 +69,9 @@ return, a staged argument) is one layout, computed once.
 
 **Slot.** An *envelope union* (one with a shape variant) is stored as `{ i64 tag, payload }`, laid
 out like a Rust `enum`: the payload area is as large as the largest variant (at least 8 bytes for
-the non-shape variants), at the shape alignment (8, or 16 with a `number` field), and the slot size
+the non-shape variants), at the shape alignment (8, or 16 with a `Number` field), and the slot size
 is a multiple of that alignment. `Thing = Tiny | Big` is 24 bytes when `Big` is 16. `none` (a union
-that lists `nothing`, or a `maybe` of the union) is the tag `u64::MAX` (`UNION_NONE_TAG`, `crates/ynz-codegen/src/shape_types.rs:18`). The layout is
+that lists `Nothing`, or a `Maybe` of the union) is the tag `u64::MAX` (`UNION_NONE_TAG`, `crates/ynz-codegen/src/shape_types.rs:18`). The layout is
 `UnionLayout` (`crates/ynz-codegen/src/shape_types.rs:20-53`); the frame layout, codegen and any
 release helper read that one answer.
 
@@ -95,14 +95,14 @@ end of the arm (`restore_narrowed_local`, `emit.rs:4947-4956`). Pin:
 **By value, no heap home.** Every store copies the payload into the slot: a container element, a
 map value and a shape field (a hidden default into a union field included), a binding (an entry
 slot owned by the binding, so rebinding the source never changes the copy), a `return` (the slot
-comes back by value), an `errors` result (`{ err, slot }`) and a `maybe<Thing>` return (the slot,
+comes back by value), an `errors` result (`{ err, slot }`) and a `Maybe<Thing>` return (the slot,
 `none` the none tag), and a `wait`-staged or `background` argument (a `Param` region of the
 callee's own frame). A suspending function returns the slot through a `Return` region of its frame;
 the waiting caller copies it out before the frame is freed. A binding that crosses a `wait` lives in
 a region of the function's frame (`crossing_local_slot_count`, `emit.rs:14814-14854`); every resume rebuilds the view from
 it, so no pointer into a resume function's stack survives a suspension. None of these allocates.
 
-**Heap-variant unions** (`string | array<int>`, `string | channel<int>`, `string | int`: no shape variant, two or more variants beside `nothing`, one of which may own heap; `is_envelope_union`, `crates/ynz-typeck/src/check.rs:12446-12463`) are envelope unions with no shape variant, so they take every path above (wrap, parameter, return, store, frame region) with the same slot: `{ i64 tag, 8-byte payload }`, 16 bytes, `UnionLayout` with no shape variants (`shape_types.rs:20-53`). The cost of the tag is one word, as a Rust `enum` discriminant. `string | int` is tagged because a scope exit must tell the int's bits from a string pointer; a union of value variants only (`int | float`) owns no heap, so it gets no tag word and no release function. The payload word is the value's bits or the heap pointer the slot owns. A wrap owns its payload from the start (a string is copied, a fresh or consumed array, map or channel moves in); a COPY of a slot (a binding made from a place, a `return` of a parameter) copies a string, array or map variant and shares a channel variant (`union_deepen_fn`, `emit.rs:6016-6153`, called from `union_persist_into_core`, `emit.rs:5669-5674`, unless the source moves), so every owner releases its own. A channel variant is refused in a union with a shape variant (`envelope_refusal`, `check.rs:12122-12148`). A union with one variant beside `nothing` (`map<..> | nothing`) stays the variant's raw pointer, null for `nothing`: it is released, and a shape field of it is copied, as that variant (`raw_union_variant`, `check.rs:12436-12444`); a union of value variants releases nothing.
+**Heap-variant unions** (`String | Array<Int>`, `string | Channel<Int>`, `string | int`: no shape variant, two or more variants beside `Nothing`, one of which may own heap; `is_envelope_union`, `crates/ynz-typeck/src/check.rs:12446-12463`) are envelope unions with no shape variant, so they take every path above (wrap, parameter, return, store, frame region) with the same slot: `{ i64 tag, 8-byte payload }`, 16 bytes, `UnionLayout` with no shape variants (`shape_types.rs:20-53`). The cost of the tag is one word, as a Rust `enum` discriminant. `string | int` is tagged because a scope exit must tell the int's bits from a string pointer; a union of value variants only (`Int | Float`) owns no heap, so it gets no tag word and no release function. The payload word is the value's bits or the heap pointer the slot owns. A wrap owns its payload from the start (a string is copied, a fresh or consumed array, map or channel moves in); a COPY of a slot (a binding made from a place, a `return` of a parameter) copies a string, array or map variant and shares a channel variant (`union_deepen_fn`, `emit.rs:6016-6153`, called from `union_persist_into_core`, `emit.rs:5669-5674`, unless the source moves), so every owner releases its own. A channel variant is refused in a union with a shape variant (`envelope_refusal`, `check.rs:12122-12148`). A union with one variant beside `Nothing` (`Map<..> | nothing`) stays the variant's raw pointer, null for `Nothing`: it is released, and a shape field of it is copied, as that variant (`raw_union_variant`, `check.rs:12436-12444`); a union of value variants releases nothing.
 
 **Recursive unions** (a variant reaches the union through shape fields, so no finite inline size)
 are the one exception: the slot is `{ tag, word }` and a shape variant's bytes live in a heap cell
@@ -111,7 +111,7 @@ the cell is made by `clone_shape_variant_into_slot`, `emit.rs:5690-5724`). A sto
 a move and COPIES it deep otherwise (next section), exactly where Rust moves or clones. A moved union BINDING or call result hands its box cell to the slot it is stored into (a field, a `let`): no new cell, no emptied cell left behind (`Cg::box_cell_views`, marked by `remember_box_cell_view`, `emit.rs:22377-22387`, read at `emit.rs:5634-5648`). The same
 holds for a non-recursive union whose shape variant has such a field (`union_owns_cells`, `emit.rs:5749-5760`).
 
-**Moving and copying a value that owns boxes.** A shape, union or `maybe` that owns
+**Moving and copying a value that owns boxes.** A shape, union or `Maybe` that owns
 a recursive union's boxes is never copied by bytes alone, because the copy would share its boxes
 with the source and a release would free each box twice. Typeck records which stores are MOVES
 (`TypedModule::heap_moves`, `HeapMoves`, `crates/ynz-typeck/src/heap_moves.rs:33-65`; recorded by
@@ -125,7 +125,7 @@ reads the record and decides nothing (`remember_moved_cells` marks the value, `e
   boxes it owns (building a chain link by link makes one cell per link);
 - every other store deep-copies, like `Clone`: `.copy()` (always, even when its source is not
   read again), a binding made from a place that stays where it is and is not a view (`let copied = outer.inner` with
-  the field written while the binding is read, a `maybe` read of an element, a returned parameter's
+  the field written while the binding is read, a `Maybe` read of an element, a returned parameter's
   alias binding) and an element store of a value
   that is not moved. The copy clones each box the value owns (`deepen_unless_moved`, `emit.rs:5797-5807`;
   `union_deepen_fn`, `emit.rs:6016-6153`): O(n) cells for n boxes.
@@ -183,16 +183,16 @@ view"), so there is no muted hint to make explicit.
 **Ownership.** A union parameter not declared `give` (a `share`, `lend` or bare one) cannot be
 stored or given away: the checker refuses it with `ParamNeedsGive` ("Only a `give` parameter can
 be given away.", `check_transfer`, `check.rs:7682-7787`, `emit_param_needs_give`, `check.rs:7797-7825`,
-text `registry/features.toml:1665-1669`), for example `let held: T | nothing = first` with `first` a
+text `registry/features.toml:1665-1669`), for example `let held: T | Nothing = first` with `first` a
 `share` parameter (kept by Chief, 2026-11-18). A `give` union is a move: when the store is in
 `heap_moves` the slot takes its boxes, and a source that is not recorded is copied deep
 (`union_persist_into_as`, `emit.rs:5553-5565`). A slot owns its payload: a shape variant owns the shape's fields (and, boxed,
-its cell), a `string`, array or map variant owns that value, scalar variants and `none` own nothing.
+its cell), a `String`, `Array` or `Map` variant owns that value, scalar variants and `none` own nothing.
 
 **Equality.** Two union fields are equal when their tags match and the stored variants are equal
 as values of that variant (field by field for a shape variant, the payload word otherwise).
 
-**Not stored.** A `maybe<Thing>` binding (or an `errors` result of one) read after a `wait` is
+**Not stored.** A `Maybe<Thing>` binding (or an `errors` result of one) read after a `wait` is
 refused by typeck (`is_errors_maybe_of_envelope_union`, `check.rs:12410-12422`; the guard,
 `check.rs:2535-2709`).
 
@@ -209,8 +209,8 @@ There is no syntax for `dense<S>` or `tagged<S>` to force a particular layout. R
 In a union context, `is` performs exact-type matching. Inheritance does NOT change this:
 
 ```ynz
-shape User { name: string }
-shape Admin extends User { permissions: fixed<string> }
+shape User { name: String }
+shape Admin extends User { permissions: Fixed<String> }
 
 shape AnyUser = Admin | User
 
@@ -271,7 +271,7 @@ Symmetric with single-variant `options` rejection.
 - [`docs/reference/REF-unions.md`](../../reference/REF-unions.md) — user-facing surface (how to write unions and use `is`)
 - [`docs/internal/implementation/IMP-options.md`](IMP-options.md) — options types (the label-only counterpart)
 - [`docs/internal/implementation/IMP-narrowing.md`](IMP-narrowing.md) — flow-sensitive `is` narrowing (how the compiler tracks which variant is proven inside a block)
-- [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) — `maybe<T>` lowering (the `T | none` special case; unions reuse M5's maybe encoding for that form)
+- [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) — `Maybe<T>` lowering (the `T | none` special case; unions reuse M5's maybe encoding for that form)
 - [`docs/internal/implementation/IMP-control-flow.md`](IMP-control-flow.md) — multi-case `if` exhaustiveness; jump-table lowering
 - [`docs/reference/REF-golden-rules.md`](../../reference/REF-golden-rules.md) Rule 12 — borrow familiar syntax (`|` from TypeScript)
 - `crates/ynz-typeck/src/unions_table.rs` — UnionLayoutTable cache (M6 implementation)

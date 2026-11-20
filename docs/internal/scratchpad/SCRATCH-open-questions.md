@@ -180,16 +180,16 @@ The single-root-toml model above sidesteps this if Yinz has no feature-flag syst
 
 ```ynz
 export shape Symbol {
-    symbol: string          // aapl
-    name: string            // apple
+    symbol: String          // aapl
+    name: String            // apple
     assetClass: AssetClass  // stock
-    exchange: string        // nyse
+    exchange: String        // nyse
 
-    sector: string
-    industry: string
+    sector: String
+    industry: String
 
-    float: number           // 19_822_143
-    marketCap: number       // 5_712_092
+    float: Number           // 19_822_143
+    marketCap: Number       // 5_712_092
 
     // lastSyncedAt: datetime
 }

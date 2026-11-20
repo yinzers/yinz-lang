@@ -31,13 +31,13 @@ The entry function is always `entrypoint`. The entry file is configured in `yinz
 
 `entrypoint()` takes no parameters. Arguments come from `cli.args()`, `cli.flag()`, `cli.option()`.
 
-**Why**: C's `main(int argc, char* argv[])` is famously ugly. Different languages have invented different conventions. Using the standard library keeps the signature clean (`function entrypoint() -> nothing`), puts argument parsing where it belongs (the CLI module), and is consistent with how everything else in the language works — dot methods, autocomplete-discoverable.
+**Why**: C's `main(int argc, char* argv[])` is famously ugly. Different languages have invented different conventions. Using the standard library keeps the signature clean (`function entrypoint() -> Nothing`), puts argument parsing where it belongs (the CLI module), and is consistent with how everything else in the language works — dot methods, autocomplete-discoverable.
 
 ---
 
 ## Errors from `entrypoint` Go to the Default Handler
 
-`function entrypoint() -> nothing errors` lets all errors propagate to the default error handler.
+`function entrypoint() -> Nothing errors` lets all errors propagate to the default error handler.
 
 **Why**: The alternative is wrapping all top-level code in explicit error handling, which is boilerplate for the 90% case where the default handler (print trace, exit 1) is exactly right. Developers who need different behavior use `setErrorHandler()` before any errors can occur.
 
@@ -47,4 +47,4 @@ The entry function is always `entrypoint`. The entry file is configured in `yinz
 
 `process.exit(1)` for explicit exit with a code. Normal completion automatically exits with code 0.
 
-**Why `process.exit()` over a return value from `entrypoint()`**: Returning an exit code from `entrypoint()` would mean `-> int` as the return type, conflicting with `-> nothing` and `-> nothing errors`. A stdlib function keeps the signature clean. `process.exit()` is also callable from anywhere — not just at the end of `entrypoint()`.
+**Why `process.exit()` over a return value from `entrypoint()`**: Returning an exit code from `entrypoint()` would mean `-> Int` as the return type, conflicting with `-> Nothing` and `-> Nothing errors`. A stdlib function keeps the signature clean. `process.exit()` is also callable from anywhere — not just at the end of `entrypoint()`.
