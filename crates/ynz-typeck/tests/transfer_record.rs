@@ -120,12 +120,12 @@ fn escapes_of(transfers: &FunctionTransfers, member: &str) -> Vec<Escape> {
         .clone()
 }
 
-const BAG: &str = "shape Bag {\n  items: array<int>\n}\n";
-const PAIR: &str = "shape Pair {\n  first: array<int>\n  second: array<int>\n}\n";
+const BAG: &str = "shape Bag {\n  items: Array<Int>\n}\n";
+const PAIR: &str = "shape Pair {\n  first: Array<Int>\n  second: Array<Int>\n}\n";
 
 /// A callee that takes a whole `Bag` (`give`), and a maker of a fresh one to reassign it with.
-const EAT_BAG: &str = "shape Bag {\n  items: array<int>\n}
-function eatBag(give bag: Bag) -> nothing {
+const EAT_BAG: &str = "shape Bag {\n  items: Array<Int>\n}
+function eatBag(give bag: Bag) -> Nothing {
   print(bag.items.count().toString())
 }
 function freshBag() -> Bag {
@@ -170,9 +170,9 @@ fn t6b_field_set_hands_the_value_to_the_field() {
 /// to `container`.
 #[test]
 fn g1_container_add_hands_the_value_to_the_container() {
-    let source = "function make() -> array<array<int>> {
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = []
+    let source = "function make() -> Array<Array<Int>> {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
   container.add(numbers)
   return container
 }";
@@ -192,9 +192,9 @@ fn g1_container_add_hands_the_value_to_the_container() {
 /// slot.
 #[test]
 fn g8_index_set_hands_the_value_to_the_slot() {
-    let source = "function make() -> array<array<int>> {
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = [[0]]
+    let source = "function make() -> Array<Array<Int>> {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = [[0]]
   container[0] = numbers
   return container
 }";
@@ -215,11 +215,11 @@ fn g8_index_set_hands_the_value_to_the_slot() {
 /// `acc` is the founder of its own class (it owns the value it now holds).
 #[test]
 fn g7_assign_from_a_loop_local_hands_the_value_to_the_outliving_binding() {
-    let source = "function underTest() -> int {
-  let acc: array<int> = [0]
-  let i: int = 0
+    let source = "function underTest() -> Int {
+  let acc: Array<Int> = [0]
+  let i: Int = 0
   while (i < 2) {
-    let per: array<int> = [i, i, i]
+    let per: Array<Int> = [i, i, i]
     acc = per
     i = i + 1
   }
@@ -268,9 +268,9 @@ fn t7_struct_literal_hands_every_part_to_the_literal() {
 /// `second` and `second` is the founder of the value it now owns.
 #[test]
 fn let_of_a_whole_binding_hands_the_value_to_the_new_binding() {
-    let source = "function underTest() -> int {
-  let first: array<int> = [1]
-  let second: array<int> = first
+    let source = "function underTest() -> Int {
+  let first: Array<Int> = [1]
+  let second: Array<Int> = first
   return second.count()
 }";
     let transfers = transfers_of(source, "underTest");
@@ -288,9 +288,9 @@ fn assert_read_after_store_rejected(source: &str) {
 }
 
 cases! { assert_read_after_store_rejected;
-    read_after_container_add_is_rejected: "function underTest() -> int {
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = []
+    read_after_container_add_is_rejected: "function underTest() -> Int {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
   container.add(numbers)
   return numbers.count() + container.count()
 }", "(High) `container.add(numbers)` then reading `numbers` and `container` (the old `store_then_read_both`, `bg_arg_alias_container_add_red`): accepted before, so a release pass freed `numbers`'s array under the container";
@@ -300,26 +300,26 @@ cases! { assert_read_after_store_rejected;
   bag.items = numbers
   return numbers.count() + bag.items.count()
 }}"), "(High) t6b: `bag.items = numbers` then reading `numbers`";
-    read_after_index_set_is_rejected: "function underTest() -> int {
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = [[0]]
+    read_after_index_set_is_rejected: "function underTest() -> Int {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = [[0]]
   container[0] = numbers
   return numbers.count() + container.count()
 }", "(High) g8: `container[0] = numbers` then reading `numbers`";
-    read_after_let_is_rejected: "function underTest() -> int {
-  let first: array<int> = [1]
-  let second: array<int> = first
+    read_after_let_is_rejected: "function underTest() -> Int {
+  let first: Array<Int> = [1]
+  let second: Array<Int> = first
   return first.count() + second.count()
 }", "(High) `let second = first` then reading `first`: two names for one value, the old silent alias";
-    read_after_assign_is_rejected: "function underTest() -> int {
-  let acc: array<int> = [0]
-  let per: array<int> = [1]
+    read_after_assign_is_rejected: "function underTest() -> Int {
+  let acc: Array<Int> = [0]
+  let per: Array<Int> = [1]
   acc = per
   return per.count() + acc.count()
 }", "(High) g7: `acc = per` then reading `per`";
-    read_after_map_set_key_and_value_is_rejected: "function underTest() -> int {
-  let numbers: array<int> = [1]
-  let table: map<int, array<int>> = {}
+    read_after_map_set_key_and_value_is_rejected: "function underTest() -> Int {
+  let numbers: Array<Int> = [1]
+  let table: Map<Int, Array<Int>> = {}
   table.set(1, numbers)
   return numbers.count() + table.count()
 }", "(High) `table.set(1, numbers)` then reading `numbers`: the map's own table of values is the other owner";
@@ -335,13 +335,13 @@ cases! { assert_read_after_store_rejected;
 
 /// A union with one shape variant that holds heap data, and a callee that takes it over.
 const FIGURE: &str = "shape Circle {
-  label: array<int>
+  label: Array<Int>
 }
 shape Square {
-  side: int
+  side: Int
 }
 shape Figure = Circle | Square
-function eatCircle(give circle: Circle) -> nothing {
+function eatCircle(give circle: Circle) -> Nothing {
   print(circle.label.count().toString())
 }
 ";
@@ -412,16 +412,16 @@ cases! { assert_accepted;
 // reported. The index store was refused already; it guards the statement form with no call.
 
 const EATERS: &str =
-    "function eatBoth(give numbers: array<int>, give rows: array<array<int>>) -> nothing {
+    "function eatBoth(give numbers: Array<Int>, give rows: Array<Array<Int>>) -> Nothing {
   print(numbers.count().toString())
 }
-function readAndEat(share numbers: array<int>, give rows: array<array<int>>) -> nothing {
+function readAndEat(share numbers: Array<Int>, give rows: Array<Array<Int>>) -> Nothing {
   print(numbers.count().toString())
 }
-function eatBack(give numbers: array<int>) -> array<int> {
+function eatBack(give numbers: Array<Int>) -> Array<Int> {
   return numbers
 }
-function countOf(give numbers: array<int>) -> int {
+function countOf(give numbers: Array<Int>) -> Int {
   return numbers.count()
 }
 ";
@@ -461,9 +461,9 @@ cases! { assert_use_after_give;
 // `give self` handed over or given away stayed readable (and a second store was skipped silently).
 
 const KEEPER: &str = "shape Box {
-  items: array<int>
+  items: Array<Int>
 }
-function eat(give box: Box) -> nothing {
+function eat(give box: Box) -> Nothing {
   print(box.items.count().toString())
 }
 ";
@@ -634,16 +634,16 @@ cases! { assert_loop_give_rejected;
 }
 
 cases! { assert_loop_store_rejected;
-    store_of_an_outer_binding_in_a_loop_is_rejected: "function underTest() -> nothing {
-  let numbers: array<int> = [1, 2, 3]
+    store_of_an_outer_binding_in_a_loop_is_rejected: "function underTest() -> Nothing {
+  let numbers: Array<Int> = [1, 2, 3]
   for (j in range(0, 2)) {
-    let newOwner: array<int> = numbers
+    let newOwner: Array<Int> = numbers
     print(newOwner.count().toString())
   }
 }", "(High) t3 for a store: `let newOwner = numbers` hands `numbers` over on every pass, and the next pass reads `numbers` again (a release pass would free it once per pass)";
-    container_add_of_an_outer_binding_in_a_loop_is_rejected: "function underTest() -> nothing {
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = []
+    container_add_of_an_outer_binding_in_a_loop_is_rejected: "function underTest() -> Nothing {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
   for (j in range(0, 2)) {
     container.add(numbers)
   }
@@ -651,8 +651,8 @@ cases! { assert_loop_store_rejected;
 }
 
 cases! { assert_loop_send_rejected;
-    send_in_a_for_loop_is_rejected: "function producer(lend wire: channel<array<int>>) -> nothing {
-  let sent: array<int> = [10, 20, 30]
+    send_in_a_for_loop_is_rejected: "function producer(lend wire: Channel<Array<Int>>) -> Nothing {
+  let sent: Array<Int> = [10, 20, 30]
   for (i in range(0, 3)) {
     wire.send(sent)
   }
@@ -728,9 +728,9 @@ cases! { assert_accepted;
 /// it.
 #[test]
 fn storing_bits_hands_nothing_over() {
-    let source = "function underTest() -> int {
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<int> = []
+    let source = "function underTest() -> Int {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Int> = []
   container.add(numbers[0].or(0))
   container.add(numbers.count())
   return container.count() + numbers.count()
@@ -744,11 +744,11 @@ fn storing_bits_hands_nothing_over() {
 #[test]
 fn storing_a_string_hands_nothing_over() {
     assert_accepted(
-        "function underTest() -> int {
-  let name: string = `ada`
-  let names: array<string> = []
+        "function underTest() -> Int {
+  let name: String = `ada`
+  let names: Array<String> = []
   names.add(name)
-  let same: string = name
+  let same: String = name
   return names.count() + same.count()
 }",
     );
@@ -759,11 +759,11 @@ fn storing_a_string_hands_nothing_over() {
 #[test]
 fn storing_a_sensitive_string_hands_nothing_over() {
     assert_accepted(
-        "function underTest() -> int {
-  let key: sensitive string = sensitive(`abc`)
-  let keys: array<sensitive string> = []
+        "function underTest() -> Int {
+  let key: sensitive String = sensitive(`abc`)
+  let keys: Array<sensitive String> = []
   keys.add(key)
-  let same: sensitive string = key
+  let same: sensitive String = key
   print(key)
   return keys.count()
 }",
@@ -778,8 +778,8 @@ fn storing_a_sensitive_string_hands_nothing_over() {
 #[test]
 fn storing_a_range_hands_nothing_over() {
     assert_accepted(
-        "shape Window { span: range }
-function underTest() -> int {
+        "shape Window { span: Range }
+function underTest() -> Int {
   let wholeRange = range(0, 3)
   let sameRange = wholeRange
   let window: Window = { span: wholeRange }
@@ -798,7 +798,7 @@ function underTest() -> int {
     );
 }
 
-const EAT2: &str = "function eat_all(give rows: array<array<int>>) -> nothing {
+const EAT2: &str = "function eat_all(give rows: Array<Array<Int>>) -> Nothing {
   print(rows.count().toString())
 }\n";
 
@@ -835,8 +835,8 @@ fn a_store_then_a_give_of_the_container_is_accepted_and_recorded_twice() {
 /// would free the sent array at the producer's scope exit while the receiver reads it.
 #[test]
 fn a_send_is_recorded_as_an_escape_on_its_channel() {
-    let source = "function producer(lend wire: channel<array<int>>) -> nothing {
-  let sent: array<int> = [10, 20, 30]
+    let source = "function producer(lend wire: Channel<Array<Int>>) -> Nothing {
+  let sent: Array<Int> = [10, 20, 30]
   wire.send(sent)
   wire.close()
 }";
@@ -874,7 +874,7 @@ function underTest() -> nothing {{
 #[test]
 fn storing_a_borrowed_parameter_is_rejected() {
     assert_rejected_with(
-        "function stash(lend bucket: array<array<int>>, rows: array<int>) -> nothing {
+        "function stash(lend bucket: Array<Array<Int>>, rows: Array<Int>) -> Nothing {
   bucket.add(rows)
 }",
         "is a parameter of `stash`",
@@ -885,8 +885,8 @@ fn storing_a_borrowed_parameter_is_rejected() {
 /// borrowed parameter in it is never released here.
 #[test]
 fn a_borrowed_parameter_in_the_class_means_the_caller_owns_it() {
-    let source = "function underTest(share bag: Bag) -> int {
-  let view: array<int> = bag.items
+    let source = "function underTest(share bag: Bag) -> Int {
+  let view: Array<Int> = bag.items
   return view.count()
 }";
     let transfers = transfers_of(&format!("{BAG}{source}"), "underTest");
@@ -902,11 +902,11 @@ fn a_borrowed_parameter_in_the_class_means_the_caller_owns_it() {
 /// a class an outer owner is in.
 #[test]
 fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
-    let source = "function underTest() -> int {
+    let source = "function underTest() -> Int {
   let outer: Bag = { items: [1] }
-  let total: int = 0
+  let total: Int = 0
   if (true) {
-    let inner: array<int> = outer.items
+    let inner: Array<Int> = outer.items
     total = inner.count()
   }
   return outer.items.count() + total
@@ -923,18 +923,18 @@ fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
 #[test]
 fn a_maybe_channel_an_imported_function_returns_is_an_owner_in_a_class_of_its_own() {
     let library =
-        "export function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
+        "export function firstChan(share chans: Array<Channel<Int>>) -> Maybe<Channel<Int>> {
   return chans.first()
 }\n";
     let main = "import { firstChan } from `lib`
-function underTest(condition: boolean) -> nothing {
-  let held: maybe<channel<int>> = none
+function underTest(condition: Boolean) -> Nothing {
+  let held: Maybe<Channel<Int>> = none
   if (condition) {
-    let local: array<channel<int>> = [channel<int>()]
+    let local: Array<Channel<Int>> = [Channel<Int>()]
     held = firstChan(local)
   }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }
 ";
     let transfers = record_of(&run_with_library(library, main), "underTest");
@@ -949,28 +949,28 @@ function entrypoint() -> nothing {
 /// their own and the channel is released once per reference.
 #[test]
 fn a_handed_back_channel_is_a_counted_reference_in_a_class_of_its_own() {
-    let library = "export function same(share ch: channel<int>) -> channel<int> {
+    let library = "export function same(share ch: Channel<Int>) -> Channel<Int> {
   return ch
 }\n";
     let main = "import { same } from `lib`
-function passOn(share ch: channel<int>) -> channel<int> {
+function passOn(share ch: Channel<Int>) -> Channel<Int> {
   return ch
 }
-function viaImport(condition: boolean) -> nothing {
-  let held: channel<int> = channel<int>()
+function viaImport(condition: Boolean) -> Nothing {
+  let held: Channel<Int> = Channel<Int>()
   if (condition) {
-    let local: channel<int> = channel<int>()
+    let local: Channel<Int> = Channel<Int>()
     held = same(local)
   }
 }
-function viaLocal(condition: boolean) -> nothing {
-  let held: channel<int> = channel<int>()
+function viaLocal(condition: Boolean) -> Nothing {
+  let held: Channel<Int> = Channel<Int>()
   if (condition) {
-    let local: channel<int> = channel<int>()
+    let local: Channel<Int> = Channel<Int>()
     held = passOn(local)
   }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }
 ";
     let output = run_with_library(library, main);
@@ -990,19 +990,19 @@ function entrypoint() -> nothing {
 /// (`MustCopy` in `non_owned_reads`): it joins nothing and `local` is its own founder.
 #[test]
 fn an_untraceable_maybe_result_is_a_copy_owner_in_a_class_of_its_own() {
-    let library = "export function firstRow(share rows: array<array<int>>) -> maybe<array<int>> {
+    let library = "export function firstRow(share rows: Array<Array<Int>>) -> Maybe<Array<Int>> {
   return rows.first()
 }\n";
     let main = "import { firstRow } from `lib`
-function underTest(condition: boolean) -> int {
-  let held: maybe<array<int>> = none
+function underTest(condition: Boolean) -> Int {
+  let held: Maybe<Array<Int>> = none
   if (condition) {
-    let local: array<array<int>> = [[1]]
+    let local: Array<Array<Int>> = [[1]]
     held = firstRow(local)
   }
   return 1
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }
 ";
     let transfers = record_of(&run_with_library(library, main), "underTest");
@@ -1036,15 +1036,15 @@ function underTest(condition: boolean) -> int {{
     assert_eq!(founder_name(&transfers, "owner"), "owner");
 }
 
-const BUCKET: &str = "shape Bucket {\n  rows: array<int>\n}\n";
+const BUCKET: &str = "shape Bucket {\n  rows: Array<Int>\n}\n";
 
 // ── a call that stores one argument into another ────────────────────────────
 
 const PUT: &str =
-    "function put(lend container: array<array<int>>, give numbers: array<int>) -> nothing {
+    "function put(lend container: Array<Array<Int>>, give numbers: Array<Int>) -> Nothing {
   container.add(numbers)
 }
-function relay(lend container: array<array<int>>, give numbers: array<int>) -> nothing {
+function relay(lend container: Array<Array<Int>>, give numbers: Array<Int>) -> Nothing {
   put(container, numbers)
 }\n";
 
@@ -1054,7 +1054,7 @@ function relay(lend container: array<array<int>>, give numbers: array<int>) -> n
 #[test]
 fn a_callee_that_stores_a_bare_parameter_is_rejected() {
     assert_rejected_with(
-        "function put(lend container: array<array<int>>, numbers: array<int>) -> nothing {
+        "function put(lend container: Array<Array<Int>>, numbers: Array<Int>) -> Nothing {
   container.add(numbers)
 }",
         "is a parameter of `put` that has no ownership word",
@@ -1110,12 +1110,12 @@ fn a_call_that_stores_a_given_argument_is_recorded_as_a_give() {
 #[test]
 fn a_callee_that_only_reads_an_argument_leaves_it_readable() {
     assert_accepted(
-        "function tally(lend into: array<int>, from: array<int>) -> nothing {
+        "function tally(lend into: Array<Int>, from: Array<Int>) -> Nothing {
   into.add(from.count())
 }
-function underTest() -> int {
-  let from: array<int> = [1, 2, 3]
-  let into: array<int> = []
+function underTest() -> Int {
+  let from: Array<Int> = [1, 2, 3]
+  let into: Array<Int> = []
   tally(into, from)
   return from.count() + into.count()
 }",
@@ -1158,12 +1158,12 @@ function underTest() -> int {{
 /// (High) `NoOwner` for a loop cell of a temporary (`for (row in make())`).
 #[test]
 fn a_loop_cell_of_a_temporary_is_recorded_as_no_owner() {
-    let source = "function make() -> array<array<int>> {
-  let rows: array<array<int>> = [[1]]
+    let source = "function make() -> Array<Array<Int>> {
+  let rows: Array<Array<Int>> = [[1]]
   return rows
 }
-function underTest() -> int {
-  let total: int = 0
+function underTest() -> Int {
+  let total: Int = 0
   for (row in make()) {
     total = total + row.count()
   }
@@ -1177,15 +1177,15 @@ function underTest() -> int {
 /// holds it founds its own class and releases it (C7 slice 3b; it was `NoOwner`, a leak).
 #[test]
 fn an_imported_functions_result_is_owned_by_the_binding_that_holds_it() {
-    let library = "export function fresh() -> array<int> {
+    let library = "export function fresh() -> Array<Int> {
   return [1]
 }\n";
     let main = "import { fresh } from `lib`
-function underTest() -> int {
-  let result: array<int> = fresh()
+function underTest() -> Int {
+  let result: Array<Int> = fresh()
   return result.count()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
 }
 ";
     let transfers = record_of(&run_with_library(library, main), "underTest");
@@ -1236,9 +1236,9 @@ function underTest() -> nothing {{
 /// holds the elements of both. Returned, `fallback` / `right` must escape with it.
 #[test]
 fn a_builtin_methods_result_reaches_its_heap_arguments() {
-    let or_source = "function pick(cache: array<array<int>>) -> array<int> {
-  let fallback: array<int> = [1]
-  let found: array<int> = cache.first().or(fallback)
+    let or_source = "function pick(cache: Array<Array<Int>>) -> Array<Int> {
+  let fallback: Array<Int> = [1]
+  let found: Array<Int> = cache.first().or(fallback)
   return found
 }";
     let transfers = transfers_of(or_source, "pick");
@@ -1249,10 +1249,10 @@ fn a_builtin_methods_result_reaches_its_heap_arguments() {
         .class_of("found")
         .is_some_and(|class| class.members[0].copy_owner));
 
-    let concat_source = "function both() -> array<array<int>> {
-  let left: array<array<int>> = [[1]]
-  let right: array<array<int>> = [[2]]
-  let joined: array<array<int>> = left.concat(right)
+    let concat_source = "function both() -> Array<Array<Int>> {
+  let left: Array<Array<Int>> = [[1]]
+  let right: Array<Array<Int>> = [[2]]
+  let joined: Array<Array<Int>> = left.concat(right)
   return joined
 }";
     let transfers = transfers_of(concat_source, "both");
@@ -1263,9 +1263,9 @@ fn a_builtin_methods_result_reaches_its_heap_arguments() {
 // ── receivers that are not a name chain (fixer round 1) ─────────────────────
 
 const FIRST_BAG: &str = "shape Bag {
-  items: array<int>
+  items: Array<Int>
 }
-function firstBag<T>(share bags: array<T>, share fallback: T) -> T {
+function firstBag<T>(share bags: Array<T>, share fallback: T) -> T {
   return bags[0].or(fallback)
 }
 ";
@@ -1336,10 +1336,10 @@ fn a_store_into_a_piece_of_a_call_result_hands_the_value_over() {
 /// iterated expression is a method call, not a name), so `row` was free to outlive `rows`/`extra`.
 #[test]
 fn a_loop_cell_joins_everything_the_iterated_value_reaches() {
-    let source = "function underTest() -> int {
-  let rows: array<array<int>> = [[1]]
-  let extra: array<array<int>> = [[2]]
-  let total: int = 0
+    let source = "function underTest() -> Int {
+  let rows: Array<Array<Int>> = [[1]]
+  let extra: Array<Array<Int>> = [[2]]
+  let total: Int = 0
   for (row in rows.concat(extra)) {
     total = total + row.count()
   }

@@ -62,8 +62,8 @@ fn nested_index_assign_marks_root_binding_mutated_no_let_to_const_hint() {
     // never recorded as mutated and the false hint fired.  The fix follows the
     // IndexAccess chain to the root Ident("arr") and records it.
     let src = r#"
-function entrypoint() -> nothing {
-  let arr: array<array<int>> = [[1, 2], [3, 4]]
+function entrypoint() -> Nothing {
+  let arr: Array<Array<Int>> = [[1, 2], [3, 4]]
   let i = 0
   let j = 1
   arr[i][j] = 99

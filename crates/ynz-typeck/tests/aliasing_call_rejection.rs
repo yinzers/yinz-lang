@@ -51,7 +51,7 @@ fn assert_aliasing_rejected(source: &str, expected_phrase: &str) {
     );
 }
 
-const BOX_SHAPE: &str = "shape Box {\n  value: int\n}\n";
+const BOX_SHAPE: &str = "shape Box {\n  value: Int\n}\n";
 
 #[test]
 fn same_value_as_share_and_lend_is_rejected() {
@@ -156,16 +156,16 @@ fn overlapping_field_path_with_lend_is_rejected() {
     // WHY: `player.pet` is part of `player` — a write through the whole reaches the
     // part, so a prefix-overlapping pair is the same conflict as an identical pair.
     let src = "shape Pet {
-  age: int
+  age: Int
 }
 shape Player {
-  score: int
+  score: Int
   pet: Pet
 }
-function groom(lend whole: Player, share part: Pet) -> nothing {
+function groom(lend whole: Player, share part: Pet) -> Nothing {
   whole.score = whole.score + part.age
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { score: 0, pet: { age: 3 } }
   groom(p, p.pet)
   print(p.score.toString())
@@ -214,11 +214,11 @@ function entrypoint() -> nothing {{
 fn same_scalar_value_twice_is_accepted() {
     // WHY: int/float/bool pass by value — two copies can never touch the same
     // storage, so the aliasing rule must not fire on scalars.
-    let src = "function add(a: int, b: int) -> int {
+    let src = "function add(a: Int, b: Int) -> Int {
   return a + b
 }
-function entrypoint() -> nothing {
-  let n: int = 4
+function entrypoint() -> Nothing {
+  let n: Int = 4
   print(add(n, n).toString())
 }";
     assert_clean(src);

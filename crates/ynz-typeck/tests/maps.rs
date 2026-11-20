@@ -60,8 +60,8 @@ fn m5p3c_map_string_int_literal_typechecks() {
     // must type-check without diagnostics.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90, `bob`: 85 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90, `bob`: 85 }
 }
 "#,
     );
@@ -72,8 +72,8 @@ fn m5p3c_map_string_string_literal_typechecks() {
     // WHY: map<string, string> must work — both key and value types can be string.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, string> = { `key`: `value`, `name`: `alice` }
+function entrypoint() -> Nothing {
+    let m: Map<String, String> = { `key`: `value`, `name`: `alice` }
 }
 "#,
     );
@@ -84,8 +84,8 @@ fn m5p3c_map_int_bool_literal_typechecks() {
     // WHY: int keys must be valid — map<int, bool> with int literals.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<int, boolean> = { 1: true, 2: false }
+function entrypoint() -> Nothing {
+    let m: Map<Int, Boolean> = { 1: true, 2: false }
 }
 "#,
     );
@@ -97,8 +97,8 @@ fn m5p3c_map_empty_with_annotation_typechecks() {
     // via the BuiltinMap annotation path in check_struct_lit.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = {}
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = {}
 }
 "#,
     );
@@ -109,8 +109,8 @@ fn m5p3c_map_single_entry_typechecks() {
     // WHY: single-entry map must work (no trailing comma needed).
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `only`: 1 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `only`: 1 }
 }
 "#,
     );
@@ -123,9 +123,9 @@ fn m5p3c_map_bracket_access_returns_maybe() {
     // WHY: `m["key"]` must return `maybe<int>` — bracket access on maps is fallible.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let v: maybe<int> = m[`alice`]
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let v: Maybe<Int> = m[`alice`]
 }
 "#,
     );
@@ -137,9 +137,9 @@ fn m5p3c_map_bracket_access_with_or_returns_value() {
     // from bracket access.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let v: int = m[`alice`].or(0)
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let v: Int = m[`alice`].or(0)
 }
 "#,
     );
@@ -150,8 +150,8 @@ fn m5p3c_map_bracket_assignment_typechecks() {
     // WHY: `m[`bob`] = 95` must type-check when m: map<string, int>.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90, `bob`: 85 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90, `bob`: 85 }
     m[`bob`] = 95
 }
 "#,
@@ -163,8 +163,8 @@ fn m5p3c_map_bracket_assignment_wrong_value_type_errors() {
     // WHY: `m["key"] = "wrong"` must error when the map holds int values.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     m[`alice`] = `not an int`
 }
 "#,
@@ -179,9 +179,9 @@ fn m5p3c_map_get_returns_maybe() {
     // WHY: `.get("alice")` on map<string, int> must return maybe<int>.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let v: maybe<int> = m.get(`alice`)
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let v: Maybe<Int> = m.get(`alice`)
 }
 "#,
     );
@@ -192,9 +192,9 @@ fn m5p3c_map_has_returns_bool() {
     // WHY: `.has()` on map<string, int> must return bool.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let exists: boolean = m.has(`alice`)
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let exists: Boolean = m.has(`alice`)
 }
 "#,
     );
@@ -205,8 +205,8 @@ fn m5p3c_map_set_returns_nothing() {
     // WHY: `.set()` must return nothing — mutation that returns no value.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     m.set(`bob`, 85)
 }
 "#,
@@ -218,8 +218,8 @@ fn m5p3c_map_remove_returns_nothing() {
     // WHY: `.remove()` must return nothing.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90, `bob`: 85 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90, `bob`: 85 }
     m.remove(`alice`)
 }
 "#,
@@ -231,9 +231,9 @@ fn m5p3c_map_count_returns_int() {
     // WHY: `.count()` on map<string, int> must return int.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let n: int = m.count()
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let n: Int = m.count()
 }
 "#,
     );
@@ -244,9 +244,9 @@ fn m5p3c_map_keys_returns_array_of_keys() {
     // WHY: `.keys()` must return array<string> for map<string, int>.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let k: array<string> = m.keys()
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let k: Array<String> = m.keys()
 }
 "#,
     );
@@ -257,9 +257,9 @@ fn m5p3c_map_values_returns_array_of_values() {
     // WHY: `.values()` must return array<int> for map<string, int>.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let v: array<int> = m.values()
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let v: Array<Int> = m.values()
 }
 "#,
     );
@@ -271,8 +271,8 @@ fn m5p3c_map_entries_returns_array_of_mapentry() {
     // iterating and accessing .key / .value, which only work on MapEntry.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     let entries = m.entries()
     for (e in entries) {
         print(e.key)
@@ -288,8 +288,8 @@ fn m5p3c_map_clear_returns_nothing() {
     // WHY: `.clear()` must return nothing.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     m.clear()
 }
 "#,
@@ -301,9 +301,9 @@ fn m5p3c_map_find_returns_maybe() {
     // WHY: `.find()` is an alias for `.get()` — must return maybe<int>.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let v: maybe<int> = m.find(`alice`)
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let v: Maybe<Int> = m.find(`alice`)
 }
 "#,
     );
@@ -317,8 +317,8 @@ fn m5p3c_map_for_loop_entry_key_typechecks() {
     // and `entry.key` must resolve to string without diagnostics.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90, `bob`: 85 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90, `bob`: 85 }
     for (entry in m) {
         print(entry.key)
     }
@@ -332,8 +332,8 @@ fn m5p3c_map_for_loop_entry_value_typechecks() {
     // WHY: `entry.value` inside a map for-loop must resolve to int without diagnostics.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90, `bob`: 85 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90, `bob`: 85 }
     for (entry in m) {
         print(entry.value.toString())
     }
@@ -347,8 +347,8 @@ fn m5p3c_map_for_loop_entry_key_and_value_typechecks() {
     // WHY: using both entry.key and entry.value in the same loop body must work.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     for (entry in m) {
         print(entry.key)
         print(entry.value.toString())
@@ -366,8 +366,8 @@ fn m5p3c_map_duplicate_string_key_produces_error() {
     // rather than silently picking one value.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 1, `alice`: 2 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 1, `alice`: 2 }
 }
 "#,
         1,
@@ -379,8 +379,8 @@ fn m5p3c_map_duplicate_int_key_produces_error() {
     // WHY: duplicate int keys must also be caught.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<int, int> = { 1: 10, 2: 20, 1: 30 }
+function entrypoint() -> Nothing {
+    let m: Map<Int, Int> = { 1: 10, 2: 20, 1: 30 }
 }
 "#,
         1,
@@ -392,8 +392,8 @@ fn m5p3c_map_three_unique_keys_no_error() {
     // WHY: three distinct keys must produce no duplicate-key diagnostic.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `a`: 1, `b`: 2, `c`: 3 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `a`: 1, `b`: 2, `c`: 3 }
 }
 "#,
     );
@@ -407,8 +407,8 @@ fn m5p3c_map_wrong_value_type_in_literal_errors() {
     // must produce a type-mismatch diagnostic.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: `not an int` }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: `not an int` }
 }
 "#,
         1,
@@ -421,8 +421,8 @@ fn m5p3c_map_wrong_key_type_in_literal_errors() {
     // The first key sets the inferred key type; subsequent mismatches error.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<int, int> = { `wrong`: 1, 2: 20 }
+function entrypoint() -> Nothing {
+    let m: Map<Int, Int> = { `wrong`: 1, 2: 20 }
 }
 "#,
         1,
@@ -436,7 +436,7 @@ fn m5p3c_map_empty_without_annotation_errors() {
     // which produces a "needs type annotation" error from check_struct_lit.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let m = {}
 }
 "#,
@@ -452,8 +452,8 @@ fn m5p3c_map_dot_access_errors() {
     // not shape fields. The compiler must reject dot access and suggest bracket syntax.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     let v = m.alice
 }
 "#,
@@ -467,8 +467,8 @@ fn m5p3c_map_dot_access_error_mentions_bracket() {
     // without guidance would leave them stuck.
     check_has_diag(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     let v = m.alice
 }
 "#,
@@ -483,8 +483,8 @@ fn m5p3c_map_nonexistent_method_errors() {
     // WHY: `m.nonexistent()` must produce exactly one diagnostic naming the method.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     m.nonexistent()
 }
 "#,
@@ -497,8 +497,8 @@ fn m5p3c_map_nonexistent_method_error_mentions_method_name() {
     // WHY: the diagnostic must mention "nonexistent" so the user can see which name failed.
     check_has_diag(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     m.nonexistent()
 }
 "#,
@@ -514,8 +514,8 @@ fn m5p3c_mapentry_nonexistent_field_errors() {
     // MapEntry only has .key and .value — any other field is an error.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     for (entry in m) {
         let bad = entry.nonexistent
     }
@@ -531,8 +531,8 @@ fn m5p3c_mapentry_method_call_errors() {
     // MapEntry has no methods, only the two fields.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     for (entry in m) {
         entry.someMethod()
     }
@@ -554,8 +554,8 @@ fn m5p3c_struct_lit_with_map_annotation_and_identifier_keys_accepted() {
     // literals are valid when the annotation says map.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { alice: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { alice: 90 }
 }
 "#,
         0,
@@ -570,8 +570,8 @@ fn m5p3c_map_type_name_in_diagnostic_renders_correctly() {
     // must render the type as "map<string, int>" — not an internal representation.
     check_has_diag(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     m.badMethod()
 }
 "#,
@@ -585,8 +585,8 @@ fn m5p3c_mapentry_type_name_in_diagnostic_renders_correctly() {
     // mention "MapEntry" in the what message.
     check_has_diag(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
     for (entry in m) {
         let bad = entry.nonexistent
     }
@@ -662,8 +662,8 @@ fn m5p3c_map_literal_with_trailing_comma_typechecks() {
     // WHY: trailing commas in map literals must be accepted.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90, `bob`: 85, }
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90, `bob`: 85, }
 }
 "#,
     );
@@ -675,9 +675,9 @@ fn m5p3c_map_bracket_access_exists_check_and_value() {
     // and unwrapped with .value — the full usage pattern must work.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<string, int> = { `alice`: 90 }
-    let val: maybe<int> = m[`alice`]
+function entrypoint() -> Nothing {
+    let m: Map<String, Int> = { `alice`: 90 }
+    let val: Maybe<Int> = m[`alice`]
     if (val.exists()) {
         print(val.value.toString())
     }
@@ -691,9 +691,9 @@ fn m5p3c_map_int_key_bracket_access_returns_maybe() {
     // WHY: map<int, string> bracket access with int key must return maybe<string>.
     check_no_diags(
         r#"
-function entrypoint() -> nothing {
-    let m: map<int, string> = { 1: `one`, 2: `two` }
-    let v: maybe<string> = m[1]
+function entrypoint() -> Nothing {
+    let m: Map<Int, String> = { 1: `one`, 2: `two` }
+    let v: Maybe<String> = m[1]
 }
 "#,
     );

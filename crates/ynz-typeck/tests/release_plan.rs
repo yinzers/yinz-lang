@@ -127,7 +127,7 @@ const ARRAY: ReleaseKind = ReleaseKind::Array;
 #[test]
 fn a_plain_local_is_released_at_the_end_of_its_block() {
     let output = clean(
-        "function plain() -> nothing {\n  let rows = [1, 2, 3]\n  print(`${rows.count()}`)\n}\n",
+        "function plain() -> Nothing {\n  let rows = [1, 2, 3]\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "plain"), "rows"),
@@ -185,7 +185,7 @@ fn an_early_return_before_a_give_still_releases_the_binding() {
 #[test]
 fn the_returned_binding_is_omitted_at_its_return() {
     let output = clean(
-        "function make() -> array<int> {\n  let rows = [1, 2, 3]\n  let spare = [4, 5]\n  return rows\n}\n",
+        "function make() -> Array<Int> {\n  let rows = [1, 2, 3]\n  let spare = [4, 5]\n  return rows\n}\n",
     );
     let returns = return_edges(&output, "make");
     assert_eq!(
@@ -200,7 +200,7 @@ fn the_returned_binding_is_omitted_at_its_return() {
 #[test]
 fn a_borrowed_parameter_is_the_callers_and_a_give_parameter_is_released() {
     let output = clean(
-        "function borrowed(share rows: array<int>) -> nothing {\n  print(`${rows.count()}`)\n}\nfunction owned(give rows: array<int>) -> nothing {\n  print(`${rows.count()}`)\n}\n",
+        "function borrowed(share rows: Array<Int>) -> Nothing {\n  print(`${rows.count()}`)\n}\nfunction owned(give rows: Array<Int>) -> Nothing {\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "borrowed"), "rows"),
@@ -218,7 +218,7 @@ fn a_borrowed_parameter_is_the_callers_and_a_give_parameter_is_released() {
 #[test]
 fn a_reassigned_owner_is_released_and_its_assignment_releases_the_old_value() {
     let output = clean(
-        "function again() -> nothing {\n  let rows = [1, 2, 3]\n  rows = [4, 5]\n  print(`${rows.count()}`)\n}\n",
+        "function again() -> Nothing {\n  let rows = [1, 2, 3]\n  rows = [4, 5]\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "again"), "rows"),
@@ -260,7 +260,7 @@ fn a_generic_body_is_covered_and_its_parameter_values_are_planned() {
 #[test]
 fn a_given_type_parameter_value_has_a_releasing_fate() {
     let output = clean(
-        "function drop<T>(give value: T) -> nothing {\n  print(`x`)\n}\nfunction maybeKeep<T>(give value: T, flag: boolean) -> array<T> {\n  let items: array<T> = []\n  if (flag) {\n    items.add(value)\n  }\n  return items\n}\n",
+        "function drop<T>(give value: T) -> Nothing {\n  print(`x`)\n}\nfunction maybeKeep<T>(give value: T, flag: Boolean) -> Array<T> {\n  let items: Array<T> = []\n  if (flag) {\n    items.add(value)\n  }\n  return items\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "drop"), "value"),
@@ -277,7 +277,7 @@ fn a_given_type_parameter_value_has_a_releasing_fate() {
 #[test]
 fn a_loop_body_has_its_own_list() {
     let output = clean(
-        "function looped() -> nothing {\n  let count = 3\n  while (count > 0) {\n    let row = [1]\n    print(`${row.count()}`)\n    count = count - 1\n  }\n}\n",
+        "function looped() -> Nothing {\n  let count = 3\n  while (count > 0) {\n    let row = [1]\n    print(`${row.count()}`)\n    count = count - 1\n  }\n}\n",
     );
     let function = function_of(&output, "looped");
     let Stmt::While { body, .. } = &function.body.stmts[1] else {
@@ -297,7 +297,7 @@ fn a_loop_body_has_its_own_list() {
 #[test]
 fn an_auto_propagation_lists_every_open_owner() {
     let output = clean(
-        "function risky() -> int errors {\n  return 1\n}\nfunction chained() -> int errors {\n  let rows = [1, 2]\n  let value = risky()\n  return value\n}\n",
+        "function risky() -> Int errors {\n  return 1\n}\nfunction chained() -> Int errors {\n  let rows = [1, 2]\n  let value = risky()\n  return value\n}\n",
     );
     let function = function_of(&output, "chained");
     let Stmt::Return {
@@ -324,7 +324,7 @@ fn an_auto_propagation_lists_every_open_owner() {
 #[test]
 fn a_string_is_released_if_live_exactly_when_the_record_lists_a_read() {
     let output = clean(
-        "function words() -> nothing {\n  let unused = `plain`\n  let label = `n=${3}`\n  print(label)\n}\n",
+        "function words() -> Nothing {\n  let unused = `plain`\n  let label = `n=${3}`\n  print(label)\n}\n",
     );
     let list = body_end(&output, "words");
     assert_eq!(fate_of(&list, "unused"), Fate::Release(ReleaseKind::String));
@@ -480,7 +480,7 @@ fn heap_class_of_each_type() {
 #[test]
 fn shapes_are_classified_by_their_fields() {
     let output = clean(
-        "shape Label {\n  text: string\n}\nshape Plain {\n  size: int\n}\nshape Holder {\n  inner: Plain\n}\nfunction risky() -> int errors {\n  return 1\n}\nfunction kinds() -> nothing {\n  let label: Label = { text: `a` }\n  let plain: Plain = { size: 1 }\n  let holder: Holder = { inner: { size: 2 } }\n  let words: fixed<string> = [`a`, `b`]\n  let result = risky()\n  if (result.failed()) {\n    print(`bad`)\n  }\n  print(plain.size.toString())\n  print(label.text)\n  print(holder.inner.size.toString())\n  print(words.count().toString())\n  print(result.toString())\n}\n",
+        "shape Label {\n  text: String\n}\nshape Plain {\n  size: Int\n}\nshape Holder {\n  inner: Plain\n}\nfunction risky() -> Int errors {\n  return 1\n}\nfunction kinds() -> Nothing {\n  let label: Label = { text: `a` }\n  let plain: Plain = { size: 1 }\n  let holder: Holder = { inner: { size: 2 } }\n  let words: Fixed<String> = [`a`, `b`]\n  let result = risky()\n  if (result.failed()) {\n    print(`bad`)\n  }\n  print(plain.size.toString())\n  print(label.text)\n  print(holder.inner.size.toString())\n  print(words.count().toString())\n  print(result.toString())\n}\n",
     );
     let list = body_end(&output, "kinds");
     assert_eq!(fate_of(&list, "label"), Fate::Release(ReleaseKind::Shape));
@@ -504,7 +504,7 @@ fn shapes_are_classified_by_their_fields() {
 #[test]
 fn only_a_kind_with_frame_backing_feeds_the_crossing_set() {
     let output = clean(
-        "shape Label {\n  text: string\n}\nfunction sleeper() -> nothing {\n  let words: fixed<string> = [`a`, `b`]\n  let label: Label = { text: `a` }\n  let rows = [1, 2]\n  wait sleep(1)\n}\n",
+        "shape Label {\n  text: String\n}\nfunction sleeper() -> Nothing {\n  let words: Fixed<String> = [`a`, `b`]\n  let label: Label = { text: `a` }\n  let rows = [1, 2]\n  wait sleep(1)\n}\n",
     );
     assert_eq!(
         crossing_names(&output, "sleeper", Names::User),
@@ -544,7 +544,7 @@ fn crossing_names(output: &CheckOutput, function: &str, names: Names) -> Vec<Str
 #[test]
 fn an_owner_declared_before_a_wait_crosses_it() {
     let output =
-        clean("function sleeper() -> nothing {\n  let rows = [1, 2, 3]\n  wait sleep(1)\n}\n");
+        clean("function sleeper() -> Nothing {\n  let rows = [1, 2, 3]\n  wait sleep(1)\n}\n");
     assert_eq!(
         crossing_names(&output, "sleeper", Names::User),
         vec!["rows".to_string()]
@@ -556,7 +556,7 @@ fn an_owner_declared_before_a_wait_crosses_it() {
 #[test]
 fn an_owner_declared_after_the_last_wait_does_not_cross() {
     let output = clean(
-        "function late() -> nothing {\n  wait sleep(1)\n  let rows = [1, 2, 3]\n  print(`${rows.count()}`)\n}\n",
+        "function late() -> Nothing {\n  wait sleep(1)\n  let rows = [1, 2, 3]\n  print(`${rows.count()}`)\n}\n",
     );
     assert_eq!(
         crossing_names(&output, "late", Names::User),
@@ -795,7 +795,7 @@ fn a_statement_holding_a_move_site_names_its_founder_as_written() {
 #[test]
 fn an_auto_propagation_omits_the_propagated_binding_as_returned() {
     let output = clean(
-        "function risky() -> int errors {\n  return 1\n}\nfunction chained() -> int errors {\n  let rows = [1, 2]\n  let value = risky()\n  return value\n}\n",
+        "function risky() -> Int errors {\n  return 1\n}\nfunction chained() -> Int errors {\n  let rows = [1, 2]\n  let value = risky()\n  return value\n}\n",
     );
     let function = function_of(&output, "chained");
     let Stmt::Return {
@@ -835,7 +835,7 @@ fn an_auto_propagation_omits_the_propagated_binding_as_returned() {
 #[test]
 fn a_binding_shadowed_in_its_own_block_is_still_released() {
     let output = clean(
-        "function twice() -> nothing {\n  let rows = [1]\n  let rows = [2]\n  print(`${rows.count()}`)\n}\n",
+        "function twice() -> Nothing {\n  let rows = [1]\n  let rows = [2]\n  print(`${rows.count()}`)\n}\n",
     );
     let list = body_end(&output, "twice");
     assert_eq!(
@@ -856,7 +856,7 @@ fn a_binding_shadowed_in_its_own_block_is_still_released() {
 #[test]
 fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
     let output = clean(
-        "function pass<T>(share rows: T) -> T {\n  return rows\n}\nfunction shadowed() -> array<int> {\n  let rows = [1]\n  let passed = pass(rows)\n  let rows = [9]\n  return passed\n}\n",
+        "function pass<T>(share rows: T) -> T {\n  return rows\n}\nfunction shadowed() -> Array<Int> {\n  let rows = [1]\n  let passed = pass(rows)\n  let rows = [9]\n  return passed\n}\n",
     );
     let returns = return_edges(&output, "shadowed");
     let list = &returns[0];
@@ -887,7 +887,7 @@ fn a_shadowed_owner_follows_its_class_when_a_class_mate_is_returned() {
 #[test]
 fn a_spawn_that_gives_two_bindings_moves_both_founders() {
     let output = clean(
-        "function work(first: array<int>, second: array<int>) -> nothing {\n  print(`${first.count()}`)\n}\nfunction spawns(flag: boolean) -> nothing {\n  let first: array<int> = [1]\n  let second: array<int> = [2]\n  if (flag) {\n    background work(first, second)\n  }\n}\n",
+        "function work(first: Array<Int>, second: Array<Int>) -> Nothing {\n  print(`${first.count()}`)\n}\nfunction spawns(flag: Boolean) -> Nothing {\n  let first: Array<Int> = [1]\n  let second: Array<Int> = [2]\n  if (flag) {\n    background work(first, second)\n  }\n}\n",
     );
     let list = body_end(&output, "spawns");
     assert_eq!(fate_of(&list, "first"), Fate::ReleaseIfLive(ARRAY));
@@ -948,7 +948,7 @@ fn a_join_is_moved_only_when_every_path_that_reaches_it_gave() {
 #[test]
 fn a_string_is_released_if_live_only_at_edges_a_listed_read_can_precede() {
     let output = clean(
-        "function late(flag: boolean) -> nothing {\n  let label = `n=${3}`\n  if (flag) {\n    return\n  }\n  print(label)\n}\n",
+        "function late(flag: Boolean) -> Nothing {\n  let label = `n=${3}`\n  if (flag) {\n    return\n  }\n  print(label)\n}\n",
     );
     assert_eq!(
         fate_of(&return_edges(&output, "late")[0], "label"),
@@ -964,7 +964,7 @@ fn a_string_is_released_if_live_only_at_edges_a_listed_read_can_precede() {
 /// Bug: a string parameter is released by the callee (the caller still owns it: a double free).
 #[test]
 fn a_string_parameter_is_not_released_by_the_callee() {
-    let output = clean("function show(text: string) -> nothing {\n  print(text)\n}\n");
+    let output = clean("function show(text: String) -> Nothing {\n  print(text)\n}\n");
     assert_eq!(
         fate_of(&body_end(&output, "show"), "text"),
         Fate::Omitted(OmitReason::NotOwner)
@@ -980,7 +980,7 @@ fn a_string_parameter_is_not_released_by_the_callee() {
 #[test]
 fn a_give_string_parameter_is_released_by_the_callee_and_omitted_by_the_caller() {
     let output = clean(
-        "function consume(give text: string) -> nothing {\n  print(text)\n}\nfunction borrow(share text: string) -> nothing {\n  print(text)\n}\nfunction caller() -> nothing {\n  let given = `n=${3}`\n  let lent = `m=${4}`\n  consume(given)\n  borrow(lent)\n}\n",
+        "function consume(give text: String) -> Nothing {\n  print(text)\n}\nfunction borrow(share text: String) -> Nothing {\n  print(text)\n}\nfunction caller() -> Nothing {\n  let given = `n=${3}`\n  let lent = `m=${4}`\n  consume(given)\n  borrow(lent)\n}\n",
     );
     assert_eq!(
         fate_of(&body_end(&output, "consume"), "text"),
@@ -1012,7 +1012,7 @@ fn a_give_string_parameter_is_released_by_the_callee_and_omitted_by_the_caller()
 #[test]
 fn a_generic_call_result_is_an_owner_of_its_own_value() {
     let output = clean(
-        "function pass<T>(share rows: T) -> T {\n  return rows\n}\nfunction mate() -> nothing {\n  let first = [1]\n  let second = pass(first)\n  print(`${second.count()}`)\n}\n",
+        "function pass<T>(share rows: T) -> T {\n  return rows\n}\nfunction mate() -> Nothing {\n  let first = [1]\n  let second = pass(first)\n  print(`${second.count()}`)\n}\n",
     );
     let list = body_end(&output, "mate");
     assert_eq!(fate_of(&list, "first"), Fate::Release(ARRAY));
@@ -1028,7 +1028,7 @@ fn a_generic_call_result_is_an_owner_of_its_own_value() {
 #[test]
 fn a_read_that_outlives_its_root_is_a_copy_released_at_both_scope_ends() {
     let output = clean(
-        "shape Bucket {\n  rows: array<int>\n}\nfunction make() -> Bucket {\n  let bucket: Bucket = { rows: [9] }\n  return bucket\n}\nfunction under(condition: boolean) -> int {\n  let cell: array<int> = make().rows\n  if (condition) {\n    let owner: Bucket = make()\n    cell = owner.rows\n  }\n  return cell.count()\n}\n",
+        "shape Bucket {\n  rows: Array<Int>\n}\nfunction make() -> Bucket {\n  let bucket: Bucket = { rows: [9] }\n  return bucket\n}\nfunction under(condition: Boolean) -> Int {\n  let cell: Array<Int> = make().rows\n  if (condition) {\n    let owner: Bucket = make()\n    cell = owner.rows\n  }\n  return cell.count()\n}\n",
     );
     let function = function_of(&output, "under");
     let Stmt::If { body, .. } = &function.body.stmts[1] else {
@@ -1051,7 +1051,7 @@ fn a_read_that_outlives_its_root_is_a_copy_released_at_both_scope_ends() {
 #[test]
 fn a_return_lists_the_innermost_frame_first_and_the_last_declared_first() {
     let output = clean(
-        "function ordered(flag: boolean) -> nothing {\n  let outer_first = [1]\n  let outer_second = [2]\n  if (flag) {\n    let inner_first = [3]\n    let inner_second = [4]\n    return\n  }\n  print(`${outer_first.count()}`)\n  print(`${outer_second.count()}`)\n}\n",
+        "function ordered(flag: Boolean) -> Nothing {\n  let outer_first = [1]\n  let outer_second = [2]\n  if (flag) {\n    let inner_first = [3]\n    let inner_second = [4]\n    return\n  }\n  print(`${outer_first.count()}`)\n  print(`${outer_second.count()}`)\n}\n",
     );
     let names: Vec<String> = return_edges(&output, "ordered")[0]
         .iter()
@@ -1158,7 +1158,7 @@ fn heap_class_of_the_remaining_kinds() {
 #[test]
 fn generic_and_recursive_shapes_are_classified_by_what_they_hold() {
     let output = clean(
-        "shape Pair<A, B> {\n  first: A\n  second: B\n}\nshape Node {\n  label: string\n  next: maybe<Node>\n}\nfunction pairs(give numbers: Pair<int, int>, give named: Pair<string, int>, give chain: Node) -> nothing {\n  print(numbers.first.toString())\n  print(named.first)\n  print(chain.label)\n}\n",
+        "shape Pair<A, B> {\n  first: A\n  second: B\n}\nshape Node {\n  label: String\n  next: Maybe<Node>\n}\nfunction pairs(give numbers: Pair<Int, Int>, give named: Pair<String, Int>, give chain: Node) -> Nothing {\n  print(numbers.first.toString())\n  print(named.first)\n  print(chain.label)\n}\n",
     );
     let list = body_end(&output, "pairs");
     assert!(
@@ -1197,7 +1197,7 @@ fn only_the_owners_that_release_cross_a_wait() {
         "released if live after the wait"
     );
     let borrowed =
-        clean("function borrowed(share rows: array<int>) -> nothing {\n  wait sleep(1)\n}\n");
+        clean("function borrowed(share rows: Array<Int>) -> Nothing {\n  wait sleep(1)\n}\n");
     assert_eq!(
         crossing_names(&borrowed, "borrowed", Names::User),
         Vec::<String>::new(),
@@ -1250,7 +1250,7 @@ fn with_reads_adds_one_read_per_owner_at_each_edge_it_belongs_to() {
         "the `return` edge lists the inner and outer owner; the arm's own end lists the inner"
     );
     // A function with no release reads is returned unchanged.
-    let quiet = clean("function quiet() -> nothing {\n  print(`x`)\n}\n");
+    let quiet = clean("function quiet() -> Nothing {\n  print(`x`)\n}\n");
     let plain = function_of(&quiet, "quiet");
     assert_eq!(
         quiet
@@ -1271,7 +1271,7 @@ fn with_reads_adds_one_read_per_owner_at_each_edge_it_belongs_to() {
 fn with_reads_puts_a_propagation_read_after_its_statement_in_its_own_block() {
     use ynz_ast::nodes::Expr;
     let output = clean(
-        "function risky() -> int errors {\n  return 1\n}\nfunction chained(flag: boolean) -> int errors {\n  let rows = [1, 2]\n  if (flag) {\n    let inner = [3]\n    let value = risky()\n    print(value.toString())\n  }\n  return 0\n}\n",
+        "function risky() -> Int errors {\n  return 1\n}\nfunction chained(flag: Boolean) -> Int errors {\n  let rows = [1, 2]\n  if (flag) {\n    let inner = [3]\n    let value = risky()\n    print(value.toString())\n  }\n  return 0\n}\n",
     );
     let function = function_of(&output, "chained");
     let rewritten = output
@@ -1480,7 +1480,7 @@ fn c1f_agreement(output: &CheckOutput) -> Vec<String> {
 #[test]
 fn a_view_is_not_an_owner_and_its_root_stays_the_owner() {
     let output = clean(
-        "shape Inner {\n  label: string\n}\nshape Outer {\n  inner: Inner\n  tag: int\n}\nfunction peek() -> nothing {\n  let first: Inner = { label: `a` }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  print(inner.label)\n}\n",
+        "shape Inner {\n  label: String\n}\nshape Outer {\n  inner: Inner\n  tag: Int\n}\nfunction peek() -> Nothing {\n  let first: Inner = { label: `a` }\n  let outer: Outer = { inner: first, tag: 2 }\n  let inner = outer.inner\n  print(inner.label)\n}\n",
     );
     assert!(
         output.typed_module.non_owned_reads.view_count() > 0,
@@ -1497,7 +1497,7 @@ fn a_view_is_not_an_owner_and_its_root_stays_the_owner() {
 #[test]
 fn a_binding_moved_by_a_store_is_omitted_and_the_new_owner_releases() {
     let output = clean(
-        "shape Bucket {\n  rows: array<int>\n}\nfunction move() -> nothing {\n  let holder: Bucket = { rows: [1, 2] }\n  let moved = holder\n  let total = moved.rows.count()\n  print(`${total}`)\n}\n",
+        "shape Bucket {\n  rows: Array<Int>\n}\nfunction move() -> Nothing {\n  let holder: Bucket = { rows: [1, 2] }\n  let moved = holder\n  let total = moved.rows.count()\n  print(`${total}`)\n}\n",
     );
     assert!(
         !output.typed_module.heap_moves.is_empty(),
@@ -1519,7 +1519,7 @@ fn a_binding_moved_by_a_store_is_omitted_and_the_new_owner_releases() {
 #[test]
 fn a_name_declared_twice_in_a_function_feeds_no_release_read_to_the_guards() {
     let output = clean(
-        "function twice(flag: boolean) -> nothing {\n  let numbers = [1]\n  if (flag) {\n    let reading: maybe<int> = numbers.get(0)\n    print(`${reading.or(0)}`)\n  }\n  if (flag) {\n    let reading = [1, 2]\n    wait sleep(1)\n  }\n}\n",
+        "function twice(flag: Boolean) -> Nothing {\n  let numbers = [1]\n  if (flag) {\n    let reading: Maybe<Int> = numbers.get(0)\n    print(`${reading.or(0)}`)\n  }\n  if (flag) {\n    let reading = [1, 2]\n    wait sleep(1)\n  }\n}\n",
     );
     assert_eq!(
         crossing_names(&output, "twice", Names::User),
@@ -1646,7 +1646,7 @@ fn view_names(output: &CheckOutput) -> Vec<String> {
 /// program holds, and the roots that must stay the owners.
 #[test]
 fn a_view_through_a_chain_an_element_or_a_lookup_is_not_an_owner() {
-    let shapes = "shape Leaf {\n  label: string\n}\nshape Mid {\n  leaf: Leaf\n  tag: int\n}\nshape Top {\n  mid: Mid\n  count: int\n}\n";
+    let shapes = "shape Leaf {\n  label: String\n}\nshape Mid {\n  leaf: Leaf\n  tag: Int\n}\nshape Top {\n  mid: Mid\n  count: Int\n}\n";
     // (case, body of `probe`, views, roots)
     let cases: [(&str, &str, &[&str], &[&str]); 4] = [
         (
@@ -1712,7 +1712,7 @@ fn a_view_through_a_chain_an_element_or_a_lookup_is_not_an_owner() {
 /// its own scope.
 #[test]
 fn a_string_joined_to_a_given_class_is_released_but_a_given_string_is_omitted() {
-    let prelude = "shape Bucket {\n  text: string\n  rows: array<int>\n}\nfunction consume(give bucket: Bucket) -> nothing {\n  print(bucket.text)\n}\nfunction takes(give text: string) -> nothing {\n  print(text)\n}\n";
+    let prelude = "shape Bucket {\n  text: String\n  rows: Array<Int>\n}\nfunction consume(give bucket: Bucket) -> Nothing {\n  print(bucket.text)\n}\nfunction takes(give text: String) -> Nothing {\n  print(text)\n}\n";
     // (case, body of `probe`, edge, string binding, expected fate)
     let cases: [(&str, &str, At, &str, Fate); 4] = [
         (

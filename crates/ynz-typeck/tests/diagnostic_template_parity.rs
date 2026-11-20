@@ -289,9 +289,9 @@ fn assert_template_rendered(
 fn consumed_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::Consumed,
-        "function eat(give rows: array<int>) -> nothing { print(rows.count()) }\n\
-         function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1, 2, 3]\n\
+        "function eat(give rows: Array<Int>) -> Nothing { print(rows.count()) }\n\
+         function entrypoint() -> Nothing {\n\
+           let rows: Array<Int> = [1, 2, 3]\n\
            eat(rows)\n\
            print(rows.count())\n\
          }",
@@ -305,11 +305,11 @@ fn consumed_through_an_alias_class_names_what_was_given_in_the_via_slot() {
         DiagnosticKind::Consumed,
         // A class-mate is a piece view of the given value (a whole-value alias cannot exist any
         // more: `let other = rows` hands `rows` over, `ConsumedByStore`).
-        "shape Bag { items: array<int> }\n\
-         function eatBag(give bag: Bag) -> nothing { print(bag.items.count()) }\n\
-         function entrypoint() -> nothing {\n\
+        "shape Bag { items: Array<Int> }\n\
+         function eatBag(give bag: Bag) -> Nothing { print(bag.items.count()) }\n\
+         function entrypoint() -> Nothing {\n\
            let bag: Bag = { items: [1, 2, 3] }\n\
-           let view: array<int> = bag.items\n\
+           let view: Array<Int> = bag.items\n\
            eatBag(bag)\n\
            print(view.count())\n\
          }",
@@ -332,11 +332,11 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     // it the consume happened inside this call. RED before the fix: zero diagnostics.
     assert_rendered(
         DiagnosticKind::Consumed,
-        "shape Bag { items: array<int> }\n\
-         function eat2(give bag: Bag, give extra: array<int>) -> nothing { print(bag.items.count()) }\n\
-         function entrypoint() -> nothing {\n\
+        "shape Bag { items: Array<Int> }\n\
+         function eat2(give bag: Bag, give extra: Array<Int>) -> Nothing { print(bag.items.count()) }\n\
+         function entrypoint() -> Nothing {\n\
            let bag: Bag = { items: [1, 2, 3] }\n\
-           let view: array<int> = bag.items\n\
+           let view: Array<Int> = bag.items\n\
            eat2(bag, view)\n\
          }",
         &[
@@ -352,11 +352,11 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     // consumed is the same read after free.
     assert_rendered(
         DiagnosticKind::Consumed,
-        "shape Bag { items: array<int> }\n\
-         function mix(give bag: Bag, share extra: array<int>) -> nothing { print(bag.items.count()) }\n\
-         function entrypoint() -> nothing {\n\
+        "shape Bag { items: Array<Int> }\n\
+         function mix(give bag: Bag, share extra: Array<Int>) -> Nothing { print(bag.items.count()) }\n\
+         function entrypoint() -> Nothing {\n\
            let bag: Bag = { items: [1, 2, 3] }\n\
-           let view: array<int> = bag.items\n\
+           let view: Array<Int> = bag.items\n\
            mix(bag, view)\n\
          }",
         &[
@@ -371,9 +371,9 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     // The same name twice: `{via}` is empty — it IS the name that was given.
     assert_rendered(
         DiagnosticKind::Consumed,
-        "function eat2(give a: array<int>, give b: array<int>) -> nothing { print(a.count()) }\n\
-         function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1, 2, 3]\n\
+        "function eat2(give a: Array<Int>, give b: Array<Int>) -> Nothing { print(a.count()) }\n\
+         function entrypoint() -> Nothing {\n\
+           let rows: Array<Int> = [1, 2, 3]\n\
            eat2(rows, rows)\n\
          }",
         &[("name", "rows"), ("given", "rows"), ("via", "")],
@@ -384,9 +384,9 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
 fn a_class_consumed_before_the_call_is_not_reported_twice() {
     // `resolve_ident` reports the read at inference; the transfer decision must stay quiet.
     let errors = errors_for(
-        "function eat(give rows: array<int>) -> nothing { print(rows.count()) }\n\
-         function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1, 2, 3]\n\
+        "function eat(give rows: Array<Int>) -> Nothing { print(rows.count()) }\n\
+         function entrypoint() -> Nothing {\n\
+           let rows: Array<Int> = [1, 2, 3]\n\
            eat(rows)\n\
            eat(rows)\n\
          }",
@@ -408,9 +408,9 @@ fn consumed_by_send_is_rendered_from_the_registry_with_the_via_slot() {
     assert_rendered(
         DiagnosticKind::ConsumedBySend,
         // The class-mate is a piece view of the sent value (`first` reaches `rows`).
-        "function entrypoint() -> nothing {\n\
-           let wire: channel<array<array<int>>> = channel<array<array<int>>>(2)\n\
-           let rows: array<array<int>> = [[1, 2, 3]]\n\
+        "function entrypoint() -> Nothing {\n\
+           let wire: Channel<Array<Array<Int>>> = Channel<Array<Array<Int>>>(2)\n\
+           let rows: Array<Array<Int>> = [[1, 2, 3]]\n\
            let first = rows.first()\n\
            wire.send(rows)\n\
            print(first.exists().toString())\n\
@@ -431,9 +431,9 @@ fn consumed_by_send_is_rendered_from_the_registry_with_the_via_slot() {
 fn consumed_by_store_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::ConsumedByStore,
-        "function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1, 2, 3]\n\
-           let table: array<array<int>> = []\n\
+        "function entrypoint() -> Nothing {\n\
+           let rows: Array<Int> = [1, 2, 3]\n\
+           let table: Array<Array<Int>> = []\n\
            table.add(rows)\n\
            print(rows.count())\n\
          }",
@@ -451,10 +451,10 @@ fn consumed_by_store_is_rendered_from_the_registry() {
 fn consumed_by_store_through_a_class_mate_names_what_was_stored_in_the_via_slot() {
     assert_rendered(
         DiagnosticKind::ConsumedByStore,
-        "shape Bag { items: array<int> }\n\
-         function entrypoint() -> nothing {\n\
+        "shape Bag { items: Array<Int> }\n\
+         function entrypoint() -> Nothing {\n\
            let bag: Bag = { items: [1, 2, 3] }\n\
-           let view: array<int> = bag.items\n\
+           let view: Array<Int> = bag.items\n\
            let kept: Bag = bag\n\
            print(view.count())\n\
            print(kept.items.count())\n\
@@ -476,10 +476,10 @@ fn consumed_by_store_through_a_class_mate_names_what_was_stored_in_the_via_slot(
 fn param_needs_give_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::ParamNeedsGive,
-        "function producer(lend wire: channel<array<int>>, rows: array<int>) -> nothing {\n\
+        "function producer(lend wire: Channel<Array<Int>>, rows: Array<Int>) -> Nothing {\n\
            wire.send(rows)\n\
          }\n\
-         function entrypoint() -> nothing { }",
+         function entrypoint() -> Nothing { }",
         &[
             ("name", "rows"),
             ("fn", "producer"),
@@ -495,9 +495,9 @@ fn param_needs_give_is_rendered_from_the_registry() {
 fn transfer_needs_copy_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::TransferNeedsCopy,
-        "shape Bucket { rows: array<int> }\n\
-         function eat(give rows: array<int>) -> nothing { print(rows.count()) }\n\
-         function entrypoint() -> nothing {\n\
+        "shape Bucket { rows: Array<Int> }\n\
+         function eat(give rows: Array<Int>) -> Nothing { print(rows.count()) }\n\
+         function entrypoint() -> Nothing {\n\
            let bucket: Bucket = { rows: [1, 2, 3] }\n\
            eat(bucket.rows)\n\
          }",
@@ -515,16 +515,16 @@ fn transfer_needs_copy_is_rendered_from_the_registry() {
 fn handle_channel_arg_needs_binding_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::HandleChannelArgNeedsBinding,
-        "function makeWire() -> channel<int> {\n\
-           let w: channel<int> = channel<int>(4)\n\
+        "function makeWire() -> Channel<Int> {\n\
+           let w: Channel<Int> = Channel<Int>(4)\n\
            return w\n\
          }\n\
-         function doubler(lend commands: channel<int>) -> int errors {\n\
+         function doubler(lend commands: Channel<Int>) -> Int errors {\n\
            let c = commands.receive()\n\
            let v = c.or(0)\n\
            return v + v\n\
          }\n\
-         function entrypoint() -> nothing {\n\
+         function entrypoint() -> Nothing {\n\
            let h = background doubler(makeWire())\n\
            h.send(21)\n\
          }",
@@ -541,8 +541,8 @@ fn message_before_failed_check_is_rendered_from_the_registry() {
     // not-yet-failed value.
     assert_rendered(
         DiagnosticKind::MessageBeforeFailedCheck,
-        "function entrypoint() -> nothing {\n\
-           let wire: channel<int> = channel<int>(2)\n\
+        "function entrypoint() -> Nothing {\n\
+           let wire: Channel<Int> = Channel<Int>(2)\n\
            let ok = wire.send(9)\n\
            print(ok.message)\n\
          }",
@@ -555,8 +555,8 @@ fn message_is_admitted_inside_its_own_failed_check() {
     // The one shape REF-errors.md documents as legal: `.message` read INSIDE the true
     // branch of `if (name.failed())`. Must compile with NO MessageBeforeFailedCheck.
     let errors = errors_for(
-        "function entrypoint() -> nothing {\n\
-           let wire: channel<int> = channel<int>(2)\n\
+        "function entrypoint() -> Nothing {\n\
+           let wire: Channel<Int> = Channel<Int>(2)\n\
            wire.close()\n\
            let late = wire.send(9)\n\
            if (late.failed()) {\n\
@@ -584,8 +584,8 @@ fn message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard() 
     // is never a member and is correctly refused.
     assert_rendered(
         DiagnosticKind::MessageBeforeFailedCheck,
-        "function mayFail(n: int) -> string errors { return `v${n}` }\n\
-         function entrypoint() -> nothing {\n\
+        "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
+         function entrypoint() -> Nothing {\n\
            let x = mayFail(1)\n\
            if (x.failed()) {\n\
              let x = mayFail(3)\n\
@@ -610,10 +610,10 @@ fn a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch() {
     // `.message` would have been evaluated as an EC field access at all, not stopped one step
     // earlier by ordinary field-lookup on `int`).
     let errors = errors_for(
-        "function mayFail(n: int) -> string errors { return `v${n}` }\n\
-         function entrypoint() -> nothing {\n\
+        "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
+         function entrypoint() -> Nothing {\n\
            let v = mayFail(1)\n\
-           let m: map<string, int> = { a: 1 }\n\
+           let m: Map<String, Int> = { a: 1 }\n\
            if (v.failed()) {\n\
              for ((k, v) in m) {\n\
                print(v.toString())\n\
@@ -670,8 +670,8 @@ fn ec_field_not_yet_available_is_rendered_from_the_registry() {
     // fix: refused at compile time, with real teaching text, before codegen ever sees it.
     assert_rendered(
         DiagnosticKind::EcFieldNotYetAvailable,
-        "function loadConfig() -> string errors { return `hello` }\n\
-         function entrypoint() -> nothing {\n\
+        "function loadConfig() -> String errors { return `hello` }\n\
+         function entrypoint() -> Nothing {\n\
            let late = loadConfig()\n\
            if (late.failed()) {\n\
              print(late.trace.count().toString())\n\
@@ -688,8 +688,8 @@ fn ec_field_not_yet_available_fires_for_suggestions_and_source_too() {
     // rather than leaving `.suggestions`/`.source` unverified.
     assert_rendered(
         DiagnosticKind::EcFieldNotYetAvailable,
-        "function loadConfig() -> string errors { return `hello` }\n\
-         function entrypoint() -> nothing {\n\
+        "function loadConfig() -> String errors { return `hello` }\n\
+         function entrypoint() -> Nothing {\n\
            let late = loadConfig()\n\
            if (late.failed()) {\n\
              print(late.suggestions.count().toString())\n\
@@ -699,8 +699,8 @@ fn ec_field_not_yet_available_fires_for_suggestions_and_source_too() {
     );
     assert_rendered(
         DiagnosticKind::EcFieldNotYetAvailable,
-        "function loadConfig() -> string errors { return `hello` }\n\
-         function entrypoint() -> nothing {\n\
+        "function loadConfig() -> String errors { return `hello` }\n\
+         function entrypoint() -> Nothing {\n\
            let late = loadConfig()\n\
            if (late.failed()) {\n\
              print(late.source.file)\n\
@@ -718,8 +718,8 @@ fn ec_field_not_yet_available_does_not_shadow_the_failed_check_gate() {
     // `check_errors_field_needs_failed_check` admits the read.
     assert_rendered(
         DiagnosticKind::MessageBeforeFailedCheck,
-        "function loadConfig() -> string errors { return `hello` }\n\
-         function entrypoint() -> nothing {\n\
+        "function loadConfig() -> String errors { return `hello` }\n\
+         function entrypoint() -> Nothing {\n\
            let late = loadConfig()\n\
            print(late.trace.count().toString())\n\
          }",
@@ -734,8 +734,8 @@ fn message_before_failed_check_refuses_a_non_ident_receiver() {
     // always refused, with a source-shaped `{name}` rendered from the expression itself.
     assert_rendered(
         DiagnosticKind::MessageBeforeFailedCheck,
-        "function freshResult() -> string errors { return `hello` }\n\
-         function entrypoint() -> nothing {\n\
+        "function freshResult() -> String errors { return `hello` }\n\
+         function entrypoint() -> Nothing {\n\
            print(freshResult().message)\n\
          }",
         &[("name", "freshResult()"), ("field", "message")],
@@ -748,11 +748,11 @@ fn union_where_variant_expected_is_rendered_from_the_registry() {
     // text must come from the registry template, not a hand-written twin.
     assert_rendered(
         DiagnosticKind::UnionWhereVariantExpected,
-        "shape Tiny { flag: boolean }\n\
-         shape Big { label: string }\n\
+        "shape Tiny { flag: Boolean }\n\
+         shape Big { label: String }\n\
          shape Thing = Tiny | Big\n\
-         function showBig(share b: Big) -> string { return b.label }\n\
-         function entrypoint() -> nothing {\n\
+         function showBig(share b: Big) -> String { return b.label }\n\
+         function entrypoint() -> Nothing {\n\
            let big: Big = { label: `hello` }\n\
            let thing: Thing = big\n\
            print(showBig(thing))\n\
@@ -820,11 +820,11 @@ fn assert_recovery_rendered(template_name: &str, source: &str, slots: &[(&str, &
 fn union_where_variant_expected_base_suggestion_compiles() {
     // The `is` arm on the name, with the other variant handled, is what the base text suggests.
     assert_compiles(
-        "shape Tiny { flag: boolean }\n\
-         shape Big { label: string }\n\
+        "shape Tiny { flag: Boolean }\n\
+         shape Big { label: String }\n\
          shape Thing = Tiny | Big\n\
-         function showBig(share b: Big) -> string { return b.label }\n\
-         function entrypoint() -> nothing {\n\
+         function showBig(share b: Big) -> String { return b.label }\n\
+         function entrypoint() -> Nothing {\n\
            let big: Big = { label: `hello` }\n\
            let thing: Thing = big\n\
            if (thing) {\n\
@@ -840,12 +840,12 @@ fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
     // `holder.inner` is an expression: an `is` arm checks a named binding only.
     assert_recovery_rendered(
         "UnionWhereVariantExpectedNameIt",
-        "shape Tiny { flag: boolean }\n\
-         shape Big { label: string }\n\
+        "shape Tiny { flag: Boolean }\n\
+         shape Big { label: String }\n\
          shape Thing = Tiny | Big\n\
          shape Holder { inner: Tiny | Big }\n\
-         function showBig(share b: Big) -> string { return b.label }\n\
-         function entrypoint() -> nothing {\n\
+         function showBig(share b: Big) -> String { return b.label }\n\
+         function entrypoint() -> Nothing {\n\
            let big: Big = { label: `hello` }\n\
            let thing: Thing = big\n\
            let holder: Holder = { inner: thing }\n\
@@ -860,12 +860,12 @@ fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
     );
     // The suggested code: name it, check the name, use it in the arm.
     assert_compiles(
-        "shape Tiny { flag: boolean }\n\
-         shape Big { label: string }\n\
+        "shape Tiny { flag: Boolean }\n\
+         shape Big { label: String }\n\
          shape Thing = Tiny | Big\n\
          shape Holder { inner: Tiny | Big }\n\
-         function showBig(share b: Big) -> string { return b.label }\n\
-         function entrypoint() -> nothing {\n\
+         function showBig(share b: Big) -> String { return b.label }\n\
+         function entrypoint() -> Nothing {\n\
            let big: Big = { label: `hello` }\n\
            let thing: Thing = big\n\
            let holder: Holder = { inner: thing }\n\
@@ -883,10 +883,10 @@ fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is
     // `map<string, string> | nothing` is the map's own pointer: no `is` arm can name `map<..>`
     // (it does not even parse), and there is no tag box for the WHY to describe.
     let source =
-        "function takesTable(share table: map<string, string>) -> string { return `ok` }\n\
-         function entrypoint() -> nothing {\n\
-           let table: map<string, string> = { `a`: `b` }\n\
-           let maybeTable: map<string, string> | nothing = table\n\
+        "function takesTable(share table: Map<String, String>) -> String { return `ok` }\n\
+         function entrypoint() -> Nothing {\n\
+           let table: Map<String, String> = { `a`: `b` }\n\
+           let maybeTable: Map<String, String> | Nothing = table\n\
            print(takesTable(maybeTable))\n\
          }";
     assert_recovery_rendered(
@@ -907,10 +907,10 @@ fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is
     );
     // The suggested code: let the receiving slot take the union.
     assert_compiles(
-        "function describeTable(share table: map<string, string> | nothing) -> string { return `ok` }\n\
-         function entrypoint() -> nothing {\n\
-           let table: map<string, string> = { `a`: `b` }\n\
-           let maybeTable: map<string, string> | nothing = table\n\
+        "function describeTable(share table: Map<String, String> | Nothing) -> String { return `ok` }\n\
+         function entrypoint() -> Nothing {\n\
+           let table: Map<String, String> = { `a`: `b` }\n\
+           let maybeTable: Map<String, String> | Nothing = table\n\
            print(describeTable(maybeTable))\n\
          }",
     );
@@ -919,9 +919,9 @@ fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is
 #[test]
 fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
     // `is int =>` does not lower (#418): the suggestion must not name it.
-    let source = "function takesInt(share number: int) -> int { return number }\n\
-         function entrypoint() -> nothing {\n\
-           let v: int | string = 5\n\
+    let source = "function takesInt(share number: Int) -> Int { return number }\n\
+         function entrypoint() -> Nothing {\n\
+           let v: Int | String = 5\n\
            print(takesInt(v).toString())\n\
          }";
     assert_recovery_rendered(
@@ -954,9 +954,9 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
         "the caret label names an `is` check no arm can offer here: {caret_label:?}"
     );
     assert_compiles(
-        "function takesEither(share either: int | string) -> string { return `ok` }\n\
-         function entrypoint() -> nothing {\n\
-           let v: int | string = 5\n\
+        "function takesEither(share either: Int | String) -> String { return `ok` }\n\
+         function entrypoint() -> Nothing {\n\
+           let v: Int | String = 5\n\
            print(takesEither(v))\n\
          }",
     );
@@ -970,8 +970,8 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
 #[test]
 fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
     // WHY: `Circle | number` passed typeck and died in codegen as "a compiler bug".
-    let preamble = "shape Circle { radius: int }\n\
-                    function describe(share value: Circle | number) -> string { return `ok` }\n";
+    let preamble = "shape Circle { radius: Int }\n\
+                    function describe(share value: Circle | Number) -> String { return `ok` }\n";
     assert_rendered(
         DiagnosticKind::UnionVariantNotStorable,
         &format!(
@@ -988,11 +988,11 @@ fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
     );
     // The suggested code: the number in a shape, the shape as the variant.
     assert_compiles(
-        "shape Circle { radius: int }\n\
-         shape Boxed { value: number }\n\
-         function describe(share value: Circle | Boxed) -> string { return `ok` }\n\
-         function entrypoint() -> nothing {\n\
-           let small: number = 5.0\n\
+        "shape Circle { radius: Int }\n\
+         shape Boxed { value: Number }\n\
+         function describe(share value: Circle | Boxed) -> String { return `ok` }\n\
+         function entrypoint() -> Nothing {\n\
+           let small: Number = 5.0\n\
            let boxed: Boxed = { value: small }\n\
            print(describe(boxed))\n\
          }",
@@ -1006,10 +1006,10 @@ fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text(
     assert_template_rendered(
         "UnionVariantNotStorableNumberPrecision",
         DiagnosticKind::UnionVariantNotStorable,
-        "shape Circle { radius: int }\n\
-         function describe(share value: Circle | number<40>) -> string { return `ok` }\n\
-         function entrypoint() -> nothing {\n\
-           let small: number<10> = 5.0\n\
+        "shape Circle { radius: Int }\n\
+         function describe(share value: Circle | Number<40>) -> String { return `ok` }\n\
+         function entrypoint() -> Nothing {\n\
+           let small: Number<10> = 5.0\n\
            print(describe(small))\n\
          }",
         &[
@@ -1020,10 +1020,10 @@ fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text(
         ],
     );
     assert_compiles(
-        "shape Circle { radius: int }\n\
-         function describe(share value: Circle | number<40>) -> string { return `ok` }\n\
-         function entrypoint() -> nothing {\n\
-           let amount: number<40> = 5.0\n\
+        "shape Circle { radius: Int }\n\
+         function describe(share value: Circle | Number<40>) -> String { return `ok` }\n\
+         function entrypoint() -> Nothing {\n\
+           let amount: Number<40> = 5.0\n\
            print(describe(amount))\n\
          }",
     );
@@ -1086,8 +1086,8 @@ fn a_suspending_result_returned_as_a_union_is_refused_with_its_registry_text() {
     assert_compiles(&program("let got = wait count()\n return got"));
 }
 
-const SAME_TWO_SHAPES: &str = "shape Tiny { flag: boolean }\n\
-     shape Big { label: string }\n\
+const SAME_TWO_SHAPES: &str = "shape Tiny { flag: Boolean }\n\
+     shape Big { label: String }\n\
      function same<T>(share first: T, share second: T) -> T { return second }\n";
 
 #[test]
@@ -1173,9 +1173,9 @@ fn consumed_by_store_into_a_struct_literal_names_a_literal_that_compiles() {
 fn consumed_by_store_into_a_map_literal_names_a_literal_that_compiles() {
     assert_rendered(
         DiagnosticKind::ConsumedByStore,
-        "function entrypoint() -> nothing {\n\
-           let rows: array<int> = [1]\n\
-           let table: map<string, array<int>> = { `first`: rows }\n\
+        "function entrypoint() -> Nothing {\n\
+           let rows: Array<Int> = [1]\n\
+           let table: Map<String, Array<Int>> = { `first`: rows }\n\
            print(rows.count())\n\
            print(table.count())\n\
          }",
@@ -1228,9 +1228,9 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
     // own reason (Product Manager ruling A, C7 review r1).
     assert_rendered(
         DiagnosticKind::MapKeyNotStorable,
-        "shape Point { x: int }\n\
-         function entrypoint() -> nothing {\n\
-           let spots: map<Point, int> = {}\n\
+        "shape Point { x: Int }\n\
+         function entrypoint() -> Nothing {\n\
+           let spots: Map<Point, Int> = {}\n\
            print(spots.count())\n\
          }",
         &[
@@ -1248,8 +1248,8 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
     );
     assert_rendered(
         DiagnosticKind::MapKeyNotStorable,
-        "function entrypoint() -> nothing {\n\
-           let rows: map<array<int>, int> = {}\n\
+        "function entrypoint() -> Nothing {\n\
+           let rows: Map<Array<Int>, Int> = {}\n\
            print(rows.count())\n\
          }",
         &[
@@ -1265,8 +1265,8 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
     assert_template_rendered(
         "MapKeyNotStorableWideNumber",
         DiagnosticKind::MapKeyNotStorable,
-        "function entrypoint() -> nothing {\n\
-           let prices: map<number<50>, int> = {}\n\
+        "function entrypoint() -> Nothing {\n\
+           let prices: Map<Number<50>, Int> = {}\n\
            print(prices.count())\n\
          }",
         &[("key", "number<50>"), ("digits", "50")],
@@ -1274,8 +1274,8 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
     assert_template_rendered(
         "MapKeyNotStorableSensitive",
         DiagnosticKind::MapKeyNotStorable,
-        "function entrypoint() -> nothing {\n\
-           let secrets: map<sensitive string, int> = {}\n\
+        "function entrypoint() -> Nothing {\n\
+           let secrets: Map<sensitive String, Int> = {}\n\
            print(secrets.count())\n\
          }",
         &[("key", "sensitive string")],
@@ -1315,7 +1315,7 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
              }}"
         )
     };
-    let generic = "function eat<T>(held: T) -> nothing { print(`ate`) }";
+    let generic = "function eat<T>(held: T) -> Nothing { print(`ate`) }";
     assert_rendered(
         DiagnosticKind::BackgroundUnionToGenericParameter,
         &program(generic, "choice"),
@@ -1326,7 +1326,7 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
         ],
     );
     assert_compiles(&program(
-        "function eat(held: Circle | Tag) -> nothing { print(`ate`) }",
+        "function eat(held: Circle | Tag) -> Nothing { print(`ate`) }",
         "choice",
     ));
     assert_compiles(&program(generic, "holder"));
@@ -1343,8 +1343,8 @@ fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_comp
     // from the registry, and both ways out (a whole number, no length) must compile.
     assert_rendered(
         DiagnosticKind::FixedLengthNotUsable,
-        "function total(share xs: fixed<int, N>) -> int { return 1 }\n\
-         function entrypoint() -> nothing { print(1) }",
+        "function total(share xs: Fixed<Int, N>) -> Int { return 1 }\n\
+         function entrypoint() -> Nothing { print(1) }",
         &[
             ("written", "fixed<int, N>"),
             ("problem", "`N` is not a whole number"),
@@ -1358,10 +1358,10 @@ fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_comp
         ],
     );
     assert_compiles(
-        "function total(share xs: fixed<int, 4>) -> int { return xs.count() }\n\
-         function again(share xs: fixed<int>) -> int { return xs.count() }\n\
-         function entrypoint() -> nothing {\n\
-           let xs: fixed<int> = [1, 2, 3, 4]\n\
+        "function total(share xs: Fixed<Int, 4>) -> Int { return xs.count() }\n\
+         function again(share xs: Fixed<Int>) -> Int { return xs.count() }\n\
+         function entrypoint() -> Nothing {\n\
+           let xs: Fixed<Int> = [1, 2, 3, 4]\n\
            print(total(xs))\n\
            print(again(xs))\n\
          }",
@@ -1372,8 +1372,8 @@ fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_comp
 fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestion_compiles() {
     assert_rendered(
         DiagnosticKind::FixedLengthNotAllowedHere,
-        "function entrypoint() -> nothing {\n\
-           let xs: fixed<int, 3> = [1, 2, 3]\n\
+        "function entrypoint() -> Nothing {\n\
+           let xs: Fixed<Int, 3> = [1, 2, 3]\n\
            print(xs.count())\n\
          }",
         &[
@@ -1386,8 +1386,8 @@ fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestio
         ],
     );
     assert_compiles(
-        "function entrypoint() -> nothing {\n\
-           let xs: fixed<int> = [1, 2, 3]\n\
+        "function entrypoint() -> Nothing {\n\
+           let xs: Fixed<Int> = [1, 2, 3]\n\
            print(xs.count())\n\
          }",
     );
@@ -1397,9 +1397,9 @@ fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestio
 fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compiles() {
     assert_rendered(
         DiagnosticKind::FixedLengthMismatch,
-        "function total(share xs: fixed<int, 4>) -> int { return xs.count() }\n\
-         function entrypoint() -> nothing {\n\
-           let xs: fixed<int> = [1, 2, 3]\n\
+        "function total(share xs: Fixed<Int, 4>) -> Int { return xs.count() }\n\
+         function entrypoint() -> Nothing {\n\
+           let xs: Fixed<Int> = [1, 2, 3]\n\
            print(total(xs))\n\
          }",
         &[
@@ -1417,9 +1417,9 @@ fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compil
         ],
     );
     assert_compiles(
-        "function total(share xs: fixed<int>) -> int { return xs.count() }\n\
-         function entrypoint() -> nothing {\n\
-           let xs: fixed<int> = [1, 2, 3]\n\
+        "function total(share xs: Fixed<Int>) -> Int { return xs.count() }\n\
+         function entrypoint() -> Nothing {\n\
+           let xs: Fixed<Int> = [1, 2, 3]\n\
            print(total(xs))\n\
          }",
     );
@@ -1429,11 +1429,11 @@ fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compil
 fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggestion_compiles() {
     assert_rendered(
         DiagnosticKind::FixedLengthMissingInExport,
-        "export function make() -> fixed<int> {\n\
-           let xs: fixed<int> = [1, 2, 3, 4]\n\
+        "export function make() -> Fixed<Int> {\n\
+           let xs: Fixed<Int> = [1, 2, 3, 4]\n\
            return xs\n\
          }\n\
-         function entrypoint() -> nothing { print(1) }",
+         function entrypoint() -> Nothing { print(1) }",
         &[
             ("function", "make"),
             ("part", "return type"),
@@ -1442,11 +1442,11 @@ fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggesti
         ],
     );
     assert_compiles(
-        "export function make() -> fixed<int, 4> {\n\
-           let xs: fixed<int> = [1, 2, 3, 4]\n\
+        "export function make() -> Fixed<Int, 4> {\n\
+           let xs: Fixed<Int> = [1, 2, 3, 4]\n\
            return xs\n\
          }\n\
-         function entrypoint() -> nothing { print(1) }",
+         function entrypoint() -> Nothing { print(1) }",
     );
 }
 
@@ -1454,15 +1454,15 @@ fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggesti
 fn fixed_return_lengths_differ_is_rendered_from_the_registry_and_its_suggestion_compiles() {
     assert_rendered(
         DiagnosticKind::FixedReturnLengthsDiffer,
-        "function pick(share flag: boolean) -> fixed<int> {\n\
-           let two: fixed<int> = [1, 2]\n\
-           let one: fixed<int> = [1]\n\
+        "function pick(share flag: Boolean) -> Fixed<Int> {\n\
+           let two: Fixed<Int> = [1, 2]\n\
+           let one: Fixed<Int> = [1]\n\
            if (flag) {\n\
              return two\n\
            }\n\
            return one\n\
          }\n\
-         function entrypoint() -> nothing { print(pick(true).count()) }",
+         function entrypoint() -> Nothing { print(pick(true).count()) }",
         &[
             ("function", "pick"),
             ("lengths", "2 items and 1 item"),
@@ -1470,15 +1470,15 @@ fn fixed_return_lengths_differ_is_rendered_from_the_registry_and_its_suggestion_
         ],
     );
     assert_compiles(
-        "function pick(share flag: boolean) -> fixed<int> {\n\
-           let two: fixed<int> = [1, 2]\n\
-           let other: fixed<int> = [3, 4]\n\
+        "function pick(share flag: Boolean) -> Fixed<Int> {\n\
+           let two: Fixed<Int> = [1, 2]\n\
+           let other: Fixed<Int> = [3, 4]\n\
            if (flag) {\n\
              return two\n\
            }\n\
            return other\n\
          }\n\
-         function entrypoint() -> nothing { print(pick(true).count()) }",
+         function entrypoint() -> Nothing { print(pick(true).count()) }",
     );
 }
 
@@ -1486,12 +1486,12 @@ fn fixed_return_lengths_differ_is_rendered_from_the_registry_and_its_suggestion_
 fn fixed_return_length_unknown_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::FixedReturnLengthUnknown,
-        "function frozen() -> fixed<int> {\n\
-           let items: fixed<int> = [1, 2]\n\
+        "function frozen() -> Fixed<Int> {\n\
+           let items: Fixed<Int> = [1, 2]\n\
            let longer = items.append(3)\n\
            return longer\n\
          }\n\
-         function entrypoint() -> nothing { print(1) }",
+         function entrypoint() -> Nothing { print(1) }",
         &[
             ("function", "frozen"),
             (
@@ -1513,9 +1513,9 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
     assert_rendered(
         DiagnosticKind::FixedFieldLengthMissing,
         "shape Bag {\n\
-           items: fixed<int>\n\
+           items: Fixed<Int>\n\
          }\n\
-         function entrypoint() -> nothing { print(1) }",
+         function entrypoint() -> Nothing { print(1) }",
         &[
             ("shape", "Bag"),
             ("field", "items"),
@@ -1526,15 +1526,15 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
     );
     assert_compiles(
         "shape Bag {\n\
-           items: fixed<int, 4>\n\
+           items: Fixed<Int, 4>\n\
          }\n\
-         function entrypoint() -> nothing { print(1) }",
+         function entrypoint() -> Nothing { print(1) }",
     );
     assert_compiles(
         "shape Bag {\n\
-           items: array<int>\n\
+           items: Array<Int>\n\
          }\n\
-         function entrypoint() -> nothing { print(1) }",
+         function entrypoint() -> Nothing { print(1) }",
     );
 }
 
@@ -1546,11 +1546,11 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
     // render from the registry, and the suggestion (write the length) compiles.
     assert_rendered(
         DiagnosticKind::FixedLengthMissingInTaskFunction,
-        "function slowTotal(share xs: fixed<int>) -> int {\n\
+        "function slowTotal(share xs: Fixed<Int>) -> Int {\n\
            wait sleep(1)\n\
            return xs.count()\n\
          }\n\
-         function entrypoint() -> nothing {\n\
+         function entrypoint() -> Nothing {\n\
            let total = wait slowTotal([1, 2, 3])\n\
            print(total)\n\
          }",
@@ -1564,20 +1564,20 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
     );
     assert_rendered(
         DiagnosticKind::FixedLengthMissingInTaskFunction,
-        "function heavy(share seed: int) -> int {\n\
-           let sum: int = 0\n\
+        "function heavy(share seed: Int) -> Int {\n\
+           let sum: Int = 0\n\
            for (i in range(0, 3000000)) {\n\
              sum = sum + (i * seed) % 7\n\
            }\n\
            return sum\n\
          }\n\
-         function host(share xs: fixed<int>) -> int {\n\
+         function host(share xs: Fixed<Int>) -> Int {\n\
            let first = heavy(1)\n\
            let second = heavy(2)\n\
            return first + second + xs.count()\n\
          }\n\
-         function entrypoint() -> nothing {\n\
-           let three: fixed<int> = [1, 2, 3]\n\
+         function entrypoint() -> Nothing {\n\
+           let three: Fixed<Int> = [1, 2, 3]\n\
            print(host(three))\n\
          }",
         &[
@@ -1589,11 +1589,11 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
         ],
     );
     assert_compiles(
-        "function slowTotal(share xs: fixed<int, 3>) -> int {\n\
+        "function slowTotal(share xs: Fixed<Int, 3>) -> Int {\n\
            wait sleep(1)\n\
            return xs.count()\n\
          }\n\
-         function entrypoint() -> nothing {\n\
+         function entrypoint() -> Nothing {\n\
            let total = wait slowTotal([1, 2, 3])\n\
            print(total)\n\
          }",

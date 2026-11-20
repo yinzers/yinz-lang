@@ -39,11 +39,11 @@ fn nested_call_arg_gets_copy_hint() {
     // outermost call — `inner(n)` is the top-level arg and is NOT trivially copyable
     // (it's a call expression), so `n` was never reached and got no hint.
     let src = r#"
-function inner(x: int) -> nothing { }
-function outer(result: int) -> nothing { }
+function inner(x: Int) -> Nothing { }
+function outer(result: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
-    let n: int = 5
+function entrypoint() -> Nothing {
+    let n: Int = 5
     outer(inner(n))
 }
 "#;
@@ -78,10 +78,10 @@ fn top_level_copyable_arg_gets_exactly_one_copy_hint() {
     // plain `Expr::Ident`, the recursion body has no `Expr::Call` to match, so it
     // emits nothing.  This test proves the recursion does not double-emit.
     let src = r#"
-function consume(x: int) -> nothing { }
+function consume(x: Int) -> Nothing { }
 
-function entrypoint() -> nothing {
-    let n: int = 42
+function entrypoint() -> Nothing {
+    let n: Int = 42
     consume(n)
 }
 "#;

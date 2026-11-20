@@ -71,7 +71,7 @@ fn admission_inputs(
 }
 
 const FIB: &str = "\
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
@@ -186,15 +186,15 @@ fn suspending_fn_emits_io_hint_without_separate_core() {
     // suspending calls overlap cooperatively, so the hint must fire WITHOUT "separate core". This
     // proves the suspending-not-promoted path uses the I/O partition, not the CPU partition.
     let src = "\
-function ioA() -> int {
+function ioA() -> Int {
   wait sleep(10)
   return 1
 }
-function ioB() -> int {
+function ioB() -> Int {
   wait sleep(10)
   return 2
 }
-function run() -> nothing {
+function run() -> Nothing {
   let a = ioA()
   let b = ioB()
   print(a)
@@ -236,7 +236,7 @@ fn cpu_group_with_trailing_wait_is_suspending_no_separate_core() {
 // ── v0.3-M3g Phase 5: mixed (fused) CPU+I/O group parity ─────────────────────────────────────
 
 const CRUNCH_FETCH: &str = "\
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 30) {
@@ -246,7 +246,7 @@ function crunch(n: int) -> int {
   return total + n
 }
 
-function fetchA(n: int) -> int {
+function fetchA(n: Int) -> Int {
   wait sleep(0)
   return n + 10
 }
@@ -321,14 +321,14 @@ fn mixed_fused_group_declines_on_non_scalar_arg_emits_no_hint() {
     // back to fully sequential lowering for a declined group, so any hint here would lie about a
     // spawn/poll that never happens.
     let src = "\
-function crunch2(n: int, m: int) -> int {
+function crunch2(n: Int, m: Int) -> Int {
   return n + m
 }
-function fetchA(n: int) -> int {
+function fetchA(n: Int) -> Int {
   wait sleep(0)
   return n + 10
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunch2(1, 2)
   let b = fetchA(3)
   print(a + b)
@@ -376,15 +376,15 @@ fn nested_suspending_group_in_ordinary_host_emits_hint_exactly_once_per_member()
     // (duplicate hints ≠ what codegen actually does; codegen inline-polls each member once). This
     // proves each member gets exactly ONE hint, not two.
     let src = "\
-function ioA() -> int {
+function ioA() -> Int {
   wait sleep(10)
   return 1
 }
-function ioB() -> int {
+function ioB() -> Int {
   wait sleep(10)
   return 2
 }
-function run(flag: bool) -> nothing {
+function run(flag: Boolean) -> Nothing {
   if (flag) {
     let a = ioA()
     let b = ioB()
@@ -455,7 +455,7 @@ fn fused_member_that_is_itself_a_promoted_cpu_host_matches_codegen_real_suspend_
     // `ynz_codegen::emit::spike_host_subset` does) returns `None`, and the actual hint pass's
     // output carries NO "separate core" tag anywhere in `entrypoint`.
     let src = "\
-function crunch(seed: int) -> int {
+function crunch(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -465,18 +465,18 @@ function crunch(seed: int) -> int {
   return total + seed
 }
 
-function pureHelper(seed: int) -> int {
+function pureHelper(seed: Int) -> Int {
   let a = crunch(3)
   let b = crunch(4)
   return a + b
 }
 
-function ioWork(n: int) -> int {
+function ioWork(n: Int) -> Int {
   wait sleep(0)
   return n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = pureHelper(1)
   let y = ioWork(4)
   print(x + y)

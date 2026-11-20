@@ -31,13 +31,13 @@ fn list_of(count: usize) -> Type {
 #[test]
 fn a_returned_length_flows_up_a_chain_declared_in_any_order() {
     let output = check(
-        "function third() -> fixed<int> { return second() }\n\
-         function second() -> fixed<int> { return first() }\n\
-         function first() -> fixed<int> {\n\
-           let xs: fixed<int> = [1, 2, 3]\n\
+        "function third() -> Fixed<Int> { return second() }\n\
+         function second() -> Fixed<Int> { return first() }\n\
+         function first() -> Fixed<Int> {\n\
+           let xs: Fixed<Int> = [1, 2, 3]\n\
            return xs\n\
          }\n\
-         function entrypoint() -> nothing { print(third().count()) }",
+         function entrypoint() -> Nothing { print(third().count()) }",
     );
     assert!(errors(&output).is_empty(), "{:#?}", errors(&output));
     let worked_out = &output.typed_module.inferred_return_types;
@@ -51,9 +51,9 @@ fn a_returned_length_flows_up_a_chain_declared_in_any_order() {
 #[test]
 fn a_parameter_returned_as_it_came_takes_the_length_the_caller_passed() {
     let output = check(
-        "function same(give xs: fixed<int>) -> fixed<int> { return xs }\n\
-         function entrypoint() -> nothing {\n\
-           let xs: fixed<int> = [1, 2]\n\
+        "function same(give xs: Fixed<Int>) -> Fixed<Int> { return xs }\n\
+         function entrypoint() -> Nothing {\n\
+           let xs: Fixed<Int> = [1, 2]\n\
            let back = same(xs)\n\
            print(back.count())\n\
          }",
@@ -74,9 +74,9 @@ fn a_parameter_returned_as_it_came_takes_the_length_the_caller_passed() {
 #[test]
 fn functions_that_only_return_each_other_have_no_length_to_work_out() {
     let output = check(
-        "function ping() -> fixed<int> { return pong() }\n\
-         function pong() -> fixed<int> { return ping() }\n\
-         function entrypoint() -> nothing { print(1) }",
+        "function ping() -> Fixed<Int> { return pong() }\n\
+         function pong() -> Fixed<Int> { return ping() }\n\
+         function entrypoint() -> Nothing { print(1) }",
     );
     let unknown: Vec<_> = errors(&output)
         .into_iter()
@@ -91,8 +91,8 @@ fn functions_that_only_return_each_other_have_no_length_to_work_out() {
 #[test]
 fn a_length_is_allowed_on_the_whole_type_of_a_field_and_nowhere_deeper() {
     let whole = check(
-        "shape Bag { items: fixed<int, 3> }\n\
-         function entrypoint() -> nothing { print(1) }",
+        "shape Bag { items: Fixed<Int, 3> }\n\
+         function entrypoint() -> Nothing { print(1) }",
     );
     assert!(errors(&whole).is_empty(), "{:#?}", errors(&whole));
     for nested in ["maybe<fixed<int, 2>>", "array<fixed<int, 2>>"] {
@@ -112,16 +112,16 @@ fn a_length_is_allowed_on_the_whole_type_of_a_field_and_nowhere_deeper() {
 #[test]
 fn an_inline_shape_field_without_a_length_is_refused_like_a_named_one() {
     for written in [
-        "function entrypoint() -> nothing {\n\
-           let point: { trail: fixed<int> } = { trail: [4, 5, 6] }\n\
+        "function entrypoint() -> Nothing {\n\
+           let point: { trail: Fixed<Int> } = { trail: [4, 5, 6] }\n\
            print(point.trail.count())\n\
          }",
-        "function show(share point: { trail: fixed<int> }) -> nothing { print(1) }\n\
-         function entrypoint() -> nothing { print(2) }",
-        "function make() -> { trail: fixed<int> } { return { trail: [1] } }\n\
-         function entrypoint() -> nothing { print(2) }",
-        "shape Holder { inner: { trail: fixed<int> } }\n\
-         function entrypoint() -> nothing { print(2) }",
+        "function show(share point: { trail: Fixed<Int> }) -> Nothing { print(1) }\n\
+         function entrypoint() -> Nothing { print(2) }",
+        "function make() -> { trail: Fixed<Int> } { return { trail: [1] } }\n\
+         function entrypoint() -> Nothing { print(2) }",
+        "shape Holder { inner: { trail: Fixed<Int> } }\n\
+         function entrypoint() -> Nothing { print(2) }",
     ] {
         let output = check(written);
         let refused = errors(&output)
@@ -168,7 +168,7 @@ fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
     let source = waiting_with(
         "share xs: fixed<int>",
         "  let n = inner(xs)",
-        "function inner(share xs: fixed<int>) -> int { return xs.count() }",
+        "function inner(share xs: Fixed<Int>) -> Int { return xs.count() }",
     );
     assert_eq!(
         task_function_refusals(&source),
@@ -187,7 +187,7 @@ fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
     let source = waiting_with(
         "share xs: fixed<int>",
         "  let task = background inner(xs)",
-        "function inner(share xs: fixed<int>) -> int {\n  wait sleep(1)\n  return 1\n}",
+        "function inner(share xs: Fixed<Int>) -> Int {\n  wait sleep(1)\n  return 1\n}",
     );
     assert_eq!(
         task_function_refusals(&source),
@@ -202,13 +202,13 @@ fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
 #[test]
 fn a_function_built_once_that_never_asks_for_the_length_is_not_refused() {
     let sources = [
-        "function show(value: fixed<string>) -> nothing {\n  wait sleep(1)\n  print(777)\n}\n\
-         function entrypoint() -> nothing {\n  let value: fixed<string> = [`p`, `q`]\n  background show(value)\n  wait sleep(5)\n}",
-        "function inner(share xs: fixed<int>) -> int {\n  wait sleep(1)\n  return 1\n}\n\
-         function show(share xs: fixed<int>) -> int {\n  wait sleep(1)\n  return inner(xs)\n}\n\
-         function entrypoint() -> nothing {\n  let done = wait show([1, 2])\n  print(done)\n}",
-        "function show(give xs: fixed<int>) -> int {\n  wait sleep(1)\n  return 1\n}\n\
-         function entrypoint() -> nothing {\n  let done = wait show([1, 2])\n  print(done)\n}",
+        "function show(value: Fixed<String>) -> Nothing {\n  wait sleep(1)\n  print(777)\n}\n\
+         function entrypoint() -> Nothing {\n  let value: Fixed<String> = [`p`, `q`]\n  background show(value)\n  wait sleep(5)\n}",
+        "function inner(share xs: Fixed<Int>) -> Int {\n  wait sleep(1)\n  return 1\n}\n\
+         function show(share xs: Fixed<Int>) -> Int {\n  wait sleep(1)\n  return inner(xs)\n}\n\
+         function entrypoint() -> Nothing {\n  let done = wait show([1, 2])\n  print(done)\n}",
+        "function show(give xs: Fixed<Int>) -> Int {\n  wait sleep(1)\n  return 1\n}\n\
+         function entrypoint() -> Nothing {\n  let done = wait show([1, 2])\n  print(done)\n}",
     ];
     for source in sources {
         assert_eq!(task_function_refusals(source), 0, "{source}");
@@ -221,12 +221,12 @@ fn a_function_built_once_that_never_asks_for_the_length_is_not_refused() {
 #[test]
 fn a_received_fixed_of_strings_cannot_cross_a_later_wait() {
     let output = check(
-        "function names() -> fixed<string> {\n\
+        "function names() -> Fixed<String> {\n\
            wait sleep(1)\n\
-           let rows: fixed<string> = [`a`, `b`]\n\
+           let rows: Fixed<String> = [`a`, `b`]\n\
            return rows\n\
          }\n\
-         function entrypoint() -> nothing {\n\
+         function entrypoint() -> Nothing {\n\
            let task = background names()\n\
            wait sleep(20)\n\
            let received = task.receive()\n\
@@ -247,12 +247,12 @@ fn a_received_fixed_of_strings_cannot_cross_a_later_wait() {
 #[test]
 fn a_received_fixed_of_ints_may_be_followed_by_a_wait() {
     let output = check(
-        "function numbers() -> fixed<int> {\n\
+        "function numbers() -> Fixed<Int> {\n\
            wait sleep(1)\n\
-           let list: fixed<int> = [1, 2]\n\
+           let list: Fixed<Int> = [1, 2]\n\
            return list\n\
          }\n\
-         function entrypoint() -> nothing {\n\
+         function entrypoint() -> Nothing {\n\
            let task = background numbers()\n\
            wait sleep(20)\n\
            let received = task.receive()\n\
@@ -279,48 +279,48 @@ fn refusals_of(source: &str, kind: DiagnosticKind) -> usize {
 fn an_exported_function_must_write_the_length_of_each_fixed_it_takes_or_returns() {
     let rows: [(&str, DiagnosticKind, usize); 6] = [
         (
-            "export function total(share xs: fixed<int>) -> int { return xs.count() }\n\
-             function entrypoint() -> nothing { print(1) }",
+            "export function total(share xs: Fixed<Int>) -> Int { return xs.count() }\n\
+             function entrypoint() -> Nothing { print(1) }",
             DiagnosticKind::FixedLengthMissingInExport,
             1,
         ),
         (
-            "export function make() -> fixed<int> {\n\
-               let xs: fixed<int> = [1, 2]\n\
+            "export function make() -> Fixed<Int> {\n\
+               let xs: Fixed<Int> = [1, 2]\n\
                return xs\n\
              }\n\
-             function entrypoint() -> nothing { print(1) }",
+             function entrypoint() -> Nothing { print(1) }",
             DiagnosticKind::FixedLengthMissingInExport,
             1,
         ),
         (
-            "export function same(share xs: fixed<int>) -> fixed<int> { return xs }\n\
-             function entrypoint() -> nothing { print(1) }",
+            "export function same(share xs: Fixed<Int>) -> Fixed<Int> { return xs }\n\
+             function entrypoint() -> Nothing { print(1) }",
             DiagnosticKind::FixedLengthMissingInExport,
             2,
         ),
         (
-            "function pick(share flag: boolean) -> fixed<int> {\n\
-               let two: fixed<int> = [1, 2]\n\
-               let one: fixed<int> = [1]\n\
+            "function pick(share flag: Boolean) -> Fixed<Int> {\n\
+               let two: Fixed<Int> = [1, 2]\n\
+               let one: Fixed<Int> = [1]\n\
                if (flag) {\n\
                  return two\n\
                }\n\
                return one\n\
              }\n\
-             function entrypoint() -> nothing { print(pick(true).count()) }",
+             function entrypoint() -> Nothing { print(pick(true).count()) }",
             DiagnosticKind::FixedReturnLengthsDiffer,
             1,
         ),
         (
-            "export function total(share xs: fixed<int, 3>) -> fixed<int, 3> { return xs }\n\
-             function entrypoint() -> nothing { print(1) }",
+            "export function total(share xs: Fixed<Int, 3>) -> Fixed<Int, 3> { return xs }\n\
+             function entrypoint() -> Nothing { print(1) }",
             DiagnosticKind::FixedLengthMissingInExport,
             0,
         ),
         (
-            "function total(share xs: fixed<int>) -> fixed<int> { return xs }\n\
-             function entrypoint() -> nothing { print(1) }",
+            "function total(share xs: Fixed<Int>) -> Fixed<Int> { return xs }\n\
+             function entrypoint() -> Nothing { print(1) }",
             DiagnosticKind::FixedLengthMissingInExport,
             0,
         ),
@@ -397,8 +397,8 @@ fn a_list_of_another_length_is_refused_where_it_is_stored_in_a_sized_field() {
              function entrypoint() -> nothing {{\n  let source: fixed<int> = {stored}\n  let bag: Bag = {{ items: source }}\n  print(bag.items.count())\n}}"
         )
     };
-    let literal = "shape Bag {\n  items: fixed<int, 3>\n}\n\
-                   function entrypoint() -> nothing {\n  let bag: Bag = { items: [1, 2] }\n  print(bag.items.count())\n}";
+    let literal = "shape Bag {\n  items: Fixed<Int, 3>\n}\n\
+                   function entrypoint() -> Nothing {\n  let bag: Bag = { items: [1, 2] }\n  print(bag.items.count())\n}";
     let rows = [
         ("variable, exact", storing("[1, 2, 3]"), 0),
         ("variable, one short", storing("[1, 2]"), 1),
@@ -446,8 +446,8 @@ fn an_unusable_written_length_is_refused_by_kind_and_the_limits_are_accepted() {
             Some(DiagnosticKind::FixedLengthNotAllowedHere),
         ),
         (
-            "function make() -> maybe<fixed<int, 3>> { return none }\n\
-             function entrypoint() -> nothing { print(1) }"
+            "function make() -> Maybe<Fixed<Int, 3>> { return none }\n\
+             function entrypoint() -> Nothing { print(1) }"
                 .to_string(),
             Some(DiagnosticKind::FixedLengthNotAllowedHere),
         ),
@@ -510,7 +510,7 @@ fn a_fallback_of_another_length_is_refused_for_or_on_a_received_fixed() {
 // Each side shows its length.
 #[test]
 fn a_length_mismatch_on_reassignment_or_field_assignment_names_both_lengths() {
-    let reassign = "function entrypoint() -> nothing {\n  let xs: fixed<int> = [1, 2, 3]\n  let ys: fixed<int> = [1, 2]\n  xs = ys\n  print(xs.count())\n}";
+    let reassign = "function entrypoint() -> Nothing {\n  let xs: Fixed<Int> = [1, 2, 3]\n  let ys: Fixed<Int> = [1, 2]\n  xs = ys\n  print(xs.count())\n}";
     let output = check(reassign);
     let reassign_texts: Vec<String> = errors(&output)
         .iter()
@@ -523,8 +523,8 @@ fn a_length_mismatch_on_reassignment_or_field_assignment_names_both_lengths() {
         reassign_texts[0]
     );
 
-    let field = "shape Bag {\n  nums: fixed<int, 3>\n}\n\
-                 function entrypoint() -> nothing {\n  let bag: Bag = { nums: [1, 2, 3] }\n  bag.nums = [1, 2]\n  print(bag.nums.count())\n}";
+    let field = "shape Bag {\n  nums: Fixed<Int, 3>\n}\n\
+                 function entrypoint() -> Nothing {\n  let bag: Bag = { nums: [1, 2, 3] }\n  bag.nums = [1, 2]\n  print(bag.nums.count())\n}";
     let output = check(field);
     let field_errors = errors(&output);
     assert_eq!(field_errors.len(), 1, "{field_errors:#?}");

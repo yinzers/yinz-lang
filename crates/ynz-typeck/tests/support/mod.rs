@@ -11,7 +11,7 @@ use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput};
 
 /// A callee that takes ownership of its argument (`give`), for programs that give a binding away.
-pub const EAT: &str = "function eat(give rows: array<int>) -> nothing {
+pub const EAT: &str = "function eat(give rows: Array<Int>) -> Nothing {
   print(rows.count().toString())
 }\n";
 

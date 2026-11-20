@@ -98,7 +98,7 @@ fn m1_source_type_checks_clean() {
     // WHY: if this test breaks, the hello-world integration test (Phase 7) breaks too.
     // The string-type assertion below is load-bearing — it proves type inference actually
     // ran and stored results, not just that no diagnostics were emitted.
-    let output = run(r#"function entrypoint() -> nothing { print(`hello, yinz`) }"#);
+    let output = run(r#"function entrypoint() -> Nothing { print(`hello, yinz`) }"#);
     assert!(
         output.diagnostics.is_empty(),
         "M1 source must type-check with zero diagnostics, got: {:#?}",
@@ -121,9 +121,9 @@ fn m2_smoke_test_type_checks_clean() {
     // is exercised: let with annotation, literal inference, arithmetic, boolean,
     // and print. If this fails, the M2 integration test (Phase 5) will also fail.
     assert_clean(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
   let price = 0.1 + 0.2
-  let count: int = 42
+  let count: Int = 42
   let active = true
   print(price)
   print(count)
@@ -135,7 +135,7 @@ fn m2_smoke_test_type_checks_clean() {
 #[test]
 fn const_binding_type_checks_clean() {
     // WHY: `const` must be accepted by typeck with the same rules as `let`.
-    assert_clean("function entrypoint() -> nothing { const x = 42\nprint(x) }");
+    assert_clean("function entrypoint() -> Nothing { const x = 42\nprint(x) }");
 }
 
 #[test]
@@ -143,8 +143,8 @@ fn conversion_methods_type_check_clean() {
     // WHY: intrinsic method calls must resolve to the correct return type.
     // If `int.toString()` doesn't resolve to `string`, `print` will reject it.
     assert_clean(
-        r#"function entrypoint() -> nothing {
-  let n: int = 42
+        r#"function entrypoint() -> Nothing {
+  let n: Int = 42
   let s = n.toString()
   print(s)
 }"#,
@@ -157,7 +157,7 @@ fn int_literal_infers_as_int() {
     // Golden Rule 7 (efficiency first) — the default must be the most
     // performant type. If x becomes `number`, arithmetic is decimal-128 overhead.
     let output = assert_errors(
-        "function entrypoint() -> nothing { let x = 42\nprint(x.toString()) }",
+        "function entrypoint() -> Nothing { let x = 42\nprint(x.toString()) }",
         0,
     );
     let int_ty = output
@@ -182,7 +182,7 @@ fn int_literal_number_store_binding_is_rejected_with_teaching_error() {
     // rejection with coercion. (Prior name: `int_literal_retypes_as_number_with_annotation`,
     // which asserted the old admit-then-ICE behavior.)
     let output = assert_errors(
-        "function entrypoint() -> nothing { let x: number = 42\nprint(x) }",
+        "function entrypoint() -> Nothing { let x: Number = 42\nprint(x) }",
         1,
     );
     assert!(
@@ -204,34 +204,34 @@ fn number_literal_stays_clean_in_number_store_binding() {
     // WHY: the false-fire guard for the store-binding gate above — a genuine decimal
     // literal (`42.0`) into a `number` binding is already a `number` and must compile
     // clean; the gate must fire ONLY on int literals, never on decimals.
-    assert_clean("function entrypoint() -> nothing { let x: number = 42.0\nprint(x) }");
+    assert_clean("function entrypoint() -> Nothing { let x: Number = 42.0\nprint(x) }");
 }
 
 #[test]
 fn int_literal_retypes_as_float_with_annotation() {
     // WHY: `let x: float = 42` must store x as `float`. Same annotation override.
-    assert_clean("function entrypoint() -> nothing { let x: float = 42\nprint(x) }");
+    assert_clean("function entrypoint() -> Nothing { let x: Float = 42\nprint(x) }");
 }
 
 #[test]
 fn number_literal_infers_as_number() {
     // WHY: `3.14` has a decimal point so it must infer as `number` (decimal128),
     // not float. `float` would silently corrupt exact decimal values.
-    assert_clean("function entrypoint() -> nothing { let x = 3.14\nprint(x) }");
+    assert_clean("function entrypoint() -> Nothing { let x = 3.14\nprint(x) }");
 }
 
 #[test]
 fn number_literal_retypes_as_float_with_annotation() {
     // WHY: `let x: float = 1.0` must store x as `float`. The user explicitly
     // chose binary floating-point — the annotation governs.
-    assert_clean("function entrypoint() -> nothing { let x: float = 1.0\nprint(x) }");
+    assert_clean("function entrypoint() -> Nothing { let x: Float = 1.0\nprint(x) }");
 }
 
 #[test]
 fn int_annotation_rejects_number_literal() {
     // WHY: `let x: int = 1.5` must error — you can't store a decimal in an int.
     // The type checker must catch this before codegen tries to emit an alloca.
-    let output = assert_errors("function entrypoint() -> nothing { let x: int = 1.5 }", 1);
+    let output = assert_errors("function entrypoint() -> Nothing { let x: Int = 1.5 }", 1);
     assert!(
         output.diagnostics[0].what.contains("number") || output.diagnostics[0].what.contains("int"),
         "Diagnostic must mention the types, got: {}",
@@ -241,18 +241,18 @@ fn int_annotation_rejects_number_literal() {
 
 #[test]
 fn int_arithmetic_type_checks_clean() {
-    assert_clean("function entrypoint() -> nothing { let x: int = 2\nlet y: int = 3\nlet z = x + y\nprint(z) }");
+    assert_clean("function entrypoint() -> Nothing { let x: Int = 2\nlet y: Int = 3\nlet z = x + y\nprint(z) }");
 }
 
 #[test]
 fn float_arithmetic_type_checks_clean() {
-    assert_clean("function entrypoint() -> nothing { let x: float = 2.0\nlet y: float = 3.0\nlet z = x + y\nprint(z) }");
+    assert_clean("function entrypoint() -> Nothing { let x: Float = 2.0\nlet y: Float = 3.0\nlet z = x + y\nprint(z) }");
 }
 
 #[test]
 fn number_arithmetic_type_checks_clean() {
     assert_clean(
-        "function entrypoint() -> nothing { let x = 0.1\nlet y = 0.2\nlet z = x + y\nprint(z) }",
+        "function entrypoint() -> Nothing { let x = 0.1\nlet y = 0.2\nlet z = x + y\nprint(z) }",
     );
 }
 
@@ -262,7 +262,7 @@ fn int_plus_number_is_type_error_with_to_number_suggestion() {
     // MUST suggest `.toNumber()` specifically — a generic "types differ" message
     // leaves the user without a fix.
     let output = assert_errors(
-        "function entrypoint() -> nothing { let a: int = 1\nlet b: number = 2.0\nlet c = a + b }",
+        "function entrypoint() -> Nothing { let a: Int = 1\nlet b: Number = 2.0\nlet c = a + b }",
         1,
     );
     assert!(
@@ -277,7 +277,7 @@ fn int_plus_float_is_type_error_with_to_float_suggestion() {
     // WHY: `int + float` must suggest `.toFloat()`, not `.toNumber()`.
     // Wrong suggestion sends the developer down the wrong conversion path.
     let output = assert_errors(
-        "function entrypoint() -> nothing { let a: int = 1\nlet b: float = 2.0\nlet c = a + b }",
+        "function entrypoint() -> Nothing { let a: Int = 1\nlet b: Float = 2.0\nlet c = a + b }",
         1,
     );
     assert!(
@@ -294,7 +294,7 @@ fn number_plus_float_is_type_error_with_both_options() {
     // and the tradeoff. This is a teaching opportunity: the user needs to
     // consciously choose the right direction.
     let output = assert_errors(
-        "function entrypoint() -> nothing { let a = 0.1\nlet b: float = 0.2\nlet c = a + b }",
+        "function entrypoint() -> Nothing { let a = 0.1\nlet b: Float = 0.2\nlet c = a + b }",
         1,
     );
     let suggestion = &output.diagnostics[0].what_instead;
@@ -310,7 +310,7 @@ fn percent_on_number_produces_specific_error() {
     // in v0.6, not just "type mismatch". If the message is generic, the developer
     // doesn't know that `.rem()` is the right approach.
     let output = assert_errors(
-        "function entrypoint() -> nothing { let a = 0.1\nlet b = 0.2\nlet c = a % b }",
+        "function entrypoint() -> Nothing { let a = 0.1\nlet b = 0.2\nlet c = a % b }",
         1,
     );
     assert!(
@@ -326,48 +326,48 @@ fn bool_less_than_int_is_type_error() {
     // WHY: `1 < 2 < 3` parses as `(1 < 2) < 3` — the outer `<` is `bool < int`,
     // which is a type error. This catches comparison chaining which silently
     // passes in many languages but produces wrong results.
-    assert_errors("function entrypoint() -> nothing { let x = 1 < 2 < 3 }", 1);
+    assert_errors("function entrypoint() -> Nothing { let x = 1 < 2 < 3 }", 1);
 }
 
 #[test]
 fn comparison_result_type_is_bool() {
     // WHY: `a < b` must produce `bool`. If it produced `int` or `number`, the
     // boolean operators `&&` and `||` would fail when applied to comparison results.
-    assert_clean("function entrypoint() -> nothing { let x: int = 1\nlet y: int = 2\nlet z = x < y\nprint(z) }");
+    assert_clean("function entrypoint() -> Nothing { let x: Int = 1\nlet y: Int = 2\nlet z = x < y\nprint(z) }");
 }
 
 #[test]
 fn bool_and_type_checks_clean() {
-    assert_clean("function entrypoint() -> nothing { let a = true\nlet b = false\nlet c = a && b\nprint(c) }");
+    assert_clean("function entrypoint() -> Nothing { let a = true\nlet b = false\nlet c = a && b\nprint(c) }");
 }
 
 #[test]
 fn int_and_bool_is_type_error() {
     // WHY: `42 && true` looks plausible to a beginner but `&&` only accepts bool.
-    assert_errors("function entrypoint() -> nothing { let x = 42 && true }", 1);
+    assert_errors("function entrypoint() -> Nothing { let x = 42 && true }", 1);
 }
 
 #[test]
 fn unary_neg_on_int_type_checks_clean() {
-    assert_clean("function entrypoint() -> nothing { let x: int = 5\nlet y = -x\nprint(y) }");
+    assert_clean("function entrypoint() -> Nothing { let x: Int = 5\nlet y = -x\nprint(y) }");
 }
 
 #[test]
 fn unary_not_on_bool_type_checks_clean() {
-    assert_clean("function entrypoint() -> nothing { let a = true\nlet b = !a\nprint(b) }");
+    assert_clean("function entrypoint() -> Nothing { let a = true\nlet b = !a\nprint(b) }");
 }
 
 #[test]
 fn unary_neg_on_bool_is_type_error() {
     // WHY: `-true` makes no mathematical sense. Must error, not silently coerce.
-    assert_errors("function entrypoint() -> nothing { let x = -true }", 1);
+    assert_errors("function entrypoint() -> Nothing { let x = -true }", 1);
 }
 
 #[test]
 fn const_reassignment_is_error() {
     // WHY: `const` expresses the intent that a value does not change. Allowing
     // reassignment would break the contract and confuse readers who see `const`.
-    let output = assert_errors("function entrypoint() -> nothing { const x = 1\nx = 2 }", 1);
+    let output = assert_errors("function entrypoint() -> Nothing { const x = 1\nx = 2 }", 1);
     assert!(
         output.diagnostics[0].what.contains("const"),
         "Diagnostic must mention `const`, got: {}",
@@ -383,7 +383,7 @@ fn const_reassignment_is_error() {
 #[test]
 fn undefined_identifier_produces_diagnostic() {
     // WHY: referencing an undefined name must error at compile time.
-    let output = assert_errors(r#"function entrypoint() -> nothing { unknownIdent() }"#, 1);
+    let output = assert_errors(r#"function entrypoint() -> Nothing { unknownIdent() }"#, 1);
     assert!(
         output.diagnostics[0].what.contains("unknownIdent"),
         "Diagnostic must name the unknown identifier, got: {}",
@@ -397,7 +397,7 @@ fn levenshtein_suggestion_for_similar_name() {
     // eliminates a frustrating "name not found" with no hint.
     // `conut` is a transposition of `count` — Levenshtein distance 2, within threshold.
     let output = assert_errors(
-        "function entrypoint() -> nothing { let count = 42\nlet x = conut }",
+        "function entrypoint() -> Nothing { let count = 42\nlet x = conut }",
         1,
     );
     assert!(
@@ -411,7 +411,7 @@ fn levenshtein_suggestion_for_similar_name() {
 fn undefined_in_assignment_produces_diagnostic() {
     // WHY: assigning to a name that doesn't exist must error, not silently
     // declare a new variable.
-    assert_errors("function entrypoint() -> nothing { x = 42 }", 1);
+    assert_errors("function entrypoint() -> Nothing { x = 42 }", 1);
 }
 
 #[test]
@@ -419,7 +419,7 @@ fn print_with_two_args_produces_arity_error() {
     // WHY: `print(1, 2)` parses fine (parser doesn't enforce arity) but typeck
     // must catch it. Without this check, the user gets a confusing codegen error
     // instead of a clear teaching diagnostic.
-    let output = assert_errors(r#"function entrypoint() -> nothing { print(1, 2) }"#, 1);
+    let output = assert_errors(r#"function entrypoint() -> Nothing { print(1, 2) }"#, 1);
     assert!(
         output.diagnostics[0].what.contains("print") && output.diagnostics[0].what.contains("1"),
         "Diagnostic must mention print and argument count, got: {}",
@@ -431,10 +431,10 @@ fn print_with_two_args_produces_arity_error() {
 fn print_with_each_primitive_type_is_clean() {
     // WHY: `print` is polymorphic. If any primitive type fails to resolve,
     // the whole M2 type surface is broken for printing.
-    assert_clean(r#"function entrypoint() -> nothing { print(42) }"#);
-    assert_clean(r#"function entrypoint() -> nothing { print(3.14) }"#);
-    assert_clean(r#"function entrypoint() -> nothing { print(true) }"#);
-    assert_clean("function entrypoint() -> nothing { let f: float = 1.0\nprint(f) }");
+    assert_clean(r#"function entrypoint() -> Nothing { print(42) }"#);
+    assert_clean(r#"function entrypoint() -> Nothing { print(3.14) }"#);
+    assert_clean(r#"function entrypoint() -> Nothing { print(true) }"#);
+    assert_clean("function entrypoint() -> Nothing { let f: Float = 1.0\nprint(f) }");
 }
 
 #[test]
@@ -443,7 +443,7 @@ fn unknown_method_produces_error_with_available_list() {
     // A generic "method not found" without alternatives leaves the developer
     // to guess what conversions exist.
     let output = assert_errors(
-        "function entrypoint() -> nothing { let x: int = 1\nlet s = x.unknownMethod() }",
+        "function entrypoint() -> Nothing { let x: Int = 1\nlet s = x.unknownMethod() }",
         1,
     );
     let what_instead = &output.diagnostics[0].what_instead;
@@ -459,7 +459,7 @@ fn unknown_method_produces_error_with_available_list() {
 fn to_string_on_int_produces_string() {
     // WHY: the return type of `.toString()` must be `string` so `print` accepts it.
     assert_clean(
-        "function entrypoint() -> nothing { let x: int = 42\nlet s = x.toString()\nprint(s) }",
+        "function entrypoint() -> Nothing { let x: Int = 42\nlet s = x.toString()\nprint(s) }",
     );
 }
 
@@ -467,7 +467,7 @@ fn to_string_on_int_produces_string() {
 fn to_float_on_int_produces_float() {
     // WHY: the return type of `.toFloat()` must be `float` so float arithmetic works.
     assert_clean(
-        "function entrypoint() -> nothing { let x: int = 5\nlet f: float = x.toFloat()\nprint(f) }",
+        "function entrypoint() -> Nothing { let x: Int = 5\nlet f: Float = x.toFloat()\nprint(f) }",
     );
 }
 
@@ -507,7 +507,7 @@ fn empty_file_missing_entrypoint_produces_diagnostic() {
 
 #[test]
 fn entrypoint_with_wrong_return_type_produces_diagnostic() {
-    let output = run(r#"function entrypoint() -> string { print(`hi`) }"#);
+    let output = run(r#"function entrypoint() -> String { print(`hi`) }"#);
     assert!(
         !output.diagnostics.is_empty(),
         "Wrong return type on entrypoint must produce a diagnostic"
@@ -525,7 +525,7 @@ fn check_re_runs_when_source_changes() {
     let diag_count_before = check_query(&db, sf).diagnostics.len();
 
     sf.set_text(&mut db)
-        .to(r#"function entrypoint() -> nothing { print(`hi`) }"#.to_string());
+        .to(r#"function entrypoint() -> Nothing { print(`hi`) }"#.to_string());
     let diag_count_after = check_query(&db, sf).diagnostics.len();
 
     assert!(diag_count_before > 0, "Empty file should have diagnostics");
@@ -557,13 +557,13 @@ fn m3_fibonacci_type_checks_clean() {
     // WHY: the M3 headline contract. Fibonacci uses recursion, parameters, return,
     // and if. If any of these paths is broken, this test catches it first.
     assert_clean(
-        r#"function fib(n: int) -> int {
+        r#"function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = fib(10)
   print(result)
 }"#,
@@ -575,19 +575,19 @@ fn m3_mutual_recursion_type_checks_clean() {
     // WHY: mutual recursion requires the two-pass design — `ping` calls `pong`
     // and vice versa. Without signature pre-pass, one call sees undefined-function.
     assert_clean(
-        r#"function ping(n: int) -> int {
+        r#"function ping(n: Int) -> Int {
   if (n <= 0) {
     return 0
   }
   return pong(n - 1)
 }
-function pong(n: int) -> int {
+function pong(n: Int) -> Int {
   if (n <= 0) {
     return 0
   }
   return ping(n - 1)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(ping(5))
 }"#,
     );
@@ -597,8 +597,8 @@ function entrypoint() -> nothing {
 fn m3_while_loop_type_checks_clean() {
     // WHY: while loop with a bool condition must type-check clean.
     assert_clean(
-        r#"function entrypoint() -> nothing {
-  let x: int = 5
+        r#"function entrypoint() -> Nothing {
+  let x: Int = 5
   while (x > 0) {
     x = x - 1
   }
@@ -612,7 +612,7 @@ fn m3_for_range_loop_type_checks_clean() {
     // WHY: `for (i in range(0, 5))` — the canonical loop form — must type-check
     // clean with `i` typed as `int` inside the body.
     assert_clean(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
   for (i in range(0, 5)) {
     print(i)
   }
@@ -623,7 +623,7 @@ fn m3_for_range_loop_type_checks_clean() {
 #[test]
 fn m3_for_range_one_arg_type_checks_clean() {
     // WHY: `range(end)` (one-argument form) must also type-check clean.
-    assert_clean(r#"function entrypoint() -> nothing { for (i in range(5)) { print(i) } }"#);
+    assert_clean(r#"function entrypoint() -> Nothing { for (i in range(5)) { print(i) } }"#);
 }
 
 #[test]
@@ -631,8 +631,8 @@ fn m3_multi_case_int_type_checks_clean() {
     // WHY: multi-case `if` with int arms must type-check without errors.
     // If the scrutinee and pattern types match and the arms type-check, no errors.
     assert_clean(
-        r#"function entrypoint() -> nothing {
-  let x: int = 2
+        r#"function entrypoint() -> Nothing {
+  let x: Int = 2
   if (x) {
     1 => print(`one`)
     2 => print(`two`)
@@ -648,7 +648,7 @@ fn m3_multi_case_string_type_checks_clean() {
     // comparison in multi-case ships in M3 (byte-equality via `ynz_string_eq`
     // in codegen). Typeck just checks pattern types match the scrutinee.
     assert_clean(
-        r#"function entrypoint() -> nothing {
+        r#"function entrypoint() -> Nothing {
   let s = `hello`
   if (s) {
     `hello` => print(`hi`)
@@ -662,15 +662,15 @@ fn m3_multi_case_string_type_checks_clean() {
 fn m3_return_with_correct_type_is_clean() {
     // WHY: `return 42` in a `-> int` function — the simplest happy-path return.
     assert_clean(
-        r#"function answer() -> int { return 42 }
-function entrypoint() -> nothing { print(answer()) }"#,
+        r#"function answer() -> Int { return 42 }
+function entrypoint() -> Nothing { print(answer()) }"#,
     );
 }
 
 #[test]
 fn m3_return_nothing_in_nothing_fn_is_clean() {
     // WHY: bare `return` in a `-> nothing` function — valid early exit.
-    assert_clean(r#"function entrypoint() -> nothing { return }"#);
+    assert_clean(r#"function entrypoint() -> Nothing { return }"#);
 }
 
 #[test]
@@ -678,8 +678,8 @@ fn m3_nested_calls_type_check_clean() {
     // WHY: `add(add(1, 2), add(3, 4))` — nested call expressions. Each call's
     // return type must flow correctly as the arg type of the outer call.
     assert_clean(
-        r#"function add(a: int, b: int) -> int { return a + b }
-function entrypoint() -> nothing { print(add(add(1, 2), add(3, 4))) }"#,
+        r#"function add(a: Int, b: Int) -> Int { return a + b }
+function entrypoint() -> Nothing { print(add(add(1, 2), add(3, 4))) }"#,
     );
 }
 
@@ -689,8 +689,8 @@ fn m3_multicase_fall_through_ok_for_nothing_fn() {
     // in a `-> nothing` function — fall-through is fine because the function
     // doesn't need to produce a value.
     assert_clean(
-        r#"function entrypoint() -> nothing {
-  let x: int = 3
+        r#"function entrypoint() -> Nothing {
+  let x: Int = 3
   if (x) {
     1 => print(`one`)
     2 => print(`two`)
@@ -705,9 +705,9 @@ fn duplicate_function_name_produces_diagnostic() {
     // WHY: two functions named `foo` must produce exactly 1 error naming both spans.
     // Silent acceptance would mean the second definition silently overwrites the first.
     let out = assert_errors(
-        r#"function foo() -> nothing { }
-function foo() -> nothing { }
-function entrypoint() -> nothing { }"#,
+        r#"function foo() -> Nothing { }
+function foo() -> Nothing { }
+function entrypoint() -> Nothing { }"#,
         1,
     );
     assert!(
@@ -720,20 +720,20 @@ function entrypoint() -> nothing { }"#,
 fn missing_entrypoint_produces_diagnostic() {
     // WHY: guard M1's invariant — a module without entrypoint is a compile error.
     // This must hold even with multi-function M3 modules.
-    let out = assert_errors(r#"function helper() -> nothing { }"#, 1);
+    let out = assert_errors(r#"function helper() -> Nothing { }"#, 1);
     assert!(out.diagnostics[0].what.contains("entrypoint"));
 }
 
 #[test]
 fn entrypoint_with_parameters_produces_diagnostic() {
     // WHY: `entrypoint` must have no parameters. The signature pre-pass catches this.
-    assert_errors(r#"function entrypoint(x: int) -> nothing { }"#, 1);
+    assert_errors(r#"function entrypoint(x: Int) -> Nothing { }"#, 1);
 }
 
 #[test]
 fn m3_entrypoint_with_non_nothing_return_type_produces_diagnostic() {
     // WHY: `entrypoint() -> int` is wrong. The signature pre-pass catches this.
-    let out = assert_errors(r#"function entrypoint() -> int { return 0 }"#, 1);
+    let out = assert_errors(r#"function entrypoint() -> Int { return 0 }"#, 1);
     assert!(out.diagnostics[0].what.contains("entrypoint"));
 }
 
@@ -746,8 +746,8 @@ fn parameter_mutation_produces_m4_deferral() {
     // future-tense deferral message that is now stale. Updated to check the current
     // accurate message ("read-only by default").
     let out = assert_errors(
-        r#"function foo(x: int) -> int { x = 5 return x }
-function entrypoint() -> nothing { print(foo(1)) }"#,
+        r#"function foo(x: Int) -> Int { x = 5 return x }
+function entrypoint() -> Nothing { print(foo(1)) }"#,
         1,
     );
     assert!(out.diagnostics[0].what.contains("x"));
@@ -764,7 +764,7 @@ fn loop_var_mutation_produces_diagnostic() {
     // The loop variable is the iteration counter — mutating it would make loop
     // behavior unpredictable (skip iterations, run forever, etc.).
     let out = assert_errors(
-        r#"function entrypoint() -> nothing { for (i in range(0, 5)) { i = 10 } }"#,
+        r#"function entrypoint() -> Nothing { for (i in range(0, 5)) { i = 10 } }"#,
         1,
     );
     assert!(out.diagnostics[0].what.contains("i"));
@@ -775,8 +775,8 @@ fn wrong_return_type_produces_diagnostic() {
     // WHY: `return `hi`` in a `-> int` function must produce a type-mismatch
     // diagnostic pointing at the wrong expression, not the whole function.
     let out = assert_errors(
-        r#"function foo() -> int { return `hi` }
-function entrypoint() -> nothing { print(foo()) }"#,
+        r#"function foo() -> Int { return `hi` }
+function entrypoint() -> Nothing { print(foo()) }"#,
         1,
     );
     assert!(out
@@ -791,7 +791,7 @@ fn missing_return_produces_diagnostic() {
     // Without this check, the function silently exits with an undefined value.
     // test-ratchet: M7 P1 — migrated to backtick syntax
     let out = assert_errors(
-        "function foo() -> int { print(`no return`) }\nfunction entrypoint() -> nothing { print(foo()) }",
+        "function foo() -> Int { print(`no return`) }\nfunction entrypoint() -> Nothing { print(foo()) }",
         1,
     );
     assert!(out.diagnostics.iter().any(|d| d.what.contains("foo")));
@@ -802,8 +802,8 @@ fn return_without_value_in_non_nothing_fn_produces_diagnostic() {
     // WHY: bare `return` in a `-> int` function is wrong — the function
     // promised a value but returns nothing.
     assert_errors(
-        r#"function foo() -> int { return }
-function entrypoint() -> nothing { print(foo()) }"#,
+        r#"function foo() -> Int { return }
+function entrypoint() -> Nothing { print(foo()) }"#,
         1,
     );
 }
@@ -812,7 +812,7 @@ function entrypoint() -> nothing { print(foo()) }"#,
 fn return_with_value_in_nothing_fn_produces_diagnostic() {
     // WHY: `return 1` inside a `-> nothing` function is a contradiction —
     // the function said it produces no value, then tries to return one.
-    assert_errors(r#"function entrypoint() -> nothing { return 1 }"#, 1);
+    assert_errors(r#"function entrypoint() -> Nothing { return 1 }"#, 1);
 }
 
 #[test]
@@ -821,8 +821,8 @@ fn dead_code_after_return_produces_warning() {
     // so the function still compiles, but the user is informed. Silently ignoring
     // dead code hides bugs (e.g. a return that was meant to be conditional).
     let out = assert_warnings(
-        r#"function foo() -> int { return 1 print(2) }
-function entrypoint() -> nothing { print(foo()) }"#,
+        r#"function foo() -> Int { return 1 print(2) }
+function entrypoint() -> Nothing { print(foo()) }"#,
         1,
     );
     assert!(out
@@ -836,13 +836,13 @@ fn multicase_non_exhaustive_in_non_nothing_fn_produces_diagnostic() {
     // WHY: `function foo(x: int) -> int { if (x) { 1 => return 1 } }` —
     // no else_arm means there's a fall-through path where no value is returned.
     assert_errors(
-        r#"function foo(x: int) -> int {
+        r#"function foo(x: Int) -> Int {
   if (x) {
     1 => return 1
     2 => return 2
   }
 }
-function entrypoint() -> nothing { print(foo(1)) }"#,
+function entrypoint() -> Nothing { print(foo(1)) }"#,
         1,
     );
 }
@@ -851,13 +851,13 @@ function entrypoint() -> nothing { print(foo(1)) }"#,
 fn multicase_with_else_all_arms_return_is_clean() {
     // WHY: exhaustive multi-case with else_arm — all paths return, no error.
     assert_clean(
-        r#"function foo(x: int) -> int {
+        r#"function foo(x: Int) -> Int {
   if (x) {
     1 => return 1
     else => return 0
   }
 }
-function entrypoint() -> nothing { print(foo(1)) }"#,
+function entrypoint() -> Nothing { print(foo(1)) }"#,
     );
 }
 
@@ -866,7 +866,7 @@ fn if_condition_must_be_bool() {
     // WHY: `if (42) { ... }` — integer condition must produce a diagnostic.
     // JavaScript-style truthy coercion is explicitly rejected in Yinz.
     assert_errors(
-        r#"function entrypoint() -> nothing { if (42) { print(`hi`) } }"#,
+        r#"function entrypoint() -> Nothing { if (42) { print(`hi`) } }"#,
         1,
     );
 }
@@ -875,7 +875,7 @@ fn if_condition_must_be_bool() {
 fn while_condition_must_be_bool() {
     // WHY: `while (1) { ... }` — same as if: no truthy coercion.
     assert_errors(
-        r#"function entrypoint() -> nothing { let x: int = 1 while (x) { x = x - 1 } }"#,
+        r#"function entrypoint() -> Nothing { let x: Int = 1 while (x) { x = x - 1 } }"#,
         1,
     );
 }
@@ -886,7 +886,7 @@ fn range_outside_for_produces_m7_deferral() {
     // Storing a range in a variable is now valid; the M3 restriction is lifted.
     // test-ratchet: M7 P3c removes the range-outside-for restriction; the test
     // now verifies that storing a range produces NO error (non-regression).
-    assert_clean(r#"function entrypoint() -> nothing { let r = range(0, 5) }"#);
+    assert_clean(r#"function entrypoint() -> Nothing { let r = range(0, 5) }"#);
     // test-ratchet: M7 P3c lifts M3 range-outside-for restriction
 }
 
@@ -894,7 +894,7 @@ fn range_outside_for_produces_m7_deferral() {
 fn range_wrong_arity_produces_diagnostic() {
     // WHY: `range(1, 2, 3)` — only 1 or 2 args accepted. Three args must error.
     assert_errors(
-        r#"function entrypoint() -> nothing { for (i in range(0, 5, 1)) { print(i) } }"#,
+        r#"function entrypoint() -> Nothing { for (i in range(0, 5, 1)) { print(i) } }"#,
         1,
     );
 }
@@ -903,7 +903,7 @@ fn range_wrong_arity_produces_diagnostic() {
 fn range_wrong_arg_type_produces_diagnostic() {
     // WHY: `range(`hi`)` — range requires `int` args. A string arg must error.
     assert_errors(
-        r#"function entrypoint() -> nothing { for (i in range(`hi`)) { print(i) } }"#,
+        r#"function entrypoint() -> Nothing { for (i in range(`hi`)) { print(i) } }"#,
         1,
     );
 }
@@ -912,7 +912,7 @@ fn range_wrong_arg_type_produces_diagnostic() {
 fn undefined_function_produces_diagnostic_with_levenshtein() {
     // WHY: `unknownFn()` must produce an error. With a close enough name (`main`
     // vs `mann`), the "did you mean" suggestion must fire.
-    let out = assert_errors(r#"function entrypoint() -> nothing { entrpoint() }"#, 1);
+    let out = assert_errors(r#"function entrypoint() -> Nothing { entrpoint() }"#, 1);
     assert!(
         out.diagnostics[0].what_instead.contains("entrypoint"),
         "Levenshtein must suggest `entrypoint` for `entrpoint`, got: {:?}",
@@ -925,8 +925,8 @@ fn function_arg_type_mismatch_produces_diagnostic() {
     // WHY: `function foo(x: int) -> nothing { }; foo(`hi`)` — string passed
     // where int expected. Must produce exactly 1 type-mismatch diagnostic.
     let out = assert_errors(
-        r#"function foo(x: int) -> nothing { }
-function entrypoint() -> nothing { foo(`hi`) }"#,
+        r#"function foo(x: Int) -> Nothing { }
+function entrypoint() -> Nothing { foo(`hi`) }"#,
         1,
     );
     assert!(out.diagnostics[0].what.contains("int") || out.diagnostics[0].what.contains("string"));
@@ -936,8 +936,8 @@ function entrypoint() -> nothing { foo(`hi`) }"#,
 fn function_arg_arity_mismatch_produces_diagnostic() {
     // WHY: `foo(1, 2)` when `foo` takes 1 arg must error with arity count.
     let out = assert_errors(
-        r#"function foo(x: int) -> nothing { }
-function entrypoint() -> nothing { foo(1, 2) }"#,
+        r#"function foo(x: Int) -> Nothing { }
+function entrypoint() -> Nothing { foo(1, 2) }"#,
         1,
     );
     assert!(out.diagnostics[0].what.contains("foo"));
@@ -979,8 +979,8 @@ fn while_true_with_no_break_is_missing_return_error() {
     // A non-nothing function that only has a while loop must get a missing-return
     // error. The diagnostic must guide the user to add a `return` inside the body.
     assert_errors(
-        r#"function foo() -> int { while (true) { } }
-function entrypoint() -> nothing { print(foo()) }"#,
+        r#"function foo() -> Int { while (true) { } }
+function entrypoint() -> Nothing { print(foo()) }"#,
         1,
     );
 }
@@ -990,8 +990,8 @@ fn empty_function_body_non_nothing_is_missing_return() {
     // WHY: `function foo() -> int { }` — zero statements, no return. Must error.
     // Edge case for `analyze_return_paths` with an empty block.
     assert_errors(
-        r#"function foo() -> int { }
-function entrypoint() -> nothing { print(foo()) }"#,
+        r#"function foo() -> Int { }
+function entrypoint() -> Nothing { print(foo()) }"#,
         1,
     );
 }
@@ -1001,7 +1001,7 @@ fn for_loop_var_is_typed_as_int() {
     // WHY: inside `for (i in range(0, 5))`, `i` must be `int` so it can be
     // passed to `print` without a `.toString()` call. If `i` is Error or
     // unknown, print(i) would produce a false type error.
-    assert_clean(r#"function entrypoint() -> nothing { for (i in range(0, 10)) { print(i) } }"#);
+    assert_clean(r#"function entrypoint() -> Nothing { for (i in range(0, 10)) { print(i) } }"#);
 }
 
 #[test]
@@ -1012,7 +1012,7 @@ fn module_signatures_query_is_separate_from_check_query() {
     let sf = SourceFile::new(
         &db,
         FILE.to_string(),
-        "function helper() -> nothing { }".to_string(),
+        "function helper() -> Nothing { }".to_string(),
     );
     let sig_out = ynz_typeck::module_signatures_query(&db, sf);
     // No main → 1 error in sig pass
@@ -1039,11 +1039,11 @@ fn shape_with_struct_literal_type_checks() {
     assert_clean(
         r#"
 shape Player {
-  name: string
-  health: int
+  name: String
+  health: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { name: `Patrick`, health: 100 }
   print(p.health)
 }
@@ -1057,8 +1057,8 @@ fn struct_lit_missing_field_produces_error() {
     // Without this check, shapes could be partially initialized with garbage values.
     let out = assert_errors(
         r#"
-shape Player { name: string health: int }
-function entrypoint() -> nothing { let p: Player = { name: `x` } }
+shape Player { name: String health: Int }
+function entrypoint() -> Nothing { let p: Player = { name: `x` } }
 "#,
         1,
     );
@@ -1075,8 +1075,8 @@ fn struct_lit_wrong_field_type_produces_error() {
     // WHY: Passing an int where a string is expected must be caught.
     assert_errors(
         r#"
-shape Player { name: string }
-function entrypoint() -> nothing { let p: Player = { name: 42 } }
+shape Player { name: String }
+function entrypoint() -> Nothing { let p: Player = { name: 42 } }
 "#,
         1,
     );
@@ -1087,8 +1087,8 @@ fn struct_lit_unknown_field_produces_error() {
     // WHY: Providing a field that doesn't exist on the shape must error.
     assert_errors(
         r#"
-shape Player { name: string }
-function entrypoint() -> nothing { let p: Player = { name: `x`, age: 30 } }
+shape Player { name: String }
+function entrypoint() -> Nothing { let p: Player = { name: `x`, age: 30 } }
 "#,
         1,
     );
@@ -1100,8 +1100,8 @@ fn field_access_resolves_correct_type() {
     // The int literal binop check below confirms the field resolved to int.
     assert_clean(
         r#"
-shape Player { name: string health: int }
-function entrypoint() -> nothing {
+shape Player { name: String health: Int }
+function entrypoint() -> Nothing {
   let p: Player = { name: `x`, health: 100 }
   let doubled = p.health * 2
   print(doubled)
@@ -1116,8 +1116,8 @@ fn field_access_unknown_field_produces_error() {
     // which would cascade into cascading spurious errors everywhere the value is used.
     assert_errors(
         r#"
-shape Player { name: string }
-function entrypoint() -> nothing {
+shape Player { name: String }
+function entrypoint() -> Nothing {
   let p: Player = { name: `x` }
   let x = p.age
 }
@@ -1131,8 +1131,8 @@ fn field_assignment_type_checks() {
     // WHY: `p.health = 50` where health is `int` must check that 50 is `int`.
     assert_clean(
         r#"
-shape Player { name: string health: int }
-function entrypoint() -> nothing {
+shape Player { name: String health: Int }
+function entrypoint() -> Nothing {
   let p: Player = { name: `x`, health: 100 }
   p.health = 50
 }
@@ -1145,8 +1145,8 @@ fn field_assignment_type_mismatch_produces_error() {
     // WHY: `p.health = `fifty`` must error — field is int, value is string.
     assert_errors(
         r#"
-shape Player { name: string health: int }
-function entrypoint() -> nothing {
+shape Player { name: String health: Int }
+function entrypoint() -> Nothing {
   let p: Player = { name: `x`, health: 100 }
   p.health = `fifty`
 }
@@ -1161,8 +1161,8 @@ fn const_field_assignment_produces_error() {
     // This is one of the five const deep-immutability paths from the plan invariants.
     let out = assert_errors(
         r#"
-shape Player { name: string health: int }
-function entrypoint() -> nothing {
+shape Player { name: String health: Int }
+function entrypoint() -> Nothing {
   const p: Player = { name: `x`, health: 100 }
   p.health = 50
 }
@@ -1182,8 +1182,8 @@ fn base_shape_instantiation_produces_error() {
     // Typeck must reject it at the construction site.
     assert_errors(
         r#"
-base shape Entity { name: string }
-function entrypoint() -> nothing { let e: Entity = { name: `x` } }
+base shape Entity { name: String }
+function entrypoint() -> Nothing { let e: Entity = { name: `x` } }
 "#,
         1,
     );
@@ -1196,8 +1196,8 @@ fn hidden_field_outside_shape_produces_error() {
     // Hidden field has a default (required since Fix A) so only the read violation fires.
     assert_errors(
         r#"
-shape Player { name: string hidden cache: int = 0 }
-function entrypoint() -> nothing {
+shape Player { name: String hidden cache: Int = 0 }
+function entrypoint() -> Nothing {
   let p: Player = { name: `x` }
   let x = p.cache
 }
@@ -1212,9 +1212,9 @@ fn self_parameter_resolves_to_shape_type() {
     // and have `self` resolve to `Type::Shape { name: "Player" }`.
     assert_clean(
         r#"
-shape Player { name: string health: int }
-function greet(share self: Player) -> string { return self.name }
-function entrypoint() -> nothing {
+shape Player { name: String health: Int }
+function greet(share self: Player) -> String { return self.name }
+function entrypoint() -> Nothing {
   let p: Player = { name: `Patrick`, health: 100 }
   let g = greet(p)
   print(g)
@@ -1229,9 +1229,9 @@ fn ufcs_method_call_on_shape_resolves() {
     // and return its declared return type. This is the primary M4 interaction pattern.
     assert_clean(
         r#"
-shape Player { name: string }
-function greet(share self: Player) -> string { return self.name }
-function entrypoint() -> nothing {
+shape Player { name: String }
+function greet(share self: Player) -> String { return self.name }
+function entrypoint() -> Nothing {
   let p: Player = { name: `Patrick` }
   let msg = p.greet()
   print(msg)
@@ -1246,9 +1246,9 @@ fn duplicate_shape_name_produces_error() {
     // second silently shadows the first and field lookups become nondeterministic.
     assert_errors(
         r#"
-shape Player { name: string }
-shape Player { health: int }
-function entrypoint() -> nothing { }
+shape Player { name: String }
+shape Player { health: Int }
+function entrypoint() -> Nothing { }
 "#,
         1,
     );
@@ -1260,8 +1260,8 @@ fn struct_lit_without_annotation_produces_error() {
     // to validate against. Without one the compiler cannot check field names.
     assert_errors(
         r#"
-shape Player { name: string }
-function entrypoint() -> nothing { let p = { name: `x` } }
+shape Player { name: String }
+function entrypoint() -> Nothing { let p = { name: `x` } }
 "#,
         1,
     );
@@ -1275,9 +1275,9 @@ fn extends_inherits_parent_fields() {
     // The field is resolved through the flattened field list in ShapeDef.
     assert_clean(
         r#"
-shape Entity { name: string }
-shape Player extends Entity { health: int }
-function entrypoint() -> nothing {
+shape Entity { name: String }
+shape Player extends Entity { health: Int }
+function entrypoint() -> Nothing {
   let p: Player = { name: `Patrick`, health: 100 }
   print(p.name)
   print(p.health)
@@ -1292,8 +1292,8 @@ fn extends_unknown_parent_produces_error() {
     // at the extends declaration, not silently produce a broken shape.
     assert_errors(
         r#"
-shape Player extends Ghost { health: int }
-function entrypoint() -> nothing { }
+shape Player extends Ghost { health: Int }
+function entrypoint() -> Nothing { }
 "#,
         1,
     );
@@ -1306,13 +1306,13 @@ fn follows_satisfied_type_checks() {
     assert_clean(
         r#"
 shape Damageable {
-  takeDamage(lend self, amount: int) -> nothing
+  takeDamage(lend self, amount: Int) -> Nothing
 }
-shape Player follows Damageable { health: int }
-function takeDamage(lend self: Player, amount: int) -> nothing {
+shape Player follows Damageable { health: Int }
+function takeDamage(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health - amount
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { health: 100 }
   takeDamage(p, 10)
 }
@@ -1326,9 +1326,9 @@ fn follows_missing_function_produces_error() {
     // the compiler must catch it and name which function is absent.
     let out = assert_errors(
         r#"
-shape Damageable { takeDamage(lend self, amount: int) -> nothing }
-shape Player follows Damageable { health: int }
-function entrypoint() -> nothing { }
+shape Damageable { takeDamage(lend self, amount: Int) -> Nothing }
+shape Player follows Damageable { health: Int }
+function entrypoint() -> Nothing { }
 "#,
         1,
     );
@@ -1346,10 +1346,10 @@ fn follows_wrong_return_type_produces_error() {
     // must produce a clear mismatch diagnostic.
     assert_errors(
         r#"
-shape Greetable { greet(share self) -> string }
-shape Player follows Greetable { name: string }
-function greet(share self: Player) -> int { return 42 }
-function entrypoint() -> nothing { }
+shape Greetable { greet(share self) -> String }
+shape Player follows Greetable { name: String }
+function greet(share self: Player) -> Int { return 42 }
+function entrypoint() -> Nothing { }
 "#,
         1,
     );
@@ -1394,9 +1394,9 @@ fn give_param_consumes_binding() {
     // Using it afterward must produce a use-after-give error.
     let out = assert_errors(
         r#"
-shape Player { name: string }
-function consume(give p: Player) -> nothing { }
-function entrypoint() -> nothing {
+shape Player { name: String }
+function consume(give p: Player) -> Nothing { }
+function entrypoint() -> Nothing {
   let p: Player = { name: `Patrick` }
   consume(p)
   let x = p.name
@@ -1417,9 +1417,9 @@ fn const_binding_cannot_be_given() {
     // of a const binding. Const deep-immutability path #3.
     assert_errors(
         r#"
-shape Player { name: string }
-function consume(give p: Player) -> nothing { }
-function entrypoint() -> nothing {
+shape Player { name: String }
+function consume(give p: Player) -> Nothing { }
+function entrypoint() -> Nothing {
   const p: Player = { name: `Patrick` }
   consume(p)
 }
@@ -1433,11 +1433,11 @@ fn const_binding_cannot_be_lent() {
     // WHY: `const` blocks the `lend` path. Const deep-immutability path #2.
     assert_errors(
         r#"
-shape Player { health: int }
-function damage(lend self: Player, amount: int) -> nothing {
+shape Player { health: Int }
+function damage(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health - amount
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { health: 100 }
   damage(p, 10)
 }
@@ -1451,9 +1451,9 @@ fn give_twice_is_use_after_give() {
     // WHY: After a value is given, the second give must see it as consumed.
     assert_errors(
         r#"
-shape Player { name: string }
-function consume(give p: Player) -> nothing { }
-function entrypoint() -> nothing {
+shape Player { name: String }
+function consume(give p: Player) -> Nothing { }
+function entrypoint() -> Nothing {
   let p: Player = { name: `Patrick` }
   consume(p)
   consume(p)
@@ -1468,9 +1468,9 @@ fn share_on_const_is_allowed() {
     // WHY: A `share` (read-only) parameter can receive a const binding.
     assert_clean(
         r#"
-shape Player { name: string }
-function greet(share p: Player) -> string { return p.name }
-function entrypoint() -> nothing {
+shape Player { name: String }
+function greet(share p: Player) -> String { return p.name }
+function entrypoint() -> Nothing {
   const p: Player = { name: `Patrick` }
   let g = greet(p)
   print(g)
@@ -1484,9 +1484,9 @@ fn unspecified_param_accepts_const() {
     // WHY: No ownership modifier defaults to share semantics. Const bindings are fine.
     assert_clean(
         r#"
-shape Player { name: string }
-function greet(p: Player) -> string { return p.name }
-function entrypoint() -> nothing {
+shape Player { name: String }
+function greet(p: Player) -> String { return p.name }
+function entrypoint() -> Nothing {
   const p: Player = { name: `Patrick` }
   let g = greet(p)
   print(g)
@@ -1503,16 +1503,16 @@ fn m6_union_type_annotation_works() {
     // Assigning a concrete variant (Circle) to a union type must be valid.
     assert_clean(
         r#"
-shape Circle { radius: number }
-shape Square { side: number }
+shape Circle { radius: Number }
+shape Square { side: Number }
 shape Shape = Circle | Square
-function describe(s: Shape) -> nothing {
+function describe(s: Shape) -> Nothing {
   if (s) {
     is Circle => print(`circle`)
     is Square => print(`square`)
   }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 5.0 }
   let s: Shape = c
   describe(s)
@@ -1526,16 +1526,16 @@ fn m6_union_multicase_exhaustive_clean() {
     // WHY: A fully-covered union multi-case must typecheck cleanly.
     assert_clean(
         r#"
-shape Circle { radius: number }
-shape Square { side: number }
+shape Circle { radius: Number }
+shape Square { side: Number }
 shape Shape = Circle | Square
-function classify(s: Shape) -> nothing {
+function classify(s: Shape) -> Nothing {
   if (s) {
     is Circle => print(`circle`)
     is Square => print(`square`)
   }
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
     );
 }
@@ -1545,18 +1545,18 @@ fn m6_union_multicase_nonexhaustive_is_error() {
     // WHY: A missing `is Foo` arm in a union multi-case must produce an error.
     assert_errors(
         r#"
-shape Circle { radius: number }
-shape Square { side: number }
-shape Triangle { width: number
-  height: number }
+shape Circle { radius: Number }
+shape Square { side: Number }
+shape Triangle { width: Number
+  height: Number }
 shape Shape = Circle | Square | Triangle
-function classify(s: Shape) -> nothing {
+function classify(s: Shape) -> Nothing {
   if (s) {
     is Circle => print(`circle`)
     is Square => print(`square`)
   }
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         1,
     );
@@ -1567,18 +1567,18 @@ fn m6_union_multicase_with_else_is_clean() {
     // WHY: `else =>` covers all remaining variants — must typecheck clean.
     assert_clean(
         r#"
-shape Circle { radius: number }
-shape Square { side: number }
-shape Triangle { width: number
-  height: number }
+shape Circle { radius: Number }
+shape Square { side: Number }
+shape Triangle { width: Number
+  height: Number }
 shape Shape = Circle | Square | Triangle
-function classify(s: Shape) -> nothing {
+function classify(s: Shape) -> Nothing {
   if (s) {
     is Circle => print(`circle`)
     else => print(`other`)
   }
 }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
     );
 }
@@ -1588,9 +1588,9 @@ fn m6_is_expr_on_non_union_is_error() {
     // WHY: `is Foo` on a non-union (e.g., string) must produce a teaching error.
     assert_errors(
         r#"
-function entrypoint() -> nothing {
-  let s: string = `hello`
-  if (s is int) {
+function entrypoint() -> Nothing {
+  let s: String = `hello`
+  if (s is Int) {
     print(`wrong`)
   }
 }
@@ -1608,7 +1608,7 @@ fn m6_options_value_typechecks() {
     assert_clean(
         r#"
 options Status { active, inactive, banned }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.active
   print(s.toString())
 }
@@ -1623,7 +1623,7 @@ fn m6_options_unknown_variant_is_error() {
     assert_errors(
         r#"
 options Status { active, inactive, banned }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.activ
 }
 "#,
@@ -1637,7 +1637,7 @@ fn m6_options_empty_body_is_error() {
     assert_errors(
         r#"
 options Empty { }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         1,
     );
@@ -1649,7 +1649,7 @@ fn m6_options_single_variant_is_error() {
     assert_errors(
         r#"
 options Single { only }
-function entrypoint() -> nothing { }
+function entrypoint() -> Nothing { }
 "#,
         1,
     );
@@ -1662,7 +1662,7 @@ fn m6_options_multicase_exhaustive_clean() {
     assert_clean(
         r#"
 options Status { active, inactive }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.active
   if (s) {
     active => print(`ok`)
@@ -1680,7 +1680,7 @@ fn m6_options_multicase_nonexhaustive_is_error() {
     assert_errors(
         r#"
 options Status { active, inactive, banned }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.active
   if (s) {
     active => print(`ok`)
@@ -1699,7 +1699,7 @@ fn m6_options_multicase_with_else_arm_is_clean() {
     assert_clean(
         r#"
 options Status { active, inactive, banned }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.active
   if (s) {
     active => print(`ok`)
@@ -1716,7 +1716,7 @@ fn m6_same_options_comparison_clean() {
     assert_clean(
         r#"
 options Status { active, inactive }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a: Status = Status.active
   let b: Status = Status.inactive
   let eq = a == b
@@ -1734,7 +1734,7 @@ fn m6_cross_options_comparison_is_error() {
         r#"
 options Status { active, inactive }
 options Visibility { visible, invisible }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s: Status = Status.active
   let v: Visibility = Visibility.visible
   let eq = s == v
@@ -1749,7 +1749,7 @@ fn m6_bool_to_int_is_error() {
     // WHY: `.toInt()` on bool must be rejected — no silent 0/1 coercion.
     assert_errors(
         r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = true.toInt()
 }
 "#,
@@ -1762,9 +1762,9 @@ fn m6_int_to_int_is_clean() {
     // WHY: `.toInt()` on int must be the identity and return `int` directly (not `maybe<int>`).
     assert_clean(
         r#"
-function entrypoint() -> nothing {
-  let x: int = 42
-  let y: int = x.toInt()
+function entrypoint() -> Nothing {
+  let x: Int = 42
+  let y: Int = x.toInt()
   print(y.toString())
 }
 "#,
@@ -1777,9 +1777,9 @@ fn m6_float_to_int_returns_maybe() {
     // If this returns int, NaN and OOR cases silently produce wrong values at runtime.
     assert_clean(
         r#"
-function entrypoint() -> nothing {
-  let x: float = 3.14
-  let y: maybe<int> = x.toInt()
+function entrypoint() -> Nothing {
+  let x: Float = 3.14
+  let y: Maybe<Int> = x.toInt()
   print(y.or(0).toString())
 }
 "#,
@@ -1792,9 +1792,9 @@ fn m6_string_to_int_returns_maybe() {
     // Must return `maybe<int>` so the caller handles the failure case.
     assert_clean(
         r#"
-function entrypoint() -> nothing {
-  let s: string = `42`
-  let x: maybe<int> = s.toInt()
+function entrypoint() -> Nothing {
+  let s: String = `42`
+  let x: Maybe<Int> = s.toInt()
   print(x.or(0).toString())
 }
 "#,
@@ -1810,11 +1810,11 @@ fn bug3_multi_level_inheritance_flatten_deterministic() {
     // the deterministic ordering fix is incomplete.
     assert_clean(
         r#"
-shape A { x: int }
-shape B extends A { y: int }
-shape C extends B { z: int }
+shape A { x: Int }
+shape B extends A { y: Int }
+shape C extends B { z: Int }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: C = { x: 1, y: 2, z: 3 }
   print(`${c.x}`)
   print(`${c.y}`)
@@ -1832,12 +1832,12 @@ fn m8_background_rejects_share_param_callee() {
     // hole. This test catches regressions where the check is removed or bypassed.
     let output = assert_errors(
         r#"
-function readData(share data: string) -> nothing {
+function readData(share data: String) -> Nothing {
   print(data)
 }
 
-function entrypoint() -> nothing {
-  let s: string = `hello`
+function entrypoint() -> Nothing {
+  let s: String = `hello`
   background readData(s)
 }
 "#,
@@ -1883,9 +1883,9 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     let a_path = dir.join("a.ynz");
 
     // v1: fileB exports `foo(x: int) -> int`. fileA imports and calls `foo(42)`.
-    let file_b_v1 = "export function foo(x: int) -> int { return x }";
+    let file_b_v1 = "export function foo(x: Int) -> Int { return x }";
     let file_a_src =
-        "import { foo } from `b`\nfunction entrypoint() -> nothing { let r = foo(42) }";
+        "import { foo } from `b`\nfunction entrypoint() -> Nothing { let r = foo(42) }";
 
     std::fs::write(&b_path, file_b_v1).expect("write b.ynz v1");
     std::fs::write(&a_path, file_a_src).expect("write a.ynz");
@@ -1917,7 +1917,7 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     );
 
     // Change fileB's foo to take a string instead of int — same name, different signature.
-    let file_b_v2 = "export function foo(x: string) -> int { return 42 }";
+    let file_b_v2 = "export function foo(x: String) -> Int { return 42 }";
     std::fs::write(&b_path, file_b_v2).expect("write b.ynz v2");
     sf_b.set_text(&mut db).to(file_b_v2.to_string());
 
@@ -1949,10 +1949,10 @@ fn hidden_field_without_default_value_is_compile_error() {
     let output = assert_errors(
         r#"
 shape Foo {
-    name: string
-    hidden bar: int
+    name: String
+    hidden bar: Int
 }
-function entrypoint() -> nothing {}
+function entrypoint() -> Nothing {}
 "#,
         1,
     );
@@ -1974,10 +1974,10 @@ fn hidden_maybe_field_without_default_suggests_none() {
     let output = assert_errors(
         r#"
 shape Foo {
-    name: string
-    hidden cache: maybe<int>
+    name: String
+    hidden cache: Maybe<Int>
 }
-function entrypoint() -> nothing {}
+function entrypoint() -> Nothing {}
 "#,
         1,
     );
@@ -2000,11 +2000,11 @@ fn same_file_construction_can_omit_hidden_field() {
     assert_clean(
         r#"
 shape Foo {
-    name: string
-    hidden bar: int = 0
+    name: String
+    hidden bar: Int = 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     const x: Foo = { name: `hello` }
     print(x.name)
 }
@@ -2034,13 +2034,13 @@ fn external_file_construction_cannot_set_hidden_field() {
 
     std::fs::write(
         &player_path,
-        "export shape Player { name: string hidden secret: int = 0 }",
+        "export shape Player { name: String hidden secret: Int = 0 }",
     )
     .expect("write player.ynz");
     std::fs::write(
         &main_path,
         "import { Player } from `player`\n\
-         function entrypoint() -> nothing {\n\
+         function entrypoint() -> Nothing {\n\
              const p: Player = { name: `Alice`, secret: 42 }\n\
          }",
     )
@@ -2093,8 +2093,8 @@ fn m8_background_let_binding_nonsuspending_callee_rejected() {
     //      (`background-handle-nonsuspending-callee`).
     let output = assert_errors(
         r#"
-function readData() -> nothing { print(`hello`) }
-function entrypoint() -> nothing {
+function readData() -> Nothing { print(`hello`) }
+function entrypoint() -> Nothing {
   let h = background readData()
 }
 "#,
@@ -2117,11 +2117,11 @@ fn v0_3_m4_background_handle_form_typechecks_for_suspending_callee() {
     //      task handle; `h.receive()` types as `T errors` (EC methods like `.or()` work).
     assert_clean(
         r#"
-function worker() -> int errors {
+function worker() -> Int errors {
   wait sleep(1)
   return 42
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let h = background worker()
   let r = h.receive()
   let v = r.or(0)
@@ -2138,8 +2138,8 @@ fn anon_shape_basic_annotation_works() {
     // WHY: minimal inline shape — must compile clean and bind fields correctly.
     assert_clean(
         r#"
-function entrypoint() -> nothing {
-  let p: { a: int, b: string } = { a: 1, b: `hi` }
+function entrypoint() -> Nothing {
+  let p: { a: Int, b: String } = { a: 1, b: `hi` }
   print(p.b)
 }
 "#,
@@ -2152,9 +2152,9 @@ fn anon_shape_field_order_irrelevant_for_equivalence() {
     //      so that passing one where the other is expected compiles clean.
     assert_clean(
         r#"
-function takesAB(p: { a: int, b: int }) -> nothing { print(`${p.a}`) }
-function entrypoint() -> nothing {
-  let x: { b: int, a: int } = { a: 1, b: 2 }
+function takesAB(p: { a: Int, b: Int }) -> Nothing { print(`${p.a}`) }
+function entrypoint() -> Nothing {
+  let x: { b: Int, a: Int } = { a: 1, b: 2 }
   takesAB(x)
 }
 "#,
@@ -2167,8 +2167,8 @@ fn anon_shape_unknown_field_rejected() {
     //      contract says exactly which fields exist.
     let output = assert_errors(
         r#"
-function entrypoint() -> nothing {
-  let x: { a: int } = { a: 1, b: 2 }
+function entrypoint() -> Nothing {
+  let x: { a: Int } = { a: 1, b: 2 }
 }
 "#,
         1,
@@ -2187,8 +2187,8 @@ fn anon_shape_missing_field_rejected() {
     //      initialization just like named shapes.
     let output = assert_errors(
         r#"
-function entrypoint() -> nothing {
-  let x: { a: int, b: int } = { a: 1 }
+function entrypoint() -> Nothing {
+  let x: { a: Int, b: Int } = { a: 1 }
 }
 "#,
         1,
@@ -2207,10 +2207,10 @@ fn anon_shape_named_shape_are_different_types() {
     //      do NOT interconvert; the user must pick one or the other.
     let output = assert_errors(
         r#"
-shape Foo { a: int }
-function entrypoint() -> nothing {
+shape Foo { a: Int }
+function entrypoint() -> Nothing {
   let x: Foo = { a: 1 }
-  let y: { a: int } = x
+  let y: { a: Int } = x
 }
 "#,
         1,
@@ -2235,8 +2235,8 @@ fn anon_shape_nested_works() {
     //      anon shape is hoisted to its own canonical synthetic name.
     assert_clean(
         r#"
-function entrypoint() -> nothing {
-  let p: { outer: { inner: int } } = { outer: { inner: 42 } }
+function entrypoint() -> Nothing {
+  let p: { outer: { inner: Int } } = { outer: { inner: 42 } }
   print(`${p.outer.inner}`)
 }
 "#,
@@ -2249,8 +2249,8 @@ fn anon_shape_in_fixed_works_with_for_destructure() {
     //      destructuring. End-to-end integration with destructuring from commit 19d9d4c.
     assert_clean(
         r#"
-function entrypoint() -> nothing {
-  const intervals: fixed<{ minutes: int }> = [
+function entrypoint() -> Nothing {
+  const intervals: Fixed<{ minutes: Int }> = [
     { minutes: 5 },
     { minutes: 15 },
     { minutes: 60 },
@@ -2268,9 +2268,9 @@ fn anon_shape_field_access_works() {
     // WHY: field access on an anon-shape-typed binding must resolve field types.
     assert_clean(
         r#"
-function entrypoint() -> nothing {
-  let p: { x: int, y: int } = { x: 3, y: 4 }
-  let sum: int = p.x + p.y
+function entrypoint() -> Nothing {
+  let p: { x: Int, y: Int } = { x: 3, y: 4 }
+  let sum: Int = p.x + p.y
   print(`${sum}`)
 }
 "#,
@@ -2283,11 +2283,11 @@ fn anon_shape_as_function_param_works() {
     //      the function signature pre-pass must hoist the anon shape.
     assert_clean(
         r#"
-function area(rect: { w: int, h: int }) -> int {
+function area(rect: { w: Int, h: Int }) -> Int {
   return rect.w * rect.h
 }
-function entrypoint() -> nothing {
-  let r: { w: int, h: int } = { w: 5, h: 3 }
+function entrypoint() -> Nothing {
+  let r: { w: Int, h: Int } = { w: 5, h: 3 }
   print(`${area(r)}`)
 }
 "#,
@@ -2331,9 +2331,9 @@ fn lint_warns_when_same_inline_shape_used_twice() {
     // a named shape. Without this, users silently accumulate duplicate type definitions
     // that must be updated separately when the shape changes.
     let output = run(r#"
-function f1(p: { a: int, b: string }) -> nothing { print(p.b) }
-function f2(q: { a: int, b: string }) -> nothing { print(q.b) }
-function entrypoint() -> nothing { f1({ a: 1, b: `hi` })  f2({ a: 2, b: `yo` }) }
+function f1(p: { a: Int, b: String }) -> Nothing { print(p.b) }
+function f2(q: { a: Int, b: String }) -> Nothing { print(q.b) }
+function entrypoint() -> Nothing { f1({ a: 1, b: `hi` })  f2({ a: 2, b: `yo` }) }
 "#);
     let warnings: Vec<_> = output
         .diagnostics
@@ -2362,9 +2362,9 @@ fn lint_no_warning_for_unique_inline_shapes() {
     // WHY: When each inline shape is used exactly once, no lint should fire.
     // Guards that the lint doesn't cry wolf on legitimate one-off shapes.
     let output = run(r#"
-function f1(p: { a: int }) -> nothing { print(p.a) }
-function f2(q: { b: string }) -> nothing { print(q.b) }
-function entrypoint() -> nothing { f1({ a: 1 })  f2({ b: `hi` }) }
+function f1(p: { a: Int }) -> Nothing { print(p.a) }
+function f2(q: { b: String }) -> Nothing { print(q.b) }
+function entrypoint() -> Nothing { f1({ a: 1 })  f2({ b: `hi` }) }
 "#);
     let repeated_warnings: Vec<_> = output
         .diagnostics
@@ -2386,8 +2386,8 @@ fn lint_fires_for_inline_shape_in_param_and_return_type() {
     // counts as 2 uses. Guards that the lint counts both annotation positions,
     // not just the first one it encounters.
     let output = run(r#"
-function f1(p: { x: int, y: int }) -> { x: int, y: int } { return p }
-function entrypoint() -> nothing {}
+function f1(p: { x: Int, y: Int }) -> { x: Int, y: Int } { return p }
+function entrypoint() -> Nothing {}
 "#);
     let warnings: Vec<_> = output
         .diagnostics
@@ -2426,9 +2426,9 @@ fn cross_file_inline_shape_structural_equivalence_positive() {
     std::fs::create_dir_all(&dir).expect("create temp dir");
     std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
 
-    let a_src = "export function takesAB(p: { a: int, b: string }) -> nothing { print(p.b) }";
+    let a_src = "export function takesAB(p: { a: Int, b: String }) -> Nothing { print(p.b) }";
     let b_src = "import { takesAB } from `a`\n\
-                 function entrypoint() -> nothing { takesAB({ a: 1, b: `hi` }) }";
+                 function entrypoint() -> Nothing { takesAB({ a: 1, b: `hi` }) }";
 
     let a_path = dir.join("a.ynz");
     let b_path = dir.join("b.ynz");
@@ -2490,9 +2490,9 @@ fn cross_file_inline_shape_field_mismatch_documents_known_gap() {
     std::fs::create_dir_all(&dir).expect("create temp dir");
     std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
 
-    let a_src = "export function takesAB(p: { a: int, b: string }) -> nothing { print(p.b) }";
+    let a_src = "export function takesAB(p: { a: Int, b: String }) -> Nothing { print(p.b) }";
     let b_src = "import { takesAB } from `a`\n\
-                 function entrypoint() -> nothing { takesAB({ a: 1, c: `hi` }) }";
+                 function entrypoint() -> Nothing { takesAB({ a: 1, c: `hi` }) }";
 
     let a_path = dir.join("a.ynz");
     let b_path = dir.join("b.ynz");
@@ -2527,8 +2527,8 @@ fn cross_file_inline_shape_field_mismatch_documents_known_gap() {
 fn anon_shape_unknown_field_type_errors() {
     let output = assert_errors(
         r#"
-function entrypoint() -> nothing {
-  const intervals: fixed<{ minutes: int, timeframe: Timeframe }> = []
+function entrypoint() -> Nothing {
+  const intervals: Fixed<{ minutes: Int, timeframe: Timeframe }> = []
 }
 "#,
         1,
@@ -2551,8 +2551,8 @@ function entrypoint() -> nothing {
 fn anon_shape_unknown_type_in_maybe_field_errors() {
     let output = assert_errors(
         r#"
-function entrypoint() -> nothing {
-  let x: { val: maybe<GhostType> } = { val: none }
+function entrypoint() -> Nothing {
+  let x: { val: Maybe<GhostType> } = { val: none }
 }
 "#,
         1,
@@ -2577,14 +2577,14 @@ function entrypoint() -> nothing {
 // "not defined" error instead of a successful type-check.
 #[test]
 fn sleep_ms_with_int_arg_is_clean() {
-    assert_clean("function entrypoint() -> nothing {\n  sleepBlocking(50)\n}");
+    assert_clean("function entrypoint() -> Nothing {\n  sleepBlocking(50)\n}");
 }
 
 // WHY: sleepBlocking with a non-int arg must produce a clear teaching error.
 // Guards against the typeck arm silently accepting wrong-typed arguments.
 #[test]
 fn sleep_ms_with_wrong_type_produces_error() {
-    let out = run("function entrypoint() -> nothing {\n  sleepBlocking(`not an int`)\n}");
+    let out = run("function entrypoint() -> Nothing {\n  sleepBlocking(`not an int`)\n}");
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -2604,7 +2604,7 @@ fn sleep_ms_with_wrong_type_produces_error() {
 // WHY: sleepBlocking with 0 args must produce an arity error.
 #[test]
 fn sleep_ms_with_no_args_produces_error() {
-    let out = run("function entrypoint() -> nothing {\n  sleepBlocking()\n}");
+    let out = run("function entrypoint() -> Nothing {\n  sleepBlocking()\n}");
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -2619,7 +2619,7 @@ fn sleep_ms_with_no_args_produces_error() {
 // WHY: sleepBlocking with 2 args must produce an arity error.
 #[test]
 fn sleep_ms_with_two_args_produces_error() {
-    let out = run("function entrypoint() -> nothing {\n  sleepBlocking(50, 100)\n}");
+    let out = run("function entrypoint() -> Nothing {\n  sleepBlocking(50, 100)\n}");
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -2686,8 +2686,8 @@ fn run_kernel(source: &str) -> CheckOutput {
 // original value might be dropped while the mutation is in progress.
 #[test]
 fn background_with_lend_param_rejected() {
-    let src = "function mutate(lend x: int) -> nothing { }\n\
-               function entrypoint() -> nothing { let x: int = 5\n background mutate(x) }";
+    let src = "function mutate(lend x: Int) -> Nothing { }\n\
+               function entrypoint() -> Nothing { let x: Int = 5\n background mutate(x) }";
     let out = run(src);
     let errors: Vec<_> = out
         .diagnostics
@@ -2762,8 +2762,8 @@ fn background_with_small_copy_no_warn() {
 // is from the `wait` keyword itself — one diagnostic, from one arm.
 #[test]
 fn wait_in_kernel_mode_rejected() {
-    let src = "function slow() -> int { return 1 }\n\
-               function entrypoint() -> nothing { let x = wait slow() }";
+    let src = "function slow() -> Int { return 1 }\n\
+               function entrypoint() -> Nothing { let x = wait slow() }";
     let out = run_kernel(src);
     let errors: Vec<_> = out
         .diagnostics
@@ -2793,7 +2793,7 @@ fn wait_in_kernel_mode_rejected() {
 // block (the --kernel flag is hidden from the public CLI), so this test IS the real trigger.
 #[test]
 fn channel_construction_in_kernel_mode_rejected() {
-    let src = "function entrypoint() -> nothing { let ch: channel<int> = channel<int>() }";
+    let src = "function entrypoint() -> Nothing { let ch: Channel<Int> = Channel<Int>() }";
     let out = run_kernel(src);
     let errors: Vec<_> = out
         .diagnostics
@@ -2814,9 +2814,9 @@ fn channel_construction_in_kernel_mode_rejected() {
 // no diagnostics. If a valid channel construction ever starts emitting an error, this fails.
 #[test]
 fn channel_construction_default_and_explicit_capacity_typecheck() {
-    let src = "function entrypoint() -> nothing {\n\
-               let a: channel<int> = channel<int>()\n\
-               let b: channel<string> = channel<string>(16)\n }";
+    let src = "function entrypoint() -> Nothing {\n\
+               let a: Channel<Int> = Channel<Int>()\n\
+               let b: Channel<String> = Channel<String>(16)\n }";
     let out = run(src);
     let errors: Vec<_> = out
         .diagnostics
@@ -2858,7 +2858,7 @@ fn channel_non_positive_capacity_literal_rejected() {
 // `<T>` and a wrong-typed capacity are both rejected with teaching diagnostics.
 #[test]
 fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
-    let missing = run("function entrypoint() -> nothing { let c = channel() }");
+    let missing = run("function entrypoint() -> Nothing { let c = Channel() }");
     assert!(
         missing
             .diagnostics
@@ -2869,7 +2869,7 @@ fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
     );
 
     let wrong =
-        run("function entrypoint() -> nothing { let c: channel<int> = channel<int>(`nope`) }");
+        run("function entrypoint() -> Nothing { let c: Channel<Int> = Channel<Int>(`nope`) }");
     assert!(
         wrong
             .diagnostics
@@ -2897,13 +2897,13 @@ fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
 // annotation. Before the fix: 0 typeck errors + codegen ICE. After: 1 teaching error.
 #[test]
 fn channel_from_shape_field_unannotated_rejected() {
-    let src = "shape Box { wire: channel<int> }\n\
-               function drain(b: Box) -> nothing {\n\
+    let src = "shape Box { wire: Channel<Int> }\n\
+               function drain(b: Box) -> Nothing {\n\
                  let c = b.wire\n\
                  let first = c.receive()\n\
                  print(first)\n\
                }\n\
-               function entrypoint() -> nothing { }";
+               function entrypoint() -> Nothing { }";
     let out = assert_errors(src, 1);
     assert!(
         out.diagnostics
@@ -2918,7 +2918,7 @@ fn channel_from_shape_field_unannotated_rejected() {
 // `.value` extraction produces a channel binding the resolver can't derive.
 #[test]
 fn channel_from_maybe_value_unannotated_rejected() {
-    let src = "function drain(chans: array<channel<int>>) -> nothing {\n\
+    let src = "function drain(chans: Array<Channel<Int>>) -> Nothing {\n\
                  let slot = chans[0]\n\
                  if (slot.exists()) {\n\
                    let c = slot.value\n\
@@ -2926,7 +2926,7 @@ fn channel_from_maybe_value_unannotated_rejected() {
                    print(first)\n\
                  }\n\
                }\n\
-               function entrypoint() -> nothing { }";
+               function entrypoint() -> Nothing { }";
     let out = assert_errors(src, 1);
     assert!(
         out.diagnostics
@@ -2941,13 +2941,13 @@ fn channel_from_maybe_value_unannotated_rejected() {
 // (loop vars are not `let` bindings), found while closing the class.
 #[test]
 fn channel_loop_variable_receiver_rejected() {
-    let src = "function drain(chans: array<channel<int>>) -> nothing {\n\
+    let src = "function drain(chans: Array<Channel<Int>>) -> Nothing {\n\
                  for (c in chans) {\n\
                    let first = c.receive()\n\
                    print(first)\n\
                  }\n\
                }\n\
-               function entrypoint() -> nothing { }";
+               function entrypoint() -> Nothing { }";
     let out = assert_errors(src, 1);
     assert!(
         out.diagnostics
@@ -2964,14 +2964,14 @@ fn channel_loop_variable_receiver_rejected() {
 #[test]
 fn channel_from_shape_field_annotated_accepted() {
     assert_clean(
-        "shape Box { wire: channel<int> }\n\
-         function drain(b: Box) -> nothing {\n\
-           let c: channel<int> = b.wire\n\
+        "shape Box { wire: Channel<Int> }\n\
+         function drain(b: Box) -> Nothing {\n\
+           let c: Channel<Int> = b.wire\n\
            let first = c.receive()\n\
            let value = first.or(0)\n\
            print(value)\n\
          }\n\
-         function entrypoint() -> nothing { }",
+         function entrypoint() -> Nothing { }",
     );
 }
 
@@ -2980,8 +2980,8 @@ fn channel_from_shape_field_annotated_accepted() {
 #[test]
 fn channel_alias_of_derivable_binding_accepted() {
     assert_clean(
-        "function entrypoint() -> nothing {\n\
-           let a: channel<int> = channel<int>(4)\n\
+        "function entrypoint() -> Nothing {\n\
+           let a: Channel<Int> = Channel<Int>(4)\n\
            let b2 = a\n\
            let first = b2.receive()\n\
            let value = first.or(0)\n\
@@ -2996,11 +2996,11 @@ fn channel_alias_of_derivable_binding_accepted() {
 // Same ICE class as the channel cases before the fix.
 #[test]
 fn handle_from_maybe_value_rejected() {
-    let src = "function worker() -> int {\n\
+    let src = "function worker() -> Int {\n\
                  sleep(10)\n\
                  return 42\n\
                }\n\
-               function entrypoint() -> nothing {\n\
+               function entrypoint() -> Nothing {\n\
                  let h = background worker()\n\
                  let hs = [h]\n\
                  let slot = hs[0]\n\
@@ -3040,8 +3040,8 @@ fn wait_suspending_in_kernel_mode_produces_exactly_one_diagnostic() {
     // which hits the call-dispatch kernel guard → 2nd error. With the fix: 1 error total.
     // NOTE: `sleep` itself fires a kernel error inside `slow`'s body, so we count errors
     // ONLY at the entrypoint's `wait slow()` call span — filter by containing "wait".
-    let src = "function slow() -> nothing { sleep(50) }\n\
-               function entrypoint() -> nothing { wait slow() }";
+    let src = "function slow() -> Nothing { sleep(50) }\n\
+               function entrypoint() -> Nothing { wait slow() }";
     let out = run_kernel(src);
     // Count errors whose `what` mentions "wait" — these are `wait`-keyword rejections.
     // The `sleep` inside `slow` fires a separate kernel error which is correct and not
@@ -3067,8 +3067,8 @@ fn wait_suspending_in_kernel_mode_produces_exactly_one_diagnostic() {
 // WHY: kernel mode must reject `background` with a teaching error.
 #[test]
 fn background_in_kernel_mode_rejected() {
-    let src = "function process() -> nothing { }\n\
-               function entrypoint() -> nothing { background process() }";
+    let src = "function process() -> Nothing { }\n\
+               function entrypoint() -> Nothing { background process() }";
     let out = run_kernel(src);
     let errors: Vec<_> = out
         .diagnostics
@@ -3092,8 +3092,8 @@ fn background_in_kernel_mode_rejected() {
 // Guards that the per-Cg bg_uid counter prevents duplicate closure names.
 #[test]
 fn background_inside_for_loop_compiles() {
-    let src = "function process(i: int) -> nothing { }\n\
-               function entrypoint() -> nothing {\n  for (i in range(0, 3)) {\n    background process(i)\n  }\n}";
+    let src = "function process(i: Int) -> Nothing { }\n\
+               function entrypoint() -> Nothing {\n  for (i in range(0, 3)) {\n    background process(i)\n  }\n}";
     assert_clean(src);
 }
 
@@ -3101,9 +3101,9 @@ fn background_inside_for_loop_compiles() {
 // lend-cross-thread error — verifies that desugaring path is covered.
 #[test]
 fn background_method_call_with_lend_self_rejected() {
-    let src = "shape Counter { n: int }\n\
-               function increment(lend self: Counter) -> nothing { self.n = self.n + 1 }\n\
-               function entrypoint() -> nothing {\n  let c: Counter = { n: 0 }\n  background c.increment()\n}";
+    let src = "shape Counter { n: Int }\n\
+               function increment(lend self: Counter) -> Nothing { self.n = self.n + 1 }\n\
+               function entrypoint() -> Nothing {\n  let c: Counter = { n: 0 }\n  background c.increment()\n}";
     let out = run(src);
     let errors: Vec<_> = out
         .diagnostics
@@ -3122,8 +3122,8 @@ fn background_method_call_with_lend_self_rejected() {
 // function signature declares `give x`. The test passes `x` directly (not `x.give`).
 #[test]
 fn background_give_then_use_after_rejected() {
-    let src = "function process(give x: int) -> nothing { }\n\
-               function entrypoint() -> nothing {\n  let x: int = 5\n  background process(x)\n  print(x)\n}";
+    let src = "function process(give x: Int) -> Nothing { }\n\
+               function entrypoint() -> Nothing {\n  let x: Int = 5\n  background process(x)\n  print(x)\n}";
     let out = run(src);
     let errors: Vec<_> = out
         .diagnostics
@@ -3142,8 +3142,8 @@ fn background_give_then_use_after_rejected() {
 #[test]
 fn background_with_zero_byte_struct_no_warn() {
     let src = "shape Empty {}\n\
-               function process(e: Empty) -> nothing { }\n\
-               function entrypoint() -> nothing {\n  let e: Empty = {}\n  background process(e.copy())\n}";
+               function process(e: Empty) -> Nothing { }\n\
+               function entrypoint() -> Nothing {\n  let e: Empty = {}\n  background process(e.copy())\n}";
     let out = run(src);
     let warnings: Vec<_> = out
         .diagnostics
@@ -3168,8 +3168,8 @@ fn background_with_zero_byte_struct_no_warn() {
 #[test]
 fn wait_in_while_loop_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
   while (i < 3) {
     wait sleep(100)
     i = i + 1
@@ -3196,7 +3196,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_in_for_loop_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   for (i in range(0, 3)) {
     wait sleep(100)
   }
@@ -3222,8 +3222,8 @@ function entrypoint() -> nothing {
 #[test]
 fn local_binding_crossing_wait_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
-  let x: int = 5
+function entrypoint() -> Nothing {
+  let x: Int = 5
   wait sleep(30)
   print(x.toString())
 }
@@ -3237,12 +3237,12 @@ function entrypoint() -> nothing {
 #[test]
 fn param_read_after_wait_is_accepted() {
     let src = r#"
-function pause(n: int) -> nothing {
+function pause(n: Int) -> Nothing {
   print(n.toString())
   wait sleep(100)
   print(n.toString())
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background pause(1)
 }
 "#;
@@ -3255,13 +3255,13 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_at_top_level_and_in_if_is_accepted() {
     let src = r#"
-function maybeWait(b: boolean) -> nothing {
+function maybeWait(b: Boolean) -> Nothing {
   if (b) {
     wait sleep(50)
   }
   wait sleep(10)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background maybeWait(true)
   sleepBlocking(200)
 }
@@ -3276,8 +3276,8 @@ function entrypoint() -> nothing {
 #[test]
 fn local_before_if_nested_wait_read_after_if_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
-  let x: int = 5
+function entrypoint() -> Nothing {
+  let x: Int = 5
   if (x < 10) {
     wait sleep(30)
   }
@@ -3294,8 +3294,8 @@ function entrypoint() -> nothing {
 #[test]
 fn local_before_if_nested_wait_read_inside_branch_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
-  let x: int = 5
+function entrypoint() -> Nothing {
+  let x: Int = 5
   if (x < 10) {
     wait sleep(30)
     print(x.toString())
@@ -3312,9 +3312,9 @@ function entrypoint() -> nothing {
 #[test]
 fn local_inside_if_branch_before_wait_read_after_wait_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   if (true) {
-    let y: int = 7
+    let y: Int = 7
     wait sleep(30)
     print(y.toString())
   }
@@ -3328,8 +3328,8 @@ function entrypoint() -> nothing {
 #[test]
 fn local_declared_and_read_before_wait_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
-  let x: int = 5
+function entrypoint() -> Nothing {
+  let x: Int = 5
   print(x.toString())
   wait sleep(10)
 }
@@ -3342,9 +3342,9 @@ function entrypoint() -> nothing {
 #[test]
 fn local_declared_after_wait_is_accepted() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(10)
-  let z: int = 99
+  let z: Int = 99
   print(z.toString())
 }
 "#;
@@ -3360,16 +3360,16 @@ function entrypoint() -> nothing {
 #[test]
 fn result_binding_crosses_later_suspension_is_accepted() {
     let src = r#"
-function sleeper() -> int {
+function sleeper() -> Int {
   wait sleep(10)
   return 5
 }
-function compute() -> int {
+function compute() -> Int {
   let slot = sleeper()
   let other = sleeper()
   return slot + other
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background compute()
   sleepBlocking(200)
 }
@@ -3383,16 +3383,16 @@ function entrypoint() -> nothing {
 #[test]
 fn result_binding_not_used_after_later_suspension_is_accepted() {
     let src = r#"
-function sleeper() -> int {
+function sleeper() -> Int {
   wait sleep(10)
   return 5
 }
-function compute(n: int) -> int {
+function compute(n: Int) -> Int {
   let slot = sleeper()
   let other = sleeper()
   return other
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background compute(1)
   sleepBlocking(200)
 }
@@ -3407,15 +3407,15 @@ function entrypoint() -> nothing {
 #[test]
 fn result_binding_used_immediately_no_second_suspension_is_accepted() {
     let src = r#"
-function sleeper() -> int {
+function sleeper() -> Int {
   wait sleep(10)
   return 5
 }
-function compute(n: int) -> int {
+function compute(n: Int) -> Int {
   let a = sleeper()
   return a
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background compute(1)
   sleepBlocking(200)
 }
@@ -3431,7 +3431,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_on_literal_is_an_error() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait 42
 }
 "#;
@@ -3456,7 +3456,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_of_wait_rejected() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait (wait sleep(10))
 }
 "#;
@@ -3474,7 +3474,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_sleep_async_is_clean() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(100)
 }
 "#;
@@ -3487,7 +3487,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_on_non_may_block_print_warns() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait print(`hi`)
 }
 "#;
@@ -3530,7 +3530,7 @@ function entrypoint() -> nothing {
 fn unawaited_sleep_async_no_longer_warns() {
     // test-ratchet: unawaited_sleep_async retired by Phase 6 inference model; old warning was bridge-era artifact
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   sleep(100)
 }
 "#;
@@ -3571,14 +3571,14 @@ function entrypoint() -> nothing {
 fn state_machine_calling_state_machine_without_wait_clean_under_inference() {
     // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; bridge-era artifact; no-wait SM→SM calls are correct under inference
     let src = r#"
-function inner() -> nothing {
+function inner() -> Nothing {
   wait sleep(10)
 }
-function outer() -> nothing {
+function outer() -> Nothing {
   wait sleep(5)
   inner()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background outer()
 }
 "#;
@@ -3616,14 +3616,14 @@ function entrypoint() -> nothing {
 #[test]
 fn state_machine_calling_state_machine_with_wait_is_clean() {
     let src = r#"
-function inner() -> nothing {
+function inner() -> Nothing {
   wait sleep(10)
 }
-function outer() -> nothing {
+function outer() -> Nothing {
   wait sleep(5)
   wait inner()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background outer()
 }
 "#;
@@ -3636,14 +3636,14 @@ function entrypoint() -> nothing {
 #[test]
 fn state_machine_can_background_state_machine_without_wait() {
     let src = r#"
-function inner() -> nothing {
+function inner() -> Nothing {
   wait sleep(10)
 }
-function outer() -> nothing {
+function outer() -> Nothing {
   wait sleep(5)
   background inner()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background outer()
 }
 "#;
@@ -3656,13 +3656,13 @@ function entrypoint() -> nothing {
 #[test]
 fn non_state_machine_calling_state_machine_is_clean() {
     let src = r#"
-function inner() -> nothing {
+function inner() -> Nothing {
   wait sleep(10)
 }
-function outer() -> nothing {
+function outer() -> Nothing {
   inner()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   outer()
 }
 "#;
@@ -3674,7 +3674,7 @@ function entrypoint() -> nothing {
 #[test]
 fn kernel_mode_rejects_sleep_async() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   sleep(100)
 }
 "#;
@@ -3715,7 +3715,7 @@ function entrypoint() -> nothing {
 #[test]
 fn kernel_mode_rejects_mixed_cpu_io_shaped_host_with_no_new_error_class() {
     let src = r#"
-function crunch(n: int) -> int {
+function crunch(n: Int) -> Int {
   let total = 0
   let i = 0
   while (i < n) {
@@ -3725,12 +3725,12 @@ function crunch(n: int) -> int {
   return total
 }
 
-function fetchIt(n: int) -> int {
+function fetchIt(n: Int) -> Int {
   sleep(100)
   return n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunch(50)
   let b = fetchIt(4)
   print(a + b)
@@ -3802,7 +3802,7 @@ fn kernel_mode_rejects_cross_module_suspending_call() {
     std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
 
     // Leaf module: exports a suspending function (calls sleep).
-    let leaf_src = "export function longJob() -> nothing {\n  sleep(100)\n}\n";
+    let leaf_src = "export function longJob() -> Nothing {\n  sleep(100)\n}\n";
     let leaf_path = dir.join("leaf_ops.ynz");
     std::fs::write(&leaf_path, leaf_src).expect("write leaf_ops.ynz");
 
@@ -3810,7 +3810,7 @@ fn kernel_mode_rejects_cross_module_suspending_call() {
     // Every real Yinz suspending call uses this form. `wait` would fire the Expr::Wait arm
     // (already guarded); this tests the call-dispatch arm where the bare suspend is rejected.
     let entry_src =
-        "import { longJob } from `leaf_ops`\nfunction entrypoint() -> nothing {\n  longJob()\n}\n";
+        "import { longJob } from `leaf_ops`\nfunction entrypoint() -> Nothing {\n  longJob()\n}\n";
     let entry_path = dir.join("entrypoint.ynz");
     std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
 
@@ -3890,13 +3890,13 @@ fn kernel_mode_rejects_cross_module_suspending_method_call() {
     std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
 
     // Worker module: a shape + suspending method (standalone function, first param = Worker).
-    let worker_src = "export shape Worker { name: string }\nexport function longJob(share self: Worker) -> nothing {\n  sleep(100)\n}\n";
+    let worker_src = "export shape Worker { name: String }\nexport function longJob(share self: Worker) -> Nothing {\n  sleep(100)\n}\n";
     let worker_path = dir.join("worker_ops.ynz");
     std::fs::write(&worker_path, worker_src).expect("write worker_ops.ynz");
 
     // Entrypoint: UFCS dot-call form — `w.longJob()` is sugar for `longJob(w)`.
     // In kernel mode this must be rejected: longJob suspends.
-    let entry_src = "import { Worker, longJob } from `worker_ops`\nfunction entrypoint() -> nothing {\n  const w: Worker = { name: `bob` }\n  w.longJob()\n}\n";
+    let entry_src = "import { Worker, longJob } from `worker_ops`\nfunction entrypoint() -> Nothing {\n  const w: Worker = { name: `bob` }\n  w.longJob()\n}\n";
     let entry_path = dir.join("entrypoint.ynz");
     std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
 
@@ -3976,13 +3976,13 @@ fn transitive_no_wait_compiles_clean_under_inference() {
     // foo calls bar() — Phase 6 analysis: foo.suspends = true (transitive).
     // wait foo() — foo.suspends is true, so this is valid-but-redundant (no warning).
     let src = r#"
-function bar() -> nothing {
+function bar() -> Nothing {
   sleep(100)
 }
-function foo() -> nothing {
+function foo() -> Nothing {
   bar()
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait foo()
 }
 "#;
@@ -4048,13 +4048,13 @@ fn wait_on_non_may_block_does_not_warn_on_nested_arg_call() {
     // wait_on_non_may_block warning for inner — correct.
     // addOne(5) is an argument to inner — must NOT get a spurious wait_on_non_may_block.
     let src = r#"
-function addOne(n: int) -> int {
+function addOne(n: Int) -> Int {
   return n + 1
 }
-function inner(n: int) -> nothing {
+function inner(n: Int) -> Nothing {
   sleepBlocking(n)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait inner(addOne(5))
 }
 "#;
@@ -4113,10 +4113,10 @@ fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() {
     // The entrypoint is suspending (calls sleep, even in arg position) so the
     // sub-expression guard fires.
     let src = r#"
-function wrapper(n: nothing) -> nothing {
+function wrapper(n: Nothing) -> Nothing {
   sleepBlocking(1)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait wrapper(sleep(100))
 }
 "#;
@@ -4177,13 +4177,13 @@ fn background_arg_state_machine_call_is_clean_under_inference() {
     // background foo(sm_bar()) — sm_bar() in arg position evaluates in calling context.
     // entrypoint calls sleep directly → entrypoint.suspends = true.
     let src = r#"
-function sm_bar() -> nothing {
+function sm_bar() -> Nothing {
   wait sleep(10)
 }
-function foo(ignored: nothing) -> nothing {
+function foo(ignored: Nothing) -> Nothing {
   wait sleep(10)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
   background foo(sm_bar())
 }
@@ -4228,7 +4228,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_test_fallible_async_true_is_clean() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait __testFallibleAsync(true)
 }
 "#;
@@ -4240,7 +4240,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_test_fallible_async_false_is_clean() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait __testFallibleAsync(false)
 }
 "#;
@@ -4254,7 +4254,7 @@ function entrypoint() -> nothing {
 #[test]
 fn wait_test_fallible_async_zero_args_gives_real_arity_error() {
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait __testFallibleAsync()
 }
 "#;
@@ -4295,10 +4295,10 @@ fn cross_module_call_from_suspending_fn_compiles_clean() {
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
     // utils.ynz — exported pure-CPU function (non-suspending)
-    let utils_src = "export function remoteOp() -> nothing { print(`remote op`) }";
+    let utils_src = "export function remoteOp() -> Nothing { print(`remote op`) }";
     // entrypoint.ynz — suspending function (reaches sleep) calling the non-suspending import
     let entry_src = "import { remoteOp } from `utils`\n\
-                     function entrypoint() -> nothing { sleep(10)\n  remoteOp() }";
+                     function entrypoint() -> Nothing { sleep(10)\n  remoteOp() }";
 
     let utils_path = dir.join("utils.ynz");
     let entry_path = dir.join("entrypoint.ynz");
@@ -4345,10 +4345,10 @@ fn cross_module_call_from_fn_with_local_sleep_compiles_clean() {
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
     // utils.ynz — non-suspending export
-    let utils_src = "export function maybeBlocking() -> nothing { print(`runs`) }";
+    let utils_src = "export function maybeBlocking() -> Nothing { print(`runs`) }";
     // entrypoint.ynz — suspending (reaches sleep) AND calls the non-suspending import
     let entry_src = "import { maybeBlocking } from `utils`\n\
-                     function entrypoint() -> nothing { sleep(1)\n  maybeBlocking() }";
+                     function entrypoint() -> Nothing { sleep(1)\n  maybeBlocking() }";
 
     let utils_path = dir.join("utils.ynz");
     let entry_path = dir.join("entrypoint.ynz");
@@ -4389,23 +4389,23 @@ fn cross_module_call_from_fn_with_local_sleep_compiles_clean() {
 fn cant_infer_suspension_dynamic_dispatch_with_local_sleep_fires_error() {
     let src = r#"
 shape Worker {
-    doWork(share self) -> nothing
+    doWork(share self) -> Nothing
 }
 
 shape FastWorker follows Worker {
-    speed: int
+    speed: Int
 }
 
-function doWork(share self: FastWorker) -> nothing {
+function doWork(share self: FastWorker) -> Nothing {
     print(`fast`)
 }
 
-function runWorker(w: dynamic Worker) -> nothing {
+function runWorker(w: dynamic Worker) -> Nothing {
     sleep(1)
     w.doWork()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let fw: FastWorker = { speed: 10 }
     runWorker(fw)
 }
@@ -4442,27 +4442,27 @@ function entrypoint() -> nothing {
 fn cant_infer_suspension_dynamic_dispatch_free_fn_form_fires_error() {
     let src = r#"
 shape Worker {
-    doWork(share self) -> nothing
+    doWork(share self) -> Nothing
 }
 
 shape FastWorker follows Worker {
-    speed: int
+    speed: Int
 }
 
-function doWork(share self: FastWorker) -> nothing {
+function doWork(share self: FastWorker) -> Nothing {
     print(`fast`)
 }
 
-function dispatch(w: dynamic Worker) -> nothing {
+function dispatch(w: dynamic Worker) -> Nothing {
     w.doWork()
 }
 
-function relay(w: dynamic Worker) -> nothing {
+function relay(w: dynamic Worker) -> Nothing {
     sleep(1)
     dispatch(w)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let fw: FastWorker = { speed: 10 }
     relay(fw)
 }
@@ -4500,22 +4500,22 @@ function entrypoint() -> nothing {
 fn dynamic_dispatch_non_suspending_caller_compiles_clean() {
     let src = r#"
 shape Worker {
-    doWork(share self) -> nothing
+    doWork(share self) -> Nothing
 }
 
 shape FastWorker follows Worker {
-    speed: int
+    speed: Int
 }
 
-function doWork(share self: FastWorker) -> nothing {
+function doWork(share self: FastWorker) -> Nothing {
     print(`fast`)
 }
 
-function relay(w: dynamic Worker) -> nothing {
+function relay(w: dynamic Worker) -> Nothing {
     w.doWork()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let fw: FastWorker = { speed: 10 }
     relay(fw)
 }
@@ -4574,8 +4574,8 @@ fn incremental_non_suspending_to_suspending_flips_caller_to_state_machine() {
     let b_path = dir.join("b.ynz");
 
     // v1: A exports a non-suspending function.
-    let a_v1 = "export function op() -> nothing { print(`op`) }";
-    let b_src = "import { op } from `a`\nfunction caller() -> nothing { op() }";
+    let a_v1 = "export function op() -> Nothing { print(`op`) }";
+    let b_src = "import { op } from `a`\nfunction caller() -> Nothing { op() }";
 
     std::fs::write(&a_path, a_v1).expect("write a.ynz v1");
     std::fs::write(&b_path, b_src).expect("write b.ynz");
@@ -4594,7 +4594,7 @@ fn incremental_non_suspending_to_suspending_flips_caller_to_state_machine() {
     );
 
     // v2: A's op now calls sleep — it becomes suspending.
-    let a_v2 = "export function op() -> nothing { sleep(10)\nprint(`op`) }";
+    let a_v2 = "export function op() -> Nothing { sleep(10)\nprint(`op`) }";
     std::fs::write(&a_path, a_v2).expect("write a.ynz v2");
     sf_a.set_text(&mut db).to(a_v2.to_string());
 
@@ -4623,8 +4623,8 @@ fn incremental_suspending_to_non_suspending_clears_caller_from_state_machine() {
     let b_path = dir.join("b.ynz");
 
     // v1: A exports a suspending function.
-    let a_v1 = "export function op() -> nothing { sleep(10)\nprint(`op`) }";
-    let b_src = "import { op } from `a`\nfunction caller() -> nothing { op() }";
+    let a_v1 = "export function op() -> Nothing { sleep(10)\nprint(`op`) }";
+    let b_src = "import { op } from `a`\nfunction caller() -> Nothing { op() }";
 
     std::fs::write(&a_path, a_v1).expect("write a.ynz v1");
     std::fs::write(&b_path, b_src).expect("write b.ynz");
@@ -4643,7 +4643,7 @@ fn incremental_suspending_to_non_suspending_clears_caller_from_state_machine() {
     );
 
     // v2: A's op removes sleep — it becomes non-suspending.
-    let a_v2 = "export function op() -> nothing { print(`op`) }";
+    let a_v2 = "export function op() -> Nothing { print(`op`) }";
     std::fs::write(&a_path, a_v2).expect("write a.ynz v2");
     sf_a.set_text(&mut db).to(a_v2.to_string());
 
@@ -4672,9 +4672,9 @@ fn incremental_diamond_a_imported_by_b_and_c_both_rechecked() {
     let b_path = dir.join("b.ynz");
     let c_path = dir.join("c.ynz");
 
-    let a_v1 = "export function op() -> nothing { print(`op`) }";
-    let b_src = "import { op } from `a`\nfunction b_caller() -> nothing { op() }";
-    let c_src = "import { op } from `a`\nfunction c_caller() -> nothing { op() }";
+    let a_v1 = "export function op() -> Nothing { print(`op`) }";
+    let b_src = "import { op } from `a`\nfunction b_caller() -> Nothing { op() }";
+    let c_src = "import { op } from `a`\nfunction c_caller() -> Nothing { op() }";
 
     std::fs::write(&a_path, a_v1).expect("write a.ynz v1");
     std::fs::write(&b_path, b_src).expect("write b.ynz");
@@ -4702,7 +4702,7 @@ fn incremental_diamond_a_imported_by_b_and_c_both_rechecked() {
     );
 
     // A's op now calls sleep — both B and C must be re-checked.
-    let a_v2 = "export function op() -> nothing { sleep(10)\nprint(`op`) }";
+    let a_v2 = "export function op() -> Nothing { sleep(10)\nprint(`op`) }";
     std::fs::write(&a_path, a_v2).expect("write a.ynz v2");
     sf_a.set_text(&mut db).to(a_v2.to_string());
 
@@ -4743,11 +4743,11 @@ fn ec_method_dispatch_failed_and_message_resolve_in_ec_fn() {
     // even though the value is `T errors`. Catches narrow restoration that forgets siblings.
     assert_clean(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = compute()
   const failed = x.failed()
   const v = x.or(0)
@@ -4769,15 +4769,15 @@ fn ec_method_no_over_restoration_when_inner_shadows_outer_ec() {
     // One error expected: int does not have method `or`.
     let out = assert_errors(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = compute()
   const outer_v = x.or(0)
   print(outer_v.toString())
-  let x: int = 7
+  let x: Int = 7
   const inner_v = x.or(0)
   print(inner_v.toString())
 }
@@ -4805,12 +4805,12 @@ fn ec_method_named_call_on_non_ec_binding_no_restoration() {
     // hiding the type error and miscompiling the call. One error expected: int.or not found.
     let out = assert_errors(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
-  let n: int = 5
+function entrypoint() -> Nothing {
+  let n: Int = 5
   let _ = n.or(0)
   let x = compute()
   const v = x.or(0)
@@ -4842,8 +4842,8 @@ fn ec_method_named_call_in_non_ec_fn_no_restoration() {
     // Confirms no false EC restoration fires in a non-EC function context.
     let out = assert_errors(
         r#"
-function entrypoint() -> nothing {
-  let n: int = 5
+function entrypoint() -> Nothing {
+  let n: Int = 5
   let _ = n.or(0)
 }
 "#,
@@ -4876,11 +4876,11 @@ fn ec_method_message_resolves_in_ec_fn() {
     // sweep found and corrected, not a fixture that needed no change).
     assert_clean(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = compute()
   if (x.failed()) {
     const msg = x.message
@@ -4903,11 +4903,11 @@ fn ec_method_suggestions_refused_even_when_checked() {
     // `.source`'s sibling tests below all read.
     let out = assert_errors(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = compute()
   if (x.failed()) {
     const sug = x.suggestions
@@ -4936,11 +4936,11 @@ fn ec_method_trace_refused_even_when_checked() {
     // Was `ec_method_trace_resolves_in_ec_fn`, asserting the pre-fix (wrong) behavior.
     let out = assert_errors(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = compute()
   if (x.failed()) {
     const t = x.trace
@@ -4972,11 +4972,11 @@ fn ec_method_source_refused_even_when_checked() {
     // source (both `Refused`).
     let out = assert_errors(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = compute()
   if (x.failed()) {
     const src = x.source
@@ -5011,11 +5011,11 @@ fn ec_method_dispatch_after_failed_guard_narrowing() {
     // original binding is valid, and the inner-guard int binding has no such EC method.
     assert_clean(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = compute()
   if (x.failed()) {
     print(`failed`)
@@ -5036,11 +5036,11 @@ fn ec_method_dispatch_on_const_bound_ec_value_in_ec_fn() {
     // would fail to restore and `.or(0)` would produce "int has no method `or`".
     assert_clean(
         r#"
-function compute() -> int errors {
+function compute() -> Int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const x = compute()
   const v = x.or(0)
   print(v.toString())

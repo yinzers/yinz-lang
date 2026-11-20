@@ -15,9 +15,9 @@
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::check_query;
 
-const SRC: &str = "shape Tally { hits: int\n outs: int }\n\
-     function record(give t: Tally) -> nothing { wait sleep(1)\n print(t.hits.toString()) }\n\
-     function entrypoint() -> nothing { let t: Tally = { hits: 3, outs: 1 }\n background record(t) }";
+const SRC: &str = "shape Tally { hits: Int\n outs: Int }\n\
+     function record(give t: Tally) -> Nothing { wait sleep(1)\n print(t.hits.toString()) }\n\
+     function entrypoint() -> Nothing { let t: Tally = { hits: 3, outs: 1 }\n background record(t) }";
 
 #[test]
 fn no_auto_parallel_empties_the_padded_set_and_silences_the_lint() {
