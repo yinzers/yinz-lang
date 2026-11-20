@@ -19,7 +19,31 @@ User spec: [`docs/reference/REF-packages.md`](../../reference/REF-packages.md)
 
 ## Built-In Package Manager
 
-`ynz add`, `ynz remove`, `ynz update` are part of the `ynz` CLI. No separate tool.
+**Status: designed, not built.** The `ynz` CLI (`crates/ynz-driver/src/main.rs`) has no `add`, `remove`, `update`, `publish` or `install` command, no lock-file reader or writer and no registry client exists yet. Everything in this doc is the design.
+
+The package commands are part of the `ynz` CLI. No separate tool.
+
+```
+ynz add markdown-parser          // install a package
+ynz add graphics@1.2.0           // install a specific version
+ynz remove markdown-parser       // uninstall
+ynz update                       // update all to the latest compatible version
+ynz update markdown-parser       // update one package
+ynz publish                      // publish your package to the registry
+```
+
+Dependencies are listed in `yinz.toml` under `[dependencies]` (included in every build) and `[dev-dependencies]` (only when running tests or building in development mode; never in production binaries):
+
+```toml
+[dependencies]
+markdown-parser = "1.2.0"
+graphics = "0.9.0"
+
+[dev-dependencies]
+test-utils = "0.5.0"
+```
+
+`ynz add` and `ynz update` maintain `yinz.lock`; the lock file is TOML, so it is readable, diffable and, in an emergency, editable by hand.
 
 **Why**: npm, cargo, go get — the most successful compiled language ecosystems have a first-party package manager. Third-party package managers fragment the ecosystem and create incompatibilities. One tool, one registry, one convention.
 
@@ -106,6 +130,10 @@ dependencies = [
 - `path+<relative-path>` — vendored locally; no network fetch.
 
 This is identical to Cargo.lock's encoding — the format is well-tested by Rust's ecosystem.
+
+**Reading an entry.** Each `[[package]]` is one entry; the list is flat and alphabetized for stable diffs. `dependencies` lists what this package needs as `"name version"`. On install the `checksum` (hash of the downloaded tarball) is re-verified, which catches registry tampering.
+
+**Diamond dependencies (same package, two versions).** If `redis-driver` needs `json 1.0.3` and `markdown-parser` needs `json 2.0.0`, both versions appear in the lock file. The `name version` reference tells each parent which one it uses, and the compiler links them separately so they do not interfere.
 
 ---
 
