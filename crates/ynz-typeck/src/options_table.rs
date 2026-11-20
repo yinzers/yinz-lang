@@ -160,7 +160,7 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
                     opt.name,
                     opt.variants.len()
                 ),
-                "Split into multiple options types, or model as `int` if you need more values.",
+                "Split into multiple options types, or model as `Int` if you need more values.",
                 "256+ variants almost always indicates a design smell. Options types work best \
                  for small, finite sets of named states.",
             ));

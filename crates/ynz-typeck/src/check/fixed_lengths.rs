@@ -98,7 +98,7 @@ impl<'b> Checker<'b> {
             self.diags.push(fixed_length_not_usable_diag(
                 span.clone(),
                 written_text,
-                "`fixed` takes an element type and a length, and no more",
+                "`Fixed` takes an element type and a length, and no more",
                 &format!(
                     "Write the element type and, if you want one, a length: `Fixed<{element_text}, 4>`. To keep values of different types together, declare a shape with a named field for each"
                 ),
@@ -111,7 +111,7 @@ impl<'b> Checker<'b> {
                     span.clone(),
                     written_text,
                     &format!(
-                        "{value} is more than the {MAX_FIXED_LENGTH} items a `fixed` list can hold"
+                        "{value} is more than the {MAX_FIXED_LENGTH} items a `Fixed` list can hold"
                     ),
                     &format!("Use an `Array<{element_text}>`, which has no fixed length"),
                 ));
@@ -144,13 +144,13 @@ impl<'b> Checker<'b> {
         let element = match written.element {
             Some(element_ast) => self.ast_type_to_type(element_ast),
             None => {
-                self.report_missing_type_arguments("fixed", 1, span);
+                self.report_missing_type_arguments("Fixed", 1, span);
                 Type::Error
             }
         };
         let element_text = match written.element {
             Some(element_ast) => render_ast_type(element_ast),
-            None => "int".to_string(),
+            None => "Int".to_string(),
         };
         self.report_unusable_fixed_arguments(&written, &written_text, &element_text, span);
         match &written.length {
@@ -226,7 +226,7 @@ impl<'b> Checker<'b> {
             self.report_lengths_in_nested_field_type(ast_ty);
             return;
         };
-        if name != "fixed" {
+        if name != "Fixed" {
             self.report_lengths_in_nested_field_type(ast_ty);
             return;
         }
@@ -235,7 +235,7 @@ impl<'b> Checker<'b> {
         let element_text = written
             .element
             .map(render_ast_type)
-            .unwrap_or_else(|| "int".to_string());
+            .unwrap_or_else(|| "Int".to_string());
         self.report_unusable_fixed_arguments(&written, &written_text, &element_text, span);
         if written.length == WrittenLength::Absent {
             self.diags.push(fixed_field_length_missing_diag(
@@ -291,11 +291,11 @@ impl<'b> Checker<'b> {
                     .iter()
                     .any(|argument| matches!(argument, AstType::Length { .. }))
                 {
-                    if name == "fixed" {
+                    if name == "Fixed" {
                         let element_text = read_fixed_arguments(args)
                             .element
                             .map(render_ast_type)
-                            .unwrap_or_else(|| "int".to_string());
+                            .unwrap_or_else(|| "Int".to_string());
                         self.diags.push(fixed_length_not_allowed_here_diag(
                             span.clone(),
                             &render_ast_type(ast_ty),
@@ -636,7 +636,7 @@ impl<'b> Checker<'b> {
             else {
                 continue;
             };
-            if name != "fixed" {
+            if name != "Fixed" {
                 continue;
             }
             let written = read_fixed_arguments(args);
@@ -646,7 +646,7 @@ impl<'b> Checker<'b> {
             let element_text = written
                 .element
                 .map(render_ast_type)
-                .unwrap_or_else(|| "int".to_string());
+                .unwrap_or_else(|| "Int".to_string());
             self.diags.push(fixed_length_missing_in_export_diag(
                 span.clone(),
                 &function.name,

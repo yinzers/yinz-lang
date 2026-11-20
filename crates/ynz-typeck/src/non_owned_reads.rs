@@ -101,13 +101,13 @@ pub(crate) fn is_taken_piece_of_a_temporary(
     let value_type = type_of(value);
     let annotation_keeps_the_type = match (annotation, &value_type) {
         (None, _) => true,
-        (Some(ynz_ast::nodes::Type::Generic { name, .. }), _) => name == "array" || name == "map",
+        (Some(ynz_ast::nodes::Type::Generic { name, .. }), _) => name == "Array" || name == "Map",
         // A nested shape is taken only under its own name: any other annotation (a union, an
         // alias) wraps or converts the value, which is a copy.
         (Some(ynz_ast::nodes::Type::Named(name, _)), Some(Type::Shape { name: shape_name })) => {
             name == shape_name
         }
-        (Some(ynz_ast::nodes::Type::Named(name, _)), _) => name == "string",
+        (Some(ynz_ast::nodes::Type::Named(name, _)), _) => name == "String",
         (Some(_), _) => false,
     };
     if !annotation_keeps_the_type
@@ -808,7 +808,7 @@ impl<'a> ReadTracker<'a> {
             (
                 Some(ynz_ast::nodes::Type::Generic { name, .. }),
                 Type::BuiltinArray { .. } | Type::BuiltinMap { .. },
-            ) => name == "array" || name == "map",
+            ) => name == "Array" || name == "Map",
             _ => false,
         };
         if !annotation_keeps_the_value {

@@ -41,12 +41,12 @@ pub struct PrimitiveIntrinsicTable {
 /// Covers every type string that appears in `registry/features.toml` `[[primitive_intrinsic]]` entries.
 fn parse_type(s: &str) -> Type {
     match s {
-        "int" => Type::Int,
-        "float" => Type::Float,
-        "number" => Type::Number { precision: 34 },
-        "bool" => Type::Bool,
-        "string" => Type::String,
-        "nothing" => Type::Nothing,
+        "Int" => Type::Int,
+        "Float" => Type::Float,
+        "Number" => Type::Number { precision: 34 },
+        "Boolean" => Type::Bool,
+        "String" => Type::String,
+        "Nothing" => Type::Nothing,
         "Range<Int>" => Type::Range {
             element: Box::new(Type::Int),
             end_inclusive: false,
@@ -91,11 +91,11 @@ fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
         // completion system can match them via prefix stripping. Their type-checker
         // dispatch is handled by builtins.rs pattern matching, not by this scalar
         // intrinsic table — skip them here to avoid parse_type() panics.
-        // `channel` (v0.3-M8) likewise: its methods dispatch through
+        // `Channel` (v0.3-M8) likewise: its methods dispatch through
         // `check_conduit_method_call` and `suspension_source`, not this scalar table.
         if matches!(
             entry.receiver_type,
-            Some("array") | Some("fixed") | Some("maybe") | Some("map") | Some("channel")
+            Some("Array") | Some("Fixed") | Some("Maybe") | Some("Map") | Some("Channel")
         ) {
             continue;
         }

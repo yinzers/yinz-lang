@@ -574,7 +574,7 @@ fn recursive_members(graph: &CallGraph) -> HashSet<String> {
 /// Shared with typeck's conduit-receiver origin discipline (`check_conduit_method_call`) so
 /// both views seed channel-typed parameters from the same predicate.
 pub(crate) fn ast_type_is_channel(ast_ty: &ynz_ast::nodes::Type) -> bool {
-    matches!(ast_ty, ynz_ast::nodes::Type::Generic { name, .. } if name == "channel")
+    matches!(ast_ty, ynz_ast::nodes::Type::Generic { name, .. } if name == "Channel")
 }
 
 /// THE authoritative collection of local functions whose DECLARED return type is `channel<T>`.
@@ -627,7 +627,7 @@ pub(crate) fn let_binds_derivable_conduit(
         || match value {
             // `channel<T>(...)` construction.
             Expr::Call(c) => match &c.callee {
-                Expr::Ident(n, _) if n == "channel" => true,
+                Expr::Ident(n, _) if n == "Channel" => true,
                 // Local fn with a declared `channel<T>` return type.
                 Expr::Ident(n, _) => channel_returning_fns.contains(n),
                 _ => false,

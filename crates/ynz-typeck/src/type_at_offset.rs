@@ -27,8 +27,8 @@ fn ast_type_to_primitive(ty: &AstType) -> Option<Type> {
         AstType::Int => Some(Type::Int),
         AstType::Float => Some(Type::Float),
         AstType::Bool => Some(Type::Bool),
-        // string → "string" narrowing for string methods
-        AstType::Named(name, _) if name == "string" => Some(Type::String),
+        // String → "String" narrowing for string methods
+        AstType::Named(name, _) if name == "String" => Some(Type::String),
         // Shape names — return as Shape for doc-hover; not narrowed for primitive completion
         AstType::Named(name, _) => Some(Type::Shape { name: name.clone() }),
         _ => None,

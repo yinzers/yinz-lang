@@ -473,7 +473,7 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             // `channel<T>()` is a constructor call — the sole reference. (`array<T>()` /
             // `map<K, V>()` are not forms the parser accepts; an empty container is a
             // literal, classified above.)
-            Expr::Ident(name, _) if name == "channel" => Provenance::Fresh,
+            Expr::Ident(name, _) if name == "Channel" => Provenance::Fresh,
             Expr::Ident(name, _)
                 if ctx.local_fns.contains(name) || ctx.imported_fn_names.contains(name) =>
             {
@@ -1097,11 +1097,11 @@ fn receiver_independent_scalar_result(method: &str) -> Option<Type> {
         return None;
     }
     match result? {
-        "int" => Some(Type::Int),
-        "float" => Some(Type::Float),
-        "boolean" | "bool" => Some(Type::Bool),
-        "string" => Some(Type::String),
-        "number" => Some(Type::Number { precision: 34 }),
+        "Int" => Some(Type::Int),
+        "Float" => Some(Type::Float),
+        "Boolean" => Some(Type::Bool),
+        "String" => Some(Type::String),
+        "Number" => Some(Type::Number { precision: 34 }),
         _ => None,
     }
 }
