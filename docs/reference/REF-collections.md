@@ -28,7 +28,7 @@ map<string, number>     // key-value pairs: look up a value by its key
 All collections are typed. Every element must be the same type:
 
 ```
-let stuff = [42, "hello", true]
+let stuff = [42, `hello`, true]
 // COMPILE ERROR: Cannot mix types in a collection. Pick one type.
 ```
 
@@ -44,10 +44,10 @@ Use `fixed<T>` when you know the size up front:
 
 ```
 let rgb: fixed<number> = [255, 128, 0]
-let names: fixed<string> = ["Alice", "Bob", "Charlie"]
+let names: fixed<string> = [`Alice`, `Bob`, `Charlie`]
 let players: fixed<Player> = [
-  { name: "Alice", health: 100 },
-  { name: "Bob", health: 80 }
+  { name: `Alice`, health: 100 },
+  { name: `Bob`, health: 80 }
 ]
 ```
 
@@ -76,8 +76,8 @@ rgb.set(1, 200)         // same thing, longer form
 
 ```
 let roster: array<Player> = []
-roster.add({ name: "Alice", health: 100 })
-roster.add({ name: "Bob", health: 80 })
+roster.add({ name: `Alice`, health: 100 })
+roster.add({ name: `Bob`, health: 80 })
 roster.remove(0)        // remove by index
 roster[0] = newPlayer   // replace element at index 0
 ```
@@ -89,16 +89,19 @@ roster[0] = newPlayer   // replace element at index 0
 Reading by index uses brackets, which is shorthand for `.get()`. Both forms return `maybe<T>` — never a bare value, so an index that is too big can't crash your program:
 
 ```
-let player = players[3]              // shorthand for players.get(3)
-let player = players.get(3)          // same thing, longer form
+let thirdPlayer = players[3]         // shorthand for players.get(3)
+let samePlayer = players.get(3)      // same thing, longer form
 // both return: maybe<Player>
 
-if (player.exists()) {
-  print(player.value.name)
+if (thirdPlayer.exists()) {
+  print(thirdPlayer.value.name)
 }
+```
 
-// Or with a default
-let foundPlayer = players.get(5)                // a Maybe: the Player, or nothing
+Or give it a default, so you get a plain `Player` back:
+
+```
+let foundPlayer = players.get(5)                // a maybe: the Player, or nothing
 let player = foundPlayer.or(defaultPlayer)      // always a Player
 ```
 
@@ -114,15 +117,15 @@ Writes use the same shorthand — brackets turn into `.set()`:
 
 ```
 players[2] = newPlayer       // shorthand for players.set(2, newPlayer)
-scores["alice"] = 75          // shorthand for scores.set("alice", 75)
+scores[`alice`] = 75          // shorthand for scores.set(`alice`, 75)
 ```
 
 Writing past the end is an error when the program runs. It does not leave empty slots behind:
 
 ```
-let arr: array<number> = [1, 2, 3]
-arr[10] = 99
-// RUNTIME ERROR: index 10 out of bounds (arr.count() == 3).
+let scores: array<number> = [1, 2, 3]
+scores[10] = 99
+// RUNTIME ERROR: index 10 out of bounds (scores.count() == 3).
 //   .set() replaces existing elements only.
 //   To append: use .add(99).
 //   To grow with default values: use .resize(newSize, defaultValue).
@@ -151,11 +154,11 @@ shape Position {
 }
 
 let path: array<Position> = []
-let p: Position = { x: 1.0, y: 2.0 }
-path.add(p)
-p.x = 99.0
-// The element inside path still has x == 1.0 — .add(p) stored a copy of p,
-// not p itself.
+let start: Position = { x: 1.0, y: 2.0 }
+path.add(start)
+start.x = 99.0
+// The element inside path still has x == 1.0 — .add(start) stored a copy of start,
+// not start itself.
 ```
 
 The stored copy keeps the values it had when you stored it.
@@ -181,7 +184,7 @@ Write these after the collection, like `players.count()`:
 .first()            // first item → maybe<T>
 .last()             // last item → maybe<T>
 .find(fn)           // first item matching condition → maybe<T>
-.count()            // number of items → number
+.count()            // number of items → int
 .unique()           // deduplicated copy
 .limit(n)           // cap to the first N items — returns new collection of at most N
 .contains(value)    // is this value in the collection? → boolean
@@ -248,14 +251,14 @@ let lookalike: Player = { name: `${prefix}ce`, health: 100 }
 let found = roster.contains(lookalike)
 // found is false — lookalike's name was built at runtime, so it is not
 // the same stored string as the roster entry's name, even though both
-// read "Alice"
+// read `Alice`
 ```
 
 To match text by what it says, use `.find(fn)` instead — `==` on strings compares the text
 itself:
 
 ```
-let alice = roster.find(p => p.name == `Alice`)
+let alice = roster.find(player => player.name == `Alice`)
 // alice.exists() is true
 ```
 
@@ -303,14 +306,14 @@ Functions you call on a map:
 .sort(fn, order)      // sorted copy
 .filter(fn)           // new map with only matching entries — fn receives entry with .key and .value
 .find(fn)             // first matching entry → maybe entry (has .key and .value)
-.count()              // → number of entries
+.count()              // → number of entries (int)
 ```
 
 **Brackets work on maps too:**
 
 ```
-scores["alice"]              // shorthand for scores.get("alice") → maybe<number>
-scores["alice"] = 75         // shorthand for scores.set("alice", 75)
+scores[`alice`]              // shorthand for scores.get(`alice`) → maybe<number>
+scores[`alice`] = 75         // shorthand for scores.set(`alice`, 75)
 ```
 
 **Bulk update with `.update({...})`:**
@@ -325,8 +328,8 @@ scores.update({ alice: 75, charlie: 40 })
 **Filtering and finding in a map:**
 
 ```
-let expensive = prices.filter(e => e.value > 100)       // new map — only items over $100
-let aliceEntry = scores.find(e => e.key == "alice")      // maybe entry
+let expensive = prices.filter(entry => entry.value > 100)       // new map — only items over $100
+let aliceEntry = scores.find(entry => entry.key == `alice`)      // maybe entry
 
 if (aliceEntry.exists()) {
   print(`${aliceEntry.value.key}: ${aliceEntry.value.value}`)
@@ -343,23 +346,23 @@ One rule decides whether to use `.` or `[]`:
 |--------|--------------|
 | `player.fieldName` | Reads a field of a shape. The name is fixed when you write the code. |
 | `player.functionName()` | Calls a function on a shape or collection |
-| `arr[i]` | Reads by position → `maybe<T>` (shorthand for `.get(i)`) |
-| `m["key"]` | Reads by key → `maybe<V>` (shorthand for `.get(key)`) |
-| `s[i]` | Reads one character of a string → `maybe<string>` (shorthand for `.get(i)`) |
+| `players[index]` | Reads by position → `maybe<T>` (shorthand for `.get(index)`) |
+| `` scores[`key`] `` | Reads by key → `maybe<V>` (shorthand for `.get(key)`) |
+| `word[index]` | Reads one character of a string → `maybe<string>` (shorthand for `.get(index)`) |
 
 Shapes and collections are different things. Using brackets on a shape, or a dot to read a map key, both fail:
 
 ```
 shape Player { name: string, health: number }
-let p: Player = { name: "Alice", health: 100 }
-let n = p["name"]
+let player: Player = { name: `Alice`, health: 100 }
+let name = player[`name`]
 // COMPILE ERROR: Bracket access is for collections (array, fixed, map, string).
-//                Use dot access on types: p.name
+//                Use dot access on types: player.name
 
 let scores: map<string, number> = { alice: 50 }
 scores.alice
 // COMPILE ERROR: Dot access is for methods, not map keys.
-//   Use scores["alice"] for the value at the "alice" key.
+//   Use scores[`alice`] for the value at the `alice` key.
 //   If you actually have a fixed set of known keys, consider using a shape
 //   instead — it's faster AND gives you dot access:
 //
@@ -417,10 +420,10 @@ let scoreboard: map<string, PlayerScores> = {
 Each operation gets its own line with a named variable. The name documents what that step produces:
 
 ```
-let active = players.filter(p => p.health > 0)
-let ranked = active.sort(p => p.health, desc)
+let active = players.filter(player => player.health > 0)
+let ranked = active.sort(player => player.health, desc)
 let top = ranked.limit(10)
-let names = top.map(p => p.name)
+let names = top.map(player => player.name)
 ```
 
 The compiler sees that each result is only used once, so it combines the four steps into one fast pass and builds no temporary lists. You get readable code AND fast code.
@@ -428,16 +431,16 @@ The compiler sees that each result is only used once, so it combines the four st
 Early returns fit naturally into this pattern:
 
 ```
-function getTopNames(share players: fixed<Player>, count: number) -> array<string> {
-  let active = players.filter(p => p.health > 0)
+function getTopNames(share players: fixed<Player>, limitCount: int) -> array<string> {
+  let active = players.filter(player => player.health > 0)
 
   if (active.count() == 0) {
     return []
   }
 
-  let ranked = active.sort(p => p.health, desc)
-  let top = ranked.limit(count)
-  return top.map(p => p.name)
+  let ranked = active.sort(player => player.health, desc)
+  let top = ranked.limit(limitCount)
+  return top.map(player => player.name)
 }
 ```
 
