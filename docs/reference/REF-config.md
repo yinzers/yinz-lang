@@ -48,7 +48,7 @@ target = "native"
 ```
 
 ```
-Unknown field `target` in yinz.toml — ignored.
+Warning: Unknown field `target` in yinz.toml — ignored.
 ```
 
-A line without an `=` gets a warning too: ``Unrecognized line in yinz.toml: `…` — ignored.``
+A line without an `=` gets a warning too: ``Warning: Unrecognized line in yinz.toml: `…` — ignored.``
