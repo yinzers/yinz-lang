@@ -1770,3 +1770,39 @@ fn walked_list_written_in_loop_names_a_map_walk_a_map() {
         "let tableCopy = holder.table.copy()",
     ));
 }
+
+#[test]
+fn walked_list_written_in_loop_names_a_string_walk_a_string() {
+    // WHY: a loop over a string is a walk too (codegen holds the string for an exact write), so a
+    // write that frees it is refused and told "string", not "list".
+    let program = |loop_header: &str, before_loop: &str| {
+        format!(
+            "shape Holder {{ text: string }}\n\
+             function entrypoint() -> nothing {{\n\
+               let holder: Holder = {{ text: `abc` }}\n\
+               {before_loop}\n\
+               for ({loop_header}) {{\n\
+                 let fresh: Holder = {{ text: `xyz` }}\n\
+                 holder = fresh\n\
+                 print(letter)\n\
+               }}\n\
+             }}"
+        )
+    };
+    assert_rendered(
+        DiagnosticKind::WalkedListWrittenInLoop,
+        &program("letter in holder.text", ""),
+        &[
+            ("loopVariable", "letter"),
+            ("walked", "holder.text"),
+            ("walkedKind", "string"),
+            ("write", "assigns `holder`"),
+            ("released", "holder"),
+            ("copyName", "textCopy"),
+        ],
+    );
+    assert_compiles(&program(
+        "letter in textCopy",
+        "let textCopy = holder.text.copy()",
+    ));
+}
