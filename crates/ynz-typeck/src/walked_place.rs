@@ -670,11 +670,25 @@ mod tests {
         }
     }
 
+    // The fixpoint is the one place here that can fail by never returning, so the summary runs on
+    // its own thread and a missed deadline is a test failure rather than a hung suite. These
+    // programs settle in well under a millisecond; 10 s is far past any loaded machine. A stuck
+    // thread is left spinning until the test process exits.
+    const FIXPOINT_LIVENESS_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
     fn summaries(source: &str) -> HashMap<String, Vec<Vec<WrittenPlace>>> {
-        let db = CompilerDb::default();
-        let file = SourceFile::new(&db, "walked.ynz".to_string(), source.to_string());
-        let parsed = parse_query(&db, file);
-        analyze_written_param_places(&parsed.module, &HashMap::new())
+        let source = source.to_string();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let db = CompilerDb::default();
+            let file = SourceFile::new(&db, "walked.ynz".to_string(), source);
+            let parsed = parse_query(&db, file);
+            let written = analyze_written_param_places(&parsed.module, &HashMap::new());
+            let _ = sender.send(written);
+        });
+        receiver
+            .recv_timeout(FIXPOINT_LIVENESS_BOUND)
+            .expect("the written-places fixpoint did not settle within the liveness bound")
     }
 
     fn field(name: &str) -> WrittenStep {
