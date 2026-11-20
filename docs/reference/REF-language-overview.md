@@ -82,7 +82,7 @@ Each section covers one part of the language. They're self-contained — start w
 - [Errors](REF-errors.md) — handling things that can go wrong
 - [Concurrency](REF-concurrency.md) — running code at the same time, background tasks
 - [Modules](REF-modules.md) — importing, exporting, and organizing code across files
-- [Scope](REF-scope.md) — block scoping and file-level constants
+- [Scope](REF-scope.md) — block scoping; why there are no file-level variables
 - [Main Function](REF-main.md) — program entry point
 - [Doc Comments](REF-doc-comments.md) — documenting your public API with `///`
 - [Configuration](REF-config.md) — the `yinz.toml` project file

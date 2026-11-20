@@ -1,6 +1,6 @@
 ---
 name: "REF-scope"
-description: "Variables are block-scoped. File-level declarations are constants only."
+description: "Variables are block-scoped. There are no file-level variables or constants; share a fixed value with a function."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
@@ -13,7 +13,7 @@ metadata:
 
 # Scope
 
-Variables are block-scoped. File-level declarations are constants only.
+Variables are block-scoped. A file holds declarations only (functions, shapes, imports and exports), so there are no file-level variables.
 
 ---
 
@@ -30,7 +30,14 @@ function process(condition: Boolean) -> Nothing {
     print(x + y)                     // fine — x is accessible from the outer scope
   }
 
-  print(y)                           // COMPILE ERROR: `y` is not defined.
+  print(y)
+  // COMPILE ERROR: `y` is not defined.
+  // not defined
+  // Check the spelling, or declare it: `let y = ...` — `y` has no declaration in scope. Declare it with `let y = ...` before using it, or check whether it's defined in a file you haven't imported yet.
+}
+
+function entrypoint() -> Nothing {
+  process(true)
 }
 ```
 
@@ -43,7 +50,15 @@ function process(items: Array<Int>) -> Nothing {
     print(temp)
   }
 
-  print(temp)                        // COMPILE ERROR: `temp` is not defined.
+  print(temp)
+  // COMPILE ERROR: `temp` is not defined.
+  // not defined
+  // Check the spelling, or declare it: `let temp = ...` — `temp` has no declaration in scope. Declare it with `let temp = ...` before using it, or check whether it's defined in a file you haven't imported yet.
+}
+
+function entrypoint() -> Nothing {
+  let items: Array<Int> = [1, 2, 3]
+  process(items)
 }
 ```
 
@@ -51,15 +66,31 @@ No variable hoisting. No surprises. See a `let`, know exactly where that variabl
 
 ---
 
-## File-level constants
+## No file-level variables
 
-`const` declared outside any function is accessible by all functions in that file:
+A `let` or `const` outside a function is a compile error:
 
 ```
-// player.ynz
+const maxRetries = 3
 
-const maxHealth = 100
-const minHealth = 0
+function entrypoint() -> Nothing {
+  print(maxRetries)
+}
+// COMPILE ERROR: Unexpected `const` at the top level.
+// Top-level code must be inside a `function`, `shape`, `import`, or `export` declaration.
+// Yinz programs are made of functions and shapes. Only declarations are allowed at the top level.
+```
+
+To share a fixed value across a whole file, write a function that returns it:
+
+```
+function maxHealth() -> Int {
+  return 100
+}
+
+function minHealth() -> Int {
+  return 0
+}
 
 shape Player {
   name: String
@@ -67,34 +98,46 @@ shape Player {
 }
 
 function heal(lend player: Player) -> Nothing {
-  player.health = maxHealth           // accessible
+  player.health = maxHealth()
 }
 
 function isDead(share player: Player) -> Boolean {
-  return player.health <= minHealth   // accessible
+  return player.health <= minHealth()
 }
-```
 
-Mutable file-level variables are not allowed. A `let` outside a function is a compile error, so write `const`:
-
-```
-const maxRetries = 3      // fine
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Alice`, health: 0 }
+  print(isDead(player))
+  heal(player)
+  print(isDead(player))
+}
 ```
 
 ---
 
-## Sharing constants across files
+## Sharing a fixed value across files
 
-Export a constant to share it across files:
+Export the function, then import it. A project with two files, `constants.ynz` and `entrypoint.ynz`:
 
 ```
 // constants.ynz
-export const maxHealth = 100
-export const apiUrl = `https://api.example.com`
-export const gravity: Float = 9.81
+export function maxHealth() -> Int {
+  return 100
+}
 
-// anywhere else in the project
-import { maxHealth } from `constants`
+export function apiUrl() -> String {
+  return `https://api.example.com`
+}
 ```
 
-No special global keyword. The module system handles it.
+```
+// entrypoint.ynz
+import { maxHealth, apiUrl } from `constants`
+
+function entrypoint() -> Nothing {
+  print(maxHealth())
+  print(apiUrl())
+}
+```
+
+No special global keyword. The module system handles it. See [Modules](REF-modules.md).
