@@ -845,7 +845,7 @@ switch statusCode {
 
 ### Chaining: a loop with `append` becomes named steps
 
-Go has no chains of calls, so you build a result with a `for` loop and `append`. In Yinz, each step is one line with a name, and each step gives back a collection. `filter` keeps what passes a test, `limit` keeps the first few, and `map` turns each item into something else.
+Go has no chains of calls, so you build a result with a `for` loop and `append`. Yinz has no chaining either. Each step goes on its own line with a name, so you can inspect every value. A loop that builds a collection one item at a time looks like Go's.
 
 Go:
 
@@ -865,13 +865,13 @@ func main() {
 		{Name: "Bob", Health: 0},
 		{Name: "Cara", Health: 80},
 	}
-	var names []string
+	var activeNames []string
 	for _, player := range players {
-		if player.Health > 0 && len(names) < 10 {
-			names = append(names, player.Name)
+		if player.Health > 0 {
+			activeNames = append(activeNames, player.Name)
 		}
 	}
-	fmt.Println(len(names)) // 2
+	fmt.Println(len(activeNames)) // 2
 }
 ```
 
@@ -889,22 +889,18 @@ function entrypoint() -> Nothing {
     { name: `Bob`, health: 0 },
     { name: `Cara`, health: 80 }
   ]
-  let active = players.filter(player => player.health > 0)
-  let topTen = active.limit(10)
-  let names = topTen.map(player => player.name)
-  let nameCount = names.count()
-  print(nameCount)    // 2
+  let activeNames: Array<String> = []
+  for (player in players) {
+    if (player.health > 0) {
+      activeNames.add(player.name)
+    }
+  }
+  let activeCount = activeNames.count()
+  print(activeCount)    // 2
 }
 ```
 
-`player => player.health > 0` is a short function, and it is written only inside calls like these. The compiler joins the steps into one fast pass over the data, so the named version costs the same as your loop.
-
-Joining the calls on one line is not valid, because each result gets its own name:
-
-```
-let names = players.filter(player => player.health > 0).map(player => player.name)
-// COMPILE ERROR: (pending ynz build run)
-```
+A chain of calls written on one line is not written in Yinz. Give each result a name on its own line, as above.
 
 ### Files and imports: no `package`; paths start at the project root
 

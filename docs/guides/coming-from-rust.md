@@ -57,7 +57,7 @@ The table and the traps below follow this list, in this order:
 | Numbers | `i32`, `i64`, `u8`, `usize`, `f64`<br>`0.1 + 0.2` is `0.30000000000000004` | `Int`, `Number`, `Float`<br>`0.1 + 0.2` is `0.3` |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`match code { 200 => ..., _ => ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | `players.iter().filter(f).map(g).collect()` | one named step per line |
+| Chaining | `players.iter().filter(f).map(g).collect()` | a `for` loop, one named step per line |
 | Files and imports | `mod services;`<br>`use crate::services::users::fetch_user;`<br>`pub fn`, `fn main()` | `` import { fetchUser } from `services/users` ``<br>`export function`<br>`function entrypoint()` |
 | Slow work | `async fn`, `.await`, an async runtime such as `tokio`<br>`tokio::join!(...)` | plain `function`; `wait` and `background` only when you need them |
 | Copies | `let b = a;` moves the value<br>`a.clone()` | `let b = a` hands the value over<br>`a.copy()` |
@@ -573,10 +573,11 @@ fn main() {
 }
 ```
 
-A size such as `i32` is not a Yinz type:
+A size such as `i32` is not a Yinz type. You get an error, and among the messages this warning:
 
 ```
 let health: i32 = 100
+// COMPILE ERROR: `i32` is not a known type.
 // COMPILE WARNING: `i32` is not a keyword in Yinz.
 // Use `Int` for whole numbers.
 ```
@@ -746,7 +747,7 @@ match (statusCode) {
 
 ### Chaining: an iterator chain becomes named steps
 
-A chain of calls joined with dots, such as `.iter().filter().map().collect()`, becomes one step per line. Give each step a name. There is no `.iter()` to start and no `.collect()` to finish: each step gives back a collection.
+Yinz has no chaining. Each step goes on its own line with a name, so you can inspect every value. There is no `.iter()` to start and no `.collect()` to finish: a `for` loop builds the result one item at a time.
 
 Rust:
 
@@ -762,13 +763,12 @@ fn main() {
         Player { name: String::from("Bob"), health: 0 },
         Player { name: String::from("Cara"), health: 80 },
     ];
-    let names: Vec<String> = players
+    let active_names: Vec<String> = players
         .iter()
         .filter(|player| player.health > 0)
-        .take(10)
         .map(|player| player.name.clone())
         .collect();
-    println!("{}", names.len());    // 2
+    println!("{}", active_names.len());    // 2
 }
 ```
 
@@ -786,22 +786,18 @@ function entrypoint() -> Nothing {
     { name: `Bob`, health: 0 },
     { name: `Cara`, health: 80 }
   ]
-  let active = players.filter(player => player.health > 0)
-  let topTen = active.limit(10)
-  let names = topTen.map(player => player.name)
-  let nameCount = names.count()
-  print(nameCount)    // 2
+  let activeNames: Array<String> = []
+  for (player in players) {
+    if (player.health > 0) {
+      activeNames.add(player.name)
+    }
+  }
+  let activeCount = activeNames.count()
+  print(activeCount)    // 2
 }
 ```
 
-`|player| player.health > 0` becomes `player => player.health > 0`, and `take(10)` becomes `limit(10)`. Arrow functions are written only inside calls like these. The compiler joins the steps into one fast pass, as Rust does for an iterator chain, so the named version costs nothing.
-
-Joining the calls on one line is not valid:
-
-```
-let names = players.filter(player => player.health > 0).map(player => player.name)
-// COMPILE ERROR: (pending ynz build run)
-```
+A chain of calls written on one line is not written in Yinz. Give each result a name on its own line, as above.
 
 ### Files and imports: no `mod` and no `use`; paths start at the project root
 

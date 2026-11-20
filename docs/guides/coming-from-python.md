@@ -57,7 +57,7 @@ The table and the traps below follow this list, in this order:
 | Numbers | `0.1 + 0.2` is `0.30000000000000004`<br>`7 / 2` is `3.5`, `7 // 2` is `3` | `0.1 + 0.2` is `0.3`<br>`7 / 2` is `3`; `//` starts a comment |
 | Operators | `and`, `or`, `not`<br>`score += 5` | `&&`, `\|\|`, `!`<br>`score = score + 5` |
 | Branching | `if:` / `elif:` / `else:`<br>`match code:` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | `[p.name for p in players if p.health > 0]` | one named step per line |
+| Chaining | `[p.name for p in players if p.health > 0]` | a `for` loop, one named step per line |
 | Files and imports | `from services.users import fetch_user`<br>`from .users import fetch_user`<br>`if __name__ == "__main__":` | `` import { fetchUser } from `services/users` ``<br>`export function`<br>`function entrypoint()` |
 | Slow work | `async def`, `await`, `asyncio.gather(...)` | plain `function`; `wait` and `background` only when you need them |
 | Copies | `b = a` makes two names for one list<br>`a.copy()` | `let b = a` hands the value over<br>`a.copy()` |
@@ -617,12 +617,12 @@ match (statusCode) {
 
 ### Chaining: a comprehension becomes named steps
 
-A list comprehension, or calls joined with dots, becomes one step per line. Give each step a name.
+Yinz has no chaining. Each step goes on its own line with a name, so you can inspect every value. A list comprehension becomes a `for` loop that builds the result one item at a time.
 
 Python:
 
 ```python
-names = [player.name for player in players if player.health > 0][:10]
+active_names = [player.name for player in players if player.health > 0]
 ```
 
 Yinz:
@@ -639,15 +639,18 @@ function entrypoint() -> Nothing {
     { name: `Bob`, health: 0 },
     { name: `Cara`, health: 80 }
   ]
-  let active = players.filter(player => player.health > 0)
-  let topTen = active.limit(10)
-  let names = topTen.map(player => player.name)
-  let nameCount = names.count()
-  print(nameCount)    // 2
+  let activeNames: Array<String> = []
+  for (player in players) {
+    if (player.health > 0) {
+      activeNames.add(player.name)
+    }
+  }
+  let activeCount = activeNames.count()
+  print(activeCount)    // 2
 }
 ```
 
-`player => player.health > 0` is Python's `lambda player: player.health > 0`. Arrow functions are written only inside calls like these. The compiler joins the steps into one fast pass, so the named version costs nothing.
+A chain of calls written on one line is not written in Yinz. Give each result a name on its own line, as above.
 
 ### Files and imports: paths start at the project root
 
