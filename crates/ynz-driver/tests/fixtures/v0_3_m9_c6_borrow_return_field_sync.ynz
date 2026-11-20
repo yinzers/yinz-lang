@@ -1,0 +1,17 @@
+// v0.3-M9 C6: returning a parameter's field hands the caller an alias
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+function pick(bucket: Bucket) -> array<int> {
+  return bucket.rows
+}
+function entrypoint() -> nothing {
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let heldRows = pick(bucket)
+  bucket.rows = [9]
+  print(heldRows.count())
+  print(heldRows[0].or(-1))
+}

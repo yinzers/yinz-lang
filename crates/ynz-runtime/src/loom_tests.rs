@@ -310,6 +310,8 @@ fn loom_orphan_purge_on_handle_free() {
             0,
             HANDLE_RET_KIND_VALUE_WORD,
             chan,
+            std::ptr::null(),
+            std::ptr::null(),
         );
         assert_eq!(
             strong_count(chan),
@@ -373,6 +375,7 @@ unsafe fn plant_shared_channel_ladder(chan: *mut u8) -> SpawnStateFnFuture {
         byte_offset: SLOT,
         kind: BG_ARG_KIND_SHARED_CHANNEL,
         size: 0,
+        cell: 0,
     });
     SpawnStateFnFuture::new(never_polled, frame, frame_size as i64, -1, descs, 1)
 }
@@ -678,11 +681,13 @@ unsafe fn plant_channel_and_cell_ladder(
         byte_offset: CHAN_SLOT,
         kind: BG_ARG_KIND_SHARED_CHANNEL,
         size: 0,
+        cell: 0,
     });
     descs.add(1).write(BgArgDropEntry {
         byte_offset: CELL_SLOT,
         kind: ynz_abi::BG_ARG_KIND_HEAP_SHAPE,
         size: 16,
+        cell: 0,
     });
     (
         SpawnStateFnFuture::new(never_polled, frame, frame_size as i64, -1, descs, 2),
@@ -802,7 +807,7 @@ fn loom_arc_group_clone_per_task_then_transient_release_frees_exactly_once() {
     let _lane = ARC_MODEL_LANE.lock().unwrap();
     model("arc_group_clone_per_task", |_iteration| unsafe {
         let frees_before = ARC_BLOCK_FREES.load(Ordering::Relaxed);
-        let block = ynz_arc_new(ARC_SIZE);
+        let block = ynz_arc_new(ARC_SIZE, None);
         (block as *mut u64).write(ARC_DATA);
         assert_eq!(arc_strong_count(block), 1);
         let mut joins = Vec::new();

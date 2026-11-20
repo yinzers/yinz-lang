@@ -1,0 +1,34 @@
+// v0.3-M9 C6 cost fixture: a `for` over a list of unions whose body writes nothing copies no
+// item (the loop variable reads the union slot, and the string its `Big` variant owns, in place).
+// Allocations: the list's literal (2). Heap strings: `big-1` (1) and the copy `describe` returns
+// of the name (1); a copied loop item would clone the name again (3).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  name: string
+  weight: int
+}
+shape Thing = Tiny | Big
+
+function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Big => {
+      return thing.name
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { name: `big-${1}`, weight: 5 }
+  let first: Thing = big
+  let things: array<Thing> = [first]
+  for (thing in things) {
+    print(describe(thing))
+  }
+}

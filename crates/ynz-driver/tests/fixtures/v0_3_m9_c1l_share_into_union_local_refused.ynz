@@ -1,0 +1,15 @@
+// v0.3-M9 C1l: a `share` parameter of a generic function is stored into a union local
+// (`let held: T | nothing = first`). The store hands the value over, and a `share` parameter still
+// belongs to the caller, so typeck refuses it with the teaching diagnostic (`give`, or `.copy()`).
+// Pinned as it behaves today, pending the Chief's ruling on this refusal.
+
+function keep<T>(share first: T) -> nothing {
+  let held: T | nothing = first
+  print(`kept`)
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  keep(rows)
+  print(rows.count())
+}

@@ -1,0 +1,13 @@
+// Shadow matrix: non-crossing `for` variable named like a crossing PARAM (the loop body has no
+// wait; the param is read after a later wait). Expected: amy, bob, param.
+function worker(n: string) -> nothing {
+  let names: array<string> = [`amy`, `bob`]
+  for (n in names) {
+    print(n)
+  }
+  wait sleep(5)
+  print(n)
+}
+function entrypoint() -> nothing {
+  worker(`param`)
+}

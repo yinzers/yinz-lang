@@ -1,0 +1,6 @@
+// Card #419: `.toString()` on a bignum (number<N>, N > 34) must compile and print every digit.
+function entrypoint() -> nothing {
+  let a: number<40> = 1.0
+  let c: number<40> = a / 3.0
+  print(c.toString())
+}

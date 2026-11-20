@@ -1,0 +1,22 @@
+// v0.3-M9 C1h: one function takes an unsized `fixed<int>` parameter and is called with lists of two
+// different lengths. Each call must see the length of the list it passes.
+// Before: a `fixed<T>` parameter carried no length, so `count()` printed 0 and every read was `none`.
+// Expected output: each call's count, then the sum of each list.
+
+function describe(share values: fixed<int>) -> int {
+  let sum: int = 0
+  for (value in values) {
+    sum = sum + value
+  }
+  print(values.count())
+  return sum
+}
+
+function entrypoint() -> nothing {
+  let pair: fixed<int> = [1, 2]
+  let triple: fixed<int> = [10, 20, 30]
+  let pairSum = describe(pair)
+  let tripleSum = describe(triple)
+  print(pairSum)
+  print(tripleSum)
+}

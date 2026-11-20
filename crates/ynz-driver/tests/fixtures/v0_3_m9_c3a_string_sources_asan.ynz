@@ -1,0 +1,34 @@
+// v0.3-M9 C3a fixture: every way a string reaches `print` and `${}`, run under AddressSanitizer.
+// The compiled code releases the temporary text of an `int`/`float`/`number` it prints or
+// interpolates; that release must free those owned bytes and must never free the static bytes
+// of a literal, `true`/`false` or an options display name.
+//
+// Expected output: see the `print` order below.
+
+options Level { low, high }
+
+shape Point {
+  x: int
+  y: float
+}
+
+function entrypoint() -> nothing {
+  let count: int = 42
+  let ratio: float = (3).toFloat()
+  let price: number = 9.5
+  let flag: boolean = true
+  let level: Level = Level.high
+  let name: string = `yinz`
+
+  print(count)
+  print(ratio)
+  print(price)
+  print(flag)
+  print(level.toString())
+  print(`literal`)
+  print(`${name}-${count}-${ratio}-${price}-${flag}-${level}`)
+  let point: Point = { x: 7, y: ratio }
+  print(point)
+  print(count.toString())
+  print(flag.toString())
+}

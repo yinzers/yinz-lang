@@ -1,0 +1,19 @@
+// v0.3-M9 C1g rework: a LEGAL generic `background` call (`stash<Report>(r)`, argument matching
+// its parameter) must keep compiling and running after the dot-call argument-count check.
+// The spawner sleeps 1000 ms so the task's line always prints first, even on a loaded machine
+// (the 60 ms of `v0_3_m4_p3_cross_give_generic.ynz` lost that race in a full-workspace run).
+shape Report {
+  label: string
+  total: int
+}
+
+function stash<T>(give item: Report) -> nothing {
+  print(item.label)
+}
+
+function entrypoint() -> nothing {
+  let r: Report = { label: `q3`, total: 42 }
+  background stash<Report>(r)
+  sleepBlocking(1000)
+  print(`generic-background-done`)
+}

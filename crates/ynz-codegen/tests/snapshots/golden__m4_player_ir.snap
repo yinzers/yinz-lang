@@ -9,7 +9,7 @@ target triple = "x86_64-pc-linux-gnu"
 
 @.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
 @.source.file = private unnamed_addr constant [14 x i8] c"m4_player.ynz\00"
-@bts = private unnamed_addr constant [8 x i8] c"Patrick\00"
+@bts = private unnamed_addr constant { i64, [8 x i8] } { i64 0, [8 x i8] c"Patrick\00" }, align 8
 
 ; Function Attrs: nofree nounwind
 declare noundef i32 @puts(ptr nocapture noundef readonly) local_unnamed_addr #0
@@ -22,6 +22,10 @@ declare void @ynz_panic_overflow(ptr, ptr, i32, i32) local_unnamed_addr
 declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) #1
 
 declare void @ynz_siphash_init() local_unnamed_addr
+
+declare void @ynz_string_release(ptr) local_unnamed_addr
+
+declare ptr @ynz_string_clone(ptr) local_unnamed_addr
 
 declare void @ynz_rt_init() local_unnamed_addr
 
@@ -53,11 +57,12 @@ ov_panic:                                         ; preds = %entry
   unreachable
 }
 
-; Function Attrs: nofree nounwind
-define void @consume(ptr nocapture readonly %0) local_unnamed_addr #0 {
+define void @consume(ptr nocapture readonly %0) local_unnamed_addr {
 entry:
   %name2 = load ptr, ptr %0, align 8
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %name2)
+  %"ynz_release_shape:Player_stored.i" = load ptr, ptr %0, align 8
+  tail call void @ynz_string_release(ptr %"ynz_release_shape:Player_stored.i")
   ret void
 }
 
@@ -65,10 +70,20 @@ define noundef i32 @main() local_unnamed_addr {
 heal.exit:
   tail call void @ynz_siphash_init()
   tail call void @ynz_rt_init()
-  %puts.i = tail call i32 @puts(ptr nonnull dereferenceable(1) @bts), !noalias !0
+  %field_str_str = tail call ptr @ynz_string_clone(ptr nonnull getelementptr inbounds ({ i64, [8 x i8] }, ptr @bts, i64 0, i32 1))
+  %puts.i = tail call i32 @puts(ptr nonnull dereferenceable(1) %field_str_str), !noalias !0
   %int_str = tail call ptr @ynz_int_to_string(i64 120)
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
-  %puts.i8 = tail call i32 @puts(ptr nonnull dereferenceable(1) @bts)
+  %temporary0_is_live.not = icmp eq ptr %int_str, null
+  br i1 %temporary0_is_live.not, label %statement_end_released_temporary0, label %statement_end_release_temporary0
+
+statement_end_release_temporary0:                 ; preds = %heal.exit
+  tail call void @ynz_string_release(ptr nonnull %int_str)
+  br label %statement_end_released_temporary0
+
+statement_end_released_temporary0:                ; preds = %statement_end_release_temporary0, %heal.exit
+  %puts.i8 = tail call i32 @puts(ptr nonnull dereferenceable(1) %field_str_str)
+  tail call void @ynz_string_release(ptr %field_str_str)
   tail call void @ynz_rt_shutdown()
   ret i32 0
 }

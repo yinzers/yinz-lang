@@ -1,0 +1,16 @@
+// v0.3-M9 C10: the same for a string field. Correct behavior: prints 3, X.
+
+shape Holder {
+  text: string
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { text: `abc`.toUpperCase() }
+  let seen = 0
+  for (ch in holder.text) {
+    holder.text = `x`.toUpperCase()
+    seen = seen + 1
+  }
+  print(seen)
+  print(holder.text)
+}

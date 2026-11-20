@@ -1,0 +1,54 @@
+// v0.3-M9 C2 safety fixture — transfer by RETURN.
+// A returned heap value leaves its function alive: the callee must not release the binding it
+// returns, and must release every OTHER local on that path. The caller becomes the owner.
+//   - `make`:      returns its only local.
+//   - `pick`:      two locals, a different one returned per path — the other must be released.
+//   - `pass`:      returns its own `give` parameter back.
+//   - `makeLater`: the same from a state-machine function; the value rides in the callee's frame
+//                  return slot until the caller's `free_frame`, which must not free the array.
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: releasing the returned binding at the return edge (the caller then reads freed
+// memory), releasing the NOT-returned sibling twice, and the caller's frame teardown freeing the
+// array that the return slot still points to.
+//
+// Expected output (one per line): 3, 3, 2, 1, 3, 4
+
+function make() -> array<int> {
+  let rows: array<int> = [1, 2, 3]
+  return rows
+}
+
+function pick(first: boolean) -> array<int> {
+  let a: array<int> = [1, 2, 3]
+  let b: array<int> = [4, 5]
+  if (first) {
+    return a
+  }
+  return b
+}
+
+function pass(give rows: array<int>) -> array<int> {
+  let scratch: array<int> = [0]
+  print(scratch.count().toString())
+  return rows
+}
+
+function makeLater() -> array<int> {
+  let rows: array<int> = [1, 2, 3, 4]
+  let spare: array<int> = [9]
+  wait sleep(1)
+  return rows
+}
+
+function entrypoint() -> nothing {
+  let made: array<int> = make()
+  print(made.count().toString())
+  let picked: array<int> = pick(true)
+  print(picked.count().toString())
+  let other: array<int> = pick(false)
+  print(other.count().toString())
+  let again: array<int> = pass(made)
+  print(again.count().toString())
+  let later: array<int> = makeLater()
+  print(later.count().toString())
+}

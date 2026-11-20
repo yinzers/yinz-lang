@@ -1,0 +1,14 @@
+// v0.3-M9 C7 slice 2: an imported function's result no binding holds is a temporary of its
+// statement. Typeck cannot trace it (`NoOwner`), but every function returns an owned value, so
+// the statement that made it frees it. Expected output: 40.
+import { freshRows } from `rows`
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let total: int = 0
+  while (i < 20) {
+    total = total + freshRows(i).count()
+    i = i + 1
+  }
+  print(total)
+}

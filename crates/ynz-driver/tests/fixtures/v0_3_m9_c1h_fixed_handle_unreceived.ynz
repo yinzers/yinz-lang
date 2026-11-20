@@ -1,0 +1,16 @@
+// v0.3-M9 C1h: a background task returns a `fixed<string>` that nobody receives. The completion's
+// strings are released when the handle goes away.
+// Before: the strings were never released.
+// Expected output: done
+
+function build() -> fixed<string> {
+  wait sleep(1)
+  let names: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return names
+}
+
+function entrypoint() -> nothing {
+  let task = background build()
+  wait sleep(20)
+  print(`done`)
+}

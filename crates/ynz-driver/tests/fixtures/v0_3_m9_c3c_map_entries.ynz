@@ -1,0 +1,27 @@
+// v0.3-M9 C3c fixture: the strings a map owns, keys and values alike, are released with the map.
+// `build` makes a `map<string, string>` of two entries (the keys are stored by their raw pointer);
+// the spawn hands it to the task and the task's drop ladder releases it.
+// Heap strings: `firstValue` 1 (fresh, moved into the literal); the literal key `key-a` is copied
+// so the map owns bytes of its own 1; `secondKey` 1 and `secondValue` 1 (fresh, moved by `set`).
+// Total 4, all released by the task.
+// (A literal written `{ firstKey: firstValue }` is NOT a key read from `firstKey`: an identifier
+// before the colon is the key's own text, so that spelling copies the text and leaves the local.)
+// Expected output: the entry count.
+
+function build(count: int) -> map<string, string> {
+  let firstValue: string = `value-a-${count}`
+  let secondKey: string = `key-b-${count}`
+  let secondValue: string = `value-b-${count}`
+  let table: map<string, string> = { `key-a`: firstValue }
+  table.set(secondKey, secondValue)
+  return table
+}
+
+function show(table: map<string, string>) -> nothing {
+  print(table.count())
+}
+
+function entrypoint() -> nothing {
+  background show(build(1))
+  wait sleep(80)
+}

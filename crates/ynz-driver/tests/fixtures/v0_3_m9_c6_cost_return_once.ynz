@@ -1,0 +1,18 @@
+// v0.3-M9 C6 cost fixture: a function that returns a field copies it once, at the `return`; the
+// caller binds the result without a second copy.
+// Allocations: the field's literal (2) and the one returned copy (2).
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function pick(share bucket: Bucket) -> array<int> {
+  return bucket.rows
+}
+
+function entrypoint() -> nothing {
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let rows = pick(bucket)
+  print(rows.count())
+}

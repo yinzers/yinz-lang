@@ -1,0 +1,24 @@
+// v0.3-M9 C1g regression guard: a generic instance's symbol name never equals a user function's.
+// Identifiers may contain `_`, and instance names were `_`-joined: `show<Big>` was
+// `show_shape_Big`, which is also the user function below, so `show(big)` ran `show_shape_Big`
+// on a `Big` and printed the `label` pointer as `code`.
+// Correct behavior: compiles; prints generic.
+// Pre-fix (b3e23ce): prints a heap address.
+
+shape Tiny {
+  code: int
+}
+shape Big {
+  label: string
+  count: int
+}
+function show<T>(share value: T) -> nothing {
+  print(`generic`)
+}
+function show_shape_Big(share value: Tiny) -> nothing {
+  print(`${value.code}`)
+}
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  show(big)
+}

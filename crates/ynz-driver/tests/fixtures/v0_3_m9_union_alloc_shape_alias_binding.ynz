@@ -1,0 +1,49 @@
+// v0.3-M9 C1f (#423) round 2: a binding made from a place that stays where it is
+// (`let copied = outer.inner`) while the place is written (`outer.tag = 3`) before the binding's
+// last read is not a view: the binding must keep the value it had, so it owns a deep copy, four
+// cells. Correct behavior: prints 400. The counter test pins 400 cells more than the moved-field
+// fixture.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Outer {
+  inner: Holder
+  tag: int
+}
+
+function buildChain() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function makeHolder() -> Holder {
+  let top = buildChain()
+  let holder: Holder = { chain: top, id: 1 }
+  return holder
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let holder = makeHolder()
+    let outer: Outer = { inner: holder, tag: 2 }
+    let copied = outer.inner
+    outer.tag = 3
+    total = total + outer.tag + copied.id
+    round = round + 1
+  }
+  print(total)
+}

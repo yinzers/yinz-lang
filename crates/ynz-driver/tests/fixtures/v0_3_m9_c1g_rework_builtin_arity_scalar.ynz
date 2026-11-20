@@ -1,0 +1,11 @@
+// v0.3-M9 C1g rework (round 1 rule fixer): built-in `int` methods called with the wrong number of
+// arguments.
+// Correct behavior: does not compile — each call is refused with the arity text of a plain call.
+// Pre-fix failure: `n.toString(1, 2)` dropped both arguments without a word; `n.wrappingAdd()`
+// read an argument that was never passed.
+
+function entrypoint() -> nothing {
+  let n = 5
+  let text = n.toString(1, 2)
+  let sum = n.wrappingAdd()
+}

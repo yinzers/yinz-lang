@@ -61,6 +61,60 @@ rgb.add(50)
 
 Pick `array<T>` when the list can grow.
 
+### `fixed<T>` and `fixed<T, N>` in function signatures
+
+A function can take a `fixed` list and give one back. Write the number of items after the type to say exactly how many it holds, or leave the number out and the compiler works it out.
+
+```
+function total(share scores: fixed<int>) -> int {
+  let sum = 0
+  for (score in scores) {
+    sum = sum + score
+  }
+  return sum
+}
+
+function sumOfFour(share scores: fixed<int, 4>) -> int {
+  return total(scores)
+}
+
+function makeRow() -> fixed<int> {
+  let row: fixed<int> = [1, 2, 3]
+  return row
+}
+```
+
+- Write the length as a whole number, `fixed<int, 4>`, on the whole type of a **parameter, a return value or a shape field** only. A local (`let row: fixed<int> = [1, 2, 3]`) takes its length from the list on the right.
+- `fixed<int>` as a parameter takes a list of any length: `total` above works for three scores or thirty.
+- `fixed<int>` as a return type takes the length of the lists the function returns. Every `return` must give the same length.
+- An `export function` must write the length of every `fixed` it takes or returns (`fixed<int, 4>`), because another file sees only the signature.
+- A list returned from a function that waits, or from a `background` task you `receive()`, comes back the same way.
+- A function that waits, or that the compiler may run as a task of its own, needs the length written (`fixed<int, 4>`) when its body asks for it (`count`, a loop, an index, a `return`).
+
+Passing a list of the wrong length is a compile error:
+
+```
+let scores: fixed<int> = [1, 2, 3]
+let result = sumOfFour(scores)
+// COMPILE ERROR: `scores` holds 3 items, but `sumOfFour` takes exactly 4 for `scores`.
+// Pass a list of 4 items, or change `scores` to `fixed<int>` so `sumOfFour` takes a list of any length.
+```
+
+#### A `fixed` list in a shape field
+
+A shape keeps a `fixed<T, N>` field inside itself:
+
+```
+shape Roster {
+  title: string
+  names: fixed<string, 2>
+}
+```
+
+- The length is required: `names: fixed<string>` is a compile error, because the shape's size has to be known. Use `array<string>` for a list whose length varies.
+- This holds for a shape written inline (`{ trail: fixed<int, 3> }`) too, and a different length is a different type.
+- Reading the field in a `let` gives the binding its own copy when the binding is written; the shape's `.copy()` copies the list and its items.
+
 You CAN replace existing elements — the size stays the same:
 
 ```
@@ -141,11 +195,10 @@ rgb[5] = 100
 
 ---
 
-## Storing a shape makes a copy
+## Storing a shape hands it over
 
 When you store a shape value — into an array, a map, or another shape's field — the collection
-keeps a copy of the value as it is at that moment. Changing the original afterward does not
-change the stored copy:
+becomes its owner. The name you stored it from cannot be used after that line:
 
 ```
 shape Position {
@@ -157,11 +210,23 @@ let path: array<Position> = []
 let start: Position = { x: 1.0, y: 2.0 }
 path.add(start)
 start.x = 99.0
-// The element inside path still has x == 1.0 — .add(start) stored a copy of start,
-// not start itself.
+// COMPILE ERROR: `start` was stored in `path` and cannot be used here — storing a value hands it over.
+//   If you still need `start` after the store, store a copy instead: `path.add(start.copy())`.
+//   If you only need it before the store, put this line above the store.
 ```
 
-The stored copy keeps the values it had when you stored it.
+If you want to keep changing `start`, store a copy. The stored copy keeps the values it had when
+you stored it:
+
+```
+path.add(start.copy())
+start.x = 99.0
+// The element inside path still has x == 1.0.
+```
+
+If you're coming from JavaScript, watch out: in JavaScript, the array and `start` would share one
+object, so setting `start.x = 99.0` would change what the array sees. In Yinz, one value never has
+two names, so you choose: hand it over, or store a copy.
 
 To change a stored element, write through the collection:
 
@@ -315,6 +380,28 @@ Functions you call on a map:
 scores[`alice`]              // shorthand for scores.get(`alice`) → maybe<number>
 scores[`alice`] = 75         // shorthand for scores.set(`alice`, 75)
 ```
+
+**A `number` key matches the number as stored.** A map keeps a `number` key in its own slot and finds a key by comparing the stored digits, so `1.0` set twice is one key, while `1.0` and `1.00` are two (`1.0 == 1.00` is still `true`; a map key does not use `==`). A key computed to the same value and scale, such as `0.5 + 0.5` for `1.0`, is the same key. Matching `1.0` and `1.00` as one key is not decided yet. `.contains` on an `array<number>` still compares with `==`, so it finds `1.00` for `1.0`.
+
+**A map keeps each key in one slot.** The slot is 8 bytes for an `int`, a `boolean`, a `float` or a `string`, and 16 bytes for a `number` of up to 34 digits. Any other key type is refused at compile time. A `number` of more than 34 digits takes as much memory as its digits need, kept outside the map, so it does not fit the slot; a shape, an array and the other types are made of other values, so a slot could hold only where they live (a shape or array key is not supported yet). Either way a lookup with a key equal to one you stored would miss, because it lives at another address:
+
+```
+let totals: map<number<50>, int> = {}
+// COMPILE ERROR: A `map` cannot be keyed by `number<50>`.
+// Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`).
+
+let labels: map<Point, string> = {}
+// COMPILE ERROR: A `map` can't be keyed by `Point` yet.
+// Key the map by one of its fields (an `int` id or a `string` name) and keep the `Point`
+// as the map's value: `map<string, Point>`.
+
+let sessions: map<sensitive string, int> = {}
+// COMPILE ERROR: A `map` cannot be keyed by `sensitive string`.
+// Key the map by a plain `string` or an `int` that is not a secret, such as an id or a name,
+// and keep the secret as the map's value: `map<string, sensitive string>`.
+```
+
+A `sensitive string` is refused for a different reason than its slot: a map would free the key as an ordinary string and compare keys with a comparison that is not constant-time. A `sensitive string` key stays refused: that is by design, not a missing feature.
 
 **Bulk update with `.update({...})`:**
 

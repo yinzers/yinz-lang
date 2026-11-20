@@ -1,0 +1,15 @@
+// Shadow matrix: crossing PARAM `n: int` and a crossing `for (n in strings)` variable — the
+// slot's type/width must come from each binding, not from the first one named `n`.
+// Expected: amy, bob, 41.
+function worker(n: int) -> nothing {
+  let names: array<string> = [`amy`, `bob`]
+  for (n in names) {
+    wait sleep(5)
+    print(n)
+  }
+  wait sleep(5)
+  print(n.toString())
+}
+function entrypoint() -> nothing {
+  worker(41)
+}

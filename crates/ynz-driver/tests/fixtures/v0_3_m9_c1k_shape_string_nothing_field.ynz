@@ -1,0 +1,15 @@
+// v0.3-M9 C1k: a shape with a `string | nothing` field. The union is the string's raw pointer
+// (null for `nothing`), so the shape's release frees that string, once.
+// Before: the build stopped with "a union of 2 variants with no shape variant has no stored form
+// to release".
+// Expected output: `A`.
+
+shape Holder {
+  label: string
+  name: string | nothing
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { label: `a`.toUpperCase(), name: `bob`.toUpperCase() }
+  print(holder.label)
+}

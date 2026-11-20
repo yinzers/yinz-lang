@@ -1,0 +1,14 @@
+// v0.3-M9 C1l: `mkm` returns a piece of its own local `rows` (`rows.first()`), and the call is
+// stored into an array literal. The literal would take the piece over as its own, while another
+// holder still owns it, so typeck refuses it (`TransferNeedsCopy`) and advises `.copy()`.
+// Kept as a refusal over a hidden copy (Golden Rules 1 and 7), decided by the Chief 2026-11-18.
+
+function mkm() -> maybe<array<int>> {
+  let rows: array<array<int>> = [[1, 2], [3]]
+  return rows.first()
+}
+
+function entrypoint() -> nothing {
+  let wrapped = [mkm()]
+  print(wrapped.count())
+}

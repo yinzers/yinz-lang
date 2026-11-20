@@ -1,0 +1,12 @@
+// v0.3-M9 C6 cost fixture: a state-machine loop (a `wait` in its body) whose body does not write
+// the iterated array copies nothing.
+// Allocations: the outer literal and two inner literals (header + buffer each: 6) and the
+// function's own state-machine frame (1, freed).
+
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[1], [2]]
+  for (row in rows) {
+    wait sleep(1)
+    print(row.count())
+  }
+}

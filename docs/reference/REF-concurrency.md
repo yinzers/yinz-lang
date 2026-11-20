@@ -358,6 +358,31 @@ counter.send(7)
 
 One more rule: the handle form needs a function that can pause (one that uses `wait` or a channel, or calls something that does). For a plain calculation that never pauses, use fire-and-forget `background crunch()`. Handles for those are not supported yet, and the compile error says so.
 
+**When the handle goes out of scope, the task stops.** A handle belongs to the block it was declared in. When that block ends (or the function returns), the task stops at its next pause, and anything it would have done after that never runs:
+
+```ynz
+function worker() -> int errors {
+  wait sleep(20)
+  print(`worker: after first sleep`)
+  wait sleep(20)
+  print(`worker: done`)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  if (true) {
+    let h = background worker()
+    print(`leaving the block`)
+  }
+  // `h` is gone, so `worker` was stopped. "worker: done" never prints.
+  print(`block exited`)
+  wait sleep(150)
+  print(`finished`)
+}
+```
+
+If you want the task to finish, keep its handle alive until you have what you need, for example by calling `h.receive()`. A fire-and-forget `background worker()` has no handle, so nothing stops it: it runs until it ends or until `entrypoint` returns.
+
 ---
 
 ## Ownership with background tasks
@@ -382,6 +407,19 @@ background processData(data)
 A `share` parameter only works while the original owner still has the value. A background task might still be running after the current function returns and the value is gone. So the function you start with `background` must take its parameters as `give`, or the caller passes a `.copy()` (an independent value the task owns).
 
 **The one exception: `channel<T>` parameters.** A channel is made to be held by two tasks at once, so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
+
+**A union cannot go to a generic parameter of a `background` function.** A task keeps its own copy of a union argument, and it can make that copy only when the function declares the union type. A generic parameter gives the task no union slot to copy into, so the compiler refuses it:
+
+```ynz
+function eat<T>(held: T) -> nothing { ... }
+
+let choice: Circle | Tag = tag
+background eat(choice)
+// COMPILE ERROR: Cannot give the union `Circle | Tag` to `eat`'s generic parameter `held`
+// in a `background` call.
+// Declare `held` as `Circle | Tag` in `eat`'s signature instead of a type parameter,
+// or put the union in a field of a shape and pass the shape.
+```
 
 **When the parameter is `give`, the compiler picks give-away or copy for you:**
 

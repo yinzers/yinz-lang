@@ -1,0 +1,86 @@
+// v0.3-M9 C1: inside an `is Variant =>` arm the narrowed binding is still accepted where the
+// UNION is expected: a union parameter (plain call, `wait`ed call, UFCS extra argument, generic
+// callee) and a union return. Those uses must pass the 16-byte envelope, not the payload.
+// `Tiny` is a 1-byte variant, so a payload read as an envelope is out of bounds.
+// Correct behavior: prints `tiny` (plain arg), `true`/`tiny` (UFCS), `tiny` (generic),
+// `tiny` (returned union), then from the suspending host `tiny`, `true`, then `end`;
+// clean under AddressSanitizer.
+// Pre-fix failure: the callee read the payload as an envelope: wrong variant (`big`) and an
+// AddressSanitizer stack-/heap-buffer-overflow READ past the 1-byte `Tiny`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+}
+shape Thing = Tiny | Big
+
+function name(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big`
+    }
+  }
+  return `none`
+}
+
+function pair(share a: Tiny, share b: Thing) -> nothing {
+  print(a.flag)
+  print(name(b))
+}
+
+function genericName<T>(share t: Thing, share extra: T) -> string {
+  return name(t)
+}
+
+function pass(share t: Thing) -> Thing {
+  if (t) {
+    is Tiny => {
+      return t
+    }
+    is Big => {
+      return t
+    }
+  }
+  return t
+}
+
+function nameLater(share t: Thing) -> nothing {
+  wait sleep(1)
+  print(name(t))
+}
+
+function suspendingHost(share thing: Thing) -> nothing {
+  if (thing) {
+    is Tiny => {
+      wait nameLater(thing)
+      print(thing.flag)
+    }
+    is Big => {
+      print(`no`)
+    }
+  }
+}
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let thing: Thing = tiny
+  if (thing) {
+    is Tiny => {
+      print(name(thing))
+      thing.pair(thing)
+      print(genericName(thing, 3))
+    }
+    is Big => {
+      print(`no`)
+    }
+  }
+  let back = pass(thing)
+  print(name(back))
+  suspendingHost(thing)
+  print(`end`)
+}

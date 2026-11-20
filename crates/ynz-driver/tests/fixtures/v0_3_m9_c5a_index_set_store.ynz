@@ -1,0 +1,15 @@
+// v0.3-M9 C5a (spike S3 probe g8): `o[0] = a` stores `a` into the container with no sink, then the
+// container is returned. GREEN today; guards C7. Expected output: `3`.
+function make() -> array<array<int>> {
+  let a: array<int> = [1, 2, 3]
+  let o: array<array<int>> = [[0]]
+  o[0] = a
+  return o
+}
+
+function entrypoint() -> nothing {
+  let o: array<array<int>> = make()
+  for (inner in o) {
+    print(inner.count().toString())
+  }
+}

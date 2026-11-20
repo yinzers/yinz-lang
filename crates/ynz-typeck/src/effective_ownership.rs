@@ -221,6 +221,11 @@ impl EffectiveOwnershipReport {
             .unwrap_or(Freshness::MayAlias { param: None })
     }
 
+    /// The names of the LOCAL functions the fixpoint analyzed.
+    pub fn local_fn_names(&self) -> HashSet<String> {
+        self.per_fn.keys().cloned().collect()
+    }
+
     /// True when `name` is a LOCAL function the fixpoint analyzed.
     pub fn is_local_fn(&self, name: &str) -> bool {
         self.per_fn.contains_key(name)
@@ -245,7 +250,7 @@ pub enum Provenance {
     /// origin permits; consumes the binding's whole alias class.
     Whole(String),
     /// A value someone still reaches through the named roots — a field, an index, a loop
-    /// cell, a literal built from named values, a call that returns a piece of its argument.
+    /// cell, a call that returns a piece of its argument.
     /// Never transferable; the fix is `.copy()` on the reached piece. `Reaches([])` is a
     /// piece of a fresh temporary (`makeBucket().rows`) — still not transferable.
     Reaches(Vec<String>),
@@ -291,22 +296,31 @@ impl<'a> ProvenanceCtx<'a> {
     }
 }
 
-/// A type whose values are bits (or immortal string bytes) — holding one never aliases a
-/// heap allocation, so an element of that type contributes nothing to a literal's roots.
+/// A type whose values are bits or a `string` (a store copies or moves it, `own_string_for_store`):
+/// holding one never aliases another owner's allocation, so it adds nothing to a literal's roots.
 /// `Error` counts as value-like so an earlier type error does not cascade into a transfer
 /// refusal. `None` (type unknown to the oracle) is treated as heap-typed by the callers.
-fn value_like(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Int
-            | Type::Float
-            | Type::Bool
-            | Type::Number { .. }
-            | Type::String
-            | Type::Options { .. }
-            | Type::Nothing
-            | Type::Error
-    )
+pub(crate) fn value_like(ty: &Type) -> bool {
+    match ty {
+        // A `maybe` of bits is an inline envelope of bits: it holds no heap pointer either.
+        Type::Maybe { inner } => value_like(inner),
+        // `sensitive string` is the string pointer with a label: its copy is the receiver's bits
+        // (`owned_copy_plan`), so storing it hands nothing over.
+        Type::Sensitive { inner } => value_like(inner),
+        _ => matches!(
+            ty,
+            Type::Int
+                | Type::Float
+                | Type::Bool
+                | Type::Number { .. }
+                | Type::String
+                // A range is its start and end; `owned_copy_plan` calls its copy the receiver's bits.
+                | Type::Range { .. }
+                | Type::Options { .. }
+                | Type::Nothing
+                | Type::Error
+        ),
+    }
 }
 
 /// The roots a provenance reaches through, for folding into an aggregate. `None` = Unknown.
@@ -317,6 +331,13 @@ fn roots_of(p: Provenance) -> Option<Vec<String>> {
         Provenance::Reaches(rs) => Some(rs),
         Provenance::Unknown => None,
     }
+}
+
+/// The bindings a receiver expression reaches (`None` = untraceable). A piece of the receiver
+/// is a piece of each of them, so field/index/method results inherit the whole set — not just
+/// the root of a name chain, which loses every receiver that is a call or method result.
+fn receiver_roots(receiver: &Expr, ctx: &ProvenanceCtx<'_>) -> Option<Vec<String>> {
+    roots_of(provenance(receiver, ctx))
 }
 
 /// Fold the provenance of an aggregate's parts (a literal's elements, a call's arguments):
@@ -358,15 +379,34 @@ fn fold_parts<'e>(
 /// A user-function call result (plain call or UFCS): fresh iff the callee's every return is
 /// fresh, else a piece of whatever its arguments reach.
 fn call_result_provenance<'e>(
+    call: &Expr,
     callee: &str,
     args: impl Iterator<Item = &'e Expr>,
     ctx: &ProvenanceCtx<'_>,
 ) -> Provenance {
     if ctx.imported_fn_names.contains(callee) && !ctx.local_fns.contains(callee) {
-        return Provenance::Unknown;
+        // An imported body is not visible, but its declared return type says what its `return`
+        // does: a type copied at `return` is an owned value, as for a local function.
+        let returns_an_owned_copy =
+            (ctx.type_of)(call).is_some_and(|ty| crate::owned_copy::copied_at_return(&ty));
+        return if returns_an_owned_copy {
+            Provenance::Fresh
+        } else {
+            Provenance::Unknown
+        };
     }
     match ctx.returns_fresh_of(callee) {
         Freshness::Fresh => Provenance::Fresh,
+        // A generic function's declared return type is a type parameter, which the fixpoint
+        // cannot say is copied at `return`; codegen resolves it per instance and does copy a
+        // heap-typed result there. The call's own (instantiated) type is the answer, as for an
+        // imported callee above: without it a generic call result was neither bound by move nor
+        // released as a temporary, and its `let` copied it a second time.
+        Freshness::MayAlias { .. }
+            if (ctx.type_of)(call).is_some_and(|ty| crate::owned_copy::copied_at_return(&ty)) =>
+        {
+            Provenance::Fresh
+        }
         Freshness::MayAlias { .. } => match fold_parts(args, ctx, true) {
             // A fresh-argument call to a may-alias callee still returns a piece of
             // SOMETHING (a global, an argument's temporary) — never transferable.
@@ -380,7 +420,7 @@ fn call_result_provenance<'e>(
 /// — no wildcard arm, by design.
 pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
     match expr {
-        // Value bits, or immortal string bytes.
+        // Value bits, or a string literal (a store copies it, so nothing aliases it).
         Expr::IntLit(..)
         | Expr::NumberLit(..)
         | Expr::BoolLit(..)
@@ -393,26 +433,35 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
         // Exactly the value a binding names — the binding's ORIGIN decides transferability.
         Expr::Ident(name, _) => Provenance::Whole(name.clone()),
         Expr::SelfValue { .. } => Provenance::Whole("self".to_string()),
-        // A piece of whatever the receiver chain roots in; a piece of a fresh temp is
-        // `Reaches([])` — still not transferable.
+        // A piece of whatever the receiver reaches: a binding chain roots in its binding, a call
+        // or method result in the bindings that result may hold (`firstBag(bags).items` is a
+        // piece of `bags`). A piece of a fresh temp is `Reaches([])` — still not transferable.
         Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } => {
-            Provenance::Reaches(
-                root_binding_name(receiver)
-                    .map(|r| vec![r.to_string()])
-                    .unwrap_or_default(),
-            )
+            match receiver_roots(receiver, ctx) {
+                Some(roots) => Provenance::Reaches(roots),
+                None => Provenance::Unknown,
+            }
         }
-        Expr::ArrayLit { elements, .. } => fold_parts(elements.iter(), ctx, true),
-        Expr::MapLit { entries, .. } => {
-            fold_parts(entries.iter().flat_map(|(k, v)| [k, v]), ctx, true)
-        }
-        Expr::StructLit { fields, .. } => fold_parts(fields.iter().map(|f| &f.value), ctx, true),
+        // A container literal stores each named heap part (`check.rs::hand_literal_parts_over`):
+        // it takes them over, so it is the sole holder of everything in it.
+        Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => Provenance::Fresh,
         Expr::PostfixOp { receiver, op, .. } => match op {
             // `.copy()` is fresh iff the copy is genuinely independent for the receiver's
             // type (parity-tested against codegen's `PostfixOpKind::Copy` arms); the FR#10
             // alias-no-op types are `Unknown` and can never be transferred through it.
             PostfixOpKind::Copy => match (ctx.type_of)(receiver) {
                 Some(ty) if copy_is_independent(&ty) => Provenance::Fresh,
+                // The `.copy()` of a type parameter is the instance's copy: codegen substitutes
+                // the concrete type, and a heap type's copy is independent (`owned_copy_plan`),
+                // while an instance with no heap to own (`int`, `number` up to 34 digits,
+                // `range`) has a release that frees nothing, so a copy that is the receiver's
+                // own bits cannot be freed through this name. The plan judges the result as an
+                // owner exactly as it judges any value of a type parameter (`Release(
+                // TypeParameter)`, `IMP-ownership.md`). An instance whose `.copy()` is refused
+                // (a union, a `channel`) never builds. Reading it as `Unknown` joined the result
+                // to the receiver's class, so a `share` parameter's copy was `CallerOwns` and
+                // never released (C1m item 4).
+                Some(Type::TypeParam { .. }) => Provenance::Fresh,
                 _ => Provenance::Unknown,
             },
             // `.freeze()` is typed `nothing` (no sink can accept it, nothing to hold). If it
@@ -428,7 +477,7 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             Expr::Ident(name, _)
                 if ctx.local_fns.contains(name) || ctx.imported_fn_names.contains(name) =>
             {
-                call_result_provenance(name, call.args.iter(), ctx)
+                call_result_provenance(expr, name, call.args.iter(), ctx)
             }
             // A free-function intrinsic (`range`, the string parsers, …) constructs its
             // result; nothing it returns is a piece of an argument.
@@ -442,9 +491,21 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             args,
             ..
         } => {
-            // UFCS: a user function reachable by this name IS the callee, receiver first.
-            if ctx.local_fns.contains(method) || ctx.imported_fn_names.contains(method) {
+            // UFCS: a user function reachable by this name IS the callee, receiver first, but a
+            // dot-call reaches a Yinz function only on a shape (or `dynamic` contract) receiver
+            // (`Checker::check_method_call` rules every built-in method of that name out first).
+            // On any other receiver the name is the built-in, whose result is borrowed even when a
+            // function shares its name: the same test `string_ownership::is_fresh_string_expr`
+            // makes, so a user `or` does not make `found.or(x)` read as `Fresh`.
+            let reaches_function = matches!(
+                (ctx.type_of)(receiver),
+                Some(Type::Shape { .. } | Type::Dynamic { .. })
+            );
+            if reaches_function
+                && (ctx.local_fns.contains(method) || ctx.imported_fn_names.contains(method))
+            {
                 return call_result_provenance(
+                    expr,
                     method,
                     std::iter::once(receiver.as_ref()).chain(args.iter()),
                     ctx,
@@ -464,11 +525,24 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             if builtin_method_returns_fresh(method) {
                 return Provenance::Fresh;
             }
-            Provenance::Reaches(
-                root_binding_name(receiver)
-                    .map(|r| vec![r.to_string()])
-                    .unwrap_or_default(),
-            )
+            // The result may be (a piece of) the receiver OR of a heap argument the method hands
+            // back or builds from: `maybe.or(default)`, `a.concat(b)`, `a.append(b)`. Every
+            // heap argument's roots are roots of the result (value-typed arguments drop out).
+            let Some(mut roots) = receiver_roots(receiver, ctx) else {
+                return Provenance::Unknown;
+            };
+            match fold_parts(args.iter(), ctx, true) {
+                Provenance::Fresh => {}
+                Provenance::Reaches(argument_roots) => {
+                    for root in argument_roots {
+                        if !roots.contains(&root) {
+                            roots.push(root);
+                        }
+                    }
+                }
+                Provenance::Whole(_) | Provenance::Unknown => return Provenance::Unknown,
+            }
+            Provenance::Reaches(roots)
         }
         Expr::Wait(inner, _) => provenance(inner, ctx),
         // A task handle — the spawn's sole reference.
@@ -653,7 +727,12 @@ pub fn analyze(
             }
             // returns_fresh[f]: every `return` fresh, else MayAlias (naming the parameter it
             // reaches through when there is one).
-            if returns_fresh[&f.name] == Freshness::Fresh {
+            // A function whose declared return type is copied at its `return` hands its caller an
+            // owned value whatever it returns (`owned_copy::copied_at_return`): `Fresh`, for the
+            // caller's binding to take without a second copy.
+            let returns_an_owned_copy =
+                crate::owned_copy::copied_at_return(&resolve_ty(&f.return_type));
+            if !returns_an_owned_copy && returns_fresh[&f.name] == Freshness::Fresh {
                 let type_of =
                     fixpoint_type_oracle(f, resolve_ty, &local_fn_names, imported_fn_names);
                 let ctx = ProvenanceCtx {
@@ -1048,15 +1127,21 @@ fn returns_freshness_in_block(
                 ..
             } => {
                 // The new value of `name`: fresh iff its initializer is fresh. A `Whole(b)`
-                // initializer aliases `b` — both names now hold one value; neither is fresh.
+                // initializer is a store, which hands `b`'s value over (`let b = a` makes the new
+                // name the one owner and consumes `a`; a program that keeps reading `a` does not
+                // build): `name` is fresh exactly when `b` was, and `b` no longer is.
                 let p = provenance(value, ctx);
                 match p {
                     Provenance::Fresh => {
                         fresh_locals.insert(name.clone());
                     }
                     Provenance::Whole(b) => {
-                        fresh_locals.remove(&b);
-                        fresh_locals.remove(name);
+                        let handed_over_fresh_value = fresh_locals.remove(&b);
+                        if handed_over_fresh_value {
+                            fresh_locals.insert(name.clone());
+                        } else {
+                            fresh_locals.remove(name);
+                        }
                     }
                     Provenance::Reaches(_) | Provenance::Unknown => {
                         fresh_locals.remove(name);
@@ -2615,4 +2700,100 @@ function entrypoint() -> nothing { }
             EffectiveOwnership::Reads
         );
     }
+}
+
+#[cfg(test)]
+mod value_like_parity {
+    use super::value_like;
+    use crate::owned_copy::{owned_copy_plan, OwnedCopy};
+    use crate::types::Type;
+
+    /// (High) `value_like` is "storing it hands nothing over", the question `owned_copy_plan`
+    /// answers with "the receiver's bits ARE the copy" (`ReceiverIsCopy`) or immutable contents
+    /// with nothing to free (`FrameLocalImmutable`). Two answers to one question drift (the
+    /// `range` store refusal was exactly that drift), so every type the copy table calls bits
+    /// must be bits here too.
+    #[test]
+    fn every_type_the_copy_table_calls_bits_is_value_like() {
+        let string = Type::String;
+        let samples = [
+            Type::Int,
+            Type::Float,
+            Type::Bool,
+            Type::String,
+            Type::Number { precision: 34 },
+            Type::Options {
+                name: "Color".to_string(),
+            },
+            Type::Range {
+                element: Box::new(Type::Int),
+                end_inclusive: false,
+            },
+            Type::Sensitive {
+                inner: Box::new(string.clone()),
+            },
+            Type::Maybe {
+                inner: Box::new(string),
+            },
+        ];
+        for sample in &samples {
+            let copy_is_bits = matches!(
+                owned_copy_plan(sample),
+                OwnedCopy::ReceiverIsCopy | OwnedCopy::FrameLocalImmutable { .. }
+            );
+            if copy_is_bits {
+                assert!(
+                    value_like(sample),
+                    "{sample:?}: its copy is the receiver's bits, so storing it must hand nothing over"
+                );
+            }
+        }
+    }
+
+    /// (High) The other direction: a type that owns heap storage is handed over when stored.
+    #[test]
+    fn a_heap_type_is_not_value_like() {
+        let array_of_ints = Type::BuiltinArray {
+            elem: Box::new(Type::Int),
+        };
+        assert!(!value_like(&array_of_ints));
+        assert!(!value_like(&Type::Shape {
+            name: "Order".to_string()
+        }));
+    }
+}
+
+/// True when position `index` of a call to `name` only READS what is passed there: a method call's
+/// receiver is position 0, its arguments follow (`is_method`). The one answer the view analysis
+/// asks, derived from the same classification the effective-ownership fixpoint uses
+/// (`classify_call_position`): a local function by its analyzed body, an imported one by its declared
+/// positions, an intrinsic as read-only, and a built-in in-place collection mutator
+/// (`array.add`, `map.set`, `fixed.set`, `remove`, `clear`, …: `*_method_is_mutating`, the table the
+/// checker uses to refuse them on a `share` parameter) as a write at every position, because it
+/// writes its receiver and stores its arguments.
+///
+/// Time: O(1)  Space: O(1)
+pub(crate) fn call_position_reads(
+    report: &EffectiveOwnershipReport,
+    imported_fn_names: &HashSet<String>,
+    name: &str,
+    index: usize,
+    is_method: bool,
+) -> bool {
+    let is_user_fn = report.is_local_fn(name) || imported_fn_names.contains(name);
+    if is_method
+        && !is_user_fn
+        && (array_method_is_mutating(name)
+            || map_method_is_mutating(name)
+            || fixed_method_is_mutating(name))
+    {
+        return false;
+    }
+    classify_call_position(
+        Some(name),
+        index,
+        &report.per_fn,
+        &report.declared_writes,
+        imported_fn_names,
+    ) == EffectiveOwnership::Reads
 }

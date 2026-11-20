@@ -1,0 +1,13 @@
+// v0.3-M9 C6 cost fixture: a `for` whose body overwrites an item of the iterated array copies
+// the item once per iteration (the loop variable owns a copy), and releases it after the
+// iteration.
+// Allocations: the outer literal and two inner literals (6), the overwriting literal in each of
+// the two iterations (2 each = 4), and one copy of the loop item per iteration (2 each = 4).
+
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[1], [2]]
+  for (row in rows) {
+    rows[0] = [9]
+    print(row.count())
+  }
+}

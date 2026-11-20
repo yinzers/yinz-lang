@@ -1169,15 +1169,6 @@ triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` t
 # "was receive called" conditional. See docs/internal/implementation/IMP-concurrency.md
 # ("ECWrapperResultCollection") and crates/ynz-runtime/src/handle.rs for the design record.
 
-# --- Handle-drop cancel wiring (docs/internal/implementation/IMP-no-function-coloring.md "Task Cancellation") ---
-[[deferred_language_feature]]
-name = "background-handle-cancel-injection"
-substitute = "A task keeps running after the binding that holds its handle goes out of scope; it finishes on its own, or stops when the program ends. To stop it earlier, give it a channel to read a stop signal from, or `wait` on its handle so your code continues only after it is done."
-why = "Yinz does not yet release anything automatically when a binding goes out of scope — not arrays, not maps, not task handles. Stopping a task when its handle goes out of scope needs that general end-of-scope cleanup first; adding it for task handles alone would build a second, separate cleanup rule that the general one would then have to replace."
-ships_in = "a later version"
-design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
-triggers = "v0.3-M9 (the drop-story milestone, plan-id `v0-3-m9-drop-story`) ships Yinz releasing values automatically at the end of a block — task handles join that rule then — or a real program needs to stop a running task before then. Re-tagged 2026-09-07: this capability was sized inside `2026-09-04-v0-3-concurrency-hardening` Phase 4 and deferred to its own milestone (Patrick-signed override; 3-5 sessions, 6+ exit-path insertion classes, string-byte-freeing soundness question still open)."
-
 # --- Conduit-op expression position (v0.3-M4 Phase 2 statement discipline) ---
 [[deferred_language_feature]]
 name = "channel-op-expression-position"
@@ -1209,10 +1200,10 @@ triggers = "`channel<Player>()` - a channel construction whose element type is a
 [[deferred_language_feature]]
 name = "channel-auto-close-on-last-producer"
 substitute = "Call `wire.close()` yourself when a producer is done sending — one line per producer, and the consumer's `receive()` returns `none` once the buffer drains. Closing twice is a safe no-op, so every producer may close."
-why = "Auto-close — the channel closing itself when the last binding that can send goes out of scope — requires three things the compiler does not have: a per-binding producer/consumer role analysis, the scope-exit drop-insertion pass (no local is released at scope end today), and a runtime refcount split into producer vs holder counts. Shipping explicit close() first costs one line per producer and is correct today; shipping auto-close first would be a refcount redesign with a dead-on-arrival trigger until the drop pass lands. Cost to add later: medium — the role analysis, one producer counter decremented from the drop ladder, and a compose rule with explicit close() (close-once semantics make that trivial)."
+why = "Auto-close — the channel closing itself when the last binding that can send goes out of scope — requires two things the compiler does not have: a per-binding producer/consumer role analysis and a runtime refcount split into producer vs holder counts (the scope-exit release pass exists, but it cannot tell a producer's release from a consumer's). Shipping explicit close() first costs one line per producer and is correct today. Cost to add later: medium — the role analysis, one producer counter decremented from the drop ladder, and a compose rule with explicit close() (close-once semantics make that trivial)."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "The general scope-exit drop pass shipping (Track 3 / the drop-story milestone), AND a real workload where forgetting close() produced a hang in practice — the explicit form is the teaching-correct default until the compiler can prove the producer set."
+triggers = "A real workload where forgetting close() produced a hang in practice — the explicit form is the teaching-correct default until the compiler can prove the producer set."
 
 # --- Handle-side close (IMP-concurrency.md "The gap that decision leaves") ---
 [[deferred_language_feature]]
@@ -1248,14 +1239,16 @@ triggers = "A real workload whose correctness contract requires a global total o
 # The emission is LIVE: two or more `background` spawns in one block that pass the same
 # whole shape binding, with nothing changing it between them, every spawned function only
 # reading it, and a shape made of `int`/`float`/`bool`/`string` fields, share ONE
-# reference-counted block (`ynz_arc_new` at the first spawn, `ynz_arc_clone` per task, the
-# caller's transient released after the last spawn, each task's reference released when it
-# retires). The `auto_arc` muted hint fires at every member spawn. What remains deferred is
-# exactly the residual the design names — this entry now describes THAT, nothing wider.
+# reference-counted block (`ynz_arc_new(size, glue)` at the first spawn, with one deep copy of
+# the shape's strings that the block owns; `ynz_arc_clone` per task, the caller's transient
+# released after the last spawn, each task's reference released when it retires; the last
+# release runs the glue that frees the strings, then frees the 16-byte-header block). The
+# `auto_arc` muted hint fires at every member spawn. What remains deferred is exactly the
+# residual the design names — this entry now describes THAT, nothing wider.
 [[deferred_language_feature]]
 name = "auto-arc-codegen-emission"
 substitute = "In the three shapes the shared block does not yet cover, each `background` task takes its own independent copy — the same safe, race-free path every `background` argument used before sharing existed: (1) `background` statements passing the same value but separated by a suspension point (`wait`, a suspending call, a channel `send`/`receive`); (2) a `background` statement inside a loop body (one statement, run once per iteration); (3) `array`/`map` values, and shapes with a `number`, `array`, `map`, `maybe`, union, `channel`, or nested-shape field. Nothing is unsafe in the meantime; only the per-task copy is paid."
-why = "Sharing one block across a group of `background` statements is sound only while the caller's transient reference is a straight-line temporary: it is minted at the first `background` statement of the group and released right after the last, and never lives in a state-machine frame. (1) A suspension between the `background` statements would have to carry that temporary across a frame boundary — the frame-layout plumbing for a compiler-owned temporary does not exist yet, and the shape-copy path is correct there. (2) A loop runs ONE `background` statement many times, so no group of statements forms; sharing across iterations needs a caller-held reference that outlives the statement, which needs the scope-exit cleanup mechanism the language does not have yet. (3) The block is a byte copy of the shape with an 8-byte-aligned refcount in front: a `number` field needs 16-byte alignment, and a field that is itself a pointer (an array, a map, a maybe, a union, a channel, a nested shape) would share the inner allocation between tasks with no count on it; an `array`/`map` value is a header-plus-buffer pair, a different sharing substrate. Each of these declines to the copy path by construction rather than sharing unsoundly."
+why = "Sharing one block across a group of `background` statements is sound only while the caller's transient reference is a straight-line temporary: it is minted at the first `background` statement of the group and released right after the last, and never lives in a state-machine frame. (1) A suspension between the `background` statements would have to carry that temporary across a frame boundary — the frame-layout plumbing for a compiler-owned temporary does not exist yet, and the shape-copy path is correct there. (2) A loop runs ONE `background` statement many times, so no group of statements forms; sharing across iterations needs a caller-held reference that outlives the statement, which needs the scope-exit cleanup mechanism the language does not have yet. (3) The block is one allocation: a 16-byte header (an 8-byte refcount, then an 8-byte drop-glue slot) in front of a byte copy of the shape, so the data is 8-byte aligned. A `number` field needs 16-byte alignment. A `string` field is covered: the block owns one deep copy of the shape's strings per spawn group, and the last `ynz_arc_free` runs the glue once to release them and then frees the block. A field that is any other pointer (an array, a map, a maybe, a union, a channel, a nested shape) has no copy the block could own, so sharing it would let tasks share the inner allocation with no count on it; an `array`/`map` value is a header-plus-buffer pair, a different sharing substrate. Each of these declines to the copy path by construction rather than sharing unsoundly."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-ownership.md"
 triggers = "(1) The compiler gains frame-backed storage for compiler-owned temporaries across a suspension point, so a group's transient can straddle a `wait`; (2) the language-wide scope-exit cleanup mechanism lands, so a caller-held reference can outlive one loop iteration; (3) a counted sharing substrate for pointer-carrying values (arrays, maps, shapes with pointer or 16-byte-aligned fields) is designed. Each slice widens the admission independently; the copy path stays the fallback for whatever remains."
@@ -1497,7 +1490,7 @@ triggers = "`arena scratch { }` keyword ships in the v0.3 concurrency/memory mil
 # task's own completion value as its final delivery — one surface). The typeck rejection that
 # pointed at this entry was lifted at check.rs (v0.3-M4 Phase 2). Remaining scoped-out slices
 # have their own entries: `background-handle-nonsuspending-callee`,
-# `background-handle-cancel-injection`, `channel-op-expression-position`.
+# `channel-op-expression-position`.
 # See docs/internal/implementation/IMP-no-function-coloring.md for the design record.
 
 # Rename — aliased re-export deferred to v0.3+.
@@ -1637,7 +1630,11 @@ why_template = "Yinz import paths are root-relative, not relative to the current
 # Rendered from this entry by typeck's consumed-read rendering (`consumed_read_diag`). `{via}`
 # is empty when the name read is the name that was given; otherwise it names the alias-class
 # mate that was given away instead (e.g. " — it shares its value with `rows`, which is what
-# was given away"), mirroring ConsumedBySend. Decided v0.3-M8 Phase 4: `git log --grep=m8-p4`.
+# was given away"), mirroring ConsumedBySend; for a give carried into the next pass of a loop it
+# names the loop (", because the previous pass through this loop already ..."); for a binding that one
+# path reassigned and another did not it names the path that did not (", because the path where the
+# `if` above did not run never reassigned it"; likewise a `match` path or a loop that ran zero times).
+# Decided v0.3-M8 Phase 4: `git log --grep=m8-p4`.
 [[diagnostic_template]]
 kind_name = "Consumed"
 what_template = "`{name}` was already given away and cannot be used here{via}."
@@ -1654,6 +1651,19 @@ what_template = "`{name}` was sent into `{channel}` and cannot be used here — 
 what_instead_template = "If you still need `{name}` after sending it, send a copy instead: `{channel}.send({sent}.copy())`. If you only need it before the send, put this line above the `send()`."
 why_template = "A channel hands the value to whichever task receives it, and that task may already be reading or changing it by the time this line runs. If both sides kept the same value, two tasks could change it at once and neither would know. So `send()` gives `{sent}` away, and the compiler refuses to build any line that reads it afterward. Nothing happens at runtime — `{name}` is not cleared or set to `none`; the program simply does not compile until this read is placed above the `send()` or the send takes a copy."
 
+# v0.3-M9 C5a (Patrick, 2026-11-13, on the Chief Architect's recommendation: "Storing a heap
+# value hands it over"). Rendered by `consumed_diag` from the cause `Scope::consume` stamped when
+# a store (`list.add(v)`, `table.set(k, v)`, `x.field = v`, `x[i] = v`, a container literal built
+# from named values, `let b = a`, `b = a`) handed the value over. `{place}` names the place with
+# its backticks (`list`, `x.field`, the literal `[a, c]`, `b`); `{copy_form}` is the same store
+# written with `.copy()`; `{via}` is as in `Consumed`.
+# Decided v0.3-M9 C5a: `git log --grep="hands it over"`.
+[[diagnostic_template]]
+kind_name = "ConsumedByStore"
+what_template = "`{name}` was stored in {place} and cannot be used here — storing a value hands it over{via}."
+what_instead_template = "If you still need `{name}` after the store, store a copy instead: `{copy_form}`. If you only need it before the store, put this line above the store."
+why_template = "Every value has one owner. Storing `{stored}` in {place} makes {place} its owner, and when {place} is done with it, it frees it. If `{name}` could still read the same value, two names would reach one value and one of them would free it under the other. So a store hands the value over, and the compiler refuses any line that reads `{stored}` afterward. Nothing happens at runtime — `{name}` is not cleared or set to `none`; the program simply does not compile until this read is placed above the store or the store takes a copy."
+
 [[diagnostic_template]]
 kind_name = "ParamNeedsGive"
 what_template = "`{name}` is a parameter of `{fn}` that {modifier}, but this line gives it away — it is {act}. Only a `give` parameter can be given away."
@@ -1664,13 +1674,181 @@ why_template = "A parameter without `give` still belongs to the caller — the c
 kind_name = "TransferNeedsCopy"
 what_template = "This line gives `{expr}` away — it is {act} — but `{expr}` is {reason}, so someone here still holds it."
 what_instead_template = "Give away a copy instead: `{fix}`. If you meant to hand over the whole thing, give the whole thing: the binding that owns it."
-why_template = "Whoever receives a `{type}` will eventually free it. If this side could still reach the same value afterward — through the field, the item, the loop, or the name it was built from — two places would hold one value and one of them would free it under the other. A `.copy()` belongs to nobody else, so it is safe to hand over."
+why_template = "Whoever receives a `{type}` will eventually free it. But `{expr}` is {reason}, so another holder may free it too: if the receiver and that holder both kept the one value, the same memory would be freed twice, and if one freed it first, the other would be left reading memory that is already gone. A `.copy()` belongs to nobody else, so it is safe to hand over."
 
 [[diagnostic_template]]
 kind_name = "HandleChannelArgNeedsBinding"
 what_template = "`{callee}` gets its command channel from `{expr}`, which is not a named binding — nothing outside the task can ever close that channel."
 what_instead_template = "Bind the channel first, then spawn: `let commands = {expr}` and `let h = background {callee}(commands, …)`. Call `commands.close()` when you are done sending."
 why_template = "A task handle can send into its channel (`h.send(value)`) but cannot close it — only the channel binding can. Without a binding, a task waiting on `receive()` can never be told the stream has ended, so it waits forever."
+
+# v0.3-M9 C1b (security): a union value reaching a slot that expects one of its variants. The
+# union is a 16-byte tagged envelope; the slot reads it as the bare variant, so the callee reads
+# the envelope's tag/data words as the variant's fields (a segfault whose read address the
+# value controls). `{value}` is the value as source text, `{union}` its type (`Tiny | Big`),
+# `{variant}` the variant the slot expects, `{needs}` the slot ("`showBig` expects a `Big` here",
+# "this function must return a `Big`", "`b` is declared as `Big`").
+# Decided v0.3-M9 C1b: `git log --grep=UnionWhereVariantExpected`.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpected"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "Check which variant it holds first, then use it inside that arm: `if ({value}) { is {variant} => { … } }` — inside the arm, `{value}` is a `{variant}`. Handle the other variants in their own `is` arms, or in an `else =>` arm."
+why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. Inside an `is {variant}` arm the compiler knows the tag matched, so `{value}` is a `{variant}` there and can be passed on."
+
+# The two other recoveries of `UnionWhereVariantExpected`, selected by `union_where_variant_expected_diag`
+# so the WHAT-INSTEAD only ever names code that compiles today (Golden Rule 3). They have no
+# `DiagnosticKind` variant of their own: the diagnostic carries `UnionWhereVariantExpected`.
+# `{value}`, `{union}`, `{variant}` and `{needs}` are the base template's slots; `{others}` is the
+# union's other variants, backticked and comma-separated ("`nothing`", "`int`, `string`").
+#
+# `...NameIt`: the value is not a bare name (`holder.inner`, `pick()`); an `is` arm checks a
+# named binding only. The union has a shape variant and the slot expects exactly that shape.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpectedNameIt"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "Give it a name first, then check the name: `let checked = {value}`, then `if (checked) { is {variant} => { … } }` — inside the arm, `checked` is a `{variant}`. Handle the other variants in their own `is` arms, or in an `else =>` arm."
+why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. An `is` arm checks a named binding, not an expression like `{value}`; inside an `is {variant}` arm the compiler knows the tag matched, so the named binding is a `{variant}` there and can be passed on."
+
+# `...NoIsArm`: no `is` arm can hand the value over as the expected variant today — the variant is
+# not a shape (`is` arms name shape variants only), or the union has no shape variant at all (it is
+# the variant's own pointer, with no tag box). The recoveries that compile are on the slot's side.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpectedNoIsArm"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "No `is` arm can hand `{value}` over as a `{variant}`: `is` arms name shape variants only. Change what receives it to accept a `{union}` instead, or keep the value a `{variant}` from where it is created instead of storing it in a `{union}`."
+why_template = "A `{union}` might hold any one of its variants, not only a `{variant}`: also {others}. Code that expects a plain `{variant}` is written for that variant alone, so given another variant it would read the wrong kind of data, and can crash. No check the compiler can run today proves `{value}` is a `{variant}`, so it refuses the hand-over."
+
+# v0.3-M9 C1e (#421): a plain value reaches a union slot whose matching variant the union box
+# cannot hold. Typeck refuses it where it records the coercion (`record_union_coercion`) so a
+# correct program never reaches codegen's refusal of the same case ("This is a compiler bug").
+# `{value}` is the value as source text, `{union}` the union's type, `{variant}` the variant that
+# takes it. The union box keeps one small value next to the tag: shapes, strings, arrays, maps,
+# `int`, `float`, `boolean` and a `number` of more than 34 digits fit; every other variant does not.
+# Decided v0.3-M9 C1e round 2: `git log --grep=UnionVariantNotStorable`.
+[[diagnostic_template]]
+kind_name = "UnionVariantNotStorable"
+what_template = "`{value}` would be stored in the `{variant}` part of a `{union}`, but a `{variant}` can't be stored in a union yet."
+what_instead_template = "Put the `{variant}` inside a shape and use that shape as the union's variant instead: `shape Boxed { value: {variant} }`, then build it with `let boxed: Boxed = { value: {value} }` and use `boxed` here."
+why_template = "A `{union}` is a box with a tag saying which variant is inside, and the box has room for one small value next to the tag. A `{variant}` is not stored that way yet, so the compiler can't build the box for it. It stops here, because storing it anyway would make the code that reads the union get the wrong data. A shape works because the box then holds the shape's location."
+
+# The same slot when the variant is a `number` of more than 34 digits and the value is a shorter
+# `number`: the two are stored differently and typeck accepts one where the other is declared, but
+# the union box has no conversion yet. Selected by `union_variant_refusal_diag`; the diagnostic
+# carries `UnionVariantNotStorable`. `{value_ty}` is the value's type (`number<10>`).
+[[diagnostic_template]]
+kind_name = "UnionVariantNotStorableNumberPrecision"
+what_template = "`{value}` is a `{value_ty}`, but the `{variant}` part of `{union}` needs a `{variant}`, and a union can't convert a `{value_ty}` into one yet."
+what_instead_template = "Create the value as a `{variant}` where you declare it, for example `let amount: {variant} = 5.0`, then use `amount` here."
+why_template = "A `number` with more digits is stored differently from one with fewer, and putting a number into a union does not convert between the two. Storing the `{value_ty}` as it is would make the code that reads the union misread its digits, so the compiler refuses instead of storing wrong digits."
+
+# v0.3-M9 C1e (#421): `let m: Mixed = wait count()` and `let m: Mixed = count()` with a suspending
+# `count`. The state-machine `let` binds a call's result without the step that tags a plain value
+# for a union, so the first `is` check on `m` would read a garbage tag. Typeck refuses it at the
+# annotated `let`; the workaround it names (`let got = ...`, then `let m: Mixed = got`) goes
+# through the tagging step. `{name}` is the binding, `{call}` the call as source text
+# (`wait count()`), `{union}` the binding's type.
+# Decided v0.3-M9 C1e round 2: `git log --grep=SuspendingResultIntoUnionLet`.
+[[diagnostic_template]]
+kind_name = "SuspendingResultIntoUnionLet"
+what_template = "`{call}` pauses and resumes before it gives its value, and that value can't be stored straight into `{name}`, which is declared as `{union}`, yet."
+what_instead_template = "Store the value in its own variable first, then store that variable in `{name}`: `let got = {call}`, then `let {name}: {union} = got`."
+why_template = "A `{union}` variable holds a value together with a tag saying which variant it is. When a call pauses and resumes, its value arrives without that tag being added, so the first `is` check on `{name}` would read a wrong tag and could crash. Copying the value from its own variable into `{name}` is the step where the compiler adds the tag."
+
+# v0.3-M9 C1e (#421): `return wait count()` and `return count()` with a suspending `count`, from a
+# function that returns a union. The state-machine `return` stores a call's result in the return
+# slot without the step that tags a plain value for a union, so the first `is` check on the
+# caller's result would read a garbage tag. Typeck refuses it at the `return`, and the codegen
+# query refuses it again for a callee only the CPU-parallel promotion makes suspending; the
+# workaround it names (`let got = ...`, then `return got`) goes through the tagging step.
+# `{call}` is the call as source text (`wait count()`), `{union}` the function's return type.
+# Decided v0.3-M9 C1e round 3: `git log --grep=SuspendingResultIntoUnionReturn`.
+[[diagnostic_template]]
+kind_name = "SuspendingResultIntoUnionReturn"
+what_template = "`{call}` pauses and resumes before it gives its value, and that value can't be returned straight from this function, which returns a `{union}`, yet."
+what_instead_template = "Store the value in its own variable first, then return that variable: `let got = {call}`, then `return got`."
+why_template = "A `{union}` returned from a function holds a value together with a tag saying which variant it is. When a call pauses and resumes, its value arrives without that tag being added, so the first `is` check on what this function returns would read a wrong tag and could crash. Returning the value from its own variable is the step where the compiler adds the tag."
+
+# v0.3-M9 C1g (#424): an argument whose type differs from the type a type parameter of a generic
+# function already stands for. Rendered by `check_generic_fn_call` when the parameter's type IS the
+# type parameter (`same<T>(first: T, second: T)`); every other argument/parameter mismatch uses the
+# plain call form's text. `{value}`/`{actual}` the argument as source text and its type; `{callee}`
+# the function; `{param}` the parameter it is passed for; `{typeParam}` the type parameter and
+# `{bound}` the type the call made it; `{cause}` says what made it (the argument for a sibling
+# parameter, or the explicit type argument); `{alternative}` the other way out, in prose that
+# names only code that compiles.
+# Decided v0.3-M9 C1g: `git log --grep=ArgumentConflictsWithTypeParameter`.
+[[diagnostic_template]]
+kind_name = "ArgumentConflictsWithTypeParameter"
+what_template = "`{value}` has type `{actual}`, but `{callee}` needs `{bound}` for `{param}`: {cause}."
+what_instead_template = "Pass a value of type `{bound}` for `{param}`. {alternative}."
+why_template = "`{callee}` is compiled once for each type `{typeParam}` stands for, and this call makes it `{bound}`, so `{callee}` handles `{param}` as `{bound}`. A `{actual}` is laid out differently, so reading it as `{bound}` gives wrong values, or goes past the end of the `{actual}` and can crash."
+
+# v0.3-M9 C6 follow-up (Product Manager ruling, card #383): a `map<K, V>` whose key type `K` has no
+# key slot. A map keeps a key in a slot of 8 bytes (`int`, `boolean`, `float`, and a `string`'s
+# address, compared by text) or 16 bytes (a `number` of up to 34 digits, kept inline); a shape, an
+# array or any other type is not one such value, so its slot would hold only an address, and an
+# equal key would be found at another address and miss. Rendered by `check_map_key_type`; `{key}`
+# is the key type, `{key_is}` says why it is not one 8- or 16-byte value, `{recovery}` is the way
+# out (a shape's names the compiling `map<string, Shape>`). The `number<N>` of more than 34 digits
+# has its own text below, because its reason is its size, not its layout, and that refusal is
+# permanent. Only this shape / array / other-type refusal is temporary (support is built on card
+# #518): its text says "yet", and its WHY states how a map stores keys today.
+# Decided v0.3-M9 C6 follow-up: `git log --grep=MapKeyNotStorable`; temporary, Chief's 2026-11-19
+# ruling: `git log --grep="mark map-key refusals temporary"`; the wide `number` stays refused,
+# Chief's 2026-11-19 ruling: `git log --grep="settle remaining refusals"`.
+[[diagnostic_template]]
+kind_name = "MapKeyNotStorable"
+what_template = "A `map` can't be keyed by `{key}` yet."
+what_instead_template = "{recovery}"
+why_template = "Today a map keeps each key in one slot of 8 bytes (for an `int`, a `boolean`, a `float`, or a `string`, which is compared by its text) or of 16 bytes (for a `number` of up to 34 digits). A `{key}` {key_is}, so its slot could hold only the address where it lives, and looking up a `{key}` equal to one you stored would miss, because it lives at another address. Keys like this are not supported yet."
+
+# The same refusal for a `number` of more than 34 digits (`number<50>`): selected by
+# `check_map_key_type`; the diagnostic carries `MapKeyNotStorable`. `{key}` is the type
+# (`number<50>`), `{digits}` its digit count (`50`).
+[[diagnostic_template]]
+kind_name = "MapKeyNotStorableWideNumber"
+what_template = "A `map` cannot be keyed by `{key}`."
+what_instead_template = "Key the map by an `int` or a `string` id, or by a `number` of at most 34 digits (`number<34>`)."
+why_template = "A map keeps a `number` key inside its own 16-byte slot, which holds up to 34 digits. A `{key}` can have up to {digits} digits and takes as much memory as its digits need, kept outside the map, so it does not fit in the slot. The slot could hold only its address, and looking up a `{key}` equal to one you stored would miss, because it lives at another address."
+
+# The same refusal for a `sensitive string` key: selected by `check_map_key_type`; the diagnostic
+# carries `MapKeyNotStorable`. `{key}` is the type (`sensitive string`). The reason is the secret
+# handling, not the slot: a map would release the key as an ordinary string and compare keys with
+# a comparison that is not constant-time. Decided v0.3-M9 C7 review r1 (Product Manager ruling A):
+# `git log --grep="refuse map<sensitive string, V> again"`.
+[[diagnostic_template]]
+kind_name = "MapKeyNotStorableSensitive"
+what_template = "A `map` cannot be keyed by `{key}`."
+what_instead_template = "Key the map by a plain `string` or an `int` that is not a secret, such as an id or a name, and keep the secret as the map's value: `map<string, sensitive string>`."
+why_template = "A `{key}` is a secret. A map would free a key as an ordinary string and would compare keys with a comparison that is not constant-time: it takes longer the more leading bytes two keys share, so how long a lookup takes could reveal part of a secret."
+
+# v0.3-M9 C6 (parked 71): `background eat(choice)` with `choice` a union and `function eat<T>(held:
+# T)`. A task copies a union argument into a slot of its own, which exists only when the callee
+# declares the union type. Rendered by `check_background_union_argument_for_generic_callee`;
+# `{union}` the union type, `{callee}` the function, `{parameter}` its generic parameter.
+# Decided v0.3-M9 C6: `git log --grep=BackgroundUnionToGenericParameter`.
+[[diagnostic_template]]
+kind_name = "BackgroundUnionToGenericParameter"
+what_template = "Cannot give the union `{union}` to `{callee}`'s generic parameter `{parameter}` in a `background` call."
+what_instead_template = "Declare `{parameter}` as `{union}` in `{callee}`'s signature instead of a type parameter, or put the union in a field of a shape and pass the shape."
+why_template = "A `background` task keeps its own copy of every argument, because it can still be running after the function that spawned it has returned. It can only copy a union when `{callee}` declares the union type. A generic parameter gives it no union slot to copy into, so the task would read the spawner's memory after the spawner returned."
+
+# v0.3-M9 C1n (card #387): `carry(choice)` with `function carry<T>(give item: T) -> nothing | T` and
+# `choice` a `Big | Tiny` (also `-> Tiny | T`). The function returns the box it was given, tagged as
+# `Big | Tiny` is; the declared union numbers its variants from `nothing` (or `Tiny`), so the caller
+# would read the wrong variant. No conversion between two unions' tags exists (a union value is not
+# accepted where a wider union is declared), so typeck refuses the call; `main` refused it too (at the
+# caller's `is Big` arm) or, for `Tiny | T`, read a `Big` as a `Tiny`. Rendered by
+# `check_generic_fn_call`; `{callee}` the function, `{typeParam}` the type parameter and `{bound}` the
+# union the call makes it, `{declared}` the return type as written and `{instance}` what it becomes,
+# `{before}` the declared variants written before the type parameter, `{reordered}` the return type
+# with the type parameter first, `{first}` the first variant of `{bound}`.
+# Decided v0.3-M9 C1n (#387): `git log --grep=GenericUnionBoundOutOfOrder`.
+[[diagnostic_template]]
+kind_name = "GenericUnionBoundOutOfOrder"
+what_template = "This call makes `{typeParam}` the union `{bound}`, but `{callee}` returns `{declared}`, with `{before}` written before `{typeParam}`, and a `{instance}` can't be returned from it yet."
+what_instead_template = "Write `{typeParam}` first in the return type of `{callee}`: `{reordered}`. Or call it with a value that is not a union."
+why_template = "A union is a box with a tag saying which variant is inside, counted in the order the variants are written. `{callee}` hands back the `{bound}` box it was given, which counts `{first}` as variant 0. `{instance}` counts `{before}` first, so code that reads the returned union would take the tag of a `{first}` for another variant, and could read the wrong data or crash. With `{typeParam}` written first, `{bound}` counts its variants the same way in both."
 
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
@@ -1725,6 +1903,31 @@ kind_name = "SpawnArgStorageDiesWithTheFrame"
 what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a background task{detail}."
 what_instead_template = "{fix}"
 why_template = "{why}"
+
+# `SpawnArgNotIndependent` for a `fixed` value the spawn CONSUMES (nothing reads it afterwards). The
+# row above says "this line still reads it" and "hand it over instead", both false here: the value is
+# already handed over, and handing a `fixed` over does not move its items, because they are kept
+# with the function that made it. Only a `fixed` whose items cannot be copied reaches this (the
+# owned-copy table refuses it); a `fixed` of strings or shapes is copied for the task. `{items}` is
+# the item type, `{detail}` the same per-type fill the row above uses.
+[[diagnostic_template]]
+kind_name = "SpawnArgNotIndependentHandedOver"
+what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a background task{detail}."
+what_instead_template = "Declare `{name}` as an `array<{items}>` instead, or give the task each item as an argument of its own."
+why_template = "A `fixed` value is kept with the function that made it, and a background task keeps running after that function has finished. To give the task a value of its own, the compiler copies the items out for it. That works for items that can be copied, such as a `string` or a shape, and not for items that cannot, such as an `array` or a `map`. So the call is refused, rather than letting the task read something that is gone."
+
+# `SpawnArgNotIndependent` for a PIECE of a value (`background crunch(make().rows)`, `background
+# f(bag.rows)`), of a type the spawn cannot give the task a value of its own of (the same
+# `spawn_arg_refusal` the named-argument rows above read). One template for both forms: the value
+# the piece is read from is either built by this line (`make()`) or a variable, and either way the
+# task would be handed the piece as it is while that value releases it. There is no name to point
+# at, so the line itself carries the pointer. `{type}`, `{detail}`, `{fix}` and `{why}` are the
+# same per-type fills the rows above use.
+[[diagnostic_template]]
+kind_name = "SpawnArgNotIndependentPiece"
+what_template = "A `{type}` read out of another value cannot be handed to a background task{detail}."
+what_instead_template = "{fix}"
+why_template = "A background task keeps running after this function has finished, and the value this `{type}` is read out of releases it when that value ends: when this line ends if the line builds the value, when the variable's scope ends otherwise. The task would be handed the `{type}` as it is and would share it with that value, so it could read it after it has been released. {why}"
 
 [[diagnostic_template]]
 kind_name = "Borrowed"
@@ -2414,6 +2617,13 @@ placement_category = "Informational"
 description = "Shows the ownership modifier the compiler picks at a function call site; also fires at background call sites when .copy() arg exceeds 64 bytes to suggest .give instead"
 example_source = "foo(player)"
 example_hint_rendered = "share (read-only — matches foo's signature)"
+# Rule 3 hover docs. One domain, two hint forms, so one tooltip explains both: the ownership word
+# at a call (`share`/`lend`/`give`) and the store hint (`handed to `list``, v0.3-M9 C5a, Patrick
+# 2026-11-13: `git log --grep="hands it over"`). The store wording is the one the ConsumedByStore
+# diagnostic uses ("storing a value hands it over").
+hover_what = "Shows who holds a value at this line. After a call it is the ownership word the compiler picked: `share` (the function only reads it), `lend` (the function may change it, you keep it) or `give` (the function takes it over). After a store it reads `handed to` and the place: storing a value hands it over, so that place is now its one owner and the name before the hint cannot be read after this line."
+hover_what_instead = "Nothing to type for a call; write `share`, `lend` or `give` in the function's signature to make the choice visible. For a store, if you read the value again, store a copy instead (`list.add(a.copy())`), or move the line that reads it above the store."
+hover_why = "Every value has one owner, and the owner frees the value when it is done with it. If two names could reach one value, one of them would free it under the other, so a store hands the value over and a call tells you whether you still hold it. A copy is a separate value, so both names can keep theirs."
 # v0.3-M1 extension: fires at `background fn(largeStruct.copy)` call sites when
 # estimated copy size > 64 bytes. LSP inlayHint handler: crates/ynz-lsp/src/inlay_hint.rs.
 # Firing condition: BackgroundLargeStructCopy warning present at call site span.
@@ -2616,25 +2826,87 @@ why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only 
 since = "v0.3-M5"
 design_doc = "docs/internal/implementation/IMP-collections.md"
 
-# v0.3-M8 Phase 7 no-duct-tape guard: Patrick re-deferred the real scope-drop-cancellation
-# fix (codegen calling `ynz_handle_free` when a handle binding's scope ends — the
-# `background-handle-cancel-injection` deferred_language_feature entry above) on condition
-# that the live exposure ships with a LOUD guard rather than a muted one ("i dont like
-# shipping silent errors i prefer loud ones that remind us we need to fix it" — audit.md
-# m8-p7-20260904-a1). Nothing releases a local of any type at scope exit today (see that
-# entry's `why`), so a task whose handle goes out of scope keeps running unseen; this fires
-# a dismissable SUGGESTION (never a build gate) at the spawn site whenever a bound handle is
-# never received anywhere in the rest of its own scope. Fires from `check_stmts`'s
-# `Stmt::Let` arm in crates/ynz-typeck/src/check.rs — narrowed to bound spawns only (an
-# unbound `background f()` has no handle to mislead anyone) and suppressed the moment a
-# `.receive()` call on the same binding appears anywhere later in scope, including inside a
-# following nested block. Retires the moment `background-handle-cancel-injection` ships.
-[[lint_rule]]
-name = "background-handle-not-waited"
-severity = "suggestion"
-description = "A `background` task handle is bound to a name but never received anywhere in its scope, so its task's completion is never waited on. Nothing frees the task when the handle's binding goes out of scope — it keeps running on its own."
-what_template = "`{handle}` never gets received anywhere below this spawn — nothing here ever waits for the task it started."
-what_instead_template = "Call `{handle}.receive()` before this scope ends to wait for the task, or give the task its own way to stop — for example, close the channel it reads its work from."
-why_template = "Yinz does not yet release a local when its scope ends, so `{handle}` going out of scope does not stop the task it started — that task keeps running on its own, even after `{handle}` is gone."
-since = "v0.3-M8"
-design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+# v0.3-M9 C1h (card #433): `fixed<T, N>` in function signatures. A `fixed` list costs what Rust's
+# `[T; N]` costs, so its length is a compile-time number. Six refusals; each text is rendered by
+# the emit sites in check.rs through `registry_diag`. Slot names are per template below.
+# Decided v0.3-M9 C1h: `git log --grep="fixed<T, N>"`.
+
+# `{written}` is the type as written (`fixed<int, N>`), `{problem}` says what is wrong with the length
+# in it, `{alternative}` is the way out (names only code that compiles), `{limit}` is 4294967295.
+[[diagnostic_template]]
+kind_name = "FixedLengthNotUsable"
+what_template = "`{written}` does not give a usable length: {problem}."
+what_instead_template = "{alternative}."
+why_template = "A `fixed` list is laid out when the program is compiled, so its length has to be a whole number written in the source, such as `4`, no larger than {limit}. A name, or a value worked out while the program runs, cannot be one."
+
+# `{written}` is the type as written, `{place}` says where (`on a local variable`, `inside another
+# type`, or `on `array`, which takes none`), `{alternative}` the way out.
+[[diagnostic_template]]
+kind_name = "FixedLengthNotAllowedHere"
+what_template = "`{written}` writes a length {place}."
+what_instead_template = "{alternative}."
+why_template = "Only the whole type of a function parameter, a return value or a shape field can write a length: the compiler checks every call, every `return` and every list stored in a field against it. Anywhere else the length of a `fixed` list comes from the list that is built, such as `[1, 2, 3]`, so a length written there would have nothing to check, and no other type takes one."
+
+# `{what_is}` is the whole first sentence (an argument or a `return` with another length, or one
+# whose length the compiler cannot tell), `{alternative}` the way out, `{element}` and `{expected}`
+# the written element type and length.
+[[diagnostic_template]]
+kind_name = "FixedLengthMismatch"
+what_template = "{what_is}."
+what_instead_template = "{alternative}."
+why_template = "A list written `fixed<{element}, {expected}>` holds exactly {expected} items, and the code compiled for it reads exactly that many. A list of another length would be read past its end, or leave items unread, so the compiler checks the length at every call, every `return` and every place a list is stored."
+
+# `{function}` the exported function, `{part}` `parameter `xs`` or `return type`, `{written}` the
+# type as written, `{suggested}` the same type with a length.
+[[diagnostic_template]]
+kind_name = "FixedLengthMissingInExport"
+what_template = "`{function}` is exported, but its {part} `{written}` does not say how many items it holds."
+what_instead_template = "Write the length, as in `{suggested}`, using the number of items the callers pass."
+why_template = "A `fixed` list without a written length is compiled once for each length the code that uses it passes, and a returned list takes its length from the function's `return` statements. A file that imports `{function}` sees only its signature, so it could ask for neither. A written length is the same in every file."
+
+# `{function}`, `{lengths}` (`3 and 2`), `{first}` the first length, `{element}` the element type.
+[[diagnostic_template]]
+kind_name = "FixedReturnLengthsDiffer"
+what_template = "`{function}` returns lists of different lengths: {lengths}."
+what_instead_template = "Make every `return` in `{function}` give a list with the same number of items, such as {first}."
+why_template = "A list comes back from a function with its items inside it, so its size is part of what the function gives back: one function returns one length. With {lengths} the caller could not know how many items to read."
+
+# `{function}`, `{reason}` says why it cannot be worked out, `{element}` the element type.
+[[diagnostic_template]]
+kind_name = "FixedReturnLengthUnknown"
+what_template = "The number of items `{function}` returns cannot be worked out: {reason}."
+what_instead_template = "Write the length in the return type of `{function}`, such as `fixed<{element}, 4>`, and make every `return` give that many items."
+why_template = "A list comes back from a function with its items inside it, so its size has to be known when the program is compiled. The compiler reads it from the `return` statements; where it cannot, the signature has to say it."
+
+# `{shape}` the shape, `{field}` the field, `{written}` the field's type as written, `{element}` the
+# element type, `{suggested}` the same type with a length.
+[[diagnostic_template]]
+kind_name = "FixedFieldLengthMissing"
+what_template = "The field `{field}` of `{shape}` is written `{written}`, which does not say how many items it holds."
+what_instead_template = "Write the length in the field's type, as in `{field}: {suggested}`, using the number of items every `{shape}` holds. If that number changes from one `{shape}` to the next, hold the items in an `array<{element}>` field instead."
+why_template = "A shape keeps a `fixed` list inside its own bytes, so the size of the list is part of the size of the shape, and both have to be known when the program is compiled. A field written without a length has no size, so the compiler cannot lay the shape out or copy it."
+
+# `{function}` the function, `{parameter}` its parameter, `{written}` the parameter's type as written,
+# `{suggested}` the same type with a length, `{reason}` why the function is built once (`pauses at a
+# `wait`` or `may be run as a task of its own`).
+[[diagnostic_template]]
+kind_name = "FixedLengthMissingInTaskFunction"
+what_template = "`{function}` takes `{parameter}` as `{written}`, which has no length, but `{function}` {reason} and needs to know how many items `{parameter}` holds."
+what_instead_template = "Write the length of `{parameter}`, as in `{parameter}: {suggested}`, using the number of items the callers pass."
+why_template = "A `fixed` parameter without a length makes the compiler build one copy of the function for each length its callers pass. A function that {reason} is built only once, so it needs one length, written in its signature."
+
+# v0.3-M9 C10 (card #387, plan #17): a `for` loop whose body frees the list it is walking. An
+# assignment releases the value it replaces; the loop reads its list straight from that value, so a
+# write to the root binding, a prefix of the walked place or an element it walks through (or a call
+# to a function that writes one) leaves the next pass reading freed memory. The binding or field
+# path the body assigns exactly is held by codegen and stays legal. Rendered by
+# `check_walked_list_kept`; `{loopVariable}` the loop variable, `{walked}` the walked place as
+# written, `{write}` the assignment or call that frees it ("assigns `outer.inner`" or "calls
+# `reset(holder)`, which assigns `holder.rows`"), `{released}` the place that is assigned,
+# `{copyName}` a name for the copy, `{walkedKind}` what the loop walks: `list`, `map` or `string`.
+# Decided v0.3-M9 C10 (#387): `git log --grep=WalkedListWrittenInLoop`.
+[[diagnostic_template]]
+kind_name = "WalkedListWrittenInLoop"
+what_template = "The `for` loop over `{walked}` {write}. That frees the {walkedKind} `{loopVariable}` is still being read from."
+what_instead_template = "Copy the {walkedKind} into a local before the loop and walk the copy: `let {copyName} = {walked}.copy()`, then `for ({loopVariable} in {copyName})`. The body can then assign `{released}` freely."
+why_template = "Assigning a place replaces its value and releases the old one. This loop reads `{walked}` straight from the value it started with, so once `{released}` is assigned, the next pass of `{loopVariable}` would read a {walkedKind} that was already released. A copy is a {walkedKind} of its own, so the body can change the original while the loop walks the copy."

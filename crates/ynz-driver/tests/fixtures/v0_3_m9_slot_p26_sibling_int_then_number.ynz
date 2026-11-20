@@ -1,0 +1,14 @@
+// Q1/Q3: sibling crossing `x`: first int (1 slot), then number (decimal128, 2 slots). Type/width is looked up by NAME (first let wins).
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let x: int = 7
+    wait sleep(5)
+    print(x.toString())
+  }
+  if (a) {
+    let x: number = 1.5
+    wait sleep(5)
+    print(x.toString())
+  }
+}

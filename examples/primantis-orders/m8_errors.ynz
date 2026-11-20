@@ -71,10 +71,17 @@ function m8Eat(give rows: array<int>) -> nothing {
   print(rowCount.toString())
 }
 
-// pick — returns a PIECE of its argument (`MayAlias` under the `returns_fresh` fixpoint fact),
-// so a `let` bound to its result is `Reaches(b)`, never transferable.
-function m8Pick(share b: Bucket) -> array<int> {
-  return b.rows
+// pick — returns its argument through a `maybe`. A function returning a string, array, map, shape,
+// channel, a `maybe` of a string, shape, number or channel or an envelope union hands back an owned
+// copy (`copied_at_return`, and a generic call result is an owned copy of the instance's type), so
+// those results are fresh; a `maybe` of an array or map still returns a piece (`MayAlias` under the
+// `returns_fresh` fixpoint fact), so a `let` bound to its result is `Reaches(b)`, never transferable.
+function m8Pick(share b: maybe<array<int>>) -> maybe<array<int>> {
+  return b
+}
+
+function m8EatBucket(give owner: maybe<array<int>>) -> nothing {
+  print(owner.exists().toString())
 }
 
 // stash — a `give` position that is NOT the receiver of a UFCS dot-call (probe 1: UFCS
@@ -105,21 +112,22 @@ function m8ConsumedBySendMap() -> nothing {
   print(entryCount.toString())
 }
 
-// WHY: ConsumedBySend through an ALIAS CLASS — `let other = rows` puts both names in one
-// class; sending `rows` consumes the class, so the read of `other` is refused and the
-// diagnostic's `{via}` slot names `rows` as what was sent (probe 4, alias-by-`let`).
+// WHY: ConsumedBySend through an ALIAS CLASS — `first` is a piece of `rows`, so both names are
+// in one class; sending `rows` consumes the class, so the read of `first` is refused and the
+// diagnostic's `{via}` slot names `rows` as what was sent. (A whole-value alias, `let other =
+// rows`, cannot exist since C5a: that `let` hands `rows` over, see the two triggers below.)
 function m8ConsumedViaAliasLet() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(2)
-  let rows: array<int> = [1, 2, 3]
-  let other = rows
+  let wire: channel<array<array<int>>> = channel<array<array<int>>>(2)
+  let rows: array<array<int>> = [[1, 2, 3]]
+  let first = rows.first()
   wire.send(rows)
-  let otherCount = other.count()
-  print(otherCount.toString())
+  let firstIsPresent = first.exists()
+  print(firstIsPresent.toString())
 }
 
-// WHY: ConsumedBySend through REASSIGNMENT — `rows = other` moves `rows` out of its own class
-// and into `other`'s (a binding event, exhaustive over `Stmt`); the send then consumes both
-// (probe 5, alias-by-reassignment — the round-1 BLOCKER that made the rule `Stmt`-exhaustive).
+// WHY: ConsumedByStore through REASSIGNMENT — `rows = other` is a store: it hands `other` to
+// `rows`, so the later read of `other` is refused (C5a; before, the two names shared one class
+// and the send below consumed both).
 function m8ConsumedViaAliasReassign() -> nothing {
   let wire: channel<array<int>> = channel<array<int>>(2)
   let rows: array<int> = [1]
@@ -130,8 +138,8 @@ function m8ConsumedViaAliasReassign() -> nothing {
   print(otherCount.toString())
 }
 
-// WHY: ConsumedBySend through a SHADOWING `let` — a new entry joining `other`'s class; the
-// send consumes the class and the read of `other` is refused (probe 6, alias-by-shadow).
+// WHY: ConsumedByStore through a SHADOWING `let` — `let rows = other` hands `other` to the new
+// `rows`, so the read of `other` is refused (C5a).
 function m8ConsumedViaAliasShadow() -> nothing {
   let wire: channel<array<int>> = channel<array<int>>(2)
   let other: array<int> = [2]
@@ -205,11 +213,11 @@ function m8TransferNeedsCopyLoopCell(lend wire: channel<array<int>>) -> nothing 
 }
 
 // WHY: TransferNeedsCopy — a CALL RESULT THAT RETURNS A PIECE of its argument (`m8Pick`
-// returns `b.rows`, so `rows` is `Reaches(bucket)` under the `returns_fresh` fact — probe 7).
+// returns `b`, so `again` is `Reaches(held)` under the `returns_fresh` fact — probe 7).
 function m8TransferNeedsCopyReturnsPiece() -> nothing {
-  let bucket: Bucket = { rows: [1, 2, 3] }
-  let rows = m8Pick(bucket)
-  m8Eat(rows)
+  let held: maybe<array<int>> = none
+  let again = m8Pick(held)
+  m8EatBucket(again)
 }
 
 // WHY: TransferNeedsCopy — a NESTED LITERAL built from a named heap value (`[a]` is
@@ -304,28 +312,29 @@ function m8CloseWithArgs() -> nothing {
 // infers all of its arguments before any position consumes, so the read of `other` at
 // position 1 is seen only by the transfer decision, which compares against the classes
 // consumed BEFORE the call (fix round 2, Producer C1: `eat2(rows, other)` used to compile and
-// print `3 3`). `{via}` names `rows` as what was given away.
-function m8Eat2(give a: array<int>, give b: array<int>) -> nothing {
-  print(`${a.count()} ${b.count()}`)
+// print `3 3`). `{via}` names `bucket` as what was given away. (C5a: the class-mate is a piece of
+// `bucket`; a whole-value alias is refused where it is made.)
+function m8Eat2(give owner: Bucket, give piece: array<int>) -> nothing {
+  print(`${owner.rows.count()} ${piece.count()}`)
 }
 
 function m8SameCallAliasGiveGive() -> nothing {
-  let rows: array<int> = [1, 2, 3]
-  let other = rows
-  m8Eat2(rows, other)
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  let other: array<int> = bucket.rows
+  m8Eat2(bucket, other)
 }
 
-// WHY: the mixed form — `rows` given at position 0, its class-mate `other` READ (`share`) at
+// WHY: the mixed form — `bucket` given at position 0, its class-mate `other` (a piece of `bucket`) READ (`share`) at
 // position 1 of the same call: a read after free inside the callee, refused with the same
 // use-after-give error.
-function m8Mix(give a: array<int>, share b: array<int>) -> nothing {
-  print(`${a.count()} ${b.count()}`)
+function m8Mix(give owner: Bucket, share piece: array<int>) -> nothing {
+  print(`${owner.rows.count()} ${piece.count()}`)
 }
 
 function m8SameCallAliasGiveShare() -> nothing {
-  let rows: array<int> = [1, 2, 3]
-  let other = rows
-  m8Mix(rows, other)
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  let other: array<int> = bucket.rows
+  m8Mix(bucket, other)
 }
 
 // WHY: there is no `h.close()` — a handle is a message line TO the child, not the channel's
@@ -349,18 +358,6 @@ function m8MessageBeforeFailedCheck() -> nothing {
   wire.close()
   let late = wire.send(9)
   print(late.message)
-}
-
-// WHY: `background-handle-not-waited` Tier 3 lint (SUGGESTION severity — never a build
-// gate; a correct program must still compile). Yinz does not yet release a local when its
-// scope ends, so a background task handle that is bound but never received keeps its task
-// running unseen after `h` goes out of scope. This is the no-duct-tape guard for the
-// re-deferred scope-drop cancellation fix: loud until the real fix ships.
-function m8HandleNotWaited() -> nothing {
-  let wire: channel<int> = channel<int>(2)
-  let h = background m8Doubler(wire)
-  h.send(5)
-  print(`spawned but never received`)
 }
 
 // ────── positive reference case ──────

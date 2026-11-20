@@ -1,0 +1,12 @@
+// v0.3-M9 C1f (#423) code round 1: an exported function returns a union of shapes the importer
+// never imports by name; the importer receives it and hands it to another exported function.
+// Correct behavior: prints `big 4`, `tiny`, `end`; clean under AddressSanitizer at -O0 and -O2.
+import { make, describe } from `lib`
+
+function entrypoint() -> nothing {
+  let first = make(true)
+  let second = make(false)
+  print(describe(first))
+  print(describe(second))
+  print(`end`)
+}

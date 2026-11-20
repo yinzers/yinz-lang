@@ -243,8 +243,7 @@ pub struct YnzChannel {
     /// `PendingSendEntry` removed at the two cancellation paths ([`purge_pending_sends`] and
     /// `channel_send_poll_guarded`'s insert-time stale-entry sweep — FRAGO 028: a removed
     /// entry's payload is unreachable to `Drop` and would leak otherwise). `None` for
-    /// element types with no runtime-owned heap payload: int/float/bool (value bits) AND
-    /// `string` (raw-malloc'd immortal bytes, invisible to the alloc counter — never freed).
+    /// element types with no runtime-owned heap payload: int/float/bool (value bits).
     ///
     /// Stored as an `Option` of a fn pointer, NOT a raw `*mut u8` field: `YnzChannel` is
     /// `Arc`-shared cross-thread relying on AUTO `Send`/`Sync`, which a raw-pointer field
@@ -312,7 +311,7 @@ impl YnzChannel {
 impl Drop for YnzChannel {
     fn drop(&mut self) {
         let Some(glue) = self.drop_glue else {
-            return; // primitive/string element types: nothing per-element to drop
+            return; // primitive element types: nothing per-element to drop
         };
         // `&mut self` is exclusive access: `get_mut` bypasses locking entirely, with the same
         // poison tolerance as `lock_or_recover` (which needs `&Mutex`, not owned access).
@@ -1759,6 +1758,7 @@ mod tests {
                 byte_offset,
                 kind: BG_ARG_KIND_HEAP_ARRAY,
                 size: 0,
+                cell: 0,
             });
         }
         unsafe extern "C-unwind" fn never_polled(_frame: *mut u8, _waker: *mut u8) -> i32 {
@@ -1785,6 +1785,10 @@ mod tests {
         let (descs, fut) = plant_array_ladders(&[payload_bits]);
         (*descs).kind = kind;
         (*descs).size = size;
+        if kind == ynz_abi::BG_ARG_KIND_OWNED_CELL {
+            // The ladder reads the cell from the descriptor, not the slot (the callee nulls it).
+            (*descs).cell = payload_bits as u64;
+        }
         (descs, fut)
     }
 
@@ -1819,8 +1823,11 @@ mod tests {
         }
         use ynz_abi::{
             bg_arg_kind_is_releasable_payload, ALL_BG_ARG_KINDS, BG_ARG_KIND_ARC_SHAPE,
-            BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_SHARED_CHANNEL,
+            BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASE_GLUE, BG_ARG_KIND_SHARED_CHANNEL,
         };
+        unsafe extern "C" fn free_sixteen_byte_cell(cell: *mut u8) {
+            crate::ynz_free(cell, 16);
+        }
         crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
         let alloc_before = crate::ynz_alloc_count();
         let free_before = crate::ynz_free_count();
@@ -1871,12 +1878,31 @@ mod tests {
                         std::ptr::null_mut(),
                         std::ptr::null_mut(),
                     )
+                } else if kind == ynz_abi::BG_ARG_KIND_OWNED_CELL {
+                    // A 16-byte counted cell the descriptor names; the ladder frees it with `size`.
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        16,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_RELEASE_GLUE {
+                    // A 16-byte counted cell and the glue that frees it: the address of the glue rides
+                    // the descriptor's `size`.
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        free_sixteen_byte_cell as *const () as usize as u64,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
                 } else if kind == BG_ARG_KIND_ARC_SHAPE {
                     // The task's counted reference to a block a co-owner still counts
                     // (exactly what `ynz_arc_clone` at a group spawn leaves in the slot).
                     // The block is ONE counted allocation; the ladder's release must free
                     // NOTHING while the co-owner lives.
-                    let base = crate::arc::ynz_arc_new(16);
+                    let base = crate::arc::ynz_arc_new(16, None);
                     (
                         crate::arc::ynz_arc_clone(base) as i64,
                         16,

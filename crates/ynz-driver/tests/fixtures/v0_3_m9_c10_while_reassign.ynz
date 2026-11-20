@@ -1,0 +1,21 @@
+// v0.3-M9 C10 guard: a `while` over an index re-reads the binding each pass, so reassigning it is
+// fine. Correct behavior: prints 3, 16, 3.
+
+function entrypoint() -> nothing {
+  let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
+  let kept: array<array<int>> = []
+  let index = 0
+  while (index < 3) {
+    let row = matrix[index].or([1])
+    kept.add(row.copy())
+    matrix = [[9], [8], [7]]
+    index = index + 1
+  }
+  print(kept.count())
+  let total = 0
+  for (row in kept) {
+    total = total + row[0].or(0)
+  }
+  print(total)
+  print(matrix.count())
+}

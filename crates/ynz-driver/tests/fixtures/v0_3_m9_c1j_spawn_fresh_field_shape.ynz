@@ -1,0 +1,30 @@
+// v0.3-M9 C1j: a fire-and-forget `background` call passes a SHAPE field of a fresh call result
+// (`make().label`). The task holds its own copy of the field; the temporary `make()` returns,
+// the field's strings included, must be released by the spawn, since a spawn suppresses the
+// statement-end temporary. Before: the original's strings leaked.
+// Expected output: the first name, the second name, then `done`.
+
+shape Label {
+  first: string
+  second: string
+}
+
+shape Crate {
+  label: Label
+}
+
+function crunch(label: Label) -> nothing {
+  print(label.first)
+  print(label.second)
+}
+
+function make() -> Crate {
+  let crate: Crate = { label: { first: `a`.toUpperCase(), second: `b`.toUpperCase() } }
+  return crate
+}
+
+function entrypoint() -> nothing {
+  background crunch(make().label)
+  wait sleep(50)
+  print(`done`)
+}

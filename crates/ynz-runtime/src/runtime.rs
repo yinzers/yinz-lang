@@ -175,9 +175,10 @@ impl Drop for PendingBlockingGuard {
 // zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
 use ynz_abi::{
     bg_arg_kind_is_releasable_payload, BG_ARG_KIND_ARC_SHAPE, BG_ARG_KIND_HEAP_ARRAY,
-    BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASED, BG_ARG_KIND_SHARED_CHANNEL,
-    FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE, SPIKE_FRAME_DISCRIMINATOR_OFFSET,
-    SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
+    BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_OWNED_CELL, BG_ARG_KIND_RELEASED, BG_ARG_KIND_RELEASE_GLUE,
+    BG_ARG_KIND_SHARED_CHANNEL, FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE,
+    SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
+    SPIKE_HANDLE_SLOT_BYTES,
 };
 
 /// Extract the spike tag (high 16 bits) and handle count (low 16 bits) from a
@@ -597,8 +598,9 @@ pub unsafe extern "C" fn ynz_rt_check_preempt(waker_ctx: *mut u8) -> bool {
 /// `shutdown_timeout` phases combined, never `timeout_ms` for each phase separately.
 ///
 /// When `YNZ_ALLOC_COUNTER_OUTPUT` env var is set to a file path, writes final alloc/free
-/// counts to that file (one "alloc=N\nfree=M\n" pair). Used by the composed-single-alloc
-/// proof in integration tests: the test sets the env var, runs the fixture, reads the file.
+/// counts to that file (one "alloc=N\nfree=M\n" pair, then the handle_* and string_* pairs).
+/// Used by the composed-single-alloc proof in integration tests: the test sets the env var,
+/// runs the fixture, reads the file.
 #[no_mangle]
 pub extern "C" fn ynz_rt_shutdown() {
     // Close admission FIRST, before anything else in this function — see
@@ -705,12 +707,19 @@ pub extern "C" fn ynz_rt_shutdown() {
             let free_count = crate::ynz_free_count();
             let handle_alloc_count = crate::ynz_handle_alloc_count();
             let handle_free_count = crate::ynz_handle_free_count();
-            // The handle_* lines come AFTER the alloc=/free= lines: existing prefix-parsers
-            // take the FIRST line matching starts_with("alloc")/starts_with("free"), and
-            // neither "handle_alloc" nor "handle_free" matches those prefixes.
+            let string_alloc_count = crate::ynz_string_alloc_count();
+            let string_alloc_bytes = crate::ynz_string_alloc_bytes();
+            let string_free_count = crate::ynz_string_free_count();
+            let string_free_bytes = crate::ynz_string_free_bytes();
+            // The handle_* and string_* lines come AFTER the alloc=/free= lines: existing
+            // prefix-parsers take the FIRST line matching starts_with("alloc")/
+            // starts_with("free"), and neither "handle_alloc"/"handle_free" nor
+            // "string_alloc"/"string_free" matches those prefixes.
             let content = format!(
                 "alloc={alloc_count}\nfree={free_count}\n\
-                 handle_alloc={handle_alloc_count}\nhandle_free={handle_free_count}\n"
+                 handle_alloc={handle_alloc_count}\nhandle_free={handle_free_count}\n\
+                 string_alloc={string_alloc_count}\nstring_free={string_free_count}\n\
+                 string_alloc_bytes={string_alloc_bytes}\nstring_free_bytes={string_free_bytes}\n"
             );
             // Best-effort write: ignore errors (the alloc counter is test-only).
             let _ = std::fs::write(&output_path, content);
@@ -849,6 +858,8 @@ impl Future for SyncStateFnFuture {
 ///   kind: u64         — one of `ynz_abi::BG_ARG_KIND_*` (the free protocol for the slot)
 ///   size: u64         — byte count passed to ynz_free for `BG_ARG_KIND_HEAP_SHAPE` (ignored
 ///                       by the other kinds)
+///   cell: u64         — the cell's own pointer for `BG_ARG_KIND_OWNED_CELL` (freed with
+///                       `ynz_free(cell, size)`, the frame slot is not read); 0 for every other kind
 ///
 /// `kind` is written by codegen at spawn time and may be REWRITTEN by the runtime to
 /// `BG_ARG_KIND_RELEASED` while the task runs — see [`release_ladder_payload`].
@@ -857,6 +868,7 @@ pub struct BgArgDropEntry {
     pub byte_offset: u64,
     pub kind: u64,
     pub size: u64,
+    pub cell: u64,
 }
 
 /// The identity of the state-machine drive whose `poll` is running on the current thread —
@@ -995,6 +1007,9 @@ impl SpawnStateFnFuture {
         arg_drop_ptr: *const BgArgDropEntry,
         arg_drop_count: i64,
     ) -> Self {
+        // The stub resume functions of the unit tests have no drop entry: mark the frame returned.
+        // SAFETY: a test frame is at least a frame header, 4-aligned.
+        unsafe { *(frame_ptr as *mut i32) = ynz_abi::FRAME_RESUME_POINT_RETURNED };
         Self {
             resume_fn,
             frame_ptr,
@@ -1094,7 +1109,22 @@ impl Drop for SpawnStateFnFuture {
             return;
         }
         unsafe {
-            // 1. Free the sleep handle in the root frame (if a sleep is live mid-wait).
+            // 0. A task retired before it returned (C8 slice 6): run the frame's drop entry. The entry
+            //    is the resume function re-entered at the bitwise complement of its `resume_point`
+            //    (the resume switch's default target is the drop dispatch). It releases the heap values
+            //    the frame holds in the state it is parked in and, through the awaited callee's own
+            //    entry, those of every nested child frame. A function that returned stored
+            //    `FRAME_RESUME_POINT_RETURNED` (the one state Rust's own completed future has), so it
+            //    has nothing left to drop. It reads frame slots, so it runs before anything is freed;
+            //    the ladder below frees only what the function does not own (a borrowed argument's
+            //    clone).
+            let resume_point = self.frame_ptr as *mut i32;
+            if *resume_point != ynz_abi::FRAME_RESUME_POINT_RETURNED {
+                *resume_point = !*resume_point;
+                (self.resume_fn)(self.frame_ptr, std::ptr::null_mut());
+            }
+            // 1. Free the sleep handle in the root frame (null after the drop entry ran: the wait-sleep
+            //    drop block frees its own frame's box; set only for a frame the entry did not run on).
             // SAFETY: FRAME_OFFSET_SLEEP_HANDLE=8 is within every valid frame header (32 bytes).
             let handle_slot =
                 self.frame_ptr.add(FRAME_OFFSET_SLEEP_HANDLE as usize) as *const *mut u8;
@@ -1115,7 +1145,11 @@ impl Drop for SpawnStateFnFuture {
                 for desc in descs {
                     // Read the i64 bit-pattern from the frame slot, cast to pointer.
                     let slot = self.frame_ptr.add(desc.byte_offset as usize) as *const i64;
-                    let bits = *slot;
+                    let bits = if desc.kind == BG_ARG_KIND_OWNED_CELL {
+                        desc.cell as i64
+                    } else {
+                        *slot
+                    };
                     if bits == 0 {
                         // Defensive: a descriptor is only emitted for a slot that WAS
                         // heap-copied (both `give` and `copy` of a heap arg copy — see D8),
@@ -1162,6 +1196,20 @@ impl Drop for SpawnStateFnFuture {
                             // every exit path including cancellation. Never rewritten to
                             // RELEASED (`bg_arg_kind_is_releasable_payload` is false for it).
                             crate::arc::ynz_arc_free(heap_ptr, desc.size as usize);
+                        }
+                        BG_ARG_KIND_OWNED_CELL => {
+                            // A cell the ladder allocated, whose fields the callee released: the
+                            // descriptor holds the pointer because the callee nulled the frame slot.
+                            crate::ynz_free(heap_ptr, desc.size as usize);
+                        }
+                        BG_ARG_KIND_RELEASE_GLUE => {
+                            // v0.3-M9 C3c/C6: the value is released by the glue codegen emitted for
+                            // its type; `size` holds the glue's address. The glue frees everything
+                            // the value owns (items, entries, fields, its own allocation).
+                            // SAFETY: codegen wrote the address of a `void(ptr)` function of this
+                            // module for this kind and no other.
+                            let glue: crate::ReleaseGlue = std::mem::transmute(desc.size as usize);
+                            glue(heap_ptr);
                         }
                         _ => {
                             // Unknown kind — defensive no-op; avoids a bad free on future
@@ -1219,7 +1267,7 @@ impl Drop for SpawnStateFnFuture {
             }
 
             // 4. Free the arg-drop descriptor array (ynz_alloc'd by codegen at spawn time).
-            //    24 bytes per entry (3 × u64); freed after all arg-copies are already released.
+            //    32 bytes per entry (4 × u64); freed after all arg-copies are already released.
             if !self.arg_drop_ptr.is_null() && self.arg_drop_count > 0 {
                 let desc_bytes = self.arg_drop_count * std::mem::size_of::<BgArgDropEntry>();
                 crate::ynz_free(self.arg_drop_ptr as *mut u8, desc_bytes);
@@ -1230,6 +1278,19 @@ impl Drop for SpawnStateFnFuture {
             // into this future exclusively; freed exactly once here.
             crate::ynz_free(self.frame_ptr, self.frame_size as usize);
         }
+    }
+}
+
+/// Marks a frame returned when its resume function unwinds (`SpawnStateFnFuture::poll`): dropped
+/// only on the unwind path, so a poll that returns costs nothing.
+struct ReturnedOnUnwind {
+    frame_ptr: *mut u8,
+}
+
+impl Drop for ReturnedOnUnwind {
+    fn drop(&mut self) {
+        // SAFETY: frame_ptr is the live frame of the task being polled (4-aligned header).
+        unsafe { *(self.frame_ptr as *mut i32) = ynz_abi::FRAME_RESUME_POINT_RETURNED };
     }
 }
 
@@ -1245,9 +1306,17 @@ impl Future for SpawnStateFnFuture {
         // unchanged. RAII: restores the previous value even if resume_fn unwinds; re-set
         // from the future's own fields at every poll, so work-stealing is safe.
         let _drive_guard = crate::channel::DriveGuard::enter(self.drive_identity());
+        // A resume function that unwinds leaves its frame mid-statement: the drop entry of the state it
+        // was in would release values the half-run statement already took or never built. The guard
+        // marks the frame returned on that path only (it is forgotten on every other), so the drop
+        // skips the entry and the frame leaks what it holds, which a panic already does.
+        let unwind_guard = ReturnedOnUnwind {
+            frame_ptr: self.frame_ptr,
+        };
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
+        std::mem::forget(unwind_guard);
         match result {
             // Ready — fire-and-forget; return value in frame slot 0 is intentionally ignored.
             0 => Poll::Ready(()),
@@ -1462,6 +1531,22 @@ pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx:
             1 // Return Pending on panic so the frame is not corrupted.
         }
     }
+}
+
+/// Free the `Sleep` box of a `wait sleep` that is still parked: the drop state of the frame that
+/// parked in it calls this when its task is dropped, then nulls its handle slot, so the one free
+/// of each frame's box is its own frame's. `ynz_rt_async_sleep_poll` frees the box itself once the
+/// sleep is Ready; a box this frees was never polled to Ready.
+///
+/// Time: O(1)  Space: O(1)
+///
+/// # Safety
+/// `handle_ptr` must be a non-null pointer returned by `ynz_rt_async_sleep_create` that
+/// `ynz_rt_async_sleep_poll` has not consumed and that nothing has freed.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_rt_async_sleep_free(handle_ptr: *mut u8) {
+    // SAFETY: the caller's contract; the inverse of the `Box::into_raw` in create.
+    drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
 }
 
 /// Run the program's entry state machine to completion — the `#[tokio::main]`-equivalent

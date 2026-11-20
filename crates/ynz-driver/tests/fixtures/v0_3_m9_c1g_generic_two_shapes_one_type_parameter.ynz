@@ -1,0 +1,26 @@
+// v0.3-M9 C1g (security): two different shapes passed for ONE type parameter
+// (`same(big, tiny)` makes the first argument bind `T = Big`, then a `Tiny` arrives for `T`).
+// Correct behavior: does not compile — the call is refused naming the argument, the type
+// parameter and the argument that fixed it.
+// Pre-fix failure: compiled (the generic call discarded `unify_param`'s mismatch and never
+// compared argument types with the substituted parameters). `same` is built for `T = Big`, so it
+// read the 1-byte `Tiny` as a 16-byte `Big`: ASan stack-buffer-overflow READ.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let out = same(big, tiny)
+  print(out.count.toString())
+}

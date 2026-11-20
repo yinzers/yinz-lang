@@ -1,0 +1,20 @@
+// v0.3-M9 C10: a `return` inside the loop, after the iterated binding was reassigned, still
+// releases the list the loop was walking. Correct behavior: prints 4, 3.
+
+function find(start: array<array<int>>) -> int {
+  let matrix: array<array<int>> = start.copy()
+  let total = 0
+  for (row in matrix) {
+    matrix = [[9]]
+    total = total + row[0].or(0)
+    if (total > 3) {
+      return total
+    }
+  }
+  return total + matrix.count()
+}
+
+function entrypoint() -> nothing {
+  print(find([[1, 2], [3, 4], [5, 6]]))
+  print(find([[1], [1]]))
+}

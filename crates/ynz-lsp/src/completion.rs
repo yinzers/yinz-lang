@@ -6,7 +6,7 @@ use ynz_parser::SourceFileRegistry as _;
 use ynz_registry::{CompletionContext, CompletionKind, RegistryCompletionItem};
 use ynz_typeck::shapes::ShapeTable;
 use ynz_typeck::signatures::SignatureTable;
-use ynz_typeck::types::type_name;
+use ynz_typeck::types::type_name_with_length;
 
 use crate::{
     capabilities::PositionEncoding,
@@ -232,10 +232,13 @@ pub fn user_symbol_items(
         let param_str = sig
             .params
             .iter()
-            .map(|(pname, ptype)| format!("{pname}: {}", type_name(ptype)))
+            .map(|(pname, ptype)| format!("{pname}: {}", type_name_with_length(ptype)))
             .collect::<Vec<_>>()
             .join(", ");
-        let detail = format!("function {name}({param_str}) -> {}", type_name(&sig.ret));
+        let detail = format!(
+            "function {name}({param_str}) -> {}",
+            type_name_with_length(&sig.ret)
+        );
 
         // Build a snippet with tab stops for each non-self parameter.
         // `self` is implicit in UFCS dot-call form; including it as a tab stop

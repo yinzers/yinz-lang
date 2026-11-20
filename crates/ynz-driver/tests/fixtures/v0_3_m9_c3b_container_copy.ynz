@@ -1,0 +1,39 @@
+// v0.3-M9 C3b fixture: a string held by a copied container is copied with it: `.copy()` of a
+// shape with a string field, `.copy()` of a `map<string, string>` (key and value), and a
+// `maybe<string>` stored in a shape field or returned (its payload is a string the place owns).
+// Allocations: `tag` name 1 (fresh), `tag.copy()` 1; the map literal's key 1 and value 1 (fresh),
+// `table.copy()` copies the key and the value 2; `let tableValue = tableCopy.get(`a`)` copies the
+// payload 1; `names` element 1 (fresh); `let firstName = names.get(0)` copies the payload 1;
+// `{ slot: firstName }` 1; `pick` returns a payload copy 1 and `let picked = pick(names)` takes
+// it (C7 slice 3: a binding of a returned `maybe` owns the payload the return made) 0.
+// Total 1+1+1+1+2+1+1+1+1+1+0 = 11.
+// Expected output: one value per line below.
+
+shape Tag {
+  name: string
+  id: int
+}
+shape Holder {
+  slot: maybe<string>
+}
+
+function pick(names: array<string>) -> maybe<string> {
+  return names.get(0)
+}
+
+function entrypoint() -> nothing {
+  let count: int = 1
+  let tag: Tag = { name: `t-${count}`, id: 1 }
+  let tagCopy = tag.copy()
+  print(tagCopy.name)
+  let table: map<string, string> = { `a`: `v-${count}` }
+  let tableCopy = table.copy()
+  let tableValue = tableCopy.get(`a`)
+  print(tableValue.or(`none`))
+  let names: array<string> = [`x-${count}`]
+  let firstName = names.get(0)
+  let holder: Holder = { slot: firstName }
+  print(holder.slot.or(`none`))
+  let picked = pick(names)
+  print(picked.or(`none`))
+}

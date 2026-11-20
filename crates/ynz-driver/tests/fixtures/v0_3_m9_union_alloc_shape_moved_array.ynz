@@ -1,0 +1,44 @@
+// v0.3-M9 C1f (#423) round 2: a shape pushed into an array moves when its source is a binding
+// the push consumes. Correct behavior: prints 100.
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+shape Holder {
+  chain: Node | End
+  id: int
+}
+shape Outer {
+  inner: Holder
+  tag: int
+}
+
+function buildChain() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function makeHolder() -> Holder {
+  let top = buildChain()
+  let holder: Holder = { chain: top, id: 1 }
+  return holder
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let holders: array<Holder> = []
+    let holder = makeHolder()
+    holders.add(holder)
+    total = total + holders.count()
+    round = round + 1
+  }
+  print(total)
+}

@@ -1,0 +1,21 @@
+// v0.3-M9 C7 slice 2c: `held` holds an imported function's untraceable `maybe` result and
+// outlives `local`, which is released at the end of the `if`. The binding owns a copy of what it
+// holds, so nothing points at what the scope exit frees.
+import { firstRow } from `helpers`
+
+function pick(condition: boolean) -> int {
+  let held: maybe<array<int>> = none
+  if (condition) {
+    let local: array<array<int>> = [[1, 2]]
+    held = firstRow(local)
+  }
+  return held.or([0]).count()
+}
+
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (pass in range(0, 20)) {
+    total = total + pick(true) + pick(false)
+  }
+  print(total)
+}

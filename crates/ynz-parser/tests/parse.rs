@@ -2672,6 +2672,50 @@ fn m5_nested_generic_type() {
     }
 }
 
+// Bug (v0.3-M9 C1h, #433; High: parser of untrusted input): the length of `fixed<T, N>` is a
+// whole number in the argument list. Each written length must reach typeck as `Type::Length`
+// with its value (`0` and the largest `u32` included), and a number that is not closed by `,` or
+// `>` must be one diagnostic, not a silent parse or a cascade into the next item.
+#[test]
+fn a_whole_number_in_a_generic_argument_list_parses_as_a_length() {
+    for written in [0_u64, 1, 4, u32::MAX as u64] {
+        let stmts = parse_fn_body(&wrap(&format!("let x: fixed<int, {written}> = x")));
+        match &stmts[0] {
+            Stmt::Let {
+                ty: Some(Type::Generic { name, args, .. }),
+                ..
+            } => {
+                assert_eq!(name, "fixed");
+                assert_eq!(args.len(), 2, "{written}");
+                assert!(matches!(args[0], Type::Int), "{written}");
+                assert!(
+                    matches!(&args[1], Type::Length { value, .. } if *value == written),
+                    "{written}: {:?}",
+                    args[1]
+                );
+            }
+            other => panic!("expected `fixed` with a length, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_length_not_closed_by_a_comma_or_angle_bracket_is_refused_once() {
+    for written in ["fixed<int, 3 4>", "fixed<int, 3 int>"] {
+        let output = parse(&wrap(&format!("let x: {written} = x")));
+        let refused = output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .what
+                    .contains("after the length in a generic type argument list")
+            })
+            .count();
+        assert_eq!(refused, 1, "{written}: {:#?}", output.diagnostics);
+    }
+}
+
 #[test]
 fn m5_generic_type_depth_cap_error() {
     // WHY: the depth cap (16) must produce exactly ONE diagnostic, not a
@@ -3437,6 +3481,45 @@ fn m7_for_destructure_preserves_user_body_stmts() {
         }
         other => panic!("expected For, got {other:?}"),
     }
+}
+
+#[test]
+fn card399_for_destructure_synthetic_exprs_have_distinct_spans() {
+    // WHY (card #399, High tier — desugar feeds the span-keyed `expr_types` table): the
+    // `.key` access, the `.value` access, the `__entry` receivers and the iterated map
+    // are four expressions with four different types. If any two share a `(start, end)`
+    // span, typeck's last write wins and codegen sees `__entry` typed as the key or value
+    // type (`field_gep: receiver is not a Shape`).
+    let stmts = parse_fn_body(&wrap("for ((k, v) in m) { }"));
+    let Stmt::For { iter, body, .. } = &stmts[0] else {
+        panic!("expected For, got {:?}", stmts[0]);
+    };
+    let access_parts = |stmt: &Stmt| match stmt {
+        Stmt::Let {
+            value: Expr::FieldAccess { receiver, span, .. },
+            ..
+        } => (receiver.span().clone(), span.clone()),
+        other => panic!("expected `let` of a field access, got {other:?}"),
+    };
+    let (key_receiver, key_access) = access_parts(&body.stmts[0]);
+    let (value_receiver, value_access) = access_parts(&body.stmts[1]);
+    let key_of = |span: &SourceSpan| (span.start, span.end);
+    let spans = [
+        key_of(iter.span()),
+        key_of(&key_access),
+        key_of(&value_access),
+        key_of(&key_receiver),
+    ];
+    for (position, first) in spans.iter().enumerate() {
+        for second in &spans[position + 1..] {
+            assert_ne!(first, second, "synthetic span collision: {spans:?}");
+        }
+    }
+    assert_eq!(
+        key_of(&key_receiver),
+        key_of(&value_receiver),
+        "both receivers are the same MapEntry-typed `__entry`, so they may share one span"
+    );
 }
 
 #[test]

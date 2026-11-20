@@ -6,13 +6,27 @@
 ///
 /// The other tests (rss_unavailable, db_rebuild_preserves_state, memory_config)
 /// run in the default test suite.
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Once, time::Duration};
 
 use ynz_watch::{
     db::init_db,
     memory::{check_rss, current_rss_bytes, hard_stop_message, MemoryConfig, RssCheckResult},
     project::WatchSourceFile,
 };
+
+// Upstream race in `memory-stats` 1.2.0 (the newest release): `memory_stats()` sets `SMAPS_CHECKED`
+// (compare_exchange) before it stores `PAGE_SIZE`, so a concurrent FIRST call on another thread
+// sees the flag set, skips the page-size load and returns `physical_mem == 0`. The first call
+// must therefore finish before any other thread calls it. `Once::call_once` blocks every other
+// caller until the closure returns, and every test in this file that reaches `memory_stats()`
+// (directly or through `check_rss`) goes through it first.
+static FIRST_RSS_CALL: Once = Once::new();
+
+fn serialise_first_rss_call() {
+    FIRST_RSS_CALL.call_once(|| {
+        let _ = current_rss_bytes();
+    });
+}
 
 fn make_db(path: &str, text: &str) -> (ynz_watch::db::WatchDb, PathBuf) {
     let p = PathBuf::from(path);
@@ -31,6 +45,7 @@ fn make_db(path: &str, text: &str) -> (ynz_watch::db::WatchDb, PathBuf) {
 //      None should be investigated, not silently accepted.
 #[test]
 fn current_rss_bytes_returns_value_on_supported_platforms() {
+    serialise_first_rss_call();
     // memory-stats supports Linux (/proc/self/status), macOS (task_info), Windows.
     // If it returns None on any of those, the test fails as a signal to investigate.
     // On genuinely unsupported targets (esoteric UNIX), skip via the env var.
@@ -52,6 +67,7 @@ fn current_rss_bytes_returns_value_on_supported_platforms() {
 //      before hitting the 4GB hard ceiling — silent degradation.
 #[test]
 fn check_rss_warn_triggers_above_threshold() {
+    serialise_first_rss_call();
     let config = MemoryConfig {
         warn_mb: 0,
         max_mb: u64::MAX,
@@ -74,6 +90,7 @@ fn check_rss_warn_triggers_above_threshold() {
 //      helpful message. Hard-stop is the safety net when Layer 1 and 2 aren't enough.
 #[test]
 fn check_rss_stop_triggers_at_zero_ceiling() {
+    serialise_first_rss_call();
     let config = MemoryConfig {
         warn_mb: 0,
         max_mb: 0,
@@ -102,6 +119,7 @@ fn check_rss_stop_triggers_at_zero_ceiling() {
 //      terminal output that drowns the actual compile errors.
 #[test]
 fn check_rss_warn_is_rate_limited() {
+    serialise_first_rss_call();
     let config = MemoryConfig {
         warn_mb: 0,
         max_mb: u64::MAX,
@@ -180,6 +198,7 @@ fn layer2_periodic_rebuild_triggers_at_threshold() {
 #[test]
 #[ignore] // Run with: cargo test --test long_session -- --include-ignored
 fn long_session_10k_rebuilds() {
+    serialise_first_rss_call();
     let path = PathBuf::from("/tmp/long_session_10k_test.ynz");
     let base_src = "function entrypoint() -> nothing { print(`iteration 0`) }\n";
     std::fs::write(&path, base_src).unwrap();

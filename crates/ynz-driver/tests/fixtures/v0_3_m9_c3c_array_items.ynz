@@ -1,0 +1,19 @@
+// v0.3-M9 C3c fixture: the strings an array owns are released with the array.
+// `build` makes an array of two fresh strings and the spawn takes it as the task's own value (a
+// fresh temporary is handed over, not copied). The task's drop ladder releases the array, and with
+// it the two strings the array stores.
+// Heap strings: 2 (the two interpolated items); every one is released by the task.
+// Expected output: the first item.
+
+function build(count: int) -> array<string> {
+  return [`first-${count}`, `second-${count}`]
+}
+
+function show(names: array<string>) -> nothing {
+  print(names[0].or(`none`))
+}
+
+function entrypoint() -> nothing {
+  background show(build(1))
+  wait sleep(80)
+}

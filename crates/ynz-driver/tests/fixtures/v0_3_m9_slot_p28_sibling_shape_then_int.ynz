@@ -1,0 +1,18 @@
+shape Pt {
+  a: int
+  b: int
+}
+// Q3: sibling crossing `x`: first a shape (frame-embedded multi-slot), then int.
+function entrypoint() -> nothing {
+  let c = true
+  if (c) {
+    let x: Pt = { a: 1, b: 2 }
+    wait sleep(5)
+    print(x.a.toString())
+  }
+  if (c) {
+    let x: int = 99
+    wait sleep(5)
+    print(x.toString())
+  }
+}

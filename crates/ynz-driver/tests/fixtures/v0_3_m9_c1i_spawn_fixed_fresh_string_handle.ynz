@@ -1,0 +1,21 @@
+// v0.3-M9 C1i: a handled `background` call (the callee suspends: a scheduler state machine) passes
+// a `fixed<string>` that is a fresh call result. The spawn releases the original strings.
+// Before: 2 of the 4 strings leaked.
+// Expected output: the count, the first name, then `done`.
+
+function crunch(xs: fixed<string, 2>) -> nothing {
+  wait sleep(1)
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function build() -> fixed<string> {
+  let xs: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return xs
+}
+
+function entrypoint() -> nothing {
+  let task = background crunch(build())
+  wait sleep(50)
+  print(`done`)
+}

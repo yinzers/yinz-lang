@@ -1,0 +1,58 @@
+// v0.3-M9 C1f (#423): a union passed to a SUSPENDING callee (`wait`) and returned from one. The
+// argument is written, payload inline, into the callee frame's own `Param` region, so it is
+// read after the callee resumes; the return travels through the callee's `Return` region.
+// Correct behavior: prints `big waited 7`, `tiny`, `big again 8`, `end`; clean under
+// AddressSanitizer at both optimization levels.
+// Before: the staged argument was a heap envelope and payload (two counted cells per call).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${thing.label} ${thing.count}`
+    }
+  }
+  return `none`
+}
+
+function slowPass(give thing: Thing) -> Thing {
+  wait sleep(1)
+  return thing
+}
+
+function slowDescribe(share thing: Thing) -> string {
+  wait sleep(1)
+  return describe(thing)
+}
+
+function clobber(seed: int) -> int {
+  let plusOne = seed + 1
+  let doubled = plusOne * 2
+  return doubled + plusOne
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `waited`, count: 7 }
+  let tiny: Tiny = { flag: true }
+  let first = wait slowDescribe(big)
+  print(first)
+  let second = wait slowPass(tiny)
+  let scratch = clobber(3)
+  print(describe(second))
+  let big2: Big = { label: `again`, count: 8 }
+  let third = wait slowPass(big2)
+  let scratch2 = clobber(4)
+  print(describe(third))
+  print(`end`)
+}

@@ -1,0 +1,18 @@
+// v0.3-M9 C10, stays legal: the callee assigns another field of the root, not the walked list.
+shape Holder {
+  name: string
+  rows: array<array<int>>
+}
+function rename(lend holder: Holder) -> nothing {
+  holder.name = `renamed`
+}
+function entrypoint() -> nothing {
+  let holder: Holder = { name: `first`, rows: [[1], [2], [3]] }
+  let total = 0
+  for (row in holder.rows) {
+    rename(holder)
+    total = total + row[0].or(0)
+  }
+  print(total)
+  print(holder.name)
+}

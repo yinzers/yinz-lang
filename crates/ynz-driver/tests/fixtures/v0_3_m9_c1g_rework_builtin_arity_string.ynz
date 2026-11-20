@@ -1,0 +1,12 @@
+// v0.3-M9 C1g rework (round 1 rule fixer): built-in `string` methods called with the wrong number
+// of arguments.
+// Correct behavior: does not compile — each call is refused with the arity text of a plain call.
+// Pre-fix failure: `s.contains()` and `s.substring(1)` panicked the code generator (each reads an
+// argument that was never passed); `s.trim(1)` dropped its argument without a word.
+
+function entrypoint() -> nothing {
+  let s = `hello`
+  let has = s.contains()
+  let part = s.substring(1)
+  let trimmed = s.trim(1)
+}

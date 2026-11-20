@@ -12,8 +12,8 @@ use ynz_typeck::{
 use crate::{
     artifact::CompiledArtifact,
     emit::{
-        build_frame_layouts_with_resolver, emit_artifact, spike_host_subset, FrameLayout,
-        SuspendSet,
+        build_frame_layouts_with_unions, emit_artifact, spike_host_subset, union_region_roles,
+        FrameLayout, SuspendSet,
     },
     state_machine,
 };
@@ -88,6 +88,16 @@ pub fn frame_layouts_query(
         // Codegen is skipped on type errors — no meaningful layouts to compute.
         return Arc::new(HashMap::new());
     }
+    // Codegen reads the module with per-binding unique names (`TypedModule::binding_names`). A
+    // hole in that record is a compiler bug that `codegen_query` of THIS file reports as an
+    // error diagnostic (it applies the same map) and answers with no artifact; this query has no
+    // error channel, so it gives the same "codegen is skipped" empty answer as the type-error
+    // branch above. An importer sizing a frame against this file therefore sees no layout for
+    // it, so its own artifact is wrong, but the build still fails: it runs `codegen_query` on
+    // every source file and fails on any error diagnostic (`ynz-driver` build.rs).
+    let Ok(codegen_typed) = check.typed_module.with_codegen_names() else {
+        return Arc::new(HashMap::new());
+    };
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
 
@@ -118,7 +128,7 @@ pub fn frame_layouts_query(
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
     let promotion = cpu_promotion_query(db, source);
     let spike_hosts = spike_host_subset(
-        &check.typed_module,
+        &codegen_typed,
         &base_suspend_set,
         &base_suspend_set,
         &promotion.promoted,
@@ -182,7 +192,7 @@ pub fn frame_layouts_query(
     // Create an inkwell Context to compute LLVM-accurate shape ABI sizes.
     // Context is created here and dropped at the end of this scope — no LLVM
     // types escape into the returned Arc<HashMap> (only u64 sizes escape).
-    let shape_abi_sizes: HashMap<String, u64> = {
+    let (shape_abi_sizes, union_roles) = {
         // Guard G1: same target machine constructor as emit_artifact.
         //
         // Pinned at `PipelineConfig::o0()` deliberately (v0.3-M7 Phase 3, recorded
@@ -218,19 +228,34 @@ pub fn frame_layouts_query(
         // shape's frame slot is sized from the padded struct type automatically (one
         // source, every consumer threaded — authoritative-derivation.md).
         let layout = layout_decisions_query(db, source);
-        let shape_types = crate::shape_types::emit_shape_types(
+        let shape_types = match crate::shape_types::emit_shape_types(
             &ctx,
             &sig_output.shape_table,
             &layout.padded_shapes,
-        );
-        shape_types
+            &target_data,
+        ) {
+            Ok(types) => types,
+            // Codegen builds the same types with `?` and reports the error first.
+            Err(_) => return Arc::new(HashMap::new()),
+        };
+        let mut sizes: HashMap<String, u64> = shape_types
             .named
             .iter()
             .map(|(name, &struct_ty)| {
                 let bytes = target_data.get_abi_size(&struct_ty);
                 (name.clone(), bytes)
             })
-            .collect()
+            .collect();
+        sizes.extend(crate::emit::union_frame_sizes(&codegen_typed, &shape_types));
+        // The same layout call fails in `emit_artifact`'s declaration of the function that
+        // returns or takes the union, which reports the error first (as for the shape types
+        // above), so the empty map is never observed as a live wrong frame size.
+        let roles = match union_region_roles(&codegen_typed, &sig_output.shape_table, &shape_types)
+        {
+            Ok(roles) => roles,
+            Err(_) => return Arc::new(HashMap::new()),
+        };
+        (sizes, roles)
         // ctx and module drop here — no inkwell types escape past this block.
     };
 
@@ -261,13 +286,31 @@ pub fn frame_layouts_query(
             })
     };
 
-    let mut layouts = build_frame_layouts_with_resolver(
-        &check.typed_module,
+    let mut layouts = build_frame_layouts_with_unions(
+        &codegen_typed,
         &effective_suspend_set,
         &base_suspend_set,
         &shape_abi_sizes,
+        &sig_output.shape_table,
+        &union_roles,
         &callee_size_resolver,
     );
+
+    let callee_union_regions = |name: &str| -> Vec<crate::emit::UnionRegion> {
+        let Some(callee_sf) = callee_source_map.get(name) else {
+            return Vec::new();
+        };
+        let callee_layouts = frame_layouts_query(db, *callee_sf);
+        let original = sig_output
+            .imported_fns
+            .get(name)
+            .and_then(|sig| sig.original_name.as_deref());
+        callee_layouts
+            .get(name)
+            .or_else(|| original.and_then(|orig| callee_layouts.get(orig)))
+            .map(|layout| layout.union_regions.clone())
+            .unwrap_or_default()
+    };
 
     // Add FrameLayout stubs for imported suspending callees, keyed by their LOCAL alias
     // name. These stubs carry the callee's real composed total_size (via Guard G2 recursive
@@ -293,6 +336,9 @@ pub fn frame_layouts_query(
                 children: Vec::new(),
                 recursion_slot: None,
                 number_errors_staging_offset: None,
+                // The callee's union slots are part of its call interface: a `wait`ing caller
+                // writes an argument into the callee's own frame at these offsets.
+                union_regions: callee_union_regions(local_name.as_str()),
                 // Imported-callee stubs carry no CPU groups — those belong to the importer's
                 // own frame, not the callee's.
                 cpu_group_slots: Vec::new(),
@@ -334,6 +380,25 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         diagnostics.push(lint);
     }
 
+    let codegen_typed = match check.typed_module.with_codegen_names() {
+        Ok(typed) => typed,
+        Err(msg) => {
+            diagnostics.push(Diagnostic::file_error(
+                source.path(db).as_str(),
+                format!("The compiler failed to produce machine code: {msg}"),
+                "This is a compiler bug. Please report it with the source file attached.",
+                "Your program passed every check, but the compiler could not tell which variable one of its names refers to. It stopped instead of guessing, because a wrong guess would build a program that gives wrong answers.",
+            ));
+            return Arc::new(CodegenOutput {
+                artifact: CompiledArtifact {
+                    object_bytes: Vec::new(),
+                    ir_text: String::new(),
+                    sha256: [0u8; 32],
+                },
+                diagnostics,
+            });
+        }
+    };
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
     // Pre-compute LLVM-accurate frame layouts via the salsa query so both the emitter
@@ -373,7 +438,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
     let promotion = cpu_promotion_query(db, source);
     let spike_hosts = spike_host_subset(
-        &check.typed_module,
+        &codegen_typed,
         &base_suspend_set,
         &base_suspend_set,
         &promotion.promoted,
@@ -408,9 +473,32 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // already evaluated inside frame_layouts_query above.
     let layout = layout_decisions_query(db, source);
 
+    // Refuse, as the teaching diagnostic, a union `let` or `return` whose value is a call only the
+    // effective suspend set knows is suspending (a CPU-promoted function). Typeck judged the
+    // same slot with its own set; codegen's `refuse_unwrapped_suspending_let` and
+    // `refuse_unwrapped_suspending_return` stay as the internal guards behind both.
+    let promoted_refusals =
+        ynz_typeck::check::suspending_union_diagnostics(&check.typed_module, &|callee| {
+            suspends_with_promotions.contains(callee)
+                && !ynz_typeck::is_base_suspension_intrinsic(callee)
+        });
+    if !promoted_refusals.is_empty() {
+        for refusal in promoted_refusals {
+            diagnostics.push(refusal);
+        }
+        return Arc::new(CodegenOutput {
+            artifact: CompiledArtifact {
+                object_bytes: Vec::new(),
+                ir_text: String::new(),
+                sha256: [0u8; 32],
+            },
+            diagnostics,
+        });
+    }
+
     match emit_artifact(
         source_path.as_str(),
-        &check.typed_module,
+        &codegen_typed,
         &sig_output.shape_table,
         &sig_output.sig_table,
         &sig_output.generic_fn_table,

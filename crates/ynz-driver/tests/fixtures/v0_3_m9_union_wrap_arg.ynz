@@ -1,0 +1,59 @@
+// v0.3-M9 C1c: a PLAIN shape passed to a UNION parameter must reach the callee as a correctly
+// tagged union envelope, not as the bare shape pointer.
+// Covers a plain call, a UFCS call (extra argument; typeck refuses a plain shape as the UFCS receiver), a generic callee and a
+// `wait`ed (suspending) callee; `Tiny` is a 1-byte variant, so reading it as the 16-byte
+// envelope is out of bounds.
+// Correct behavior: every line names the variant that was passed (`tiny` / `big hello`) and the
+// run is clean under AddressSanitizer.
+// Pre-fix failure: the callee read the shape's own bytes as `{tag, data}`: `none` / the wrong
+// variant for `Big`, `big` for `Tiny`, and an AddressSanitizer stack-buffer-overflow READ past
+// the 1-byte `Tiny`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function pair(share first: Tiny, share second: Thing) -> string {
+  return `${first.flag} / ${describe(second)}`
+}
+
+function genericDescribe<T>(share t: Thing, share extra: T) -> string {
+  return describe(t)
+}
+
+function describeLater(share t: Thing) -> string {
+  wait sleep(1)
+  return describe(t)
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  print(describe(big))
+  print(describe(tiny))
+  print(tiny.pair(big))
+  print(genericDescribe(tiny, 3))
+  print(genericDescribe(big, 3))
+  let later = wait describeLater(tiny)
+  print(later)
+  let laterBig = wait describeLater(big)
+  print(laterBig)
+  print(`end`)
+}

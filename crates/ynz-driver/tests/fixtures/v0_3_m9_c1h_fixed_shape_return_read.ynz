@@ -1,0 +1,26 @@
+// v0.3-M9 C1h: a function returns a `fixed<Part>` of shapes that own a string; the caller reads
+// the count and the names, and the list releases its items when it leaves scope.
+// Before: the list came back as a pointer into the callee's dead stack frame with no length: the
+// count printed 0, the items were never released, and a read went through freed stack.
+// Expected output: the count, then both names.
+
+shape Part {
+  name: string
+}
+
+function makeParts() -> fixed<Part> {
+  let first: Part = { name: `a`.toUpperCase() }
+  let second: Part = { name: `bb` }
+  let parts: fixed<Part> = [first, second]
+  return parts
+}
+
+function entrypoint() -> nothing {
+  let parts = makeParts()
+  let nobody: Part = { name: `none` }
+  let firstPart: Part = parts[0].or(nobody)
+  let secondPart: Part = parts[1].or(nobody)
+  print(parts.count())
+  print(firstPart.name)
+  print(secondPart.name)
+}

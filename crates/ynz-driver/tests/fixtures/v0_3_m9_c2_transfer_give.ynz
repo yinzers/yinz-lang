@@ -1,0 +1,66 @@
+// v0.3-M9 C2 safety fixture — transfer by GIVE.
+// `eat(give rows)` hands ownership to the callee, which becomes the one releaser. The caller must
+// not release a binding it gave away — on every path, including a CONDITIONAL give (only one
+// branch gives; the other branch still owns), a give through an ALIAS (`alias` was bound from
+// `original`), and a give made across a suspension.
+//   - `definite`:    gives on every path.
+//   - `conditional`: gives only when `handOver` is true; otherwise it keeps ownership to scope end.
+//   - `aliased`:     gives the alias; the original name must not release the same array again.
+//   - `suspending`:  the conditional give inside a state-machine function with waits around it.
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: caller and callee both releasing the given array (double free), and a
+// conditional give that releases on the given path at all or on the kept path twice.
+//
+// Expected output (one per line): 3, 3, kept, 3, 7, 8, 3, done, done
+
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+
+function definite() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  eat(rows)
+}
+
+function conditional(handOver: boolean) -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  if (handOver) {
+    eat(rows)
+  }
+  if (handOver == false) {
+    print(`kept`)
+  }
+}
+
+function aliased(handOver: boolean) -> int {
+  let original: array<int> = [1, 2, 3]
+  let alias: array<int> = original
+  if (handOver) {
+    eat(alias)
+  }
+  if (handOver) {
+    return 7
+  }
+  return 8
+}
+
+function suspending(handOver: boolean) -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  wait sleep(1)
+  if (handOver) {
+    eat(rows)
+    wait sleep(1)
+  }
+  wait sleep(1)
+  print(`done`)
+}
+
+function entrypoint() -> nothing {
+  definite()
+  conditional(true)
+  conditional(false)
+  print(aliased(true).toString())
+  print(aliased(false).toString())
+  suspending(true)
+  suspending(false)
+}

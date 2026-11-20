@@ -1,0 +1,14 @@
+// Q1: outer `x` in an if (non-top-level), non-crossing; inner crossing x nested; outer read after inner scope exits.
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let x = `outer`
+    print(x)
+    if (a) {
+      let x = `inner`
+      wait sleep(5)
+      print(x)
+    }
+    print(x)
+  }
+}

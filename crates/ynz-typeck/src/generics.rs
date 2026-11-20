@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ynz_ast::nodes::OwnershipModifier;
 use ynz_diagnostics::SourceSpan;
@@ -63,13 +63,94 @@ pub fn unify_param(param_ty: &Type, arg_ty: &Type, subst: &mut Substitution) -> 
 
 /// Recursively apply `subst` to `ty`, replacing `TypeParam` leaves with concrete types.
 pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
+    let apply = |inner: &Type| Box::new(apply_substitution(inner, subst));
     match ty {
         Type::TypeParam { name } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
         Type::Generic { name, args } => Type::Generic {
             name: name.clone(),
             args: args.iter().map(|a| apply_substitution(a, subst)).collect(),
         },
+        Type::BuiltinArray { elem } => Type::BuiltinArray { elem: apply(elem) },
+        Type::BuiltinFixed { elem, size } => Type::BuiltinFixed {
+            elem: apply(elem),
+            size: size.clone(),
+        },
+        Type::BuiltinChannel { elem } => Type::BuiltinChannel { elem: apply(elem) },
+        Type::Maybe { inner } => Type::Maybe {
+            inner: apply(inner),
+        },
+        Type::ErrorsCapable { inner } => Type::ErrorsCapable {
+            inner: apply(inner),
+        },
+        Type::Sensitive { inner } => Type::Sensitive {
+            inner: apply(inner),
+        },
+        Type::BuiltinMap { key, val } => Type::BuiltinMap {
+            key: apply(key),
+            val: apply(val),
+        },
+        Type::MapEntry { key, val } => Type::MapEntry {
+            key: apply(key),
+            val: apply(val),
+        },
+        Type::Union { variants } => {
+            let substituted: Vec<Type> = variants
+                .iter()
+                .map(|variant| apply_substitution(variant, subst))
+                .collect();
+            flatten_union(substituted)
+        }
         other => other.clone(),
+    }
+}
+
+/// The union a substituted union stands for: a variant that became a union itself
+/// (`T | nothing` with `T = Big | Tiny`) contributes its variants in place, and a variant
+/// that repeats an earlier one (`T | Tiny` with `T = Tiny`) is dropped, so the result is the
+/// flat variant list a program writes by hand (`Big | Tiny | nothing`). A union left with one
+/// variant is that variant. Without this a nested union is a different type from the flat
+/// union holding the same variants, and a correct call is refused with a message that says the
+/// parameter expects the very type the argument has (C1g, #424).
+/// Codegen's `Cg::resolve_type` flattens an
+/// instance's union the same way, so the instance and its callers judge one union.
+///
+/// O(total variants squared) time, O(total variants) space.
+pub fn flatten_union(substituted: Vec<Type>) -> Type {
+    let mut flat: Vec<Type> = Vec::with_capacity(substituted.len());
+    for variant in substituted {
+        let contributed = match variant {
+            Type::Union { variants } => variants,
+            single => vec![single],
+        };
+        for contributed_variant in contributed {
+            if !flat.contains(&contributed_variant) {
+                flat.push(contributed_variant);
+            }
+        }
+    }
+    if flat.len() == 1 {
+        flat.remove(0)
+    } else {
+        Type::Union { variants: flat }
+    }
+}
+
+/// Does `ty` still mention a type parameter after substitution? True for a parameter the call
+/// never bound (reported by the "cannot work out the type parameter" error), anywhere inside
+/// the type. O(size of the type) time, O(depth) stack.
+pub fn mentions_type_param(ty: &Type) -> bool {
+    match ty {
+        Type::TypeParam { .. } => true,
+        Type::Generic { args, .. } => args.iter().any(mentions_type_param),
+        Type::BuiltinArray { elem }
+        | Type::BuiltinFixed { elem, .. }
+        | Type::BuiltinChannel { elem } => mentions_type_param(elem),
+        Type::Maybe { inner } | Type::ErrorsCapable { inner } => mentions_type_param(inner),
+        Type::BuiltinMap { key, val } | Type::MapEntry { key, val } => {
+            mentions_type_param(key) || mentions_type_param(val)
+        }
+        Type::Union { variants } => variants.iter().any(mentions_type_param),
+        _ => false,
     }
 }
 
@@ -94,8 +175,8 @@ pub struct MonoSignature {
 /// Keyed by `(fn_name, concrete_type_args)`. Codegen (P4a) consumes this to
 /// emit one LLVM function per unique instantiation.
 ///
-/// `BTreeMap`, not `HashMap`: codegen's Pass 1.5/2.5 emission ORDER (and its
-/// first-match-by-name fallback lookup) follow this table's iteration order, which
+/// `BTreeMap`, not `HashMap`: codegen's Pass 1.5/2.5 emission ORDER follows this
+/// table's iteration order, which
 /// therefore reaches the object bytes. A per-process-seeded `HashMap` here made
 /// multi-file builds flap between orderings run-to-run (v0.3-M7 R10 — the
 /// pirates-roster two-hash flap). Ordered iteration is load-bearing; do not switch back.
@@ -107,6 +188,58 @@ pub struct MonomorphizationTable {
 impl MonomorphizationTable {
     pub fn record(&mut self, fn_name: String, type_args: Vec<Type>, sig: MonoSignature) {
         self.entries.insert(MonoKey { fn_name, type_args }, sig);
+    }
+}
+
+/// The type arguments type checking chose for each generic call, keyed by the call's
+/// `(span.start, span.end)`.
+///
+/// Codegen reads the instance a call runs from here and nowhere else. Re-deriving it from
+/// the argument types is ambiguous: `pickA(tiny, big)` against `pickA<T>(first: T | Tiny,
+/// second: T)` fits both `pickA<Big>` and `pickA<Big | Tiny>` when both exist, and only the
+/// type checker knows which one it checked (C1g, #424).
+///
+/// A call checked twice with different type arguments is kept as a conflict, never as the
+/// last or first choice, so codegen stops with an internal error instead of guessing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GenericCallInstances {
+    type_args_by_call: HashMap<(usize, usize), Vec<Type>>,
+    conflicting_calls: HashSet<(usize, usize)>,
+}
+
+impl GenericCallInstances {
+    /// Record the type arguments the call at `call_span` was checked with. O(type args) time.
+    pub fn record(&mut self, call_span: (usize, usize), type_args: Vec<Type>) {
+        match self.type_args_by_call.get(&call_span) {
+            Some(recorded) if *recorded != type_args => {
+                self.conflicting_calls.insert(call_span);
+            }
+            Some(_) => {}
+            None => {
+                self.type_args_by_call.insert(call_span, type_args);
+            }
+        }
+    }
+
+    /// The type arguments the call at `call_span` was checked with. An error when the type
+    /// checker recorded none, or recorded two different sets. O(1) time.
+    pub fn type_args_at(&self, call_span: (usize, usize)) -> Result<&[Type], String> {
+        if self.conflicting_calls.contains(&call_span) {
+            return Err(format!(
+                "the call at bytes {}..{} was type-checked with two different sets of type \
+                 arguments",
+                call_span.0, call_span.1
+            ));
+        }
+        self.type_args_by_call
+            .get(&call_span)
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                format!(
+                    "the type checker recorded no type arguments for the call at bytes {}..{}",
+                    call_span.0, call_span.1
+                )
+            })
     }
 }
 

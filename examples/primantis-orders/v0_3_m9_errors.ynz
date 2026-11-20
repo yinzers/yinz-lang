@@ -1,0 +1,127 @@
+// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness, C1g call arguments, C1e hidden defaults, C5a store hands over, C6 map keys and a union given to a generic task, C10 a loop whose body frees the list it walks)
+//
+// Every block below intentionally triggers a diagnostic added or extended in v0.3-M9.
+// Run `ynz build v0_3_m9_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class.
+
+// A sandwich that is either a plain order or a special; `Special` is the variant the
+// kitchen helpers below expect.
+shape Plain {
+  table: int
+}
+shape Special {
+  label: string
+}
+shape Order = Plain | Special
+
+shape Ticket {
+  held: Special
+}
+
+shape Book {
+  tickets: array<array<int>>
+}
+
+shape Round = Plain | int
+
+shape Tip {
+  amount: int
+  // WHY: hidden-field default mismatch — every new `Tip` starts with this default, but a
+  // `string` field cannot start as the `int` 4096.
+  hidden note: string = 4096
+}
+
+function plateSpecial(share special: Special) -> string {
+  return special.label
+}
+
+function pickSpecial(share order: Order) -> Special {
+  return order
+}
+
+function describeRound(share round: Round) -> string {
+  if (round) {
+    is Plain => {
+      return `plain`
+    }
+  }
+  return `other`
+}
+
+function sameKind<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function eat<T>(held: T) -> nothing {
+  print(`ate`)
+}
+
+function entrypoint() -> nothing {
+  let special: Special = { label: `cheesesteak` }
+  let order: Order = special.copy()
+  let second: Order = special.copy()
+
+  // WHY: UnionWhereVariantExpected (argument) — an `Order` might hold a `Plain`, but
+  // `plateSpecial` reads a `Special`.
+  print(plateSpecial(order))
+
+  // WHY: UnionWhereVariantExpected (annotated `let`) — same refusal for a declared type.
+  let again: Special = order
+
+  // WHY: UnionWhereVariantExpected (shape field) — the field is declared as a `Special`.
+  let ticket: Ticket = { held: second }
+
+  print(again.label)
+  print(ticket.held.label)
+
+  // WHY: non-exhaustive union multi-case with a non-shape variant — `describeRound`
+  // names `Plain` only, so an `int` round would fall through every arm.
+  let plain: Plain = { table: 4 }
+  let round: Round = plain.copy()
+  print(describeRound(round))
+
+  // WHY: ArgumentConflictsWithTypeParameter — `sameKind` takes both arguments as one `T`;
+  // `plain` makes `T` a `Plain`, so the `Special` cannot follow.
+  print(sameKind(plain, special).table.toString())
+
+  // WHY: ConsumedByStore — `box.add(moved)` hands `moved` over to `box`, so the read of
+  // `moved` on the next line is refused (store a copy, or read it above the store).
+  let moved: array<int> = [1, 2, 3]
+  let box: array<array<int>> = []
+  box.add(moved)
+  print(moved.count().toString())
+
+  // WHY: MapKeyNotStorable (shape) — not supported yet: a map keeps each key in one slot of 8 or
+  // 16 bytes today, and a shape holds several fields, so an equal `Plain` would be looked up at
+  // another address and miss. For now, key the map by a field and keep the shape as the value.
+  let byPlain: map<Plain, int> = {}
+  print(byPlain.count().toString())
+
+  // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — it is kept outside the 16-byte
+  // slot, so only its address would be the key.
+  let byPrice: map<number<50>, int> = {}
+  print(byPrice.count().toString())
+
+  // WHY: MapKeyNotStorable (`sensitive string`) — a map would free the secret as an ordinary
+  // string and compare keys in a way whose timing leaks. Keep the secret as the value.
+  let bySecret: map<sensitive string, int> = {}
+  print(bySecret.count().toString())
+
+  // WHY: BackgroundUnionToGenericParameter — a task copies a union argument into a slot of its
+  // own, which only exists when the callee declares the union type; `eat`'s `held` is a bare `T`.
+  let given: Order = special.copy()
+  background eat(given)
+
+  // WHY: WalkedListWrittenInLoop — `ticketBook = fresh` releases the book whose `tickets` the
+  // loop is still reading, so the next pass would read a list that was already released.
+  let ticketBook: Book = { tickets: [[1], [2]] }
+  let spent = 0
+  for (ticketRow in ticketBook.tickets) {
+    let fresh: Book = { tickets: [[9]] }
+    ticketBook = fresh
+    spent = spent + ticketRow[0].or(0)
+  }
+  print(spent.toString())
+}

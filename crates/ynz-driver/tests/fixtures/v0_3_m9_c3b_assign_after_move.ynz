@@ -1,0 +1,15 @@
+// v0.3-M9 C3b fixture: a binding reassigned after its string was moved out holds a string of its
+// own, and the moved string stays with its new holder.
+// `let moved = source` is the last read of `source` (an assignment target is not a read), so the
+// string moves into `moved`; `source = `again`` then stores a copy of the literal.
+// Allocations: `source` 1 (fresh), `moved` 0 (move), `source = `again`` 1 (copy of a literal).
+// Total 2.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let count: int = 5
+  let source: string = `first-${count}`
+  let moved: string = source
+  source = `again`
+  print(moved)
+}

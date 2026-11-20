@@ -1,0 +1,42 @@
+// v0.3-M9 C3b fixture: a hidden string field's default (written by the shape's defaults
+// initializer, once per construction) is a literal stored in the instance, so each instance owns
+// a copy of its own, and a hidden default that is a string inherited through `extends` does too.
+// Allocations: two `Item` constructions copy the literal default 2; one `Special` construction
+// copies its own hidden default and the inherited one 2; the name `n-1` is fresh and stored by
+// move 1; each of the four accessors returns a field read, copied at the `return` 4.
+// Total 2+2+1+4 = 9.
+// Expected output: one value per line below.
+
+shape Item {
+  id: int
+  hidden label: string = `default`
+}
+
+shape Special extends Item {
+  name: string
+  hidden note: string = `note`
+}
+
+function showLabel(share self: Item) -> string {
+  return self.label
+}
+
+function showInherited(share self: Special) -> string {
+  return self.label
+}
+
+function showNote(share self: Special) -> string {
+  return self.note
+}
+
+function entrypoint() -> nothing {
+  let count: int = 1
+  let first: Item = { id: 1 }
+  let second: Item = { id: 2 }
+  let special: Special = { id: 3, name: `n-${count}` }
+  print(first.showLabel())
+  print(second.showLabel())
+  print(special.showInherited())
+  print(special.showNote())
+  print(special.name)
+}

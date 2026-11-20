@@ -1,0 +1,33 @@
+// v0.3-M9 C10: the field is assigned on some passes only, and a `return` inside the body leaves
+// the loop with the field already replaced. Correct behavior: prints 6, 3.
+
+shape Holder {
+  rows: array<array<int>>
+}
+
+function walk(start: Holder) -> int {
+  let holder: Holder = start.copy()
+  let total = 0
+  let pass = 0
+  for (row in holder.rows) {
+    pass = pass + 1
+    if (pass == 1) {
+      holder.rows = [[9], [8]]
+    }
+    if (pass == 2) {
+      holder.rows = [[7]]
+    }
+    total = total + row[0].or(0)
+    if (total > 4) {
+      return total
+    }
+  }
+  return total + holder.rows.count()
+}
+
+function entrypoint() -> nothing {
+  let a: Holder = { rows: [[1], [2], [3]] }
+  let b: Holder = { rows: [[1], [1]] }
+  print(walk(a))
+  print(walk(b))
+}

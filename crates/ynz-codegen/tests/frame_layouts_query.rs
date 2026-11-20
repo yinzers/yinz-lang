@@ -656,7 +656,8 @@ function entrypoint() -> nothing {
     // `bgarg-number`). Fallback (shape missing from shape_abi_sizes) would give
     // 1 + slack slots — still distinguishable from 3 + slack.
     // n_locals = 0 params + 3 shape slots + slack.
-    let expected_slots = 3 + FRAME_SHAPE_REGION_SLACK_SLOTS;
+    // Plus the one moved-flag slot in front of every frame-embedded shape (C8 slice 4a).
+    let expected_slots = 1 + 3 + FRAME_SHAPE_REGION_SLACK_SLOTS;
     assert_eq!(
         layout.n_locals,
         expected_slots,
@@ -733,7 +734,8 @@ function entrypoint() -> nothing {
     // (hotfix `bgarg-number`). The typeck field-count approximation this test guards
     // against would count 2 + slack — still distinguishable from 1 + slack.
     // n_locals = 0 params + 1 slot + slack.
-    let expected_slots = 1 + FRAME_SHAPE_REGION_SLACK_SLOTS;
+    // Plus the one moved-flag slot in front of every frame-embedded shape (C8 slice 4a).
+    let expected_slots = 1 + 1 + FRAME_SHAPE_REGION_SLACK_SLOTS;
     assert_eq!(
         layout.n_locals, expected_slots,
         "bool×bool shape crossing local occupies 1 LLVM slot (8 bytes ABI) + \

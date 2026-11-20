@@ -513,6 +513,9 @@ unsafe extern "C-unwind" fn signal_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut
             // Ready — confirmed via Miri (M6 Phase 6b) that skipping this leaked the
             // embedded TestStateMachine box every time this test ran.
             std::ptr::drop_in_place(frame_ptr as *mut SignalSm);
+            // A resume function that returns Ready marks its frame returned (the ABI the drop entry
+            // tests: `FRAME_RESUME_POINT_RETURNED`), or the runtime would re-enter it to drop it.
+            *(frame_ptr as *mut i32) = ynz_abi::FRAME_RESUME_POINT_RETURNED;
             0
         }
         Poll::Pending => 1,

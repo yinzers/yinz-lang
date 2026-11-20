@@ -1,0 +1,48 @@
+// v0.3-M9 C1f (#423): an explicit `.copy()` of a recursive union value is DEEP, like `Clone` on a
+// Rust enum holding a `Box`: every box the value owns is cloned, so the copy shares no cell with
+// the one it came from. A recursive release (C6) frees each value's cells separately; a shared
+// cell would be freed twice. Each of 100 rounds builds a chain (`top` -> `middle` -> `last` -> an
+// `End`) and stores a copy of it into a `Node | End` binding: the copy clones the three boxes the
+// chain owns, and the binding's own box takes the copy by move, four cells in all.
+// Correct behavior: prints the summed lengths of the stored chains, 300. The counter test pins the
+// allocations: 400 more than `v0_3_m9_union_alloc_recursive_chain.ynz`, four cells per copy.
+
+shape End {
+  flag: boolean
+}
+shape Node {
+  value: int
+  next: Node | End
+}
+
+function build() -> Node {
+  let stop: End = { flag: true }
+  let last: Node = { value: 3, next: stop }
+  let middle: Node = { value: 2, next: last }
+  let top: Node = { value: 1, next: middle }
+  return top
+}
+
+function length(share chain: Node | End) -> int {
+  if (chain) {
+    is Node => {
+      return 1 + length(chain.next)
+    }
+    is End => {
+      return 0
+    }
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let total = 0
+  let round = 0
+  while (round < 100) {
+    let top = build()
+    let chain: Node | End = top.copy()
+    total = total + length(chain)
+    round = round + 1
+  }
+  print(total)
+}

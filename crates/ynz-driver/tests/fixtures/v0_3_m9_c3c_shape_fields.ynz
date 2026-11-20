@@ -1,0 +1,22 @@
+// v0.3-M9 C3c fixture: the strings a shape owns are released with the shape.
+// The spawner reads `tag` after the spawn, so the task gets a copy of it (its `name` is cloned).
+// Heap strings: `tag` name 1 (fresh) + the task's copy 1 = 2. The task's drop ladder releases the
+// copy's string and the spawner (a resume function: it waits) releases its own `tag` at its scope exit.
+// Expected output: the name twice, the task's then the spawner's.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function show(tag: Tag) -> nothing {
+  print(tag.name)
+}
+
+function entrypoint() -> nothing {
+  let count: int = 1
+  let tag: Tag = { name: `tag-${count}`, id: 7 }
+  background show(tag)
+  wait sleep(80)
+  print(tag.name)
+}

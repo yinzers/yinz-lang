@@ -1,5 +1,5 @@
 // M5 P2 fix round 2 — tripwire (a2): shape element persisted through a STRUCT
-// LITERAL field (`holder = { best: p }` inside the loop) — the same store_field
+// LITERAL field (`holder = { best: p.copy() }` inside the loop) — the same store_field
 // funnel as direct field-assign, distinct lexical path (lower_struct_lit's
 // provided-field stores). The escape survives the outer binding's shallow
 // byte copy (store_binding copies Holder's bytes — i.e. the `best` POINTER
@@ -27,7 +27,7 @@ function entrypoint() -> nothing {
   let holder: Holder = { best: zero }
   for (p in parts) {
     if (p.qty == 1) {
-      let inner: Holder = { best: p }
+      let inner: Holder = { best: p.copy() }
       holder = inner
     }
   }

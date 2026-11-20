@@ -1,0 +1,32 @@
+// v0.3-M9 C1e rework (#421): the shape whose hidden defaults the entrypoint module constructs.
+// `count` is a plain `int` default; `extra` is a non-shape variant default into a union field,
+// which must reach the field inside its tagged envelope.
+
+export shape Big {
+  label: string
+  count: int
+}
+
+export shape Holder {
+  name: string
+  hidden count: int = 5
+  hidden extra: Big | int = 4096
+}
+
+// Hidden fields are read only by functions taking the shape as `self`, so the readers live here.
+export function peekCount(share self: Holder) -> int {
+  return self.count
+}
+
+export function peekExtra(share self: Holder) -> string {
+  let slot: Big | int = self.extra
+  if (slot) {
+    is Big => {
+      return `big ${slot.label}`
+    }
+    else => {
+      return `other`
+    }
+  }
+  return `none`
+}

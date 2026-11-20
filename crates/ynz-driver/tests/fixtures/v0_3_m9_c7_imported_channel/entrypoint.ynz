@@ -1,0 +1,34 @@
+// v0.3-M9 C7 slice 2d: `held` owns the counted reference a function hands back (the callee's `return` shares it), so
+// the channel is freed once, when both `held` and `local` are gone. The functions are plain (no
+// send or receive), so the scope exit releases `held` and `local` each once: an early free is a
+// double free of the channel's reference count under ASan, a missing release is a leak under
+// LeakSanitizer.
+import { same } from `helpers`
+
+function passOn(share ch: channel<array<int>>) -> channel<array<int>> {
+  return ch
+}
+
+function throughImport(condition: boolean) -> nothing {
+  let held: channel<array<int>> = channel<array<int>>()
+  if (condition) {
+    let local: channel<array<int>> = channel<array<int>>()
+    held = same(local)
+  }
+}
+
+function throughLocal(condition: boolean) -> nothing {
+  let held: channel<array<int>> = channel<array<int>>()
+  if (condition) {
+    let local: channel<array<int>> = channel<array<int>>()
+    held = passOn(local)
+  }
+}
+
+function entrypoint() -> nothing {
+  throughImport(true)
+  throughImport(false)
+  throughLocal(true)
+  throughLocal(false)
+  print(1)
+}

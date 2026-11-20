@@ -39,6 +39,7 @@
 //! - `types` — the [`Type`] enum: all types the type checker knows.
 
 pub mod ast_offset;
+pub mod binding_names;
 pub mod builtins;
 pub mod check;
 pub mod cpu_admission;
@@ -46,26 +47,36 @@ pub mod effective_ownership;
 pub mod errors_fields;
 pub mod exports;
 pub mod false_sharing;
+pub mod fixed_length;
+pub mod fixed_length_use;
 pub mod generics;
+pub mod heap_moves;
 pub mod independence;
 pub mod inlay_hint_passes;
 pub mod intrinsics;
 pub mod lints;
+pub mod loop_row_handover;
 pub mod may_block;
+pub mod non_owned_reads;
 pub mod options_table;
 pub mod owned_copy;
 pub mod queries;
+pub mod release_plan;
 pub mod resolve_import;
 pub mod return_paths;
 pub mod scope;
 pub mod shapes;
 pub mod signatures;
 pub mod soa;
+pub mod string_ownership;
 pub mod suspension_source;
 pub mod symbol_lookup;
+pub mod temporaries;
+pub mod transfer_record;
 pub mod type_at_offset;
 pub mod type_variant_sampler;
 pub mod types;
+pub mod walked_place;
 
 pub use check::{
     block_contains_back_edge_yield, check, check_with_kernel_mode, crossing_local_names,
@@ -81,7 +92,9 @@ pub use false_sharing::{
     collect_shape_type_names, finalize_false_sharing, FalseSharingOutcome,
     CROSS_THREAD_FIELDS_NOT_PADDED,
 };
-pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
+pub use generics::{
+    GenericCallInstances, GenericFnTable, GenericShapeTable, MonomorphizationTable,
+};
 pub use inlay_hint_passes::{
     array_to_fixed_promotion_hints, auto_arc_hints, background_routing_hints,
     channel_capacity_hints, copy_point_hints, let_to_const_promotion_hints,
@@ -113,4 +126,7 @@ pub use symbol_lookup::{
     rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,
 };
 pub use type_at_offset::type_of_expression_at_offset;
-pub use types::{is_trivially_copyable, Type};
+pub use types::{
+    fixed_length_fits, is_trivially_copyable, type_name_with_length, type_names_for_mismatch,
+    FixedLength, Type,
+};

@@ -1,0 +1,91 @@
+// v0.3-M9 C1h: an array of 70 shapes with a fixed<int, 3> field, laid out struct-of-arrays by the compiler: a loop reads the list, set writes it back.
+// Expected output: 4970, 7
+
+shape Point {
+  x: int
+  y: int
+  trail: fixed<int, 3>
+}
+
+function entrypoint() -> nothing {
+  let points: array<Point> = [
+    { x: 1, y: 1, trail: [1, 2, 3] },
+    { x: 2, y: 1, trail: [2, 2, 3] },
+    { x: 3, y: 1, trail: [3, 2, 3] },
+    { x: 4, y: 1, trail: [4, 2, 3] },
+    { x: 5, y: 1, trail: [5, 2, 3] },
+    { x: 6, y: 1, trail: [6, 2, 3] },
+    { x: 7, y: 1, trail: [7, 2, 3] },
+    { x: 8, y: 1, trail: [8, 2, 3] },
+    { x: 9, y: 1, trail: [9, 2, 3] },
+    { x: 10, y: 1, trail: [10, 2, 3] },
+    { x: 11, y: 1, trail: [11, 2, 3] },
+    { x: 12, y: 1, trail: [12, 2, 3] },
+    { x: 13, y: 1, trail: [13, 2, 3] },
+    { x: 14, y: 1, trail: [14, 2, 3] },
+    { x: 15, y: 1, trail: [15, 2, 3] },
+    { x: 16, y: 1, trail: [16, 2, 3] },
+    { x: 17, y: 1, trail: [17, 2, 3] },
+    { x: 18, y: 1, trail: [18, 2, 3] },
+    { x: 19, y: 1, trail: [19, 2, 3] },
+    { x: 20, y: 1, trail: [20, 2, 3] },
+    { x: 21, y: 1, trail: [21, 2, 3] },
+    { x: 22, y: 1, trail: [22, 2, 3] },
+    { x: 23, y: 1, trail: [23, 2, 3] },
+    { x: 24, y: 1, trail: [24, 2, 3] },
+    { x: 25, y: 1, trail: [25, 2, 3] },
+    { x: 26, y: 1, trail: [26, 2, 3] },
+    { x: 27, y: 1, trail: [27, 2, 3] },
+    { x: 28, y: 1, trail: [28, 2, 3] },
+    { x: 29, y: 1, trail: [29, 2, 3] },
+    { x: 30, y: 1, trail: [30, 2, 3] },
+    { x: 31, y: 1, trail: [31, 2, 3] },
+    { x: 32, y: 1, trail: [32, 2, 3] },
+    { x: 33, y: 1, trail: [33, 2, 3] },
+    { x: 34, y: 1, trail: [34, 2, 3] },
+    { x: 35, y: 1, trail: [35, 2, 3] },
+    { x: 36, y: 1, trail: [36, 2, 3] },
+    { x: 37, y: 1, trail: [37, 2, 3] },
+    { x: 38, y: 1, trail: [38, 2, 3] },
+    { x: 39, y: 1, trail: [39, 2, 3] },
+    { x: 40, y: 1, trail: [40, 2, 3] },
+    { x: 41, y: 1, trail: [41, 2, 3] },
+    { x: 42, y: 1, trail: [42, 2, 3] },
+    { x: 43, y: 1, trail: [43, 2, 3] },
+    { x: 44, y: 1, trail: [44, 2, 3] },
+    { x: 45, y: 1, trail: [45, 2, 3] },
+    { x: 46, y: 1, trail: [46, 2, 3] },
+    { x: 47, y: 1, trail: [47, 2, 3] },
+    { x: 48, y: 1, trail: [48, 2, 3] },
+    { x: 49, y: 1, trail: [49, 2, 3] },
+    { x: 50, y: 1, trail: [50, 2, 3] },
+    { x: 51, y: 1, trail: [51, 2, 3] },
+    { x: 52, y: 1, trail: [52, 2, 3] },
+    { x: 53, y: 1, trail: [53, 2, 3] },
+    { x: 54, y: 1, trail: [54, 2, 3] },
+    { x: 55, y: 1, trail: [55, 2, 3] },
+    { x: 56, y: 1, trail: [56, 2, 3] },
+    { x: 57, y: 1, trail: [57, 2, 3] },
+    { x: 58, y: 1, trail: [58, 2, 3] },
+    { x: 59, y: 1, trail: [59, 2, 3] },
+    { x: 60, y: 1, trail: [60, 2, 3] },
+    { x: 61, y: 1, trail: [61, 2, 3] },
+    { x: 62, y: 1, trail: [62, 2, 3] },
+    { x: 63, y: 1, trail: [63, 2, 3] },
+    { x: 64, y: 1, trail: [64, 2, 3] },
+    { x: 65, y: 1, trail: [65, 2, 3] },
+    { x: 66, y: 1, trail: [66, 2, 3] },
+    { x: 67, y: 1, trail: [67, 2, 3] },
+    { x: 68, y: 1, trail: [68, 2, 3] },
+    { x: 69, y: 1, trail: [69, 2, 3] },
+    { x: 70, y: 1, trail: [70, 2, 3] },
+  ]
+  let sum: int = 0
+  for (point in points) {
+    sum = sum + point.x + point.trail[0].or(0)
+  }
+  print(sum)
+  points.set(0, { x: 100, y: 1, trail: [5, 6, 7] })
+  let first = points[0].or({ x: 0, y: 0, trail: [0, 0, 0] })
+  print(first.trail[2].or(-1))
+}

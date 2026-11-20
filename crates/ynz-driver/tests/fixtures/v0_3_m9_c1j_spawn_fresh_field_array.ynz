@@ -1,0 +1,25 @@
+// v0.3-M9 C1j: a fire-and-forget `background` call passes an `array<string>` FIELD of a fresh call
+// result (`make().items`). The task holds its own copy of the field; the temporary `make()`
+// returns, array and strings included, must be released by the spawn, since a spawn suppresses
+// the statement-end temporary. Before: the original array and two of its strings leaked.
+// Expected output: the count, the first name, then `done`.
+
+shape Crate {
+  items: array<string>
+}
+
+function crunch(xs: array<string>) -> nothing {
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function make() -> Crate {
+  let crate: Crate = { items: [`a`.toUpperCase(), `b`.toUpperCase()] }
+  return crate
+}
+
+function entrypoint() -> nothing {
+  background crunch(make().items)
+  wait sleep(50)
+  print(`done`)
+}

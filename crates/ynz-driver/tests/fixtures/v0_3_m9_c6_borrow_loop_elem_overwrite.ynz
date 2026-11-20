@@ -1,0 +1,10 @@
+// v0.3-M9 C6: a for-loop variable reads an array item the loop body overwrites
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
+
+function entrypoint() -> nothing {
+  let items: array<string> = [`a-${1}`, `b-${2}`]
+  for (item in items) {
+    items[0] = `z-${3}`
+    print(item)
+  }
+}

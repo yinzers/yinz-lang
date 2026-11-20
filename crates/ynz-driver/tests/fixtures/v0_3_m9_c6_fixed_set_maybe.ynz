@@ -1,0 +1,13 @@
+// v0.3-M9 C6 fixture: `fixed<maybe<string>>` `set` and index assignment release the envelope
+// and the string of the `maybe` they replace.
+// Expected output: the list's size.
+
+function entrypoint() -> nothing {
+  let labels: array<string> = [`a-${1}`, `b-${2}`]
+  let first: maybe<string> = labels.get(0)
+  let second: maybe<string> = labels.get(1)
+  let value: fixed<maybe<string> > = [first, second]
+  value.set(0, labels.get(1))
+  value[1] = labels.get(0)
+  print(value.count())
+}

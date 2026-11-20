@@ -1,0 +1,27 @@
+// v0.3-M9 C1g rework: `d.display()` through a `dynamic Printable` receiver where the contract
+// declares `display(share self, share extra: int)`.
+// Correct behavior: does not compile — refused with the same arity text as the plain call form.
+// Pre-fix failure: the dynamic dot-call path never compared the argument count with the
+// contract's declaration, so the call went on to codegen (and a missing argument was read from
+// nowhere once dynamic dispatch is lowered).
+
+shape Printable {
+  display(share self, share extra: int) -> nothing
+}
+
+shape Player follows Printable {
+  name: string
+}
+
+function display(share self: Player, share extra: int) -> nothing {
+  print(self.name)
+}
+
+function showDynamic(shown: dynamic Printable) -> nothing {
+  shown.display()
+}
+
+function entrypoint() -> nothing {
+  let player: Player = { name: `hero` }
+  showDynamic(player)
+}

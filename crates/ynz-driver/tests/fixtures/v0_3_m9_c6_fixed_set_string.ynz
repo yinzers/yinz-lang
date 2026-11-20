@@ -1,0 +1,17 @@
+// v0.3-M9 C6 fixture: `fixed<string>` `set` and index assignment release the string they replace,
+// as the array `set` of an `array<string>` does (one release path for an overwritten item).
+// Heap strings: `a-1`, `b-2` (moved into the list's literal), `c-3` and `d-4` (the values the
+// `set` and the index assignment store) and the copy `let fallback` makes of its literal: 5
+// allocated. `value.set(0, ...)` releases `a-1` and
+// `value[1] = ...` releases `b-2`: 2 released. `fallback` is released at the end of `entrypoint`
+// (C7 slice 2): 3 released.
+// Expected output: the two names the list holds at the end.
+
+function entrypoint() -> nothing {
+  let value: fixed<string> = [`a-${1}`, `b-${2}`]
+  value.set(0, `c-${3}`)
+  value[1] = `d-${4}`
+  let fallback: string = `none`
+  print(value[0].or(fallback))
+  print(value[1].or(fallback))
+}

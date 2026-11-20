@@ -1,0 +1,17 @@
+// v0.3-M9 C10, stays legal: the callee assigns an ELEMENT of the walked list (`holder.rows[0]`),
+// not the list: the loop's list is not freed. Prints 6: the loop reads each row it started with.
+shape Holder {
+  rows: array<array<int>>
+}
+function replaceFirst(lend holder: Holder) -> nothing {
+  holder.rows[0] = [9]
+}
+function entrypoint() -> nothing {
+  let holder: Holder = { rows: [[1], [2], [3]] }
+  let total = 0
+  for (row in holder.rows) {
+    replaceFirst(holder)
+    total = total + row[0].or(0)
+  }
+  print(total)
+}

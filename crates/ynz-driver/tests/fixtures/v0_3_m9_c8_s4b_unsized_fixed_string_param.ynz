@@ -1,0 +1,15 @@
+// v0.3-M9 C8 slice 4b: a function takes a `fixed<string>` parameter.
+// A `fixed<T>` in a signature carries its length (card #433): a returned list comes back by value
+// with its length, an unsized parameter is compiled once per length its callers pass. Correct
+// behavior: the program compiles, runs, frees every allocation (items included) and is clean
+// under AddressSanitizer at both optimization levels.
+
+function consume(give rows: fixed<string>) -> int {
+  return 1
+}
+
+function entrypoint() -> nothing {
+  let rows: fixed<string> = [`a`.toUpperCase(), `bb`]
+  let used = consume(rows)
+  print(used)
+}

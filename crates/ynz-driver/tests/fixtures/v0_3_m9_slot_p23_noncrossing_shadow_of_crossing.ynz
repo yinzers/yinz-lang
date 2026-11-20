@@ -1,0 +1,16 @@
+// Q1: inner shadow within a while that has no wait, outer crossing in while.
+function entrypoint() -> nothing {
+  let i = 0
+  while (i < 1) {
+    let s = `outer`
+    wait sleep(5)
+    let j = 0
+    while (j < 1) {
+      let s = `inner`
+      print(s)
+      j = j + 1
+    }
+    print(s)
+    i = i + 1
+  }
+}

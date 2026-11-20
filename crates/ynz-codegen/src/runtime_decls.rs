@@ -22,10 +22,20 @@ pub struct RuntimeDecls<'ctx> {
     // Decimal conversion from float: (double x, ptr out) → void
     pub decimal_from_float: FunctionValue<'ctx>,
 
-    // Formatting: (value, ptr buf, i64 buf_len) → i64 bytes_written
+    // Formatting: (value) → ptr to a fresh heap string the caller owns (`ynz_string_release`)
     pub decimal_to_string: FunctionValue<'ctx>,
     pub int_to_string: FunctionValue<'ctx>,
     pub float_to_string: FunctionValue<'ctx>,
+
+    // Print / interpolation text of a number, consumed at once: no heap string, nothing to release.
+    // print: (value) → void, writes the text and a newline to stdout.
+    // append: (builder: *mut u8, value) → void, appends the text to a string builder.
+    pub int_print: FunctionValue<'ctx>,
+    pub int_append: FunctionValue<'ctx>,
+    pub float_print: FunctionValue<'ctx>,
+    pub float_append: FunctionValue<'ctx>,
+    pub decimal_print: FunctionValue<'ctx>,
+    pub decimal_append: FunctionValue<'ctx>,
 
     // Panic stubs — noreturn, write to stderr then abort
     pub panic_overflow: FunctionValue<'ctx>,
@@ -70,6 +80,8 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_array_set(ptr arr, i64 idx, ptr src) -> void — aborts on OOB
     pub ynz_array_set: FunctionValue<'ctx>,
     pub ynz_array_count: FunctionValue<'ctx>,
+    /// `ynz_array_blank_cell(arr, idx)`: zero one cell of a list whose item a hand-over took.
+    pub ynz_array_blank_cell: FunctionValue<'ctx>,
     pub ynz_array_drop: FunctionValue<'ctx>,
     // Deep-clone for primitive-element arrays (int/float/bool — no element indirection).
     // Returns a new independent YnzArray with its own data buffer. Must be freed with
@@ -84,6 +96,15 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_siphash_init: FunctionValue<'ctx>,
     // ynz_map_new(i64 elem_size) -> ptr
     pub ynz_map_new: FunctionValue<'ctx>,
+    // ynz_map_new_decimal_keys(i64 elem_size) -> ptr: a map whose keys are decimal128 numbers held
+    // inline (16 bytes), hashed and compared as those 16 bytes
+    pub ynz_map_new_decimal_keys: FunctionValue<'ctx>,
+    // ynz_map_get_decimal(ptr map, ptr key16, ptr out) -> i64 has-flag; same contract as ynz_map_get
+    pub ynz_map_get_decimal: FunctionValue<'ctx>,
+    // ynz_map_set_decimal(ptr map, ptr key16, ptr src, ptr value_glue, i32 values_inline) -> void
+    pub ynz_map_set_decimal: FunctionValue<'ctx>,
+    // ynz_map_iter_get_decimal(ptr map, i64 pos, ptr key16_out, ptr val_out) -> i64 has-flag
+    pub ynz_map_iter_get_decimal: FunctionValue<'ctx>,
     // ynz_map_get(ptr map, i64 key, ptr out) -> i64 has-flag; copies elem_size
     // value bytes into out on hit, zeroes out on miss
     pub ynz_map_get: FunctionValue<'ctx>,
@@ -131,7 +152,8 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_channel_recv_poll(chan: ptr, out: ptr, waker_ctx: ptr) -> i32
     pub ynz_channel_recv_poll: FunctionValue<'ctx>,
     // ynz_rt_spawn_handle(resume_fn, frame_ptr, frame_size, rec_slot, arg_drop_ptr,
-    //                     arg_drop_count, ret_kind, msg_chan) -> ptr (the task handle)
+    //                     arg_drop_count, ret_kind, msg_chan, result_release, result_move) -> ptr
+    //                     (the task handle)
     pub ynz_rt_spawn_handle: FunctionValue<'ctx>,
     // ynz_handle_recv_poll(handle: ptr, err_out: ptr, ok_out: ptr, waker_ctx: ptr) -> i32
     pub ynz_handle_recv_poll: FunctionValue<'ctx>,
@@ -151,6 +173,24 @@ pub struct RuntimeDecls<'ctx> {
     // M6: create a heap-owned string copy from a static byte literal.
     // ABI: (ptr: *const u8, len: i64) → *const u8 (null-terminated)
     pub ynz_string_from_static: FunctionValue<'ctx>,
+
+    // C3a: the one release entry point for string bytes — frees an owned (heap) string, leaves
+    // static bytes alone, ignores null. ABI: (ptr) → void
+    pub ynz_string_release: FunctionValue<'ctx>,
+
+    // C3b: copy a string into a fresh heap string the caller owns — the copy a store makes of a
+    // borrowed string. ABI: (ptr) → ptr
+    pub ynz_string_clone: FunctionValue<'ctx>,
+
+    // C3b: give a just-cloned map strings of its own (keys and/or values).
+    // ABI: (map: ptr, clone_keys: i32, clone_values: i32) → void
+    pub ynz_map_clone_strings: FunctionValue<'ctx>,
+    // ynz_array_release(ptr arr, ptr item_glue, i32 items_inline) -> void: call the glue on each
+    // item, then drop the array (v0.3-M9 C3c/C6).
+    pub ynz_array_release: FunctionValue<'ctx>,
+    // ynz_map_release(ptr map, ptr key_glue, ptr value_glue, i32 values_inline) -> void: call the
+    // glues on each occupied entry, then drop the map (v0.3-M9 C3c/C6).
+    pub ynz_map_release: FunctionValue<'ctx>,
 
     // M7 P4a: errors runtime — frame stack + error allocation.
     // ynz_frame_push(file: ptr, line: i64, function: ptr) → void
@@ -225,6 +265,10 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_bignum_sub: FunctionValue<'ctx>,
     pub ynz_bignum_mul: FunctionValue<'ctx>,
     pub ynz_bignum_div: FunctionValue<'ctx>,
+    pub ynz_bignum_compare: FunctionValue<'ctx>,
+    pub ynz_bignum_neg: FunctionValue<'ctx>,
+    // ynz_bignum_to_float(a: *const i8) → f64 — backs `.toFloat()` / `.toInt()` on `number<N>`, N > 34.
+    pub ynz_bignum_to_float: FunctionValue<'ctx>,
 
     // ── v0.3-M1: Tokio scheduler runtime ─────────────────────────────────
     // Called by generated `main` and `background` lowering.
@@ -265,6 +309,9 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx: *mut u8) → i32
     //   Poll the boxed Sleep future. Returns 0 (Ready, box freed) or 1 (Pending).
     pub ynz_rt_async_sleep_poll: FunctionValue<'ctx>,
+    // ynz_rt_async_sleep_free(handle_ptr: *mut u8)
+    //   Free a still-parked Sleep box (a task dropped mid-wait; its frame's drop state calls it).
+    pub ynz_rt_async_sleep_free: FunctionValue<'ctx>,
     // ynz_rt_run_entrypoint(resume_fn, frame_ptr, frame_size) → i32
     //   Program-entry state-machine driver — the tokio::main-equivalent for Yinz.
     //   Called ONLY by the codegen-emitted main wrapper and non-entry wrappers;
@@ -347,8 +394,8 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_decimal_from_float",
                 void.fn_type(&[f64.into(), ptr.into()], false),
             ),
-            // Format shims: value → ptr to null-terminated string in thread-local buffer.
-            // Runtime uses thread-local static buffers, not caller-allocated buffers.
+            // Format shims: value → ptr to a fresh heap string the caller owns (release it with
+            // `ynz_string_release`).
             decimal_to_string: declare_fn(
                 module,
                 "ynz_decimal_to_string",
@@ -363,6 +410,32 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_float_to_string",
                 ptr.fn_type(&[f64.into()], false),
+            ),
+            int_print: declare_fn(module, "ynz_int_print", void.fn_type(&[i64.into()], false)),
+            int_append: declare_fn(
+                module,
+                "ynz_int_append",
+                void.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            float_print: declare_fn(
+                module,
+                "ynz_float_print",
+                void.fn_type(&[f64.into()], false),
+            ),
+            float_append: declare_fn(
+                module,
+                "ynz_float_append",
+                void.fn_type(&[ptr.into(), f64.into()], false),
+            ),
+            decimal_print: declare_fn(
+                module,
+                "ynz_decimal_print",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            decimal_append: declare_fn(
+                module,
+                "ynz_decimal_append",
+                void.fn_type(&[ptr.into(), ptr.into()], false),
             ),
             panic_overflow: declare_fn(
                 module,
@@ -428,16 +501,24 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_array_get",
                 i64.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
-            // ynz_array_set: (ptr arr, i64 idx, ptr src) -> void
+            // ynz_array_set: (ptr arr, i64 idx, ptr src) + item glue + inline flag -> void
             ynz_array_set: declare_fn(
                 module,
                 "ynz_array_set",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                void.fn_type(
+                    &[ptr.into(), i64.into(), ptr.into(), ptr.into(), i32.into()],
+                    false,
+                ),
             ),
             ynz_array_count: declare_fn(
                 module,
                 "ynz_array_count",
                 i64.fn_type(&[ptr.into()], false),
+            ),
+            ynz_array_blank_cell: declare_fn(
+                module,
+                "ynz_array_blank_cell",
+                void.fn_type(&[ptr.into(), i64.into()], false),
             ),
             ynz_array_drop: declare_fn(
                 module,
@@ -452,6 +533,29 @@ impl<'ctx> RuntimeDecls<'ctx> {
 
             ynz_siphash_init: declare_fn(module, "ynz_siphash_init", void.fn_type(&[], false)),
             ynz_map_new: declare_fn(module, "ynz_map_new", ptr.fn_type(&[i64.into()], false)),
+            ynz_map_new_decimal_keys: declare_fn(
+                module,
+                "ynz_map_new_decimal_keys",
+                ptr.fn_type(&[i64.into()], false),
+            ),
+            ynz_map_get_decimal: declare_fn(
+                module,
+                "ynz_map_get_decimal",
+                i64.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+            ),
+            ynz_map_set_decimal: declare_fn(
+                module,
+                "ynz_map_set_decimal",
+                void.fn_type(
+                    &[ptr.into(), ptr.into(), ptr.into(), ptr.into(), i32.into()],
+                    false,
+                ),
+            ),
+            ynz_map_iter_get_decimal: declare_fn(
+                module,
+                "ynz_map_iter_get_decimal",
+                i64.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into()], false),
+            ),
             ynz_map_get: declare_fn(
                 module,
                 "ynz_map_get",
@@ -465,12 +569,25 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_map_set: declare_fn(
                 module,
                 "ynz_map_set",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                void.fn_type(
+                    &[ptr.into(), i64.into(), ptr.into(), ptr.into(), i32.into()],
+                    false,
+                ),
             ),
             ynz_map_set_str: declare_fn(
                 module,
                 "ynz_map_set_str",
-                void.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+                void.fn_type(
+                    &[
+                        ptr.into(),
+                        ptr.into(),
+                        ptr.into(),
+                        ptr.into(),
+                        ptr.into(),
+                        i32.into(),
+                    ],
+                    false,
+                ),
             ),
             ynz_map_count: declare_fn(module, "ynz_map_count", i64.fn_type(&[ptr.into()], false)),
             ynz_map_has: declare_fn(
@@ -538,6 +655,8 @@ impl<'ctx> RuntimeDecls<'ctx> {
                         i64.into(),
                         i64.into(),
                         ptr.into(),
+                        ptr.into(),
+                        ptr.into(),
                     ],
                     false,
                 ),
@@ -582,6 +701,31 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 ptr.fn_type(&[ptr.into(), i64.into()], false),
             ),
 
+            ynz_string_release: declare_fn(
+                module,
+                "ynz_string_release",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_clone: declare_fn(
+                module,
+                "ynz_string_clone",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_array_release: declare_fn(
+                module,
+                "ynz_array_release",
+                void.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            ynz_map_release: declare_fn(
+                module,
+                "ynz_map_release",
+                void.fn_type(&[ptr.into(), ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            ynz_map_clone_strings: declare_fn(
+                module,
+                "ynz_map_clone_strings",
+                void.fn_type(&[ptr.into(), i32.into(), i32.into()], false),
+            ),
             // M7 P4a: errors runtime.
             ynz_frame_push: declare_fn(
                 module,
@@ -744,6 +888,23 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_bignum_div",
                 ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
             ),
+            // (ptr a, ptr b, i32 precision) -> i32: -1 less, 0 equal, 1 greater, 2 unordered (NaN)
+            ynz_bignum_compare: declare_fn(
+                module,
+                "ynz_bignum_compare",
+                i32.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            // (ptr a, i32 precision) -> ptr: `0 - a` as a heap string
+            ynz_bignum_neg: declare_fn(
+                module,
+                "ynz_bignum_neg",
+                ptr.fn_type(&[ptr.into(), i32.into()], false),
+            ),
+            ynz_bignum_to_float: declare_fn(
+                module,
+                "ynz_bignum_to_float",
+                f64.fn_type(&[ptr.into()], false),
+            ),
 
             // v0.3-M1: Tokio scheduler runtime
             ynz_rt_init: declare_fn(module, "ynz_rt_init", void.fn_type(&[], false)),
@@ -800,6 +961,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_rt_async_sleep_poll",
                 // (handle_ptr: *mut u8, waker_ctx: *mut u8) -> i32  (0=Ready, 1=Pending)
                 i32.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_rt_async_sleep_free: declare_fn(
+                module,
+                "ynz_rt_async_sleep_free",
+                // (handle_ptr: *mut u8) -> void
+                void.fn_type(&[ptr.into()], false),
             ),
             ynz_rt_run_entrypoint: declare_fn(
                 module,

@@ -1,0 +1,36 @@
+// v0.3-M9 C2 safety fixture — transfer by SEND.
+// A task builds two arrays, `send`s one (ownership moves into the channel, then to the receiver)
+// and keeps the other as a plain local. The receiver reads the sent array AFTER the producer
+// retired, so the producer's scope-exit release must free `unsent` and must NOT free `sent`.
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: releasing a sent binding at the producer's scope exit (the receiver then reads
+// freed memory), releasing it a second time at the receiver's scope exit after the channel
+// already dropped it, and the converse leak-turned-double-free when `unsent` is skipped.
+//
+// Expected output (one per line): 2, 3, 10, 30, end
+
+function producer(lend wire: channel<array<int>>) -> nothing {
+  let sent: array<int> = [10, 20, 30]
+  let unsent: array<int> = [1, 2]
+  wire.send(sent)
+  print(unsent.count().toString())
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  background producer(wire)
+  wait sleep(50)
+  let got = wire.receive()
+  if (got.exists()) {
+    let rows = got.value
+    print(rows.count().toString())
+    print(rows[0].or(-1).toString())
+    print(rows[2].or(-1).toString())
+  }
+  let after = wire.receive()
+  if (after.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

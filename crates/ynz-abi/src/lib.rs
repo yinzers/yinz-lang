@@ -17,6 +17,16 @@
 /// layout table in `ynz-codegen`'s `state_machine` module for the full per-frame layout.
 pub const FRAME_OFFSET_RESUME_POINT: u64 = 0;
 
+/// The `resume_point` of a function that has returned (reached Ready): the resume function stores it
+/// at every Ready return, which is the one state a future in Rust also has (a completed future is
+/// `Returned`). A task dropped before it finished re-enters its resume function with the bitwise
+/// complement of its `resume_point` (`!resume_point`, negative: a state number is never negative),
+/// which the resume switch sends to the drop entry of that state (C8 slice 6). A returned frame has
+/// nothing left to drop, so the runtime tests for this value and skips the entry; it costs no
+/// field of the frame and no store beyond the one at the return. Greater than any state number
+/// (a function has far fewer than 2^31 suspension points).
+pub const FRAME_RESUME_POINT_RETURNED: i32 = i32::MAX;
+
 /// Byte offset of the `sleep_handle` pointer field within each (sub-)frame. Present regardless
 /// of whether the fn directly calls `sleep`; zeroed when unused. `ynz-codegen` writes this slot
 /// (`store_sleep_handle` / `load_sleep_handle` in `state_machine.rs`); `ynz-runtime`'s
@@ -102,13 +112,23 @@ pub const HANDLE_RET_KIND_EC_HEAP_PTR: i64 = 5;
 /// (`-> maybe<T> errors` needs no twin: its ok-word is already a heap cell the resume fn
 /// promotes at the return, `EC_WORD` reads it as-is.)
 pub const HANDLE_RET_KIND_VALUE_MAYBE: i64 = 6;
+/// `-> T` or `-> T errors` where `T` is an envelope union (C8), or a plain `-> fixed<T, N>` (C1h, the
+/// list's cells being the region): the return slot holds the ADDRESS of
+/// the union's region inside the child's own frame (`{0, region}` / `{err, region}`), which is freed
+/// right after the completion is read. The spawn site therefore passes the runtime a MOVE glue
+/// (`void(slot, *err, *ok)`, `ynz_rt_spawn_handle`'s `result_move`) that moves the slot out into one
+/// heap cell of its own (the completion's `ok`, 0 when the task failed); the parent's receive and
+/// an unreceived completion's release both own that cell. Rust's join handle likewise stores the
+/// task's output in the task's own heap allocation.
+pub const HANDLE_RET_KIND_UNION: i64 = 7;
 
 // ── `background` spawn-argument drop-ladder descriptor kinds ─────────────────
 //
 // `ynz-codegen` heap-clones every heap-typed `background` argument so it survives the
 // spawner's frame, and hands `ynz_rt_spawn` / `ynz_rt_spawn_handle` one descriptor per clone
-// (`ynz-runtime`'s `BgArgDropEntry { byte_offset, kind, size }`). The runtime's task-retire
-// drop ladder reads the pointer back out of the named frame slot and frees it by `kind`.
+// (`ynz-runtime`'s `BgArgDropEntry { byte_offset, kind, size, cell }`). The runtime's task-retire
+// drop ladder reads the pointer back out of the named frame slot and frees it by `kind`, except
+// for [`BG_ARG_KIND_OWNED_CELL`], which carries the pointer itself.
 // Shared here so the two sides cannot drift on the wire values.
 
 /// `ynz_alloc`'d cell (a shape copy, a decimal128 cell, a maybe envelope, a map-entry cell):
@@ -129,6 +149,19 @@ pub const BG_ARG_KIND_RELEASED: u64 = 3;
 /// `background` Boundaries", topology (B)): released with `ynz_arc_free(ptr, size)`; the LAST
 /// release frees the block. `size` is the shape's ABI byte size (the `ynz_arc_new` size).
 pub const BG_ARG_KIND_ARC_SHAPE: u64 = 4;
+/// A task-owned value released by the program's own release glue (v0.3-M9 C3c/C6): the slot
+/// holds the pointer, and the descriptor's `size` holds the ADDRESS of a `void glue(ptr)` function
+/// codegen emitted for the value's type (`ynz_release_<type>`). The glue frees everything the
+/// value owns: array items, map entries (string keys included), shape fields, promoted cells and
+/// the value's own allocation. One kind for every type whose release is more than one flat free,
+/// so a new heap type adds a glue function, never a wire value.
+pub const BG_ARG_KIND_RELEASE_GLUE: u64 = 5;
+/// A cell the ladder allocated whose CONTENTS the callee releases itself (the fields of a flat shape
+/// given to a suspending callee): the entry carries the cell's own pointer (`BgArgDropEntry::cell`),
+/// freed with `ynz_free(cell, size)`. The frame slot is not read: the callee nulls the slot of a
+/// parameter it releases, which would otherwise hide the cell from the ladder. Never a hand-off
+/// payload.
+pub const BG_ARG_KIND_OWNED_CELL: u64 = 6;
 
 /// Every `BG_ARG_KIND_*` value, for the runtime's per-kind alloc/free parity test that links
 /// [`bg_arg_kind_is_releasable_payload`] to the drop ladder's free match: a kind added here
@@ -139,6 +172,8 @@ pub const ALL_BG_ARG_KINDS: &[u64] = &[
     BG_ARG_KIND_SHARED_CHANNEL,
     BG_ARG_KIND_RELEASED,
     BG_ARG_KIND_ARC_SHAPE,
+    BG_ARG_KIND_RELEASE_GLUE,
+    BG_ARG_KIND_OWNED_CELL,
 ];
 
 /// Is a ladder slot of this kind a heap PAYLOAD the task can hand off (send into a channel,
@@ -163,6 +198,22 @@ pub const fn bg_arg_kind_is_releasable_payload(kind: u64) -> bool {
         && kind != BG_ARG_KIND_RELEASED
         && kind != BG_ARG_KIND_ARC_SHAPE
 }
+
+// ── String ownership header ──────────────────────────────────────────────────
+//
+// A `string` is a pointer to NUL-terminated UTF-8 bytes. STRING_HEADER_BYTES bytes in front of
+// those bytes hold one u64 that tells `ynz_string_release` whether the bytes are owned.
+// Codegen emits it in front of every static string (`{ i64, [N x i8] }`); the runtime writes it
+// in front of every heap string. One home here so the two sides cannot drift on the layout.
+
+/// Bytes of header in front of a string's first byte. A multiple of 8 so the string bytes stay
+/// 8-aligned after a 16-aligned `malloc`.
+pub const STRING_HEADER_BYTES: u64 = 8;
+
+/// Header value of static bytes (a literal, `true`/`false`, a display name, `[REDACTED]`):
+/// never freed. Any other value is the byte capacity (length + NUL, so always at least 1) of a
+/// heap string, which `ynz_string_release` frees.
+pub const STATIC_STRING_HEADER: u64 = 0;
 
 #[cfg(test)]
 mod bg_arg_kind_tests {

@@ -1,0 +1,25 @@
+// v0.3-M9 C3c fixture: replacing an array item frees the string it replaces, by `set` and by
+// index assignment alike.
+// Heap strings: `first` 1 (fresh, moved into the literal); `items.set(0, `second`)` copies the
+// literal 1 and releases `first`; `items[0] = `third`` copies the literal 1 and releases the
+// copy of `second`. Total 3 allocated; the 2 replaced strings are released at once and the task's
+// ladder releases the last one: 3 released.
+// Expected output: the item count and the item.
+
+function build(count: int) -> array<string> {
+  let first: string = `first-${count}`
+  let items: array<string> = [first]
+  items.set(0, `second`)
+  items[0] = `third`
+  return items
+}
+
+function show(items: array<string>) -> nothing {
+  print(items.count())
+  print(items[0].or(`none`))
+}
+
+function entrypoint() -> nothing {
+  background show(build(1))
+  wait sleep(80)
+}

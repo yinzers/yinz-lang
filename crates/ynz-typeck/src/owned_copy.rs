@@ -19,27 +19,21 @@
 //! are exactly two buckets — a real copy, or a [`CopyRefusal`] the user can read.
 //!
 //! "Independence is meaningful" means *the value has state something could change*. For a
-//! type whose contents can never change — `int`, `string`, an `options` tag, a `range` — the
+//! type whose contents can never change — `int`, an `options` tag, a `range` — the
 //! receiver already IS an independent value in every observable sense, so returning it is a
 //! copy rather than an alias. That is [`OwnedCopy::ReceiverIsCopy`] /
 //! [`OwnedCopy::FrameLocalImmutable`], not a stub.
 //!
-//! ## Residuals this table does NOT close, named rather than hidden
+//! ## What a copy owns
 //!
-//! - [`OwnedCopy::ShapeMemcpy`] copies a shape's own bytes. A field that is itself a pointer
-//!   (a nested shape, an `array`, a `map`, a `maybe`) is copied as a pointer, so the copy and
-//!   the original still share it. Making that deep needs a per-shape recursive clone with a
-//!   matching release story; it is a separate, ratified piece of work, not something this
-//!   module can pretend away.
-//! - [`OwnedCopy::MapClone`] copies a map's four buffers. A value cell holding a pointer is
-//!   copied as a pointer, the same one level down. Iterating a map's occupied slots from
-//!   generated code is the missing machinery.
-//!
-//! Both residuals are pre-existing behaviour of already-shipped arms, unchanged here.
-//! `array<T>` is the one container this module DOES take all the way down
-//! ([`ElemCopy::Nested`]), because it is the type the use-after-free was found on.
+//! A copy owns a copy of everything the value owns, all the way down: a shape's string, array,
+//! map, nested-shape, `maybe` and union fields and its channel reference ([`OwnedCopy::ShapeMemcpy`]),
+//! a map's values ([`OwnedCopy::MapClone`]), an array's items ([`ElemCopy::Nested`]). A value a
+//! store takes by move (`heap_moves`) keeps its heap and copies nothing, and a `let` view
+//! (`non_owned_reads`) owns nothing. `ynz-codegen`'s release table frees exactly what the copy
+//! allocates, and a parity test holds the two tables together.
 
-use crate::types::{type_name, Type};
+use crate::types::{is_bignum, type_name, Type};
 
 /// How to produce an owned, independent copy of a value of some type — or why one cannot
 /// exist. Exhaustive over `Type` via [`owned_copy_plan`], which has no `_` arm, so a new
@@ -47,10 +41,16 @@ use crate::types::{type_name, Type};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnedCopy {
     /// The receiver's bits ARE the copy, for every consumer: an immediate (`int`, `float`,
-    /// `bool`, an `options` i8 tag) or a pointer to immortal, immutable bytes (`string`,
-    /// `sensitive string`). Nothing can change what is behind it, so a second name for the
-    /// same bits is indistinguishable from a second value.
+    /// `bool`, an `options` i8 tag). Nothing can change what is behind it, so a second name
+    /// for the same bits is indistinguishable from a second value.
     ReceiverIsCopy,
+    /// A `string` (and a `sensitive string`, the same pointer): a fresh heap copy of the bytes
+    /// (`ynz_string_clone`), so the copy and the receiver own two strings. Nothing changes a
+    /// string in place, but the scope-exit release frees a heap string once, so two holders of
+    /// one pointer would free it twice. The one copy a store makes of a borrowed string
+    /// (`IMP-strings.md` "String Ownership and Release"); `.copy()` and a `background`
+    /// argument ask for the same one.
+    StringClone,
     /// Immutable contents behind a pointer into the PRODUCING FRAME's storage — a
     /// `decimal128` number today. `.copy()` may hand back the receiver (same frame, nothing
     /// can mutate it); a `background` argument may NOT, because the frame dies while the task
@@ -58,15 +58,15 @@ pub enum OwnedCopy {
     /// mechanism the spawn path has for this type, or [`HeapCell::None`] when it has none and
     /// must refuse.
     FrameLocalImmutable { heap_cell: HeapCell },
-    /// A `shape`: copy the struct's own bytes into fresh storage. See the pointer-field
-    /// residual in this module's header.
+    /// A `shape`: copy the struct's own bytes into fresh storage, then a copy of every heap
+    /// field (see "What a copy owns" in this module's header).
     ShapeMemcpy,
     /// `fixed<T>`: copy the N inline cells into a fresh slot.
     FixedMemcpy,
     /// `array<T>`: a fresh header and buffer. `elem` says whether the element cells are
     /// finished once byte-copied or must themselves be copied.
     ArrayClone { elem: ElemCopy },
-    /// `map<K, V>`: a fresh header and its four buffers. See the value-cell residual above.
+    /// `map<K, V>`: a fresh header and its four buffers, and a copy of every heap value.
     MapClone,
     /// `maybe<T>`: a fresh envelope cell, plus the payload for the inner types whose payload
     /// is itself copied by the shared maybe-ownership core.
@@ -78,12 +78,12 @@ pub enum OwnedCopy {
 /// Whether a container's element cells are finished once the buffer is byte-copied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ElemCopy {
-    /// The cell holds the whole element (an `int`, a `shape`'s inline bytes) or a pointer to
-    /// immortal immutable bytes (a `string`). Byte-copying the buffer finishes the job.
+    /// The cell holds the whole element (an `int`, a `shape`'s inline bytes). Byte-copying the
+    /// buffer finishes the job.
     Inline,
-    /// The cell holds a pointer to a separately-allocated value. The buffer copy must be
-    /// followed by copying each element through this same table, or the two containers would
-    /// share their items.
+    /// The cell holds a pointer to a separately-allocated value (a `string`'s bytes included).
+    /// The buffer copy must be followed by copying each element through this same table, or the
+    /// two containers would share their items.
     Nested,
 }
 
@@ -148,9 +148,10 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
     match ty {
         // ── Values whose contents can never change: the receiver is already the copy ──
         Type::Int | Type::Float | Type::Bool => OwnedCopy::ReceiverIsCopy,
-        // String bytes are allocated once and never written again, and there is no operation
-        // that changes a string in place, so two names for the same bytes can never disagree.
-        Type::String => OwnedCopy::ReceiverIsCopy,
+        // Nothing changes a string in place, so two names for the same bytes never disagree.
+        // What two names cannot do is both own them: the scope-exit release frees a heap
+        // string once, so a copy is a fresh string with an owner of its own.
+        Type::String => OwnedCopy::StringClone,
         // An `options` value is a small tag with nothing behind it.
         Type::Options { .. } => OwnedCopy::ReceiverIsCopy,
 
@@ -171,6 +172,12 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
 
         Type::BuiltinFixed { elem, .. } => match elem_copy(elem) {
             Some(ElemCopy::Inline) => OwnedCopy::FixedMemcpy,
+            // A `fixed<string>` copies its block of cells and then each string in it (the emitter
+            // walks the cells), so the two lists own separate strings; a `fixed<Shape>` is the Inline
+            // arm above and gets a fresh heap cell per item the same way.
+            Some(ElemCopy::Nested) if matches!(owned_copy_plan(elem), OwnedCopy::StringClone) => {
+                OwnedCopy::FixedMemcpy
+            }
             // A `fixed` list stores its items inline in one block of cells; there is no
             // per-item pointer to follow, so an item that needs following cannot live here.
             Some(ElemCopy::Nested) | None => {
@@ -190,6 +197,7 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
             // inner kinds it knows how to follow. An inner whose own copy needs a fresh
             // allocation is not one of those yet.
             OwnedCopy::ReceiverIsCopy
+            | OwnedCopy::StringClone
             | OwnedCopy::FrameLocalImmutable { .. }
             | OwnedCopy::ShapeMemcpy => OwnedCopy::MaybeCellClone,
             _ => OwnedCopy::Refused(items_refuse(ty, "contents", inner.as_ref())),
@@ -203,6 +211,7 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
         // `string` today, so there is no such case to design for yet.
         Type::Sensitive { inner } => match owned_copy_plan(inner) {
             OwnedCopy::ReceiverIsCopy => OwnedCopy::ReceiverIsCopy,
+            OwnedCopy::StringClone => OwnedCopy::StringClone,
             _ => OwnedCopy::Refused(items_refuse(ty, "contents", inner)),
         },
 
@@ -252,17 +261,9 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
              set of bytes that copying could mean here.",
         )),
 
-        // Bignum (`precision > 34`). Unreachable from source today — the parser turns a
-        // wider-than-34 precision away with its own message — but classified honestly rather
-        // than left to alias, since the moment it ships the alias would be silent.
-        Type::Number { .. } => OwnedCopy::Refused(CopyRefusal::new(
-            " with more than 34 digits of precision",
-            "Use a plain `number`, which carries 34 digits: `let total: number = 12.5`. \
-             Copying works on those.",
-            "Numbers wider than that are still being designed and are not ready in this \
-             version, so nothing here knows yet how their digits are stored — a copy could \
-             not be made honestly.",
-        )),
+        // Bignum (`precision > 34`): a pointer to heap decimal text, copied and released exactly like a
+        // `string` (`is_owned_text`). Immutable text, so a fresh copy of the bytes is a full copy.
+        Type::Number { .. } => OwnedCopy::StringClone,
 
         // The WHAT-INSTEAD here cannot point at "the value you meant" the way the other
         // refusals can — when a function hands back `nothing` there IS no such value to name.
@@ -335,21 +336,14 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
 fn elem_copy(ty: &Type) -> Option<ElemCopy> {
     match owned_copy_plan(ty) {
         // The cell holds the element outright (an int, a shape's inline bytes, an options
-        // tag) or a pointer to bytes nothing can change (a string).
+        // tag).
         OwnedCopy::ReceiverIsCopy | OwnedCopy::ShapeMemcpy => Some(ElemCopy::Inline),
-        // A `number` cell is 8 bytes of POINTER bits, not the 16-byte decimal itself
-        // (`Cg::array_elem_size` sizes it at 8, and `Cg::to_i64_bits` is what puts it there) —
-        // and the storage it points at belongs to whichever frame produced the number, which
-        // is the same fact [`OwnedCopy::FrameLocalImmutable`] states. Copying the cell is
-        // still the right answer, because the copy question is INDEPENDENCE and nothing can
-        // change what those bits point at: two cells reading one unchanging decimal can never
-        // disagree, exactly as for a `string`. What copying does NOT do is move that storage
-        // anywhere, so an `array<number>` handed to a task carries the same frame-storage
-        // exposure it would have carried with no copy in sight — a property of the container,
-        // not something the copy introduces, and not something this table can fix (there is no
-        // per-cell re-homing path today; `value_to_stable_bits` has no `Number` arm). Recorded
-        // as parked entry 70 rather than smuggled in here as an `ElemCopy` distinction that
-        // would claim to solve it.
+        // A string cell is a pointer to bytes the cell owns: copy each one.
+        OwnedCopy::StringClone => Some(ElemCopy::Nested),
+        // A decimal128 `number` sits in the cell itself (16 bytes, `Cg::array_elem_size`), so
+        // copying the cell copies the value and nothing points into the producing frame. (A
+        // `range` is the other type with this copy plan; codegen cannot lower a range element yet,
+        // so no array, map or `fixed` of ranges builds.)
         OwnedCopy::FrameLocalImmutable { .. } => Some(ElemCopy::Inline),
         // The cell is a pointer to a separate allocation — follow it.
         OwnedCopy::ArrayClone { .. } | OwnedCopy::MapClone | OwnedCopy::MaybeCellClone => {
@@ -375,6 +369,15 @@ pub enum SpawnRehoming {
     StabilizeLoopView,
     /// A `decimal128` number lives in frame-owned storage, so it is copied into a heap cell.
     DecimalCell,
+    /// An ENVELOPE union (`check::is_envelope_union`: the one question codegen asks too before it
+    /// makes a slot) is given a slot of its own in the task, a copy of what the variant owns,
+    /// whether the argument is a name, a field of a live value or a field of a fresh call result:
+    /// the state-machine spawn persists it into the callee frame (`stage_union_arg`) and the CPU
+    /// spawn into `bg_union_arg_cell`. Neither path reads the owned-copy table, which refuses
+    /// every union. A union that is not an envelope (`int | float`, `string | nothing`) is the
+    /// variant's raw bits or pointer, has no slot to copy into, and is NOT listed here: it stays
+    /// on the owned-copy table's answer.
+    UnionSlot,
 }
 
 /// Does the `background` path re-home this type with a mechanism of its own?
@@ -389,6 +392,9 @@ pub fn spawn_rehoming(ty: &Type) -> Option<SpawnRehoming> {
         Type::BuiltinChannel { .. } => Some(SpawnRehoming::ShareChannel),
         Type::MapEntry { .. } => Some(SpawnRehoming::StabilizeLoopView),
         Type::Number { precision } if *precision <= 34 => Some(SpawnRehoming::DecimalCell),
+        union @ Type::Union { .. } if crate::check::is_envelope_union(union) => {
+            Some(SpawnRehoming::UnionSlot)
+        }
         _ => None,
     }
 }
@@ -438,6 +444,7 @@ pub fn spawn_arg_refusal(ty: &Type) -> Option<(SpawnRefusalCause, CopyRefusal)> 
             ),
         )),
         OwnedCopy::ReceiverIsCopy
+        | OwnedCopy::StringClone
         | OwnedCopy::FrameLocalImmutable { .. }
         | OwnedCopy::ShapeMemcpy
         | OwnedCopy::FixedMemcpy
@@ -465,13 +472,62 @@ pub fn spawn_arg_can_be_independent(ty: &Type) -> bool {
 ///   (`emit_owned_copy`'s `(CopyMode::Body, _)` arm). The receiver still reaches it, so
 ///   `r.copy()` on a `range` is not a second value however immutable it is — calling it
 ///   `Fresh` would let a transfer sink hand away something the source still names. Ordinary
-///   `int`/`string` copies are unaffected: those are [`OwnedCopy::ReceiverIsCopy`], where the
+///   `int` copies are unaffected: those are [`OwnedCopy::ReceiverIsCopy`], where the
 ///   bits are the value and there is no storage for anyone to still reach.
 pub fn copy_is_independent(ty: &Type) -> bool {
     !matches!(
         owned_copy_plan(ty),
         OwnedCopy::Refused(_) | OwnedCopy::FrameLocalImmutable { .. }
     )
+}
+
+/// True when a `return` of a value of type `ty` hands its caller an OWNED value: the types a
+/// function copies at its `return` unless the value moves (a fresh one, an owned local at its last
+/// use). A call to a function whose declared return type is one of these is `Fresh`
+/// (`effective_ownership`'s `returns_fresh`), so the caller's binding takes it without a second
+/// copy. THE one answer for typeck's call-result classification and codegen's return seam
+/// (`authoritative-derivation.md`): a `string`, an `array`, a `map`, a shape, a `channel` and a
+/// `maybe` of one, a `maybe` of a string, shape, number or union with a shape variant, a union with a shape variant, and a union with no tag whose one variant is one of these. A channel's copy is a counted reference (`ynz_channel_share`,
+/// the count channels already have), so a returned channel is one reference the caller owns and
+/// gives back once. Any other type returns what it names (a task handle has no copy, and a type
+/// parameter is only known per instance).
+///
+/// Time: O(1)  Space: O(1)
+pub fn copied_at_return(ty: &Type) -> bool {
+    match ty {
+        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+        Type::Number { .. } => is_bignum(ty),
+        Type::Shape { name } => !name.is_empty(),
+        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
+        // An `errors` result owns what its `return` allocated: the inner value's copy, and for a
+        // `maybe` the envelope cell the return always makes (`maybe_to_heap_cell`), whatever its
+        // payload, so the caller's binding owns the cell and releases it.
+        Type::ErrorsCapable { inner } => {
+            copied_at_return(inner) || matches!(inner.as_ref(), Type::Maybe { .. })
+        }
+        Type::BuiltinChannel { .. } => true,
+        // A `maybe` return copies its payload itself (the `Type::Maybe` arm of the return, `maybe_payload_stable_bits`):
+        // a string clone, a shape or number cell or a channel reference, unless the value moves. An array or map payload is the caller's copy to make.
+        Type::Maybe { inner } => match inner.as_ref() {
+            Type::BuiltinChannel { .. } | Type::String => true,
+            Type::Shape { name } => !name.is_empty(),
+            Type::Number { precision } => *precision <= crate::types::DECIMAL128_MAX_PRECISION,
+            // A `maybe` of a union with a shape variant returns the union's slot by value, its payload a
+            // deep copy unless the value moves (the `Type::Maybe` return of an envelope union).
+            union @ Type::Union { .. } => crate::check::is_envelope_union(union),
+            _ => false,
+        },
+        // An envelope union is returned by value with its payload inline; its `return` persists a
+        // deep copy unless the value moves, so the caller owns what it gets. Any other union is
+        // its one variant's raw pointer (`raw_union_variant`) and is returned as that variant is:
+        // the caller releases what a call hands back (`heap_class_of`), so a shared parameter
+        // returned as it is must be copied here, or both sides free it.
+        Type::Union { variants } => {
+            crate::check::is_envelope_union(ty)
+                || crate::check::raw_union_variant(variants).is_some_and(copied_at_return)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -492,7 +548,6 @@ mod tests {
                 Type::Int
                     | Type::Float
                     | Type::Bool
-                    | Type::String
                     | Type::Options { .. }
                     | Type::Number { .. }
                     | Type::Range { .. }
@@ -567,7 +622,7 @@ mod tests {
         assert_eq!(
             owned_copy_plan(&Type::BuiltinFixed {
                 elem: Box::new(Type::Int),
-                size: Some(3),
+                size: crate::types::FixedLength::Known(3),
             }),
             OwnedCopy::FixedMemcpy
         );

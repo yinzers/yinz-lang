@@ -28,7 +28,7 @@ function entrypoint() -> nothing {
     if (m.exists()) {
       let p: Part = m.value
       if (p.qty == 1) {
-        found = p
+        found = p.copy()
       }
     }
     i = i + 1

@@ -1,0 +1,23 @@
+// v0.3-M9 C3b fixture: a string stored in a shape field (a literal's field, a field assignment).
+// Allocations: `label` 1 (fresh). `first` copies `label` (read again) 1. `second` takes the
+// last use of `other` by move 0 (`other` itself is 1 fresh). `Tag.name = `fixed`` copies a
+// literal 1. `Tag.name = copy.name` copies a field read 1. Total 1+1+1+0+1+1 = 5.
+// Expected output: one value per line below.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let count: int = 7
+  let label: string = `label-${count}`
+  let first: Tag = { name: label, id: 1 }
+  print(label)
+  let other: string = `other-${count}`
+  let second: Tag = { name: other, id: 2 }
+  second.name = `fixed`
+  first.name = second.name
+  print(first.name)
+  print(second.name)
+}

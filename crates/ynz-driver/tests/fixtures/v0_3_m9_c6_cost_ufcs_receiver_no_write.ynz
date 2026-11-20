@@ -1,0 +1,27 @@
+// v0.3-M9 C6 cost fixture: the receiver of a dotted UFCS call to a user function (typeck takes it
+// as argument 0) is the field read `world.bucket`, and no argument of the call writes `world`
+// (the other argument is `share`), so the receiver is passed as it is. A field read followed by
+// one call is no method chain, and the receiver needs no `let` (a `let` would copy it).
+// Allocations: `world`'s nested `bucket` (1 for the box, 2 for its `rows` array: header and
+// buffer), `first`'s `rows` array (2) and the list of one `Bucket` (2) = 7. The call copies no
+// receiver; the scope exit releases all 7 (C7 slice 3: nested shapes are released).
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+shape World {
+  bucket: Bucket
+  owners: array<Bucket>
+}
+
+function total(share bucket: Bucket, share owners: array<Bucket>) -> int {
+  return bucket.rows.count() + owners.count() - 1
+}
+
+function entrypoint() -> nothing {
+  let first: Bucket = { rows: [4], id: 1 }
+  let world: World = { bucket: { rows: [1, 2, 3], id: 1 }, owners: [first] }
+  print(world.bucket.total(world.owners))
+}

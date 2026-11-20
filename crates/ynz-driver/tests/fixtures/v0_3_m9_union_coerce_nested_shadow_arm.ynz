@@ -1,0 +1,75 @@
+// v0.3-M9 C1e (#421): an `is` arm on a binding that SHADOWS a narrowed name, nested inside the
+// outer `is` arm, must leave the outer binding narrowed when it ends. The inner arm used to
+// remove the name's overlay outright, so after the inner block the outer `t` read as the union.
+// Correct behavior: prints `inner other`, `wother`, `hello`, `big hello`, then `hello`,
+// `big hello` for the call that skips the inner block, then `end`; clean under ASan.
+// Pre-fix failure: does not compile (`Thing values do not have fields` on the outer `t.label`).
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+}
+shape Other {
+  n: int
+}
+shape Thing = Tiny | Big
+shape Wrap = Big | Other
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Big => {
+      return `big ${t.label}`
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}
+
+function viaWrap(share w: Wrap) -> string {
+  if (w) {
+    is Big => {
+      return `wbig`
+    }
+    is Other => {
+      return `wother`
+    }
+  }
+  return `none`
+}
+
+function outer(share t: Thing, share flag: boolean) -> string {
+  if (t) {
+    is Big => {
+      if (flag) {
+        let other: Other = { n: 3 }
+        let t: Wrap = other
+        if (t) {
+          is Other => {
+            print(`inner other`)
+            print(viaWrap(t))
+          }
+          else => {
+            print(`inner else`)
+          }
+        }
+      }
+      print(t.label)
+      return describe(t)
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello` }
+  let t: Thing = big
+  print(outer(t, true))
+  print(outer(t, false))
+  print(`end`)
+}

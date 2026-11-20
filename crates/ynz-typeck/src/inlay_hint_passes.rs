@@ -59,7 +59,7 @@ use crate::{
 /// sig data), replace the explicit list with a registry-sourced lookup.
 ///
 /// Time: O(n) where n = number of registry free-fn names (small, <10).  Space: O(1).
-fn builtin_free_fn_is_readonly(name: &str) -> bool {
+pub(crate) fn builtin_free_fn_is_readonly(name: &str) -> bool {
     // Builtins special-cased in check.rs (not in PrimitiveIntrinsicTable.free_fns).
     if matches!(name, "print" | "sensitive") {
         return true;
@@ -83,7 +83,7 @@ fn builtin_free_fn_is_readonly(name: &str) -> bool {
 ///
 /// Time: O(1) amortised (HashSet lookup; set built once via OnceLock).
 /// Space: O(m) where m = number of scalar intrinsic method names (<40).
-fn primitive_intrinsic_method_is_readonly(method: &str) -> bool {
+pub(crate) fn primitive_intrinsic_method_is_readonly(method: &str) -> bool {
     static INTRINSIC_METHODS: OnceLock<HashSet<String>> = OnceLock::new();
     let set = INTRINSIC_METHODS.get_or_init(|| {
         PrimitiveIntrinsicTable::m6()
@@ -111,11 +111,12 @@ pub struct TypeHint {
 
 /// Ownership modifier hint at a function-call argument.
 ///
-/// Rendered as `share`, `lend`, or `give` at `position` (after the argument).
+/// Rendered as `share`, `lend`, or `give` at `position` (after the argument), or as
+/// ``handed to `place` `` after a value a store handed over.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OwnershipHint {
     pub position: usize,
-    /// `"share"`, `"lend"`, or `"give"`.
+    /// `"share"`, `"lend"`, `"give"`, or ``"handed to `place`"``.
     pub modifier: String,
 }
 
@@ -769,6 +770,17 @@ pub fn ownership_call_site_hints(
                 &mut hints,
             );
         }
+    }
+
+    // A named heap value a store handed over (`list.add(a)`, `x.f = a`, `let b = a`, a literal
+    // part): typeck recorded it at the one store decision; the hint says where it went.
+    let mut handed_over: Vec<_> = check.typed_module.stores_handed_over.iter().collect();
+    handed_over.sort();
+    for ((_, end), place) in handed_over {
+        hints.push(OwnershipHint {
+            position: *end,
+            modifier: format!("handed to {place}"),
+        });
     }
 
     // Emit inferred `give`/`copy` hints for plain-ident arguments at `background`

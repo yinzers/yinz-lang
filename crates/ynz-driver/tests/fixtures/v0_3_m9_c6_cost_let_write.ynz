@@ -1,0 +1,15 @@
+// v0.3-M9 C6 cost fixture: a `let` of a field that is overwritten while the binding is live copies
+// the field once.
+// Allocations: the field's literal (2), the overwriting literal (2) and the one copy (2).
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let rows = bucket.rows
+  bucket.rows = [9]
+  print(rows.count())
+}

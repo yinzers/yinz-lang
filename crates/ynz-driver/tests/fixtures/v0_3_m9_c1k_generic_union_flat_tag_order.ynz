@@ -1,0 +1,40 @@
+// v0.3-M9 C1k: `f<T>(..) -> T | Tiny` with `T` bound to the union `Big | Other` returns a `Tiny`.
+// The instance's union is the flat `Big | Other | Tiny`, so the `Tiny` is variant 2 there (the
+// slot as written has it at variant 1) and the caller's `is Tiny` arm must match it.
+// Before: the envelope was tagged 1 (`Other`), so the caller printed `other` and ASan reported
+// the `Tiny` read as an `Other` at -O0.
+// Expected output: `tiny`, `end`.
+
+shape Big {
+  label: string
+  items: array<int>
+}
+shape Other {
+  count: int
+}
+shape Tiny {
+  flag: boolean
+}
+
+function withTiny<T>(share first: T, give tiny: Tiny) -> T | Tiny {
+  return tiny
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `x`.toUpperCase(), items: [1] }
+  let either: Big | Other = big
+  let tiny: Tiny = { flag: true }
+  let chosen = withTiny(either, tiny)
+  if (chosen) {
+    is Big => {
+      print(`big`)
+    }
+    is Other => {
+      print(`other`)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }
+  print(`end`)
+}

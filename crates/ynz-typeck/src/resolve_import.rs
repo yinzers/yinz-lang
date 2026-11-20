@@ -23,6 +23,8 @@ use crate::{
 pub struct ResolvedImport {
     /// Local name → ShapeDef for imported shapes.
     pub shapes: std::collections::HashMap<String, ShapeDef>,
+    /// Shapes the imported shapes need only to be sized (`ShapeTable::layout_only`).
+    pub layout_shapes: std::collections::HashMap<String, ShapeDef>,
     /// Local name → OptionsEntry for imported options types.
     pub options: std::collections::HashMap<String, OptionsEntry>,
     /// Local name → FunctionSig for imported functions.
@@ -33,6 +35,7 @@ impl ResolvedImport {
     pub fn empty() -> Self {
         Self {
             shapes: Default::default(),
+            layout_shapes: Default::default(),
             options: Default::default(),
             functions: Default::default(),
         }
@@ -199,6 +202,18 @@ pub fn resolve_imports(
         // Get or build the ExportTable for the imported file using the same db.
         let export_table =
             load_export_table(db, &resolved_path, module_str, &span, visiting, diags);
+
+        for (name, def) in &export_table.layout_shapes {
+            match result.layout_shapes.get(name) {
+                Some(earlier) if earlier != def => {
+                    diags.push(union_variant_name_clash(name, span.clone()));
+                }
+                Some(_) => {}
+                None => {
+                    result.layout_shapes.insert(name.clone(), def.clone());
+                }
+            }
+        }
 
         // Resolve named vs namespace imports.
         match &import.kind {
@@ -465,6 +480,37 @@ fn load_export_table(
         // callee would appear trivial and the importer would never parallelize calls
         // to it (v0.3-M3d cross-module worth-it propagation).
         sig.does_real_work = check_out.does_real_work_set.contains(name.as_str());
+        // The places the body writes through its parameters, for the importer's loops
+        // (`walked_place`): the pre-analysis sig_table carries none.
+        sig.written_param_places = check_out
+            .written_param_places
+            .get(name.as_str())
+            .cloned()
+            .unwrap_or_default();
     }
     export_table
+}
+
+/// The refusal for a shape name that means two different shapes in one module while one of them
+/// sizes an imported shape's union field (`ShapeTable::layout_only`). The field keeps its variants
+/// inline, sized by the declaring module's shape of that name; sized here by another shape, the
+/// two modules would disagree on the slot and a store would write past it. `span` is where the
+/// second meaning comes in (the importer's own shape, or the second import).
+pub fn union_variant_name_clash(name: &str, span: SourceSpan) -> Diagnostic {
+    Diagnostic::error(
+        span,
+        format!(
+            "Two different shapes are named `{name}` here, and an imported shape keeps one of \
+             them inside a union field."
+        ),
+        format!(
+            "Rename one of the `{name}` shapes, or import `{name}` from the module that declares \
+             the union field so the name means that one shape."
+        ),
+        format!(
+            "A union field holds its variant inline, sized by the `{name}` of the module that \
+             declares the field. If `{name}` meant another shape here, this module would size \
+             the same field differently, and a store into it would write past its end."
+        ),
+    )
 }

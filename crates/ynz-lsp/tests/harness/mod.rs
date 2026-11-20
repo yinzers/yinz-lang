@@ -215,19 +215,16 @@ pub struct SubprocessHarness {
 
 impl SubprocessHarness {
     pub fn spawn() -> Self {
-        let binary = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("ynz-lsp");
-        let mut child = Command::new(&binary)
+        // Cargo names the built binary for integration tests. Deriving it from the test
+        // executable's own path (`target/debug/deps/..` -> `target/debug/ynz-lsp`) breaks when
+        // cargo puts test executables in a build-dir apart from the target-dir.
+        let binary = env!("CARGO_BIN_EXE_ynz-lsp");
+        let mut child = Command::new(binary)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .unwrap_or_else(|_| panic!("failed to spawn {:?}", binary));
+            .unwrap_or_else(|err| panic!("failed to spawn {binary}: {err}"));
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         Self {

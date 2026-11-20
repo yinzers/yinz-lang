@@ -4,7 +4,7 @@ Pittsburgh Pirates Roster — Yinz v0.1 Showcase
 M2 — variables, arithmetic, primitives:
 Clemente
 2000
-0.00000000000000000000000000000
+0.317
 1234567.89
 true
 3
@@ -162,6 +162,13 @@ v0.3-M8 — closing a channel:
 v0.3-M8 — one shared copy for three background scouts:
   three scouts graded Paul Skenes: combined 1095
   the front office still holds the original: 60/70/45
+
+v0.3-M9 — a task handle leaving its scope stops its task:
+  north post: lookout sent out, now leaving the block
+  north post: block ended, the lookout's handle is released
+  south post: spotted a barge on the Allegheny
+  south post: courier brought back 3 barges
+  waited 150 ms: no report from the north post, its task was stopped
 
 v0.3-M5 — per-field array layout: 128-cannonball volley, hot loop on x/y:
   height integral over 64 steps:

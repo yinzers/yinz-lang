@@ -1,0 +1,61 @@
+// v0.3-M9 C1e rework (#421), review round 1: a hidden union default belongs to each instance.
+// Two instances built by the same default must not share one envelope: reassigning one's slot
+// leaves the other's default intact, and the default is inherited through `extends`.
+
+shape Big {
+  label: string
+  count: int
+}
+
+shape Base {
+  id: int
+  hidden slot: Big | int = 4096
+}
+
+shape Derived extends Base {
+  name: string
+  hidden own: Big | int = 7
+}
+
+function describe(share value: Big | int) -> string {
+  if (value) {
+    is Big => {
+      return `big ${value.label}`
+    }
+    else => {
+      return `int`
+    }
+  }
+  return `none`
+}
+
+function showSlot(share self: Derived) -> string {
+  let slot: Big | int = self.slot
+  return describe(slot)
+}
+
+function showOwn(share self: Derived) -> string {
+  let own: Big | int = self.own
+  return describe(own)
+}
+
+function replaceSlot(lend self: Derived, give replacement: Big | int) -> nothing {
+  self.slot = replacement
+}
+
+
+function entrypoint() -> nothing {
+  let first: Derived = { id: 1, name: `first` }
+  let second: Derived = { id: 1, name: `second` }
+  let big: Big = { label: `replacement`, count: 3 }
+  let replacement: Big | int = big
+  first.replaceSlot(replacement)
+  print(first.showSlot())
+  print(second.showSlot())
+  print(first.showOwn())
+  print(second.showOwn())
+  for (round in range(0, 2)) {
+    let fresh: Derived = { id: round, name: `loop` }
+    print(fresh.showSlot())
+  }
+}

@@ -1,0 +1,50 @@
+// v0.3-M9 C1e (#421): a plain shape passed where a TYPE PARAMETER is bound to a union
+// (`same(thing, big)` makes `T = Tiny | Big`) is wrapped in the tagged envelope through the
+// substituted parameter type, like a declared union parameter. A declared union parameter of a
+// generic callee takes the same path.
+// Correct behavior: prints `big hello`, `tiny`, `big hello`, `end`; clean under AddressSanitizer
+// at both optimization levels.
+// Pre-fix failure: C1c (#410) wrapped only declared union parameters, so `describe` read the
+// bare `Big` as the envelope and printed `none`; the type checker refused the call until this
+// card (the refusal said so).
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function declared<T>(share t: Thing, share extra: T) -> string {
+  return describe(t)
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let thing: Thing = tiny.copy()
+  let out = same(thing, big)
+  print(describe(out))
+  let second = same(thing, tiny)
+  print(describe(second))
+  print(declared(big, 7))
+  print(`end`)
+}

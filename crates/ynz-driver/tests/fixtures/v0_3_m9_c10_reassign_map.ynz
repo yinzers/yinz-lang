@@ -1,0 +1,12 @@
+// v0.3-M9 C10: the same for a `map` walked by entry. Correct behavior: prints 6, 1.
+
+function entrypoint() -> nothing {
+  let scores: map<string, int> = { `a`: 1, `b`: 2, `c`: 3 }
+  let total = 0
+  for (entry in scores) {
+    scores = { `z`: 9 }
+    total = total + entry.value
+  }
+  print(total)
+  print(scores.count())
+}

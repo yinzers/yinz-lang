@@ -1,0 +1,22 @@
+// v0.3-M9 C1k: a shape with `array<int> | nothing` and `map<string, int> | nothing` fields is
+// copied (a task's argument, `.copy()`) and every copy releases its own array and map.
+// Expected output: `A` twice (the task's, the copy's).
+
+shape Holder {
+  label: string
+  nums: array<int> | nothing
+  table: map<string, int> | nothing
+}
+
+function show(h: Holder) -> nothing {
+  print(h.label)
+}
+
+function entrypoint() -> nothing {
+  let table: map<string, int> = { `a`: 1 }
+  let holder: Holder = { label: `a`.toUpperCase(), nums: [1, 2], table: table }
+  background show(holder)
+  wait sleep(50)
+  let twin: Holder = holder.copy()
+  print(twin.label)
+}

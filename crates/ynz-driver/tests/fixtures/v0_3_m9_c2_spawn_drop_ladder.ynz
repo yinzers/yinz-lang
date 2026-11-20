@@ -1,0 +1,30 @@
+// v0.3-M9 C2 safety fixture — exit class: THE SPAWNED TASK'S DROP LADDER.
+// `background worker(rows, tag)` hands the task a heap clone of `rows`; the task's drop ladder
+// (SpawnStateFnFuture::drop walking its BgArgDropEntry list) frees what the task owns when it
+// retires. The worker also owns locals of its own and suspends, so scope-exit release and the
+// ladder both touch the same frame's memory. The parent keeps its own `rows` and reads it after
+// the task retired.
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: the worker releasing its `give rows` parameter AND the ladder freeing the same
+// clone (double free), or the parent's `rows` being released by the spawn (use-after-free on the
+// parent's later read). The second spawn passes `moved` itself (no copy): the spawn takes that
+// binding over, and the parent never reads it again.
+//
+// Expected output (one per line): 3, 7, 2, 8, 3
+
+function worker(give rows: array<int>, tag: int) -> nothing {
+  let mine: array<int> = [tag]
+  wait sleep(1)
+  print(rows.count().toString())
+  print(mine[0].or(-1).toString())
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [10, 20, 30]
+  background worker(rows.copy(), 7)
+  wait sleep(50)
+  let moved: array<int> = [1, 2]
+  background worker(moved, 8)
+  wait sleep(50)
+  print(rows.count().toString())
+}

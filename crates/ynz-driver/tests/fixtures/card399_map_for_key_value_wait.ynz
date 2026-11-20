@@ -1,0 +1,10 @@
+// Fixture: `for ((key, value) in map)` with a `wait` in the body (the state-machine
+// lowering path). Key and value are bound before the wait and printed after it.
+function entrypoint() -> nothing {
+  let ages: map<string, int> = { `pat`: 31, `sam`: 42 }
+  for ((who, age) in ages) {
+    let label: string = `${who}:${age.toString()}`
+    wait sleep(1)
+    print(label)
+  }
+}

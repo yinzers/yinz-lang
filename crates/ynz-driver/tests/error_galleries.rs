@@ -138,7 +138,7 @@ fn m8_gallery_fires_expected_diagnostics() {
     // test-ratchet: v0.1-polish adds 3 inline-shape error triggers (unknown field,
     // missing field, hidden-in-inline) — count grows from 2 to ~6.
     // v0.3-M8 Phase 4 (test-ratchet): the channel-close + transfer-rule section adds the
-    // four new compile diagnostics (ConsumedBySend ×5 incl. the three alias forms,
+    // four new compile diagnostics (ConsumedBySend ×3 incl. the piece-view alias form (C5a: the other two alias forms are ConsumedByStore ×2),
     // ParamNeedsGive ×5 incl. both frames of the relay chain, TransferNeedsCopy ×5 incl. the
     // dynamic-contract instance, HandleChannelArgNeedsBinding ×1), the extracted const-send
     // refusal, the existing use-after-give error at two new sites (+2 same-call alias-pair
@@ -170,6 +170,11 @@ fn m8_gallery_fires_expected_diagnostics() {
     assert!(
         stderr.contains("which is what was sent"),
         "m8 gallery must include the alias-class `{{via}}` form of ConsumedBySend; got:\n{stderr}"
+    );
+    // ConsumedByStore (C5a) — `rows = other` and `let rows = other` hand `other` over.
+    assert!(
+        stderr.contains("`other` was stored in `rows` and cannot be used here"),
+        "m8 gallery must include the ConsumedByStore diagnostic; got:\n{stderr}"
     );
     // ParamNeedsGive — the WHAT's fixed closing sentence.
     assert!(
@@ -245,19 +250,6 @@ fn m8_gallery_fires_expected_diagnostics() {
     assert!(
         stderr.contains("hasn't been checked with `.failed()` yet"),
         "m8 gallery must include the MessageBeforeFailedCheck diagnostic; got:\n{stderr}"
-    );
-
-    // ── Phase 7: the `background-handle-not-waited` Tier 3 lint (SUGGESTION severity —
-    //    must be present in stderr WITHOUT raising the Error count above: the no-duct-tape
-    //    guard for the re-deferred scope-drop cancellation fix is a teaching surface, never
-    //    a build gate) ──
-    assert!(
-        stderr.contains("lint: background-handle-not-waited"),
-        "m8 gallery must fire background-handle-not-waited with its rule code; got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("h.receive()"),
-        "background-handle-not-waited must name the actual binding in its WHAT-INSTEAD; got:\n{stderr}"
     );
 }
 
@@ -681,7 +673,7 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         // round 2026-09-07, should-fix 5: the previous text was a dead end at this very
         // trigger).
         "Drop the `.copy()` and call the function on its own",
-        "move every later read of `parcel` above the `background` line",
+        "move every later read of `pings` above the `background` line",
         "for a `range`, its start and end as two `int` values",
         "Check `.failed()` on `count` first",
         "Use `.message` to read what went wrong",
@@ -689,6 +681,78 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         assert!(
             stderr.contains(phrase),
             "a copy refusal lost its WHAT-INSTEAD ({phrase:?}); got:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn v0_3_m9_gallery_fires_union_diagnostics() {
+    // WHY: v0_3_m9_errors.ynz is where a human reads the v0.3-M9 union refusals together: a
+    // union reaching a slot that expects one of its variants (return, argument, annotated
+    // `let`, shape field), a union match that leaves a non-shape variant unhandled, and (C1g) an
+    // argument of another type than its type parameter was made to stand for, (C1e) a hidden
+    // field whose default is not its declared type, (C5a) a store that hands a value over and a
+    // later read of it, and (C6) a map key no slot holds (three forms) and a union given to a
+    // generic task parameter, and (C10) a loop whose body assigns the root of the list it walks.
+    // One trigger each; the count plus a key phrase per class keeps one
+    // from regressing into a generic message.
+    let (stderr, code) = compile_gallery(&gallery("v0_3_m9_errors.ynz"));
+    assert_ne!(code, 0, "v0_3_m9 gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    assert_eq!(
+        error_count, 13,
+        "v0_3_m9 gallery must produce exactly 13 errors, one per trigger; got \
+         {error_count}.\nstderr:\n{stderr}"
+    );
+
+    for (label, phrase) in [
+        ("argument", "`plateSpecial` expects a `Special` here"),
+        ("return", "this function must return a `Special`"),
+        ("annotated `let`", "`again` is declared as `Special`"),
+        ("shape field", "`Ticket.held` is declared as a `Special`"),
+        ("what-instead", "Check which variant it holds first"),
+        ("why", "is a box with a tag saying which variant is inside"),
+        (
+            "hidden field default of another type",
+            "Hidden field `note` expects `string`, but its default is `int`",
+        ),
+        (
+            "non-shape variant left unhandled",
+            "1 variant is not handled: int",
+        ),
+        (
+            "argument that conflicts with its type parameter",
+            "`special` has type `Special`, but `sameKind` needs `Plain` for `second`",
+        ),
+        (
+            "store that hands a value over (C5a)",
+            "`moved` was stored in `box` and cannot be used here",
+        ),
+        (
+            "shape map key (C6)",
+            "A `map` can't be keyed by `Plain` yet",
+        ),
+        (
+            "wide number map key (C6)",
+            "A `map` cannot be keyed by `number<50>`",
+        ),
+        (
+            "sensitive string map key (C7)",
+            "A `map` cannot be keyed by `sensitive string`",
+        ),
+        (
+            "union given to a generic task parameter (C6)",
+            "Cannot give the union `Plain | Special` to `eat`'s generic parameter `held`",
+        ),
+        (
+            "assignment that frees the list a loop walks (C10)",
+            "The `for` loop over `ticketBook.tickets` assigns `ticketBook`",
+        ),
+    ] {
+        assert!(
+            stderr.contains(phrase),
+            "v0_3_m9 gallery must include the {label} diagnostic (`{phrase}`); got:\n{stderr}"
         );
     }
 }

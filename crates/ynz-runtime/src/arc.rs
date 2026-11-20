@@ -4,21 +4,28 @@
 //! state crossing a `background` boundary. Codegen wraps an Arc-eligible value (a shape
 //! whose fields are all primitives or strings — the compile-time "Arc-able floor") in one
 //! of these allocations at the spawn site; each spawned task's arg-drop ladder releases
-//! its reference with [`ynz_arc_free`]; the last release frees the allocation.
+//! its reference with [`ynz_arc_free`]; the last release runs the block's drop glue (it
+//! releases the strings the block owns) and frees the allocation.
 //!
 //! # Layout
 //!
 //! One single `ynz_alloc` allocation:
 //!
 //! ```text
-//! [ strong: AtomicU64 — 8 bytes ][ data: `size` bytes ... ]
-//! ^ base pointer                 ^ DATA pointer (what codegen holds and passes)
+//! [ strong: AtomicU64 — 8 bytes ][ drop glue: fn pointer or null — 8 bytes ][ data: `size` bytes ... ]
+//! ^ base pointer                                                              ^ DATA pointer (what codegen holds and passes)
 //! ```
 //!
 //! The C-ABI surface hands out the DATA pointer, never the base pointer, so the spawned
 //! callee receives a plain struct pointer indistinguishable from any other shape pointer
 //! (same ABI as the heap-copy path). All three entry points recover the header at
-//! `data_ptr - 8`.
+//! `data_ptr - ARC_HEADER_SIZE` (16).
+//!
+//! The drop glue (C1o, card #503) is `void(data: ptr)`, given to [`ynz_arc_new`]: it releases
+//! what the block's own bytes own (the strings a shape copy holds), and the LAST
+//! [`ynz_arc_free`] runs it before freeing the allocation. Null means the data owns no heap.
+//! The glue lives in the block, so every release site (the drop ladder, the closure-body free,
+//! the caller's transient release) frees through the one path with no glue argument of its own.
 //!
 //! Allocation goes through the COUNTED [`crate::ynz_alloc`] / [`crate::ynz_free`] pair
 //! deliberately: the `YNZ_ALLOC_COUNTER_OUTPUT` alloc=free gates then genuinely prove the
@@ -46,8 +53,8 @@
 //!
 //! `ynz-codegen`'s `prepare_bg_arg_for_ctx` emits the topology-(B) protocol from
 //! `docs/internal/implementation/IMP-ownership.md` "Auto-Arc — Sharing Topology Across
-//! `background` Boundaries": at the FIRST spawn of an admitted group, `ynz_arc_new(size)` +
-//! a copy of the shape bytes, held in a caller-side transient; `ynz_arc_clone` at EVERY
+//! `background` Boundaries": at the FIRST spawn of an admitted group, `ynz_arc_new(size, glue)` +
+//! a copy of the shape bytes and of every string in them (C1o), held in a caller-side transient; `ynz_arc_clone` at EVERY
 //! member spawn (the task's reference); `ynz_arc_free(transient, size)` right after the last
 //! member's spawn call; and each task's drop ladder (`BG_ARG_KIND_ARC_SHAPE`, the CPU-arm
 //! closure free, or the state-machine ladder in `runtime.rs`) releases its reference at
@@ -67,14 +74,21 @@ use crate::sync::{fence, AtomicU64};
 pub(crate) static ARC_BLOCK_FREES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-/// Byte size of the refcount header preceding the data bytes.
+/// Byte offset of the drop glue in the header: right after the refcount.
 ///
-/// Production: 8 (`std::sync::atomic::AtomicU64` is one machine word — the layout the
-/// C-ABI contract above documents). Under `--cfg loom` the header is loom's tracked atomic,
-/// which is wider; the size is rounded up to keep the data 8-aligned. The loom build never
-/// produces `libynz_runtime.a`, so codegen's `data_ptr - 8` recovery is only ever paired with
-/// the 8-byte production header.
-const ARC_HEADER_SIZE: usize = std::mem::size_of::<AtomicU64>().div_ceil(8) * 8;
+/// Production: 8 (`std::sync::atomic::AtomicU64` is one machine word — the layout the C-ABI
+/// contract above documents). Under `--cfg loom` the refcount is loom's tracked atomic, which
+/// is wider; the offset is rounded up to keep the glue 8-aligned. The loom build never produces
+/// `libynz_runtime.a`.
+const ARC_GLUE_OFFSET: usize = std::mem::size_of::<AtomicU64>().div_ceil(8) * 8;
+
+/// Byte size of the header preceding the data bytes: the refcount, then the drop glue. A
+/// multiple of 8, so the data stays 8-aligned.
+const ARC_HEADER_SIZE: usize = ARC_GLUE_OFFSET + std::mem::size_of::<ArcDropGlue>();
+
+/// The drop glue of a block: runs once, on the data, when the last reference is released.
+/// `None` is the null pointer (the data owns no heap).
+pub type ArcDropGlue = Option<unsafe extern "C" fn(data: *mut u8)>;
 
 /// Recover the header pointer from a data pointer.
 ///
@@ -87,10 +101,11 @@ unsafe fn header<'a>(data_ptr: *mut u8) -> &'a AtomicU64 {
 }
 
 /// Allocate a refcounted block for `size` data bytes. Returns the DATA pointer
-/// (header lives at `ptr - 8`); strong count starts at 1. The caller copies the value's
-/// bytes into the returned pointer.
+/// (header lives at `ptr - ARC_HEADER_SIZE`); strong count starts at 1. The caller copies the
+/// value's bytes into the returned pointer, and passes `drop_glue` when those bytes own heap
+/// (null otherwise): the last [`ynz_arc_free`] calls it with the data pointer before freeing.
 ///
-/// Data alignment: the data starts 8 bytes into a `malloc`-aligned allocation, so it is
+/// Data alignment: the data starts 16 bytes into a `malloc`-aligned allocation, so it is
 /// 8-byte aligned — sufficient for the Arc-able floor (i64 / f64 / pointer fields only;
 /// the compile-time floor excludes 16-byte `number` fields precisely so this holds).
 ///
@@ -100,9 +115,10 @@ unsafe fn header<'a>(data_ptr: *mut u8) -> &'a AtomicU64 {
 /// every [`ynz_arc_clone`]) must be released exactly once via [`ynz_arc_free`] with the
 /// same `size`.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_arc_new(size: usize) -> *mut u8 {
+pub unsafe extern "C" fn ynz_arc_new(size: usize, drop_glue: ArcDropGlue) -> *mut u8 {
     let base = crate::ynz_alloc(ARC_HEADER_SIZE + size);
     (base as *mut AtomicU64).write(AtomicU64::new(1));
+    (base.add(ARC_GLUE_OFFSET) as *mut ArcDropGlue).write(drop_glue);
     base.add(ARC_HEADER_SIZE)
 }
 
@@ -119,7 +135,8 @@ pub unsafe extern "C" fn ynz_arc_clone(data_ptr: *mut u8) -> *mut u8 {
 }
 
 /// Release one reference. When the last reference is released, frees the whole
-/// allocation (header + data) through the counted `ynz_free`.
+/// allocation (header + data) through the counted `ynz_free`; first it runs the block's drop glue
+/// (see [`ynz_arc_new`]) on the data, so the heap the block owns is released exactly once.
 ///
 /// # Safety
 ///
@@ -134,6 +151,10 @@ pub unsafe extern "C" fn ynz_arc_free(data_ptr: *mut u8, size: usize) {
     if header(data_ptr).fetch_sub(1, Ordering::Release) == 1 {
         // Last reference: acquire every other releasing thread's writes before freeing.
         fence(Ordering::Acquire);
+        let glue_slot = data_ptr.sub(ARC_HEADER_SIZE).add(ARC_GLUE_OFFSET) as *const ArcDropGlue;
+        if let Some(drop_glue) = glue_slot.read() {
+            drop_glue(data_ptr);
+        }
         // Loom's atomic is a tracked object that must be dropped inside the model; the
         // production `std` atomic has no drop glue, so this is a no-op there (and the
         // header's raw bytes are freed with the block either way).
@@ -168,7 +189,7 @@ mod tests {
     #[test]
     fn new_clone_free_lifecycle_counts_correctly() {
         unsafe {
-            let p = ynz_arc_new(16);
+            let p = ynz_arc_new(16, None);
             assert_eq!(strong(p), 1);
             // Data bytes are writable and stable across clones.
             (p as *mut u64).write(0xDEAD_BEEF);
@@ -185,6 +206,42 @@ mod tests {
         }
     }
 
+    static GLUE_RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static GLUE_SAW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    unsafe extern "C" fn count_and_read_glue(data: *mut u8) {
+        GLUE_RUNS.fetch_add(1, Ordering::SeqCst);
+        GLUE_SAW.store((data as *const u64).read(), Ordering::SeqCst);
+    }
+
+    // Bug it catches (C1o): a block's drop glue skipped, or run on a non-last release (it would
+    // release strings a task still reads), or run twice (a double free) — High: data integrity.
+    #[test]
+    fn drop_glue_runs_once_on_the_last_release_with_the_data_intact() {
+        unsafe {
+            let block = ynz_arc_new(8, Some(count_and_read_glue));
+            (block as *mut u64).write(0xC10);
+            let second_reference = ynz_arc_clone(block);
+            ynz_arc_free(block, 8);
+            assert_eq!(
+                GLUE_RUNS.load(Ordering::SeqCst),
+                0,
+                "not the last reference"
+            );
+            ynz_arc_free(second_reference, 8);
+            assert_eq!(
+                GLUE_RUNS.load(Ordering::SeqCst),
+                1,
+                "the last release runs it once"
+            );
+            assert_eq!(
+                GLUE_SAW.load(Ordering::SeqCst),
+                0xC10,
+                "the glue sees the live data"
+            );
+        }
+    }
+
     #[test]
     fn free_of_null_is_a_safe_no_op() {
         unsafe { ynz_arc_free(std::ptr::null_mut(), 16) }
@@ -197,7 +254,7 @@ mod tests {
         // RMW) would leave the count != 1 at join; a premature zero would free the block
         // under the hammer and crash.
         unsafe {
-            let p = ynz_arc_new(8);
+            let p = ynz_arc_new(8, None);
             (p as *mut u64).write(7);
             let addr = p as usize;
             let mut joins = Vec::new();

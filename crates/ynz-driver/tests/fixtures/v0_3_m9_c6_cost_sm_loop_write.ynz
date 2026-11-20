@@ -1,0 +1,16 @@
+// v0.3-M9 C6 cost fixture: a state-machine loop whose body overwrites an item of the iterated
+// array copies the item once per iteration, and releases that copy after the iteration (the
+// variable is read after the `wait`, so it is a frame slot the release reloads).
+// Allocations: the outer literal and two inner literals (6), the overwriting literal in each of
+// the two iterations (4), and one copy of the loop item per iteration (4).
+// Releases: the item each overwrite replaces (4) and each iteration's copy (4), and the frame.
+// Plus the state-machine frame (1 allocated, 1 freed).
+
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[1], [2]]
+  for (row in rows) {
+    rows[0] = [9]
+    wait sleep(1)
+    print(row.count())
+  }
+}

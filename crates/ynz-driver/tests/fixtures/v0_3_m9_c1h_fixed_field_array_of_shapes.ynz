@@ -1,0 +1,23 @@
+// v0.3-M9 C1h: an array of shapes with a fixed<string, 2> field: each element holds its list inline and releases its strings.
+// Expected output: M three times, the tag sum 3, N
+
+shape Bag {
+  tag: int
+  names: fixed<string, 2>
+}
+
+function entrypoint() -> nothing {
+  let bags: array<Bag> = []
+  for (i in range(0, 3)) {
+    let bag: Bag = { tag: i, names: [`n`.toUpperCase(), `m`.toUpperCase()] }
+    bags.add(bag)
+  }
+  let sum: int = 0
+  for (bag in bags) {
+    sum = sum + bag.tag
+    print(bag.names[1].or(`?`))
+  }
+  print(sum)
+  let first = bags[0].or({ tag: -1, names: [`z`, `z`] })
+  print(first.names[0].or(`?`))
+}

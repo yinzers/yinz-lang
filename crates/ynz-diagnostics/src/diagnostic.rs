@@ -36,6 +36,9 @@ pub enum DiagnosticKind {
     Consumed,
     /// Value was sent into a channel and read afterward (use-after-send) — v0.3-M8 Phase 4.
     ConsumedBySend,
+    /// Value was stored into a container, a field, an index or another binding and read
+    /// afterward (use-after-store) — v0.3-M9 C5a.
+    ConsumedByStore,
     /// A parameter is given away (sent, or passed to a `give` position) without being
     /// declared `give` — v0.3-M8 Phase 4.
     ParamNeedsGive,
@@ -46,6 +49,70 @@ pub enum DiagnosticKind {
     /// A handle-form spawn's command channel is not a named binding, so nothing outside the
     /// task could ever close it — v0.3-M8 Phase 4.
     HandleChannelArgNeedsBinding,
+    /// A union value reaches a slot (argument, return, annotated `let`, shape field) that
+    /// expects one of its variants. The union is a tagged envelope; the slot would read it as
+    /// the bare variant — wrong data or memory past the envelope. v0.3-M9 C1b.
+    UnionWhereVariantExpected,
+    /// A plain value reaches a union slot whose matching variant the union's tagged box cannot
+    /// hold yet (`number`, `maybe`, `fixed`, `dynamic`, `range`, an `options` type), or a
+    /// shorter `number` meets a `number` variant of more than 34 digits. v0.3-M9 C1e: refused
+    /// in typeck instead of at codegen's "compiler bug" refusal of the same case.
+    UnionVariantNotStorable,
+    /// An annotated `let` of a union type takes the result of a call that pauses and resumes
+    /// (`let m: Mixed = wait count()`); that result is bound without the tag a union needs.
+    /// v0.3-M9 C1e: refused in typeck instead of at codegen's "compiler bug" refusal.
+    SuspendingResultIntoUnionLet,
+    /// A `return` of a union-typed function takes the result of a call that pauses and resumes
+    /// (`return wait count()`); that result is stored in the return slot without the tag a union
+    /// needs. v0.3-M9 C1e: refused in typeck and by the codegen query instead of reaching the
+    /// compiler's internal guard.
+    SuspendingResultIntoUnionReturn,
+    /// An argument whose type differs from the type a type parameter of a generic function was
+    /// already made to stand for, by an earlier argument or an explicit type argument
+    /// (`same(big, tiny)` makes `T` a `Big`, then a `Tiny` arrives). The function is built for
+    /// the first type and would read the second as it. v0.3-M9 C1g.
+    ArgumentConflictsWithTypeParameter,
+    /// The length of a `fixed<T, N>` is not a whole number the compiler can use (`fixed<int, N>`,
+    /// a number past 4294967295, or an argument after the length). v0.3-M9 C1h.
+    FixedLengthNotUsable,
+    /// A length written where only a function parameter or return type may write one (a local,
+    /// a shape field, nested inside another type), or on a type that takes none (`array<int, 4>`).
+    /// v0.3-M9 C1h.
+    FixedLengthNotAllowedHere,
+    /// A list whose length differs from the length a signature wrote: an argument, or a `return`
+    /// value, of another length or of a length the compiler does not know. v0.3-M9 C1h.
+    FixedLengthMismatch,
+    /// An `export function` whose `fixed` parameter or return type does not write its length:
+    /// another file sees only the signature. v0.3-M9 C1h.
+    FixedLengthMissingInExport,
+    /// A function whose `return` statements give lists of different lengths. v0.3-M9 C1h.
+    FixedReturnLengthsDiffer,
+    /// A function whose returned list length cannot be worked out from its `return` statements.
+    /// v0.3-M9 C1h.
+    FixedReturnLengthUnknown,
+    /// A shape field written `fixed<T>` without a length: the shape holds the list inside itself,
+    /// so its size must be known. v0.3-M9 C1h.
+    FixedFieldLengthMissing,
+    /// A function that pauses at a `wait`, or that may run as a task of its own, takes a `fixed<T>`
+    /// parameter without a length: such a function is built once, so it needs the length written.
+    /// v0.3-M9 C1h.
+    FixedLengthMissingInTaskFunction,
+    /// A `map` written with a key type whose value the map cannot hold in one of its key slots
+    /// (8 bytes, or 16 for a `number` of up to 34 digits): a `number` of more than 34 digits, a
+    /// shape, an array, any other type. The slot would hold only an address, so an equal key
+    /// would miss. v0.3-M9 C6 follow-up, as ruled by the Product Manager.
+    MapKeyNotStorable,
+    /// A `background` call passes a union to a parameter the generic callee declares as a bare
+    /// type parameter: the task has no slot to copy the union into. v0.3-M9 C6.
+    BackgroundUnionToGenericParameter,
+    /// A `for` loop walks a list, and its body assigns that list's holder, a prefix or the root of
+    /// the walked place, an element it walks through, or calls a function that does: the
+    /// assignment frees the list the loop is still reading. v0.3-M9 C10 (#387), plan #17.
+    WalkedListWrittenInLoop,
+    /// A generic call whose declared return union (`nothing | T`, `Tiny | T`) has a type parameter
+    /// the call binds to a union that would not be first in the instance's flat union: the value the
+    /// instance returns keeps its own tags, which would name other variants. v0.3-M9 C1n (#387).
+    GenericUnionBoundOutOfOrder,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -107,9 +174,31 @@ impl DiagnosticKind {
             DiagnosticKind::ImportNotFound => "ImportNotFound",
             DiagnosticKind::Consumed => "Consumed",
             DiagnosticKind::ConsumedBySend => "ConsumedBySend",
+            DiagnosticKind::ConsumedByStore => "ConsumedByStore",
             DiagnosticKind::ParamNeedsGive => "ParamNeedsGive",
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
+            DiagnosticKind::UnionWhereVariantExpected => "UnionWhereVariantExpected",
+            DiagnosticKind::UnionVariantNotStorable => "UnionVariantNotStorable",
+            DiagnosticKind::SuspendingResultIntoUnionLet => "SuspendingResultIntoUnionLet",
+            DiagnosticKind::SuspendingResultIntoUnionReturn => "SuspendingResultIntoUnionReturn",
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "ArgumentConflictsWithTypeParameter"
+            }
+            DiagnosticKind::MapKeyNotStorable => "MapKeyNotStorable",
+            DiagnosticKind::FixedLengthNotUsable => "FixedLengthNotUsable",
+            DiagnosticKind::FixedLengthNotAllowedHere => "FixedLengthNotAllowedHere",
+            DiagnosticKind::FixedLengthMismatch => "FixedLengthMismatch",
+            DiagnosticKind::FixedLengthMissingInExport => "FixedLengthMissingInExport",
+            DiagnosticKind::FixedReturnLengthsDiffer => "FixedReturnLengthsDiffer",
+            DiagnosticKind::FixedReturnLengthUnknown => "FixedReturnLengthUnknown",
+            DiagnosticKind::FixedFieldLengthMissing => "FixedFieldLengthMissing",
+            DiagnosticKind::FixedLengthMissingInTaskFunction => "FixedLengthMissingInTaskFunction",
+            DiagnosticKind::BackgroundUnionToGenericParameter => {
+                "BackgroundUnionToGenericParameter"
+            }
+            DiagnosticKind::WalkedListWrittenInLoop => "WalkedListWrittenInLoop",
+            DiagnosticKind::GenericUnionBoundOutOfOrder => "GenericUnionBoundOutOfOrder",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -137,9 +226,27 @@ impl DiagnosticKind {
         "ImportNotFound",
         "Consumed",
         "ConsumedBySend",
+        "ConsumedByStore",
         "ParamNeedsGive",
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
+        "UnionWhereVariantExpected",
+        "UnionVariantNotStorable",
+        "SuspendingResultIntoUnionLet",
+        "SuspendingResultIntoUnionReturn",
+        "ArgumentConflictsWithTypeParameter",
+        "MapKeyNotStorable",
+        "FixedLengthNotUsable",
+        "FixedLengthNotAllowedHere",
+        "FixedLengthMismatch",
+        "FixedLengthMissingInExport",
+        "FixedReturnLengthsDiffer",
+        "FixedReturnLengthUnknown",
+        "FixedFieldLengthMissing",
+        "FixedLengthMissingInTaskFunction",
+        "BackgroundUnionToGenericParameter",
+        "WalkedListWrittenInLoop",
+        "GenericUnionBoundOutOfOrder",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -163,9 +270,40 @@ impl DiagnosticKind {
             DiagnosticKind::ImportNotFound => "not found".to_string(),
             DiagnosticKind::Consumed => "given away".to_string(),
             DiagnosticKind::ConsumedBySend => "sent away".to_string(),
+            DiagnosticKind::ConsumedByStore => "handed over".to_string(),
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
+            // True for all three recoveries `union_where_variant_expected_diag` picks from: the caret
+            // label comes from the kind alone, so it must not name an `is` check that two of them
+            // (a non-shape variant, an expression value) cannot offer as written.
+            DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
+            DiagnosticKind::UnionVariantNotStorable => "can't be stored in a union yet".to_string(),
+            DiagnosticKind::SuspendingResultIntoUnionLet => {
+                "store it in a variable first".to_string()
+            }
+            DiagnosticKind::SuspendingResultIntoUnionReturn => {
+                "store it in a variable first".to_string()
+            }
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "not the type this call needs".to_string()
+            }
+            DiagnosticKind::MapKeyNotStorable => "can't be a map key".to_string(),
+            DiagnosticKind::FixedLengthNotUsable => "not a usable length".to_string(),
+            DiagnosticKind::FixedLengthNotAllowedHere => "no length here".to_string(),
+            DiagnosticKind::FixedLengthMismatch => "wrong number of items".to_string(),
+            DiagnosticKind::FixedLengthMissingInExport => "write the length".to_string(),
+            DiagnosticKind::FixedReturnLengthsDiffer => "different lengths".to_string(),
+            DiagnosticKind::FixedReturnLengthUnknown => "length not known".to_string(),
+            DiagnosticKind::FixedFieldLengthMissing => "write the length".to_string(),
+            DiagnosticKind::FixedLengthMissingInTaskFunction => "write the length".to_string(),
+            DiagnosticKind::BackgroundUnionToGenericParameter => {
+                "declare the union type".to_string()
+            }
+            DiagnosticKind::WalkedListWrittenInLoop => "walk a copy".to_string(),
+            DiagnosticKind::GenericUnionBoundOutOfOrder => {
+                "put the type parameter first".to_string()
+            }
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {

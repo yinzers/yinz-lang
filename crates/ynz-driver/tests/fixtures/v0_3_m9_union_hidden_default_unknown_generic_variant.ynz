@@ -1,0 +1,34 @@
+// v0.3-M9 C1e rework (#421): a hidden field whose union type holds an unknown generic name
+// (`Nope<int>`) must be refused at its annotation.
+// Correct behavior: the build fails naming the broken annotation; no binary.
+// Pre-fix failure: the annotation resolved to an unreported error type, the default check skips
+// a type holding one, so the program compiled with the raw int 4096 where the envelope pointer
+// belongs and SIGSEGVed reading it.
+
+shape Big {
+  label: string
+  count: int
+}
+
+shape Holder {
+  name: string
+  hidden extra: Big | Nope<int> = 4096
+}
+
+function peek(share self: Holder) -> string {
+  let slot: Big | Nope<int> = self.extra
+  if (slot) {
+    is Big => {
+      return `big ${slot.label}`
+    }
+    else => {
+      return `other`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { name: `a` }
+  print(holder.peek())
+}

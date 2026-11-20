@@ -1,0 +1,34 @@
+// v0.3-M9 C1g rework round 3 (test fixer): the typed positions of the built-in methods that the
+// other `builtin_argument_type_*` fixtures leave out: the `fixed<T>` arm, the `array` `remove`,
+// the `map` `has`/`remove`, and the two-`string` `replace`. Correct behavior: does not compile —
+// each argument is compared with the method's parameter, with the plain call form's text.
+// Without the entry in `builtin_method_argument_slots` the call compiles, and a `Tiny` is read
+// as a `Big` (16 bytes) or a `string` as an `int`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let fs: fixed<Big> = [big]
+  fs.set(`zero`, big)
+  let fixedGot = fs.get(`zero`)
+  let fixedHas = fs.contains(tiny)
+  let xs: array<Big> = [big]
+  xs.remove(tiny)
+  let m: map<string, Big> = {}
+  let mapHas = m.has(7)
+  m.remove(8)
+  let text = `hello world`
+  let swapped = text.replace(1, 2)
+  print(fixedGot.exists().toString())
+  print(fixedHas.toString())
+  print(mapHas.toString())
+  print(swapped)
+}

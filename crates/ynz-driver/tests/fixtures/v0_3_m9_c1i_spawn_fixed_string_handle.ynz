@@ -1,0 +1,17 @@
+// v0.3-M9 C1i: a handled `background` call passes a `fixed<string>` with no ownership keyword
+// (the callee suspends, so it runs as a state machine on the scheduler). Every string is released
+// exactly once.
+// Expected output: the count, the first name, then `done`.
+
+function crunch(xs: fixed<string, 2>) -> nothing {
+  wait sleep(1)
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function entrypoint() -> nothing {
+  let xs: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  let task = background crunch(xs)
+  wait sleep(50)
+  print(`done`)
+}

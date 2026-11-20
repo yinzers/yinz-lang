@@ -1,0 +1,12 @@
+// Q1: for-loop variable named like a param, in a suspending fn.
+function worker(n: string) -> nothing {
+  let names: array<string> = [`amy`, `bob`]
+  for (n in names) {
+    wait sleep(5)
+    print(n)
+  }
+  print(n)
+}
+function entrypoint() -> nothing {
+  worker(`param`)
+}

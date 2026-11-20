@@ -1,0 +1,17 @@
+// v0.3-M9 C1h: a `fixed<string>` a suspending function returns is bound to a local of the caller
+// that is released only AFTER a later `wait` (it crosses the `wait` through its release).
+// Before: the caller bound the returned cells in a block of its resume function's stack and marked
+// the local moved, so the release after the `wait` ran on a null list (a crash).
+// Expected output: the first item, and every string freed.
+
+function pick() -> fixed<string> {
+  wait sleep(1)
+  let rows: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return rows
+}
+
+function entrypoint() -> nothing {
+  let rows = pick()
+  print(rows[0].or(`?`))
+  wait sleep(1)
+}

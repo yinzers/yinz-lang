@@ -284,6 +284,9 @@ function entrypoint() -> nothing {
   // ────── v0.3-M8: one shared copy for a group of background readers (auto-Arc) ──────
   // m8_arc_demo suspends (it receives the scouts' reports), so `wait` orders it after m8_demo.
   wait m8_arc_demo()
+  // ────── v0.3-M9: a task handle leaving its scope stops its task ──────
+  // m9_demo suspends (it waits on a task and sleeps), so `wait` orders it after m8_arc_demo.
+  wait m9_demo()
   // ────── v0.3-M5: per-field array layout — cannonball volley ──────
   // m5_soa_demo is pure CPU (it never suspends); m8_demo above was waited, so
   // this final section runs strictly after the channel story finishes.
@@ -1313,6 +1316,59 @@ function m8_arc_demo() -> nothing {
   print(`  the front office still holds the original: ${file.contactGrade.toString()}/${file.powerGrade.toString()}/${file.speedGrade.toString()}`)
 }
 
+// ────── v0.3-M9: a task handle leaving its scope stops its task ──────
+//
+// `let lookout = background watchTheRiver(...)` gives you a HANDLE: a name for the running
+// task. The handle belongs to the block it is declared in, like any other local. When that
+// block ends, the compiler releases the handle — and releasing a handle STOPS its task at the
+// task's next pause (its next `wait`). That is the whole rule:
+//
+//   - there is no "detach" and no "join" to remember;
+//   - everything the stopped task was holding (its own locals, the values you gave it) is
+//     freed exactly once — nothing leaks, and nothing is freed twice;
+//   - a task that must finish keeps its handle alive until it is done, for example with
+//     `handle.receive()`, which waits for the task's result.
+//
+// Why: a handle you no longer hold is a result nobody can ever read. Letting that task run on
+// would spend time and memory on work no one will see, so the language stops it for you.
+// (A `background` call you never store in a name has no handle to leave a scope: it keeps
+// running until it finishes, or until `entrypoint` returns.)
+
+// watchTheRiver — a lookout who waits 40 ms for a barge to show up, then reports it.
+// The report line is the last thing the task does, so a task that was stopped never prints it.
+function watchTheRiver(post: string) -> int errors {
+  wait sleep(40)
+  print(`  ${post}: spotted a barge on the Allegheny`)
+  return 3
+}
+
+function m9_demo() -> nothing {
+  print(``)
+  print(`v0.3-M9 — a task handle leaving its scope stops its task:`)
+
+  // Case 1 — the handle leaves its block. `lookout` is declared inside this `if` block, so the
+  // block's closing brace is where it goes out of scope. The task is still waiting out its
+  // 40 ms when that happens, so it is stopped there: "north post: spotted a barge" never prints.
+  if (true) {
+    let lookout = background watchTheRiver(`north post`)
+    print(`  north post: lookout sent out, now leaving the block`)
+  }
+  print(`  north post: block ended, the lookout's handle is released`)
+
+  // Case 2 — the handle stays alive until the task is done. `receive()` waits for the task's
+  // result, so the 40 ms wait finishes and the task prints its line. Only then does `courier`
+  // leave scope (at the end of this function), and by then the task has nothing left to stop.
+  let courier = background watchTheRiver(`south post`)
+  let courierReport = courier.receive()
+  let bargesSeen = courierReport.or(0)
+  print(`  south post: courier brought back ${bargesSeen.toString()} barges`)
+
+  // Give the stopped lookout far more than its 40 ms. Had it been left running, its line would
+  // appear during this pause. It does not, which is how you can see it was stopped.
+  wait sleep(150)
+  print(`  waited 150 ms: no report from the north post, its task was stopped`)
+}
+
 // ────── v0.3-M5: per-field array layout — cannonball volley from Fort Pitt ──────
 //
 // The repo's FIRST layout-qualifying array example. `volley` below is a
@@ -1513,13 +1569,16 @@ function m5_soa_demo() -> nothing {
   // still the captain's, and the quartermaster's edit silently landed in the
   // captain's book. Nothing warned you.
   let foreHold: array<int> = [12, 8, 3]
+  // Putting `foreHold` in the manifest hands it over: the manifest holds the hold now, so
+  // the lookups below name an empty hold as their "nothing there" answer instead.
+  let noHold: array<int> = []
   let captainsManifest: array<array<int>> = [foreHold]
   let quartermastersManifest: array<array<int>> = captainsManifest.copy()
   let foundQuartermastersFore = quartermastersManifest[0]
-  let quartermastersFore: array<int> = foundQuartermastersFore.or(foreHold)
+  let quartermastersFore: array<int> = foundQuartermastersFore.or(noHold)
   quartermastersFore.set(0, 99)
   let foundCaptainsFore = captainsManifest[0]
-  let captainsFore: array<int> = foundCaptainsFore.or(foreHold)
+  let captainsFore: array<int> = foundCaptainsFore.or(noHold)
   let foundCaptainsFirstCrate = captainsFore[0]
   let captainsFirstCrate = foundCaptainsFirstCrate.or(-1)
   print(`  captain's fore hold, first crate: ${captainsFirstCrate.toString()}`)

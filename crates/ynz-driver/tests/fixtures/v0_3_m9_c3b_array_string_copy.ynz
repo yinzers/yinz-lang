@@ -1,0 +1,17 @@
+// v0.3-M9 C3b fixture: `.copy()` of an `array<string>` gives the copy strings of its own, so
+// releasing both arrays frees each string once.
+// Allocations: the two elements are fresh and stored by move 2; `names.copy()` copies each 2;
+// `copied[0] = ...` stores a fresh string by move 1.
+// Total 2+2+1 = 5.
+// Expected output: one value per line below.
+
+function entrypoint() -> nothing {
+  let count: int = 1
+  let names: array<string> = [`a-${count}`, `b-${count}`]
+  let copied = names.copy()
+  copied[0] = `c-${count}`
+  print(names[0].or(`none`))
+  print(names[1].or(`none`))
+  print(copied[0].or(`none`))
+  print(copied[1].or(`none`))
+}

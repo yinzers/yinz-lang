@@ -1,0 +1,18 @@
+// v0.3-M9 C1k: a shape with an `int | float` field (a union with no shape variant and no heap
+// variant) is released at its scope exit. The union owns nothing, so only the string is freed.
+// Before: the build stopped with "a union of 2 variants with no shape variant has no stored form
+// to release".
+// Expected output: `A`, `B`.
+
+shape Holder {
+  label: string
+  pick: int | float
+}
+
+function entrypoint() -> nothing {
+  let holder: Holder = { label: `a`.toUpperCase(), pick: 3 }
+  print(holder.label)
+  let wide: float = 2.5
+  let other: Holder = { label: `b`.toUpperCase(), pick: wide }
+  print(other.label)
+}

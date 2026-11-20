@@ -35,7 +35,14 @@ fn string_map_insert_get_overwrite_and_miss_behave_correctly_across_growth() {
         // Arrange + Act: insert N distinct keys.
         for (i, k) in keys.iter().enumerate() {
             let v = i as i64;
-            ynz_map_set_str(map, k.as_ptr() as *const u8, &v as *const i64 as *const u8);
+            ynz_map_set_str(
+                map,
+                k.as_ptr() as *const u8,
+                &v as *const i64 as *const u8,
+                None,
+                None,
+                0,
+            );
         }
 
         // Assert: every key hits with its own value.
@@ -57,6 +64,9 @@ fn string_map_insert_get_overwrite_and_miss_behave_correctly_across_growth() {
             map,
             keys[42].as_ptr() as *const u8,
             &v as *const i64 as *const u8,
+            None,
+            None,
+            0,
         );
         assert_eq!(ynz_runtime::ynz_map_count(map), count_before);
         let mut out: i64 = 0;
@@ -114,7 +124,14 @@ unsafe fn time_str_map(keys: &[CString]) -> Duration {
     let map = ynz_map_new(8);
     for (i, k) in keys.iter().enumerate() {
         let v = i as i64;
-        ynz_map_set_str(map, k.as_ptr() as *const u8, &v as *const i64 as *const u8);
+        ynz_map_set_str(
+            map,
+            k.as_ptr() as *const u8,
+            &v as *const i64 as *const u8,
+            None,
+            None,
+            0,
+        );
     }
     let mut out: i64 = 0;
     for k in keys {
@@ -136,7 +153,7 @@ unsafe fn time_int_map(n: usize) -> Duration {
     let map = ynz_map_new(8);
     for i in 0..n {
         let v = i as i64;
-        ynz_map_set(map, i as i64, &v as *const i64 as *const u8);
+        ynz_map_set(map, i as i64, &v as *const i64 as *const u8, None, 0);
     }
     let mut out: i64 = 0;
     for i in 0..n {

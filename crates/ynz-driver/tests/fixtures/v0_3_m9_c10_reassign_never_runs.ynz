@@ -1,0 +1,15 @@
+// v0.3-M9 C10: the reassignment sits in an `if` that never runs, so the loop never took the list
+// over and the binding's own release frees it once. Correct behavior: prints 3, 3.
+
+function entrypoint() -> nothing {
+  let matrix: array<array<int>> = [[1], [2], [3]]
+  let seen = 0
+  for (row in matrix) {
+    seen = seen + 1
+    if (seen > 99) {
+      matrix = [[9]]
+    }
+  }
+  print(seen)
+  print(matrix.count())
+}

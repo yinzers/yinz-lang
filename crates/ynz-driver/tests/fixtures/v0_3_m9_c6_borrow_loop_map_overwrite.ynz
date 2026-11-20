@@ -1,0 +1,10 @@
+// v0.3-M9 C6: a map-loop entry reads a value the body overwrites
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
+
+function entrypoint() -> nothing {
+  let table: map<string, string> = { `k`: `v-${1}` }
+  for (entry in table) {
+    table[`k`] = `w-${2}`
+    print(entry.value)
+  }
+}

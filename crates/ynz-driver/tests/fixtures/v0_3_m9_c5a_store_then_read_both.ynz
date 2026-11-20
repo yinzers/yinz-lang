@@ -1,0 +1,14 @@
+// v0.3-M9 C5a: REFUSED since storing hands the value over — `o.add(a)` gives `a` to `o`, so the
+// reads of `a` below are the `ConsumedByStore` error (asserted in `v03_m9_store_hands_over.rs`).
+// It was the "a store joins, it does not consume" guard (`3` `1` `3` after the store); the stores
+// that stay legal are the other C5a fixtures. Fix: `o.add(a.copy())`, or read `a` above the store.
+function entrypoint() -> nothing {
+  let a: array<int> = [1, 2, 3]
+  let o: array<array<int>> = []
+  o.add(a)
+  print(a.count().toString())
+  print(o.count().toString())
+  for (inner in o) {
+    print(inner.count().toString())
+  }
+}

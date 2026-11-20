@@ -687,3 +687,21 @@ fn no_auto_parallel_env_outranks_soa_force_env_at_the_query() {
         "YNZ_NO_AUTO_PARALLEL=1 must outrank YNZ_SOA_FORCE=soa; got: {rows:?}"
     );
 }
+
+#[test]
+fn a_list_whose_loop_hands_a_row_over_declines_as_escape() {
+    // WHY (High): a struct-of-arrays list has no row cell for the hand-over to take; the layout
+    // kept it and codegen failed with an internal error (C1q). The list must decline.
+    let _guard = env_guard();
+    let rows = candidates_for("v0_3_m9_c1q_handover_soa_list.ynz");
+    let pts = rows
+        .iter()
+        .find(|row| row.array_name == "pts")
+        .expect("`pts` is a candidate");
+    assert_eq!(
+        pts.verdict,
+        SoaVerdict::Declined(SoaDeclineReason::Escapes {
+            how: "a loop row is handed over (C1q)".to_string(),
+        })
+    );
+}

@@ -1,0 +1,14 @@
+// v0.3-M9 C1l: the same program as `..._refused`, written the way the refusal advises: the union
+// local takes a `.copy()` of the `share` parameter, so the caller's array stays its own.
+// Expected output: `kept`, then the caller's count `3`.
+
+function keep<T>(share first: T) -> nothing {
+  let held: T | nothing = first.copy()
+  print(`kept`)
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  keep(rows)
+  print(rows.count())
+}

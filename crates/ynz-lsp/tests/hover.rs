@@ -78,6 +78,7 @@ fn hover_user_defined_function() {
             contains_wait: false,
             suspends: false,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         },
     );
@@ -237,6 +238,7 @@ fn hover_with_doc_comment_prepends_content() {
             contains_wait: false,
             suspends: false,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         },
     );
@@ -305,6 +307,7 @@ fn hover_without_doc_comment_shows_signature_only() {
             contains_wait: false,
             suspends: false,
             does_real_work: false,
+            written_param_places: Vec::new(),
             original_name: None,
         },
     );

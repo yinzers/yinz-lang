@@ -1,0 +1,20 @@
+// v0.3-M9 C6 fixture: `fixed<map<string, int>>` `set` releases the map it replaces, its keys
+// included.
+// Expected output: the sizes of the two maps the list holds at the end.
+
+function entrypoint() -> nothing {
+  let first: map<string, int> = {}
+  first.set(`a-${1}`, 1)
+  let second: map<string, int> = {}
+  second.set(`b-${2}`, 2)
+  let third: map<string, int> = {}
+  third.set(`c-${3}`, 3)
+  third.set(`d-${4}`, 4)
+  let value: fixed<map<string, int> > = [first, second]
+  value.set(0, third)
+  let fallback: map<string, int> = {}
+  let firstItem: map<string, int> = value[0].or(fallback)
+  let secondItem: map<string, int> = value[1].or(fallback)
+  print(firstItem.count())
+  print(secondItem.count())
+}

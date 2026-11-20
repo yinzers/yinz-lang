@@ -1,0 +1,16 @@
+// v0.3-M9 C1f security round 1 (#423): the guard beside the name-clash refusals. This module
+// imports the SAME `Big` that sizes `Holder`'s union field, so the name means one shape.
+// Correct behavior: compiles and prints `big lib 5`, `7`, `big own 9`; clean under
+// AddressSanitizer at -O0 and -O2.
+import { Holder, Tiny, Big, show, fillHolder } from `lib`
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let holder: Holder = { slot: tiny, id: 7 }
+  fillHolder(holder)
+  print(show(holder))
+  print(holder.id)
+  let big: Big = { first: 1, second: 2, third: 3, fourth: 4, fifth: 9, label: `own` }
+  let built: Holder = { slot: big, id: 8 }
+  print(show(built))
+}

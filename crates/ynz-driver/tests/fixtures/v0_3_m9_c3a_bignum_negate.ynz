@@ -1,0 +1,18 @@
+// v0.3-M9 C3a fixture: unary minus on a `number>34`. It was lowered as decimal128
+// `0 - value`: it read the value's text as 16 decimal128 bytes and returned a 16-byte stack cell
+// as if it were bignum text (printed `2.5` for `-2.5`'s operand, a wrong result).
+//
+// Expected: -2.5 / 2.5 / -12.5 / 0
+
+function entrypoint() -> nothing {
+  let big: number<50> = 2.5
+  let negated: number<50> = -big
+  print(negated)
+  let negatedTwice: number<50> = -negated
+  print(negatedTwice)
+  let negativeLarge: number<50> = -12.5
+  print(negativeLarge)
+  let zero: number<50> = 0.0
+  let negatedZero: number<50> = -zero
+  print(negatedZero)
+}

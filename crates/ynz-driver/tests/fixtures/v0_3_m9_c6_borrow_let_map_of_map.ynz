@@ -1,0 +1,12 @@
+// v0.3-M9 C6: let of a map value .or() aliases it; the map set frees it
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
+
+function entrypoint() -> nothing {
+  let outer: map<string, map<string, string>> = { `a`: { `k`: `v-${1}` } }
+  let fallback: map<string, string> = {}
+  let maybeInner = outer.get(`a`)
+  let inner = maybeInner.or(fallback)
+  outer[`a`] = { `k`: `w-${2}` }
+  let maybeValue = inner.get(`k`)
+  print(maybeValue.or(`none`))
+}

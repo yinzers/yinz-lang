@@ -1,3 +1,35 @@
+/// How many items a `fixed` list holds, as far as the compiler knows.
+///
+/// `fixed<T, N>` costs what Rust's `[T; N]` costs: the length is a compile-time constant, never a
+/// runtime field and never a pointer-and-length pair. A function whose parameter is written
+/// `fixed<T>` (no length) gets one specialised version per length its callers pass
+/// ([`FixedLength::OfParam`]).
+///
+/// `Ord` for the same reason as [`Type`]: it keys ordered containers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FixedLength {
+    /// The compiler does not know it: the result of an
+    /// operation that builds a list of runtime length (`filter`, `unique`, `limit`, `freeze`).
+    Unknown,
+    /// Known at compile time: a literal's item count, or the `N` of `fixed<T, N>`.
+    Known(usize),
+    /// The length of the `fixed<T>` parameter named `parameter` of the function being
+    /// checked. The body is checked once with this placeholder; each specialised version
+    /// replaces it with the length of the list its callers pass.
+    OfParam { parameter: String },
+}
+
+impl FixedLength {
+    /// The length when it is known now, `None` for [`Unknown`](FixedLength::Unknown) and for a
+    /// parameter's placeholder. O(1).
+    pub fn known(&self) -> Option<usize> {
+        match self {
+            FixedLength::Known(count) => Some(*count),
+            FixedLength::Unknown | FixedLength::OfParam { .. } => None,
+        }
+    }
+}
+
 /// The types known to the M7 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
@@ -78,13 +110,9 @@ pub enum Type {
     /// Element type is concrete at typeck time.
     BuiltinArray { elem: Box<Type> },
 
-    /// Stack-allocated fixed-size list: `fixed<T>` in source.
-    /// `size` is `Some(n)` when the literal element count is known at typeck time
-    /// (for literal-OOB checking), `None` when only the annotation is present.
-    BuiltinFixed {
-        elem: Box<Type>,
-        size: Option<usize>,
-    },
+    /// Stack-allocated fixed-size list: `fixed<T>` in source, `fixed<T, N>` in a signature.
+    /// `size` says how many items the list holds, as far as the compiler knows (`FixedLength`).
+    BuiltinFixed { elem: Box<Type>, size: FixedLength },
 
     /// Built-in optional type: `maybe<T>` in source.
     /// Distinct from `Type::Generic` because `.value` has special flow-sensitive
@@ -228,6 +256,67 @@ pub fn type_name(t: &Type) -> String {
     }
 }
 
+/// The names of a slot's type and of the value stored in it, for a diagnostic that says they do
+/// not match. When both are `fixed` lists and only their LENGTHS differ, each shows its length
+/// (`fixed<int, 3>` and `fixed<int, 2>`): with `type_name` alone both read `fixed<int>`, and the
+/// message reads as no mismatch at all. Anything else keeps `type_name`. O(size of the types).
+pub fn type_names_for_mismatch(slot: &Type, value: &Type) -> (String, String) {
+    match (slot, value) {
+        (
+            Type::BuiltinFixed {
+                size: slot_size, ..
+            },
+            Type::BuiltinFixed {
+                size: value_size, ..
+            },
+        ) if slot_size != value_size => (type_name_with_length(slot), type_name_with_length(value)),
+        _ => (type_name(slot), type_name(value)),
+    }
+}
+
+/// Can a `fixed` slot of length `slot` hold a list of length `value`? A written length takes
+/// exactly that many items; a slot with no written length (`fixed<T>`) takes any list. A list
+/// whose length the compiler does not know never fits a written length: the slot would read
+/// cells the list may not have. O(1).
+pub fn fixed_length_fits(slot: &FixedLength, value: &FixedLength) -> bool {
+    match slot {
+        FixedLength::Known(slot_count) => {
+            matches!(value, FixedLength::Known(count) if count == slot_count)
+        }
+        FixedLength::Unknown | FixedLength::OfParam { .. } => true,
+    }
+}
+
+/// `type_name`, but a `fixed` list of known length shows it (`fixed<int, 4>`): what a function
+/// signature says, so hover and completion show the length a caller must pass (C1h, #433). Only the
+/// whole type is read; a `fixed` inside another type keeps `type_name`'s form. O(size of the type).
+pub fn type_name_with_length(ty: &Type) -> String {
+    match ty {
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } => format!("fixed<{}, {count}>", type_name(elem)),
+        other => type_name(other),
+    }
+}
+
+/// The widest `number<N>` that is a decimal128 value (an i128, no heap). A `number` wider than this is a
+/// bignum: a pointer to heap decimal text, released like a `string`.
+pub const DECIMAL128_MAX_PRECISION: u32 = 34;
+
+/// True when a value of `ty` is text on the heap that one holder owns and every other holder copies: a
+/// `string` or a bignum (`number<N>`, N > 34, a pointer to heap decimal text). The one fact the
+/// string-ownership records (moves, non-owned reads, temporaries, the copy table) answer from.
+pub fn is_owned_text(ty: &Type) -> bool {
+    matches!(ty, Type::String) || is_bignum(ty)
+}
+
+/// True when `ty` is a bignum (`number<N>`, N > 34): the ONE type fact the release plan
+/// (`heap_class_of`) and codegen's release table (`release_step`) both answer from.
+pub fn is_bignum(ty: &Type) -> bool {
+    matches!(ty, Type::Number { precision } if *precision > DECIMAL128_MAX_PRECISION)
+}
+
 /// True when a value of this type is passed by copy (no heap reference, no aliasing).
 ///
 /// Trivially-copyable types — `int`, `float`, `boolean`, `number` — fit in a machine
@@ -277,6 +366,10 @@ pub enum ChannelElemDrop {
     /// mints (`number_to_heap_cell`) and the RECEIVE frees — never the sender's own storage
     /// (fr12, `IMP-concurrency.md`). Glue: `ynz_number_cell_free`.
     NumberCell,
+    /// `string`: the payload is a counted string the channel owns from the send (a borrowed string
+    /// is copied by the send, a movable one is handed over: `own_string_for_store`) until a
+    /// receive takes it. Glue: `ynz_string_release`.
+    String,
 }
 
 impl ChannelElemDrop {
@@ -288,29 +381,31 @@ impl ChannelElemDrop {
     pub fn transfers_source(self) -> bool {
         match self {
             ChannelElemDrop::Array | ChannelElemDrop::Map => true,
-            ChannelElemDrop::NumberCell => false,
+            // A string is copied or moved by the send itself (`own_string_for_store`): the source
+            // binding keeps the ownership rules every string read has.
+            ChannelElemDrop::NumberCell | ChannelElemDrop::String => false,
         }
     }
 }
 
 /// THE classification of a channel element type into its drop kind (`None` = no
-/// runtime-owned payload: `int`/`float`/`bool` value bits, or `string`'s immortal bytes).
+/// runtime-owned payload: `int`/`float`/`bool` value bits).
 pub fn channel_elem_drop(elem: &Type) -> Option<ChannelElemDrop> {
     match elem {
         Type::BuiltinArray { .. } => Some(ChannelElemDrop::Array),
         Type::BuiltinMap { .. } => Some(ChannelElemDrop::Map),
+        Type::String => Some(ChannelElemDrop::String),
         Type::Number { precision } if *precision <= 34 => Some(ChannelElemDrop::NumberCell),
         _ => None,
     }
 }
 
 /// The element types `channel<T>()` admits — DERIVED from [`channel_elem_drop`] (glue-bearing
-/// kinds) plus the value-bit scalars and `string`, never a third hand-maintained list.
+/// kinds) plus the value-bit scalars, never a third hand-maintained list.
 /// `shape` elements and bignum `number` (precision > 34) stay rejected
 /// (`channel-element-heap-upgrade` in the feature registry).
 pub fn channel_elem_supported(elem: &Type) -> bool {
-    matches!(elem, Type::Int | Type::Float | Type::Bool | Type::String)
-        || channel_elem_drop(elem).is_some()
+    matches!(elem, Type::Int | Type::Float | Type::Bool) || channel_elem_drop(elem).is_some()
 }
 
 /// The user-facing names of the element types [`channel_elem_supported`] admits, in the
@@ -341,11 +436,11 @@ pub use crate::owned_copy::copy_is_independent;
 /// beneficial-emission condition", item 4): can a value of this type be shared across a
 /// `background` boundary as ONE refcounted block whose bytes every task reads?
 ///
-/// A `shape` whose fields are all `int`/`float`/`bool`/`string` — the field kinds a byte copy
-/// of the struct shares soundly: value bits, or (`string`) a pointer the shipped copy path (a
-/// byte `memcpy` of the struct into `ynz_alloc`'d storage) ALREADY shares between the caller
-/// and every task, and which the runtime never releases today (no string free exists), so
-/// sharing it by count changes nothing. Excluded, each for a reason the block cannot express:
+/// A `shape` whose fields are all `int`/`float`/`bool`/`string`: value bits, which a byte copy of
+/// the struct shares soundly, or a `string`, the one heap kind the block can own. The block holds
+/// a copy of each string of its own (made once at group creation by `deepen_shape_fields`) and
+/// releases them with the shape's release function when the last reference drops (C1o), so a
+/// task never reads a string the spawner has released. Excluded, each for a reason the block cannot express:
 /// - `number` fields: 16-byte alignment; the block's data starts 8-aligned (`arc.rs`). ALSO:
 ///   a shape with a `number` field SIGSEGVs on ANY `background` spawn today on the copy path
 ///   (parked item 40 / FRAGO 012, hotfix pending) — do not widen the floor to `number` until
@@ -541,6 +636,36 @@ mod channel_elem_tests {
             !channel_elem_supported(&Type::Number { precision: 40 }),
             "bignum `number` (precision > 34) must stay rejected per the \
              channel-element-heap-upgrade deferral"
+        );
+    }
+}
+
+#[cfg(test)]
+mod type_name_with_length_tests {
+    use super::*;
+
+    // Bug: hover and completion showed `fixed<int>` for a parameter written `fixed<int, 4>`, so a
+    // caller could not see the length the function requires (signature display, Low tier: one
+    // named reason, the signature is the only place a caller learns a required length).
+    #[test]
+    fn a_known_length_is_shown_and_an_unknown_one_is_not() {
+        let list = |size| Type::BuiltinFixed {
+            elem: Box::new(Type::Int),
+            size,
+        };
+        assert_eq!(
+            type_name_with_length(&list(FixedLength::Known(4))),
+            "fixed<int, 4>"
+        );
+        assert_eq!(
+            type_name_with_length(&list(FixedLength::Unknown)),
+            "fixed<int>"
+        );
+        assert_eq!(
+            type_name_with_length(&list(FixedLength::OfParam {
+                parameter: "xs".to_string()
+            })),
+            "fixed<int>"
         );
     }
 }

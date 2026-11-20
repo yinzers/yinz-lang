@@ -1,0 +1,26 @@
+// v0.3-M9 C1g rework round 3 (security): a built-in `array<Big>` method receives an argument of
+// the wrong type. Correct behavior: does not compile — each argument is compared with the
+// method's parameter, with the plain call form's text.
+// Pre-fix failure (ASan, 2eabaf7): `xs.add(tiny)`, `xs.set(0, tiny)` and `xs.contains(tiny)`
+// compiled and read the 1-byte `Tiny` as a 16-byte `Big` (stack-buffer-overflow READ);
+// `xs.get(`zero`)` panicked the code generator.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let xs: array<Big> = [big]
+  xs.add(tiny)
+  xs.set(0, tiny)
+  let found = xs.contains(tiny)
+  let got = xs.get(`zero`)
+  print(found.toString())
+  print(got.exists().toString())
+}

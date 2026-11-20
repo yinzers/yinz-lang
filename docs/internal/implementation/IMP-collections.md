@@ -490,9 +490,11 @@ shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
 
 Decided: pointer identity and whole-element memcmp rejected.
 
-**Pointer-typed fields (string, nested shape/collection) compare by identity** — ratified as final
-for M5 after the E8-class review. Deep value equality for those fields is a future extension, not
-an M5 gap-fix.
+**String fields compare by content** (`shape_value_eq`; `array<string>.contains` does the same):
+copy-on-store gives a stored string no stable identity, so an identity compare of a stored copy
+with the text it was copied from is always false (`IMP-strings.md` "String Ownership and
+Release"). This follows D12's value-semantics direction. **Nested shape and collection fields
+still compare by identity**; deep value equality for those is a future extension.
 
 ### Field-assign = copy-on-persist snapshot semantics (D13)
 
@@ -505,7 +507,9 @@ to alias, so the snapshot is forced — and it is consistent with D12's value-se
 
 **Teaching note (the single most surprising divergence for the target audience):** TypeScript/JS
 developers expect aliasing here — in TS, objects are references, so push-then-mutate changes what
-the array sees. In Yinz, the collection stores a snapshot taken at the assignment:
+the array sees. In Yinz a store hands the source over (`IMP-ownership.md`, "Stores are sinks";
+`git log --grep="hands it over"`), so the source name cannot be read or mutated after the store.
+To keep working with the source, store a copy; the collection holds a snapshot taken at the store:
 
 ```ynz
 shape Position {
@@ -514,12 +518,12 @@ shape Position {
 }
 
 let path: array<Position> = []
-let p: Position = { x: 1, y: 2 }
-path.add(p)
-p.x = 99
-// The stored element still has x == 1 — .add() snapshotted p's bytes at the call.
-// In TypeScript, path[0] would alias p and show x == 99.
-// To change the stored element, write through the collection: path[0] = { x: 99, y: 2 }
+let p: Position = { x: 1.0, y: 2.0 }
+path.add(p.copy())
+p.x = 99.0
+// The stored element still has x == 1.0 — the copy was taken at the call.
+// Without `.copy()`, the read of `p` on the next line is refused.
+// To change the stored element, write through the collection: path[0] = { x: 99.0, y: 2.0 }
 ```
 
 The user spec ([`REF-collections.md`](../../reference/REF-collections.md)) must keep carrying this
@@ -709,3 +713,17 @@ Companion length methods:
 - Adds a new concept jr devs must learn (and convert to/from strings).
 - Unicode complications surface immediately: is a `char` a code point? A grapheme? UTF-8 byte? Each answer wrong for some use case.
 - A 1-length string covers every place a "char" would be useful, without the conceptual baggage.
+
+## `fixed<T, N>` in function signatures (v0.3-M9 C1h)
+
+State in force; the history is in the commits (`git log --grep="fixed<T, N>"`).
+
+- **Cost rule (Golden Rule 6).** A length is a compile-time constant, never a runtime field and never a pointer-and-length pair: `fixed<T, N>` costs what Rust's `[T; N]` costs. Measured on the emitted machine code (`build(a, b, c, d) -> fixed<int, 4>` and `third(xs) -> int`): the same instructions as the Rust program (`mov` + four stores + `ret`; one `mov` + `ret`), no allocation. A `fixed<Shape>` list still keeps one heap cell per item (the existing item representation, unchanged by this work), which Rust's inline `[S; N]` does not.
+- **Type.** `Type::BuiltinFixed.size` is a `FixedLength`: `Known(n)`, `Unknown` (the result of `filter`/`unique`/`limit`/`freeze`, `append`/`prepend`/`concat`), or `OfParam` (the length of an unsized `fixed<T>` parameter: the body is checked once with the placeholder).
+- **One reader of a written `fixed<…>`**: `crates/ynz-typeck/src/fixed_length.rs` (`read_fixed_arguments`). The checker's side (diagnostics, call binding, return-length work) is `check/fixed_lengths.rs`. A length may be written only as the whole type of a parameter, a return value or a shape field (inline shapes included, `check_shape_field_type`); elsewhere, and on any other generic, it is refused (`FixedLengthNotAllowedHere`). A field written without a length is refused (`FixedFieldLengthMissing`).
+- **Return by value.** A `fixed` of known length comes back as `[N x i64]` (plain functions: `abi_return_type`; suspending functions: the cells ride the frame's `Return` region, copied out by the wrapper or the calling state machine). A function whose return type writes no length gets the length every `return` gives, worked out by re-running the body check until no function's length changes (`check`); disagreeing or unknown lengths are refused (`FixedReturnLengthsDiffer`, `FixedReturnLengthUnknown`).
+- **Per-length versions.** An unsized `fixed<T>` parameter makes the function compile once per length its callers pass (symbol `name<3>`). `fixed_length::close_instances` is the ONLY place the set of versions is worked out (`TypedModule::fixed_instances`); codegen declares, lowers and calls exactly those versions and works out no length itself (`Cg::fixed_version_symbol`, `Cg::resolve_fixed_length`). A function that suspends or may be promoted to a task host is compiled once (`why_built_once`, the one predicate), so it has no versions. An unsized `fixed<T>` parameter on it is refused (`FixedLengthMissingInTaskFunction`) only when its body asks for the length (`fixed_length_use::LengthUses::needs_length`: any use but handing the list to a callee that does not need it, or owning it with heap items to release); a function that only receives the list works, because a spawn's copy is sized and released from the argument's type at the call site (`release_glue_free_kind`).
+- **Exports** must write the length of every `fixed` they take or return (`FixedLengthMissingInExport`): an importer sees only the signature.
+- **Shape fields.** A `fixed<T, N>` field is stored by value: an `[N x i64]` member (`[N x i128]` for a decimal128 item) of the shape's struct (`shape_types.rs`), so the length is in the type and nothing is stored beside the cells. Reading the field yields the address of its first cell; a store copies the cells and a `fixed<string>`/`fixed<Shape>` field gets an item of its own per cell unless the source is moved; the shape's release walks the cells in place; every deep copy (`deepen_shape_fields`) copies each cell's item. A `let` of a field read is judged like an array or shape read (`non_owned_reads`): a view when nothing writes it, else a copy in an entry-block slot.
+- **Background tasks.** A plain `fixed<T, N>` result rides the moved cell a union result rides (`HANDLE_RET_KIND_UNION`, `handle_cell_bytes`): `receive()` copies the cells and their items into a block of the receiving frame; an unreceived result releases its items and the cell.
+- **Not built / parked.** `freeze`, `filter`, `unique`, `limit` build lists of runtime length and are not lowered in codegen. A list of unknown length (`Unknown`) read from one of them reads `count` 0 as before.

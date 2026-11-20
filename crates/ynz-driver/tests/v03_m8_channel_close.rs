@@ -128,10 +128,10 @@ fn assert_runs(name: &str, expected_stdout: &str) {
 }
 
 /// Exit 0 + byte-exact stdout + exact alloc/free parity: `alloc == free + expected_gap`, where
-/// the gap is the set of heap values still HELD at exit (no scope-exit drop pass exists, so a
-/// received or buffered value is held to exit by its binding or by the channel). A smaller gap
-/// is a double free (the ladder, the glue, or `refuse_closed` freed a value someone still
-/// holds); a larger gap is a leak (P2-3's class).
+/// the gap is the set of heap values still HELD at exit. Scope-exit release (C7, C8) frees a
+/// received or buffered value with its binding or with the channel, so a fixture pins 0 unless a
+/// value is held on purpose. A smaller gap is a double free (the ladder, the glue, or
+/// `refuse_closed` freed a value someone still holds); a larger gap is a leak (P2-3's class).
 fn assert_runs_with_parity(
     name: &str,
     expected_stdout: &str,
@@ -235,8 +235,8 @@ fn m8_p4_chan_array_roundtrip_receiver_is_sole_holder() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_array_roundtrip.ynz",
         "3\n10\n30\nend\n",
-        2,
-        "2 = the task-built array now held by the receiver's `got`",
+        0,
+        "nothing is held at exit: the receiver's `maybe` local releases the task-built array (C8 slice 4a)",
     );
 }
 
@@ -256,8 +256,8 @@ fn m8_p4_chan_array_buffered_at_exit_is_held_by_the_channel() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_array_drop_with_buffered.ynz",
         "buffered\n",
-        2,
-        "2 = the buffered array held by the never-torn-down channel",
+        0,
+        "0 = the buffered array is freed with the spawner's channel local, which a state-machine entrypoint now releases (C8 slice 2)",
     );
 }
 
@@ -268,9 +268,9 @@ fn m8_p4_chan_map_roundtrip_both_task_built_and_give_bg_arg() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_map_roundtrip.ynz",
         "2\n2\n3\n9\nend\n",
-        10,
-        "5 = the task-built map held by `first`'s value, 5 = the given spawner map held by \
-         `second`'s value (header + ctrl + keys + vals + insert_order each)",
+        0,
+        "nothing is held at exit: both maps are released by their `maybe` locals at the resume \
+         function's scope exit (C8 slice 4a)",
     );
 }
 
@@ -289,8 +289,8 @@ fn m8_p4_chan_map_buffered_at_exit_is_held_by_the_channel() {
     assert_runs_with_parity(
         "v0_3_m8_p4_chan_map_drop_with_buffered.ynz",
         "buffered\n",
-        5,
-        "5 = the buffered map held by the never-torn-down channel",
+        0,
+        "0 = the buffered map is freed with the spawner's channel local, which a state-machine entrypoint now releases (C8 slice 2)",
     );
 }
 
@@ -311,8 +311,9 @@ fn m8_p4_flow_every_admitted_payload_form_sends() {
     assert_runs_with_parity(
         "v0_3_m8_p4_flow_admitted_forms.ynz",
         "3\n4\n4\n2\n0\n5\nend\n",
-        12,
-        "6 received arrays × 2 counted allocs each, held by the consumer at exit",
+        0,
+        "nothing is held at exit: every received array is released by its `maybe` local at the \
+         resume function's scope exit (C8 slice 4a)",
     );
 }
 
@@ -349,8 +350,8 @@ fn m8_p4_number_channel_buffered_cell_is_held_by_the_channel() {
     assert_runs_with_parity(
         "v0_3_m8_p4_number_chan_drop_with_buffered.ynz",
         "buffered\n",
-        1,
-        "1 = the buffered 16-byte cell held by the never-torn-down channel",
+        0,
+        "0 = the buffered 16-byte cell is freed with the spawner's channel local, which a state-machine entrypoint now releases (C8 slice 2)",
     );
 }
 
@@ -448,9 +449,9 @@ fn m8_p4_fix2_builder_with_a_computed_scalar_local_is_fresh_and_sends() {
     assert_runs_with_parity(
         "v0_3_m8_p4_builder_with_computed_scalar_is_fresh.ynz",
         "1\n3\nend\n",
-        4,
-        "the received one-element array (2 counted allocs) held by the consumer, plus the \
-         bucket's rows array (2 counted allocs) held by `bucket` — nothing is freed at scope exit",
+        0,
+        "nothing is held at exit: the received array and the flat shape bucket are released by \
+         the resume function at its scope exit (C8 slice 4a)",
     );
 }
 

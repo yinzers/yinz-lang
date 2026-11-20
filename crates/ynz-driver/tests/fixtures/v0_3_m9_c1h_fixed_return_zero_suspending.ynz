@@ -1,0 +1,21 @@
+// v0.3-M9 C1h: a SUSPENDING function, called directly and as a `background` task, returns a
+// `fixed<int, 0>`: the empty list. Its return goes through the suspension frame and the task
+// handle, and no step of that path may read or write memory for it.
+// Expected output: the two counts, 0 and 0.
+
+function noIntsLater() -> fixed<int, 0> {
+  wait sleep(1)
+  let nothingYet: fixed<int> = []
+  return nothingYet
+}
+
+function entrypoint() -> nothing {
+  let direct = noIntsLater()
+  print(direct.count())
+  let handle = background noIntsLater()
+  wait sleep(20)
+  let received = handle.receive()
+  let fallback: fixed<int> = []
+  let list = received.or(fallback)
+  print(list.count())
+}

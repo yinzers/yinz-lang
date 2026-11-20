@@ -1,0 +1,13 @@
+// v0.3-M9 C6: returning a parameter hands the caller an alias of an element
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
+
+function echo(rows: array<int>) -> array<int> {
+  return rows
+}
+function entrypoint() -> nothing {
+  let holder: array<array<int>> = [[10, 20, 30]]
+  let fallback: array<int> = []
+  let heldRows = echo(holder[0].or(fallback))
+  holder[0] = [9]
+  print(heldRows.count())
+}

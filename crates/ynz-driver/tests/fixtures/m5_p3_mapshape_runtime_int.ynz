@@ -16,7 +16,7 @@ function entrypoint() -> nothing {
   let pa: Part = { qty: qa, price: qa * 10 }
   let pb: Part = { qty: qb, price: qb * 10 }
   let stock: map<int, Part> = {}
-  stock.set(100, pa)
+  stock.set(100, pa.copy())
   stock.set(200, pb)
   let n1: int = stock.count()
   print(n1)
@@ -40,7 +40,7 @@ function entrypoint() -> nothing {
     print(g2.value.qty)
   }
   let pc: Part = { qty: qc, price: qc * 10 }
-  stock.set(100, pc)
+  stock.set(100, pc.copy())
   let i1 = stock[100]
   if (i1.exists()) {
     print(i1.value.qty)

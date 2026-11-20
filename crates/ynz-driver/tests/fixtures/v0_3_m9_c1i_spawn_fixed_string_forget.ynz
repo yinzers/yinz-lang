@@ -1,0 +1,17 @@
+// v0.3-M9 C1i: a fire-and-forget `background` call passes a `fixed<string>` with no ownership
+// keyword (the callee never suspends, so it runs on the CPU pool). The task reads the list and
+// every string is released exactly once.
+// Before: 2 of the 4 strings leaked.
+// Expected output: the count, the first name, then `done`.
+
+function crunch(xs: fixed<string>) -> nothing {
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function entrypoint() -> nothing {
+  let xs: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  background crunch(xs)
+  wait sleep(50)
+  print(`done`)
+}

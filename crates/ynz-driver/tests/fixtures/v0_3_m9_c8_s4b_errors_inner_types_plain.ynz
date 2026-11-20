@@ -1,0 +1,79 @@
+// v0.3-M9 C8 slice 4b: the plain-path release of an `errors` local, one function per inner type whose ok
+// word is not a plain heap pointer: a shape, a `maybe` of a shape, a union, a union of a string and an
+// int, a `maybe` of that union, a `maybe` of a string, an array, a map and a bignum `number`. Each local
+// is released at the scope exit with the form its ok word needs (a union and a `maybe` of a union ride
+// the result as a view and a pair over a view, never a heap cell). Correct behavior: nine `false`, every
+// allocation freed, clean under AddressSanitizer at both optimization levels.
+
+shape Big {
+  label: string
+  count: int
+}
+shape Tiny {
+  flag: boolean
+}
+shape Thing = Tiny | Big
+shape Mixed = string | int
+
+function aShape(n: int) -> Big errors {
+  let big: Big = { label: `s${n}`, count: n }
+  return big
+}
+function aMaybeShape(n: int) -> maybe<Big> errors {
+  let items: array<Big> = [{ label: `ms${n}`, count: n }]
+  let found = items.get(0)
+  return found
+}
+function aUnion(n: int) -> Thing errors {
+  let big: Big = { label: `u${n}`, count: n }
+  return big
+}
+function aMixed(n: int) -> Mixed errors {
+  let text: Mixed = `mixed${n}`
+  return text
+}
+function aMaybeString(n: int) -> maybe<string> errors {
+  let items: array<string> = [`m${n}`]
+  let found = items.get(0)
+  return found
+}
+function aMaybeMixed(n: int) -> maybe<Mixed> errors {
+  let text: Mixed = `mm${n}`
+  let items: array<Mixed> = []
+  items.add(text)
+  let found = items.get(0)
+  return found
+}
+function anArray(n: int) -> array<string> errors {
+  let items: array<string> = [`a${n}`, `b`]
+  return items
+}
+function aMap(n: int) -> map<string, string> errors {
+  let table: map<string, string> = {}
+  table[`k`] = `v${n}`
+  return table
+}
+function aBig(n: int) -> number errors {
+  return 123456789012345678901234567890123456789.5
+}
+
+function entrypoint() -> nothing {
+  let a = aShape(1)
+  let b = aMaybeShape(2)
+  let c = aUnion(3)
+  let d = aMixed(4)
+  let e = aMaybeMixed(5)
+  let f = anArray(6)
+  let g = aMap(7)
+  let h = aMaybeString(8)
+  let i = aBig(9)
+  print(a.failed())
+  print(b.failed())
+  print(c.failed())
+  print(d.failed())
+  print(e.failed())
+  print(f.failed())
+  print(g.failed())
+  print(h.failed())
+  print(i.failed())
+}

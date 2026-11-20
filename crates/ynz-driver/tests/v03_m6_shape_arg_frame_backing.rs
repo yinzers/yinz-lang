@@ -26,9 +26,26 @@ fn fixture(name: &str) -> PathBuf {
 /// Run `ynz run <fixture>` with a kill-after-timeout guard.
 /// Returns (stdout, stderr, exit_code, timed_out). exit_code is -1 when killed/signalled.
 fn ynz_run_with_timeout(name: &str, timeout: Duration) -> (String, String, i32, bool) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ynz"))
+    ynz_run_at_level_with_timeout(name, timeout, false)
+}
+
+/// [`ynz_run_with_timeout`] at -O0 when `no_optimize` is set (`YNZ_NO_OPTIMIZE=1`), else at the
+/// default -O2.
+fn ynz_run_at_level_with_timeout(
+    name: &str,
+    timeout: Duration,
+    no_optimize: bool,
+) -> (String, String, i32, bool) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ynz"));
+    command
         .args(["run", fixture(name).to_str().unwrap()])
-        .env("CLICOLOR", "0")
+        .env("CLICOLOR", "0");
+    if no_optimize {
+        command.env("YNZ_NO_OPTIMIZE", "1");
+    } else {
+        command.env_remove("YNZ_NO_OPTIMIZE");
+    }
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -375,7 +392,7 @@ fn v03_m6_union_arg_pure_call_yields_deterministic_value() {
     // tagged struct lives in a parent stack alloca; staging stages ptr_to_int of it.
     // Pre-fix signature (Paper-Traced this phase): deterministically the WRONG variant —
     // `circle` 3/3 from the dangling tag read. The FRAGO-013 fix must bind-time-promote
-    // the envelope to a counted heap cell (`union_to_heap_cell`, resolving the
+    // the envelope as a by-value union slot in a frame region (`flush_crossing_union`, resolving the
     // value_to_stable_bits known-hole for the crossing path) via the one classifier.
     let (stdout, stderr, code, timed_out) =
         ynz_run_with_timeout("v0_3_m6_union_arg_pure_call.ynz", RUN_TIMEOUT);
@@ -488,4 +505,46 @@ fn v03_m6_fixed_arg_to_suspending_callee_is_rejected() {
         "the teaching error must suggest the heap-backed `array<T>` alternative; \
          stderr:\n{stderr}"
     );
+}
+
+mod v03_m9_c1h_number_literal_and_expression_args_reach_a_suspending_callee {
+    use super::*;
+
+    fn assert_arguments_survive_the_callees_wait(no_optimize: bool) {
+        // WHY: a `number` literal or expression passed to a suspending callee was staged in the
+        // caller's resume-function stack (only a named local was frame-backed), so the callee
+        // read dead stack after its `wait`: `tally(2.25)` printed 0.25 instead of 2.50 and
+        // `tally(seed + 2.75)` read whatever the stack held. It made
+        // `red_opt_dangling_stack_return_sm_tier` depend on stack garbage. Tier: Medium.
+        // Run at -O0 and -O2: the staging differs between the two levels. Decided: this fix
+        // rides in C1h (#433); search git log "decimal128 staging fix rides".
+        let (stdout, stderr, code, timed_out) = ynz_run_at_level_with_timeout(
+            "v0_3_m9_c1h_number_literal_arg_suspending_call.ynz",
+            RUN_TIMEOUT,
+            no_optimize,
+        );
+        assert!(
+            !timed_out,
+            "no_optimize={no_optimize}: must not hang; stderr:\n{stderr}"
+        );
+        assert_eq!(
+            code, 0,
+            "no_optimize={no_optimize}: must run clean; stderr:\n{stderr}"
+        );
+        assert_eq!(
+            stdout, "2.50\n5.50\n",
+            "no_optimize={no_optimize}: a number literal or expression argument must survive \
+             the callee's wait; stderr:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn optimized() {
+        assert_arguments_survive_the_callees_wait(false);
+    }
+
+    #[test]
+    fn no_optimize() {
+        assert_arguments_survive_the_callees_wait(true);
+    }
 }

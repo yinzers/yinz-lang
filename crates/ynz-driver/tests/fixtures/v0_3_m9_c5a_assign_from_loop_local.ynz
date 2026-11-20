@@ -1,0 +1,17 @@
+// v0.3-M9 C5a (spike S3 probe g7): `acc = per` makes the outer `acc` hold the per-iteration local.
+// A release at the loop back-edge that frees `per` frees what `acc` still holds. GREEN today;
+// guards C7. Expected output: `3`.
+function f() -> int {
+  let acc: array<int> = [0]
+  let i: int = 0
+  while (i < 2) {
+    let per: array<int> = [i, i, i]
+    acc = per
+    i = i + 1
+  }
+  return acc.count()
+}
+
+function entrypoint() -> nothing {
+  print(f().toString())
+}

@@ -790,6 +790,7 @@ pub fn emit_type(ty: &Type) -> String {
                 .join(", ");
             format!("{{ {fs} }}")
         }
+        Type::Length { value, .. } => value.to_string(),
         Type::Error => "<ERROR>".into(),
     }
 }

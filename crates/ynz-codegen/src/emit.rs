@@ -21,7 +21,7 @@ use inkwell::{
     targets::FileType,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
     values::{
-        BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+        AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
         PointerValue,
     },
     AddressSpace, IntPredicate,
@@ -36,13 +36,14 @@ use ynz_typeck::{
     independence::{partition_independent_groups, IndependentGroup},
     is_base_suspension_intrinsic, type_attached_const_type,
     types::{channel_elem_drop, ChannelElemDrop},
-    GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
+    FixedLength, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type,
+    TypedModule,
 };
 
 use crate::{
     artifact::{sha256, CompiledArtifact},
     runtime_decls::RuntimeDecls,
-    shape_types::{emit_shape_types, ShapeLlvmTypes},
+    shape_types::{emit_shape_types, ShapeLlvmTypes, UnionLayout, UNION_NONE_TAG},
     state_machine,
     vtable::emit_vtable_globals,
 };
@@ -83,6 +84,12 @@ static EMPTY_WAIT_CACHE: std::sync::OnceLock<WaitCache> = std::sync::OnceLock::n
 fn empty_wait_cache() -> &'static WaitCache {
     EMPTY_WAIT_CACHE.get_or_init(WaitCache::new)
 }
+
+/// The byte size of a decimal128 `number` stored inline in an array or map cell.
+const DECIMAL_CELL_SIZE: u64 = 16;
+
+/// The bytes of a `maybe` envelope: its flag word and its payload bits.
+const MAYBE_ENVELOPE_BYTES: u64 = 16;
 
 static EMPTY_SUSPEND_SET: std::sync::OnceLock<SuspendSet> = std::sync::OnceLock::new();
 fn empty_suspend_set() -> &'static SuspendSet {
@@ -163,6 +170,27 @@ pub struct CpuGroupSlot {
     pub result_offset: u64,
 }
 
+/// What a union region of a suspending function's composed frame holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UnionRegionRole {
+    /// The returned union (or the union success value of an `errors` result): the resume
+    /// function writes the slot here and puts its address in the return slot, so the pair of
+    /// 8-byte words the return slot holds never has to carry the whole slot.
+    Return,
+    /// The `n`th parameter, a union: a `wait`ing caller writes the argument's slot here, in the
+    /// callee's own frame, so it survives the caller's suspension.
+    Param(usize),
+}
+
+/// One union slot a composed frame reserves, `size` bytes (a `UnionLayout::slot_size`) at
+/// `offset` from the frame base.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnionRegion {
+    pub role: UnionRegionRole,
+    pub offset: u64,
+    pub size: u64,
+}
+
 /// Composed-frame layout for one suspending function.
 ///
 /// A composed frame embeds the sub-frames of all directly-called suspending children
@@ -190,6 +218,9 @@ pub struct FrameLayout {
     /// read. It is placed after all own-local slots and before child sub-frames so it lives
     /// inside the single composed frame allocation (zero extra `ynz_alloc`).
     pub number_errors_staging_offset: Option<u64>,
+    /// Union slots this function reserves after the `number errors` staging slot and before
+    /// the child sub-frames (`UnionRegion`), in `union_region_roles` order.
+    pub union_regions: Vec<UnionRegion>,
     /// CPU-parallel-group member slots (v0.3-M3d), keyed by `(group_id, member_index)`.
     ///
     /// Empty for every function that does not contain a promoted CPU group — non-promoted
@@ -250,6 +281,31 @@ pub fn build_frame_layouts_with_resolver(
     shape_abi_sizes: &HashMap<String, u64>,
     callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
 ) -> HashMap<String, FrameLayout> {
+    build_frame_layouts_with_unions(
+        typed,
+        suspend_set,
+        base_suspends,
+        shape_abi_sizes,
+        &ShapeTable::default(),
+        &HashMap::new(),
+        callee_size_resolver,
+    )
+}
+
+/// `build_frame_layouts_with_resolver` for a module that may pass or return an envelope union:
+/// `union_roles` (`union_region_roles`) says which union slots each suspending function
+/// reserves in its frame, and how large they are.
+///
+/// Time: as `build_frame_layouts_with_resolver`  Space: as there
+pub fn build_frame_layouts_with_unions(
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
+    shape_abi_sizes: &HashMap<String, u64>,
+    shape_table: &ShapeTable,
+    union_roles: &HashMap<String, Vec<(UnionRegionRole, u64)>>,
+    callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
+) -> HashMap<String, FrameLayout> {
     // Step 1: collect direct suspending callees for each suspending fn.
     let mut direct_children: HashMap<String, Vec<String>> = HashMap::new();
     for item in &typed.module.items {
@@ -301,6 +357,8 @@ pub fn build_frame_layouts_with_resolver(
             suspend_set,
             base_suspends,
             shape_abi_sizes,
+            shape_table,
+            union_roles,
             &mut sizes,
             &mut visiting,
         );
@@ -338,8 +396,13 @@ pub fn build_frame_layouts_with_resolver(
                 // Phase 6: frame layout must reserve slots for the SAME widened
                 // crossing set the resume fn flushes/reloads — one producer verdict.
                 typed.back_edge_yield_admitted.contains(&f.name),
+                // A scope-exit release is a read at its edge (typeck's release plan).
+                &typed
+                    .release_plan
+                    .reads(&f.name, ynz_typeck::release_plan::Names::Codegen),
             );
-            let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
+            let crossing_slots =
+                crossing_local_total_slots(f, &crossing, typed, shape_table, shape_abi_sizes);
 
             // v0.3-M3d CPU-group slots. A promoted host (admitted by spike_cpu_candidates)
             // reserves a handle+result region immediately after the frame header, BEFORE its
@@ -357,7 +420,14 @@ pub fn build_frame_layouts_with_resolver(
             let (cpu_group_slots, cpu_reserve) =
                 cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
 
-            let n_locals = f.params.len() + crossing_slots;
+            let wait_temporary_slots = wait_temporary_slot_count(
+                f,
+                typed,
+                suspend_set,
+                typed.back_edge_yield_admitted.contains(&f.name),
+                shape_abi_sizes,
+            );
+            let n_locals = f.params.len() + crossing_slots + wait_temporary_slots;
             // own_base (start of own-local slots) is pushed past the CPU-slot reserve so
             // crossing locals never alias a handle/result slot.
             let own_base =
@@ -373,7 +443,21 @@ pub fn build_frame_layouts_with_resolver(
                 None
             };
             // Child sub-frames start after the optional staging slot.
-            let children_start = own_base + number_errors_staging_offset.map_or(0, |_| 16);
+            let mut union_regions: Vec<UnionRegion> = Vec::new();
+            let mut union_cursor = own_base + number_errors_staging_offset.map_or(0, |_| 16);
+            for (role, size) in union_roles
+                .get(&f.name)
+                .map(|region_roles| region_roles.as_slice())
+                .unwrap_or(&[])
+            {
+                union_regions.push(UnionRegion {
+                    role: *role,
+                    offset: union_cursor,
+                    size: *size,
+                });
+                union_cursor += size;
+            }
+            let children_start = union_cursor;
 
             // Build child offset list, detecting recursion edges.
             let mut children: Vec<(String, u64)> = Vec::new();
@@ -426,6 +510,7 @@ pub fn build_frame_layouts_with_resolver(
                     children,
                     recursion_slot,
                     number_errors_staging_offset,
+                    union_regions,
                     cpu_group_slots,
                 },
             );
@@ -736,6 +821,8 @@ fn compute_frame_size(
     suspend_set: &SuspendSet,
     base_suspends: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
+    shape_table: &ShapeTable,
+    union_roles: &HashMap<String, Vec<(UnionRegionRole, u64)>>,
     sizes: &mut HashMap<String, u64>,
     visiting: &mut HashSet<String>,
 ) -> u64 {
@@ -785,13 +872,28 @@ fn compute_frame_size(
                         // Phase 6: the child-frame-size memo must match the layout's
                         // widened crossing reservation exactly — same producer verdict.
                         typed.back_edge_yield_admitted.contains(&f.name),
+                        &typed
+                            .release_plan
+                            .reads(&f.name, ynz_typeck::release_plan::Names::Codegen),
                     );
-                    let crossing_slots =
-                        crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
+                    let crossing_slots = crossing_local_total_slots(
+                        f,
+                        &crossing,
+                        typed,
+                        shape_table,
+                        shape_abi_sizes,
+                    );
                     let (_, reserve) =
                         cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
+                    let wait_temporary_slots = wait_temporary_slot_count(
+                        f,
+                        typed,
+                        suspend_set,
+                        typed.back_edge_yield_admitted.contains(&f.name),
+                        shape_abi_sizes,
+                    );
                     return Some((
-                        f.params.len() + crossing_slots,
+                        f.params.len() + crossing_slots + wait_temporary_slots,
                         is_number_errors_return(f),
                         reserve,
                     ));
@@ -805,7 +907,10 @@ fn compute_frame_size(
         ynz_abi::FRAME_HEADER_SIZE + cpu_reserve + state_machine::own_locals_size(n_locals);
     // Include the 16-byte `number errors` staging slot in the own-locals region when needed.
     let staging_size = if needs_number_errors_staging { 16 } else { 0 };
-    let mut total = own_base + staging_size;
+    let union_bytes: u64 = union_roles
+        .get(fn_name)
+        .map_or(0, |roles| roles.iter().map(|(_, size)| size).sum());
+    let mut total = own_base + staging_size + union_bytes;
 
     if let Some(children) = direct_children.get(fn_name) {
         let mut seen_recursive: HashSet<String> = HashSet::new();
@@ -823,6 +928,8 @@ fn compute_frame_size(
                     suspend_set,
                     base_suspends,
                     shape_abi_sizes,
+                    shape_table,
+                    union_roles,
                     sizes,
                     visiting,
                 );
@@ -994,8 +1101,8 @@ pub fn emit_artifact(
 }
 
 struct ModuleGlobals<'ctx> {
-    str_true: GlobalValue<'ctx>,
-    str_false: GlobalValue<'ctx>,
+    str_true: StaticString<'ctx>,
+    str_false: StaticString<'ctx>,
     dec_zero: GlobalValue<'ctx>,
     panic_int_add: GlobalValue<'ctx>,
     panic_int_sub: GlobalValue<'ctx>,
@@ -1093,19 +1200,24 @@ fn build_module<'ctx, 'g>(
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
-        panic_int_add: build_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
-        panic_int_sub: build_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
-        panic_int_mul: build_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
-        panic_int_div: build_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
-        panic_int_rem: build_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
-        panic_dec_div: build_string_global(ctx, module, "division by zero (number)", ".panic.ddiv"),
-        panic_dec_rem: build_string_global(
+        panic_int_add: build_c_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
+        panic_int_sub: build_c_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
+        panic_int_mul: build_c_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
+        panic_int_div: build_c_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
+        panic_int_rem: build_c_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
+        panic_dec_div: build_c_string_global(
+            ctx,
+            module,
+            "division by zero (number)",
+            ".panic.ddiv",
+        ),
+        panic_dec_rem: build_c_string_global(
             ctx,
             module,
             "remainder by zero (number)",
             ".panic.drem",
         ),
-        source_file: build_string_global(ctx, module, source_path, ".source.file"),
+        source_file: build_c_string_global(ctx, module, source_path, ".source.file"),
     };
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
@@ -1115,7 +1227,12 @@ fn build_module<'ctx, 'g>(
     // AND into `frame_layouts_query`'s sizing pass, never re-derived in codegen
     // (authoritative-derivation.md). Empty under --no-auto-parallel, so the
     // sequential oracle lowering emits genuinely unpadded layouts.
-    let shape_types = emit_shape_types(ctx, shape_table, &layout.padded_shapes);
+    let shape_types = {
+        let data_layout = module.get_data_layout();
+        let target_data =
+            inkwell::targets::TargetData::create(data_layout.as_str().to_str().unwrap_or(""));
+        emit_shape_types(ctx, shape_table, &layout.padded_shapes, &target_data)?
+    };
 
     // Pass 0.25 — forward-declare imported (cross-module) functions as LLVM external declarations.
     //
@@ -1197,7 +1314,7 @@ fn build_module<'ctx, 'g>(
         let dl_owned = module.get_data_layout();
         let dl_str = dl_owned.as_str().to_str().unwrap_or("");
         let target_data = inkwell::targets::TargetData::create(dl_str);
-        let sizes: HashMap<String, u64> = shape_types
+        let mut sizes: HashMap<String, u64> = shape_types
             .named
             .iter()
             .map(|(name, &struct_ty)| {
@@ -1205,6 +1322,7 @@ fn build_module<'ctx, 'g>(
                 (name.clone(), bytes)
             })
             .collect();
+        sizes.extend(union_frame_sizes(typed, &shape_types));
         // Compile-time link for `FRAME_SHAPE_REGION_ALIGN` (hotfix `bgarg-number`): a
         // frame-embedded shape region is rounded up to that alignment and no further,
         // so a shape struct whose measured ABI alignment exceeds it would be read
@@ -1291,14 +1409,45 @@ fn build_module<'ctx, 'g>(
     // Pass 1 — forward-declare every non-generic function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => declare_function(
-                ctx,
-                module,
-                f,
-                shape_table,
-                &shape_types,
-                effective_ownership,
-            )?,
+            // A function with `fixed<T>` length parameters is declared once per specialised
+            // version typeck found (`FixedInstances`), under that version's symbol; any other
+            // function once under its own name.
+            Item::Function(function) if function.generics.is_empty() => {
+                if typed
+                    .fixed_instances
+                    .length_parameters
+                    .contains_key(&function.name)
+                {
+                    for version in typed
+                        .fixed_instances
+                        .instances
+                        .iter()
+                        .filter(|version| version.function == function.name)
+                    {
+                        declare_function(
+                            ctx,
+                            module,
+                            typed,
+                            function,
+                            shape_table,
+                            &shape_types,
+                            effective_ownership,
+                            Some(version),
+                        )?;
+                    }
+                } else {
+                    declare_function(
+                        ctx,
+                        module,
+                        typed,
+                        function,
+                        shape_table,
+                        &shape_types,
+                        effective_ownership,
+                        None,
+                    )?;
+                }
+            }
             Item::Function(_)
             | Item::ShapeDecl(_)
             | Item::OptionsDecl(_)
@@ -1335,32 +1484,81 @@ fn build_module<'ctx, 'g>(
     // Pass 1.6 — emit vtable globals for `dynamic Foo` dispatch.
     let _vtables = emit_vtable_globals(module, shape_table);
 
+    // Pass 1.7 — forward-declare the hidden-defaults initializer of every shape THIS module
+    // declares and that has hidden fields (own or inherited). The body (Pass 2.6) lowers each
+    // default with this module's typed data; a module that only imports the shape declares the
+    // same symbol bodiless at its first construction site (`lower_struct_lit`).
+    let defaults_initializer_shapes: Vec<&ynz_ast::nodes::ShapeDecl> = typed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ShapeDecl(declaration)
+                if declaration.generics.is_empty()
+                    && declaration.alias_ty.is_none()
+                    && shape_table
+                        .get(&declaration.name)
+                        .is_some_and(shape_has_hidden_fields) =>
+            {
+                Some(declaration)
+            }
+            _ => None,
+        })
+        .collect();
+    for declaration in &defaults_initializer_shapes {
+        let shape = shape_table
+            .get(&declaration.name)
+            .ok_or_else(|| format!("defaults of `{}`: shape not in table", declaration.name))?;
+        shape_defaults_initializer(ctx, module, shape);
+    }
+
     // Pass 2 — emit non-generic function bodies.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => lower_function(
-                ctx,
-                module,
-                &rt,
-                &globals,
-                typed,
-                f,
-                shape_table,
-                &shape_types,
-                &shape_abi_sizes,
-                &shape_field_abi,
-                mono_table,
-                &options_table,
-                &wait_cache,
-                suspend_set,
-                base_suspends,
-                frame_layouts,
-                imported_fns,
-                sig_table,
-                no_auto_parallel,
-                m3d_spike,
-                layout,
-            )?,
+            Item::Function(function) if function.generics.is_empty() => {
+                // One body per specialised version of a function with `fixed<T>` length
+                // parameters (the same list Pass 1 declared), one body otherwise.
+                let versions: Vec<Option<&ynz_typeck::fixed_length::InstanceKey>> = if typed
+                    .fixed_instances
+                    .length_parameters
+                    .contains_key(&function.name)
+                {
+                    typed
+                        .fixed_instances
+                        .instances
+                        .iter()
+                        .filter(|version| version.function == function.name)
+                        .map(Some)
+                        .collect()
+                } else {
+                    vec![None]
+                };
+                for version in versions {
+                    lower_function(
+                        ctx,
+                        module,
+                        &rt,
+                        &globals,
+                        typed,
+                        function,
+                        shape_table,
+                        &shape_types,
+                        &shape_abi_sizes,
+                        &shape_field_abi,
+                        &options_table,
+                        &wait_cache,
+                        suspend_set,
+                        base_suspends,
+                        frame_layouts,
+                        imported_fns,
+                        sig_table,
+                        no_auto_parallel,
+                        m3d_spike,
+                        layout,
+                        version,
+                    )?;
+                }
+            }
             Item::Function(_)
             | Item::ShapeDecl(_)
             | Item::OptionsDecl(_)
@@ -1368,6 +1566,32 @@ fn build_module<'ctx, 'g>(
             | Item::ConstDecl(_)
             | Item::ReExport(_) => {}
         }
+    }
+
+    // Pass 2.6 — emit the hidden-defaults initializer bodies declared in Pass 1.7. After every
+    // function is declared, because a default may call one.
+    for declaration in &defaults_initializer_shapes {
+        lower_shape_defaults_initializer(
+            ctx,
+            module,
+            &rt,
+            &globals,
+            typed,
+            declaration,
+            shape_table,
+            &shape_types,
+            &shape_abi_sizes,
+            &shape_field_abi,
+            &options_table,
+            &wait_cache,
+            suspend_set,
+            base_suspends,
+            frame_layouts,
+            imported_fns,
+            sig_table,
+            m3d_spike,
+            layout,
+        )?;
     }
 
     // Pass 2.5 — emit monomorphized generic function bodies.
@@ -1409,7 +1633,6 @@ fn build_module<'ctx, 'g>(
             fn_val,
             type_subst,
             mono_sig,
-            mono_table,
             &options_table,
             layout,
         )?;
@@ -1419,63 +1642,140 @@ fn build_module<'ctx, 'g>(
     Ok(())
 }
 
-/// Mangle a generic function name + type args into a unique LLVM symbol name.
+/// Mangle a generic function name + type args into a unique LLVM symbol name:
+/// `fn_name<arg,arg>`.
+///
+/// The name must be injective, and must never equal a user function's name: Pass 1.5 skips an
+/// instance whose name is already declared, and a call resolves to whatever function holds the
+/// name. The old `_`-joined form broke both, because Yinz identifiers may contain `_`:
+/// `show<Big>` was `show_shape_Big`, the name of a user function `show_shape_Big(Tiny)`, so
+/// `show(big)` ran that function on a `Big`; and `second<A_shape_B, int>` and
+/// `second<A, B_int>` were both `second_shape_A_shape_B_int` (C1g, #424). `<`, `>`, `,` and the
+/// delimiters `mangle_type` uses never occur in an identifier, so neither can happen.
+///
+/// O(size of the type arguments) time and space.
 fn mangle_mono_name(fn_name: &str, type_args: &[Type]) -> String {
-    let mut name = fn_name.to_string();
-    for ty in type_args {
-        name.push('_');
-        name.push_str(&mangle_type(ty));
-    }
-    name
+    let args: Vec<String> = type_args.iter().map(mangle_type).collect();
+    format!("{fn_name}<{}>", args.join(","))
 }
 
+/// The symbol of the function that writes one shape's hidden-field defaults into an instance:
+/// `ynz_defaults<shape:Name>@<declaring file>`. The first part is the injective `fn<arg>` form of
+/// `mangle_mono_name`, so it can never equal a user function's name; the file part keeps two
+/// modules' shapes of the same name apart, because shape names are not unique across a project
+/// (each module has its own LLVM context) and the symbol is external, so the linker sees all of
+/// them. A shape name never contains `@`, so the pair stays injective.
+///
+/// The declaring file is `ShapeDef::defined_at`: an imported shape keeps the `ShapeDef` of the
+/// module that declares it, so the declaring and every constructing module derive the same
+/// symbol. The module that DECLARES the shape defines it; every module that constructs the
+/// shape, that one included, calls it. O(length of the shape name + file path) time and space.
+fn shape_defaults_symbol(shape: &ynz_typeck::shapes::ShapeDef) -> String {
+    let shape_part = mangle_mono_name(
+        "ynz_defaults",
+        &[Type::Shape {
+            name: shape.name.clone(),
+        }],
+    );
+    format!("{shape_part}@{}", shape.defined_at.file)
+}
+
+/// True when constructing `shape` must call its defaults initializer. Hidden fields always carry
+/// a default (typeck refuses a hidden field without one), and the flattened field list holds the
+/// inherited ones too, so this one test answers it for a local and an imported shape alike.
+///
+/// O(fields) time, O(1) space.
+fn shape_has_hidden_fields(shape: &ynz_typeck::shapes::ShapeDef) -> bool {
+    shape.fields.iter().any(|field| field.is_hidden)
+}
+
+/// The defaults initializer's function value, declared on first use: `void (ptr instance)`.
+/// A module that declares the shape defines the body (`lower_shape_defaults_initializer`);
+/// a module that only imports the shape gets this bodiless declaration, which the linker
+/// resolves against the declaring module's object.
+///
+/// O(length of the shape name + file path) time and space.
+fn shape_defaults_initializer<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    shape: &ynz_typeck::shapes::ShapeDef,
+) -> FunctionValue<'ctx> {
+    let symbol = shape_defaults_symbol(shape);
+    if let Some(declared) = module.get_function(&symbol) {
+        return declared;
+    }
+    let pointer = ctx.ptr_type(AddressSpace::default());
+    module.add_function(
+        &symbol,
+        ctx.void_type().fn_type(&[pointer.into()], false),
+        None,
+    )
+}
+
+/// A type's symbol-name form. Injective: a user name is always followed by a delimiter or the
+/// end, and the delimiters (`:`, `(`, `)`, `,`, `|`) never occur in an identifier, so two
+/// different types never share a form (see `mangle_mono_name`).
+///
+/// O(size of the type) time and space.
 fn mangle_type(ty: &Type) -> String {
+    let joined = |types: &[Type], separator: &str| {
+        types
+            .iter()
+            .map(mangle_type)
+            .collect::<Vec<_>>()
+            .join(separator)
+    };
     match ty {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
         Type::Bool => "boolean".to_string(),
         Type::String => "string".to_string(),
         Type::Nothing => "nothing".to_string(),
-        Type::Shape { name } => format!("shape_{name}"),
-        Type::Dynamic { contract } => format!("dyn_{contract}"),
-        Type::BuiltinArray { elem } => format!("array_{}", mangle_type(elem)),
-        Type::BuiltinFixed { elem, size } => {
-            format!("fixed_{}_{}", size.unwrap_or(0), mangle_type(elem))
-        }
-        Type::Maybe { inner } => format!("maybe_{}", mangle_type(inner)),
-        Type::Generic { name, args } => {
-            let arg_str = args.iter().map(mangle_type).collect::<Vec<_>>().join("_");
-            format!("{name}_{arg_str}")
-        }
-        Type::TypeParam { name } => format!("tparam_{name}"),
-        Type::Number { precision } => format!("number_{precision}"),
+        Type::Shape { name } => format!("shape:{name}"),
+        Type::Dynamic { contract } => format!("dyn:{contract}"),
+        Type::BuiltinArray { elem } => format!("array({})", mangle_type(elem)),
+        Type::BuiltinFixed { elem, size } => match size {
+            FixedLength::Known(size) => format!("fixed({size},{})", mangle_type(elem)),
+            FixedLength::Unknown => format!("fixed(,{})", mangle_type(elem)),
+            FixedLength::OfParam { parameter } => {
+                format!("fixed(param {parameter},{})", mangle_type(elem))
+            }
+        },
+        Type::Maybe { inner } => format!("maybe({})", mangle_type(inner)),
+        Type::Generic { name, args } => format!("generic:{name}({})", joined(args, ",")),
+        Type::TypeParam { name } => format!("tparam:{name}"),
+        Type::Number { precision } => format!("number({precision})"),
         Type::Range {
             element,
             end_inclusive,
         } => {
             format!(
-                "range_{}{}",
-                mangle_type(element),
-                if *end_inclusive { "_inc" } else { "" }
+                "{}({})",
+                if *end_inclusive { "range_inc" } else { "range" },
+                mangle_type(element)
             )
         }
         Type::BuiltinMap { key, val } => {
-            format!("map_{}_{}", mangle_type(key), mangle_type(val))
+            format!("map({},{})", mangle_type(key), mangle_type(val))
         }
         Type::MapEntry { key, val } => {
-            format!("mapentry_{}_{}", mangle_type(key), mangle_type(val))
+            format!("mapentry({},{})", mangle_type(key), mangle_type(val))
         }
-        Type::BuiltinChannel { elem } => format!("channel_{}", mangle_type(elem)),
+        Type::BuiltinChannel { elem } => format!("channel({})", mangle_type(elem)),
         // v0.3-M4: inferred-only task handles never appear as generic type args in valid
         // programs, but the mangler stays total.
-        Type::BackgroundHandle { result, .. } => format!("bghandle_{}", mangle_type(result)),
-        Type::Options { name } => format!("options_{name}"),
-        Type::Union { variants } => {
-            let parts: Vec<_> = variants.iter().map(mangle_type).collect();
-            format!("union_{}", parts.join("_or_"))
-        }
-        Type::ErrorsCapable { inner } => format!("errors_{}", mangle_type(inner)),
-        Type::Sensitive { inner } => format!("sensitive_{}", mangle_type(inner)),
+        Type::BackgroundHandle { result, msg_elem } => match msg_elem {
+            Some(msg_elem) => format!(
+                "bghandle({},{})",
+                mangle_type(result),
+                mangle_type(msg_elem)
+            ),
+            None => format!("bghandle({},)", mangle_type(result)),
+        },
+        Type::Options { name } => format!("options:{name}"),
+        Type::Union { variants } => format!("union({})", joined(variants, "|")),
+        Type::ErrorsCapable { inner } => format!("errors({})", mangle_type(inner)),
+        Type::Sensitive { inner } => format!("sensitive({})", mangle_type(inner)),
         // Type::Error should never reach codegen — an earlier phase should have
         // caught all type errors and stopped compilation. Panic here so it's
         // visible immediately if it ever does (instead of silently emitting a
@@ -1518,88 +1818,44 @@ fn lower_generic_function<'ctx>(
     fn_val: FunctionValue<'ctx>,
     type_subst: HashMap<String, Type>,
     mono_sig: &ynz_typeck::generics::MonoSignature,
-    mono_table: &'_ MonomorphizationTable,
     options_table: &'_ ynz_typeck::options_table::OptionsTable,
     layout: &'_ ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
     let ret_ty = mono_sig.ret_type.clone();
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
 
-    let mut cg = Cg {
+    // The shared plain-function context, plus this instantiation's type substitution. A generic
+    // body cannot `wait` (M2) and is not errors-capable (M7), so it carries no suspension data:
+    // the empty caches, the empty genuine-suspend set (which turns the block_on-fallback guard
+    // `sync_call_fallback_is_codegen_bug` vacuously off; safe while no generic body can reach a
+    // suspension point through a type parameter, see `ynz-typeck/src/check.rs:4214`, and a
+    // v0.4-revisit site with the kernel guard deferral documented there) and the empty
+    // signature table (`lower_sm_block` is never reached). It never enters the M3d spike path.
+    let mut cg = plain_cg(
         ctx,
         module,
-        builder: ctx.create_builder(),
         rt,
         globals,
         typed,
-        current_fn: fn_val,
-        is_main: false,
-        current_fn_ret_ty: ret_ty,
-        locals: HashMap::new(),
+        fn_val,
+        ret_ty,
+        false,
+        false,
         shape_table,
         shape_types,
         shape_abi_sizes,
         shape_field_abi,
-        soa_bindings: HashMap::new(),
-        // The REAL authority, not an empty stand-in: the struct-lit padded-alloca
-        // alignment path runs for generic bodies too.
         layout,
-        type_subst,
-        mono_table,
         options_table,
-        // Generic functions are not errors-capable in M7 (no `-> T errors` on generics yet).
-        is_errors_capable: false,
-        errors_capable_locals: std::collections::HashSet::new(),
-        bg_uid: 0,
-        arc_transients: HashMap::new(),
-        arc_pending_release: Vec::new(),
-        // Generic functions cannot contain `wait` in M2. Use empty caches.
-        wait_cache: empty_wait_cache(),
-        suspend_set: empty_suspend_set(),
-        // Generic mono functions cannot suspend yet (v0.4 generic+suspension work), so the
-        // genuine-suspend set is empty here too — the block_on-fallback guard
-        // (`sync_call_fallback_is_codegen_bug`) is vacuously off for generic bodies. Safe today:
-        // no generic function in the current language surface can reach a suspension point through
-        // a type parameter (see `ynz-typeck/src/check.rs:4214`). This empty-set assumption is a
-        // v0.4-revisit site alongside the kernel guard deferral documented there.
-        base_suspends: empty_suspend_set(),
-        frame_layouts: empty_frame_layouts(),
-        imported_fns: empty_imported_fns(),
-        sm_frame_ptr: None,
-        sm_yinz_ret_ty: None,
-        sm_crossing_names: None,
-        sm_crossing_scalar_set: HashSet::new(),
-        sm_crossing_bool_set: HashSet::new(),
-        sm_crossing_slot_indices: Vec::new(),
-        sm_crossing_decimal128_set: HashSet::new(),
-        sm_number_param_set: HashSet::new(),
-        sm_crossing_float_set: HashSet::new(),
-        sm_crossing_errors_capable_set: HashSet::new(),
-        sm_crossing_ec_number_set: HashSet::new(),
-        sm_crossing_ec_number_i128_allocas: HashMap::new(),
-        sm_crossing_shape_embed_set: HashSet::new(),
-        sm_crossing_ec_struct_allocas: HashMap::new(),
-        sm_crossing_shape_names: HashMap::new(),
-        sm_crossing_shape_allocas: HashMap::new(),
-        sm_scope_depth: 0,
-        sm_for_loop_counter: 0,
-        sm_number_errors_staging_offset: None,
-        // Generic functions cannot contain `wait` — auto-parallel is never applicable.
-        no_auto_parallel: false,
-        // Generic functions never SM-lower; no back-edge yield.
-        back_edge_yield: false,
-        // Generic functions never reach lower_sm_block; the empty table satisfies
-        // the struct field without the caller needing a real SignatureTable.
-        sig_table: empty_sig_table(),
-        // Generic functions never enter the M3d spike path.
-        m3d_spike: false,
-        m3d_spike_cpu_result_names: Vec::new(),
-        m3d_spike_cpu_result_allocas: HashMap::new(),
-        m3d_spike_fired: false,
-        // Generic functions never enter the M3g fused-group path.
-        fused_group: None,
-        fused_group_fired: false,
-    };
+        empty_wait_cache(),
+        empty_suspend_set(),
+        empty_suspend_set(),
+        empty_frame_layouts(),
+        empty_imported_fns(),
+        empty_sig_table(),
+        false,
+    );
+    cg.type_subst = type_subst;
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
@@ -1611,12 +1867,7 @@ fn lower_generic_function<'ctx>(
         materialize_param(&mut cg, &param.name, llvm_param, concrete_ty)?;
     }
 
-    for stmt in &f.body.stmts {
-        if is_block_terminated(&cg) {
-            break;
-        }
-        lower_stmt(&mut cg, stmt)?;
-    }
+    lower_block_stmts(&mut cg, &f.body)?;
 
     if !is_block_terminated(&cg) {
         if ret_is_nothing {
@@ -1678,14 +1929,18 @@ fn llvm_param_types<'ctx>(
 /// - effective `Unknown` → NO attributes. The analysis cannot prove read-only, so
 ///   any claim would be hope, not knowledge — degrade to conservative.
 /// - declared `give` → no attributes (callee owns the data, may mutate or free).
+#[allow(clippy::too_many_arguments)]
 fn declare_function<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
+    typed: &TypedModule,
     f: &FunctionDecl,
     shape_table: &ShapeTable,
     shape_types: &ShapeLlvmTypes<'ctx>,
     effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
+    version: Option<&ynz_typeck::fixed_length::InstanceKey>,
 ) -> Result<(), String> {
+    let lengths = version_lengths(typed, f, version);
     let params = llvm_param_types(ctx, f, shape_table);
     let fn_ty = if f.name == "entrypoint" {
         ctx.i32_type().fn_type(&params, false)
@@ -1693,23 +1948,27 @@ fn declare_function<'ctx>(
         // M7 P4a: errors-capable functions return `{i64 error_ptr, i64 success_val}`.
         // field 0 = error pointer (0 = success, non-zero = *YnzError)
         // field 1 = success value as i64 (valid only when field 0 = 0)
-        let result_ty = errors_result_type(ctx);
+        let success_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+        let result_ty = ec_result_type(ctx, shape_types, &success_ty)?;
         result_ty.fn_type(&params, false)
     } else {
         // The return ABI comes from the ONE authoritative mapping (`abi_return_type`,
         // shared with the imported-fn and mono declaration sites) — v0.3-M7 R9:
         // number/maybe/shape return BY VALUE, never a pointer to a callee alloca.
-        let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+        let ret_ty = substitute_lengths(&declared_return_type(typed, shape_table, f), &lengths);
         match abi_return_type(ctx, shape_types, &ret_ty)? {
             None => ctx.void_type().fn_type(&params, false),
             Some(t) => t.fn_type(&params, false),
         }
     };
     // `entrypoint` is the Yinz name; the C ABI entry point must be `main` for the linker.
+    let version_symbol = version.map(|version| {
+        ynz_typeck::fixed_length::instance_symbol(&version.function, &version.lengths)
+    });
     let llvm_name = if f.name == "entrypoint" {
         "main"
     } else {
-        &f.name
+        version_symbol.as_deref().unwrap_or(&f.name)
     };
     let fn_val = module.add_function(llvm_name, fn_ty, None);
 
@@ -1771,6 +2030,111 @@ fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
     ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
 }
 
+/// The LLVM struct an `errors` function RETURNS, by its success type (C1f, #423).
+///
+/// - an envelope union (a union with a shape variant): `{ i64 err, <slot> }`, the success value
+///   as the union's inline slot (`UnionLayout`), so a call allocates nothing and the caller
+///   reads nothing from the callee's frame;
+/// - everything else: `{ i64 err, i64 ok }` (`errors_result_type`).
+///
+/// Inside a function an `errors` VALUE is always the standard `{ err, ok }` pair (`ok` for a
+/// union is the view pointer a union value is everywhere): `ec_union_result_to_standard` converts
+/// at the call boundary, `ec_union_result` builds the slot form at the `return`.
+///
+/// Time: O(v) for v variants  Space: O(1)
+fn ec_result_type<'ctx>(
+    ctx: &'ctx Context,
+    shape_types: &ShapeLlvmTypes<'ctx>,
+    success: &Type,
+) -> Result<inkwell::types::StructType<'ctx>, String> {
+    match success {
+        Type::Maybe { inner } if matches!(inner.as_ref(), union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union)) => {
+            ec_result_type(ctx, shape_types, inner)
+        }
+        union @ Type::Union { variants } if ynz_typeck::check::is_envelope_union(union) => {
+            let layout = shape_types.union_layout(variants)?;
+            Ok(ctx.struct_type(
+                &[
+                    ctx.i64_type().into(),
+                    shape_types.union_slot_llvm(ctx, &layout).into(),
+                ],
+                false,
+            ))
+        }
+        _ => Ok(errors_result_type(ctx)),
+    }
+}
+
+/// The return type a function is declared and lowered with: the length typeck worked out from its
+/// `return` statements when its type is a `fixed` without a written length, else the type as
+/// written. THE one reader (C1h, #433). A length that is a parameter's placeholder is still
+/// symbolic here (`substitute_lengths` makes it a number per version). O(size of the type).
+fn declared_return_type(
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+    function: &FunctionDecl,
+) -> Type {
+    match typed.inferred_return_types.get(&function.name) {
+        Some(worked_out) => worked_out.clone(),
+        None => ast_type_to_typeck_type(&function.return_type, shape_table),
+    }
+}
+
+/// The type parameter `index` of `function` is declared with: the signature table's for a `fixed` (it
+/// carries the parameter's length placeholder), else the type as written. O(size of the type).
+fn declared_param_type(
+    sig_table: &SignatureTable,
+    shape_table: &ShapeTable,
+    function: &FunctionDecl,
+    index: usize,
+) -> Type {
+    match sig_table
+        .fns
+        .get(&function.name)
+        .and_then(|signature| signature.params.get(index))
+    {
+        Some((_, signature_type @ Type::BuiltinFixed { .. })) => signature_type.clone(),
+        _ => ast_type_to_typeck_type(&function.params[index].ty, shape_table),
+    }
+}
+
+/// The lengths of the specialised version `version` of `function`, by parameter name: what its length
+/// placeholders stand for. Empty for a function compiled once. O(length parameters).
+fn version_lengths(
+    typed: &TypedModule,
+    function: &FunctionDecl,
+    version: Option<&ynz_typeck::fixed_length::InstanceKey>,
+) -> HashMap<String, Option<usize>> {
+    let Some(version) = version else {
+        return HashMap::new();
+    };
+    typed
+        .fixed_instances
+        .parameters_of(&function.name)
+        .iter()
+        .cloned()
+        .zip(version.lengths.iter().copied())
+        .collect()
+}
+
+/// `ty` with a `fixed` list's length placeholder replaced by the length of the version being
+/// built. Only a type that IS a `fixed` can hold one. O(1).
+fn substitute_lengths(ty: &Type, lengths: &HashMap<String, Option<usize>>) -> Type {
+    match ty {
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::OfParam { parameter },
+        } => Type::BuiltinFixed {
+            elem: elem.clone(),
+            size: match lengths.get(parameter) {
+                Some(Some(count)) => FixedLength::Known(*count),
+                Some(None) | None => FixedLength::Unknown,
+            },
+        },
+        other => other.clone(),
+    }
+}
+
 /// The ONE C-ABI return-type mapping for user functions (v0.3-M7 Phase 3, R9/FRAGO 005).
 ///
 /// Consumed by ALL THREE declaration sites — local `declare_function`, the imported-fn
@@ -1794,12 +2158,10 @@ fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
 ///   fields are already counted heap cells (`store_field`), so the shallow copy is
 ///   complete.
 ///
-/// Everything heap-backed (string, array, map, sensitive, bignum) keeps the `ptr`
-/// return. `fixed<T>` and union returns also keep `ptr`: fixed returns are broken at
-/// BOTH tiers today (pre-existing size-loss bug, not an O0-reliant class) and union
-/// read-back after a call is loudly blocked (the documented union KNOWN-HOLE posture)
-/// — neither is silently-wrong-under-optimization, and both are surfaced findings,
-/// not ride-along fixes.
+/// - `fixed<T>` of known length (C1h, #433) → its cells `[N x i64]` by value, the cost of
+///   returning Rust's `[T; N]`.
+///
+/// Everything heap-backed (string, array, map, sensitive, bignum) keeps the `ptr` return.
 ///
 /// Returns `Ok(None)` for `Nothing` (void).
 fn abi_return_type<'ctx>(
@@ -1813,7 +2175,18 @@ fn abi_return_type<'ctx>(
         Type::Float => Some(ctx.f64_type().into()),
         Type::Bool => Some(ctx.bool_type().into()),
         Type::Number { precision } if *precision <= 34 => Some(ctx.i128_type().into()),
-        Type::ErrorsCapable { .. } => Some(errors_result_type(ctx).into()),
+        Type::ErrorsCapable { inner } => Some(ec_result_type(ctx, shape_types, inner)?.into()),
+        // A `maybe` of an envelope union comes back as the union's slot, `none` its `UNION_NONE_TAG`
+        // (`Cg::maybe_union_variants`): a `{flag, bits}` pair's bits would point at a view in the
+        // callee's frame.
+        Type::Maybe { inner } if matches!(inner.as_ref(), union @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(union)) =>
+        {
+            let Type::Union { variants } = inner.as_ref() else {
+                return Err("abi_return_type: a maybe of a union lost its variants".to_string());
+            };
+            let layout = shape_types.union_layout(variants)?;
+            Some(shape_types.union_slot_llvm(ctx, &layout).into())
+        }
         Type::Maybe { .. } => Some(
             ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
                 .into(),
@@ -1828,6 +2201,23 @@ fn abi_return_type<'ctx>(
             })?;
             Some((*struct_ty).into())
         }
+        // C1f (#423): an envelope union comes back BY VALUE as its slot (`UnionLayout`), like a
+        // `maybe`; its payload is inline, so nothing it points to lives in the callee's frame.
+        union @ Type::Union { variants } if ynz_typeck::check::is_envelope_union(union) => {
+            let layout = shape_types.union_layout(variants)?;
+            Some(shape_types.union_slot_llvm(ctx, &layout).into())
+        }
+        // C1h (#433): a `fixed` list of known length comes back BY VALUE as its cells, the cost of
+        // returning Rust's `[T; N]`. The cells are the list's whole storage, so nothing the caller
+        // reads lives in the callee's frame (before, the caller read a pointer into it).
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } => Some(
+            ctx.i64_type()
+                .array_type(fixed_cell_words(elem, *count))
+                .into(),
+        ),
         _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
     })
 }
@@ -1845,6 +2235,37 @@ fn is_ptr_param(ty: &ynz_ast::nodes::Type, shape_table: &ShapeTable) -> bool {
         }
         _ => true,
     }
+}
+
+/// How `maybe_payload_stable_bits` copies a wide payload: `heap` makes a counted heap cell that
+/// outlives the frame (else the binding's own slot or region), `moved` says the source envelope
+/// is consumed so its payload is not deep-copied, and `take` says the source cell is freed once
+/// the copy is made (a value a call returned already sits in a cell of the caller's).
+#[derive(Clone, Copy)]
+struct PayloadCopy {
+    heap: bool,
+    moved: bool,
+    take: bool,
+}
+
+/// What `union_persist_if_ok` persists: the union's `variants`, whether the `view` it is given is
+/// the pointer to a `maybe` pair (`maybe`), and the move decision (`deep`: `Some` is passed to
+/// `union_persist_into_core` as it stands, `None` lets `union_persist_into_as` decide from the
+/// source).
+struct UnionPersist<'a> {
+    variants: &'a [Type],
+    maybe: bool,
+    deep: Option<bool>,
+}
+
+/// How a state-machine loop made the copy of its variable, for `release_sm_loop_copy`:
+/// `embed_copy` (a shape embedded in the frame), `body_suspends` (the body contains a suspension
+/// point) and `held` (the copy is held in a slot of the iteration's heap frame).
+#[derive(Clone, Copy)]
+struct SmLoopCopy {
+    embed_copy: bool,
+    body_suspends: bool,
+    held: bool,
 }
 
 /// One SoA field segment: where a field's per-element column lives inside the
@@ -1878,6 +2299,31 @@ struct SoaArrayInfo<'ctx> {
     segments: Vec<SoaSegment<'ctx>>,
 }
 
+/// A crossing local that holds an envelope union (or an `errors` result of one) in a frame
+/// region of its own: the persistent home of its value across suspensions. The local's alloca
+/// holds a view of the region, so every reader sees the value form it always did.
+struct CrossingUnion<'ctx> {
+    /// The union's variants (the success type's, for an `errors` result).
+    variants: Vec<Type>,
+    /// The local is an `errors` result: its `{err, ok}` pair keeps `ok` a view of the region.
+    errors: bool,
+    /// The region inside the composed frame (`shape_frame_region_ptr`), `UnionLayout::slot_size`
+    /// bytes, stable for the task's lifetime.
+    region: PointerValue<'ctx>,
+}
+
+/// One union `is`-arm narrowing in force (see `Cg::narrowed_unions`).
+struct NarrowedUnion<'ctx> {
+    /// The scrutinee binding's codegen name.
+    name: String,
+    /// The scrutinee expression, re-lowered against `outer_slot` to re-derive the envelope.
+    scrutinee: Expr,
+    /// The binding's slot outside the arm: holds the union envelope.
+    outer_slot: PointerValue<'ctx>,
+    /// The arm's slot: holds the variant payload pointer; `cg.locals[name]` inside the arm.
+    narrowed_slot: PointerValue<'ctx>,
+}
+
 struct Cg<'ctx, 'g> {
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -1906,8 +2352,9 @@ struct Cg<'ctx, 'g> {
     // v0.3-M5 P5: the admitted-SoA bindings live in THIS function (fresh empty per
     // Cg; keyed by binding name). Registered at the `Stmt::Let` construction
     // interception; consulted by `soa_expr_info` at every choke-point call site.
-    // For-in loop vars mask an entry for the body's duration (the only shadow case:
-    // admission's shadow-decline covers every same-name `let`).
+    // The key is the binding's unique codegen name (`TypedModule::binding_names`), so a
+    // for-in loop var or a same-name `let` that reuses the user's name is a different key and
+    // never reads or hides this entry.
     soa_bindings: HashMap<String, SoaArrayInfo<'ctx>>,
     // v0.3-M5 P4: THE one authoritative layout source (typeck's
     // `layout_decisions_query` — E3 B1). Every layout read in lowering goes
@@ -1917,7 +2364,14 @@ struct Cg<'ctx, 'g> {
     // M5 P4a: type-param substitution for the current monomorphized instance.
     // Empty for non-generic functions.
     type_subst: HashMap<String, Type>,
-    mono_table: &'g MonomorphizationTable,
+    // v0.3-M9 C1h (#433): the lengths of the specialised version being lowered, by the name of
+    // the `fixed<T>` parameter each is the length of. Empty for a function compiled once. A
+    // parameter not in the map (a function compiled once) reads as a list of unknown length.
+    length_subst: HashMap<String, Option<usize>>,
+    // The same lengths in the order of the function's length parameters
+    // (`FixedInstances::length_parameters`): what `FixedInstances::instance_of_call` resolves a
+    // call's lengths against. Empty for a function compiled once.
+    instance_lengths: Vec<Option<usize>>,
     // M6: options table for variant tag lookup.
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     // M7 P4a: true when the current function declared `-> T errors`.
@@ -1926,6 +2380,10 @@ struct Cg<'ctx, 'g> {
     // M7 P4a: set of local names that hold errors-capable results (pointer to {i64, i64}).
     // When one of these is first used in an errors-capable function, auto-propagation fires.
     errors_capable_locals: std::collections::HashSet<String>,
+    // v0.3-M9 C7 slice 3: the slot an errors-capable local was bound into, by codegen name. A
+    // propagating or narrowing read re-points `locals` at a slot holding the success value (a view of
+    // the ok word), so the release of the result and the slot a move nulls are this one.
+    ec_original_slots: HashMap<String, PointerValue<'ctx>>,
     // v0.3-M1: per-compilation counter for unique `background` closure LLVM function names.
     // Per-Cg (not global static) so identical source always produces identical IR even
     // when multiple compilations run in the same process (LSP, test harness).
@@ -1942,6 +2400,48 @@ struct Cg<'ctx, 'g> {
     // spawn-site lowering immediately after the spawn call — never by the drop ladder,
     // which frees only the TASKS' references.
     arc_pending_release: Vec<(PointerValue<'ctx>, u64)>,
+    // v0.3-M9 C3b: the string values the expression that produced them says a store may take
+    // by move (typeck's `TypedModule::string_moves`), keyed by the LLVM value. Written by
+    // `lower_expr` and read by `own_string_for_store`; a string absent from it is copied.
+    owned_string_values: std::collections::HashSet<usize>,
+    // C7 slice 2: the temporaries of the statements being lowered, innermost statement last. A
+    // statement opens a frame (`open_temporaries`) holding one entry-block slot per temporary
+    // typeck recorded for it (`TypedModule::temporaries`), set to null at the statement's start;
+    // `lower_expr` stores a temporary's value into its slot where it is built, and the statement's
+    // end, a `return` and an auto-propagation release every live slot through `emit_slot_release`.
+    temporary_frames: Vec<Vec<TemporarySlot<'ctx>>>,
+    /// The copies the plain `for` loops around the code being lowered made for their variables, outermost
+    /// first: a `return` or an auto-propagation inside the body leaves the iteration before its end
+    /// releases them, so it releases them itself (`Cg::release_open_loop_copies`).
+    open_loop_copies: Vec<(BasicValueEnum<'ctx>, Type)>,
+    /// The collections the plain `for` loops around the code being lowered walk while their own body
+    /// reassigns the iterated binding, outermost first (`Cg::begin_loop_held`).
+    loop_held: Vec<LoopHeld<'ctx>>,
+    // C1f round 2: the heap values (a shape, union or `maybe` that may own boxes) the expression
+    // that produced them says a store takes by MOVE (typeck's `TypedModule::heap_moves`), keyed by
+    // the LLVM value: the pointer an identifier read loads (a fresh `load` per read), a literal's
+    // or a call result's slot, a union envelope view. Written by `lower_expr`, read by every copy
+    // of a value's bytes (`Cg::is_moved_cells`); a value absent from it is copied deep.
+    moved_cell_values: std::collections::HashSet<usize>,
+    // The heap envelope cells an explicit `.copy()` of a `maybe` minted (`lower_postfix_op`), keyed by
+    // the LLVM value. A copy is a value nobody else holds, so the one store or binding that takes it
+    // owns its cell and payload as they are (`maybe_to_owned_dest`) instead of copying them again and
+    // orphaning the first copy.
+    minted_maybe_copies: std::collections::HashSet<usize>,
+    // The envelopes of a `maybe` a Yinz function returned or a string `get` built (`lower_expr`), keyed by
+    // the LLVM value: each owns its payload (a string clone, a shape or number cell) and nothing else
+    // holds it, so a persist takes the payload instead of copying it and orphaning the first
+    // (`maybe_to_owned_dest`).
+    fresh_payload_maybes: std::collections::HashSet<usize>,
+    // C7 slice 3b: the nested-shape cells a `let` or assignment takes out of a temporary
+    // (`lower_taken_field`), keyed by the LLVM value of the cell pointer. The store that copies
+    // the cell's bytes into the binding frees the emptied cell (`shape_bytes_to_owned`).
+    taken_shape_cells: std::collections::HashSet<usize>,
+    // C7 slice 4: the union views a MOVED read of a union binding or a moved Yinz call result (`lower_expr`), keyed by the
+    // LLVM value. For a recursive (boxed) union such a view's data word is the box cell its slot
+    // owns, which the consuming store takes as it is instead of allocating a cell and leaking the
+    // emptied one (`union_persist_into_as`).
+    box_cell_views: std::collections::HashSet<usize>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -1983,6 +2483,18 @@ struct Cg<'ctx, 'g> {
     // int/bool/float/ptr types use 1 slot; decimal128 and ErrorsCapable use 2 slots
     // (16 bytes stored directly in the frame — not a pointer to a stack buffer).
     sm_crossing_slot_indices: Vec<usize>,
+    // The resume function's parameter names, in frame-slot order (slot `i` holds parameter `i`).
+    sm_param_names: Vec<String>,
+    // The frame slots the temporaries of suspending statements take: `base..end` are reserved by the
+    // layout, `next` is the first not yet given to a statement (`Cg::next_wait_temporary_slot`).
+    sm_wait_temporary_base: usize,
+    sm_wait_temporary_next: usize,
+    sm_wait_temporary_end: usize,
+    // `temporary_frames.len()` right after each statement frame or loop-iteration frame that lives
+    // in the heap frame was pushed, innermost last: `Cg::hold_copy_in_frame` adds a copy to the
+    // innermost frame only when that frame is one of these (a frame of entry-block slots could not
+    // keep the copy across a `wait`).
+    wait_frame_marks: Vec<usize>,
     // Set of crossing local names whose type is decimal128 (number with precision ≤ 34).
     // These use 2 frame slots and i128 alloca (not ptr alloca).
     sm_crossing_decimal128_set: HashSet<String>,
@@ -2028,12 +2540,48 @@ struct Cg<'ctx, 'g> {
     // - flush:  memcpy this alloca → frame slot region
     // cg.locals[name] points to this alloca so field access GEPs work correctly.
     sm_crossing_shape_allocas: HashMap<String, PointerValue<'ctx>>,
+    // Region-homed crossing locals (a frame-embedded shape, a union region): the frame slot that
+    // holds the local's MOVED flag. The region itself follows that slot. A move or a release sets
+    // the flag, a rebind clears it, and every resume re-derives the local's slot from it: a
+    // region's bytes are live data, so a move cannot null a word of them.
+    sm_region_flags: HashMap<String, usize>,
+    // Drop entries of the resume function being emitted (C8 slice 6 spike): the resume point a
+    // dropped task presents (the bitwise complement of the state it is parked in) and the block
+    // that releases what the frame holds in that state.
+    sm_drop_cases: Vec<(u32, BasicBlock<'ctx>)>,
+    // The region pointer of each frame-embedded shape crossing local, computed once in sm_entry.
+    // A bind copies into it and re-points the local at it, whatever a move left in the local.
+    sm_crossing_shape_regions: HashMap<String, PointerValue<'ctx>>,
+    // Crossing `maybe` locals homed in a frame region (`MaybeRegion`), by name.
+    sm_crossing_maybe_regions: HashMap<String, PointerValue<'ctx>>,
+    // The payload type of each region-homed `maybe` crossing local.
+    sm_crossing_maybe_inner: HashMap<String, Type>,
+    // Crossing `fixed` list locals homed in a frame region, by name: the region and its byte size.
+    sm_crossing_fixed_regions: HashMap<String, (PointerValue<'ctx>, u64)>,
+    // While a binding of a region-homed `maybe` is being stored: the region (envelope) and the place
+    // its shape or number payload goes (`maybe_to_owned_dest` reads them instead of allocating).
+    maybe_env_dest: std::cell::Cell<Option<PointerValue<'ctx>>>,
+    maybe_payload_dest: std::cell::Cell<Option<PointerValue<'ctx>>>,
+    // Crossing locals holding an envelope union, by name (`CrossingUnion`): their value lives in
+    // a frame region, so a resume reads it back instead of a pointer into a dead stack.
+    sm_crossing_unions: HashMap<String, CrossingUnion<'ctx>>,
     // Nesting depth inside if/while/for/match bodies in a SM resume function.
     // Used for the snapshot/restore protocol that prevents non-crossing locals introduced
-    // inside a nested scope from leaking into cg.locals after the scope exits. Shadow
-    // bindings (a `let x` where outer `x` crosses a wait) are rejected at typeck
-    // (ShadowsCrossingLocal), so at codegen time depth > 0 never signals a shadow.
+    // inside a nested scope from leaking into cg.locals after the scope exits. Every binding
+    // has its own codegen name (`TypedModule::binding_names`), so a nested `let x` never
+    // shares a name, or a frame slot, with an outer `x` that crosses a wait: depth > 0 never
+    // signals a shadow. (Typeck's ShadowsCrossingLocal still rejects that source shape.)
     sm_scope_depth: usize,
+    // Union `is`-arm narrowings in force at the current lowering point, innermost last
+    // (`narrow_union_local_to_variant` pushes, `restore_narrowed_local` pops). A state-machine
+    // resume reloads bindings from the frame AFTER the arm entry that narrowed them, so
+    // `reload_params_from_frame` reads this to write the reloaded envelope to the OUTER slot
+    // and re-derive the payload pointer (`renarrow_union_locals`).
+    narrowed_unions: Vec<NarrowedUnion<'ctx>>,
+    // The expression whose OWN lowering is running inside `lower_expr`'s coercion wrapper: its
+    // node lowers against its plain typeck type (`Cg::expr_type`); every other reader sees the
+    // union the value was coerced to.
+    coercion_inner: Option<(usize, usize)>,
     // Counter tracking how many suspending for-loops have been emitted in this SM function.
     // Generates the matching synthetic crossing-local name `__ynz_for_idx_N` that
     // typeck pre-allocates a frame slot for. Must increment in the same order as
@@ -2044,6 +2592,8 @@ struct Cg<'ctx, 'g> {
     // Used by lower_stmt_return to write the i128 decimal to a frame-stable location so
     // the EC ok-pointer survives the resume function returning.
     sm_number_errors_staging_offset: Option<u64>,
+    /// The union slots this state machine's frame reserves (`FrameLayout::union_regions`).
+    sm_union_regions: Vec<UnionRegion>,
     // v0.3-M3b Phase 4: when true, the auto-parallelize pass is disabled.
     // All suspending statements lower in pure source order via the existing
     // single inline-poll path. This is the TRUE dumb-sequential baseline used
@@ -2123,6 +2673,27 @@ struct Cg<'ctx, 'g> {
     // True once this function's single fused group has fired. Mirrors `m3d_spike_fired`'s
     // single-group discipline — `admitted_fused_group` only ever admits ONE top-level group.
     fused_group_fired: bool,
+    // v0.3-M9 C7: the type of every binding this function declares, by codegen name (filled at
+    // `let`, the handle `let` and parameter materialization). `emit_release_edge` reads it: a
+    // release-plan entry names a binding and a kind, the helper needs the type.
+    local_types: HashMap<String, Type>,
+    // v0.3-M9 C7 slice 2: the slots a string value, read at its last use, is taken out of if the
+    // store seam takes it, by the value's LLVM reference (`Cg::note_string_last_use`).
+    string_take_slots: HashMap<usize, Vec<MoveSlot<'ctx>>>,
+    // v0.3-M9 C1q: the list cell each variable of a loop that hands its rows over reads its row
+    // from (`for_handover_cell`), by variable name; the read typeck records as the hand-over
+    // blanks it (`Cg::take_handover_row`).
+    handover_rows: HashMap<String, HandoverCell<'ctx>>,
+    // v0.3-M9 C1q: the cell a handed-over string row is blanked in if the store seam takes the
+    // string, by the string's LLVM reference (`Cg::take_string_slots`).
+    string_take_cells: HashMap<usize, HandoverCell<'ctx>>,
+    // v0.3-M9 C7 slice 3: a string read off an errors-capable result at its last use is the result's ok
+    // word: where the store seam takes it, this word is nulled, so the result's release skips it.
+    string_take_ec_words: HashMap<usize, (PointerValue<'ctx>, Option<usize>)>,
+    // v0.3-M9 C8 slice 4b: errors-capable locals whose ok word is BORROWED from a handle (`h.receive()` of a
+    // `number` (not a `maybe`, which arrives in an owned cell): the completion's 16-byte buffer belongs to the handle, which frees it when it
+    // drops). The scope exit drops only their error object, never the ok word.
+    ec_borrowed_ok: HashSet<String>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -2148,6 +2719,42 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.ctx.ptr_type(AddressSpace::default())
     }
 
+    /// The symbol of the specialised version the call at `call_span` runs, when typeck recorded
+    /// one (the callee has `fixed<T>` length parameters): the version for the lengths the call
+    /// passes, seen from inside the version being lowered. `None` for any other call. An
+    /// undeclared version is an internal error, never a guess. O(lengths).
+    fn fixed_version_symbol(&self, call_span: (usize, usize)) -> Result<Option<String>, String> {
+        let Some(version) = self
+            .typed
+            .fixed_instances
+            .instance_of_call(call_span, &self.instance_lengths)
+        else {
+            return Ok(None);
+        };
+        let symbol = ynz_typeck::fixed_length::instance_symbol(&version.function, &version.lengths);
+        if self.module.get_function(&symbol).is_none() {
+            return Err(format!(
+                "internal compiler error: the call at bytes {}..{} runs `{symbol}`, but typeck \
+                 listed no such version. This is a compiler bug.",
+                call_span.0, call_span.1
+            ));
+        }
+        Ok(Some(symbol))
+    }
+
+    /// The length of a `fixed` list in the version being lowered: a parameter's placeholder
+    /// becomes the length that version was built for (`length_subst`), or unknown when the
+    /// function is compiled once. THE one place codegen reads a placeholder. O(1).
+    fn resolve_fixed_length(&self, length: &FixedLength) -> FixedLength {
+        match length {
+            FixedLength::OfParam { parameter } => match self.length_subst.get(parameter) {
+                Some(Some(count)) => FixedLength::Known(*count),
+                Some(None) | None => FixedLength::Unknown,
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Apply the current type-param substitution to `ty`, returning a concrete type.
     fn resolve_type(&self, ty: &Type) -> Type {
         match ty {
@@ -2165,18 +2772,86 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             },
             Type::BuiltinFixed { elem, size } => Type::BuiltinFixed {
                 elem: Box::new(self.resolve_type(elem)),
-                size: *size,
+                size: self.resolve_fixed_length(size),
             },
             Type::Maybe { inner } => Type::Maybe {
                 inner: Box::new(self.resolve_type(inner)),
             },
+            // The variants are substituted too, and the union flattened as typeck builds an
+            // instance's union (`generics::apply_substitution`): `T | nothing` with `T = Big` is the
+            // envelope union `Big | nothing`, and with `T = int` the raw union `int | nothing`. THE
+            // one place a union's variants are substituted, so every caller that asks whether a
+            // union is an envelope union (`is_envelope_union`) or what a raw one holds
+            // (`raw_union_variant`) judges the instance's union, not the generic's.
+            Type::Union { variants } => ynz_typeck::generics::flatten_union(
+                variants
+                    .iter()
+                    .map(|variant| self.resolve_type(variant))
+                    .collect(),
+            ),
             other => other.clone(),
         }
     }
 
+    /// The union coercion typeck recorded for the expression at `key`
+    /// (`TypedModule::union_coercions`), or `None` when it enters no union slot in the instance
+    /// being lowered. THE reader of that record: every consumer asks here, so none of them
+    /// wraps a value the instance already holds as the slot's union.
+    ///
+    /// Typeck records a generic body's `return second` (`second: T` into `T | Tiny`) as a
+    /// coercion of variant 0. When the instance binds `T` to a union (`Big | Tiny`), the value
+    /// already IS the slot's flat union (`Big | Tiny`, the type `apply_substitution` builds):
+    /// there is no plain variant to wrap, and wrapping would nest an envelope in an envelope
+    /// (C1g `v0_3_m9_c1g_generic_call_runs_its_checked_instance`). Likewise `T | U` with `T = U = Tiny`
+    /// flattens to the plain `Tiny`: the value already IS the slot, which callers see as `Tiny`
+    /// (`apply_substitution`), so nothing is wrapped. A bound union whose flat
+    /// variants come in another order than the slot's (`Tiny | T`) is not this case: typeck
+    /// refuses that generic call (`GenericUnionBoundOutOfOrder`), so no instance reaches the
+    /// lowering with one; the lowering's refusal stays as a guard against mis-tagging.
+    ///
+    /// Time: O(size of the slot type)  Space: O(size of the slot type)
+    fn coercion_at(&self, key: (usize, usize)) -> Option<&ynz_typeck::check::UnionCoercion> {
+        let coercion = self.typed.union_coercions.get(&key)?;
+        let plain = self.resolve_type(self.typed.expr_types.get(&key)?);
+        let flat_slot = self.resolve_type(&coercion.slot);
+        if plain == flat_slot {
+            return None;
+        }
+        // Typeck records a generic body's `return item` into `T | nothing` against the slot as
+        // written, where `T` may become a shape. The instance whose `T` is a `string` or an `int`
+        // holds that union as its raw pointer or bits (`is_envelope_union`): no envelope to
+        // wrap in.
+        if !matches!(flat_slot, Type::Union { .. })
+            || !ynz_typeck::check::is_envelope_union(&flat_slot)
+        {
+            return None;
+        }
+        // `T | nothing` with `T = Big | Tiny`: the value is an envelope union whose variants are the
+        // first of the instance's flat union (`Big | Tiny | nothing`), so its tags are the slot's
+        // tags and the envelope is the slot's envelope: nothing is wrapped. Typeck cannot tell
+        // (`T` is abstract in the body). A union that sits elsewhere in the flat order
+        // (`nothing | T`) never reaches here: typeck refuses that generic call
+        // (`check_generic_fn_call`, asking the same `union_keeps_slot_tags`).
+        let held = self.declared_variant(coercion);
+        if held.is_some_and(|held| ynz_typeck::check::union_keeps_slot_tags(&held, &flat_slot)) {
+            return None;
+        }
+        Some(coercion)
+    }
+
     /// Look up the typeck type for `expr` and apply the current type-param substitution.
+    ///
+    /// An expression typeck coerced into a union slot (`TypedModule::union_coercions`) reads as
+    /// that union: `lower_expr` wraps its value in the tagged envelope, so every consumer of the
+    /// lowered value sees the type of what it got. The expression's own node lowers against the
+    /// plain type (`coercion_inner`).
     fn expr_type(&self, expr: &Expr) -> Type {
         let key = (expr.span().start, expr.span().end);
+        if self.coercion_inner != Some(key) {
+            if let Some(coercion) = self.coercion_at(key) {
+                return self.resolve_type(&coercion.slot);
+            }
+        }
         let raw = self
             .typed
             .expr_types
@@ -2266,6 +2941,31 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// Move the builder to where a new entry-block alloca belongs: after the entry block's
+    /// existing leading allocas and before its first other instruction, so every entry alloca
+    /// executes before anything else in the function.
+    ///
+    /// Why not "at the end of the entry block": a loop's `llvm.stacksave` is an entry-block
+    /// instruction, and `llvm.stackrestore` releases every alloca executed after it. An alloca
+    /// added at the end of the entry block after a loop was lowered sits after that stacksave,
+    /// so the back-edge restore would hand its slot back to the stack and a callee's frame
+    /// would overwrite a live local (AddressSanitizer turns entry allocas into dynamic ones,
+    /// which exposed it: `v03_m9_union_coerce_let` once a callee's frame grew). Allocas at the
+    /// top of the entry block are never after a stacksave.
+    ///
+    /// O(k) time for k instructions before the first non-alloca one.
+    fn position_for_entry_alloca(&self, entry_bb: BasicBlock<'ctx>) {
+        let mut instruction = entry_bb.get_first_instruction();
+        while let Some(current) = instruction {
+            if current.get_opcode() != inkwell::values::InstructionOpcode::Alloca {
+                self.builder.position_before(&current);
+                return;
+            }
+            instruction = current.get_next_instruction();
+        }
+        self.builder.position_at_end(entry_bb);
+    }
+
     /// Build an alloca in the function's ENTRY block, regardless of where the builder
     /// currently points. LLVM SSA requires allocas to dominate every use; placing them
     /// in the entry block is the canonical way to satisfy this for values that may be
@@ -2286,11 +2986,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // We save and restore the builder's current insertion point so the caller's
         // ongoing block emission is unaffected.
         let saved_bb = self.builder.get_insert_block();
-        if let Some(term) = entry_bb.get_terminator() {
-            self.builder.position_before(&term);
-        } else {
-            self.builder.position_at_end(entry_bb);
-        }
+        self.position_for_entry_alloca(entry_bb);
         let slot = self.alloca(ty, name)?;
         // Restore the builder to wherever it was before we moved it.
         if let Some(bb) = saved_bb {
@@ -2316,11 +3012,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .get_first_basic_block()
             .ok_or_else(|| format!("alloca_in_entry_llvm: no entry block for `{name}`"))?;
         let saved_bb = self.builder.get_insert_block();
-        if let Some(term) = entry_bb.get_terminator() {
-            self.builder.position_before(&term);
-        } else {
-            self.builder.position_at_end(entry_bb);
-        }
+        self.position_for_entry_alloca(entry_bb);
         let slot = self
             .builder
             .build_alloca(llvm_ty, name)
@@ -2508,18 +3200,143 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// ELEMENTS and map VALUES alike (the two ABIs mirror 1:1; a map-side twin
     /// of this match would be exactly the parallel-derivation corpse class).
     ///
-    /// Non-shape elements are 8-byte cells holding the i64-bit convention
-    /// (int/float/bool by value; string/number/every other pointer type as pointer
-    /// bits — scratch-doc Option A). Shape elements are stored inline at the
-    /// shape's LLVM ABI byte size, read from `shape_abi_sizes`
+    /// Other elements are 8-byte cells holding the i64-bit convention
+    /// (int/float/bool by value; string/every other pointer type as pointer bits —
+    /// scratch-doc Option A). A decimal128 `number` is stored inline, 16 bytes
+    /// ([`DECIMAL_CELL_SIZE`]), like a Rust `Vec<Decimal>` element. Shape elements are stored
+    /// inline at the shape's LLVM ABI byte size, read from `shape_abi_sizes`
     /// (TargetData-accurate, computed once per module) — never re-derived here.
     fn array_elem_size(&self, elem_ty: &Type) -> Result<u64, String> {
         match self.resolve_type(elem_ty) {
             Type::Shape { ref name } => self.shape_abi_sizes.get(name).copied().ok_or_else(|| {
                 format!("array elem size: shape `{name}` missing from shape_abi_sizes")
             }),
+            // C1f: an envelope union is stored BY VALUE as its slot, the size its `UnionLayout`
+            // gives (tag + the largest variant, inline).
+            Type::Union { .. } if self.envelope_union_variants(elem_ty).is_some() => {
+                let variants = self
+                    .envelope_union_variants(elem_ty)
+                    .ok_or("array elem size: union lost its variants")?;
+                Ok(self.union_layout(&variants)?.slot_size)
+            }
+            // A decimal128 `number` is 16 bytes and is stored inline, as a shape is. A cell that
+            // held a pointer to the producing frame's storage read a dead frame once that frame
+            // returned or its loop body reused the slot.
+            Type::Number { precision } if precision <= 34 => Ok(DECIMAL_CELL_SIZE),
             _ => Ok(8),
         }
+    }
+
+    /// Is a value of `ty` a decimal128 `number`, which an array or map stores inline in a
+    /// [`DECIMAL_CELL_SIZE`]-byte cell? (A `number<N>` past 34 digits is a pointer cell.)
+    fn is_inline_decimal(&self, ty: &Type) -> bool {
+        matches!(self.resolve_type(ty), Type::Number { precision } if precision <= 34)
+    }
+
+    /// The LLVM type of one cell of a `fixed<elem>` block: the 16-byte decimal itself for a
+    /// decimal128 `number`, the uniform 8-byte i64 cell for everything else.
+    fn fixed_cell_llvm(&self, elem_ty: &Type) -> inkwell::types::IntType<'ctx> {
+        if self.is_inline_decimal(elem_ty) {
+            self.i128()
+        } else {
+            self.i64()
+        }
+    }
+
+    /// The LLVM type of a whole `fixed<elem>` block of `count` cells.
+    fn fixed_block_type(&self, elem_ty: &Type, count: u32) -> inkwell::types::ArrayType<'ctx> {
+        self.fixed_cell_llvm(elem_ty).array_type(count)
+    }
+
+    /// The byte size of one cell of a `fixed<elem>` block (see [`Cg::fixed_cell_llvm`]).
+    fn fixed_cell_bytes(&self, elem_ty: &Type) -> u64 {
+        if self.is_inline_decimal(elem_ty) {
+            DECIMAL_CELL_SIZE
+        } else {
+            8
+        }
+    }
+
+    /// The address of cell `index` of the `fixed<elem>` block at `cells`.
+    fn fixed_cell_ptr(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        elem_ty: &Type,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        // SAFETY: every caller bounds-checks `index` against the block's compile-time size.
+        unsafe {
+            self.builder
+                .build_gep(self.fixed_cell_llvm(elem_ty), cells, &[index], site)
+                .map_err(|err| format!("{site} fixed cell gep: {err}"))
+        }
+    }
+
+    /// Read cell `index` of a `fixed<elem>` block as a value: the cell's address for a decimal
+    /// (a number value is a pointer to its 16 bytes), the loaded i64 bits converted otherwise.
+    fn fixed_cell_value(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        elem_ty: &Type,
+        site: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let cell = self.fixed_cell_ptr(cells, index, elem_ty, site)?;
+        if self.is_inline_decimal(elem_ty) {
+            return Ok(cell.into());
+        }
+        let bits = self
+            .builder
+            .build_load(self.i64(), cell, &format!("{site}_bits"))
+            .map_err(|err| format!("{site} fixed cell load: {err}"))?
+            .into_int_value();
+        self.i64_bits_to(bits, elem_ty)
+    }
+
+    /// The i64 a `{flag, bits}` maybe envelope carries for cell `index`: the cell's address for a
+    /// decimal, the cell's bits otherwise.
+    fn fixed_cell_envelope_bits(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        elem_ty: &Type,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let cell = self.fixed_cell_ptr(cells, index, elem_ty, site)?;
+        if self.is_inline_decimal(elem_ty) {
+            return self
+                .builder
+                .build_ptr_to_int(cell, self.i64(), &format!("{site}_addr"))
+                .map_err(|err| format!("{site} fixed cell address: {err}"));
+        }
+        Ok(self
+            .builder
+            .build_load(self.i64(), cell, &format!("{site}_bits"))
+            .map_err(|err| format!("{site} fixed cell load: {err}"))?
+            .into_int_value())
+    }
+
+    /// Write the decimal at `value` into cell `index` of a `fixed<number>` block: the 16 bytes
+    /// are copied, so the source slot may be reused by the next statement.
+    fn fixed_cell_store_decimal(
+        &self,
+        cells: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+        value: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let cell = self.fixed_cell_ptr(cells, index, &Type::Number { precision: 34 }, site)?;
+        self.builder
+            .build_memcpy(
+                cell,
+                1,
+                value,
+                1,
+                self.i64().const_int(DECIMAL_CELL_SIZE, false),
+            )
+            .map_err(|err| format!("{site} fixed decimal store: {err}"))?;
+        Ok(())
     }
 
     // ── v0.3-M5 P5: SoA gather/scatter (design c) ────────────────────────────
@@ -2765,12 +3582,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `ynz_array_set` call with the ORIGINAL idx — the runtime's own abort
     /// path fires (byte-identical observable behavior to the AoS set; the raw
     /// call is legal because this helper lives inside the choke section).
+    ///
+    /// `release_replaced` says the slots hold an element the array owns, whose heap the write
+    /// replaces and so releases; the constructor writes into a fresh buffer holding nothing.
     fn soa_scatter(
         &self,
         info: &SoaArrayInfo<'ctx>,
         arr: PointerValue<'ctx>,
         idx: inkwell::values::IntValue<'ctx>,
         src: PointerValue<'ctx>,
+        release_replaced: bool,
         site: &str,
     ) -> Result<(), String> {
         let struct_ty = self.shape_types.get(&info.shape_name).ok_or_else(|| {
@@ -2793,6 +3614,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("soa scatter br: {e}"))?;
 
         self.builder.position_at_end(hit_bb);
+        // The element being replaced owns what its fields hold, so each is released (with the
+        // glue of the field type, as the AoS `ynz_array_set` releases the whole element) before
+        // the new element's fields are written over it.
+        let replaced_releases = if release_replaced {
+            self.shape_field_releases(&info.shape_name)?
+        } else {
+            Vec::new()
+        };
+        for (field_index, glue, inline) in replaced_releases {
+            let seg = info.segments.get(field_index as usize).ok_or_else(|| {
+                format!(
+                    "soa scatter: shape `{}` has no segment for field {field_index}",
+                    info.shape_name
+                )
+            })?;
+            let addr = self.soa_field_addr(data, seg, idx, site)?;
+            self.call_stored_release((glue, inline), addr, &format!("{site}_soa_old"))?;
+        }
         for (i, seg) in info.segments.iter().enumerate() {
             let sp = self
                 .builder
@@ -2815,7 +3654,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_call(
                 self.rt.ynz_array_set,
-                &[arr.into(), idx.into(), src.into()],
+                &[
+                    arr.into(),
+                    idx.into(),
+                    src.into(),
+                    self.ptr().const_null().into(),
+                    self.i32().const_zero().into(),
+                ],
                 &format!("{site}_soa_abort"),
             )
             .map_err(|e| format!("soa scatter oob set: {e}"))?;
@@ -2986,8 +3831,27 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         elem_ty: &Type,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
-        if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
+        if let Type::Shape { name } = self.resolve_type(elem_ty) {
+            // The runtime memcpys the element out of this pointer, so a shape that owns boxes and
+            // is not moved in is staged through a deep copy, or the element would share them.
+            if !self.is_moved_cells(val.into_pointer_value()) && self.shape_owns_cells(&name)? {
+                return self.shape_bytes_to_owned(val.into_pointer_value(), &name, site);
+            }
             return Ok(val.into_pointer_value());
+        }
+        // A decimal128 value is a pointer to its 16 bytes; the runtime memcpys them into the cell
+        // before this returns, so the source may be a slot the next statement reuses.
+        if self.is_inline_decimal(elem_ty) {
+            return Ok(val.into_pointer_value());
+        }
+        // C1f: an envelope union persists as its own slot (payload inline); the runtime memcpys
+        // the staged slot bytes into the element cell.
+        if let Some(variants) = self.envelope_union_variants(elem_ty) {
+            let layout = self.union_layout(&variants)?;
+            let staging =
+                self.alloca_in_entry_llvm(self.union_slot_llvm(&layout), &format!("{site}_stage"))?;
+            self.union_persist_into(val.into_pointer_value(), staging, &variants, site)?;
+            return Ok(staging);
         }
         // PERSIST boundary: the runtime memcpys these bits into the element
         // cell, which persists past the site's next execution — so maybe
@@ -2995,6 +3859,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         // (`value_to_stable_bits`), never marshal bare envelope-pointer bits
         // (the escape-the-iteration miscompile; fix round 3, tripwire
         // `m5_p2_byval_array_maybe_elem_write_escape`).
+        // A string cell owns its bytes: copy a borrowed string, take a movable one.
+        let val = own_string_for_store(self, val, elem_ty, site)?;
         let stable = self.value_to_stable_bits(val, elem_ty, site)?;
         let bits = self.zext_bits64(stable)?;
         let staging = self.alloca_in_entry_llvm(self.i64(), &format!("{site}_stage"))?;
@@ -3008,7 +3874,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `soa` must be None: growth is a Phase 4 admission decline (D3 — `add`
     /// escapes), so a Some here is an entry-gate breach, not a lowering case.
     fn array_elem_push(
-        &self,
+        &mut self,
         arr: PointerValue<'ctx>,
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
@@ -3047,13 +3913,21 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 ));
             }
             let src = self.array_elem_src_ptr(val, elem_ty, site)?;
-            return self.soa_scatter(info, arr, idx, src, site);
+            return self.soa_scatter(info, arr, idx, src, true, site);
         }
         let src = self.array_elem_src_ptr(val, elem_ty, site)?;
+        // The item being replaced is released with the element type's glue.
+        let (glue, inline) = self.element_release_arguments(elem_ty)?;
         self.builder
             .build_call(
                 self.rt.ynz_array_set,
-                &[arr.into(), idx.into(), src.into()],
+                &[
+                    arr.into(),
+                    idx.into(),
+                    src.into(),
+                    glue.into(),
+                    self.i32().const_int(inline as u64, false).into(),
+                ],
                 site,
             )
             .map_err(|e| format!("array_set: {e}"))?;
@@ -3089,7 +3963,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   (`value_to_stable_bits` in `array_elem_src_ptr`), cloning envelope +
     ///   shape payload into counted heap cells. Fix round 3.
     /// - **Fixed-array element writes** (index-assign / `.set()` / literal
-    ///   fill): a PERSIST surface — the `[N x i64]` stack slots outlive the
+    ///   fill): a PERSIST surface — the `[N x i64]` stack slots (`[N x i128]` for a decimal128
+    ///   `number`, copied in whole) outlive the
     ///   producing site's next execution, and there is NO runtime memcpy
     ///   backstop (fixed never migrated to the by-value heap ABI). Shape and
     ///   maybe elements route through the ONE marshalling choke point
@@ -3120,6 +3995,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     format!("array out buffer: LLVM type for shape `{name}` missing")
                 })?;
                 self.alloca_in_entry_llvm(struct_ty, &format!("{site}_out"))
+            }
+            Type::Union { .. } if self.envelope_union_variants(elem_ty).is_some() => {
+                let variants = self
+                    .envelope_union_variants(elem_ty)
+                    .ok_or("array out buffer: union lost its variants")?;
+                let layout = self.union_layout(&variants)?;
+                self.alloca_in_entry_llvm(self.union_slot_llvm(&layout), &format!("{site}_out"))
+            }
+            Type::Number { precision } if precision <= 34 => {
+                self.alloca_in_entry_llvm(self.i128(), &format!("{site}_out"))
             }
             _ => self.alloca_in_entry_llvm(self.i64(), &format!("{site}_out")),
         }
@@ -3163,8 +4048,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         elem_ty: &Type,
         site: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
+        if matches!(self.resolve_type(elem_ty), Type::Shape { .. })
+            || self.is_inline_decimal(elem_ty)
+        {
             return Ok(out.into());
+        }
+        if let Some(variants) = self.envelope_union_variants(elem_ty) {
+            return Ok(self.union_slot_to_value(out, &variants, site)?.into());
         }
         let bits = self
             .builder
@@ -3183,11 +4073,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         elem_ty: &Type,
         site: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        if matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
+        if matches!(self.resolve_type(elem_ty), Type::Shape { .. })
+            || self.is_inline_decimal(elem_ty)
+        {
             return self
                 .builder
                 .build_ptr_to_int(out, self.i64(), &format!("{site}_ptrbits"))
                 .map_err(|e| format!("array out ptr bits: {e}"));
+        }
+        if let Some(variants) = self.envelope_union_variants(elem_ty) {
+            let value = self.union_slot_to_value(out, &variants, site)?;
+            return self
+                .builder
+                .build_ptr_to_int(value, self.i64(), &format!("{site}_ptrbits"))
+                .map_err(|err| format!("array out union bits: {err}"));
         }
         self.builder
             .build_load(self.i64(), out, &format!("{site}_bits"))
@@ -3275,7 +4174,30 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_memcpy(owned, 1, src, 1, size)
             .map_err(|e| format!("shape_bytes_to_owned memcpy: {e}"))?;
+        self.deepen_unless_moved(src, owned, shape_name)?;
+        self.free_taken_shape_cell(src, size)?;
         Ok(owned)
+    }
+
+    /// A nested shape a `let` took out of a temporary (`lower_taken_field`): its bytes and
+    /// everything they own are the binding's now, so only the emptied cell `src` goes. Nothing
+    /// is emitted for any other source.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn free_taken_shape_cell(
+        &self,
+        src: PointerValue<'ctx>,
+        size: inkwell::values::IntValue<'ctx>,
+    ) -> Result<(), String> {
+        if self
+            .taken_shape_cells
+            .contains(&(src.as_value_ref() as usize))
+        {
+            self.builder
+                .build_call(self.rt.ynz_free, &[src.into(), size.into()], "")
+                .map_err(|err| format!("free the taken shape cell: {err}"))?;
+        }
+        Ok(())
     }
 
     /// Get-side ownership (v0.3-M5 P2 fix-loop): copy a `{i64 flag, i64 bits}`
@@ -3285,18 +4207,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `array_elem_get_maybe`'s envelope is per-site storage reused across reads,
     /// and for shape elements its bits point at the equally-reused out buffer. An
     /// escaping maybe binding therefore needs BOTH copied: the envelope by value,
-    /// and (shape payloads only, guarded on the flag — a `none`'s bits may be 0)
-    /// the payload bytes into an owned region with bits repointed at the copy.
-    /// Non-shape payloads are self-contained i64 bits (values, or pointers that
-    /// are stable against per-site reuse — heap for string, frame-local STACK
-    /// allocas for number) — the envelope copy alone owns them.
+    /// and (shape and decimal payloads, guarded on the flag — a `none`'s bits may be 0)
+    /// the payload bytes into an owned region with bits repointed at the copy
+    /// (`maybe_payload_stable_bits`: an element read's payload points at a per-site
+    /// buffer). Other payloads are self-contained i64 bits (values, or heap pointers
+    /// such as a string) — the envelope copy alone owns them.
     fn maybe_to_owned(
         &self,
         src_env: PointerValue<'ctx>,
         inner_ty: &Type,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
-        self.maybe_to_owned_dest(src_env, inner_ty, site, false)
+        self.maybe_to_owned_dest(src_env, inner_ty, site, false, false)
+    }
+
+    /// `maybe_to_owned` for a `maybe` a user function returned: its shape and number payload sit in a
+    /// heap cell the return made (`maybe_payload_stable_bits` with `heap`), and a string payload is a
+    /// clone the return made. The binding TAKES them: the shape's bytes move into the binding's own
+    /// slot with the strings and cells they own (no copy of either), and the empty cell is freed, so
+    /// the binding's release frees each allocation once. An array or map payload is the caller's
+    /// copy to make (`copy_maybe_container_payload`) and is left alone.
+    fn maybe_to_owned_taking(
+        &self,
+        src_env: PointerValue<'ctx>,
+        inner_ty: &Type,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        self.maybe_to_owned_dest(src_env, inner_ty, site, false, true)
     }
 
     /// Persist-side sibling of `maybe_to_owned` (v0.3-M5 P2 fix round 2): same
@@ -3310,7 +4247,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         inner_ty: &Type,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
-        self.maybe_to_owned_dest(src_env, inner_ty, site, true)
+        self.maybe_to_owned_dest(src_env, inner_ty, site, true, false)
     }
 
     /// Shared implementation for the two maybe ownership copies above — ONE
@@ -3324,7 +4261,22 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         inner_ty: &Type,
         site: &str,
         heap: bool,
+        take: bool,
     ) -> Result<PointerValue<'ctx>, String> {
+        // A cell an explicit `.copy()` minted is held by nobody else: a persist keeps it as it is, a
+        // binding takes its payload and gives the emptied cell back.
+        let minted = self
+            .minted_maybe_copies
+            .contains(&(src_env.as_value_ref() as usize));
+        if minted && heap {
+            return Ok(src_env);
+        }
+        let take = take
+            || minted
+            || (heap
+                && self
+                    .fresh_payload_maybes
+                    .contains(&(src_env.as_value_ref() as usize)));
         let owned_env = if heap {
             let raw = self
                 .maybe_type()
@@ -3335,6 +4287,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_int_z_extend(raw, self.i64(), &format!("{site}_env_sz"))
                 .map_err(|e| format!("maybe env size zext {site}: {e}"))?;
             self.heap_cell(env_size, &format!("{site}_env"))?
+        } else if let Some(region) = self.maybe_env_dest.get() {
+            // A binding homed in a frame region (`MaybeRegion`): the envelope is the region.
+            region
         } else {
             self.alloca_in_entry_llvm(self.maybe_type(), &format!("{site}_env_own"))?
         };
@@ -3357,7 +4312,39 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("{e}"))?
             .into_int_value();
 
-        let final_bits = self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap)?;
+        let moved = self.is_moved_cells(src_env);
+        let final_bits = self.maybe_payload_stable_bits(
+            flag,
+            bits,
+            inner_ty,
+            site,
+            PayloadCopy { heap, moved, take },
+        )?;
+        // A `maybe` of an envelope union holds a VIEW of a slot someone else owns (an element's, a
+        // field's, a per-site wrap's): a binding that keeps it would release what that owner
+        // releases, so the payload is copied into a slot of the binding's own, deep like every union
+        // copy (`union_to_owned`). A moved source hands its slot over, and a value a call returned
+        // already sits in a slot of the caller's (`take`). A stored form keeps the view.
+        // A binding homed in a frame region (`maybe_payload_dest`) keeps the union in the region
+        // behind its envelope whatever the source: a value a call returned sits in a slot that dies
+        // with the call's frame or the resume invocation's stack (`maybe_union_payload_into`).
+        let final_bits = match self.envelope_union_variants(&self.resolve_type(inner_ty)) {
+            Some(variants) if !heap => match self.maybe_payload_dest.get() {
+                Some(region) => self.maybe_union_payload_into(
+                    flag,
+                    bits,
+                    &variants,
+                    region,
+                    !take && !moved,
+                    site,
+                )?,
+                None if !take && !moved => {
+                    self.maybe_union_payload_copy(flag, bits, &variants, site)?
+                }
+                None => final_bits,
+            },
+            _ => final_bits,
+        };
 
         let dst_flag_gep = self
             .builder
@@ -3373,7 +4360,181 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_store(dst_val_gep, final_bits)
             .map_err(|e| format!("{e}"))?;
+        if minted {
+            self.free_minted_maybe_cell(src_env, site)?;
+        }
         Ok(owned_env)
+    }
+
+    /// `maybe_union_payload_copy` for a `maybe` homed in a frame region: when `flag` is set the
+    /// union `bits` view names is persisted into the union slot behind the view in the region
+    /// (`region` is the payload address: the 16-byte view, then the slot), deep when `deep` and
+    /// otherwise taking what it owns, and the bits are the region's view. Nothing is allocated, and
+    /// a later resume reads the same bytes back, which a per-site view does not survive.
+    ///
+    /// Time: O(1) to emit; the copy it emits is as `union_persist_into`  Space: O(1)
+    fn maybe_union_payload_into(
+        &self,
+        flag: inkwell::values::IntValue<'ctx>,
+        bits: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        region: PointerValue<'ctx>,
+        deep: bool,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let has = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_has_union_region"),
+            )
+            .map_err(|err| format!("{site}: maybe union flag compare: {err}"))?;
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_union_region_copy"));
+        let cont_bb = self.append_block(&format!("{site}_union_region_cont"));
+        self.builder
+            .build_conditional_branch(has, copy_bb, cont_bb)
+            .map_err(|err| format!("{site}: maybe union branch: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let source = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_union_region_src"))
+            .map_err(|err| format!("{site}: maybe union view cast: {err}"))?;
+        // SAFETY: `maybe_region_payload_bytes` reserved the view and the slot behind the envelope.
+        let slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.ctx.i8_type(),
+                    region,
+                    &[self.i64().const_int(16, false)],
+                    &format!("{site}_union_region_slot"),
+                )
+                .map_err(|err| format!("{site}: maybe union slot gep: {err}"))?
+        };
+        self.union_persist_into_core(
+            source,
+            slot,
+            variants,
+            self.union_has_nothing(variants),
+            deep,
+            &format!("{site}_union_region"),
+        )?;
+        let view =
+            self.union_slot_to_value_as(slot, variants, false, &format!("{site}_union_region"))?;
+        self.builder
+            .build_memcpy(region, 8, view, 8, self.i64().const_int(16, false))
+            .map_err(|err| format!("{site}: maybe union view into the region: {err}"))?;
+        let region_bits = self
+            .builder
+            .build_ptr_to_int(region, self.i64(), &format!("{site}_union_region_bits"))
+            .map_err(|err| format!("{site}: maybe union region bits: {err}"))?;
+        let copy_end_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|err| format!("{site}: maybe union join: {err}"))?;
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.i64(), &format!("{site}_union_region_phi"))
+            .map_err(|err| format!("{site}: maybe union phi: {err}"))?;
+        phi.add_incoming(&[(&region_bits, copy_end_bb), (&bits, pre_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// The bits of a `maybe` of the envelope union `variants` after its payload is copied into a
+    /// slot of the binding's own: when `flag` is set, the view `bits` name is deep-copied
+    /// (`union_to_owned`) and the bits are the copy's view; `none` keeps its bits.
+    ///
+    /// Time: O(1) to emit; the copy it emits is as `union_persist_into`  Space: O(1) entry slot
+    fn maybe_union_payload_copy(
+        &self,
+        flag: inkwell::values::IntValue<'ctx>,
+        bits: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let has = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_has_union"),
+            )
+            .map_err(|err| format!("{site}: maybe union flag compare: {err}"))?;
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_union_copy"));
+        let cont_bb = self.append_block(&format!("{site}_union_cont"));
+        self.builder
+            .build_conditional_branch(has, copy_bb, cont_bb)
+            .map_err(|err| format!("{site}: maybe union branch: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let view = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_union_src"))
+            .map_err(|err| format!("{site}: maybe union view cast: {err}"))?;
+        let owned_view = self.union_to_owned(view, variants, &format!("{site}_maybe"))?;
+        let owned_bits = self
+            .builder
+            .build_ptr_to_int(owned_view, self.i64(), &format!("{site}_union_own_bits"))
+            .map_err(|err| format!("{site}: maybe union owned bits: {err}"))?;
+        // The copy may have opened blocks of its own; the phi's edge is where it ended.
+        let copy_end_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|err| format!("{site}: maybe union join: {err}"))?;
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.i64(), &format!("{site}_union_bits"))
+            .map_err(|err| format!("{site}: maybe union phi: {err}"))?;
+        phi.add_incoming(&[(&owned_bits, copy_end_bb), (&bits, pre_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// Give back the empty envelope cell an explicit `.copy()` of a `maybe` minted
+    /// (`minted_maybe_copies`) once its flag and payload bits have been taken out of it.
+    fn free_minted_maybe_cell(&self, cell: PointerValue<'ctx>, site: &str) -> Result<(), String> {
+        let envelope_size = self
+            .maybe_type()
+            .size_of()
+            .ok_or_else(|| format!("{site}: maybe envelope size_of unavailable"))?;
+        self.builder
+            .build_call(self.rt.ynz_free, &[cell.into(), envelope_size.into()], "")
+            .map_err(|err| format!("free the minted copy cell of {site}: {err}"))?;
+        Ok(())
+    }
+
+    /// THE codegen call that copies a string (`ynz_string_clone`): a fresh counted heap string
+    /// with the same bytes. The `StringClone` arm of `emit_owned_copy` and the payload copy of a
+    /// `maybe<string>` (`maybe_payload_stable_bits`, which only has `&self`) both come here.
+    fn string_clone_call(
+        &self,
+        string: BasicValueEnum<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        Ok(self
+            .builder
+            .build_call(self.rt.ynz_string_clone, &[string.into()], name)
+            .map_err(|err| format!("{name} string clone: {err}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("{name} string clone: returned void"))?
+            .into_pointer_value())
     }
 
     /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
@@ -3406,15 +4567,19 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         bits: inkwell::values::IntValue<'ctx>,
         inner_ty: &Type,
         site: &str,
-        heap: bool,
+        copy: PayloadCopy,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let PayloadCopy { heap, moved, take } = copy;
         enum WidePayload {
             Shape(String),
             Number,
+            String,
         }
         let wide = match self.resolve_type(inner_ty) {
             Type::Shape { name } => WidePayload::Shape(name),
-            Type::Number { precision } if precision <= 34 && heap => WidePayload::Number,
+            Type::Number { precision } if precision <= 34 => WidePayload::Number,
+            // A `maybe<string>` owns its payload string: a store copies it like any other string.
+            Type::String => WidePayload::String,
             _ => return Ok(bits),
         };
         let has = self
@@ -3448,6 +4613,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // position-independent, so the same acquisition point serves both.
                 let owned_pay = if heap {
                     self.heap_cell(size, &format!("{site}_pay"))?
+                } else if let Some(region) = self.maybe_payload_dest.get() {
+                    region
                 } else {
                     let struct_ty = self.shape_types.get(name).ok_or_else(|| {
                         format!("maybe_payload_stable_bits: LLVM type for `{name}` missing")
@@ -3457,11 +4624,66 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 self.builder
                     .build_memcpy(owned_pay, 1, src_pay, 1, size)
                     .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
+                // The payload owns a copy of everything the shape owns unless the envelope it
+                // came from moves in: a consumed source is released by nobody (its scope exit skips
+                // it), so a moved payload takes the strings and cells its source owned and clones
+                // nothing.
+                if take {
+                    // The cell and the strings and cells it owns are the binding's now; only the
+                    // emptied cell goes.
+                    self.builder
+                        .build_call(self.rt.ynz_free, &[src_pay.into(), size.into()], "")
+                        .map_err(|err| {
+                            format!("maybe_payload_stable_bits free the taken cell: {err}")
+                        })?;
+                } else if !moved {
+                    self.deepen_shape_fields(owned_pay, name)?;
+                }
                 owned_pay
             }
-            // Number reaches here only with `heap = true` (the match above passes
-            // in-frame copies through) — the one authoritative i128 promotion.
-            WidePayload::Number => self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?,
+            // A number payload points at the 16 bytes of whatever produced it: a frame slot, or the
+            // per-site buffer an element read fills (reused by the next read at that site). A stored
+            // payload gets its own copy: a counted heap cell when it persists past the frame, the
+            // binding's own slot otherwise.
+            WidePayload::Number if heap => {
+                let cell = self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?;
+                if take {
+                    self.builder
+                        .build_call(self.rt.ynz_number_cell_free, &[src_pay.into()], "")
+                        .map_err(|err| {
+                            format!("maybe_payload_stable_bits free the taken number: {err}")
+                        })?;
+                }
+                cell
+            }
+            WidePayload::Number => {
+                let owned_pay = match self.maybe_payload_dest.get() {
+                    Some(region) => region,
+                    None => self.alloca_in_entry_llvm(self.i128(), &format!("{site}_num_own"))?,
+                };
+                self.builder
+                    .build_memcpy(
+                        owned_pay,
+                        1,
+                        src_pay,
+                        1,
+                        self.i64().const_int(DECIMAL_CELL_SIZE, false),
+                    )
+                    .map_err(|err| format!("maybe_payload_stable_bits number memcpy: {err}"))?;
+                if take {
+                    self.builder
+                        .build_call(self.rt.ynz_number_cell_free, &[src_pay.into()], "")
+                        .map_err(|err| {
+                            format!("maybe_payload_stable_bits free the taken number: {err}")
+                        })?;
+                }
+                owned_pay
+            }
+            // A taken string is the clone the return made.
+            WidePayload::String if take => src_pay,
+            WidePayload::String => {
+                self.string_clone_call(src_pay.into(), &format!("{site}_str_pay"))?
+            }
         };
         let own_bits = self
             .builder
@@ -3548,6 +4770,23 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|e| format!("{e}"))?;
                 Ok(slot.into())
             }
+            // A `maybe` of an envelope union returned its slot: it lands in a CALLER-owned slot and
+            // the pair is rebuilt over a view of it (flag 0 and bits 0 for `none`).
+            Type::Maybe { ref inner } if self.envelope_union_variants(inner).is_some() => {
+                let variants = self
+                    .envelope_union_variants(inner)
+                    .ok_or("wrap_abi_call_result: maybe lost its union variants")?;
+                let layout = self.union_layout(&variants)?;
+                let slot = self.alloca_in_entry_llvm(
+                    self.union_slot_llvm(&layout),
+                    &format!("{site}_maybe_union_ret"),
+                )?;
+                self.builder
+                    .build_store(slot, val.into_struct_value())
+                    .map_err(|err| format!("{err}"))?;
+                let view = self.union_slot_to_value_as(slot, &variants, true, site)?;
+                Ok(self.maybe_pair_over_view(view, site)?.into())
+            }
             Type::Maybe { .. } => {
                 let sv = val.into_struct_value();
                 let slot = self
@@ -3582,170 +4821,2201 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|e| format!("{e}"))?;
                 Ok(slot.into())
             }
+            // C1h (#433): a `fixed` list returned by value lands in a CALLER-owned slot; the slot is
+            // the list (its address is what every list value is).
+            Type::BuiltinFixed {
+                ref elem,
+                size: FixedLength::Known(count),
+            } => {
+                let cells = self.i64().array_type(fixed_cell_words(elem, count));
+                let slot = self.alloca_in_entry_llvm(cells, &format!("{site}_fixed_ret"))?;
+                store_fixed_cells(&self.builder, slot, val.into_array_value())
+                    .map_err(|err| format!("{site} fixed ret store: {err}"))?;
+                Ok(slot.into())
+            }
+            // C1f (#423): the returned slot lands in a CALLER-owned slot, and the value is a view
+            // of it (null for `none`).
+            union @ Type::Union { .. } if self.envelope_union_variants(&union).is_some() => {
+                let variants = self
+                    .envelope_union_variants(&union)
+                    .ok_or("wrap_abi_call_result: union lost its variants")?;
+                let layout = self.union_layout(&variants)?;
+                let slot = self.alloca_in_entry_llvm(
+                    self.union_slot_llvm(&layout),
+                    &format!("{site}_union_ret"),
+                )?;
+                self.builder
+                    .build_store(slot, val.into_struct_value())
+                    .map_err(|err| format!("{err}"))?;
+                Ok(self.union_slot_to_value(slot, &variants, site)?.into())
+            }
             _ => Ok(val),
         }
     }
 
-    /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
-    /// FRAGOs 006/007/013) — the union sibling of `maybe_to_heap_cell`: clone a
-    /// union value into counted heap cells so a CROSSING binding's pointer
-    /// survives suspension (the resume fn's stack dies on every Pending return).
+    /// Read the `data` word (field 1) of a non-null union envelope `{i64 tag, i64 data}`.
+    /// For a shape variant these are the `ptr_to_int` bits of the payload's storage
+    /// (`wrap_into_union_envelope`); for any other variant they are the value's own i64 bits.
     ///
-    /// A union value is an opaque pointer with a NON-uniform repr:
-    ///   - NULL for the `T | nothing` none case (the `is`-none path
-    ///     `build_is_null`s the value directly), or
-    ///   - a pointer to a `{i64 tag, i64 data}` tagged struct whose `data` holds
-    ///     `ptr_to_int` of the payload shape's storage (union-ctor Let arm).
+    /// The ONE place the envelope's `data` field is read: `union_payload_ptr` (variant
+    /// narrowing) and `union_persist_into` (slot stores) both go through it, so
+    /// the layout lives in one derivation (authoritative-derivation).
     ///
-    /// The clone preserves BOTH reprs:
-    ///   - **null → null**: a heap cell pointer is never null, so cloning a none
-    ///     through a cell would flip `is`-none from true to false — the null
-    ///     sentinel IS the none value and must pass through untouched;
-    ///   - **non-null → fresh {tag,data} heap cell**, with the payload
-    ///     deep-copied into its OWN heap cell selected by a tag switch (variant
-    ///     shapes have different ABI sizes, read from the ONE `shape_abi_sizes`
-    ///     source via `shape_abi_size_const`); a non-shape variant's data is
-    ///     self-contained i64 bits (or an already-heap-stable pointer) and
-    ///     copies as-is through the switch default.
-    ///
-    /// BINDING surface only: `value_to_stable_bits` deliberately keeps NO Union
-    /// arm (its KNOWN-HOLE doc — the persist surfaces stay loud-fail-pinned
-    /// until the union ABI gets one authoritative layout), so this helper is
-    /// reachable only from the two binding funnels (`store_binding`'s Union arm
-    /// and the union-ctor Let arm's crossing branch).
-    ///
-    /// Time: O(1) + one memcpy of the selected variant's ABI size  Space: O(1)
-    /// (two heap cells per present value; zero for a none)
-    fn union_to_heap_cell(
+    /// Time: O(1)  Space: O(1)
+    fn union_data_bits(
         &self,
-        src: PointerValue<'ctx>,
-        variants: &[Type],
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let union_st = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let data_gep = self
+            .builder
+            .build_struct_gep(union_st, envelope, 1, &format!("{site}_src_data"))
+            .map_err(|err| format!("union data gep {site}: {err}"))?;
+        Ok(self
+            .builder
+            .build_load(self.i64(), data_gep, &format!("{site}_data"))
+            .map_err(|err| format!("union data load {site}: {err}"))?
+            .into_int_value())
+    }
+
+    /// Envelope → payload pointer: the pointer to a SHAPE variant's own storage, read
+    /// out of a non-null union envelope. The ONE routine both consumers call:
+    /// `union_persist_into` (copies the payload into its slot) and the
+    /// `is`-arm narrowing (`narrow_union_local_to_variant`, re-points the narrowed
+    /// binding at the payload so shape field reads and `let inner: Variant = fig`
+    /// copies see the variant, not the 16-byte envelope).
+    ///
+    /// Valid only after a tag check selected a shape variant — the caller owns that
+    /// check (the `is` arm's tag compare / the heap-cell tag switch).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_payload_ptr(
+        &self,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let bits = self.union_data_bits(envelope, site)?;
+        self.builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_payload_ptr"))
+            .map_err(|err| format!("union payload int_to_ptr {site}: {err}"))
+    }
+
+    /// Inside an `is Variant =>` arm, typeck types the scrutinee binding as the variant
+    /// shape (`union_narrowed` overlay, `simple_ident_name` predicate). Codegen mirrors
+    /// that: re-point the binding's local slot at a fresh slot holding the variant's
+    /// PAYLOAD pointer (`union_payload_ptr`), so every shape-typed read of the name in
+    /// the arm resolves through the ordinary shape-local path. Without it the arm reads
+    /// the `{tag, data}` envelope as if it were the shape (field reads return the tag;
+    /// `let inner: Variant = fig` memcpys `sizeof(Variant)` bytes out of 16 — an
+    /// out-of-bounds read).
+    ///
+    /// Must run inside the arm body block (after the tag compare branched there), so
+    /// the payload load only happens when the tag matched. Returns the handle for
+    /// `restore_narrowed_local` at arm end; `None` when the scrutinee is not a
+    /// narrowable binding (typeck applies no overlay then either).
+    ///
+    /// Typeck still accepts the narrowed binding where the UNION is expected (a union
+    /// slot: `can_assign` admits a variant there) and records the flow in
+    /// `TypedModule::union_coercions`. Those uses keep the envelope (`narrowed_envelope_use`);
+    /// handing them the payload pointer would make the callee read a 16-byte envelope out of a
+    /// smaller variant.
+    ///
+    /// Time: O(1)  Space: O(1) (one pointer-sized entry-block slot per arm site)
+    fn narrow_union_local_to_variant(
+        &mut self,
+        scrutinee: &Expr,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<Option<(String, PointerValue<'ctx>)>, String> {
+        let Some(name) = ynz_typeck::check::simple_ident_name(scrutinee) else {
+            return Ok(None);
+        };
+        let outer_slot = *self
+            .locals
+            .get(name)
+            .ok_or_else(|| format!("{site}: narrowed binding `{name}` has no local slot"))?;
+        let payload = self.union_payload_ptr(envelope, site)?;
+        let narrowed_slot = self.alloca_in_entry_llvm(self.ptr(), &format!("{name}_variant"))?;
+        self.builder
+            .build_store(narrowed_slot, payload)
+            .map_err(|err| format!("{site}: store narrowed payload: {err}"))?;
+        self.locals.insert(name.to_string(), narrowed_slot);
+        self.narrowed_unions.push(NarrowedUnion {
+            name: name.to_string(),
+            scrutinee: scrutinee.clone(),
+            outer_slot,
+            narrowed_slot,
+        });
+        Ok(Some((name.to_string(), outer_slot)))
+    }
+
+    /// Undo `narrow_union_local_to_variant` at the end of the arm (typeck removes its
+    /// overlay at the same point).
+    fn restore_narrowed_local(&mut self, narrowed: Option<(String, PointerValue<'ctx>)>) {
+        if let Some((name, outer_slot)) = narrowed {
+            let closed = self.narrowed_unions.pop();
+            debug_assert!(
+                closed.as_ref().is_some_and(|entry| entry.name == name),
+                "narrowed_unions is out of step with the `is` arm being closed"
+            );
+            self.locals.insert(name, outer_slot);
+        }
+    }
+
+    /// The slot a frame reload writes `name`'s value to: the binding's OUTER slot while an
+    /// `is` arm narrows it (the arm's slot holds the payload pointer, never the envelope),
+    /// otherwise `cg.locals[name]`.
+    ///
+    /// Time: O(d) for d nested narrowings (the `is`-arm nesting depth)  Space: O(1)
+    fn reload_slot(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        self.narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.outer_slot)
+            .or_else(|| self.locals.get(name).copied())
+    }
+
+    /// The union envelope of a narrowed binding: the scrutinee re-lowered against the
+    /// binding's OUTER slot (the slot that holds the envelope), the same derivation the
+    /// arm entry used. `cg.locals[name]` is back on `narrowed_slot` afterwards.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn lower_narrowed_envelope(
+        &mut self,
+        name: &str,
+        scrutinee: &Expr,
+        outer_slot: PointerValue<'ctx>,
+        narrowed_slot: PointerValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        self.locals.insert(name.to_string(), outer_slot);
+        let envelope = lower_expr(self, scrutinee);
+        self.locals.insert(name.to_string(), narrowed_slot);
+        Ok(envelope?.into_pointer_value())
+    }
+
+    /// The declared type of parameter `index` of `callee`, resolved. A generic function is not
+    /// in the signature table, so its declaration in this module answers.
+    ///
+    /// Time: O(f) for f items in the module  Space: O(1)
+    fn callee_param_type(&self, callee: &str, index: usize) -> Option<Type> {
+        let declared = match self.sig_table.fns.get(callee) {
+            Some(sig) => sig.params.get(index).map(|(_, param_ty)| param_ty.clone()),
+            None => self.typed.module.items.iter().find_map(|item| match item {
+                Item::Function(function) if function.name == callee => function
+                    .params
+                    .get(index)
+                    .map(|param| ast_type_to_typeck_type(&param.ty, self.shape_table)),
+                _ => None,
+            }),
+        };
+        declared.map(|param_ty| self.resolve_type(&param_ty))
+    }
+
+    /// The union a `return` must produce: the current function's declared return type (the
+    /// state machine's Yinz type inside a resume function) with an `errors` wrapper peeled,
+    /// when that is a union.
+    fn union_return_slot_ty(&self) -> Option<Type> {
+        let declared = self
+            .sm_yinz_ret_ty
+            .clone()
+            .unwrap_or_else(|| self.current_fn_ret_ty.clone());
+        let peeled = match self.resolve_type(&declared) {
+            Type::ErrorsCapable { inner } => self.resolve_type(&inner),
+            other => other,
+        };
+        let holds_union = match &peeled {
+            Type::Maybe { inner } => matches!(self.resolve_type(inner), Type::Union { .. }),
+            other => matches!(other, Type::Union { .. }),
+        };
+        holds_union.then_some(peeled)
+    }
+
+    /// Whether `expr` is an identifier use that `narrowed_envelope_use` answers with the
+    /// union envelope: an `is` arm's narrowed binding that typeck recorded as flowing into a
+    /// union-typed slot (`TypedModule::union_coercions`: the one record of such flows).
+    fn is_narrowed_envelope_ident(&self, expr: &Expr) -> bool {
+        let Expr::Ident(name, span) = expr else {
+            return false;
+        };
+        self.narrowed_use_reuses_envelope(name, (span.start, span.end))
+    }
+
+    /// Whether the use of the narrowed binding `name` at `use_key` can hand the slot the arm's
+    /// OUTER envelope: typeck recorded the use as flowing into a union slot AND that slot is the
+    /// union the arm narrowed. The envelope's tag is a position in ITS union, so a slot union
+    /// that lists the variant at another position (`Thing = Tiny | Big` narrowed to `Big`, into
+    /// a slot `Big | Small`) needs a fresh envelope from the payload, which the ordinary
+    /// coercion builds with the slot's own tag.
+    ///
+    /// Matching `narrowed_unions` by `name` is by binding: `BindingNames::apply` gives a `let`
+    /// that shadows the narrowed name its own codegen name, so a shadow never finds an entry.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(1)
+    fn narrowed_use_reuses_envelope(&self, name: &str, use_key: (usize, usize)) -> bool {
+        let Some(coercion) = self.coercion_at(use_key) else {
+            return false;
+        };
+        let Some(entry) = self
+            .narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+        else {
+            return false;
+        };
+        self.expr_type(&entry.scrutinee) == self.resolve_type(&coercion.slot)
+    }
+
+    /// Build the tagged envelope `{i64 tag, i64 data}`: `data_bits` is the variant's payload
+    /// word — for a shape variant the `ptr_to_int` of the payload's storage, for any other
+    /// variant the value's own i64 bits (`wrap_into_union_envelope` picks which). The slot is a
+    /// per-site entry-block alloca (this function's frame): the callee borrows it for the call.
+    /// Anything that must outlive the frame is persisted into a slot by value
+    /// (`union_persist_into`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn build_union_envelope(
+        &self,
+        data_bits: inkwell::values::IntValue<'ctx>,
+        tag: u64,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
         let union_st = self
             .ctx
             .struct_type(&[self.i64().into(), self.i64().into()], false);
-        let pre_bb = self
+        let slot = self.alloca_in_entry_llvm(union_st, &format!("{site}_envelope"))?;
+        let tag_gep = self
             .builder
-            .get_insert_block()
-            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
-        let copy_bb = self.append_block(&format!("{site}_ucopy"));
-        let cont_bb = self.append_block(&format!("{site}_ucont"));
-        let is_none = self
-            .builder
-            .build_is_null(src, &format!("{site}_is_none"))
-            .map_err(|e| format!("union cell is_null {site}: {e}"))?;
+            .build_struct_gep(union_st, slot, 0, &format!("{site}_env_tag"))
+            .map_err(|err| format!("union envelope tag gep {site}: {err}"))?;
         self.builder
-            .build_conditional_branch(is_none, cont_bb, copy_bb)
-            .map_err(|e| format!("{e}"))?;
+            .build_store(tag_gep, self.i64().const_int(tag, false))
+            .map_err(|err| format!("union envelope tag store {site}: {err}"))?;
+        let data_gep = self
+            .builder
+            .build_struct_gep(union_st, slot, 1, &format!("{site}_env_data"))
+            .map_err(|err| format!("union envelope data gep {site}: {err}"))?;
+        self.builder
+            .build_store(data_gep, data_bits)
+            .map_err(|err| format!("union envelope data store {site}: {err}"))?;
+        Ok(slot)
+    }
 
-        // Present value: clone the {tag,data} envelope into a counted heap cell.
-        self.builder.position_at_end(copy_bb);
-        let raw = union_st
-            .size_of()
-            .ok_or_else(|| format!("{site}: union envelope size_of unavailable"))?;
-        let env_size = self
-            .builder
-            .build_int_z_extend(raw, self.i64(), &format!("{site}_env_sz"))
-            .map_err(|e| format!("union env size zext {site}: {e}"))?;
-        let cell = self.heap_cell(env_size, &format!("{site}_env"))?;
-        let src_tag_gep = self
-            .builder
-            .build_struct_gep(union_st, src, 0, &format!("{site}_src_tag"))
-            .map_err(|e| format!("{e}"))?;
-        let tag = self
-            .builder
-            .build_load(self.i64(), src_tag_gep, &format!("{site}_tag"))
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
+    /// Internal guard behind the teaching refusals of a suspending call's result entering a
+    /// union slot (typeck's `refuse_suspending_result_into_union_let` and `..._return`, and the
+    /// codegen query's `suspending_union_diagnostics` with the effective suspend set): refuse a
+    /// `let` whose value typeck recorded as entering a union slot
+    /// (`TypedModule::union_coercions`) when the state-machine lowering binds that value
+    /// without `lower_expr`, the one coercion point: `let m: Mixed = wait count()` and
+    /// `let m: Mixed = count()` with a suspending `count`. Bound bare, the raw return value
+    /// becomes the envelope pointer and the first `is` arm reads its tag through that
+    /// address. A user program never reaches it; reaching it is a compiler bug.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn refuse_unwrapped_suspending_let(&self, name: &str, value: &Expr) -> Result<(), String> {
+        match self.recorded_union_slot(value) {
+            None => Ok(()),
+            Some(slot) => Err(format!(
+                "codegen: `let {name}`: the result of a suspending call reached a `{slot:?}` binding \
+                 unwrapped although typeck refuses that before codegen runs (the call is \
+                 suspending only in the effective suspend set); this is a compiler bug",
+            )),
+        }
+    }
+
+    /// The `return` face of `refuse_unwrapped_suspending_let`: refuse `return <suspending call>`
+    /// whose value typeck recorded as entering the returned union. The state-machine `return`
+    /// stores the call's result in the return slot without `lower_expr`, so the raw result would
+    /// be read back as the envelope pointer (and `to_i64_bits` panics on it, which a user must
+    /// not see as the "compiler bug" box).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn refuse_unwrapped_suspending_return(&self, value: &Expr) -> Result<(), String> {
+        match self.recorded_union_slot(value) {
+            None => Ok(()),
+            Some(slot) => Err(format!(
+                "codegen: `return`: the result of a suspending call reached the `{slot:?}` return \
+                 slot unwrapped although typeck and the codegen query refuse that before \
+                 emission; this is a compiler bug",
+            )),
+        }
+    }
+
+    /// The resolved union slot typeck recorded for `value` (`TypedModule::union_coercions`),
+    /// `None` when `value` enters no union slot.
+    ///
+    /// Time: O(1)  Space: O(size of the slot type)
+    fn recorded_union_slot(&self, value: &Expr) -> Option<Type> {
+        let span = value.span();
+        self.coercion_at((span.start, span.end))
+            .map(|coercion| self.resolve_type(&coercion.slot))
+    }
+
+    /// THE coercion point: wrap the lowered plain value `val` of `expr` in the tagged envelope
+    /// of the union slot typeck recorded for it (`TypedModule::union_coercions`). Called by
+    /// `lower_expr` and nowhere else, so every slot kind typeck records — annotated `let`,
+    /// argument (plain, dot-call, generic, `wait`-staged), `return`, shape field, `.or`
+    /// fallback — wraps here, once, with the same tag derivation.
+    ///
+    /// The envelope lives in this function's frame (a per-site entry-block slot): a callee only borrows it,
+    /// and a binding or field holds the pointer. A value that must outlive the frame is
+    /// persisted into a slot by value afterwards (`union_persist_into`). A union with no shape variant never reaches
+    /// here: typeck records only envelope unions (`T | nothing` with a non-shape `T` stays the
+    /// raw pointer).
+    ///
+    /// The payload word: a shape's storage pointer; `int`, `boolean` and `float` as their own
+    /// bits; a `string`, array, map or `number` above 34 digits as the heap pointer. A variant
+    /// whose value does not fit one word without an allocation (`number` up to 34 digits,
+    /// `maybe`, `fixed`, `dynamic`, ...) is refused: an error beats a silent wrong envelope.
+    ///
+    /// Time: O(1)  Space: O(1) envelope slot
+    fn wrap_into_union_envelope(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+        coercion: &ynz_typeck::check::UnionCoercion,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let span = expr.span();
+        let site = format!("coerce_{}_{}", span.start, span.end);
+        let (tag, variant) = self.coerced_variant(coercion, &site)?;
+        // Internal guard behind typeck's teaching refusal (`record_union_coercion`): both ask
+        // `ynz_typeck::check::envelope_refusal`, so a variant the envelope cannot hold (and a
+        // narrow `number` typeck assigned to a wide `number` variant, whose slot address would
+        // be read as a wide decimal) never reaches the lowering below. Reaching it means typeck's
+        // gate was bypassed or a type parameter resolved to such a variant after typeck ran.
+        let plain_ty = self.resolve_type(
+            &self
+                .typed
+                .expr_types
+                .get(&(span.start, span.end))
+                .cloned()
+                .unwrap_or(Type::Error),
+        );
+        if let Some(refusal) =
+            ynz_typeck::check::envelope_refusal(&variant, &plain_ty, &coercion.slot)
+        {
+            return Err(format!(
+                "codegen: {site}: a `{plain_ty:?}` value reached a union's `{variant:?}` \
+                 variant ({refusal:?}) although typeck refuses that before codegen runs; this \
+                 is a compiler bug"
+            ));
+        }
+        let bits = match &variant {
+            Type::Shape { .. }
+            | Type::String
+            | Type::BuiltinArray { .. }
+            | Type::Number { precision: 35.. }
+            | Type::BuiltinChannel { .. }
+            | Type::BuiltinMap { .. } => self
+                .builder
+                .build_ptr_to_int(
+                    val.into_pointer_value(),
+                    self.i64(),
+                    &format!("{site}_bits"),
+                )
+                .map_err(|err| format!("{site}: ptr2int: {err}"))?,
+            Type::Int => val.into_int_value(),
+            Type::Bool => self
+                .builder
+                .build_int_z_extend(val.into_int_value(), self.i64(), &format!("{site}_bits"))
+                .map_err(|err| format!("{site}: zext: {err}"))?,
+            Type::Float => self
+                .builder
+                .build_bit_cast(val.into_float_value(), self.i64(), &format!("{site}_bits"))
+                .map_err(|err| format!("{site}: bitcast: {err}"))?
+                .into_int_value(),
+            other => {
+                return Err(format!(
+                    "codegen: {site}: a `{other:?}` variant of a union has no envelope lowering \
+                     and `envelope_refusal` does not list it; this is a compiler bug"
+                ))
+            }
+        };
+        Ok(self.build_union_envelope(bits, tag, &site)?.into())
+    }
+
+    /// The variant typeck recorded at `coercion.tag` in the slot as written, resolved in THIS
+    /// instance (`T` in `T | nothing` with `T = Big | Tiny` is `Big | Tiny`); `None` when the slot
+    /// is not a union or the tag is out of range. THE one lookup of it: `coerced_variant` takes
+    /// the variant to wrap from it, and `coercion_at` asks whether it already is the slot's
+    /// layout.
+    ///
+    /// Time: O(size of the variant)  Space: O(size of the variant)
+    fn declared_variant(&self, coercion: &ynz_typeck::check::UnionCoercion) -> Option<Type> {
+        match &coercion.slot {
+            Type::Union { variants: declared } => declared
+                .get(coercion.tag)
+                .map(|declared_variant| self.resolve_type(declared_variant)),
+            _ => None,
+        }
+    }
+
+    /// The variant a coercion wraps and the envelope tag it takes in THIS instance: the variant
+    /// is the one typeck recorded at `coercion.tag` in the slot as written (in `T | Tiny` a `Tiny`
+    /// is variant 1), and the tag is its place in the instance's flat union
+    /// (`resolve_type`, which flattens `T | Tiny` with `T = Big | Other` to `Big | Other | Tiny`),
+    /// which is the order a reader of the envelope's tag uses. A variant that is itself a union (the value is
+    /// already a union, in another order than the slot) is returned as it is for the caller to
+    /// refuse, never wrapped under another variant's tag.
+    ///
+    /// Time: O(v) for v variants  Space: O(v)
+    fn coerced_variant(
+        &self,
+        coercion: &ynz_typeck::check::UnionCoercion,
+        site: &str,
+    ) -> Result<(u64, Type), String> {
+        let (Type::Union { variants: declared }, Type::Union { variants: flat }) =
+            (&coercion.slot, self.resolve_type(&coercion.slot))
+        else {
+            return Err(format!(
+                "codegen: {site}: typeck recorded a coercion into `{:?}`, which is not a union",
+                coercion.slot
+            ));
+        };
+        let variant = self.declared_variant(coercion).ok_or_else(|| {
+            format!(
+                "codegen: {site}: coercion tag {} is out of range for a union of {} variants",
+                coercion.tag,
+                declared.len()
+            )
+        })?;
+        let tag = match flat
+            .iter()
+            .position(|flat_variant| *flat_variant == variant)
+        {
+            Some(position) => position,
+            // A union variant is in the flat union as its own variants, never as itself.
+            None if matches!(variant, Type::Union { .. }) => coercion.tag,
+            None => {
+                return Err(format!(
+                    "codegen: {site}: the variant `{variant:?}` of the coercion into `{:?}` is not \
+                     in the instance's union",
+                    coercion.slot
+                ))
+            }
+        };
+        Ok((tag as u64, variant))
+    }
+
+    /// The envelope for the identifier `name` at `span` when that use belongs to an active
+    /// `is`-arm narrowing and flows into a union-typed slot (`TypedModule::union_coercions`);
+    /// `None` for every other use, which reads the payload through `cg.locals`.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(1)
+    fn narrowed_envelope_use(
+        &mut self,
+        name: &str,
+        span: &ynz_diagnostics::SourceSpan,
+    ) -> Result<Option<PointerValue<'ctx>>, String> {
+        if !self.narrowed_use_reuses_envelope(name, (span.start, span.end)) {
+            return Ok(None);
+        }
+        let Some(entry) = self
+            .narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+        else {
+            return Ok(None);
+        };
+        let (scrutinee, outer_slot, narrowed_slot) = (
+            entry.scrutinee.clone(),
+            entry.outer_slot,
+            entry.narrowed_slot,
+        );
+        self.lower_narrowed_envelope(name, &scrutinee, outer_slot, narrowed_slot)
+            .map(Some)
+    }
+
+    /// Re-derive every narrowed binding's payload pointer from its just-reloaded envelope.
+    /// A state-machine resume enters the arm at a post-`wait` state block, skipping the arm
+    /// entry where `narrow_union_local_to_variant` stored the payload pointer, so in this
+    /// invocation the arm's entry-block slot is uninitialized until this runs. It re-lowers
+    /// the scrutinee against the outer slot: the same derivation the arm entry used.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(d)
+    fn renarrow_union_locals(&mut self) -> Result<(), String> {
+        let narrowings: Vec<(String, Expr, PointerValue<'ctx>, PointerValue<'ctx>)> = self
+            .narrowed_unions
+            .iter()
+            .map(|entry| {
+                (
+                    entry.name.clone(),
+                    entry.scrutinee.clone(),
+                    entry.outer_slot,
+                    entry.narrowed_slot,
+                )
+            })
+            .collect();
+        for (name, scrutinee, outer_slot, narrowed_slot) in narrowings {
+            let envelope =
+                self.lower_narrowed_envelope(&name, &scrutinee, outer_slot, narrowed_slot)?;
+            let payload = self.union_payload_ptr(envelope, "is_arm_resume")?;
+            self.builder
+                .build_store(narrowed_slot, payload)
+                .map_err(|err| format!("re-narrow `{name}` after resume: {err}"))?;
+        }
+        Ok(())
+    }
+
+    /// The 16-byte `{i64 tag, i64 data}` LLVM type of a union envelope, in a frame and in a
+    /// slot alike.
+    fn union_envelope_type(&self) -> inkwell::types::StructType<'ctx> {
+        crate::shape_types::union_envelope_type(self.ctx)
+    }
+
+    /// Whether `variants` include `nothing`, i.e. whether a union value of this type can be
+    /// the null pointer (the value form of `none`).
+    fn union_has_nothing(&self, variants: &[Type]) -> bool {
+        variants
+            .iter()
+            .any(|variant| matches!(self.resolve_type(variant), Type::Nothing))
+    }
+
+    /// Write both words of a union slot.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn store_union_slot_words(
+        &self,
+        dst: PointerValue<'ctx>,
+        tag: inkwell::values::IntValue<'ctx>,
+        data: inkwell::values::IntValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let slot_ty = self.union_envelope_type();
+        for (index, word) in [(0u32, tag), (1u32, data)] {
+            let gep = self
+                .builder
+                .build_struct_gep(slot_ty, dst, index, &format!("{site}_slot_word{index}"))
+                .map_err(|err| format!("union slot gep {site}: {err}"))?;
+            self.builder
+                .build_store(gep, word)
+                .map_err(|err| format!("union slot store {site}: {err}"))?;
+        }
+        Ok(())
+    }
+    /// The bits a suspending function's parameter alloca holds, from the bits in its frame slot.
+    /// Most parameters are their own bits; an envelope-union parameter's frame bits are the
+    /// address of its slot (a `UnionRegionRole::Param` region of this frame, written by the
+    /// caller), and the alloca holds a view of that slot, the value form every reader expects.
+    ///
+    /// Time: O(v) for v shape variants  Space: O(1)
+    fn sm_param_bits(
+        &self,
+        frame_bits: inkwell::values::IntValue<'ctx>,
+        param_ty: &Type,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        if let Some(variants) = self.envelope_union_variants(param_ty) {
+            let slot = self
+                .builder
+                .build_int_to_ptr(frame_bits, self.ptr(), "sm_param_union_slot")
+                .map_err(|err| format!("sm union param slot cast: {err}"))?;
+            let view = self.union_slot_to_value(slot, &variants, "sm_param_union")?;
+            return self
+                .builder
+                .build_ptr_to_int(view, self.i64(), "sm_param_union_bits")
+                .map_err(|err| format!("sm union param view bits: {err}"));
+        }
+        self.to_i64_bits(self.i64_bits_to(frame_bits, param_ty)?, param_ty)
+    }
+
+    /// Stage the envelope-union argument `value` for parameter `index` of the suspending
+    /// callee `callee_name`, whose frame starts at `callee_frame`: persist it into the callee
+    /// frame's `Param` region (so it lives as long as the callee, not as long as this resume
+    /// invocation or the caller's frame) and return the address as the frame slot bits.
+    ///
+    /// Time: O(1) + one memmove  Space: O(1)
+    fn stage_union_arg(
+        &self,
+        value: PointerValue<'ctx>,
+        variants: &[Type],
+        callee_name: &str,
+        index: usize,
+        callee_frame: PointerValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let offset = self
+            .frame_layouts
+            .get(callee_name)
+            .and_then(|layout| {
+                layout
+                    .union_regions
+                    .iter()
+                    .find(|region| region.role == UnionRegionRole::Param(index))
+            })
+            .map(|region| region.offset)
+            .ok_or_else(|| {
+                format!(
+                    "codegen: the frame layout of `{callee_name}` reserves no union region for \
+                     parameter {index}; the layout and the call disagree, a compiler bug"
+                )
+            })?;
+        let region = state_machine::frame_region_ptr(
+            self.ctx,
+            &self.builder,
+            callee_frame,
+            offset,
+            "staged_union_arg",
+        )?;
+        self.union_persist_into(value, region, variants, "staged_union_arg")?;
+        self.builder
+            .build_ptr_to_int(region, self.i64(), "staged_union_arg_bits")
+            .map_err(|err| format!("staged union arg bits: {err}"))
+    }
+
+    /// The byte offset, in this state machine's frame, of the union slot reserved for `role`
+    /// (`FrameLayout::union_regions`). Missing means the layout and the lowering disagree about
+    /// which union slots this function has: a compiler bug.
+    ///
+    /// Time: O(r) for r regions  Space: O(1)
+    fn sm_union_region(&self, role: UnionRegionRole) -> Result<u64, String> {
+        self.sm_union_regions
+            .iter()
+            .find(|region| region.role == role)
+            .map(|region| region.offset)
+            .ok_or_else(|| {
+                format!(
+                    "codegen: the frame layout reserves no union region for {role:?}; the frame \
+                     layout and the lowering disagree about this function's union slots, which \
+                     is a compiler bug"
+                )
+            })
+    }
+
+    /// The slot layout of the envelope union `variants`: the one answer, owned by
+    /// `emit_shape_types` (`ShapeLlvmTypes::union_layout`).
+    ///
+    /// Time: O(v)  Space: O(v)
+    fn union_layout(&self, variants: &[Type]) -> Result<UnionLayout, String> {
+        self.shape_types.union_layout(variants)
+    }
+
+    /// The LLVM type of one slot of `layout`.
+    fn union_slot_llvm(&self, layout: &UnionLayout) -> inkwell::types::StructType<'ctx> {
+        self.shape_types.union_slot_llvm(self.ctx, layout)
+    }
+
+    /// Address of a slot's payload area (`layout.payload_offset` bytes in).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_payload_addr(
+        &self,
+        slot: PointerValue<'ctx>,
+        layout: &UnionLayout,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        // SAFETY: `payload_offset` is inside every slot of `layout` (`slot_size` > it).
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.ctx.i8_type(),
+                    slot,
+                    &[self.i64().const_int(layout.payload_offset, false)],
+                    &format!("{site}_payload_addr"),
+                )
+                .map_err(|err| format!("union payload gep {site}: {err}"))
+        }
+    }
+
+    /// PERSIST a union value into a slot that outlives this frame: the one routine behind an
+    /// array element, a map value and a shape field (C1f, #423). `dst` is a slot of the union's
+    /// `UnionLayout`; the payload lives INLINE in it, so nothing is allocated:
+    /// - `src` null (`none`): the slot gets tag `UNION_NONE_TAG`.
+    /// - a shape variant: the shape's bytes are copied into the slot's payload area (a
+    ///   recursive, boxed union clones them into a heap cell and keeps the cell pointer). When
+    ///   `src` is a MOVED value (`is_moved_cells`: typeck's `heap_moves`) the slot takes the boxes
+    ///   the shape's union fields own, as Rust moves a `Box`; otherwise the copy is DEEP, like
+    ///   `Box::clone`: every cell they own is cloned too (`clone_shape_variant_into_slot`), so a
+    ///   stored value shares no cell with a source that is still held and releasing one never
+    ///   frees the other's.
+    /// - any other variant: its 8 bytes of bits (the value, or the pointer the store hands
+    ///   over) are copied into the payload area.
+    ///
+    /// `src` may point into `dst` (a field read stored back into the same field), so the copy is
+    /// a memmove.
+    ///
+    /// Ownership for the release helper (C6/C7): a slot owns what its payload holds. Releasing
+    /// it is a tag switch: a shape variant releases the shape's fields (and, boxed, frees the
+    /// cell), a `string`, array or map variant releases that value, the scalar variants and
+    /// `none` own nothing.
+    ///
+    /// Time: O(1) + one memmove of the variant's size for a moved value; plus O(n) for the n cells
+    /// a recursive value owns when it is copied deep  Space: O(1); a heap cell for the value's own
+    /// box (boxed union), and one for each cell it owns when copied deep
+    fn union_persist_into(
+        &self,
+        src: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<(), String> {
+        self.union_persist_into_as(src, dst, variants, self.union_has_nothing(variants), site)
+    }
+
+    /// `union_persist_into` for a source that may be null (`none`) whether or not the union lists
+    /// `nothing`: `nullable` says so. A `maybe<Thing>` is such a value: its absent case is the
+    /// null view.
+    ///
+    /// Time: as `union_persist_into`  Space: as there
+    fn union_persist_into_as(
+        &self,
+        src: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        variants: &[Type],
+        nullable: bool,
+        site: &str,
+    ) -> Result<(), String> {
+        // A source typeck says a store takes by move hands over the boxes its shape variant owns;
+        // any other source keeps them, so the slot clones them (`clone_shape_variant_into_slot`).
+        let deep = !self.is_moved_cells(src);
+        self.union_persist_into_core(src, dst, variants, nullable, deep, site)
+    }
+
+    /// `union_persist_into_as` with the move decision made by the caller: `deep` false hands the
+    /// boxes the source owns to the slot. A crossing union local's flush passes false: its source
+    /// is the binding's own slot (or the region itself), which the region replaces as the value's
+    /// one home, so cloning would leave the replaced slot's boxes with no owner.
+    ///
+    /// Time and space: as `union_persist_into`
+    fn union_persist_into_core(
+        &self,
+        src: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        variants: &[Type],
+        nullable: bool,
+        deep: bool,
+        site: &str,
+    ) -> Result<(), String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let done_bb = self.append_block(&format!("{site}_persist_done"));
+        if nullable {
+            let none_bb = self.append_block(&format!("{site}_persist_none"));
+            let present_bb = self.append_block(&format!("{site}_persist_some"));
+            let is_none = self
+                .builder
+                .build_is_null(src, &format!("{site}_persist_is_none"))
+                .map_err(|err| format!("union persist is_null {site}: {err}"))?;
+            self.builder
+                .build_conditional_branch(is_none, none_bb, present_bb)
+                .map_err(|err| format!("union persist branch {site}: {err}"))?;
+            self.builder.position_at_end(none_bb);
+            let none_tag_gep = self
+                .builder
+                .build_struct_gep(slot_ty, dst, 0, &format!("{site}_none_tag"))
+                .map_err(|err| format!("union persist none gep {site}: {err}"))?;
+            self.builder
+                .build_store(none_tag_gep, self.i64().const_int(UNION_NONE_TAG, false))
+                .map_err(|err| format!("union persist none store {site}: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|err| format!("union persist none branch {site}: {err}"))?;
+            self.builder.position_at_end(present_bb);
+        }
+        let tag = self.union_tag_bits(src, site)?;
+        let data = self.union_data_bits(src, site)?;
         let dst_tag_gep = self
             .builder
-            .build_struct_gep(union_st, cell, 0, &format!("{site}_dst_tag"))
-            .map_err(|e| format!("{e}"))?;
+            .build_struct_gep(slot_ty, dst, 0, &format!("{site}_dst_tag"))
+            .map_err(|err| format!("union persist dst tag gep {site}: {err}"))?;
         self.builder
             .build_store(dst_tag_gep, tag)
-            .map_err(|e| format!("{e}"))?;
-        let src_data_gep = self
-            .builder
-            .build_struct_gep(union_st, src, 1, &format!("{site}_src_data"))
-            .map_err(|e| format!("{e}"))?;
-        let data = self
-            .builder
-            .build_load(self.i64(), src_data_gep, &format!("{site}_data"))
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
-        let dst_data_gep = self
-            .builder
-            .build_struct_gep(union_st, cell, 1, &format!("{site}_dst_data"))
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("union persist tag store {site}: {err}"))?;
+        let payload_addr = self.union_payload_addr(dst, &layout, site)?;
 
-        // Tag switch: shape variants deep-copy their payload bytes into an own
-        // heap cell; anything else (default) copies the raw i64 bits.
-        let done_bb = self.append_block(&format!("{site}_udata_done"));
-        let raw_bb = self.append_block(&format!("{site}_udata_raw"));
-        let mut shape_cases: Vec<(u64, String)> = Vec::new();
-        for (i, v) in variants.iter().enumerate() {
-            if let Type::Shape { ref name } = self.resolve_type(v) {
-                shape_cases.push((i as u64, name.clone()));
-            }
-        }
-        let case_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = shape_cases
+        let raw_bb = self.append_block(&format!("{site}_persist_raw"));
+        let case_blocks: Vec<BasicBlock<'ctx>> = layout
+            .shape_variants
             .iter()
-            .map(|(i, _)| self.append_block(&format!("{site}_upay{i}")))
+            .map(|(index, _)| self.append_block(&format!("{site}_persist_pay{index}")))
             .collect();
-        let switch_cases: Vec<(
-            inkwell::values::IntValue<'ctx>,
-            inkwell::basic_block::BasicBlock<'ctx>,
-        )> = shape_cases
+        let switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = layout
+            .shape_variants
             .iter()
             .zip(case_blocks.iter())
-            .map(|((i, _), bb)| (self.i64().const_int(*i, false), *bb))
+            .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
             .collect();
         self.builder
             .build_switch(tag, raw_bb, &switch_cases)
-            .map_err(|e| format!("union cell tag switch {site}: {e}"))?;
-        for ((i, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
+            .map_err(|err| format!("union persist tag switch {site}: {err}"))?;
+        // A moved union binding of a recursive union hands its box cell over: the slot takes the
+        // cell pointer, nothing is allocated and no emptied cell is left behind.
+        let takes_cell =
+            layout.boxed && !deep && self.box_cell_views.contains(&(src.as_value_ref() as usize));
+        for ((index, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
             self.builder.position_at_end(*case_bb);
-            let src_pay = self
-                .builder
-                .build_int_to_ptr(data, self.ptr(), &format!("{site}_src_pay{i}"))
-                .map_err(|e| format!("{e}"))?;
-            let size = self.shape_abi_size_const(shape_name, "union_to_heap_cell")?;
-            let pay_cell = self.heap_cell(size, &format!("{site}_pay{i}"))?;
-            self.builder
-                .build_memcpy(pay_cell, 1, src_pay, 1, size)
-                .map_err(|e| format!("union cell payload memcpy {site}: {e}"))?;
-            let own_bits = self
-                .builder
-                .build_ptr_to_int(pay_cell, self.i64(), &format!("{site}_own_bits{i}"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_store(dst_data_gep, own_bits)
-                .map_err(|e| format!("{e}"))?;
+            if takes_cell {
+                self.builder
+                    .build_store(payload_addr, data)
+                    .map_err(|err| format!("union persist take cell {site}: {err}"))?;
+                self.builder
+                    .build_unconditional_branch(done_bb)
+                    .map_err(|err| format!("union persist take cell branch {site}: {err}"))?;
+                continue;
+            }
+            let payload = self.union_payload_ptr(src, &format!("{site}_src_pay{index}"))?;
+            self.clone_shape_variant_into_slot(
+                payload,
+                payload_addr,
+                &layout,
+                shape_name,
+                deep,
+                &format!("{site}_pay{index}"),
+            )?;
             self.builder
                 .build_unconditional_branch(done_bb)
-                .map_err(|e| format!("{e}"))?;
+                .map_err(|err| format!("union persist case branch {site}: {err}"))?;
         }
         self.builder.position_at_end(raw_bb);
         self.builder
-            .build_store(dst_data_gep, data)
-            .map_err(|e| format!("{e}"))?;
+            .build_store(payload_addr, data)
+            .map_err(|err| format!("union persist raw store {site}: {err}"))?;
+        // A string, array, map or channel variant the slot did not take by move is copied: the
+        // byte copy left it pointing at the source's value, and both slots release it
+        // (`union_deepen_fn`).
+        if deep && self.union_has_copied_variant(variants) {
+            let deepen = self.union_deepen_fn(variants)?;
+            self.builder
+                .build_call(deepen, &[dst.into()], &format!("{site}_persist_deepen"))
+                .map_err(|err| format!("union persist deepen {site}: {err}"))?;
+        }
         self.builder
             .build_unconditional_branch(done_bb)
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("union persist raw branch {site}: {err}"))?;
         self.builder.position_at_end(done_bb);
-        self.builder
-            .build_unconditional_branch(cont_bb)
-            .map_err(|e| format!("{e}"))?;
+        Ok(())
+    }
 
-        // Merge: null flows through unchanged; present values yield the cell.
-        self.builder.position_at_end(cont_bb);
-        let phi = self
+    /// Store a SHAPE variant's bytes (`payload_src`) into the slot whose payload area is at
+    /// `payload_addr`, as a value of its own: the copy shares no cell with the source. An inline
+    /// slot receives the bytes; a boxed (recursive) slot gets a fresh heap cell holding them, and
+    /// its address in the payload word. When `deep`, every box the shape's union fields own is
+    /// cloned too (`deepen_shape_fields`), like `Box::clone` in a Rust enum; a moved value
+    /// (`deep` false) keeps them, as Rust moves a `Box`.
+    ///
+    /// Time: O(1) moved; O(n) deep for the n cells the value owns  Space: O(1) moved; O(n) deep
+    fn clone_shape_variant_into_slot(
+        &self,
+        payload_src: PointerValue<'ctx>,
+        payload_addr: PointerValue<'ctx>,
+        layout: &UnionLayout,
+        shape_name: &str,
+        deep: bool,
+        site: &str,
+    ) -> Result<(), String> {
+        let size = self.shape_abi_size_const(shape_name, "clone_shape_variant_into_slot")?;
+        if layout.boxed {
+            let cell = self.heap_cell(size, site)?;
+            self.builder
+                .build_memcpy(cell, 1, payload_src, 1, size)
+                .map_err(|err| format!("union clone box memcpy {site}: {err}"))?;
+            if deep {
+                self.deepen_shape_fields(cell, shape_name)?;
+            }
+            let cell_bits = self
+                .builder
+                .build_ptr_to_int(cell, self.i64(), &format!("{site}_cell_bits"))
+                .map_err(|err| format!("union clone cell bits {site}: {err}"))?;
+            self.builder
+                .build_store(payload_addr, cell_bits)
+                .map_err(|err| format!("union clone cell store {site}: {err}"))?;
+        } else {
+            self.builder
+                .build_memmove(payload_addr, 1, payload_src, 1, size)
+                .map_err(|err| format!("union clone payload memmove {site}: {err}"))?;
+            if deep {
+                self.deepen_shape_fields(payload_addr, shape_name)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// True when a slot of the union `variants` holds a value of its own that a copy of the slot
+    /// must copy: a `string`, array, map or channel variant (a shape variant is cloned by
+    /// `clone_shape_variant_into_slot`).
+    ///
+    /// Time: O(v) for v variants  Space: O(1)
+    fn union_has_copied_variant(&self, variants: &[Type]) -> bool {
+        variants.iter().any(|variant| {
+            let variant = self.resolve_type(variant);
+            is_string_like(&variant)
+                || matches!(
+                    variant,
+                    Type::BuiltinArray { .. }
+                        | Type::BuiltinMap { .. }
+                        | Type::BuiltinChannel { .. }
+                )
+        })
+    }
+
+    /// True when a slot of the union `variants` can own a heap cell: it is boxed (recursive), or
+    /// one of its shape variants has a union field that can. Such a slot cannot be copied by its
+    /// bytes alone, because the copy would share the cell with the source.
+    ///
+    /// Time: O(t) for the t shape and union types reachable inline  Space: O(t) recursion depth
+    fn union_owns_cells(&self, variants: &[Type]) -> Result<bool, String> {
+        let layout = self.union_layout(variants)?;
+        if layout.boxed {
+            return Ok(true);
+        }
+        for (_, shape_name) in &layout.shape_variants {
+            if self.shape_owns_cells(shape_name)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// True when a value of the shape `shape_name` has a union field that can own a heap cell
+    /// (`union_owns_cells`). The inline unions form no cycle (every recursive union is boxed), so
+    /// the walk ends.
+    ///
+    /// Time: O(t) for the t shape and union types reachable inline  Space: O(t) recursion depth
+    fn shape_owns_cells(&self, shape_name: &str) -> Result<bool, String> {
+        let shape_def = self
+            .shape_table
+            .layout_shape(shape_name)
+            .ok_or_else(|| format!("shape_owns_cells: shape `{shape_name}` not in table"))?;
+        for field in &shape_def.fields {
+            if let Some(variants) = self.envelope_union_variants(&field.ty) {
+                if self.union_owns_cells(&variants)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// True when the expression that produced `value` is one a store takes by MOVE (typeck's
+    /// `TypedModule::heap_moves`, remembered by `lower_expr`): nobody else reads its boxes, so a
+    /// copy of its bytes may keep them. Any other value is copied deep.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn is_moved_cells(&self, value: PointerValue<'ctx>) -> bool {
+        self.moved_cell_values
+            .contains(&(value.as_value_ref() as usize))
+    }
+
+    /// After the bytes of the shape value `source` were copied to `copy`: give the copy boxes of
+    /// its own (`deepen_shape_fields`) unless `source` is moved, in which case the copy takes its
+    /// boxes as Rust moves a `Box`. THE one place a byte copy of a shape decides between the two.
+    ///
+    /// Time: O(f) to emit; O(n) at run time for the n boxes a deep copy clones  Space: O(1)
+    fn deepen_unless_moved(
+        &self,
+        source: PointerValue<'ctx>,
+        copy: PointerValue<'ctx>,
+        shape_name: &str,
+    ) -> Result<(), String> {
+        if self.is_moved_cells(source) {
+            return Ok(());
+        }
+        self.deepen_shape_fields(copy, shape_name)
+    }
+
+    /// Is `ty` a `fixed<T, N>` field whose cells hold pointers to items the shape owns (strings or
+    /// shapes), so a copy of the shape's bytes shares them and must copy each? O(1) time.
+    fn fixed_field_items_need_copy(&self, ty: &Type) -> bool {
+        match self.resolve_type(ty) {
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(_),
+            } => {
+                let elem = self.resolve_type(&elem);
+                is_string_like(&elem) || matches!(elem, Type::Shape { .. })
+            }
+            _ => false,
+        }
+    }
+
+    /// A copy of the `count` cells at `cells` (a `fixed<elem>` list another holder owns) in a slot
+    /// of the function's entry block, with a copy of every string or shape item the cells point
+    /// at, so the copy owns what it holds. The slot is in the entry block, never in a loop body,
+    /// so a copy made on every pass of a loop does not grow the stack. O(count) time at run time.
+    fn copy_fixed_cells_into_entry_slot(
+        &self,
+        cells: PointerValue<'ctx>,
+        elem: &Type,
+        count: u64,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let elem = self.resolve_type(elem);
+        let block_ty = self.fixed_block_type(&elem, count as u32);
+        let slot = self.alloca_in_entry_llvm(block_ty, &format!("{site}_fixed_copy"))?;
+        let bytes = count * self.fixed_cell_bytes(&elem);
+        self.builder
+            .build_memcpy(slot, 8, cells, 8, self.i64().const_int(bytes, false))
+            .map_err(|err| format!("{site} fixed copy memcpy: {err}"))?;
+        if is_string_like(&elem) || matches!(elem, Type::Shape { .. }) {
+            emit_fixed_item_cells_copy(self, slot, count, &elem, site)?;
+        }
+        Ok(slot)
+    }
+
+    /// Is a field of type `ty` a `fixed<T, N>` list stored by value in the shape (its length is
+    /// known, so its cells are inline)? O(1) time.
+    fn is_stored_fixed_field(&self, ty: &Type) -> bool {
+        matches!(
+            self.resolve_type(ty),
+            Type::BuiltinFixed {
+                size: FixedLength::Known(_),
+                ..
+            }
+        )
+    }
+
+    /// The type a stored value of type `ty` (a shape field, a returned value) is copied and
+    /// released as: itself, except a union that is not an envelope union, which is its one
+    /// variant's raw pointer or bits (`raw_union_variant`): that variant, or `nothing` when it holds
+    /// none (`int | float`). The copy (`deepen_shape_fields`, `own_returned_value`) and the release
+    /// (`release_step`) read the same fact.
+    ///
+    /// Time: O(v) for a union's v variants  Space: O(v)
+    fn stored_form_type(&self, ty: &Type) -> Type {
+        let resolved = self.resolve_type(ty);
+        match &resolved {
+            Type::Union { variants } if !ynz_typeck::check::is_envelope_union(&resolved) => {
+                ynz_typeck::check::raw_union_variant(variants)
+                    .map_or(Type::Nothing, |held| self.stored_form_type(held))
+            }
+            _ => resolved,
+        }
+    }
+
+    /// Does a field of type `ty` own heap a shape copy must copy (`deepen_shape_fields`)?
+    ///
+    /// Time: O(v) for a union's v variants  Space: O(v)
+    fn field_needs_deepen(&self, ty: &Type) -> bool {
+        let ty = self.stored_form_type(ty);
+        self.envelope_union_variants(&ty).is_some()
+            || is_string_like(&ty)
+            || self.fixed_field_items_need_copy(&ty)
+            || matches!(
+                ty,
+                Type::BuiltinArray { .. }
+                    | Type::BuiltinMap { .. }
+                    | Type::Shape { .. }
+                    | Type::Maybe { .. }
+                    | Type::BuiltinChannel { .. }
+            )
+    }
+
+    /// Does shape `shape_name` own heap a copy of its bytes must copy?
+    ///
+    /// Time: O(f)  Space: O(1)
+    fn shape_needs_deepen(&self, shape_name: &str) -> bool {
+        self.shape_table
+            .layout_shape(shape_name)
+            .is_some_and(|shape| {
+                shape
+                    .fields
+                    .iter()
+                    .any(|field| self.field_needs_deepen(&field.ty))
+            })
+    }
+
+    /// After the bytes of a shape value were copied to `shape_ptr`, make every field that owns
+    /// heap own a copy of its own: the byte copy left each pointing at the source's. THE one place
+    /// a shape copy deepens (`.copy()`, a task's argument, a `maybe` payload, a union variant):
+    /// the release helper frees exactly what this allocates (`stored_release`).
+    /// - a `string` field: a fresh string (`ynz_string_clone`);
+    /// - an `array` or `map` field: the owned copy `emit_owned_copy` makes;
+    /// - a nested `shape` field (a heap cell) and a `maybe` field (a heap envelope cell): a fresh
+    ///   cell holding a deep copy of the contents;
+    /// - an envelope union field: `union_deepen_fn`.
+    ///
+    /// Nothing for a field that owns no heap, so a shape of plain values copies by bytes alone.
+    ///
+    /// Time: O(f) to emit for f fields; O(n) at run time for the n values the shape owns
+    /// Space: O(1) here
+    fn deepen_shape_fields(
+        &self,
+        shape_ptr: PointerValue<'ctx>,
+        shape_name: &str,
+    ) -> Result<(), String> {
+        let struct_ty = self
+            .shape_types
+            .get(shape_name)
+            .ok_or_else(|| format!("deepen_shape_fields: LLVM type for `{shape_name}` missing"))?;
+        let shape_def = self
+            .shape_table
+            .layout_shape(shape_name)
+            .ok_or_else(|| format!("deepen_shape_fields: shape `{shape_name}` not in table"))?
+            .clone();
+        for (field_index, field) in shape_def.fields.iter().enumerate() {
+            let field_ty = self.stored_form_type(&field.ty);
+            let site = format!("deepen_{shape_name}_{}", field.name);
+            let envelope_variants = self.envelope_union_variants(&field_ty);
+            if !self.field_needs_deepen(&field_ty) {
+                continue;
+            }
+            let field_slot = self
+                .builder
+                .build_struct_gep(struct_ty, shape_ptr, field_index as u32, &site)
+                .map_err(|err| format!("deepen_shape_fields gep: {err}"))?;
+            if let Some(variants) = envelope_variants {
+                let deepen_fn = self.union_deepen_fn(&variants)?;
+                self.builder
+                    .build_call(deepen_fn, &[field_slot.into()], "deepen_field")
+                    .map_err(|err| format!("deepen_shape_fields call: {err}"))?;
+                continue;
+            }
+            // A `fixed<T, N>` field's cells sit inside the shape and were byte-copied with it: each
+            // cell's item gets a copy of its own.
+            if let Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } = &field_ty
+            {
+                let elem = self.resolve_type(elem);
+                emit_fixed_item_cells_copy(self, field_slot, *count as u64, &elem, &site)?;
+                continue;
+            }
+            let original = self
+                .builder
+                .build_load(self.ptr(), field_slot, &format!("{site}_original"))
+                .map_err(|err| format!("deepen_shape_fields load: {err}"))?
+                .into_pointer_value();
+            let copied: BasicValueEnum<'ctx> = match &field_ty {
+                Type::Shape { name } => self
+                    .shape_bytes_to_heap_cell(original, name, &format!("{site}_cell"))?
+                    .into(),
+                Type::Maybe { inner } => self
+                    .maybe_to_heap_cell(original, inner, &format!("{site}_cell"))?
+                    .into(),
+                // A channel is shared, not copied: the copy holds a counted reference of its own, which
+                // its release gives back (`ynz_channel_free`).
+                Type::BuiltinChannel { .. } => self
+                    .builder
+                    .build_call(
+                        self.rt.ynz_channel_share,
+                        &[original.into()],
+                        &format!("{site}_share"),
+                    )
+                    .map_err(|err| format!("deepen_shape_fields share: {err}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_channel_share returned void")?,
+                // A string, an array or a map: the one owned copy.
+                other => {
+                    emit_owned_copy(self, None, original.into(), other, CopyMode::Body, &site)?.0
+                }
+            };
+            self.builder
+                .build_store(field_slot, copied)
+                .map_err(|err| format!("deepen_shape_fields store: {err}"))?;
+        }
+        Ok(())
+    }
+
+    /// The module-private function `(slot)` that makes a slot of the union `variants`, whose bytes
+    /// were just copied from another slot, own its cells: a boxed slot clones the cell it points
+    /// to (and, through `deepen_shape_fields`, the cells inside it), an inline slot deepens the
+    /// shape variant it holds. A tag with no shape variant (`none`, `int`, `string`, …) owns no
+    /// cell and is left alone.
+    ///
+    /// One function per union rather than inline code, because a shape variant that reaches the
+    /// union again would otherwise unfold forever; it is declared before its body is emitted, so
+    /// the inner reference is a call (as `boxed_union_eq_fn`).
+    ///
+    /// Time: O(v) to emit once per union; O(n) at run time for the n cells the slot owns
+    /// Space: O(v)
+    fn union_deepen_fn(&self, variants: &[Type]) -> Result<FunctionValue<'ctx>, String> {
+        let name = format!(
+            "ynz_union_deepen_{}",
+            crate::shape_types::union_key(variants)
+        );
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let layout = self.union_layout(variants)?;
+        let deepen_fn = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(deepen_fn, "entry");
+        let done = self.ctx.append_basic_block(deepen_fn, "done");
+        self.builder.position_at_end(entry);
+        let slot = deepen_fn
+            .get_nth_param(0)
+            .ok_or("union deepen: missing slot")?
+            .into_pointer_value();
+        let tag = self
             .builder
-            .build_phi(self.ptr(), &format!("{site}_ucell"))
-            .map_err(|e| format!("{e}"))?;
-        phi.add_incoming(&[(&cell, done_bb), (&src, pre_bb)]);
-        Ok(phi.as_basic_value().into_pointer_value())
+            .build_load(self.i64(), slot, "tag")
+            .map_err(|err| format!("union deepen tag load: {err}"))?
+            .into_int_value();
+        let case_blocks: Vec<BasicBlock<'ctx>> = layout
+            .shape_variants
+            .iter()
+            .map(|(index, _)| {
+                self.ctx
+                    .append_basic_block(deepen_fn, &format!("shape_variant{index}"))
+            })
+            .collect();
+        let switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = layout
+            .shape_variants
+            .iter()
+            .zip(case_blocks.iter())
+            .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
+            .collect();
+        // A string, array or map variant owns the value its payload word points at: the byte copy
+        // left it pointing at the source's, so it gets a copy of its own (`emit_owned_copy`).
+        let mut switch_cases = switch_cases;
+        let mut copy_cases: Vec<(BasicBlock<'ctx>, Type)> = Vec::new();
+        for (index, variant) in variants.iter().enumerate() {
+            let variant = self.resolve_type(variant);
+            if matches!(variant, Type::Shape { .. }) {
+                continue;
+            }
+            if is_string_like(&variant)
+                || matches!(
+                    variant,
+                    Type::BuiltinArray { .. }
+                        | Type::BuiltinMap { .. }
+                        | Type::BuiltinChannel { .. }
+                )
+            {
+                let block = self
+                    .ctx
+                    .append_basic_block(deepen_fn, &format!("copy_variant{index}"));
+                switch_cases.push((self.i64().const_int(index as u64, false), block));
+                copy_cases.push((block, variant));
+            }
+        }
+        self.builder
+            .build_switch(tag, done, &switch_cases)
+            .map_err(|err| format!("union deepen switch: {err}"))?;
+        for ((index, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
+            self.builder.position_at_end(*case_bb);
+            let payload_addr = self.union_payload_addr(slot, &layout, "deepen")?;
+            if layout.boxed {
+                let source_cell = self
+                    .builder
+                    .build_load(self.ptr(), payload_addr, "source_cell")
+                    .map_err(|err| format!("union deepen cell load: {err}"))?
+                    .into_pointer_value();
+                self.clone_shape_variant_into_slot(
+                    source_cell,
+                    payload_addr,
+                    &layout,
+                    shape_name,
+                    true,
+                    &format!("deepen{index}"),
+                )?;
+            } else {
+                self.deepen_shape_fields(payload_addr, shape_name)?;
+            }
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("union deepen case branch: {err}"))?;
+        }
+        for (block, variant) in copy_cases {
+            self.builder.position_at_end(block);
+            let payload_addr = self.union_payload_addr(slot, &layout, "deepen_variant")?;
+            let original = self
+                .builder
+                .build_load(self.ptr(), payload_addr, "variant_original")
+                .map_err(|err| format!("union deepen variant load: {err}"))?;
+            // A channel is shared, not copied: the copy holds a counted reference of its own.
+            let copied: BasicValueEnum<'ctx> = if matches!(variant, Type::BuiltinChannel { .. }) {
+                self.builder
+                    .build_call(
+                        self.rt.ynz_channel_share,
+                        &[original.into()],
+                        "deepen_variant_share",
+                    )
+                    .map_err(|err| format!("union deepen variant share: {err}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_channel_share returned void")?
+            } else {
+                emit_owned_copy(
+                    self,
+                    None,
+                    original,
+                    &variant,
+                    CopyMode::Body,
+                    "deepen_variant",
+                )?
+                .0
+            };
+            self.builder
+                .build_store(payload_addr, copied)
+                .map_err(|err| format!("union deepen variant store: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("union deepen variant branch: {err}"))?;
+        }
+        self.builder.position_at_end(done);
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("union deepen return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(deepen_fn)
+    }
+
+    /// READ a persisted union slot as a union value: a pointer to a per-site frame envelope
+    /// `{tag, data}` that views the slot (`data` is the address of the slot's payload for a
+    /// shape variant, the stored bits for any other), or null when the slot holds `none`. The
+    /// view is valid until the next read at this site, as an element read's out buffer is, and
+    /// the payload it points to is valid as long as the slot is.
+    ///
+    /// Time: O(v) for v shape variants  Space: O(1)
+    fn union_slot_to_value(
+        &self,
+        slot: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        self.union_slot_to_value_as(slot, variants, self.union_has_nothing(variants), site)
+    }
+
+    /// `union_slot_to_value` for a slot whose `none` tag reads back as the null value whether or
+    /// not the union lists `nothing` (`nullable`), the counterpart of `union_persist_into_as`.
+    ///
+    /// Time: O(v) for v shape variants  Space: O(1)
+    fn union_slot_to_value_as(
+        &self,
+        slot: PointerValue<'ctx>,
+        variants: &[Type],
+        nullable: bool,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let tag_gep = self
+            .builder
+            .build_struct_gep(slot_ty, slot, 0, &format!("{site}_slot_tag_gep"))
+            .map_err(|err| format!("union slot tag gep {site}: {err}"))?;
+        let tag = self
+            .builder
+            .build_load(self.i64(), tag_gep, &format!("{site}_slot_tag"))
+            .map_err(|err| format!("union slot tag load {site}: {err}"))?
+            .into_int_value();
+        let payload_addr = self.union_payload_addr(slot, &layout, site)?;
+        let word = self
+            .builder
+            .build_load(self.i64(), payload_addr, &format!("{site}_slot_word"))
+            .map_err(|err| format!("union slot word load {site}: {err}"))?
+            .into_int_value();
+        let data = if layout.boxed {
+            word
+        } else {
+            let mut is_shape = self.ctx.bool_type().const_zero();
+            for (index, _) in &layout.shape_variants {
+                let is_this = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        self.i64().const_int(*index, false),
+                        &format!("{site}_is_shape{index}"),
+                    )
+                    .map_err(|err| format!("union slot compare {site}: {err}"))?;
+                is_shape = self
+                    .builder
+                    .build_or(is_shape, is_this, &format!("{site}_is_shape_acc{index}"))
+                    .map_err(|err| format!("union slot or {site}: {err}"))?;
+            }
+            let address = self
+                .builder
+                .build_ptr_to_int(payload_addr, self.i64(), &format!("{site}_payload_bits"))
+                .map_err(|err| format!("union slot address bits {site}: {err}"))?;
+            self.builder
+                .build_select(is_shape, address, word, &format!("{site}_slot_data"))
+                .map_err(|err| format!("union slot select {site}: {err}"))?
+                .into_int_value()
+        };
+        let view =
+            self.alloca_in_entry_llvm(self.union_envelope_type(), &format!("{site}_view"))?;
+        self.store_union_slot_words(view, tag, data, site)?;
+        if !nullable {
+            return Ok(view);
+        }
+        let is_none = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                self.i64().const_int(UNION_NONE_TAG, false),
+                &format!("{site}_slot_is_none"),
+            )
+            .map_err(|err| format!("union slot none compare {site}: {err}"))?;
+        Ok(self
+            .builder
+            .build_select(
+                is_none,
+                self.ptr().const_null(),
+                view,
+                &format!("{site}_slot_val"),
+            )
+            .map_err(|err| format!("union slot select {site}: {err}"))?
+            .into_pointer_value())
+    }
+
+    /// The variants of the union a call to the `errors` function `callee` yields on success, when
+    /// that success type is an envelope union: such a callee returns its slot by value
+    /// (`ec_result_type`) and a suspending one a `Return` region address, so a caller converts the
+    /// result at the call boundary (`ec_union_result_to_standard`, `ec_region_to_standard`).
+    ///
+    /// Time: O(f) for f items in the module  Space: O(v)
+    fn callee_ec_union_variants(&self, callee: &str) -> Option<(Vec<Type>, bool)> {
+        let success = self
+            .typed
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == callee && function.errors_capable => {
+                    Some(ast_type_to_typeck_type(
+                        &function.return_type,
+                        self.shape_table,
+                    ))
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                self.imported_fns
+                    .get(callee)
+                    .and_then(|sig| match &sig.ret {
+                        Type::ErrorsCapable { inner } => Some((**inner).clone()),
+                        _ => None,
+                    })
+            })?;
+        self.ec_success_union(&success)
+    }
+
+    /// The variants of an `errors` function's success type `success` when it is an envelope
+    /// union, or a `maybe` of one (`true`: the success value is the maybe pair every maybe value
+    /// is, and `none` is the slot's none tag). Both ride the result as the union's slot.
+    ///
+    /// Time: O(v)  Space: O(v)
+    fn ec_success_union(&self, success: &Type) -> Option<(Vec<Type>, bool)> {
+        match self.resolve_type(success) {
+            Type::Maybe { inner } => self
+                .envelope_union_variants(&inner)
+                .map(|variants| (variants, true)),
+            other => self
+                .envelope_union_variants(&other)
+                .map(|variants| (variants, false)),
+        }
+    }
+
+    /// The LLVM struct the CURRENT (non-suspending) `errors` function returns
+    /// (`ec_result_type` of its success type).
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn ec_result_llvm(&self) -> Result<inkwell::types::StructType<'ctx>, String> {
+        match self.union_return_slot_ty() {
+            Some(success) => ec_result_type(self.ctx, self.shape_types, &success),
+            None => Ok(errors_result_type(self.ctx)),
+        }
+    }
+
+    /// Persist the union value `view` into the slot `dst` only when `err` is 0: on a failed call
+    /// the success word is not a union value (it is 0), so it is never read.
+    ///
+    /// `maybe` says `view` is the pointer to a maybe pair (a `maybe` of the union) instead of the
+    /// union view: it is read, and turned into a view (null for `none`), only on the success path,
+    /// because on a failed call it is null.
+    ///
+    /// Time: O(1) + one memmove of the variant's size  Space: O(1)
+    fn union_persist_if_ok(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        view: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        persisted: UnionPersist<'_>,
+        site: &str,
+    ) -> Result<(), String> {
+        let UnionPersist {
+            variants,
+            maybe,
+            deep,
+        } = persisted;
+        let present_bb = self.append_block(&format!("{site}_present"));
+        let join_bb = self.append_block(&format!("{site}_join"));
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{site}_is_ok"),
+            )
+            .map_err(|err| format!("{site}: err compare: {err}"))?;
+        self.builder
+            .build_conditional_branch(is_ok, present_bb, join_bb)
+            .map_err(|err| format!("{site}: branch: {err}"))?;
+        self.builder.position_at_end(present_bb);
+        let view = if maybe {
+            self.maybe_pair_to_view(view, site)?
+        } else {
+            view
+        };
+        let nullable = maybe || self.union_has_nothing(variants);
+        match deep {
+            Some(deep) => {
+                self.union_persist_into_core(view, dst, variants, nullable, deep, site)?
+            }
+            None => self.union_persist_into_as(view, dst, variants, nullable, site)?,
+        }
+        self.builder
+            .build_unconditional_branch(join_bb)
+            .map_err(|err| format!("{site}: present->join: {err}"))?;
+        self.builder.position_at_end(join_bb);
+        Ok(())
+    }
+
+    /// Build the by-value result `{ err, slot }` of an `errors` function whose success type is
+    /// the union `variants`: the slot holds `view`'s value (payload inline) when `err` is 0 and
+    /// stays zero otherwise (`view` is not a union value then, so it is never read).
+    ///
+    /// Time: O(1) + one memmove of the variant's size  Space: O(1) entry-block scratch slot
+    fn ec_union_result(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        view: PointerValue<'ctx>,
+        variants: &[Type],
+        maybe: bool,
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let scratch = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
+        self.builder
+            .build_store(scratch, slot_ty.const_zero())
+            .map_err(|err| format!("{site}: zero the result slot: {err}"))?;
+        self.union_persist_if_ok(
+            err,
+            view,
+            scratch,
+            UnionPersist {
+                variants,
+                maybe,
+                deep: None,
+            },
+            site,
+        )?;
+        let slot = self
+            .builder
+            .build_load(slot_ty, scratch, &format!("{site}_slot_value"))
+            .map_err(|err| format!("{site}: load the result slot: {err}"))?;
+        let result_ty = ec_result_type(
+            self.ctx,
+            self.shape_types,
+            &Type::Union {
+                variants: variants.to_vec(),
+            },
+        )?;
+        let with_err = self
+            .builder
+            .build_insert_value(result_ty.const_zero(), err, 0, &format!("{site}_err"))
+            .map_err(|err| format!("{site}: insert err: {err}"))?
+            .into_struct_value();
+        Ok(self
+            .builder
+            .build_insert_value(with_err, slot, 1, &format!("{site}_val"))
+            .map_err(|err| format!("{site}: insert slot: {err}"))?
+            .into_struct_value())
+    }
+
+    /// Turn the by-value result `{ err, slot }` of a call to an `errors` function whose success
+    /// type is the union `variants` into the standard `{ err, ok }` pair, `ok` the view pointer of
+    /// a caller-owned copy of the slot, so `.failed()`, `.or(...)`, auto-propagation and every
+    /// use of the binding read it like any other `errors` value.
+    ///
+    /// Time: O(v) for v shape variants  Space: O(1) entry-block slot and view
+    fn ec_union_result_to_standard(
+        &self,
+        result: inkwell::values::StructValue<'ctx>,
+        variants: &[Type],
+        maybe: bool,
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let err = self
+            .builder
+            .build_extract_value(result, 0, &format!("{site}_err"))
+            .map_err(|err| format!("{site}: extract err: {err}"))?
+            .into_int_value();
+        let slot_value = self
+            .builder
+            .build_extract_value(result, 1, &format!("{site}_slot_value"))
+            .map_err(|err| format!("{site}: extract slot: {err}"))?;
+        let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
+        self.builder
+            .build_store(slot, slot_value)
+            .map_err(|err| format!("{site}: store the result slot: {err}"))?;
+        self.ec_standard_over_slot(err, slot, variants, maybe, site)
+    }
+
+    /// Build the standard `{ err, ok }` pair whose `ok` is the view pointer of the union slot at
+    /// `slot`.
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn ec_standard_over_slot(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        slot: PointerValue<'ctx>,
+        variants: &[Type],
+        maybe: bool,
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let view = self.union_slot_to_value_as(
+            slot,
+            variants,
+            maybe || self.union_has_nothing(variants),
+            site,
+        )?;
+        // A `maybe` success value is the maybe pair every maybe value is, over the view.
+        let ok_value = if maybe {
+            self.maybe_pair_over_view(view, site)?
+        } else {
+            view
+        };
+        let ok_bits = self
+            .builder
+            .build_ptr_to_int(ok_value, self.i64(), &format!("{site}_ok_bits"))
+            .map_err(|err| format!("{site}: view bits: {err}"))?;
+        let standard = errors_result_type(self.ctx);
+        let with_err = self
+            .builder
+            .build_insert_value(standard.const_zero(), err, 0, &format!("{site}_std_err"))
+            .map_err(|err| format!("{site}: insert err: {err}"))?
+            .into_struct_value();
+        Ok(self
+            .builder
+            .build_insert_value(with_err, ok_bits, 1, &format!("{site}_std_ok"))
+            .map_err(|err| format!("{site}: insert ok: {err}"))?
+            .into_struct_value())
+    }
+
+    /// The suspending-callee face of `ec_union_result_to_standard`: the return slot's success
+    /// word is the address of the callee frame's `Return` union region (0 when the call failed).
+    /// Copy the slot out into a caller-owned one (the child frame is freed or reused after this
+    /// read) and return the standard `{ err, ok }` pair over the copy.
+    ///
+    /// Time: O(v) + one memcpy of the slot  Space: O(1) entry-block slot and view
+    fn ec_region_to_standard(
+        &self,
+        err: inkwell::values::IntValue<'ctx>,
+        region_bits: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        maybe: bool,
+        site: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_slot"))?;
+        self.builder
+            .build_store(slot, slot_ty.const_zero())
+            .map_err(|err| format!("{site}: zero the copied slot: {err}"))?;
+        let copy_bb = self.append_block(&format!("{site}_copy"));
+        let join_bb = self.append_block(&format!("{site}_copied"));
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{site}_is_ok"),
+            )
+            .map_err(|err| format!("{site}: err compare: {err}"))?;
+        self.builder
+            .build_conditional_branch(is_ok, copy_bb, join_bb)
+            .map_err(|err| format!("{site}: branch: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let region = self
+            .builder
+            .build_int_to_ptr(region_bits, self.ptr(), &format!("{site}_region"))
+            .map_err(|err| format!("{site}: region cast: {err}"))?;
+        self.builder
+            .build_memcpy(
+                slot,
+                1,
+                region,
+                1,
+                self.i64().const_int(layout.slot_size, false),
+            )
+            .map_err(|err| format!("{site}: copy the slot: {err}"))?;
+        self.builder
+            .build_unconditional_branch(join_bb)
+            .map_err(|err| format!("{site}: copy->join: {err}"))?;
+        self.builder.position_at_end(join_bb);
+        self.ec_standard_over_slot(err, slot, variants, maybe, site)
+    }
+
+    /// COPY a union value into storage the binding owns: a slot of its own in this frame's entry
+    /// block (one per binding site) holding the value by value, and a view of it. A binding that
+    /// kept the pointer it was given would alias the envelope and payload of whatever built the
+    /// value (a per-site wrap slot a later loop iteration rewrites, or another binding that is
+    /// rebound), so `let previous: Thing = current` followed by rebinding `current` would change
+    /// `previous` too.
+    ///
+    /// Time: O(v) for v shape variants + one memmove of the variant's size  Space: O(1) entry slot
+    fn union_to_owned(
+        &self,
+        value: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let layout = self.union_layout(variants)?;
+        let slot_ty = self.union_slot_llvm(&layout);
+        let slot = self.alloca_in_entry_llvm(slot_ty, &format!("{site}_owned"))?;
+        self.union_persist_into(value, slot, variants, &format!("{site}_owned"))?;
+        self.union_slot_to_value(slot, variants, &format!("{site}_owned"))
+    }
+
+    /// The union view (null for `none`) of the maybe pair `pair` points to: its bits as a pointer
+    /// when its flag is set, null when it is not. The inverse of `maybe_pair_over_view`.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn maybe_pair_to_view(
+        &self,
+        pair: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let (flag, bits) = self.load_maybe_env_pair(pair, &format!("{site}_maybe"))?;
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_maybe_present"),
+            )
+            .map_err(|err| format!("{site}: maybe flag compare: {err}"))?;
+        let view_bits = self
+            .builder
+            .build_select(
+                present,
+                bits,
+                self.i64().const_zero(),
+                &format!("{site}_maybe_view_bits"),
+            )
+            .map_err(|err| format!("{site}: maybe view bits: {err}"))?
+            .into_int_value();
+        self.builder
+            .build_int_to_ptr(view_bits, self.ptr(), &format!("{site}_maybe_view"))
+            .map_err(|err| format!("{site}: maybe view cast: {err}"))
+    }
+
+    /// The `{ flag, bits }` maybe envelope of the union view `view` (null for `none`): an
+    /// entry-block slot of this frame, flag 1 and bits the view's address, or both 0.
+    ///
+    /// Time: O(1)  Space: O(1) entry-block slot
+    fn maybe_pair_over_view(
+        &self,
+        view: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let present = self
+            .builder
+            .build_is_not_null(view, &format!("{site}_maybe_present"))
+            .map_err(|err| format!("{site}: view null check: {err}"))?;
+        let flag = self
+            .builder
+            .build_int_z_extend(present, self.i64(), &format!("{site}_maybe_flag"))
+            .map_err(|err| format!("{site}: flag widen: {err}"))?;
+        let bits = self
+            .builder
+            .build_ptr_to_int(view, self.i64(), &format!("{site}_maybe_bits"))
+            .map_err(|err| format!("{site}: view bits: {err}"))?;
+        let env = self.alloca_in_entry_llvm(self.maybe_type(), &format!("{site}_maybe_pair"))?;
+        for (index, word) in [(0u32, flag), (1u32, bits)] {
+            let gep = self
+                .builder
+                .build_struct_gep(self.maybe_type(), env, index, &format!("{site}_maybe_word"))
+                .map_err(|err| format!("{site}: maybe gep: {err}"))?;
+            self.builder
+                .build_store(gep, word)
+                .map_err(|err| format!("{site}: maybe word store: {err}"))?;
+        }
+        Ok(env)
+    }
+
+    /// `region` itself, or null when the moved flag `flag_bits` (the local's first frame slot) is
+    /// set: what a resume makes of a region-homed local a move or a release left behind.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn null_if_moved(
+        &self,
+        flag_bits: inkwell::values::IntValue<'ctx>,
+        region: PointerValue<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let moved = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag_bits,
+                self.i64().const_zero(),
+                &format!("{name}_moved"),
+            )
+            .map_err(|err| format!("{name}: moved flag compare: {err}"))?;
+        Ok(self
+            .builder
+            .build_select(
+                moved,
+                self.ptr().const_null(),
+                region,
+                &format!("{name}_unless_moved"),
+            )
+            .map_err(|err| format!("{name}: select unless moved: {err}"))?
+            .into_pointer_value())
+    }
+
+    /// The two words of the 16-byte pair at `pair`: an errors-capable result's `{err, ok}`, or a
+    /// `maybe`'s `{flag, bits}` (both are two i64 words).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn load_errors_pair(
+        &self,
+        pair: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let mut words = Vec::with_capacity(2);
+        for index in 0..2u32 {
+            let gep = self
+                .builder
+                .build_struct_gep(
+                    self.maybe_type(),
+                    pair,
+                    index,
+                    &format!("{site}_word{index}"),
+                )
+                .map_err(|err| format!("{site}: pair word gep: {err}"))?;
+            words.push(
+                self.builder
+                    .build_load(self.i64(), gep, &format!("{site}_word{index}_value"))
+                    .map_err(|err| format!("{site}: pair word load: {err}"))?
+                    .into_int_value(),
+            );
+        }
+        Ok((words[0], words[1]))
+    }
+
+    /// Store the two words of a 16-byte pair at `pair` (the twin of `load_errors_pair`).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn store_errors_pair(
+        &self,
+        pair: PointerValue<'ctx>,
+        first: inkwell::values::IntValue<'ctx>,
+        second: inkwell::values::IntValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        for (index, word) in [(0u32, first), (1u32, second)] {
+            let gep = self
+                .builder
+                .build_struct_gep(
+                    self.maybe_type(),
+                    pair,
+                    index,
+                    &format!("{site}_out{index}"),
+                )
+                .map_err(|err| format!("{site}: pair word gep: {err}"))?;
+            self.builder
+                .build_store(gep, word)
+                .map_err(|err| format!("{site}: pair word store: {err}"))?;
+        }
+        Ok(())
+    }
+    /// The frame region pointer of the frame-embedded shape crossing local `name`, computed once
+    /// in `sm_entry` (it dominates every state).
+    /// Where the payload of a `maybe` homed in `region` goes: 16 bytes in, the first 16-aligned
+    /// address after the envelope (the region itself is 16-aligned).
+    fn maybe_region_payload_ptr(
+        &self,
+        region: PointerValue<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        // SAFETY: `maybe_frame_slots` reserved the envelope and the payload behind it.
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.ctx.i8_type(),
+                    region,
+                    &[self.i64().const_int(16, false)],
+                    &format!("{name}_maybe_payload"),
+                )
+                .map_err(|err| format!("{name}: maybe payload gep: {err}"))
+        }
+    }
+
+    fn crossing_shape_region(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
+        self.sm_crossing_shape_regions
+            .get(name)
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "codegen: frame-embedded shape local `{name}` has no region pointer; the \
+                 classification of crossing locals and the lowering disagree, a compiler bug"
+                )
+            })
+    }
+
+    /// Where a bind of the frame-embedded shape local `name` copies its bytes: the region, which
+    /// the local is re-pointed at and marked live again whatever a move or a release left in its
+    /// slot. `slot` is the local's alloca.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn embed_dest(
+        &self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let region = self.crossing_shape_region(name)?;
+        self.builder
+            .build_store(slot, region)
+            .map_err(|err| format!("{name}: re-point the local at its region: {err}"))?;
+        self.set_moved_flag(self.region_flag_of(name), 0)?;
+        Ok(region)
+    }
+
+    /// The frame region and variants of the crossing union local `name`.
+    fn crossing_union(&self, name: &str) -> Result<&CrossingUnion<'ctx>, String> {
+        self.sm_crossing_unions.get(name).ok_or_else(|| {
+            format!(
+                "codegen: crossing local `{name}` has no union frame region; the classification \
+                 of crossing locals and the lowering disagree, a compiler bug"
+            )
+        })
+    }
+
+    /// Persist the current value of the crossing union local `name` into its frame region, then
+    /// point the local at a view of the region, so from here on the region is the value's one
+    /// home and a later resume reads the same bytes back (`reload_crossing_union`). Nothing is
+    /// allocated; the payload moves inline into the region (`union_persist_into`).
+    ///
+    /// For an `errors` result, `err` goes to frame slot `slot_idx` and the success slot is
+    /// persisted only when `err` is 0 (`ok` is no union value otherwise); `ok` then names the
+    /// region's view.
+    ///
+    /// Time: O(v) for v shape variants + one memmove of the variant's size  Space: O(1)
+    fn flush_crossing_union(
+        &self,
+        name: &str,
+        alloca: PointerValue<'ctx>,
+        frame_ptr: PointerValue<'ctx>,
+        slot_idx: usize,
+    ) -> Result<(), String> {
+        let crossing = self.crossing_union(name)?;
+        let site = format!("{name}_cross");
+        if !crossing.errors {
+            // A union that was moved or released since it was bound has nothing to persist: its
+            // view is null and its region's boxes belong to the taker. A bind clears the flag
+            // before this flush (`store_binding`, `bind_sm_result_and_flush`).
+            let flag = state_machine::load_local_slot(
+                self.ctx,
+                &self.builder,
+                frame_ptr,
+                slot_idx,
+                &format!("{site}_flag"),
+            )?;
+            let moved = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    flag,
+                    self.i64().const_zero(),
+                    &format!("{site}_is_moved"),
+                )
+                .map_err(|err| format!("{site}: moved flag compare: {err}"))?;
+            let persist_bb = self.append_block(&format!("{site}_flush_persist"));
+            let done_bb = self.append_block(&format!("{site}_flush_done"));
+            self.builder
+                .build_conditional_branch(moved, done_bb, persist_bb)
+                .map_err(|err| format!("{site}: moved flag branch: {err}"))?;
+            self.builder.position_at_end(persist_bb);
+            let view = self
+                .builder
+                .build_load(self.ptr(), alloca, &format!("{site}_view"))
+                .map_err(|err| format!("{site}: load the union view: {err}"))?
+                .into_pointer_value();
+            self.union_persist_into_core(
+                view,
+                crossing.region,
+                &crossing.variants,
+                self.union_has_nothing(&crossing.variants),
+                false,
+                &site,
+            )?;
+            let region_view =
+                self.union_slot_to_value(crossing.region, &crossing.variants, &site)?;
+            self.builder
+                .build_store(alloca, region_view)
+                .map_err(|err| format!("{site}: point the local at its region: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|err| format!("{site}: flush join: {err}"))?;
+            self.builder.position_at_end(done_bb);
+            return Ok(());
+        }
+        let ec_ty = errors_result_type(self.ctx);
+        let struct_ptr = self
+            .builder
+            .build_load(self.ptr(), alloca, &format!("{site}_ec_ptr"))
+            .map_err(|err| format!("{site}: load the errors pair: {err}"))?
+            .into_pointer_value();
+        let err_ptr = self
+            .builder
+            .build_struct_gep(ec_ty, struct_ptr, 0, &format!("{site}_err_gep"))
+            .map_err(|err| format!("{site}: err gep: {err}"))?;
+        let ok_ptr = self
+            .builder
+            .build_struct_gep(ec_ty, struct_ptr, 1, &format!("{site}_ok_gep"))
+            .map_err(|err| format!("{site}: ok gep: {err}"))?;
+        let err = self
+            .builder
+            .build_load(self.i64(), err_ptr, &format!("{site}_err"))
+            .map_err(|err| format!("{site}: load err: {err}"))?
+            .into_int_value();
+        state_machine::store_local_slot(self.ctx, &self.builder, frame_ptr, slot_idx, err)?;
+        let ok_bits = self
+            .builder
+            .build_load(self.i64(), ok_ptr, &format!("{site}_ok"))
+            .map_err(|err| format!("{site}: load ok: {err}"))?
+            .into_int_value();
+        let view = self
+            .builder
+            .build_int_to_ptr(ok_bits, self.ptr(), &format!("{site}_ok_view"))
+            .map_err(|err| format!("{site}: ok view cast: {err}"))?;
+        self.union_persist_if_ok(
+            err,
+            view,
+            crossing.region,
+            UnionPersist {
+                variants: &crossing.variants,
+                maybe: false,
+                deep: Some(false),
+            },
+            &site,
+        )?;
+        let region_ok = self.crossing_union_ok_word(name, err)?;
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{site}_flush_is_ok"),
+            )
+            .map_err(|err| format!("{site}: err compare: {err}"))?;
+        let new_ok = self
+            .builder
+            .build_select(is_ok, region_ok, ok_bits, &format!("{site}_new_ok"))
+            .map_err(|err| format!("{site}: select ok: {err}"))?
+            .into_int_value();
+        self.builder
+            .build_store(ok_ptr, new_ok)
+            .map_err(|err| format!("{site}: store ok: {err}"))?;
+        Ok(())
+    }
+
+    /// The value form (view pointer, null for `none`) of the crossing union local `name`, read
+    /// back from its frame region after a resume.
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn reload_crossing_union(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
+        let crossing = self.crossing_union(name)?;
+        self.union_slot_to_value(
+            crossing.region,
+            &crossing.variants,
+            &format!("{name}_reload"),
+        )
+    }
+
+    /// The `ok` word of the crossing `errors` union local `name` after a resume: a view of its
+    /// frame region when `err` is 0, 0 otherwise (the standard failed pair).
+    ///
+    /// Time: O(v)  Space: O(1)
+    fn crossing_union_ok_word(
+        &self,
+        name: &str,
+        err: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let view = self.reload_crossing_union(name)?;
+        let view_bits = self
+            .builder
+            .build_ptr_to_int(view, self.i64(), &format!("{name}_reload_ok_bits"))
+            .map_err(|err| format!("{name}: region view bits: {err}"))?;
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                &format!("{name}_reload_is_ok"),
+            )
+            .map_err(|err| format!("{name}: err compare: {err}"))?;
+        Ok(self
+            .builder
+            .build_select(
+                is_ok,
+                view_bits,
+                self.i64().const_zero(),
+                &format!("{name}_reload_ok"),
+            )
+            .map_err(|err| format!("{name}: select ok: {err}"))?
+            .into_int_value())
+    }
+
+    /// Read the `tag` word of a non-null union envelope `{i64 tag, i64 data}`.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_tag_bits(
+        &self,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let tag_gep = self
+            .builder
+            .build_struct_gep(
+                self.union_envelope_type(),
+                envelope,
+                0,
+                &format!("{site}_src_tag"),
+            )
+            .map_err(|err| format!("union tag gep {site}: {err}"))?;
+        Ok(self
+            .builder
+            .build_load(self.i64(), tag_gep, &format!("{site}_tag"))
+            .map_err(|err| format!("union tag load {site}: {err}"))?
+            .into_int_value())
+    }
+
+    /// The variants of `ty` when it is an envelope union (a union with a shape variant), the
+    /// one answer to "does a slot of this type hold the 16-byte envelope by value"
+    /// (`ynz_typeck::check::is_envelope_union` decides; typeck's coercion record uses the same).
+    ///
+    /// Time: O(v)  Space: O(v)
+    fn envelope_union_variants(&self, ty: &Type) -> Option<Vec<Type>> {
+        match self.resolve_type(ty) {
+            resolved @ Type::Union { .. } if ynz_typeck::check::is_envelope_union(&resolved) => {
+                let Type::Union { variants } = resolved else {
+                    return None;
+                };
+                Some(variants)
+            }
+            _ => None,
+        }
     }
 
     /// Get-side ownership (v0.3-M5 P2 fix-loop): copy shape bytes INTO the frame
@@ -3761,14 +7031,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         site: &str,
     ) -> Result<(), String> {
         let size = self.shape_abi_size_const(shape_name, "shape_bytes_into_embed_slot")?;
-        let dest = self
-            .builder
-            .build_load(self.ptr(), slot, &format!("{site}_frame_ptr"))
-            .map_err(|e| format!("embed slot frame ptr load {site}: {e}"))?
-            .into_pointer_value();
+        let dest = self.embed_dest(site, slot)?;
         self.builder
             .build_memcpy(dest, 1, src, 1, size)
-            .map_err(|e| format!("embed slot memcpy {site}: {e}"))?;
+            .map_err(|err| format!("embed slot memcpy {site}: {err}"))?;
+        self.deepen_unless_moved(src, dest, shape_name)?;
+        self.free_taken_shape_cell(src, size)?;
         Ok(())
     }
 
@@ -3787,10 +7055,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// the pre-M5 pointer ABI's stable-heap-element contract per persisted
     /// value.
     ///
-    /// Ownership/drop: nobody frees these cells yet — the pre-existing
-    /// never-drop-locals design (FRAGO 009; Phase 3 step 4 owns the parity
-    /// verdict). Eager free-on-overwrite would be UNSOUND today: `.copy()` is
-    /// a shallow struct memcpy, so two parents may share one nested cell.
+    /// Ownership/drop: the scope-exit release pass (C7) frees each cell, with the
+    /// value that holds it or at the overwrite that replaces it; this helper only
+    /// allocates. Freeing at the allocation site would be UNSOUND: a shape
+    /// `.copy()` is a shallow struct memcpy, so two parents may share one nested cell.
     fn heap_cell(
         &self,
         size: inkwell::values::IntValue<'ctx>,
@@ -3804,6 +7072,36 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or("ynz_alloc returned void")
             .map(|v| v.into_pointer_value())
             .map_err(|e| e.to_string())
+    }
+
+    /// The return of a shape read out of an errors-capable local took the shape's boxes into a new
+    /// cell: free the old ok-word cell `old_cell` (its shell only: the boxes moved) and null the
+    /// ok word of the result at `result_slot`, so the binding's release skips it.
+    ///
+    /// O(1) time and space.
+    fn free_taken_ec_shape_cell(
+        &self,
+        result_slot: PointerValue<'ctx>,
+        old_cell: PointerValue<'ctx>,
+        shape_name: &str,
+    ) -> Result<(), String> {
+        let size = self.shape_abi_size_const(shape_name, "free_taken_ec_shape_cell")?;
+        self.builder
+            .build_call(self.rt.ynz_free, &[old_cell.into(), size.into()], "")
+            .map_err(|err| format!("free the taken errors cell: {err}"))?;
+        let result = self
+            .builder
+            .build_load(self.ptr(), result_slot, "ec_taken_result")
+            .map_err(|err| format!("load the taken errors result: {err}"))?
+            .into_pointer_value();
+        let ok_word = self
+            .builder
+            .build_struct_gep(errors_result_type(self.ctx), result, 1, "ec_taken_ok")
+            .map_err(|err| format!("gep the taken errors ok word: {err}"))?;
+        self.builder
+            .build_store(ok_word, self.i64().const_zero())
+            .map_err(|err| format!("null the taken errors ok word: {err}"))?;
+        Ok(())
     }
 
     /// Persist-side ownership (v0.3-M5 P2 fix round 2): clone shape bytes into
@@ -3821,6 +7119,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_memcpy(cell, 1, src, 1, size)
             .map_err(|e| format!("shape_bytes_to_heap_cell memcpy: {e}"))?;
+        self.deepen_unless_moved(src, cell, shape_name)?;
         Ok(cell)
     }
 
@@ -3867,8 +7166,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// pointer bits are overwritten with the site and die with the frame — so
     /// they clone into counted heap cells here; everything else is
     /// self-contained i64 bits (plain values, or pointers stable against
-    /// per-site reuse — heap for string, frame-local STACK allocas for
-    /// number). The persist surfaces that route through here
+    /// per-site reuse — heap for string; a decimal128 number is not marshalled here
+    /// for an array or map, whose cell holds its 16 bytes inline). The persist
+    /// surfaces that route through here
     /// (authoritative-derivation: one marshalling answer, no per-surface
     /// twins):
     ///
@@ -3884,8 +7184,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   the 8-byte cell persists inside the buffer. Fix round 3; tripwire
     ///   `m5_p2_byval_array_maybe_elem_write_escape`. (Shape elements never
     ///   reach this helper from arrays — they memcpy by value inline.)
-    /// - **Fixed-array element slots** (uniform `[N x i64]` stack layout — the
-    ///   by-value heap ABI does not apply): ALL THREE write sites —
+    /// - **Fixed-array element slots** (`[N x i64]` stack layout, `[N x i128]` for a
+    ///   decimal128 `number` — the by-value heap ABI does not apply): ALL THREE write sites —
     ///   index-assign, `.set()`, and the literal fill. Fix round 4 (the
     ///   round-3 closer's surfaced deviation); tripwires
     ///   `m5_p2_byval_fixed_*escape*`. Shape AND maybe elements clone here;
@@ -3905,34 +7205,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `shape`-/`maybe_to_heap_cell` — directly; the `to_i64_bits` after them
     /// marshals an already-stable heap pointer).
     ///
-    /// KNOWN HOLE — Union (documented, no arm; BLOCKED-class, surfaced fix
-    /// round 3; state refreshed P3 step 5(d) sweep): a union value's
-    /// representation is NOT one derivable layout — a `{i64 tag, i64 data}`
-    /// tagged-struct alloca from the annotated-Let ctor (with `data` an
-    /// interior ptr_to_int of a STACK shape alloca), but a NULL pointer for
-    /// the `T | nothing` none case (the union print path `build_is_null`s the
-    /// value directly). A blind 16-byte clone would segfault on the null repr
-    /// and would still persist the interior stack payload pointer one level
-    /// down. CONSTRUCTIBILITY (P3 step-5 probes, superseding the earlier
-    /// "unobservable today for maps" claim): the WRITE side IS constructible —
-    /// `map<int, UnionAlias>.set(...)` and an `array<UnionAlias>` literal both
-    /// compile AND run (the union bits fall through to `to_i64_bits` and the
-    /// raw interior-stack pointer persists silently); a union-typed SHAPE
-    /// FIELD is cleanly typeck-rejected (that surface is closed). READ-BACK
-    /// from either collection (`is`-narrowing after get) fails as a LOUD
-    /// codegen ICE — no binary is produced, so no end-to-end silent wrong is
-    /// observable today. The pins `m5_p3_sweep_union_readback_blocked_{array,
-    /// map}` assert the read-back build keeps failing loud: if it ever starts
-    /// compiling, the marshalling question must be answered consciously here.
-    /// A loud-reject GATE at the persist surfaces is a NEW user-facing
-    /// diagnostic (feature-registry + gallery obligations) — FRAGO-grade plan
-    /// surface, surfaced to the deviation-judge, deliberately NOT built as a
-    /// sweep ride-along. Owned by the fix-round deviation record until the
-    /// union ABI gets one authoritative layout. NOTE (v0.3-M6 Phase 1c step
-    /// 3c): the BINDING surface now has its own null-preserving heap promotion
-    /// (`union_to_heap_cell`, reachable only from the two binding funnels) —
-    /// that does NOT close this hole and deliberately adds NO Union arm here:
-    /// an arm would silently widen the persist surfaces past the pins above.
+    /// Union — deliberately no arm. An envelope union is stored as its own slot, payload inline
+    /// (`union_persist_into`; `IMP-unions.md` "Stored union slot"), by the heap array, map and
+    /// shape-field persist sites BEFORE they reach this helper, so no union is marshalled as
+    /// bits here. A union's value form is a pointer to a per-site `{tag, data}` view (null for
+    /// `none`), which no blind clone can copy: an arm here would persist the view's interior
+    /// pointer into a stack payload.
     fn value_to_stable_bits(
         &self,
         val: BasicValueEnum<'ctx>,
@@ -3953,8 +7231,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .map_err(|e| format!("maybe value cell bits {site}: {e}"))
             }
             Type::MapEntry {
+                key: ref entry_key_ty,
                 val: ref entry_val_ty,
-                ..
             } => {
                 // P3 step 5(b): a MapEntry value is a pointer to the map loop
                 // arm's PER-SITE {i64 key_bits, i64 val_bits} entry struct —
@@ -3986,10 +7264,38 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 // maybe-valued entry's bits are a stable heap cell today —
                 // the write-side marshal above minted it — but cloning keeps
                 // this arm correct if that ever changes). The KEY half is
-                // always self-contained (i64 bits or a stable heap string
-                // pointer) — the memcpy above already owns it.
+                // self-contained for an int, bool, float or string key (i64 bits or a stable heap
+                // string pointer: the memcpy above owns it); a decimal key's bits are the address
+                // of the loop's per-site key buffer, which the next iteration overwrites, so it is
+                // copied into a heap cell of its own below (a spawn argument frees it with the entry cell,
+                // `bg_mapentry_release_fn`).
+                if self.is_inline_decimal(&self.resolve_type(entry_key_ty)) {
+                    let kslot = self
+                        .builder
+                        .build_struct_gep(entry_ty, cell, 0, &format!("{site}_me_k"))
+                        .map_err(|e| format!("{e}"))?;
+                    let kbits = self
+                        .builder
+                        .build_load(self.i64(), kslot, &format!("{site}_me_kbits"))
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let kptr = self
+                        .builder
+                        .build_int_to_ptr(kbits, self.ptr(), &format!("{site}_me_kptr"))
+                        .map_err(|e| format!("{e}"))?;
+                    let kcell = self.number_to_heap_cell(kptr, &format!("{site}_me_key"))?;
+                    let new_kbits = self
+                        .builder
+                        .build_ptr_to_int(kcell, self.i64(), &format!("{site}_me_knew"))
+                        .map_err(|e| format!("{e}"))?;
+                    self.builder
+                        .build_store(kslot, new_kbits)
+                        .map_err(|e| format!("{e}"))?;
+                }
                 let resolved_val_ty = self.resolve_type(entry_val_ty);
-                if matches!(resolved_val_ty, Type::Shape { .. } | Type::Maybe { .. }) {
+                if matches!(resolved_val_ty, Type::Shape { .. } | Type::Maybe { .. })
+                    || self.is_inline_decimal(&resolved_val_ty)
+                {
                     let vslot = self
                         .builder
                         .build_struct_gep(entry_ty, cell, 1, &format!("{site}_me_v"))
@@ -4009,6 +7315,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         }
                         Type::Maybe { ref inner } => {
                             self.maybe_to_heap_cell(vptr, inner, &format!("{site}_me_val"))?
+                        }
+                        // A decimal value half points into the map loop's per-site value buffer.
+                        Type::Number { .. } => {
+                            self.number_to_heap_cell(vptr, &format!("{site}_me_val"))?
                         }
                         _ => unreachable!("guarded by the matches! above"),
                     };
@@ -4037,15 +7347,93 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     // `array_elem_src_ptr`, `array_elem_out_buffer`, `array_elem_bits_from_out`)
     // — one derivation for both collection ABIs, never a map-side twin.
 
-    /// Allocate a new heap map for `val_ty` values (the ONLY ynz_map_new call
-    /// site in codegen). elem_size via `array_elem_size` — the shared by-value
-    /// elem-size derivation for array elements AND map values.
-    fn map_new(&self, val_ty: &Type, name: &str) -> Result<PointerValue<'ctx>, String> {
+    /// How a map of `key_ty` keys stores and compares them: a string by pointer (compared by its
+    /// text), a decimal128 `number` inline in 16 bytes (hashed and compared as those 16 bytes), an
+    /// `int`, `bool` or `float` as i64 bits. Any other key type (a `number<N>` past 34 digits, a
+    /// `sensitive string`, a shape) is not a map key, and the runtime has no
+    /// key slot for it. Typeck refuses those (`check_map_key_type`), so reaching one here is an
+    /// internal error, never an i64 of pointer bits.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn map_key_kind(&self, key_ty: &Type) -> Result<MapKeyKind, String> {
+        let resolved = self.resolve_type(key_ty);
+        match resolved {
+            Type::String => Ok(MapKeyKind::String),
+            Type::Number { precision } if precision <= 34 => Ok(MapKeyKind::Number),
+            Type::Int | Type::Bool | Type::Float => Ok(MapKeyKind::Int),
+            other => Err(format!(
+                "internal error: a map keyed by {other:?} reached codegen, but typeck refuses it \
+                 (`check_map_key_type`: keys are string, number up to 34 digits, int, \
+                 bool or float)"
+            )),
+        }
+    }
+
+    /// The key operand a map entry point takes, from the key expression's value: a string pointer
+    /// as it is, a decimal's pointer to its 16 bytes as it is (the runtime copies them before it
+    /// returns), anything else as i64 bits. `value_ty` is the type of the key EXPRESSION.
+    fn map_key_operand(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        value_ty: &Type,
+        kind: MapKeyKind,
+    ) -> Result<inkwell::values::BasicMetadataValueEnum<'ctx>, String> {
+        match kind {
+            MapKeyKind::String | MapKeyKind::Number => Ok(value.into()),
+            MapKeyKind::Int => Ok(self.to_i64_bits(value, value_ty)?.into()),
+        }
+    }
+
+    /// Per-site ENTRY-BLOCK buffer an iteration reads a map key into: 16 bytes for a decimal key,
+    /// one i64 cell otherwise (a string key arrives as its stored pointer).
+    fn map_key_out_buffer(&self, key_ty: &Type, site: &str) -> Result<PointerValue<'ctx>, String> {
+        match self.map_key_kind(key_ty)? {
+            MapKeyKind::Number => self.alloca_in_entry_llvm(self.i128(), site),
+            MapKeyKind::String | MapKeyKind::Int => self.alloca_in_entry_llvm(self.i64(), site),
+        }
+    }
+
+    /// The i64 bits a filled key buffer stands for in a `MapEntry`: the buffer's ADDRESS for a
+    /// decimal key (a number value is a pointer to its 16 bytes, as a map value's bits are), the
+    /// loaded cell otherwise.
+    fn map_key_bits_from_out(
+        &self,
+        key_out: PointerValue<'ctx>,
+        key_ty: &Type,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        match self.map_key_kind(key_ty)? {
+            MapKeyKind::Number => self
+                .builder
+                .build_ptr_to_int(key_out, self.i64(), site)
+                .map_err(|err| format!("map key address: {err}")),
+            MapKeyKind::String | MapKeyKind::Int => self
+                .builder
+                .build_load(self.i64(), key_out, site)
+                .map(|value| value.into_int_value())
+                .map_err(|err| format!("map key load: {err}")),
+        }
+    }
+
+    /// Allocate a new heap map for `key_ty` keys and `val_ty` values (the ONLY ynz_map_new
+    /// call site in codegen). elem_size via `array_elem_size` — the shared by-value
+    /// elem-size derivation for array elements AND map values. A decimal key needs a map made
+    /// for 16-byte keys; every other key kind shares `ynz_map_new`.
+    fn map_new(
+        &self,
+        key_ty: &Type,
+        val_ty: &Type,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
         let elem_size = self.array_elem_size(val_ty)?;
         let size_const = self.i64().const_int(elem_size, false);
+        let constructor = match self.map_key_kind(key_ty)? {
+            MapKeyKind::Number => self.rt.ynz_map_new_decimal_keys,
+            MapKeyKind::String | MapKeyKind::Int => self.rt.ynz_map_new,
+        };
         let v = self
             .builder
-            .build_call(self.rt.ynz_map_new, &[size_const.into()], name)
+            .build_call(constructor, &[size_const.into()], name)
             .map_err(|e| format!("map_new: {e}"))?
             .try_as_basic_value()
             .basic()
@@ -4054,9 +7442,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Insert/overwrite one value (the ONLY ynz_map_set / ynz_map_set_str call
-    /// sites in codegen). `key` is the already-marshalled key operand: i64 bits
-    /// for int-keyed maps (`is_str = false`), a string pointer for str-keyed
-    /// maps (`is_str = true`).
+    /// sites in codegen; the decimal one is `ynz_map_set_decimal`). `key` is the
+    /// already-marshalled key operand (`map_key_operand`): i64 bits for int-keyed
+    /// maps, a string pointer for str-keyed maps, a pointer to the 16 decimal
+    /// bytes for number-keyed maps (copied into the map before the call returns).
     ///
     /// The value src pointer comes from `array_elem_src_ptr` — EXACTLY the map
     /// marshalling semantics: shape values pass their byte pointer through and
@@ -4065,22 +7454,58 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// maybe/non-shape values marshal through `value_to_stable_bits` into an
     /// 8-byte staging cell, keeping the stable-bits persist discipline unchanged.
     fn map_val_set(
-        &self,
+        &mut self,
         map: PointerValue<'ctx>,
         key: inkwell::values::BasicMetadataValueEnum<'ctx>,
-        is_str: bool,
+        kind: MapKeyKind,
         val: BasicValueEnum<'ctx>,
         val_ty: &Type,
         site: &str,
     ) -> Result<(), String> {
-        let src = self.array_elem_src_ptr(val, val_ty, site)?;
-        let callee = if is_str {
-            self.rt.ynz_map_set_str
+        let is_str = kind == MapKeyKind::String;
+        // A string key is stored by its pointer: the map owns its own copy of it.
+        let key: inkwell::values::BasicMetadataValueEnum<'ctx> = if is_str {
+            let key_value = BasicValueEnum::try_from(key)
+                .map_err(|_| format!("map_val_set {site}: a string key is not a value"))?;
+            own_string_for_store(self, key_value, &Type::String, "map_key_str")?.into()
         } else {
-            self.rt.ynz_map_set
+            key
+        };
+        let src = self.array_elem_src_ptr(val, val_ty, site)?;
+        let callee = match kind {
+            MapKeyKind::String => self.rt.ynz_map_set_str,
+            MapKeyKind::Number => self.rt.ynz_map_set_decimal,
+            MapKeyKind::Int => self.rt.ynz_map_set,
+        };
+        // What a set over a present key replaces is released: the old value by the value type's
+        // glue, and the key copy this set was handed (the map keeps the key it owns).
+        let (value_glue, value_inline) = self.element_release_arguments(val_ty)?;
+        let value_inline = self.i32().const_int(value_inline as u64, false);
+        let args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = if is_str {
+            let key_glue = self
+                .rt
+                .ynz_string_release
+                .as_global_value()
+                .as_pointer_value();
+            vec![
+                map.into(),
+                key,
+                src.into(),
+                key_glue.into(),
+                value_glue.into(),
+                value_inline.into(),
+            ]
+        } else {
+            vec![
+                map.into(),
+                key,
+                src.into(),
+                value_glue.into(),
+                value_inline.into(),
+            ]
         };
         self.builder
-            .build_call(callee, &[map.into(), key, src.into()], site)
+            .build_call(callee, &args, site)
             .map_err(|e| format!("map_val_set: {e}"))?;
         Ok(())
     }
@@ -4094,14 +7519,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         &self,
         map: PointerValue<'ctx>,
         key: inkwell::values::BasicMetadataValueEnum<'ctx>,
-        is_str: bool,
+        kind: MapKeyKind,
         out: PointerValue<'ctx>,
         site: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        let callee = if is_str {
-            self.rt.ynz_map_get_str
-        } else {
-            self.rt.ynz_map_get
+        let callee = match kind {
+            MapKeyKind::String => self.rt.ynz_map_get_str,
+            MapKeyKind::Number => self.rt.ynz_map_get_decimal,
+            MapKeyKind::Int => self.rt.ynz_map_get,
         };
         let flag = self
             .builder
@@ -4122,12 +7547,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         &self,
         map: PointerValue<'ctx>,
         key: inkwell::values::BasicMetadataValueEnum<'ctx>,
-        is_str: bool,
+        kind: MapKeyKind,
         val_ty: &Type,
         site: &str,
     ) -> Result<PointerValue<'ctx>, String> {
         let out = self.array_elem_out_buffer(val_ty, site)?;
-        let flag = self.map_val_get_into(map, key, is_str, out, site)?;
+        let flag = self.map_val_get_into(map, key, kind, out, site)?;
         let bits = self.array_elem_bits_from_out(out, val_ty, site)?;
         let maybe_slot = self.alloca_in_entry_llvm(self.maybe_type(), &format!("{site}_maybe"))?;
         let h = self
@@ -4148,23 +7573,24 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Read the entry at insertion-order `pos` (the ONLY ynz_map_iter_get /
-    /// ynz_map_iter_get_str call sites in codegen). Writes the key into
-    /// `key_out` (an i64 slot; str-keyed maps receive the stored key POINTER as
-    /// i64 bits) and the value bytes into `val_out` (an `array_elem_out_buffer`).
+    /// ynz_map_iter_get_str / ynz_map_iter_get_decimal call sites in codegen). Writes the key into
+    /// `key_out` (a `map_key_out_buffer`: an i64 slot, where a str-keyed map receives the stored
+    /// key POINTER as i64 bits, or 16 bytes for a number key) and the value bytes into `val_out`
+    /// (an `array_elem_out_buffer`).
     /// Returns the i64 has-flag.
     fn map_iter_get_into(
         &self,
         map: PointerValue<'ctx>,
         pos: inkwell::values::IntValue<'ctx>,
-        is_str: bool,
+        kind: MapKeyKind,
         key_out: PointerValue<'ctx>,
         val_out: PointerValue<'ctx>,
         site: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        let callee = if is_str {
-            self.rt.ynz_map_iter_get_str
-        } else {
-            self.rt.ynz_map_iter_get
+        let callee = match kind {
+            MapKeyKind::String => self.rt.ynz_map_iter_get_str,
+            MapKeyKind::Number => self.rt.ynz_map_iter_get_decimal,
+            MapKeyKind::Int => self.rt.ynz_map_iter_get,
         };
         let flag = self
             .builder
@@ -4218,6 +7644,136 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(v)
     }
 
+    /// The module-private function `(slot_a, slot_b) -> i1` comparing two slots of the RECURSIVE
+    /// (boxed) union `variants`: equal when the tags match and the stored variants are equal as
+    /// values of that variant, a shape variant field by field through the cell the slot owns
+    /// (`shape_value_eq`), `none` always, any other variant by its payload word.
+    ///
+    /// One function per union rather than inline code, because a shape variant that reaches the
+    /// union again would otherwise unfold forever; the function is declared before its body is
+    /// emitted, so the inner reference is a call. A cell is read only on the branch whose tag
+    /// says the slot owns one: the word of `int` or `none` is no pointer.
+    ///
+    /// Time: O(v) to emit once per union  Space: O(v)
+    fn boxed_union_eq_fn(&self, variants: &[Type]) -> Result<FunctionValue<'ctx>, String> {
+        let name = format!("ynz_union_eq_{}", crate::shape_types::union_key(variants));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let layout = self.union_layout(variants)?;
+        let fn_ty = self
+            .bool()
+            .fn_type(&[self.ptr().into(), self.ptr().into()], false);
+        let eq_fn =
+            self.module
+                .add_function(&name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(eq_fn, "entry");
+        let tags_match = self.ctx.append_basic_block(eq_fn, "tags_match");
+        let differ = self.ctx.append_basic_block(eq_fn, "differ");
+        let by_word = self.ctx.append_basic_block(eq_fn, "by_word");
+        self.builder.position_at_end(entry);
+        let slot_a = eq_fn
+            .get_nth_param(0)
+            .ok_or("boxed union equality: missing first slot")?
+            .into_pointer_value();
+        let slot_b = eq_fn
+            .get_nth_param(1)
+            .ok_or("boxed union equality: missing second slot")?
+            .into_pointer_value();
+        let tag_a = self
+            .builder
+            .build_load(self.i64(), slot_a, "tag_a")
+            .map_err(|err| format!("{err}"))?
+            .into_int_value();
+        let tag_b = self
+            .builder
+            .build_load(self.i64(), slot_b, "tag_b")
+            .map_err(|err| format!("{err}"))?
+            .into_int_value();
+        let same_tag = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, tag_a, tag_b, "same_tag")
+            .map_err(|err| format!("{err}"))?;
+        self.builder
+            .build_conditional_branch(same_tag, tags_match, differ)
+            .map_err(|err| format!("{err}"))?;
+        self.builder.position_at_end(differ);
+        self.builder
+            .build_return(Some(&self.bool().const_zero()))
+            .map_err(|err| format!("{err}"))?;
+        self.builder.position_at_end(tags_match);
+        let case_blocks: Vec<BasicBlock<'ctx>> = layout
+            .shape_variants
+            .iter()
+            .map(|(index, _)| {
+                self.ctx
+                    .append_basic_block(eq_fn, &format!("shape_variant{index}"))
+            })
+            .collect();
+        let switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = layout
+            .shape_variants
+            .iter()
+            .zip(case_blocks.iter())
+            .map(|((index, _), block)| (self.i64().const_int(*index, false), *block))
+            .collect();
+        self.builder
+            .build_switch(tag_a, by_word, &switch_cases)
+            .map_err(|err| format!("{err}"))?;
+        for ((_, shape_name), case_bb) in layout.shape_variants.iter().zip(case_blocks.iter()) {
+            self.builder.position_at_end(*case_bb);
+            let mut cells = Vec::new();
+            for slot in [slot_a, slot_b] {
+                let word_addr = self.union_payload_addr(slot, &layout, "boxed_eq")?;
+                cells.push(
+                    self.builder
+                        .build_load(self.ptr(), word_addr, "cell")
+                        .map_err(|err| format!("{err}"))?
+                        .into_pointer_value(),
+                );
+            }
+            let equal = self.shape_value_eq(cells[0], cells[1], shape_name, "boxed_eq")?;
+            self.builder
+                .build_return(Some(&equal))
+                .map_err(|err| format!("{err}"))?;
+        }
+        self.builder.position_at_end(by_word);
+        let mut words = Vec::new();
+        for slot in [slot_a, slot_b] {
+            let word_addr = self.union_payload_addr(slot, &layout, "boxed_eq")?;
+            words.push(
+                self.builder
+                    .build_load(self.i64(), word_addr, "word")
+                    .map_err(|err| format!("{err}"))?
+                    .into_int_value(),
+            );
+        }
+        let same_word = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, words[0], words[1], "same_word")
+            .map_err(|err| format!("{err}"))?;
+        let is_none = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag_a,
+                self.i64().const_int(UNION_NONE_TAG, false),
+                "is_none",
+            )
+            .map_err(|err| format!("{err}"))?;
+        let equal = self
+            .builder
+            .build_or(same_word, is_none, "plain_equal")
+            .map_err(|err| format!("{err}"))?;
+        self.builder
+            .build_return(Some(&equal))
+            .map_err(|err| format!("{err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(eq_fn)
+    }
+
     /// Field-wise VALUE equality between two shape element pointers.
     ///
     /// v0.3-M5 P2 recorded decision: `contains` on `array<Shape>` compares element
@@ -4229,10 +7785,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// layout-correct for padded and unpadded shapes alike.
     ///
     /// Field payloads compare by BIT equality, matching the non-shape element cells
-    /// (float compares as its i64 bit pattern). Pointer-typed fields (string,
-    /// nested shape) compare by pointer identity — **D12 RATIFIED (P3 step 5(a),
-    /// final for M5)**: the by-value cut FORCED field-wise equality at the
-    /// element grain (pointer identity has no by-value analogue), but
+    /// (float compares as its i64 bit pattern). A `string` field compares by its bytes
+    /// (`ynz_string_eq`): every store copies a borrowed string (v0.3-M9 C3b), so two equal
+    /// strings are never one pointer. Other pointer-typed fields (nested shape) compare by
+    /// pointer identity — **D12 RATIFIED (P3 step 5(a), final for M5)**: the by-value cut
+    /// FORCED field-wise equality at the element grain (pointer identity has no by-value
+    /// analogue), but
     /// pointer-typed FIELDS underwent no repr change, so bit-identity is the
     /// minimal behavior-preserving semantics, consistent with the non-shape
     /// cells' bit-equality locked by the step-1 matrix goldens. Deep equality
@@ -4253,7 +7811,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .ok_or_else(|| format!("shape_value_eq: LLVM type for `{shape_name}` missing"))?;
         let shape_def = self
             .shape_table
-            .get(shape_name)
+            .layout_shape(shape_name)
             .ok_or_else(|| format!("shape_value_eq: shape `{shape_name}` not in table"))?
             .clone();
         let mut acc = self.bool().const_int(1, false);
@@ -4351,7 +7909,176 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                         .build_int_compare(IntPredicate::EQ, a, b, &format!("{site}_eq_{fname}"))
                         .map_err(|e| format!("{e}"))?
                 }
-                // Pointer payload (string, nested shape, bignum, everything else):
+                // An envelope union field is the inline slot: two slots are equal when their tags
+                // match and the stored variants are equal as values of that variant: a shape
+                // variant field by field (`shape_value_eq`, which skips the padding inside the
+                // shape and the unused bytes of a slot sized for a bigger variant), any other
+                // variant by its payload word (bit equality, like the pointer fields below), and
+                // `none` always. Every shape variant's comparison is straight-line loads from
+                // memory the slot owns, so the matching one is selected by tag.
+                union @ Type::Union { .. } if self.envelope_union_variants(union).is_some() => {
+                    let variants = self
+                        .envelope_union_variants(union)
+                        .ok_or("shape_value_eq: union lost its variants")?;
+                    let layout = self.union_layout(&variants)?;
+                    // A recursive union's shape variant can reach this very slot again, so
+                    // comparing it inline would never end: it compares through one function per
+                    // union, which reads a cell only when the tag says the slot owns one.
+                    if layout.boxed {
+                        let eq_fn = self.boxed_union_eq_fn(&variants)?;
+                        let equal = self
+                            .builder
+                            .build_call(
+                                eq_fn,
+                                &[a_gep.into(), b_gep.into()],
+                                &format!("{site}_ueq_{fname}"),
+                            )
+                            .map_err(|err| format!("{err}"))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or("boxed union equality returned void")?
+                            .into_int_value();
+                        acc = self
+                            .builder
+                            .build_and(acc, equal, &format!("{site}_acc_{fname}"))
+                            .map_err(|err| format!("{err}"))?;
+                        continue;
+                    }
+                    let tag_a = self
+                        .builder
+                        .build_load(self.i64(), a_gep, "ueq_ta")
+                        .map_err(|err| format!("{err}"))?
+                        .into_int_value();
+                    let tag_b = self
+                        .builder
+                        .build_load(self.i64(), b_gep, "ueq_tb")
+                        .map_err(|err| format!("{err}"))?
+                        .into_int_value();
+                    let same_tag = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, tag_a, tag_b, "ueq_tag")
+                        .map_err(|err| format!("{err}"))?;
+                    let payload_a = self.union_payload_addr(a_gep, &layout, "ueq_a")?;
+                    let payload_b = self.union_payload_addr(b_gep, &layout, "ueq_b")?;
+                    let word_a = self
+                        .builder
+                        .build_load(self.i64(), payload_a, "ueq_wa")
+                        .map_err(|err| format!("{err}"))?
+                        .into_int_value();
+                    let word_b = self
+                        .builder
+                        .build_load(self.i64(), payload_b, "ueq_wb")
+                        .map_err(|err| format!("{err}"))?
+                        .into_int_value();
+                    let same_word = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, word_a, word_b, "ueq_word")
+                        .map_err(|err| format!("{err}"))?;
+                    let is_none = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            tag_a,
+                            self.i64().const_int(UNION_NONE_TAG, false),
+                            "ueq_none",
+                        )
+                        .map_err(|err| format!("{err}"))?;
+                    // Not a shape variant: the payload word, or nothing for `none`.
+                    let mut variant_equal = self
+                        .builder
+                        .build_or(same_word, is_none, "ueq_plain")
+                        .map_err(|err| format!("{err}"))?;
+                    // A shape variant's fields are compared only when BOTH slots hold that
+                    // variant (a branch per variant): a string field compares through
+                    // `ynz_string_eq`, which must never read the bytes of another variant.
+                    for (index, variant_shape) in &layout.shape_variants {
+                        let (variant_a, variant_b) = (payload_a, payload_b);
+                        let is_variant = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::EQ,
+                                tag_a,
+                                self.i64().const_int(*index, false),
+                                "ueq_is_variant",
+                            )
+                            .map_err(|err| format!("{err}"))?;
+                        let both_this_variant = self
+                            .builder
+                            .build_and(is_variant, same_tag, "ueq_both_variant")
+                            .map_err(|err| format!("{err}"))?;
+                        let before_block = self
+                            .builder
+                            .get_insert_block()
+                            .ok_or("shape_value_eq: no insert block")?;
+                        let compare_block = self.append_block(&format!("{site}_ueq_cmp{index}"));
+                        let after_block = self.append_block(&format!("{site}_ueq_after{index}"));
+                        self.builder
+                            .build_conditional_branch(both_this_variant, compare_block, after_block)
+                            .map_err(|err| format!("{err}"))?;
+                        self.builder.position_at_end(compare_block);
+                        let shape_equal = self.shape_value_eq(
+                            variant_a,
+                            variant_b,
+                            variant_shape,
+                            &format!("{site}_u{index}"),
+                        )?;
+                        let compare_end_block = self
+                            .builder
+                            .get_insert_block()
+                            .ok_or("shape_value_eq: no insert block")?;
+                        self.builder
+                            .build_unconditional_branch(after_block)
+                            .map_err(|err| format!("{err}"))?;
+                        self.builder.position_at_end(after_block);
+                        let merged = self
+                            .builder
+                            .build_phi(self.ctx.bool_type(), "ueq_pick")
+                            .map_err(|err| format!("{err}"))?;
+                        merged.add_incoming(&[
+                            (&shape_equal, compare_end_block),
+                            (&variant_equal, before_block),
+                        ]);
+                        variant_equal = merged.as_basic_value().into_int_value();
+                    }
+                    self.builder
+                        .build_and(same_tag, variant_equal, "ueq_slot")
+                        .map_err(|err| format!("{err}"))?
+                }
+                // A string field compares by its bytes (`ynz_string_eq`, as `==` does): a store
+                // copies a borrowed string, so two shapes built from one string hold two
+                // pointers, and equal text must still be equal.
+                Type::String => {
+                    let left_string = self
+                        .builder
+                        .build_load(self.ptr(), a_gep, &format!("{site}_av_{fname}"))
+                        .map_err(|err| format!("{err}"))?;
+                    let right_string = self
+                        .builder
+                        .build_load(self.ptr(), b_gep, &format!("{site}_bv_{fname}"))
+                        .map_err(|err| format!("{err}"))?;
+                    let call = self
+                        .builder
+                        .build_call(
+                            self.rt.string_eq,
+                            &[left_string.into(), right_string.into()],
+                            &format!("{site}_seq_{fname}"),
+                        )
+                        .map_err(|err| format!("{err}"))?;
+                    let result = call
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or("shape_value_eq string_eq returned void")?
+                        .into_int_value();
+                    self.builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            result,
+                            self.i32().const_int(0, false),
+                            &format!("{site}_eq_{fname}"),
+                        )
+                        .map_err(|err| format!("{err}"))?
+                }
+                // Pointer payload (nested shape, bignum, everything else):
                 // pointer identity — the Risk-3 heap-field deferral.
                 _ => {
                     let a = self
@@ -4403,7 +8130,6 @@ fn lower_function<'ctx, 'g>(
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
     shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
-    mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
@@ -4414,6 +8140,7 @@ fn lower_function<'ctx, 'g>(
     no_auto_parallel: bool,
     m3d_spike: bool,
     layout: &'g ynz_typeck::soa::LayoutDecisions,
+    version: Option<&ynz_typeck::fixed_length::InstanceKey>,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -4431,7 +8158,6 @@ fn lower_function<'ctx, 'g>(
             shape_types,
             shape_abi_sizes,
             shape_field_abi,
-            mono_table,
             options_table,
             wait_cache,
             suspend_set,
@@ -4445,89 +8171,60 @@ fn lower_function<'ctx, 'g>(
         );
     }
 
+    // The symbol Pass 1 declared: the specialised version's (`name<3>`), or the function's own.
+    let version_symbol = version.map(|version| {
+        ynz_typeck::fixed_length::instance_symbol(&version.function, &version.lengths)
+    });
     let llvm_name = if f.name == "entrypoint" {
         "main"
     } else {
-        f.name.as_str()
+        version_symbol.as_deref().unwrap_or(f.name.as_str())
     };
     let fn_val = module
         .get_function(llvm_name)
-        .ok_or_else(|| format!("function `{}` was not forward-declared", f.name))?;
+        .ok_or_else(|| format!("function `{llvm_name}` was not forward-declared"))?;
 
-    let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+    let lengths = version_lengths(typed, f, version);
+    let ret_ty = substitute_lengths(&declared_return_type(typed, shape_table, f), &lengths);
     let is_main = f.name == "entrypoint";
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
     let is_errors_capable = f.errors_capable;
 
-    let mut cg = Cg {
+    let mut cg = plain_cg(
         ctx,
         module,
-        builder: ctx.create_builder(),
         rt,
         globals,
         typed,
-        current_fn: fn_val,
+        fn_val,
+        ret_ty,
         is_main,
-        current_fn_ret_ty: ret_ty,
-        locals: HashMap::new(),
+        is_errors_capable,
         shape_table,
         shape_types,
         shape_abi_sizes,
         shape_field_abi,
-        soa_bindings: HashMap::new(),
         layout,
-        type_subst: HashMap::new(),
-        mono_table,
         options_table,
-        is_errors_capable,
-        errors_capable_locals: std::collections::HashSet::new(),
-        bg_uid: 0,
-        arc_transients: HashMap::new(),
-        arc_pending_release: Vec::new(),
         wait_cache,
         suspend_set,
         base_suspends,
         frame_layouts,
         imported_fns,
-        sm_frame_ptr: None,
-        sm_yinz_ret_ty: None,
-        sm_crossing_names: None,
-        sm_crossing_scalar_set: HashSet::new(),
-        sm_crossing_bool_set: HashSet::new(),
-        sm_crossing_slot_indices: Vec::new(),
-        sm_crossing_decimal128_set: HashSet::new(),
-        sm_number_param_set: HashSet::new(),
-        sm_crossing_float_set: HashSet::new(),
-        sm_crossing_errors_capable_set: HashSet::new(),
-        sm_crossing_ec_number_set: HashSet::new(),
-        sm_crossing_ec_number_i128_allocas: HashMap::new(),
-        sm_crossing_shape_embed_set: HashSet::new(),
-        sm_crossing_ec_struct_allocas: HashMap::new(),
-        sm_crossing_shape_names: HashMap::new(),
-        sm_crossing_shape_allocas: HashMap::new(),
-        sm_scope_depth: 0,
-        sm_for_loop_counter: 0,
-        sm_number_errors_staging_offset: None,
-        // Non-SM functions cannot contain independent suspending groups.
-        no_auto_parallel: false,
-        // Non-SM functions have no frame and cannot yield — the documented residual.
-        back_edge_yield: false,
-        // sig_table unused for non-SM functions — independence analysis runs only in
-        // lower_sm_block which is never reached from the non-SM path.
         sig_table,
-        // Non-SM functions are never in the spike suspend_set extension, so m3d_spike
-        // only matters for SM functions. Forward the flag so future callers are consistent.
         m3d_spike,
-        m3d_spike_cpu_result_names: Vec::new(),
-        m3d_spike_cpu_result_allocas: HashMap::new(),
-        m3d_spike_fired: false,
-        // Non-SM functions never reach lower_sm_block — the M3g fused path is never consulted.
-        fused_group: None,
-        fused_group_fired: false,
-    };
+    );
+    cg.length_subst = lengths;
+    cg.instance_lengths = version
+        .map(|version| version.lengths.clone())
+        .unwrap_or_default();
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
+    #[cfg(test)]
+    if is_main {
+        run_cg_probe(&cg);
+    }
 
     // Initialize SipHash key from OS entropy before any map operations.
     // Also initialise the Tokio runtime (v0.3-M1: spawns the blocking thread pool).
@@ -4542,8 +8239,8 @@ fn lower_function<'ctx, 'g>(
 
     // M7 P4a: errors-capable functions push a frame on entry for the call trace.
     if is_errors_capable {
-        let file_g = build_string_global(ctx, module, f.name.as_str(), ".ec.file");
-        let fn_g = build_string_global(ctx, module, f.name.as_str(), ".ec.fn");
+        let file_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.file");
+        let fn_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.fn");
         cg.builder
             .build_call(
                 cg.rt.ynz_frame_push,
@@ -4562,16 +8259,12 @@ fn lower_function<'ctx, 'g>(
         let llvm_param = fn_val
             .get_nth_param(i as u32)
             .ok_or_else(|| format!("missing LLVM param {} for `{}`", i, f.name))?;
-        let param_ty = ast_type_to_typeck_type(&param.ty, shape_table);
+        let declared = declared_param_type(sig_table, shape_table, f, i);
+        let param_ty = cg.resolve_type(&declared);
         materialize_param(&mut cg, &param.name, llvm_param, &param_ty)?;
     }
 
-    for stmt in &f.body.stmts {
-        if is_block_terminated(&cg) {
-            break;
-        }
-        lower_stmt(&mut cg, stmt)?;
-    }
+    lower_block_stmts(&mut cg, &f.body)?;
 
     // Implicit terminator if the current block has no terminator yet.
     //
@@ -4595,7 +8288,7 @@ fn lower_function<'ctx, 'g>(
             cg.builder
                 .build_call(cg.rt.ynz_frame_pop, &[], "ec_pop_implicit")
                 .map_err(|e| format!("frame_pop: {e}"))?;
-            let zero_result = errors_result_type(ctx).const_zero();
+            let zero_result = cg.ec_result_llvm()?.const_zero();
             cg.builder
                 .build_return(Some(&zero_result))
                 .map_err(|e| format!("implicit ec ret: {e}"))?;
@@ -4610,6 +8303,299 @@ fn lower_function<'ctx, 'g>(
         }
     }
     Ok(())
+}
+
+/// Define one shape's hidden-defaults initializer (`ynz_defaults<shape:Name>(ptr instance)`):
+/// write every hidden field's default into the instance, its inherited fields' defaults too.
+///
+/// This is the ONLY place a hidden default is lowered. It runs in the module that declares the
+/// shape, so each default is lowered with that module's own typed data (expression types and the
+/// union coercion recorded at the default's span), and may call that module's private helpers.
+/// Every construction site, local or imported, calls it (`lower_struct_lit`).
+///
+/// The chain is walked child first; an ancestor's field that a nearer declaration re-declares is
+/// skipped, so the nearest declaration's default is the one stored. An ancestor not declared in
+/// this module is an error, never a silent skip: typeck requires `extends` to stay in one file,
+/// so reaching it means that rule was bypassed.
+///
+/// O(hidden fields + chain depth) time and space at compile time; the emitted function is one
+/// store per hidden field plus whatever its default expression costs. Per construction that is
+/// one direct call (~1 ns), plus, for a plain variant defaulted
+/// into a union that has a shape variant, two counted heap cells (~29 ns) until #423's inline
+/// envelope replaces the heap home.
+#[allow(clippy::too_many_arguments)]
+fn lower_shape_defaults_initializer<'ctx, 'g>(
+    ctx: &'ctx Context,
+    module: &'g Module<'ctx>,
+    rt: &'g RuntimeDecls<'ctx>,
+    globals: &'g ModuleGlobals<'ctx>,
+    typed: &'g TypedModule,
+    declaration: &ynz_ast::nodes::ShapeDecl,
+    shape_table: &'g ShapeTable,
+    shape_types: &'g ShapeLlvmTypes<'ctx>,
+    shape_abi_sizes: &'g HashMap<String, u64>,
+    shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
+    options_table: &'g ynz_typeck::options_table::OptionsTable,
+    wait_cache: &'g WaitCache,
+    suspend_set: &'g SuspendSet,
+    base_suspends: &'g SuspendSet,
+    frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    m3d_spike: bool,
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
+) -> Result<(), String> {
+    let shape_name = declaration.name.as_str();
+    let shape_def = shape_table
+        .get(shape_name)
+        .ok_or_else(|| format!("defaults of `{shape_name}`: shape not in table"))?;
+    let fn_val = shape_defaults_initializer(ctx, module, shape_def);
+    let struct_ty = *shape_types
+        .named
+        .get(shape_name)
+        .ok_or_else(|| format!("defaults of `{shape_name}`: LLVM type not found"))?;
+
+    let mut cg = plain_cg(
+        ctx,
+        module,
+        rt,
+        globals,
+        typed,
+        fn_val,
+        Type::Nothing,
+        false,
+        false,
+        shape_table,
+        shape_types,
+        shape_abi_sizes,
+        shape_field_abi,
+        layout,
+        options_table,
+        wait_cache,
+        suspend_set,
+        base_suspends,
+        frame_layouts,
+        imported_fns,
+        sig_table,
+        m3d_spike,
+    );
+    let entry = ctx.append_basic_block(fn_val, "entry");
+    cg.builder.position_at_end(entry);
+    let instance = fn_val
+        .get_nth_param(0)
+        .ok_or_else(|| format!("defaults of `{shape_name}`: missing instance parameter"))?
+        .into_pointer_value();
+
+    let mut visited_field_names: HashSet<&str> = HashSet::new();
+    let mut current: &ynz_ast::nodes::ShapeDecl = declaration;
+    loop {
+        for ast_field in &current.fields {
+            // A nearer declaration already owns this name.
+            if !visited_field_names.insert(ast_field.name.as_str()) || !ast_field.is_hidden {
+                continue;
+            }
+            let default_expr = ast_field.default.as_ref().ok_or_else(|| {
+                format!(
+                    "Hidden field `{}` of `{}` has no default value",
+                    ast_field.name, current.name
+                )
+            })?;
+            let field_idx = shape_def
+                .fields
+                .iter()
+                .position(|resolved_field| resolved_field.name == ast_field.name)
+                .ok_or_else(|| {
+                    format!(
+                        "defaults of `{shape_name}`: hidden field `{}` is not in the resolved shape",
+                        ast_field.name
+                    )
+                })?;
+            let field_ty = shape_def.fields[field_idx].ty.clone();
+            let field_slot = cg
+                .builder
+                .build_struct_gep(
+                    struct_ty,
+                    instance,
+                    field_idx as u32,
+                    &format!("{shape_name}.{}_default", ast_field.name),
+                )
+                .map_err(|err| format!("hidden default GEP `{}`: {err}", ast_field.name))?;
+            let lowered_default = lower_expr(&mut cg, default_expr)?;
+            // `lower_expr` wraps a plain variant in an envelope that is a slot in THIS frame, and
+            // this frame ends at the `ret`. `store_field` copies a union into the field's own
+            // 16 bytes and clones a shape payload into a heap cell, so nothing dies with it.
+            store_field(&mut cg, lowered_default, &field_ty, field_slot)?;
+        }
+        let Some((parent_name, _)) = &current.extends else {
+            break;
+        };
+        current = typed
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::ShapeDecl(candidate) if candidate.name == *parent_name => Some(candidate),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "defaults of `{shape_name}`: parent `{parent_name}` is not declared in the \
+                     module that declares `{shape_name}` — its hidden defaults cannot be lowered here"
+                )
+            })?;
+    }
+    cg.builder
+        .build_return(None)
+        .map_err(|err| format!("defaults of `{shape_name}`: ret: {err}"))?;
+    Ok(())
+}
+
+// A test hook: a function the entrypoint's lowering context is handed to, so a unit test can ask
+// the context for something no source program reaches yet (a release of an `errors` value, which
+// C7 first emits).
+#[cfg(test)]
+thread_local! {
+    static CG_PROBE: std::cell::Cell<Option<fn(&Cg<'_, '_>)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn run_cg_probe(cg: &Cg<'_, '_>) {
+    if let Some(probe) = CG_PROBE.with(|slot| slot.get()) {
+        probe(cg);
+    }
+}
+
+/// The lowering context for one plain (non-state-machine) function body: no frame, no
+/// state-machine slots, no fused groups. The ONE constructor `lower_function`,
+/// `lower_generic_function` and `lower_shape_defaults_initializer` share, so a field added to
+/// `Cg` is initialised once.
+///
+/// O(1) time and space.
+#[allow(clippy::too_many_arguments)]
+fn plain_cg<'ctx, 'g>(
+    ctx: &'ctx Context,
+    module: &'g Module<'ctx>,
+    rt: &'g RuntimeDecls<'ctx>,
+    globals: &'g ModuleGlobals<'ctx>,
+    typed: &'g TypedModule,
+    fn_val: FunctionValue<'ctx>,
+    ret_ty: Type,
+    is_main: bool,
+    is_errors_capable: bool,
+    shape_table: &'g ShapeTable,
+    shape_types: &'g ShapeLlvmTypes<'ctx>,
+    shape_abi_sizes: &'g HashMap<String, u64>,
+    shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
+    options_table: &'g ynz_typeck::options_table::OptionsTable,
+    wait_cache: &'g WaitCache,
+    suspend_set: &'g SuspendSet,
+    base_suspends: &'g SuspendSet,
+    frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    m3d_spike: bool,
+) -> Cg<'ctx, 'g> {
+    Cg {
+        ctx,
+        module,
+        builder: ctx.create_builder(),
+        rt,
+        globals,
+        typed,
+        current_fn: fn_val,
+        is_main,
+        current_fn_ret_ty: ret_ty,
+        locals: HashMap::new(),
+        shape_table,
+        shape_types,
+        shape_abi_sizes,
+        shape_field_abi,
+        soa_bindings: HashMap::new(),
+        layout,
+        type_subst: HashMap::new(),
+        length_subst: HashMap::new(),
+        instance_lengths: Vec::new(),
+        options_table,
+        is_errors_capable,
+        errors_capable_locals: std::collections::HashSet::new(),
+        ec_original_slots: HashMap::new(),
+        bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
+        owned_string_values: std::collections::HashSet::new(),
+        temporary_frames: Vec::new(),
+        open_loop_copies: Vec::new(),
+        loop_held: Vec::new(),
+        moved_cell_values: std::collections::HashSet::new(),
+        minted_maybe_copies: std::collections::HashSet::new(),
+        fresh_payload_maybes: std::collections::HashSet::new(),
+        taken_shape_cells: std::collections::HashSet::new(),
+        box_cell_views: std::collections::HashSet::new(),
+        wait_cache,
+        suspend_set,
+        base_suspends,
+        frame_layouts,
+        imported_fns,
+        sm_frame_ptr: None,
+        sm_yinz_ret_ty: None,
+        sm_crossing_names: None,
+        sm_crossing_scalar_set: HashSet::new(),
+        sm_crossing_bool_set: HashSet::new(),
+        sm_crossing_slot_indices: Vec::new(),
+        sm_param_names: Vec::new(),
+        sm_wait_temporary_base: 0,
+        sm_wait_temporary_next: 0,
+        sm_wait_temporary_end: 0,
+        wait_frame_marks: Vec::new(),
+        sm_crossing_decimal128_set: HashSet::new(),
+        sm_number_param_set: HashSet::new(),
+        sm_crossing_float_set: HashSet::new(),
+        sm_crossing_errors_capable_set: HashSet::new(),
+        sm_crossing_ec_number_set: HashSet::new(),
+        sm_crossing_ec_number_i128_allocas: HashMap::new(),
+        sm_crossing_shape_embed_set: HashSet::new(),
+        sm_crossing_ec_struct_allocas: HashMap::new(),
+        sm_crossing_shape_names: HashMap::new(),
+        sm_crossing_shape_allocas: HashMap::new(),
+        sm_region_flags: HashMap::new(),
+        sm_drop_cases: Vec::new(),
+        sm_crossing_shape_regions: HashMap::new(),
+        sm_crossing_maybe_regions: HashMap::new(),
+        sm_crossing_maybe_inner: HashMap::new(),
+        sm_crossing_fixed_regions: HashMap::new(),
+        maybe_env_dest: std::cell::Cell::new(None),
+        maybe_payload_dest: std::cell::Cell::new(None),
+        sm_crossing_unions: HashMap::new(),
+        sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
+        coercion_inner: None,
+        sm_for_loop_counter: 0,
+        sm_number_errors_staging_offset: None,
+        sm_union_regions: Vec::new(),
+        // Non-SM functions cannot contain independent suspending groups.
+        no_auto_parallel: false,
+        // Non-SM functions have no frame and cannot yield — the documented residual.
+        back_edge_yield: false,
+        // sig_table unused for non-SM functions — independence analysis runs only in
+        // lower_sm_block which is never reached from the non-SM path.
+        sig_table,
+        // Non-SM functions are never in the spike suspend_set extension, so m3d_spike
+        // only matters for SM functions. Forward the flag so future callers are consistent.
+        m3d_spike,
+        m3d_spike_cpu_result_names: Vec::new(),
+        m3d_spike_cpu_result_allocas: HashMap::new(),
+        m3d_spike_fired: false,
+        // Non-SM functions never reach lower_sm_block — the M3g fused path is never consulted.
+        fused_group: None,
+        fused_group_fired: false,
+        local_types: HashMap::new(),
+        string_take_slots: HashMap::new(),
+        handover_rows: HashMap::new(),
+        string_take_cells: HashMap::new(),
+        string_take_ec_words: HashMap::new(),
+        ec_borrowed_ok: HashSet::new(),
+    }
 }
 
 // ── v0.3-M2: state-machine function codegen ───────────────────────────────────
@@ -4669,7 +8655,6 @@ fn lower_function_with_waits<'ctx, 'g>(
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
     shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
-    mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
@@ -4735,6 +8720,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         &cpu_supported_refs,
         &typed.expr_types,
         back_edge_yield,
+        &typed
+            .release_plan
+            .reads(&f.name, ynz_typeck::release_plan::Names::Codegen),
     );
 
     // Slot index layout: params occupy slots [0..n_params), crossing locals occupy
@@ -4817,19 +8805,13 @@ fn lower_function_with_waits<'ctx, 'g>(
         let mut cursor = crossing_slot_base;
         for cname in &crossing_names {
             indices.push(cursor);
-            let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
-            let slots = match ty {
-                Some(Type::Number { precision }) if precision <= 34 => 2,
-                // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
-                Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
-                    3
-                }
-                // All other ErrorsCapable {i64,i64}: 2 frame slots for the two fields.
-                Some(Type::ErrorsCapable { .. }) => 2,
-                Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
-                _ => 1,
-            };
-            cursor += slots;
+            cursor += crossing_local_slot_count(
+                &f.body.stmts,
+                cname.as_str(),
+                typed,
+                shape_table,
+                shape_abi_sizes,
+            );
         }
         indices
     };
@@ -4837,12 +8819,16 @@ fn lower_function_with_waits<'ctx, 'g>(
     // For spike functions, the CPU-slot reserve is included so the fallback frame-size
     // formula (FRAME_HEADER_SIZE + own_locals_size(n_locals)) produces the right total
     // without double-counting spike_extra_frame_bytes.
+    let crossing_total_slots =
+        crossing_local_total_slots(f, &crossing_names, typed, shape_table, shape_abi_sizes);
+    // The frame slots of the temporaries of suspending statements follow the crossing locals.
+    let wait_temporary_base = crossing_slot_base + crossing_total_slots;
+    let wait_temporary_slots =
+        wait_temporary_slot_count(f, typed, suspend_set, back_edge_yield, shape_abi_sizes);
     let n_locals = if spike_active_here {
-        n_params
-            + spike_slot_reserve
-            + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
+        n_params + spike_slot_reserve + crossing_total_slots + wait_temporary_slots
     } else {
-        n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
+        n_params + crossing_total_slots + wait_temporary_slots
     };
 
     // Look up the composed frame layout for this function. The total_size covers
@@ -4939,6 +8925,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         .map(|i| ctx.append_basic_block(resume_fn, &format!("sm_s{i}")))
         .collect();
     let dead_block = ctx.append_basic_block(resume_fn, "sm_dead");
+    // A dropped task presents the complement of its resume point (negative), which no state
+    // case matches: the default target dispatches it to the state's drop entry (C8 slice 6).
+    let drop_dispatch_block = ctx.append_basic_block(resume_fn, "sm_drop_dispatch");
 
     // Pending return block: returns 1 (Pending) to the outer driver.
     let pending_block = ctx.append_basic_block(resume_fn, "sm_pending");
@@ -4958,7 +8947,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             inner: Box::new(inner),
         }
     } else {
-        ast_type_to_typeck_type(&f.return_type, shape_table)
+        declared_return_type(typed, shape_table, f)
     };
 
     // frame_ptr_for_resume is not available until Part 2 — we'll thread it through
@@ -4984,7 +8973,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
-        mono_table,
+        length_subst: HashMap::new(),
+        instance_lengths: Vec::new(),
         options_table,
         // is_errors_capable = false inside the resume fn: the SM return path handles
         // errors-capable results explicitly (stores {i64,i64} in return slot). Keeping
@@ -4992,9 +8982,19 @@ fn lower_function_with_waits<'ctx, 'g>(
         // conflicts with the resume fn's `i32` return type.
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
+        ec_original_slots: HashMap::new(),
         bg_uid: 0,
         arc_transients: HashMap::new(),
         arc_pending_release: Vec::new(),
+        owned_string_values: std::collections::HashSet::new(),
+        temporary_frames: Vec::new(),
+        open_loop_copies: Vec::new(),
+        loop_held: Vec::new(),
+        moved_cell_values: std::collections::HashSet::new(),
+        minted_maybe_copies: std::collections::HashSet::new(),
+        fresh_payload_maybes: std::collections::HashSet::new(),
+        taken_shape_cells: std::collections::HashSet::new(),
+        box_cell_views: std::collections::HashSet::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -5006,6 +9006,11 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_scalar_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_bool_set: HashSet::new(),   // populated during alloca creation below
         sm_crossing_slot_indices: crossing_slot_indices.clone(),
+        sm_param_names: param_names.clone(),
+        sm_wait_temporary_base: wait_temporary_base,
+        sm_wait_temporary_next: wait_temporary_base,
+        sm_wait_temporary_end: wait_temporary_base + wait_temporary_slots,
+        wait_frame_marks: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(), // populated during alloca creation below
         sm_number_param_set: HashSet::new(),        // populated during param alloca creation below
         sm_crossing_float_set: HashSet::new(),      // populated during alloca creation below
@@ -5014,11 +9019,25 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_ec_struct_allocas: HashMap::new(), // populated during alloca creation below
         sm_crossing_shape_names: HashMap::new(),    // populated during alloca creation below
         sm_crossing_shape_allocas: HashMap::new(),  // populated during alloca creation below
-        sm_crossing_ec_number_set: HashSet::new(),  // populated during alloca creation below
+        sm_region_flags: HashMap::new(),
+        sm_drop_cases: Vec::new(),
+        sm_crossing_shape_regions: HashMap::new(),
+        sm_crossing_maybe_regions: HashMap::new(),
+        sm_crossing_maybe_inner: HashMap::new(),
+        sm_crossing_fixed_regions: HashMap::new(),
+        maybe_env_dest: std::cell::Cell::new(None),
+        maybe_payload_dest: std::cell::Cell::new(None),
+        sm_crossing_unions: HashMap::new(), // populated in Step 1b' below
+        sm_crossing_ec_number_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
+        coercion_inner: None,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
+        sm_union_regions: frame_layout
+            .map(|layout| layout.union_regions.clone())
+            .unwrap_or_default(),
         // When set, lower_sm_block skips independence analysis and lowers all stmts
         // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
         no_auto_parallel,
@@ -5041,6 +9060,12 @@ fn lower_function_with_waits<'ctx, 'g>(
         // only fires for a group gate 1 actually allocated state slots and frame reserve for.
         fused_group: fused_candidates.clone(),
         fused_group_fired: false,
+        local_types: HashMap::new(),
+        string_take_slots: HashMap::new(),
+        handover_rows: HashMap::new(),
+        string_take_cells: HashMap::new(),
+        string_take_ec_words: HashMap::new(),
+        ec_borrowed_ok: HashSet::new(),
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -5120,9 +9145,9 @@ fn lower_function_with_waits<'ctx, 'g>(
             // union-ANNOTATED crossing local's RHS types as the CONCRETE variant shape
             // (`let fig: Figure = s` types as `Square`), which would misclassify the
             // binding into `shape_embed_set` — but its storage is the union {tag,data}
-            // heap cell (bind-time promotion in the union-ctor Let arm), never
+            // heap cell (bind-time promotion in `store_binding`), never
             // embeddable shape bytes. Resolve the Let's annotation through the SAME
-            // finder the typeck guards use and the SAME resolver the union-ctor arm
+            // finder the typeck guards use and the SAME resolver the annotated `let`
             // uses (`ast_type_to_typeck_type` — one source, no twin); a Union
             // annotation routes the binding to the pointer-alloca strategy (the
             // default arm below), same as maybe.
@@ -5319,8 +9344,9 @@ fn lower_function_with_waits<'ctx, 'g>(
             // address up to `FRAME_SHAPE_REGION_ALIGN` inside the slack
             // `shape_frame_slots` reserved. Every consumer below reads this pointer
             // from the ptr alloca; nothing recomputes it from `slot_idx`.
+            // The local's first frame slot is its moved flag; the region follows it.
             let frame_slot_byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
-                + (slot_idx as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+                + ((slot_idx + 1) as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
             let shape_region_ptr = state_machine::shape_frame_region_ptr(
                 ctx,
                 &cg_resume.builder,
@@ -5340,7 +9366,140 @@ fn lower_function_with_waits<'ctx, 'g>(
                 .builder
                 .build_store(*alloca, shape_region_ptr)
                 .map_err(|e| format!("sm shape wire store {cname}: {e}"))?;
+            cg_resume.sm_region_flags.insert(cname.clone(), slot_idx);
+            cg_resume
+                .sm_crossing_shape_regions
+                .insert(cname.clone(), shape_region_ptr);
         }
+    }
+
+    // Step 1b' — Locate the frame region of every crossing local that holds an envelope union.
+    //
+    // The region (`union_frame_slots` slots after the local's own slots) is the persistent home
+    // of the union's value: a bind persists the value into it (`Cg::flush_crossing_union`) and
+    // every resume reads a view of it back, so no pointer into a dead resume stack and no heap
+    // cell outlives a suspension. Computed here, in sm_entry, so it dominates every state.
+    {
+        let mut crossing_unions: HashMap<String, CrossingUnion<'ctx>> = HashMap::new();
+        let mut region_flags: HashMap<String, usize> = HashMap::new();
+        for (pos, cname) in crossing_names.iter().enumerate() {
+            let Some(ty) = crossing_frame_type(&f.body.stmts, cname, typed, shape_table) else {
+                continue;
+            };
+            let Some(variants) = crossing_union_variants(&ty) else {
+                continue;
+            };
+            let errors = matches!(ty, Type::ErrorsCapable { .. });
+            if !shape_abi_sizes.contains_key(&crate::shape_types::union_key(&variants)) {
+                return Err(format!(
+                    "codegen: crossing local `{cname}` of `{}` holds a union the frame layout \
+                     did not size; the layout and the lowering disagree, a compiler bug",
+                    f.name
+                ));
+            }
+            // An `errors` result keeps its `{err, ok}` words in the first two slots; any other union
+            // keeps its moved flag in the first (`Cg::sm_region_flags`).
+            let region_slot = crossing_slot_indices[pos] + if errors { 2 } else { 1 };
+            if !errors {
+                region_flags.insert(cname.clone(), crossing_slot_indices[pos]);
+            }
+            let region_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + (region_slot as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                region_offset,
+                &format!("{cname}_union"),
+            )?;
+            crossing_unions.insert(
+                cname.clone(),
+                CrossingUnion {
+                    variants,
+                    errors,
+                    region,
+                },
+            );
+        }
+        cg_resume.sm_crossing_unions = crossing_unions;
+        cg_resume.sm_region_flags.extend(region_flags);
+    }
+
+    // Step 1b'' — Locate the frame region of every crossing `maybe` local: the moved flag slot, then
+    // the 16-byte envelope and the payload bytes a shape or decimal payload needs. The local's
+    // alloca is wired to the region as a shape's is; a bind copies into it (`maybe_env_dest`), so no
+    // heap cell is allocated for the envelope. Computed here, in sm_entry, so it dominates every state.
+    {
+        let mut maybe_regions: HashMap<String, PointerValue<'ctx>> = HashMap::new();
+        let mut maybe_inner: HashMap<String, Type> = HashMap::new();
+        for (pos, cname) in crossing_names.iter().enumerate() {
+            let Some(Type::Maybe { inner }) =
+                crossing_frame_type(&f.body.stmts, cname, typed, shape_table)
+            else {
+                continue;
+            };
+            if maybe_region_payload_bytes(&inner, shape_abi_sizes).is_none() {
+                continue;
+            }
+            let slot_idx = crossing_slot_indices[pos];
+            let region_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + ((slot_idx + 1) as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                region_offset,
+                &format!("{cname}_maybe"),
+            )?;
+            let alloca = *cg_resume
+                .locals
+                .get(cname)
+                .ok_or_else(|| format!("sm maybe wire: alloca for `{cname}` missing"))?;
+            cg_resume
+                .builder
+                .build_store(alloca, region)
+                .map_err(|e| format!("sm maybe wire store {cname}: {e}"))?;
+            cg_resume.sm_region_flags.insert(cname.clone(), slot_idx);
+            maybe_regions.insert(cname.clone(), region);
+            maybe_inner.insert(cname.clone(), (*inner).clone());
+        }
+        cg_resume.sm_crossing_maybe_regions = maybe_regions;
+        cg_resume.sm_crossing_maybe_inner = maybe_inner;
+    }
+
+    // Step 1b''' — the frame region of every crossing `fixed` list local, wired like a `maybe`'s.
+    {
+        let mut fixed_regions: HashMap<String, (PointerValue<'ctx>, u64)> = HashMap::new();
+        for (pos, cname) in crossing_names.iter().enumerate() {
+            let Some(Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            }) = crossing_frame_type(&f.body.stmts, cname, typed, shape_table)
+            else {
+                continue;
+            };
+            let slot_idx = crossing_slot_indices[pos];
+            let region_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + ((slot_idx + 1) as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                region_offset,
+                &format!("{cname}_fixed"),
+            )?;
+            let alloca = *cg_resume
+                .locals
+                .get(cname)
+                .ok_or_else(|| format!("sm fixed wire: alloca for `{cname}` missing"))?;
+            cg_resume
+                .builder
+                .build_store(alloca, region)
+                .map_err(|e| format!("sm fixed wire store {cname}: {e}"))?;
+            cg_resume.sm_region_flags.insert(cname.clone(), slot_idx);
+            fixed_regions.insert(cname.clone(), (region, fixed_region_bytes(&elem, count)));
+        }
+        cg_resume.sm_crossing_fixed_regions = fixed_regions;
     }
 
     // Step 2 — Emit the switch on resume_point (still in sm_entry, after allocas).
@@ -5356,7 +9515,7 @@ fn lower_function_with_waits<'ctx, 'g>(
             .collect();
         cg_resume
             .builder
-            .build_switch(rp, dead_block, &cases)
+            .build_switch(rp, drop_dispatch_block, &cases)
             .map_err(|e| format!("sm switch: {e}"))?;
     }
 
@@ -5390,18 +9549,15 @@ fn lower_function_with_waits<'ctx, 'g>(
             state_machine::load_local_slot(ctx, &cg_resume.builder, frame_param, slot_idx, pname)?;
         let param_decl = &f.params[slot_idx];
         let param_ty = ast_type_to_typeck_type(&param_decl.ty, shape_table);
-        // Reconstruct the LLVM value from i64 bits, then store into the alloca.
-        let val = cg_resume
-            .i64_bits_to(bits, &param_ty)
-            .map_err(|e| format!("sm param reconstruct: {e}"))?;
         let alloca = *cg_resume
             .locals
             .get(pname)
             .ok_or_else(|| format!("sm: alloca for {pname} not found"))?;
-        // Store directly regardless of type (the alloca is i64; store the raw bits).
+        // Store directly regardless of type (the alloca is i64; store the raw bits; a union
+        // parameter's frame bits name its slot, which the alloca holds as a view).
         let bits_for_store = cg_resume
-            .to_i64_bits(val, &param_ty)
-            .map_err(|e| format!("sm param to_bits: {e}"))?;
+            .sm_param_bits(bits, &param_ty)
+            .map_err(|err| format!("sm param bits: {err}"))?;
         cg_resume
             .builder
             .build_store(alloca, bits_for_store)
@@ -5409,6 +9565,27 @@ fn lower_function_with_waits<'ctx, 'g>(
     }
 
     // Emit the function body statements, intercepting waits at the right state boundaries.
+    // State 0 (never polled) drop entry: the parameters the function owns.
+    {
+        let resume_block = cg_resume
+            .builder
+            .get_insert_block()
+            .ok_or("drop state 0: no insert block")?;
+        register_drop_state(
+            &mut cg_resume,
+            f,
+            &param_names,
+            shape_table,
+            frame_param,
+            f.body.span.start,
+            0,
+            &[],
+            &[],
+            false,
+        )?;
+        cg_resume.builder.position_at_end(resume_block);
+    }
+
     // crossing_names is threaded through so lower_sm_body can flush/reload crossing locals
     // at suspension boundaries.
     lower_sm_body(
@@ -5422,6 +9599,22 @@ fn lower_function_with_waits<'ctx, 'g>(
         f,
         shape_table,
     )?;
+
+    // The drop dispatch: the complement of each registered state's resume point selects its
+    // drop entry; any other value (a state with no entry yet) returns Ready, releasing nothing.
+    {
+        let builder = ctx.create_builder();
+        builder.position_at_end(drop_dispatch_block);
+        let rp = state_machine::load_resume_point(ctx, &builder, frame_param)?;
+        let cases: Vec<_> = cg_resume
+            .sm_drop_cases
+            .iter()
+            .map(|(value, bb)| (ctx.i32_type().const_int(*value as u64, false), *bb))
+            .collect();
+        builder
+            .build_switch(rp, dead_block, &cases)
+            .map_err(|e| format!("sm drop dispatch: {e}"))?;
+    }
 
     // ── Part 2: Generate the wrapper function ──────────────────────────────────
 
@@ -5454,8 +9647,36 @@ fn lower_function_with_waits<'ctx, 'g>(
             .get_nth_param(slot_idx as u32)
             .ok_or_else(|| format!("wrapper: missing param {slot_idx}"))?;
         let param_ty = ast_type_to_typeck_type(&param.ty, shape_table);
-        let bits = value_to_i64_bits(&builder, ctx.i64_type(), llvm_param, &param_ty)
-            .map_err(|e| format!("param to bits: {e}"))?;
+        let bits = if let Some(variants) = cg_resume.envelope_union_variants(&param_ty) {
+            // An envelope-union parameter is written into this frame's own `Param` region
+            // (the resume function reads its slot there). The persist emission is the resume
+            // function's `Cg`, pointed at the wrapper for this one call.
+            let wrapper_block = builder
+                .get_insert_block()
+                .ok_or("wrapper: builder has no insert block")?;
+            cg_resume.builder.position_at_end(wrapper_block);
+            let resume_function = cg_resume.current_fn;
+            cg_resume.current_fn = wrapper_fn;
+            let staged = cg_resume.stage_union_arg(
+                llvm_param.into_pointer_value(),
+                &variants,
+                &f.name,
+                slot_idx,
+                frame_ptr,
+            );
+            cg_resume.current_fn = resume_function;
+            let staged = staged?;
+            builder.position_at_end(
+                cg_resume
+                    .builder
+                    .get_insert_block()
+                    .ok_or("wrapper: union staging left no insert block")?,
+            );
+            staged
+        } else {
+            value_to_i64_bits(&builder, ctx.i64_type(), llvm_param, &param_ty)
+                .map_err(|err| format!("param to bits: {err}"))?
+        };
         state_machine::store_local_slot(ctx, &builder, frame_ptr, slot_idx, bits)?;
     }
 
@@ -5481,7 +9702,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Read the typed return value from the return slot at offset 16.
     // The resume function stored the typed value there (instead of the old i32-truncation
     // into frame[0] which was the i32-truncation defect fixed in Phase 7).
-    let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+    let ret_ty = declared_return_type(typed, shape_table, f);
     let is_errors_capable = f.errors_capable;
 
     // Free the frame before constructing the return value — the frame slots were already
@@ -5518,6 +9739,79 @@ fn lower_function_with_waits<'ctx, 'g>(
         // no staging slot is involved, so the two-step read-then-free is safe as-is.
         let (err_i64, mut ok_i64) =
             state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+
+        // C1f (#423): an envelope union success value is the slot in the frame's `Return`
+        // region (the ok word is its address, 0 on a failed call). The wrapper returns the
+        // by-value `{ err, slot }` (`ec_result_type`), copying the slot out before the frame is
+        // freed.
+        // A `maybe` of one rides the same way (`none` its none tag).
+        let slot_union = match &ret_ty {
+            Type::Maybe { inner } => inner.as_ref(),
+            other => other,
+        };
+        if let Type::Union { variants } = slot_union {
+            if ynz_typeck::check::is_envelope_union(slot_union) {
+                let layout = shape_types.union_layout(variants)?;
+                let slot_ty = shape_types.union_slot_llvm(ctx, &layout);
+                let result_ty = ec_result_type(ctx, shape_types, &ret_ty)?;
+                let slot = builder
+                    .build_alloca(slot_ty, "wrap_ec_union_slot")
+                    .map_err(|err| format!("ec wrapper union slot: {err}"))?;
+                builder
+                    .build_store(slot, slot_ty.const_zero())
+                    .map_err(|err| format!("ec wrapper union zero: {err}"))?;
+                let is_ok = builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err_i64,
+                        ctx.i64_type().const_zero(),
+                        "wrap_ec_union_isok",
+                    )
+                    .map_err(|err| format!("ec wrapper union isok: {err}"))?;
+                let copy_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_union_copy");
+                let merge_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_union_merge");
+                builder
+                    .build_conditional_branch(is_ok, copy_bb, merge_bb)
+                    .map_err(|err| format!("ec wrapper union branch: {err}"))?;
+                builder.position_at_end(copy_bb);
+                let region = builder
+                    .build_int_to_ptr(
+                        ok_i64,
+                        ctx.ptr_type(AddressSpace::default()),
+                        "wrap_ec_union_region",
+                    )
+                    .map_err(|err| format!("ec wrapper union region: {err}"))?;
+                builder
+                    .build_memcpy(
+                        slot,
+                        1,
+                        region,
+                        1,
+                        ctx.i64_type().const_int(layout.slot_size, false),
+                    )
+                    .map_err(|err| format!("ec wrapper union copy: {err}"))?;
+                builder
+                    .build_unconditional_branch(merge_bb)
+                    .map_err(|err| format!("ec wrapper union copy->merge: {err}"))?;
+                builder.position_at_end(merge_bb);
+                let slot_value = builder
+                    .build_load(slot_ty, slot, "wrap_ec_union_value")
+                    .map_err(|err| format!("ec wrapper union load: {err}"))?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                let with_err = builder
+                    .build_insert_value(result_ty.const_zero(), err_i64, 0, "wrap_ec_union_err")
+                    .map_err(|err| format!("ec wrapper union err: {err}"))?
+                    .into_struct_value();
+                let result = builder
+                    .build_insert_value(with_err, slot_value, 1, "wrap_ec_union_ok")
+                    .map_err(|err| format!("ec wrapper union ok: {err}"))?
+                    .into_struct_value();
+                builder
+                    .build_return(Some(&result))
+                    .map_err(|err| format!("ec wrapper union ret: {err}"))?;
+                return Ok(());
+            }
+        }
 
         // `-> number errors`: copy the i128 out of the staging slot before freeing the frame.
         let is_number_errors_inner =
@@ -5666,6 +9960,104 @@ fn lower_function_with_waits<'ctx, 'g>(
                 builder
                     .build_return(Some(&i128_val))
                     .map_err(|e| format!("wrapper number ret: {e}"))?;
+            }
+            // C1f (#423): the resume fn wrote the union's slot into the frame's `Return` region
+            // and put its address in the return slot. Load the slot BY VALUE (per
+            // `abi_return_type`) before the frame is freed. The region is only 8-aligned inside
+            // the composed frame, so the load claims no more.
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(&ret_ty) => {
+                let layout = shape_types.union_layout(variants)?;
+                let slot_ty = shape_types.union_slot_llvm(ctx, &layout);
+                let region_bits = state_machine::load_return_value_i64(
+                    ctx,
+                    &builder,
+                    frame_ptr,
+                    "ret_union_bits",
+                )?;
+                let region = builder
+                    .build_int_to_ptr(
+                        region_bits,
+                        ctx.ptr_type(AddressSpace::default()),
+                        "ret_union_region",
+                    )
+                    .map_err(|err| format!("wrapper union region cast: {err}"))?;
+                let slot_value = builder
+                    .build_load(slot_ty, region, "ret_union_slot")
+                    .map_err(|err| format!("wrapper union load: {err}"))?;
+                slot_value
+                    .as_instruction_value()
+                    .ok_or("wrapper union load: no instruction value")?
+                    .set_alignment(8)
+                    .map_err(|err| format!("wrapper union load alignment: {err}"))?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder
+                    .build_return(Some(&slot_value))
+                    .map_err(|err| format!("wrapper union ret: {err}"))?;
+            }
+            // C1h (#433): a `fixed` list of known length: the resume fn copied its cells into the
+            // frame's `Return` region and put the region's address in the return slot. Load the
+            // cells BY VALUE (per `abi_return_type`) before the frame is freed.
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } => {
+                let cells_ty = ctx.i64_type().array_type(fixed_cell_words(elem, *count));
+                let region_bits = state_machine::load_return_value_i64(
+                    ctx,
+                    &builder,
+                    frame_ptr,
+                    "ret_fixed_bits",
+                )?;
+                let region = builder
+                    .build_int_to_ptr(
+                        region_bits,
+                        ctx.ptr_type(AddressSpace::default()),
+                        "ret_fixed_region",
+                    )
+                    .map_err(|err| format!("wrapper fixed region cast: {err}"))?;
+                let cells = load_fixed_cells(&builder, cells_ty, region, "ret_fixed_cells")?;
+                // An empty list has no load to align (`load_fixed_cells` read nothing).
+                if let Some(load) = cells.as_instruction_value() {
+                    load.set_alignment(8)
+                        .map_err(|err| format!("wrapper fixed load alignment: {err}"))?;
+                }
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder
+                    .build_return(Some(&cells))
+                    .map_err(|err| format!("wrapper fixed ret: {err}"))?;
+            }
+            // A `maybe` of an envelope union: the slot rides the `Return` region like a union's.
+            Type::Maybe { inner } if ynz_typeck::check::is_envelope_union(inner) => {
+                let Type::Union { variants } = inner.as_ref() else {
+                    return Err("wrapper maybe union return: lost the variants".to_string());
+                };
+                let layout = shape_types.union_layout(variants)?;
+                let slot_ty = shape_types.union_slot_llvm(ctx, &layout);
+                let region_bits = state_machine::load_return_value_i64(
+                    ctx,
+                    &builder,
+                    frame_ptr,
+                    "ret_maybe_union_bits",
+                )?;
+                let region = builder
+                    .build_int_to_ptr(
+                        region_bits,
+                        ctx.ptr_type(AddressSpace::default()),
+                        "ret_maybe_union_region",
+                    )
+                    .map_err(|err| format!("wrapper maybe union region cast: {err}"))?;
+                let slot_value = builder
+                    .build_load(slot_ty, region, "ret_maybe_union_slot")
+                    .map_err(|err| format!("wrapper maybe union load: {err}"))?;
+                slot_value
+                    .as_instruction_value()
+                    .ok_or("wrapper maybe union load: no instruction value")?
+                    .set_alignment(8)
+                    .map_err(|err| format!("wrapper maybe union load alignment: {err}"))?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder
+                    .build_return(Some(&slot_value))
+                    .map_err(|err| format!("wrapper maybe union ret: {err}"))?;
             }
             Type::Maybe { .. } => {
                 // v0.3-M7 R9: the resume fn stored the maybe envelope's (flag, bits)
@@ -5880,17 +10272,32 @@ fn count_suspension_expr(
 /// suspension-source arm)? One helper so every routing site stays in lock-step
 /// (authoritative-derivation: never a per-site re-derived disjunct).
 fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
+    stmt_needs_sm_walker_for(
+        cg.suspend_set,
+        &cg.typed.expr_types,
+        cg.back_edge_yield,
+        stmt,
+    )
+}
+
+/// `stmt_needs_sm_walker` without a `Cg`: the frame layout counts the frame slots of a suspending
+/// statement's temporaries (`wait_temporary_slot_count`) with the SAME predicate the resume
+/// function routes by, never a second copy of it.
+fn stmt_needs_sm_walker_for(
+    suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
+    back_edge_yield: bool,
+    stmt: &Stmt,
+) -> bool {
     stmt_contains_wait(stmt)
-        || stmt_contains_suspending_call(stmt, cg.suspend_set, &cg.typed.expr_types)
-        || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
+        || stmt_contains_suspending_call(stmt, suspend_set, expr_types)
+        || ynz_typeck::stmt_contains_conduit_suspend(stmt, expr_types)
         // v0.3-M7 Phase 6: in an ADMITTED function, a statement that IS or CONTAINS a
         // qualifying loop routes through the SM walker so the loop reaches its SM arm's
         // back-edge poll-yield (a wait-free `if` wrapping a hot loop must not strand the
         // loop in plain lowering). THE one containment predicate — never re-derived.
-        || (cg.back_edge_yield
-            && ynz_typeck::stmt_contains_back_edge_yield(stmt, &cg.typed.expr_types))
+        || (back_edge_yield && ynz_typeck::stmt_contains_back_edge_yield(stmt, expr_types))
 }
-
 /// True if the statement contains a direct call to a suspending user-defined function.
 ///
 /// Used alongside `stmt_contains_wait` to detect suspension points that don't have an
@@ -5945,11 +10352,10 @@ fn reload_params_from_frame<'ctx>(
         let bits = state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, pname)?;
         let param_decl = &f.params[slot_idx];
         let param_ty = ast_type_to_typeck_type(&param_decl.ty, shape_table);
-        let alloca = *cg
-            .locals
-            .get(pname)
+        let alloca = cg
+            .reload_slot(pname)
             .ok_or_else(|| format!("sm reload: alloca for {pname} missing"))?;
-        let bits_to_store = cg.to_i64_bits(cg.i64_bits_to(bits, &param_ty)?, &param_ty)?;
+        let bits_to_store = cg.sm_param_bits(bits, &param_ty)?;
         cg.builder
             .build_store(alloca, bits_to_store)
             .map_err(|e| format!("sm reload store {pname}: {e}"))?;
@@ -5982,7 +10388,7 @@ fn reload_params_from_frame<'ctx>(
                 let slot_idx = slot_indices[i];
                 let bits =
                     state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, cname)?;
-                if let Some(&alloca) = cg.locals.get(cname) {
+                if let Some(alloca) = cg.reload_slot(cname) {
                     let is_int = scalar_set.contains(cname.as_str());
                     let is_bool = bool_set.contains(cname.as_str());
                     let is_float = float_set.contains(cname.as_str());
@@ -6150,6 +10556,13 @@ fn reload_params_from_frame<'ctx>(
                             cg.builder
                                 .build_store(f1_ptr, f1_as_i64)
                                 .map_err(|e| format!("reload ec num f1 store {cname}: {e}"))?;
+                        } else if cg.sm_crossing_unions.contains_key(cname.as_str()) {
+                            // `errors` union result: `ok` is a view of the frame region, rebuilt
+                            // here because the view pointer died with the previous resume.
+                            let ok_word = cg.crossing_union_ok_word(cname, bits)?;
+                            cg.builder.build_store(f1_ptr, ok_word).map_err(|err| {
+                                format!("reload ec union ok store {cname}: {err}")
+                            })?;
                         } else {
                             // All other ErrorsCapable: slot N+1 holds f1 (ok-word as i64).
                             let hi_bits = state_machine::load_local_slot(
@@ -6167,11 +10580,41 @@ fn reload_params_from_frame<'ctx>(
                         cg.builder
                             .build_store(alloca, struct_alloca)
                             .map_err(|e| format!("reload ec ptr store {cname}: {e}"))?;
+                    } else if cg.sm_crossing_unions.contains_key(cname.as_str()) {
+                        // Envelope union: a view of the frame region, rebuilt because the
+                        // view pointer died with the previous resume.
+                        let view = cg.reload_crossing_union(cname)?;
+                        // A union that was moved or released reads back as no value: the moved flag
+                        // (`bits`, the first slot) outlives the resume, the null in the local does not.
+                        let view = cg.null_if_moved(bits, view, cname)?;
+                        cg.builder.build_store(alloca, view).map_err(|err| {
+                            format!("sm crossing reload union store {cname}: {err}")
+                        })?;
+                    } else if let Some((region, _)) =
+                        cg.sm_crossing_fixed_regions.get(cname.as_str()).copied()
+                    {
+                        // A `fixed` list homed in a frame region: re-wired like a `maybe`.
+                        let wired = cg.null_if_moved(bits, region, cname)?;
+                        cg.builder.build_store(alloca, wired).map_err(|err| {
+                            format!("sm crossing reload fixed store {cname}: {err}")
+                        })?;
+                    } else if let Some(region) =
+                        cg.sm_crossing_maybe_regions.get(cname.as_str()).copied()
+                    {
+                        // A `maybe` homed in a frame region: re-wired like a shape; null once moved.
+                        let wired = cg.null_if_moved(bits, region, cname)?;
+                        cg.builder.build_store(alloca, wired).map_err(|err| {
+                            format!("sm crossing reload maybe store {cname}: {err}")
+                        })?;
                     } else if is_shape_embed {
-                        // Shape crossing local: frame-embedded. The ptr alloca is re-wired
-                        // to the frame's slot region in Step 1b on every resume call — no
-                        // reload needed here. The alloca already holds the correct ptr.
-                        // This is a no-op for shape crossing locals.
+                        // Shape crossing local: frame-embedded. The ptr alloca is re-wired to the
+                        // frame's slot region in Step 1b on every resume call; a shape that was
+                        // moved or released reads back as null (the moved flag is `bits`).
+                        let region = cg.crossing_shape_region(cname)?;
+                        let wired = cg.null_if_moved(bits, region, cname)?;
+                        cg.builder.build_store(alloca, wired).map_err(|err| {
+                            format!("sm crossing reload shape store {cname}: {err}")
+                        })?;
                     } else {
                         // Pointer alloca (string/array/map/etc.): reconstruct ptr from i64.
                         let ptr_val = cg
@@ -6203,6 +10646,454 @@ fn reload_params_from_frame<'ctx>(
             }
         }
     } // end reload_crossing guard
+    cg.renarrow_union_locals()
+}
+
+/// The callee frame a parked parent is awaiting, for the parent's drop entry to drop in turn.
+#[derive(Clone, Copy)]
+enum DropChild {
+    /// An embedded sub-frame at this byte offset of the parent frame.
+    Embedded { offset: u64 },
+    /// A heap-boxed recursive child whose pointer sits at this byte offset of the parent frame.
+    Boxed { offset: u64 },
+}
+
+/// One awaited callee of a drop state: its frame, its resume function (the entry that drops it) and,
+/// for a member of a group, the type of the value it hands back. A group member may have returned
+/// already, with its result still in its return slot because the group binds results only once every
+/// member is done: the drop state then releases that value instead of re-entering the member.
+struct DropMember<'ctx> {
+    child: DropChild,
+    resume: FunctionValue<'ctx>,
+    returned_value: Option<Type>,
+}
+
+/// One CPU member of a group, for a drop state: a task parked at the group's join still holds the
+/// member's join handle (the runtime detaches it with the frame) until the member is polled Ready,
+/// which nulls the handle slot and leaves the result in its result slot until the group binds
+/// it. A null handle therefore means "finished, result unclaimed": the drop state releases that value.
+struct CpuDropMember {
+    handle_offset: u64,
+    result_offset: u64,
+    result_type: Type,
+}
+
+/// The innermost statement of `block` (nested blocks included) whose span holds source offset
+/// `offset`: the statement a task parked at that offset is in.
+///
+/// O(depth * statements) time.
+fn innermost_statement(block: &ynz_ast::nodes::Block, offset: usize) -> Option<&Stmt> {
+    for stmt in &block.stmts {
+        let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
+        if start <= offset && offset <= end {
+            for nested in ynz_typeck::release_plan::nested_blocks(stmt) {
+                if nested.span.start <= offset && offset <= nested.span.end {
+                    if let Some(inner) = innermost_statement(nested, offset) {
+                        return Some(inner);
+                    }
+                }
+            }
+            return Some(stmt);
+        }
+    }
+    None
+}
+
+/// The entries of a drop state's suspension edge whose binding the drop entry can read: those kept in
+/// a frame slot (a parameter, a crossing local, a CPU-group result), which `reload_params_from_frame`
+/// restored. Any other binding lives only in a stack slot of the resume call that parked, which the
+/// drop path never writes, so reading it would free a stray pointer.
+///
+/// Such a binding is not read after the park, so it holds no value there: the plan lists it only as
+/// `ReleaseIfLive`, a binding the parked statement hands over (a `give` to the awaited callee), and
+/// the hand-over ran before the park. It is left out; the callee owns the value and its own drop
+/// entry releases it. A plain `Release` of a binding with no frame slot breaks that reasoning, so it
+/// is an internal error rather than a guess.
+///
+/// O(entries + frame-backed names) time.
+fn frame_backed_drop_entries(
+    cg: &Cg<'_, '_>,
+    param_names: &[String],
+    entries: &[ynz_typeck::release_plan::ReleaseEntry],
+    function_name: &str,
+) -> Result<Vec<ynz_typeck::release_plan::ReleaseEntry>, String> {
+    use ynz_typeck::release_plan::Fate;
+    let crossing = cg.sm_crossing_names.as_deref().ok_or_else(|| {
+        format!("internal: the drop entry of `{function_name}` has no crossing set")
+    })?;
+    let is_frame_backed = |name: &str| {
+        param_names.iter().any(|param| param == name)
+            || crossing.iter().any(|local| local == name)
+            || cg
+                .m3d_spike_cpu_result_names
+                .iter()
+                .any(|(result, _)| result == name)
+    };
+    let mut kept = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if is_frame_backed(&entry.codegen_name) {
+            kept.push(entry.clone());
+            continue;
+        }
+        match entry.fate {
+            Fate::Omitted(_) | Fate::ReleaseIfLive(_) => {}
+            Fate::Release(_) => {
+                return Err(format!(
+                    "internal: the drop entry of `{function_name}` must release `{}`, which has \
+                     no frame slot",
+                    entry.codegen_name
+                ))
+            }
+        }
+    }
+    Ok(kept)
+}
+
+/// Free the `Sleep` box this frame parked in a `wait sleep` and null the handle slot, so the one free
+/// of the box is its own frame's: the runtime's drop of the task frees the handle of the root frame
+/// and of the recursion chain only, and finds null there after the drop entry ran. The slot is
+/// null-checked because a drop entry also runs for a frame that has not parked yet.
+///
+/// O(1) time and code.
+fn free_parked_sleep_handle<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let handle = state_machine::load_sleep_handle(cg.ctx, &cg.builder, frame_ptr)?;
+    let free_bb = cg.append_block("drop_sleep_free");
+    let after_bb = cg.append_block("drop_sleep_done");
+    let is_parked = cg
+        .builder
+        .build_is_not_null(handle, "drop_sleep_is_parked")
+        .map_err(|e| format!("drop sleep null check: {e}"))?;
+    cg.builder
+        .build_conditional_branch(is_parked, free_bb, after_bb)
+        .map_err(|e| format!("drop sleep branch: {e}"))?;
+    cg.builder.position_at_end(free_bb);
+    cg.builder
+        .build_call(cg.rt.ynz_rt_async_sleep_free, &[handle.into()], "")
+        .map_err(|e| format!("drop sleep free: {e}"))?;
+    let null_handle = cg.ptr().const_null();
+    state_machine::store_sleep_handle(cg.ctx, &cg.builder, frame_ptr, null_handle)?;
+    cg.builder
+        .build_unconditional_branch(after_bb)
+        .map_err(|e| format!("drop sleep join: {e}"))?;
+    cg.builder.position_at_end(after_bb);
+    Ok(())
+}
+
+/// Emit the drop entry of continuation state `state`, the state a task parked at source offset
+/// `offset` resumes in (C8 slice 6). A dropped task re-enters its resume function with the bitwise
+/// complement of its `resume_point`; the resume switch sends that value to the block built here
+/// (the drop dispatch). The block
+///
+/// 1. reloads the frame's slots as the continuation state does,
+/// 2. releases the temporaries of the open statements (`release_open_temporaries`),
+/// 0. frees this frame's own `Sleep` box when the state is a `wait sleep` (`parked_in_sleep`: the
+///    one free of that box, so no runtime ladder frees it again),
+/// 3. releases what the parked statement's suspension edge lists
+///    (`ReleasePlan::suspension_edge`: typeck's list for exactly this state, each release behind a
+///    null check because the statement may have taken a value before it parked),
+/// 4. drops the callee frames the state awaits, each by its own resume function the same way, and
+/// 5. returns Ready.
+///
+/// It never releases every non-null slot: a borrowed parameter and a view are non-null slots the
+/// task does not own, and an embedded callee frame keeps the slots of its previous call.
+/// Nothing runs on the normal path.
+///
+/// O(open scopes + callee frames) time and code per suspension point.
+#[allow(clippy::too_many_arguments)]
+fn register_drop_state<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    f: &FunctionDecl,
+    param_names: &[String],
+    shape_table: &'g ShapeTable,
+    frame_ptr: PointerValue<'ctx>,
+    offset: usize,
+    state: usize,
+    children: &[DropMember<'ctx>],
+    cpu_members: &[CpuDropMember],
+    parked_in_sleep: bool,
+) -> Result<(), String> {
+    let ctx = cg.ctx;
+    let saved = cg
+        .builder
+        .get_insert_block()
+        .ok_or("drop state: no insert block")?;
+    let parked_in = if state == 0 {
+        f.body.stmts.first()
+    } else {
+        innermost_statement(&f.body, offset)
+    }
+    .ok_or_else(|| {
+        format!(
+            "internal: `{}` suspends at offset {offset} outside every statement of its body",
+            f.name
+        )
+    })?;
+    let entries = cg
+        .typed
+        .release_plan
+        .suspension_edge(ynz_typeck::release_plan::stmt_source_span(parked_in))
+        .ok_or_else(|| {
+            format!(
+                "internal: the release plan has no suspension edge for the statement of `{}` at \
+                 offset {offset}",
+                f.name
+            )
+        })?;
+    let drop_bb = ctx.append_basic_block(cg.current_fn, &format!("sm_drop_s{state}"));
+    cg.builder.position_at_end(drop_bb);
+    if parked_in_sleep {
+        free_parked_sleep_handle(cg, frame_ptr)?;
+    }
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, state != 0, true)?;
+    cg.release_open_temporaries("drop_temporary")?;
+    let entries = frame_backed_drop_entries(cg, param_names, entries, &f.name)?;
+    cg.emit_release_edge_with(&entries, "drop", true)?;
+    for member in children {
+        let which = &member.child;
+        let child_resume = &member.resume;
+        let child_frame = match which {
+            DropChild::Embedded { offset } => state_machine::child_frame_ptr(
+                ctx,
+                &cg.builder,
+                frame_ptr,
+                *offset,
+                "drop_child_frame",
+            )?,
+            DropChild::Boxed { offset } => {
+                // SAFETY: the recursion slot is within the parent frame at a layout-fixed offset.
+                let slot = unsafe {
+                    cg.builder
+                        .build_gep(
+                            ctx.i8_type(),
+                            frame_ptr,
+                            &[ctx.i64_type().const_int(*offset, false)],
+                            "drop_rec_slot",
+                        )
+                        .map_err(|e| format!("drop rec slot gep: {e}"))?
+                };
+                cg.builder
+                    .build_load(
+                        ctx.ptr_type(AddressSpace::default()),
+                        slot,
+                        "drop_rec_frame",
+                    )
+                    .map_err(|e| format!("drop rec frame load: {e}"))?
+                    .into_pointer_value()
+            }
+        };
+        let resume_point = state_machine::load_resume_point(ctx, &cg.builder, child_frame)?;
+        let mut after_member = None;
+        if let Some(value_type) = &member.returned_value {
+            let returned_bb = cg.append_block("drop_member_returned");
+            let running_bb = cg.append_block("drop_member_running");
+            let joined_bb = cg.append_block("drop_member_done");
+            let has_returned = cg
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    resume_point,
+                    ctx.i32_type()
+                        .const_int(ynz_abi::FRAME_RESUME_POINT_RETURNED as u64, false),
+                    "drop_member_has_returned",
+                )
+                .map_err(|e| format!("drop member returned cmp: {e}"))?;
+            cg.builder
+                .build_conditional_branch(has_returned, returned_bb, running_bb)
+                .map_err(|e| format!("drop member branch: {e}"))?;
+            cg.builder.position_at_end(returned_bb);
+            cg.release_returned_value(child_frame, value_type)?;
+            cg.builder
+                .build_unconditional_branch(joined_bb)
+                .map_err(|e| format!("drop member returned join: {e}"))?;
+            cg.builder.position_at_end(running_bb);
+            after_member = Some(joined_bb);
+        }
+        let complement = cg
+            .builder
+            .build_not(resume_point, "drop_child_rp")
+            .map_err(|e| format!("drop child rp: {e}"))?;
+        cg.builder
+            .build_store(child_frame, complement)
+            .map_err(|e| format!("drop child rp store: {e}"))?;
+        cg.builder
+            .build_call(
+                *child_resume,
+                &[
+                    child_frame.into(),
+                    ctx.ptr_type(AddressSpace::default()).const_null().into(),
+                ],
+                "",
+            )
+            .map_err(|e| format!("drop child call: {e}"))?;
+        if let Some(joined_bb) = after_member {
+            cg.builder
+                .build_unconditional_branch(joined_bb)
+                .map_err(|e| format!("drop member running join: {e}"))?;
+            cg.builder.position_at_end(joined_bb);
+        }
+    }
+    for cpu_member in cpu_members {
+        let handle_slot = cpu_group_slot_ptr(cg, frame_ptr, cpu_member.handle_offset)?;
+        let handle = cg
+            .builder
+            .build_load(
+                ctx.ptr_type(AddressSpace::default()),
+                handle_slot,
+                "drop_cpu_handle",
+            )
+            .map_err(|e| format!("drop cpu handle load: {e}"))?
+            .into_pointer_value();
+        let finished_bb = cg.append_block("drop_cpu_finished");
+        let joined_bb = cg.append_block("drop_cpu_done");
+        let is_finished = cg
+            .builder
+            .build_is_null(handle, "drop_cpu_is_finished")
+            .map_err(|e| format!("drop cpu null check: {e}"))?;
+        cg.builder
+            .build_conditional_branch(is_finished, finished_bb, joined_bb)
+            .map_err(|e| format!("drop cpu branch: {e}"))?;
+        cg.builder.position_at_end(finished_bb);
+        let synthetic_frame = cpu_group_slot_ptr(
+            cg,
+            frame_ptr,
+            cpu_member.result_offset - ynz_abi::FRAME_OFFSET_RETURN_SLOT,
+        )?;
+        cg.release_returned_value(synthetic_frame, &cpu_member.result_type)?;
+        cg.builder
+            .build_unconditional_branch(joined_bb)
+            .map_err(|e| format!("drop cpu join: {e}"))?;
+        cg.builder.position_at_end(joined_bb);
+    }
+    cg.builder
+        .build_return(Some(&ctx.i32_type().const_int(0, false)))
+        .map_err(|e| format!("drop ret: {e}"))?;
+    cg.sm_drop_cases.push((!(state as u32), drop_bb));
+    cg.builder.position_at_end(saved);
+    Ok(())
+}
+
+/// The type of the heap value the suspending callee `callee_name` hands back through its return
+/// slot, when the group's drop state must release it (`DropMember::returned_value`): a string,
+/// array or map; a `maybe` of a string, flat shape, decimal or envelope union; an envelope union; or
+/// an errors-capable result of one of those, of a plain value or of a bignum. `None` for a result
+/// that owns no heap, and for a kind with no release of this shape yet (a channel, a handle).
+///
+/// O(1) time.
+fn callee_result_type(cg: &Cg<'_, '_>, callee_name: &str) -> Option<Type> {
+    let returned = cg.resolve_type(&sm_callee_return_type(cg, callee_name)?);
+    // A string, array or map is one pointer in the slot. A `maybe` of a string, a flat shape or a
+    // decimal is its `{flag, bits}` pair. An envelope union is the address of its slot in the
+    // member's frame, as is a `maybe` of one. Any other `maybe` owns nothing the slot could release.
+    let owns_released_heap = |ty: &Type| match ty {
+        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+        Type::Maybe { inner } => {
+            cg.envelope_union_variants(inner).is_some()
+                || matches!(cg.resolve_type(inner), Type::String)
+                || cg.maybe_payload_cell_size(ty).is_some()
+        }
+        union @ Type::Union { .. } => cg.envelope_union_variants(union).is_some(),
+        _ => false,
+    };
+    if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
+        let inner_is_supported = owns_released_heap(&returned)
+            || matches!(
+                returned,
+                Type::Int | Type::Bool | Type::Float | Type::Nothing
+            )
+            || matches!(returned, Type::Number { precision } if precision > 34);
+        return inner_is_supported.then(|| Type::ErrorsCapable {
+            inner: Box::new(returned),
+        });
+    }
+    owns_released_heap(&returned).then_some(returned)
+}
+
+/// The embedded sub-frame of the suspending callee `callee_name` in the frame of `f`, as the
+/// awaited child of a drop state.
+///
+/// O(children) time.
+fn embedded_drop_child<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    f: &FunctionDecl,
+    callee_name: &str,
+    resume_fn: FunctionValue<'ctx>,
+) -> Result<DropMember<'ctx>, String> {
+    let offset = cg
+        .frame_layouts
+        .get(&f.name)
+        .and_then(|layout| {
+            layout
+                .children
+                .iter()
+                .find(|(name, _)| name == callee_name)
+                .map(|(_, offset)| *offset)
+        })
+        .ok_or_else(|| {
+            format!(
+                "drop state: no child frame slot for `{callee_name}` in `{}`",
+                f.name
+            )
+        })?;
+    Ok(DropMember {
+        child: DropChild::Embedded { offset },
+        resume: resume_fn,
+        returned_value: None,
+    })
+}
+
+/// The address `offset` bytes into the frame at `frame_ptr` (a CPU handle or result slot).
+fn cpu_group_slot_ptr<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    frame_ptr: PointerValue<'ctx>,
+    offset: u64,
+) -> Result<PointerValue<'ctx>, String> {
+    // SAFETY: the offset is a handle or result slot the frame layout reserved for the group.
+    unsafe {
+        cg.builder.build_gep(
+            cg.ctx.i8_type(),
+            frame_ptr,
+            &[cg.ctx.i64_type().const_int(offset, false)],
+            "cpu_group_slot",
+        )
+    }
+    .map_err(|e| format!("cpu group slot gep: {e}"))
+}
+
+/// The CPU members of a group a drop state has to look at: those whose callee hands back a heap value.
+/// `slots` are the (handle, result) offsets of the group, in member order.
+///
+/// O(members) time.
+fn cpu_drop_members(cg: &Cg<'_, '_>, callees: &[&str], slots: &[(u64, u64)]) -> Vec<CpuDropMember> {
+    callees
+        .iter()
+        .zip(slots)
+        .filter_map(|(callee, (handle_offset, result_offset))| {
+            callee_result_type(cg, callee).map(|result_type| CpuDropMember {
+                handle_offset: *handle_offset,
+                result_offset: *result_offset,
+                result_type,
+            })
+        })
+        .collect()
+}
+
+/// Return Ready (0) from a resume function: mark the frame returned
+/// (`ynz_abi::FRAME_RESUME_POINT_RETURNED`) so a task dropped later runs no drop entry, then return.
+/// Every Ready return of a resume function comes here (C8 slice 6).
+///
+/// O(1) time: one store and the return.
+fn build_resume_ready_return<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    frame_ptr: PointerValue<'ctx>,
+    what: &str,
+) -> Result<(), String> {
+    state_machine::store_resume_point_returned(cg.ctx, &cg.builder, frame_ptr)?;
+    cg.builder
+        .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
+        .map_err(|e| format!("{what}: {e}"))?;
     Ok(())
 }
 
@@ -6269,9 +11160,7 @@ fn lower_sm_body<'ctx, 'g>(
             frame_ptr,
             cg.ctx.i64_type().const_int(0, false),
         )?;
-        cg.builder
-            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-            .map_err(|e| format!("sm terminal ret: {e}"))?;
+        build_resume_ready_return(cg, frame_ptr, "sm terminal ret")?;
     }
 
     // Terminate any unreached state blocks. LLVM requires every basic block to have a terminator.
@@ -6292,9 +11181,7 @@ fn lower_sm_body<'ctx, 'g>(
                 frame_ptr,
                 cg.ctx.i64_type().const_int(0, false),
             )?;
-            cg.builder
-                .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-                .map_err(|e| format!("sm orphan state ret: {e}"))?;
+            build_resume_ready_return(cg, frame_ptr, "sm orphan state ret")?;
         }
     }
 
@@ -6311,8 +11198,44 @@ fn lower_sm_body<'ctx, 'g>(
 ///
 /// Extracted from `lower_sm_body` so control-flow handlers (`Stmt::If`, future loops) can
 /// recurse into their branch bodies with the same walk.
+///
+/// When control reaches the end of the block, the bindings it declared are released from the
+/// release plan's block-end edge (`Cg::release_at_block_end`), as `lower_block_stmts` does on the
+/// plain path. A block that ends in a `return` released at that `return` instead.
 #[allow(clippy::too_many_arguments)]
 fn lower_sm_block<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    block: &ynz_ast::nodes::Block,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    lower_sm_block_stmts(
+        cg,
+        block,
+        state_blocks,
+        pending_block,
+        frame_ptr,
+        waker_ctx,
+        param_names,
+        f,
+        shape_table,
+        current_state,
+    )?;
+    if !is_block_terminated(cg) {
+        cg.release_at_block_end(block)?;
+    }
+    Ok(())
+}
+
+/// The statements of `lower_sm_block`, with no scope release at the end.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_block_stmts<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     block: &ynz_ast::nodes::Block,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
@@ -6403,6 +11326,8 @@ fn lower_sm_block<'ctx, 'g>(
                 cg,
                 &cpu_stmts,
                 f,
+                param_names,
+                shape_table,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -6517,6 +11442,8 @@ fn lower_sm_block<'ctx, 'g>(
             emit_fused_group_spawn_poll(
                 cg,
                 f,
+                param_names,
+                shape_table,
                 &fused.members,
                 state_blocks,
                 pending_block,
@@ -6664,6 +11591,17 @@ fn flush_var_slot_to_frame<'ctx>(
     slot_idx: usize,
 ) -> Result<(), String> {
     let ctx = cg.ctx;
+    if cg.sm_crossing_unions.contains_key(name) {
+        // Envelope union (or `errors` union result): its value lives in a frame region.
+        return cg.flush_crossing_union(name, alloca, frame_ptr, slot_idx);
+    }
+    if cg.sm_crossing_maybe_regions.contains_key(name)
+        || cg.sm_crossing_fixed_regions.contains_key(name)
+    {
+        // A `maybe` homed in a frame region: its bytes are already live there and the first slot is
+        // its moved flag, which only a move, a release and a bind write.
+        return Ok(());
+    }
     if cg.sm_crossing_scalar_set.contains(name) {
         // Int: i64 alloca — raw i64 load, 1 slot.
         let bits = cg
@@ -6881,6 +11819,7 @@ fn flush_crossing_local_if_needed<'ctx>(
         stmt,
         cg.sm_crossing_names.as_deref().unwrap_or(&[]),
         &mut written_names,
+        &cg.typed.release_plan,
     );
 
     for name in &written_names {
@@ -6911,8 +11850,25 @@ fn flush_crossing_local_if_needed<'ctx>(
 /// the outer crossing local's frame slot. Only `Stmt::Assign` in nested scopes
 /// counts as a mutation. This prevents Bug 6: `let x` inside an if arm from
 /// clobbering the outer x frame slot with the shadow's value.
-fn collect_crossing_writes(stmt: &Stmt, crossing_names: &[String], out: &mut Vec<String>) {
+/// Also counts the founders a read inside `stmt` moves out of (`ReleasePlan::founders_moved_in`):
+/// the move nulls the founder's slot, so the slot is written there and must be flushed.
+fn collect_crossing_writes(
+    stmt: &Stmt,
+    crossing_names: &[String],
+    out: &mut Vec<String>,
+    release_plan: &ynz_typeck::release_plan::ReleasePlan,
+) {
     collect_crossing_writes_impl(stmt, crossing_names, out, false);
+    // Nothing runs after a `return`, so its read leaves no slot to flush (a flush emitted after the
+    // return's terminator is invalid IR).
+    if matches!(stmt, Stmt::Return { .. }) {
+        return;
+    }
+    for founder in release_plan.founders_moved_in(stmt) {
+        if crossing_names.contains(&founder) && !out.contains(&founder) {
+            out.push(founder);
+        }
+    }
 }
 
 fn collect_crossing_writes_impl(
@@ -7018,6 +11974,44 @@ fn root_ident(expr: &Expr) -> Option<&str> {
 /// 5. Post-wait block: reloads params from frame, continues emitting post-wait code.
 #[allow(clippy::too_many_arguments)]
 fn lower_sm_stmt_with_wait<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    stmt: &Stmt,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    // The temporaries of a statement that suspends live in frame slots, so they survive the
+    // resume (`Cg::open_wait_temporaries`); the statement's end releases them. A statement routed
+    // here for a CPU group alone is not counted by `wait_temporary_slot_count` and opens none.
+    let opened = if stmt_needs_sm_walker(cg, stmt) {
+        cg.open_wait_temporaries(ynz_typeck::release_plan::stmt_span(stmt))?
+    } else {
+        false
+    };
+    lower_sm_stmt_with_wait_body(
+        cg,
+        stmt,
+        state_blocks,
+        pending_block,
+        frame_ptr,
+        waker_ctx,
+        param_names,
+        f,
+        shape_table,
+        current_state,
+    )?;
+    cg.close_temporaries(opened)
+}
+
+/// The lowering of a statement that suspends, inside the temporary frame `lower_sm_stmt_with_wait`
+/// opened for it.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_stmt_with_wait_body<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     stmt: &Stmt,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
@@ -7153,9 +12147,10 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // `let name = wait suspendingCallee(args)` — bind the return value.
         Stmt::Let {
             name,
-            value: Expr::Wait(inner, _),
+            value: let_value @ Expr::Wait(inner, _),
             ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_let(name, let_value)?;
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -7188,6 +12183,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         Stmt::Let {
             name, value: inner, ..
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_let(name, inner)?;
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -7262,8 +12258,10 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
 
         // `return suspendingCallee(args)` from a SM function — inline-poll + store return + Ready.
         Stmt::Return {
-            value: Some(inner), ..
+            value: Some(inner),
+            span: return_span,
         } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
+            cg.refuse_unwrapped_suspending_return(inner)?;
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -7328,9 +12326,12 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                     }
                 }
             }
-            cg.builder
-                .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-                .map_err(|e| format!("sm return after inline-poll: {e}"))?;
+            let own_frame = cg
+                .sm_frame_ptr
+                .ok_or("sm return after inline-poll: no frame pointer")?;
+            // The returned value now sits in the return slot, so every open scope can be released.
+            cg.release_at_return(return_span)?;
+            build_resume_ready_return(cg, own_frame, "sm return after inline-poll")?;
         }
 
         // `while (cond) { ...wait/suspending_call... }` — emit a frame-backed loop.
@@ -7347,7 +12348,10 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // runs again (potentially suspending again). Each iteration is therefore a distinct
         // poll cycle: sequential by construction (the runtime never resumes the same task
         // twice concurrently), satisfying the "loop iterations sequential by default" design.
-        Stmt::While { cond, body, .. } => {
+        Stmt::While {
+            cond, body, span, ..
+        } => {
+            let loop_offset = span.start;
             let locals_snapshot = cg.locals.clone();
             cg.sm_scope_depth += 1;
 
@@ -7395,6 +12399,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                     cg,
                     while_header_bb,
                     "sm while body->header branch",
+                    loop_offset,
                     state_blocks,
                     pending_block,
                     frame_ptr,
@@ -7438,7 +12443,11 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // resumes at the function level. Crossing OUTER locals (declared before the for-loop
         // and read after it, or read inside the body) DO get sm_entry allocas via P1.
         Stmt::For {
-            var, iter, body, ..
+            var,
+            iter,
+            body,
+            span,
+            ..
         } => {
             let locals_snapshot = cg.locals.clone();
             cg.sm_scope_depth += 1;
@@ -7447,6 +12456,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 var,
                 iter,
                 body,
+                span.start,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -7567,6 +12577,7 @@ fn lower_sm_for<'ctx, 'g>(
     var: &str,
     iter: &Expr,
     body: &ynz_ast::nodes::Block,
+    loop_offset: usize,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
     frame_ptr: PointerValue<'ctx>,
@@ -7702,6 +12713,7 @@ fn lower_sm_for<'ctx, 'g>(
                 cg,
                 header_bb,
                 "sm for range back-edge",
+                loop_offset,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -7729,6 +12741,7 @@ fn lower_sm_for<'ctx, 'g>(
         // function lowers all body statements in ONE Cg, so a binding
         // registered at Let time is visible here across state blocks).
         let soa_info = cg.soa_expr_info(iter);
+        let held_iter = hold_loop_iterable(cg, iter)?;
 
         // Init index to 0 and flush to frame slot.
         let zero = cg.i64().const_zero();
@@ -7752,7 +12765,7 @@ fn lower_sm_for<'ctx, 'g>(
             .build_store(idx_alloca, idx_cur)
             .map_err(|e| format!("{e}"))?;
         // Re-evaluate array pointer and count at header — reloads from frame-backed local.
-        let arr_ptr_h = lower_expr(cg, iter)?.into_pointer_value();
+        let arr_ptr_h = loop_iterable_pointer(cg, iter, held_iter)?;
         let cnt_cur = cg
             .builder
             .build_call(cg.rt.ynz_array_count, &[arr_ptr_h.into()], "sm_a_cnt")
@@ -7770,7 +12783,8 @@ fn lower_sm_for<'ctx, 'g>(
             .map_err(|e| format!("sm for array cond: {e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let arr_cur = lower_expr(cg, iter)?.into_pointer_value();
+        cg.open_iteration_frame();
+        let arr_cur = loop_iterable_pointer(cg, iter, held_iter)?;
         // Use the existing crossing-local alloca if `var` is already frame-backed; otherwise
         // create a new sm_entry alloca. Creating a duplicate alloca would make cg.locals[var]
         // point to a different alloca than the one the frame reload writes into, causing the
@@ -7782,6 +12796,10 @@ fn lower_sm_for<'ctx, 'g>(
             cg.locals.insert(var.to_string(), s);
             s
         };
+        let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
+        let mut owned_elem: Option<OwnedRead<'ctx>> = None;
+        let mut embed_copy = false;
+        let mut held_copy = false;
         if cg.sm_crossing_shape_embed_set.contains(var) {
             // Shape-embed loop var: `var_slot` is the ptr alloca pre-wired to the frame
             // region (Step 1b in lower_function_with_waits). The by-value get writes the
@@ -7789,15 +12807,7 @@ fn lower_sm_for<'ctx, 'g>(
             // one step. (The pre-M5 special case memcpy'd from a heap element pointer here;
             // by-value storage erased that indirection, so the choke point's out-pointer IS
             // the destination.) No flush needed — frame bytes are live at the right spot.
-            let dest_ptr = cg
-                .builder
-                .build_load(
-                    cg.ctx.ptr_type(inkwell::AddressSpace::default()),
-                    var_slot,
-                    &format!("{var}_arr_shape_frame_ptr"),
-                )
-                .map_err(|e| format!("sm for array shape frame ptr load {var}: {e}"))?
-                .into_pointer_value();
+            let dest_ptr = cg.embed_dest(var, var_slot)?;
             // SoA shape-embed: the gather honors the SAME out-pointer contract —
             // element bytes land DIRECTLY in the frame region.
             let _flag = cg.array_elem_get_into(
@@ -7807,18 +12817,27 @@ fn lower_sm_for<'ctx, 'g>(
                 "sm_a_get_call",
                 soa_info.as_ref(),
             )?;
+            // The bytes in the frame region share the element's strings and boxes: unless the
+            // loop variable is a view, it owns a copy of them, released after the iteration.
+            if let Type::Shape { name: shape_name } = cg.resolve_type(&elem) {
+                if !read_may_point_at_place(cg, iter, None) && cg.shape_needs_deepen(&shape_name) {
+                    cg.deepen_shape_fields(dest_ptr, &shape_name)?;
+                    embed_copy = true;
+                }
+            }
         } else {
             let out = cg.array_elem_out_buffer(&elem, "sm_a_get")?;
             let _flag =
                 cg.array_elem_get_into(arr_cur, idx_cur, out, "sm_a_get_call", soa_info.as_ref())?;
             let elem_val = cg.array_elem_from_out(out, &elem, "sm_a_get")?;
+            owned_elem = Some(own_loop_element(cg, iter, elem_val, &elem, "sm_a_elem")?);
+            let elem_val = owned_elem.as_ref().map_or(elem_val, |owned| owned.value);
+            if body_suspends && owned_elem.as_ref().is_some_and(|owned| owned.copied) {
+                held_copy = hold_loop_copy(cg, elem_val, &elem)?;
+            }
             store(cg, elem_val, &elem, var_slot)?;
             flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
         }
-
-        // v0.3-M5 P5: loop-var mask (same contract as the non-SM array loop) —
-        // the only shadow case an admitted binding can hit is its own loop var.
-        let soa_masked = cg.soa_bindings.remove(var);
 
         // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
         let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
@@ -7834,16 +12853,26 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
-
-        if let Some(m) = soa_masked {
-            cg.soa_bindings.insert(var.to_string(), m);
-        }
+        // The iteration's end releases the copy held in its frame slot.
+        cg.close_temporaries(true)?;
 
         if !is_block_terminated(cg) {
             // Release this iteration's allocas before the back edge (leaf bodies only).
             if let Some(sp) = loop_sp {
                 cg.loop_stack_restore(sp)?;
             }
+            release_sm_loop_copy(
+                cg,
+                var,
+                var_slot,
+                &elem,
+                owned_elem.as_ref(),
+                SmLoopCopy {
+                    embed_copy,
+                    body_suspends,
+                    held: held_copy,
+                },
+            )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7862,6 +12891,7 @@ fn lower_sm_for<'ctx, 'g>(
                 cg,
                 header_bb,
                 "sm for array back",
+                loop_offset,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -7883,11 +12913,13 @@ fn lower_sm_for<'ctx, 'g>(
     // compile-time constant; pointer comes from a frame-backed crossing local.
     if let Type::BuiltinFixed { elem, size } = &iter_ty {
         let elem = elem.as_ref().clone();
-        let n = match size {
-            Some(n) => *n as u64,
-            None => return Err("SM for-loop: fixed array with unknown size".to_string()),
+        let item_count = match size {
+            FixedLength::Known(item_count) => *item_count as u64,
+            FixedLength::Unknown | FixedLength::OfParam { .. } => {
+                return Err("SM for-loop: fixed array with unknown size".to_string())
+            }
         };
-        let size_val = cg.i64().const_int(n, false);
+        let size_val = cg.i64().const_int(item_count, false);
 
         let zero = cg.i64().const_zero();
         cg.builder
@@ -7918,18 +12950,9 @@ fn lower_sm_for<'ctx, 'g>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
+        cg.open_iteration_frame();
         let arr_cur = lower_expr(cg, iter)?.into_pointer_value();
-        let gep = unsafe {
-            cg.builder
-                .build_gep(cg.i64(), arr_cur, &[idx_cur], "sm_ff_gep")
-                .map_err(|e| format!("{e}"))?
-        };
-        let bits = cg
-            .builder
-            .build_load(cg.i64(), gep, "sm_ff_bits")
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
-        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let elem_val = cg.fixed_cell_value(arr_cur, idx_cur, &elem, "sm_ff_gep")?;
         let var_slot = if let Some(&existing) = cg.locals.get(var) {
             existing
         } else {
@@ -7937,7 +12960,11 @@ fn lower_sm_for<'ctx, 'g>(
             cg.locals.insert(var.to_string(), s);
             s
         };
-        store(cg, elem_val, &elem, var_slot)?;
+        let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
+        let owned_elem = own_loop_element(cg, iter, elem_val, &elem, "sm_ff_elem")?;
+        let held_copy =
+            body_suspends && owned_elem.copied && hold_loop_copy(cg, owned_elem.value, &elem)?;
+        store(cg, owned_elem.value, &elem, var_slot)?;
         flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
 
         lower_sm_block(
@@ -7952,8 +12979,21 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
+        cg.close_temporaries(true)?;
 
         if !is_block_terminated(cg) {
+            release_sm_loop_copy(
+                cg,
+                var,
+                var_slot,
+                &elem,
+                Some(&owned_elem),
+                SmLoopCopy {
+                    embed_copy: false,
+                    body_suspends,
+                    held: held_copy,
+                },
+            )?;
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7985,6 +13025,7 @@ fn lower_sm_for<'ctx, 'g>(
     if let Type::BuiltinMap { key, val } = &iter_ty {
         let key_ty = key.as_ref().clone();
         let val_ty = val.as_ref().clone();
+        let held_iter = hold_loop_iterable(cg, iter)?;
 
         let zero = cg.i64().const_zero();
         cg.builder
@@ -8007,7 +13048,7 @@ fn lower_sm_for<'ctx, 'g>(
             .build_store(idx_alloca, idx_cur)
             .map_err(|e| format!("{e}"))?;
         // Re-evaluate map pointer and count at header — reloads from frame-backed local.
-        let map_ptr_h = lower_expr(cg, iter)?.into_pointer_value();
+        let map_ptr_h = loop_iterable_pointer(cg, iter, held_iter)?;
         let cnt_cur = cg.map_count_val(map_ptr_h, "sm_mf_cnt")?;
         let lt = cg
             .builder
@@ -8018,7 +13059,8 @@ fn lower_sm_for<'ctx, 'g>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let map_cur = lower_expr(cg, iter)?.into_pointer_value();
+        cg.open_iteration_frame();
+        let map_cur = loop_iterable_pointer(cg, iter, held_iter)?;
         let entry_ty = cg
             .ctx
             .struct_type(&[cg.i64().into(), cg.i64().into()], false);
@@ -8040,23 +13082,28 @@ fn lower_sm_for<'ctx, 'g>(
 
         // Per-site ENTRY-BLOCK key slot + value out buffer (elem_size-aware,
         // shared array/map get-side ownership contract — reused per iteration).
-        let key_slot = cg.alloca_in_entry_llvm(cg.i64(), "sm_mf_key")?;
+        let key_slot = cg.map_key_out_buffer(&key_ty, "sm_mf_key")?;
         let val_out = cg.array_elem_out_buffer(&val_ty, "sm_mf_val")?;
-        cg.map_iter_get_into(
-            map_cur,
-            idx_cur,
-            key_is_string(&key_ty),
-            key_slot,
-            val_out,
-            "sm_mf_iter",
-        )?;
-        let k_val = cg
-            .builder
-            .build_load(cg.i64(), key_slot, "sm_mf_kv")
-            .map_err(|e| format!("{e}"))?;
+        let key_kind = cg.map_key_kind(&key_ty)?;
+        cg.map_iter_get_into(map_cur, idx_cur, key_kind, key_slot, val_out, "sm_mf_iter")?;
+        let k_val = cg.map_key_bits_from_out(key_slot, &key_ty, "sm_mf_kv")?;
         // Entry val bits: shape values carry the out-buffer pointer as i64 bits
         // (MapEntry fields load i64 bits + i64_bits_to), others the loaded cell.
         let v_bits = cg.array_elem_bits_from_out(val_out, &val_ty, "sm_mf_vv")?;
+        let owned_entry = own_map_entry(cg, iter, k_val, v_bits, &key_ty, &val_ty)?;
+        let (k_val, v_bits) = (owned_entry.key_bits, owned_entry.value_bits);
+        let body_suspends = body.stmts.iter().any(|stmt| stmt_needs_sm_walker(cg, stmt));
+        // A suspending body keeps each copy in a slot of the iteration's frame (the entry is not
+        // read after a `wait`, but a `return` in the body and the iteration end release it from
+        // the slot); a kind the slot cannot hold stays with the SSA release below.
+        if body_suspends {
+            if let Some(key) = owned_entry.key {
+                hold_loop_copy(cg, key, &key_ty)?;
+            }
+            if let Some(value) = owned_entry.value {
+                hold_loop_copy(cg, value, &val_ty)?;
+            }
+        }
         let k_dst = cg
             .builder
             .build_struct_gep(entry_ty, entry_slot, 0, "sm_mf_kd")
@@ -8090,11 +13137,17 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
+        cg.close_temporaries(true)?;
 
         if !is_block_terminated(cg) {
             // Release this iteration's allocas before the back edge (leaf bodies only).
             if let Some(sp) = loop_sp {
                 cg.loop_stack_restore(sp)?;
+            }
+            // A body that suspends released the copies it held at the iteration's end
+            // (`close_temporaries`); the entry is not read after a `wait` (Check 2c).
+            if !body_suspends {
+                release_map_entry(cg, &owned_entry, &key_ty, &val_ty)?;
             }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
@@ -8114,6 +13167,7 @@ fn lower_sm_for<'ctx, 'g>(
                 cg,
                 header_bb,
                 "sm for map back-edge",
+                loop_offset,
                 state_blocks,
                 pending_block,
                 frame_ptr,
@@ -8134,7 +13188,8 @@ fn lower_sm_for<'ctx, 'g>(
     // These forms with a suspension body are unsupported — typeck should have caught them
     // via the WaitInsideLoop guard before this point. Fall back to non-SM lowering
     // (which will panic if it hits a wait, surfacing the bug cleanly).
-    lower_stmt_for(cg, var, iter, body)
+    // Typeck hands no loop of a suspending function its rows over (`loop_hands_rows_over`).
+    lower_stmt_for(cg, var, iter, body, false)
 }
 
 /// Emit state-machine codegen for a multi-case `if` (`Stmt::Match`) with a `wait`
@@ -8276,6 +13331,18 @@ fn lower_sm_match<'ctx, 'g>(
                 || (cg.m3d_spike
                     && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
+        // `is Variant =>`: re-point the scrutinee binding at the variant payload for the arm
+        // body, the same window typeck's overlay uses. A `wait` inside the arm re-derives the
+        // payload on resume (`reload_params_from_frame` → `renarrow_union_locals`).
+        let narrowed = if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
+            cg.narrow_union_local_to_variant(
+                scrutinee,
+                scrutinee_val.into_pointer_value(),
+                "sm_is_arm",
+            )?
+        } else {
+            None
+        };
         cg.sm_scope_depth += 1;
         if arm_routes_to_sm {
             lower_sm_block(
@@ -8299,6 +13366,7 @@ fn lower_sm_match<'ctx, 'g>(
             }
         }
         cg.sm_scope_depth -= 1;
+        cg.restore_narrowed_local(narrowed);
         for (name, &outer_alloca) in &locals_snapshot {
             cg.locals.insert(name.clone(), outer_alloca);
         }
@@ -8399,6 +13467,12 @@ fn load_sm_return_value_typed<'ctx>(
     if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+        // C1f (#423): a union success word is the address of the callee frame's `Return` region.
+        if let Some((variants, maybe)) = cg.callee_ec_union_variants(callee_name) {
+            return Ok(cg
+                .ec_region_to_standard(err_i64, ok_i64, &variants, maybe, tag)?
+                .into());
+        }
         let struct_ty = errors_result_type(ctx);
         let mut result = struct_ty.const_zero();
         result = cg
@@ -8414,22 +13488,7 @@ fn load_sm_return_value_typed<'ctx>(
         return Ok(result.into());
     }
 
-    // Look up the callee's declared return type — check local items first, then
-    // imported functions for cross-module callees.
-    let callee_ret_ty = cg
-        .typed
-        .module
-        .items
-        .iter()
-        .find_map(|item| {
-            if let ynz_ast::nodes::Item::Function(f) = item {
-                if f.name == callee_name {
-                    return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
-                }
-            }
-            None
-        })
-        .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()));
+    let callee_ret_ty = sm_callee_return_type(cg, callee_name);
 
     match callee_ret_ty {
         Some(Type::Float) => {
@@ -8442,6 +13501,89 @@ fn load_sm_return_value_typed<'ctx>(
             // bind_sm_return_value's I128Value arm will create an i128 alloca for it.
             let i128_val = state_machine::load_return_value_i128(ctx, &cg.builder, frame_ptr, tag)?;
             Ok(i128_val.into())
+        }
+        // C1f (#423): a union-returning callee's resume fn wrote its slot into the callee
+        // frame's `Return` region and put the region's address in the return slot. Copy the slot
+        // into a CALLER-owned one now (a heap-boxed child frame is freed right after this read),
+        // and hand back a view of the copy.
+        Some(union @ Type::Union { .. }) if cg.envelope_union_variants(&union).is_some() => {
+            let variants = cg
+                .envelope_union_variants(&union)
+                .ok_or("sm union return load: lost the variants")?;
+            let layout = cg.union_layout(&variants)?;
+            let region_bits =
+                state_machine::load_return_value_i64(ctx, &cg.builder, frame_ptr, tag)?;
+            let region = cg
+                .builder
+                .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_union_region"))
+                .map_err(|err| format!("sm union region cast: {err}"))?;
+            let slot =
+                cg.alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{tag}_union"))?;
+            cg.builder
+                .build_memcpy(
+                    slot,
+                    1,
+                    region,
+                    1,
+                    cg.i64().const_int(layout.slot_size, false),
+                )
+                .map_err(|err| format!("sm union slot copy: {err}"))?;
+            Ok(cg.union_slot_to_value(slot, &variants, tag)?.into())
+        }
+        // A callee returning a `maybe` of an envelope union wrote its slot to the `Return` region
+        // like a union does: copy it into a caller-owned slot, then rebuild the maybe pair over a
+        // view of the copy (flag 0, bits 0 for `none`).
+        Some(Type::Maybe { ref inner }) if cg.envelope_union_variants(inner).is_some() => {
+            let variants = cg
+                .envelope_union_variants(inner)
+                .ok_or("sm maybe union return load: lost the variants")?;
+            let layout = cg.union_layout(&variants)?;
+            let region_bits =
+                state_machine::load_return_value_i64(ctx, &cg.builder, frame_ptr, tag)?;
+            let region = cg
+                .builder
+                .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_maybe_union_region"))
+                .map_err(|err| format!("sm maybe union region cast: {err}"))?;
+            let slot = cg
+                .alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{tag}_maybe_union"))?;
+            cg.builder
+                .build_memcpy(
+                    slot,
+                    1,
+                    region,
+                    1,
+                    cg.i64().const_int(layout.slot_size, false),
+                )
+                .map_err(|err| format!("sm maybe union slot copy: {err}"))?;
+            let view = cg.union_slot_to_value_as(slot, &variants, true, tag)?;
+            Ok(cg.maybe_pair_over_view(view, tag)?.into())
+        }
+        // C1h (#433): a callee returning a `fixed` of known length wrote its cells into the callee
+        // frame's `Return` region and put the region's address in the return slot. Copy the cells
+        // into a CALLER-owned list now (a heap-boxed child frame is freed right after this read);
+        // the list's address is the value.
+        Some(Type::BuiltinFixed {
+            ref elem,
+            size: FixedLength::Known(count),
+        }) => {
+            let cells_ty = cg.i64().array_type(fixed_cell_words(elem, count));
+            let region_bits =
+                state_machine::load_return_value_i64(ctx, &cg.builder, frame_ptr, tag)?;
+            let region = cg
+                .builder
+                .build_int_to_ptr(region_bits, cg.ptr(), &format!("{tag}_fixed_region"))
+                .map_err(|err| format!("sm fixed region cast: {err}"))?;
+            let list = cg.alloca_in_entry_llvm(cells_ty, &format!("{tag}_fixed"))?;
+            cg.builder
+                .build_memcpy(
+                    list,
+                    8,
+                    region,
+                    8,
+                    cg.i64().const_int(fixed_region_bytes(elem, count), false),
+                )
+                .map_err(|err| format!("sm fixed list copy: {err}"))?;
+            Ok(list.into())
         }
         Some(Type::Maybe { .. }) => {
             // v0.3-M7 R9: a maybe-returning callee's resume fn stores the envelope's
@@ -8478,6 +13620,26 @@ fn load_sm_return_value_typed<'ctx>(
             Ok(ret_i64.into())
         }
     }
+}
+
+/// The declared return type of the suspending callee `callee_name`: local items first, then imported
+/// functions for cross-module callees. `None` for a callee neither knows.
+///
+/// O(items) time.
+fn sm_callee_return_type(cg: &Cg<'_, '_>, callee_name: &str) -> Option<Type> {
+    cg.typed
+        .module
+        .items
+        .iter()
+        .find_map(|item| {
+            if let ynz_ast::nodes::Item::Function(f) = item {
+                if f.name == callee_name {
+                    return Some(declared_return_type(cg.typed, cg.shape_table, f));
+                }
+            }
+            None
+        })
+        .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()))
 }
 
 /// Extract the callee function name from a `Expr::Call(c)` expression, returning `None`
@@ -8607,6 +13769,23 @@ fn bind_sm_return_value<'ctx>(
 ///
 /// After this call the alloca is registered in `cg.locals` under `name`.
 fn bind_sm_result_and_flush<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    name: &str,
+    return_val: inkwell::values::BasicValueEnum<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    callee_name: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    let is_errors_capable_result = return_val.is_struct_value();
+    let alloca = bind_sm_result_and_flush_value(cg, name, return_val, frame_ptr, callee_name)?;
+    if is_errors_capable_result {
+        // The scope-exit release reads an errors-capable result through its original slot: a read
+        // re-points `locals` at the success value, so the release (and a take) must not use that.
+        cg.ec_original_slots.insert(name.to_string(), alloca);
+    }
+    Ok(alloca)
+}
+
+fn bind_sm_result_and_flush_value<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     name: &str,
     mut return_val: inkwell::values::BasicValueEnum<'ctx>,
@@ -8836,15 +14015,7 @@ fn bind_sm_result_and_flush<'ctx>(
                     )
                     .map_err(|e| format!("bind_sm_result shape int_to_ptr {name}: {e}"))?;
                 // Load the frame region ptr from the ptr alloca (pre-wired to frame slot region).
-                let dest_ptr = cg
-                    .builder
-                    .build_load(
-                        cg.ctx.ptr_type(inkwell::AddressSpace::default()),
-                        alloca,
-                        &format!("{name}_bind_frame_ptr"),
-                    )
-                    .map_err(|e| format!("bind_sm_result shape load frame ptr {name}: {e}"))?
-                    .into_pointer_value();
+                let dest_ptr = cg.embed_dest(name, alloca)?;
                 cg.builder
                     .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
                     .map_err(|e| format!("bind_sm_result shape memcpy {name}: {e}"))?;
@@ -8888,6 +14059,47 @@ fn bind_sm_result_and_flush<'ctx>(
                     .build_store(alloca, fv)
                     .map_err(|e| format!("bind_sm_result float store {name}: {e}"))?;
                 state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, as_i64)?;
+            }
+            // A `fixed` list homed in a frame region (a crossing local that owns heap items, so its
+            // release runs after a later `wait`): the cells a callee returned are copied INTO the
+            // region, as a bind of any other `fixed` copies them (`store_binding_of_read`), and the
+            // bind makes the local live again. Without this the generic arm below stored the cells'
+            // address in the moved-flag slot: the local read back as moved, and its release as null.
+            inkwell::values::BasicValueEnum::PointerValue(cells)
+                if cg.sm_crossing_fixed_regions.contains_key(name) =>
+            {
+                let (region, bytes) = cg.sm_crossing_fixed_regions[name];
+                cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+                cg.builder
+                    .build_memmove(region, 8, cells, 8, cg.i64().const_int(bytes, false))
+                    .map_err(|err| format!("bind_sm_result fixed copy {name}: {err}"))?;
+                cg.builder
+                    .build_store(alloca, region)
+                    .map_err(|err| format!("bind_sm_result fixed store {name}: {err}"))?;
+            }
+            // A `maybe` homed in a frame region: the result is copied INTO the region, as a bind of
+            // any other `maybe` copies it (`store_binding_of_read`); the first slot stays its moved flag.
+            inkwell::values::BasicValueEnum::PointerValue(envelope)
+                if cg.sm_crossing_maybe_regions.contains_key(name) =>
+            {
+                let region = cg.sm_crossing_maybe_regions[name];
+                let inner = cg.sm_crossing_maybe_inner[name].clone();
+                cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+                cg.maybe_env_dest.set(Some(region));
+                cg.maybe_payload_dest
+                    .set(Some(cg.maybe_region_payload_ptr(region, name)?));
+                // A string, container, shape or value payload comes out of a callee or a channel as the
+                // binding's own (a copy of it would be an allocation the program does not make
+                // today, and would orphan the cell and the strings the callee made); a decimal payload
+                // is copied into the region.
+                let take = !matches!(cg.resolve_type(&inner), Type::Number { .. })
+                    || ynz_typeck::types::is_bignum(&cg.resolve_type(&inner));
+                let owned = cg.maybe_to_owned_dest(envelope, &inner, name, false, take);
+                cg.maybe_env_dest.set(None);
+                cg.maybe_payload_dest.set(None);
+                cg.builder
+                    .build_store(alloca, owned?)
+                    .map_err(|e| format!("bind_sm_result maybe store {name}: {e}"))?;
             }
             _ => {
                 // Int/bool/ptr (non-shape): convert to i64 bits, store into alloca, flush 1 slot.
@@ -8933,6 +14145,12 @@ fn bind_sm_result_and_flush<'ctx>(
                 // Frame slot always holds i64 (zext of the bit); slot_idx is already correct.
                 state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
             }
+        }
+        // An envelope union result: persist it into the local's frame region (and point the local at
+        // the region's view), so it outlives this resume.
+        if cg.sm_crossing_unions.contains_key(name) {
+            cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+            cg.flush_crossing_union(name, alloca, frame_ptr, slot_idx)?;
         }
         Ok(alloca)
     } else {
@@ -9038,6 +14256,17 @@ fn bind_sm_result_and_flush<'ctx>(
                 return_val = new_sv.into();
             }
         }
+        // A `maybe` a suspending callee returned carries its shape or number payload in a heap cell the
+        // return made (`maybe_payload_stable_bits` with `heap`): the binding TAKES it, as a plain call's
+        // result is taken (`maybe_to_owned_taking`), so the binding's release frees each allocation once.
+        if let inkwell::values::BasicValueEnum::PointerValue(envelope) = return_val {
+            if let Some(Type::Maybe { inner }) = sm_callee_return_type(cg, callee_name) {
+                if cg.envelope_union_variants(&inner).is_none() {
+                    let owned = cg.maybe_to_owned_taking(envelope, &inner, name)?;
+                    return_val = owned.into();
+                }
+            }
+        }
         let alloca = bind_sm_return_value(cg, name, return_val)?;
         Ok(alloca)
     }
@@ -9079,29 +14308,566 @@ fn crossing_local_total_slots(
     f: &ynz_ast::nodes::FunctionDecl,
     crossing_names: &[String],
     typed: &TypedModule,
+    shape_table: &ShapeTable,
     shape_abi_sizes: &HashMap<String, u64>,
 ) -> usize {
-    let mut total = 0usize;
-    for cname in crossing_names {
-        let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
-        let slots = match ty {
-            // decimal128: 16-byte value stored in 2 consecutive i64 frame slots.
-            Some(Type::Number { precision }) if precision <= 34 => 2,
-            // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
-            // The i128 decimal bits are stored directly so same-callee calls that reuse
-            // the callee's staging slot cannot clobber a live crossing binding.
-            Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
-                3
+    crossing_names
+        .iter()
+        .map(|cname| {
+            crossing_local_slot_count(&f.body.stmts, cname, typed, shape_table, shape_abi_sizes)
+        })
+        .sum()
+}
+
+/// Where the value of a temporary of a suspending statement lives while the statement runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TemporaryHome {
+    /// The temporary is a pointer to heap that stays put across a suspension (a string, an array, a
+    /// map, the envelope cell of a minted `maybe` copy): one frame slot holds the pointer.
+    Pointer,
+    /// The temporary's bytes are held in a frame region behind its pointer slot, because the value
+    /// the expression builds sits in this resume invocation's stack (a call result, a literal): a
+    /// shape, a `fixed` list, a `maybe` envelope or an envelope union.
+    Region(TemporaryRegionKind, usize),
+    /// No frame home yet: the kind leaks, as a temporary of an unsupported kind does on the plain
+    /// path (never a double free).
+    Skip,
+}
+
+/// What a temporary's frame region holds, and so how a value is moved into it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TemporaryRegionKind {
+    /// `n` bytes copied as they are: a shape, a `fixed` list's cells, a `maybe`'s 16-byte envelope.
+    Bytes(u64),
+    /// A union slot of these variants (`union_persist_into_core`).
+    Union(Vec<Type>),
+    /// A `maybe` of an envelope union with these variants: the 16-byte envelope, then the 16-byte view
+    /// and the union slot behind it (`Cg::maybe_union_payload_into`).
+    MaybeUnion(Vec<Type>),
+    /// An errors-capable result whose success type is an envelope union: the 16-byte `{err, ok}` pair,
+    /// then the 16-byte view and the union slot, `ok` naming the view (`Cg::maybe_union_payload_into`).
+    ErrorsUnion(Vec<Type>),
+    /// An errors-capable result whose success type is a `maybe` of an envelope union: the pair, the 16-byte
+    /// `maybe` pair `ok` names, then the view and the slot behind it.
+    ErrorsMaybeUnion(Vec<Type>),
+}
+
+/// The frame home of a temporary of type `ty` (already resolved; `minted_maybe_copy` is typeck's
+/// word that it is an explicit `.copy()` of a `maybe`). The ONE answer behind the frame layout
+/// (`wait_temporary_slot_count`) and the statement that opens its frame (`Cg::open_temporary_frame`),
+/// so a frame and its lowering agree on every slot.
+///
+/// Time: O(1)  Space: O(variants) for a union
+fn temporary_home(
+    ty: &Type,
+    minted_maybe_copy: bool,
+    sizes: &HashMap<String, u64>,
+) -> TemporaryHome {
+    match ty {
+        Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => {
+            TemporaryHome::Pointer
+        }
+        Type::Maybe { .. } if minted_maybe_copy => TemporaryHome::Pointer,
+        // An errors-capable call result is a `{err, ok}` pair (two words) that dies with the resume
+        // invocation: its 16 bytes move into a region, whose address the slot holds. An ok word that is a
+        // plain word the pair owns (a string, array, map or shape cell, a `maybe` cell, a scalar, a bignum)
+        // needs nothing behind the pair. A union rides the pair as a view of a slot, and a `maybe` of one as
+        // a stack `maybe` pair over that view: the region holds those behind the pair, so a release after a
+        // `wait` reads bytes that are still there. A decimal128 `number` owns nothing to release (its ok
+        // word points into staging) and keeps no home.
+        Type::ErrorsCapable { inner } => match inner.as_ref() {
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(inner.as_ref()) => {
+                match maybe_region_payload_bytes(inner, sizes) {
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::ErrorsUnion(variants.clone()),
+                        maybe_frame_slots(payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
             }
-            // All other ErrorsCapable {i64,i64}: 2 frame slots for the two fields.
-            Some(Type::ErrorsCapable { .. }) => 2,
-            // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
-            Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
-            _ => 1,
-        };
-        total += slots;
+            Type::Maybe { inner: payload } if matches!(payload.as_ref(), Type::Union { variants: _ } if ynz_typeck::check::is_envelope_union(payload.as_ref())) =>
+            {
+                let Type::Union { variants } = payload.as_ref() else {
+                    return TemporaryHome::Skip;
+                };
+                match maybe_region_payload_bytes(payload, sizes) {
+                    // The pair, the `maybe` pair over the view (16 bytes), then the view and the slot.
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::ErrorsMaybeUnion(variants.clone()),
+                        maybe_frame_slots(16 + payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
+            }
+            plain if errors_result_has_plain_ok_word(plain) => {
+                TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0))
+            }
+            _ => TemporaryHome::Skip,
+        },
+        Type::Maybe { inner } => match inner.as_ref() {
+            // A counted channel reference: no frame bytes.
+            Type::BuiltinChannel { .. } => TemporaryHome::Skip,
+            // The union a call returned sits in a slot that dies with the resume invocation: it is
+            // moved into a slot of the region behind the envelope.
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(inner.as_ref()) => {
+                match maybe_region_payload_bytes(inner, sizes) {
+                    Some(payload_bytes) => TemporaryHome::Region(
+                        TemporaryRegionKind::MaybeUnion(variants.clone()),
+                        maybe_frame_slots(payload_bytes),
+                    ),
+                    None => TemporaryHome::Skip,
+                }
+            }
+            _ => TemporaryHome::Region(TemporaryRegionKind::Bytes(16), maybe_frame_slots(0)),
+        },
+        Type::Shape { name } => match sizes.get(name) {
+            Some(&bytes) => TemporaryHome::Region(
+                TemporaryRegionKind::Bytes(bytes),
+                shape_frame_slots(name, sizes),
+            ),
+            None => TemporaryHome::Skip,
+        },
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } => {
+            let bytes = fixed_region_bytes(elem, *count);
+            TemporaryHome::Region(TemporaryRegionKind::Bytes(bytes), fixed_frame_slots(bytes))
+        }
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(ty) => {
+            if sizes.contains_key(&crate::shape_types::union_key(variants)) {
+                TemporaryHome::Region(
+                    TemporaryRegionKind::Union(variants.clone()),
+                    union_frame_slots(variants, sizes),
+                )
+            } else {
+                TemporaryHome::Skip
+            }
+        }
+        _ => TemporaryHome::Skip,
     }
-    total
+}
+
+/// Is the ok word of an errors-capable result of inner type `inner` a plain word its pair owns, so the
+/// 16-byte pair moves into a frame region as it is (`temporary_home`)?
+///
+/// Time: O(1)  Space: O(1)
+fn errors_result_has_plain_ok_word(inner: &Type) -> bool {
+    match inner {
+        Type::String
+        | Type::BuiltinArray { .. }
+        | Type::BuiltinMap { .. }
+        | Type::Shape { .. }
+        | Type::Nothing
+        | Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Options { .. } => true,
+        // A bignum is a heap pointer released like a string; a decimal128 `number` owns nothing.
+        Type::Number { .. } => ynz_typeck::types::is_bignum(inner),
+        Type::Maybe { inner: payload } => {
+            matches!(
+                payload.as_ref(),
+                Type::String | Type::Int | Type::Float | Type::Bool | Type::Shape { .. }
+            )
+        }
+        _ => false,
+    }
+}
+
+/// The frame slots the temporaries of `f`'s suspending statements need: per temporary typeck
+/// recorded at the release point of a statement the resume function routes through the SM walker
+/// (`stmt_needs_sm_walker_for`), at every nesting depth, one pointer slot plus the bytes of its
+/// region when its kind has one (`temporary_home`); plus the slots the copies a statement stages
+/// make (`copy_slot_count`, `staged_argument_slot_count`). A temporary built in such a statement
+/// must survive its `wait`, which an entry-block slot does not (a resume gets a fresh stack
+/// frame), so it lives in the heap frame after the crossing locals (`Cg::open_wait_temporaries`).
+/// The slots are an upper bound: a temporary whose kind the emitter holds no frame home for
+/// (`TemporaryHome::Skip`) leaves its slot unused, which costs 8 bytes and nothing else.
+///
+/// O(statements) time.
+fn wait_temporary_slot_count(
+    f: &ynz_ast::nodes::FunctionDecl,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    back_edge_yield: bool,
+    sizes: &HashMap<String, u64>,
+) -> usize {
+    fn temporary_slots(
+        span: (usize, usize),
+        typed: &TypedModule,
+        sizes: &HashMap<String, u64>,
+    ) -> usize {
+        let Some(plain) = typed.expr_types.get(&span) else {
+            return 1;
+        };
+        // An argument coerced into a union parameter: the temporary is the envelope the call mints.
+        let ty = typed
+            .union_coercions
+            .get(&span)
+            .map_or(plain, |coercion| &coercion.slot);
+        let minted = typed.temporaries.is_minted_maybe_copy(span.0, span.1);
+        match temporary_home(ty, minted, sizes) {
+            TemporaryHome::Region(_, region_slots) => 1 + region_slots,
+            TemporaryHome::Pointer | TemporaryHome::Skip => 1,
+        }
+    }
+    fn count_block(
+        block: &ynz_ast::nodes::Block,
+        typed: &TypedModule,
+        suspend_set: &SuspendSet,
+        back_edge_yield: bool,
+        sizes: &HashMap<String, u64>,
+    ) -> usize {
+        block
+            .stmts
+            .iter()
+            .map(|stmt| {
+                let own = if stmt_needs_sm_walker_for(
+                    suspend_set,
+                    &typed.expr_types,
+                    back_edge_yield,
+                    stmt,
+                ) {
+                    let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
+                    let temporaries: usize = typed
+                        .temporaries
+                        .released_at(start, end)
+                        .iter()
+                        .map(|&span| temporary_slots(span, typed, sizes))
+                        .sum();
+                    temporaries
+                        + copy_slot_count(stmt, typed)
+                        + staged_argument_slot_count(stmt, typed, suspend_set, sizes)
+                } else {
+                    0
+                };
+                let nested: usize = ynz_typeck::release_plan::nested_blocks(stmt)
+                    .into_iter()
+                    .map(|inner| count_block(inner, typed, suspend_set, back_edge_yield, sizes))
+                    .sum();
+                own + nested
+            })
+            .sum()
+    }
+    count_block(&f.body, typed, suspend_set, back_edge_yield, sizes)
+}
+
+/// The frame slots the region of a staged argument of type `ty` takes (`Cg::stage_value_in_frame`):
+/// a shape's bytes, a decimal128 `number`'s 16, a `maybe`'s 16-byte envelope and the bytes of the payload cell behind it (a flat
+/// shape's or a decimal's). Any other type stages nothing.
+///
+/// O(1) time.
+fn staged_region_slots(ty: &Type, sizes: &HashMap<String, u64>) -> usize {
+    match ty {
+        Type::Shape { name } => shape_frame_slots(name, sizes),
+        Type::Number { precision } if *precision <= 34 => fixed_frame_slots(DECIMAL_CELL_SIZE),
+        Type::Maybe { inner } => {
+            fixed_frame_slots(MAYBE_ENVELOPE_BYTES + staged_maybe_payload_bytes(inner, sizes))
+        }
+        _ => 0,
+    }
+}
+
+/// The bytes of the payload a staged `maybe` carries into its region beside the envelope: a flat
+/// shape's bytes or a decimal's 16, 0 for any other payload (a string, array or map is one pointer
+/// in the envelope already).
+///
+/// O(1) time.
+fn staged_maybe_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> u64 {
+    match inner {
+        Type::Shape { name } => sizes.get(name).copied().unwrap_or(0),
+        Type::Number { precision } if *precision <= 34 => DECIMAL_CELL_SIZE,
+        _ => 0,
+    }
+}
+
+/// The frame slots the arguments a suspending statement stages into a suspending callee need
+/// (`stage_suspending_call_arg_bits`), for the calls inside the statement itself, not in a block
+/// nested in it:
+///
+/// * an argument that is, or is coerced into, an envelope union takes one slot, which keeps the
+///   pointer to the callee's `Param` region the statement's end releases (a `give` position leaves
+///   it unused);
+/// * a shape or `maybe` value typeck records as a staged argument
+///   (`Temporaries::is_staged_argument`) takes the region its bytes are held in
+///   (`Cg::stage_value_in_frame`).
+///
+/// O(expressions of the statement) time.
+fn staged_argument_slot_count(
+    stmt: &Stmt,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    sizes: &HashMap<String, u64>,
+) -> usize {
+    let argument_slots = |arg: &Expr| -> usize {
+        let span = arg.span();
+        let key = (span.start, span.end);
+        let slot = typed
+            .union_coercions
+            .get(&key)
+            .map(|coercion| &coercion.slot)
+            .or_else(|| typed.expr_types.get(&key));
+        if slot.is_some_and(ynz_typeck::check::is_envelope_union) {
+            return 1;
+        }
+        match typed.expr_types.get(&key) {
+            Some(ty) if typed.temporaries.is_staged_argument(key.0, key.1) => {
+                staged_region_slots(ty, sizes)
+            }
+            _ => 0,
+        }
+    };
+    fn walk(
+        expr: &Expr,
+        suspend_set: &SuspendSet,
+        argument_slots: &dyn Fn(&Expr) -> usize,
+    ) -> usize {
+        let own = match expr {
+            Expr::Call(call) => match &call.callee {
+                Expr::Ident(name, _) if is_suspending_member(suspend_set, name) => {
+                    call.args.iter().map(argument_slots).sum()
+                }
+                _ => 0,
+            },
+            // The UFCS form: the receiver is argument 0 of the callee.
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } if is_suspending_member(suspend_set, method) => std::iter::once(receiver.as_ref())
+                .chain(args.iter())
+                .map(argument_slots)
+                .sum(),
+            _ => 0,
+        };
+        own + ynz_typeck::string_ownership::children(expr)
+            .into_iter()
+            .map(|inner| walk(inner, suspend_set, argument_slots))
+            .sum::<usize>()
+    }
+    ynz_typeck::release_plan::stmt_own_exprs(stmt)
+        .into_iter()
+        .map(|expr| walk(expr, suspend_set, &argument_slots))
+        .sum()
+}
+
+/// The frame slots the copies a suspending statement makes need (`Cg::hold_copy_in_frame`): one
+/// per read typeck judged `MustCopy` that sits in the statement itself, not in a block nested in
+/// it (a nested statement counts its own), and two for the map a `for` iterates (its key and its
+/// value are each copied). A loop variable's copy and the copy of an argument staged into a
+/// suspending call are the two producers; a read that turns out to be a view, or whose type owns
+/// no heap, leaves its slot unused, which costs 8 bytes.
+///
+/// O(copies of the program) time.
+fn copy_slot_count(stmt: &Stmt, typed: &TypedModule) -> usize {
+    let nested: Vec<(usize, usize)> = ynz_typeck::release_plan::nested_blocks(stmt)
+        .into_iter()
+        .map(|block| (block.span.start, block.span.end))
+        .collect();
+    let (start, end) = ynz_typeck::release_plan::stmt_span(stmt);
+    let iterated_map = match stmt {
+        Stmt::For { iter, .. } => {
+            let span = iter.span();
+            matches!(
+                typed.expr_types.get(&(span.start, span.end)),
+                Some(Type::BuiltinMap { .. })
+            )
+            .then_some((span.start, span.end))
+        }
+        _ => None,
+    };
+    typed
+        .non_owned_reads
+        .copies()
+        .filter(|&(copy_start, copy_end)| {
+            copy_start >= start
+                && copy_end <= end
+                && !nested
+                    .iter()
+                    .any(|&(from, to)| copy_start >= from && copy_end <= to)
+        })
+        .map(|span| if Some(span) == iterated_map { 2 } else { 1 })
+        .sum()
+}
+
+/// The type that decides how the crossing local `target` is held in the frame: a union
+/// ANNOTATION wins over the type of the value (`let thing: Thing = big` types its value as the
+/// variant `Big`, but the binding is the union), otherwise the typeck type of its value. The one
+/// classification both the frame layout (slot counts) and the resume function's allocas read.
+///
+/// Time: O(s) for s statements  Space: O(1)
+fn crossing_frame_type(
+    stmts: &[Stmt],
+    target: &str,
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+) -> Option<Type> {
+    find_let_annotation_type_in_stmts(stmts, target)
+        .map(|ast_ann| ast_type_to_typeck_type(&ast_ann, shape_table))
+        .filter(|ty| matches!(ty, Type::Union { .. }))
+        .or_else(|| find_let_typeck_type_in_stmts(stmts, target, typed))
+}
+
+/// The variants of the envelope union a crossing local of type `ty` holds in a frame region of
+/// its own: the local's type when it is an envelope union, or the success type of an `errors`
+/// result whose success value is one. `None` for every other crossing local.
+fn crossing_union_variants(ty: &Type) -> Option<Vec<Type>> {
+    let union = match ty {
+        Type::ErrorsCapable { inner } => inner.as_ref(),
+        other => other,
+    };
+    match union {
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(union) => {
+            Some(variants.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Frame slots a union region of `variants` takes: the slot's bytes (the `union_key` entry of
+/// the sizes map, the one `UnionLayout::slot_size`) rounded up to whole slots, plus the
+/// alignment slack `shape_frame_region_ptr` rounds into.
+fn union_frame_slots(variants: &[Type], sizes: &HashMap<String, u64>) -> usize {
+    // A missing entry is a compiler bug: `Cg::sm_union_region_ptr` refuses to lower the local,
+    // so the module never reaches a binary with a region the frame did not reserve.
+    let bytes = sizes
+        .get(&crate::shape_types::union_key(variants))
+        .copied()
+        .unwrap_or(8);
+    (bytes.max(8) as usize).div_ceil(8) + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
+}
+
+/// The bytes a frame region holds behind the 16-byte envelope of a crossing `maybe<inner>` local:
+/// a shape payload's bytes, a decimal128 payload's 16, an envelope union's 16-byte view and its
+/// slot, nothing for a payload that is a value or a heap pointer. `None` only for a union the
+/// frame layout did not size (a compiler bug, reported where the local is wired).
+///
+/// Time: O(1)  Space: O(1)
+fn maybe_region_payload_bytes(inner: &Type, sizes: &HashMap<String, u64>) -> Option<u64> {
+    match inner {
+        // The 16-byte view of the union, then its slot (`Cg::maybe_union_payload_into`).
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(inner) => sizes
+            .get(&crate::shape_types::union_key(variants))
+            .map(|slot_bytes| 16 + slot_bytes),
+        Type::Shape { name } => sizes.get(name).copied(),
+        Type::Number { precision } if *precision <= 34 => Some(DECIMAL_CELL_SIZE),
+        _ => Some(0),
+    }
+}
+
+/// The 8-byte words of a `fixed<elem>` list of `count` cells (`fixed_region_bytes` / 8): the LLVM
+/// `[words x i64]` a list is returned as. A list is never longer than `u32::MAX` cells
+/// (`MAX_FIXED_LENGTH`).
+fn fixed_cell_words(elem: &Type, count: usize) -> u32 {
+    (fixed_region_bytes(elem, count) / 8) as u32
+}
+
+/// Load the cells of a `fixed` list from `region` as the by-value `[words x i64]` it travels as.
+/// A list of zero cells has no storage: its address may be a one-cell slot that holds nothing
+/// of it, so nothing is read (a zero-size access of that slot is an out-of-bounds access under
+/// AddressSanitizer) and the empty array is the value.
+///
+/// O(words) time and space: a load of the whole list.
+fn load_fixed_cells<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    cells_ty: inkwell::types::ArrayType<'ctx>,
+    region: PointerValue<'ctx>,
+    name: &str,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    if cells_ty.is_empty() {
+        return Ok(cells_ty.const_zero().into());
+    }
+    builder
+        .build_load(cells_ty, region, name)
+        .map_err(|err| format!("{name}: {err}"))
+}
+
+/// Store a by-value `fixed` list (`[words x i64]`) into `slot`. A list of zero cells stores
+/// nothing (see `load_fixed_cells`).
+///
+/// O(words) time and space: a store of the whole list.
+fn store_fixed_cells<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    slot: PointerValue<'ctx>,
+    cells: inkwell::values::ArrayValue<'ctx>,
+) -> Result<(), String> {
+    if cells.get_type().is_empty() {
+        return Ok(());
+    }
+    builder
+        .build_store(slot, cells)
+        .map(|_| ())
+        .map_err(|err| format!("fixed cells store: {err}"))
+}
+
+/// The bytes of a `fixed<elem>` list of `count` cells: 16 per decimal128 cell, 8 otherwise (the
+/// block `Cg::fixed_block_type` lays out).
+fn fixed_region_bytes(elem: &Type, count: usize) -> u64 {
+    let cell = match elem {
+        Type::Number { precision } if *precision <= 34 => DECIMAL_CELL_SIZE,
+        _ => 8,
+    };
+    count as u64 * cell
+}
+
+/// Frame slots a `fixed` region of `bytes` takes, with the alignment slack.
+fn fixed_frame_slots(bytes: u64) -> usize {
+    bytes.div_ceil(8) as usize + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
+}
+
+/// Frame slots a `maybe` region of `payload_bytes` takes: the envelope, the payload behind it,
+/// and the alignment slack `shape_frame_region_ptr` rounds into.
+fn maybe_frame_slots(payload_bytes: u64) -> usize {
+    (16 + payload_bytes).div_ceil(8) as usize + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
+}
+
+/// Frame slots the crossing local `cname` takes: decimal128 two, a decimal `errors` result
+/// three, any other `errors` result two (plus a union region when its success value is an
+/// envelope union), a shape its bytes and an envelope union its region (each behind one moved-flag
+/// slot, `Cg::sm_region_flags`), everything else one.
+/// The ONE count behind the frame layout, the frame size and the resume function's slot indices.
+fn crossing_local_slot_count(
+    stmts: &[Stmt],
+    cname: &str,
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+    shape_abi_sizes: &HashMap<String, u64>,
+) -> usize {
+    match crossing_frame_type(stmts, cname, typed, shape_table) {
+        // decimal128: 16-byte value stored in 2 consecutive i64 frame slots.
+        Some(Type::Number { precision }) if precision <= 34 => 2,
+        // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
+        // The i128 decimal bits are stored directly so same-callee calls that reuse
+        // the callee's staging slot cannot clobber a live crossing binding.
+        Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
+            3
+        }
+        // An `errors` union result: {err, ok}, then the region its success slot lives in.
+        Some(ref errors @ Type::ErrorsCapable { .. }) => match crossing_union_variants(errors) {
+            Some(variants) => 2 + union_frame_slots(&variants, shape_abi_sizes),
+            None => 2,
+        },
+        // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
+        Some(Type::Shape { name: ref sname }) => 1 + shape_frame_slots(sname, shape_abi_sizes),
+        // A `fixed` list: its moved flag, then its cells.
+        Some(Type::BuiltinFixed {
+            ref elem,
+            size: FixedLength::Known(count),
+        }) => 1 + fixed_frame_slots(fixed_region_bytes(elem, count)),
+        // A `maybe`: its moved flag, then the envelope and payload region.
+        Some(Type::Maybe { ref inner }) => match maybe_region_payload_bytes(inner, shape_abi_sizes)
+        {
+            Some(payload_bytes) => 1 + maybe_frame_slots(payload_bytes),
+            None => 1,
+        },
+        Some(ref union @ Type::Union { .. }) => match crossing_union_variants(union) {
+            Some(variants) => 1 + union_frame_slots(&variants, shape_abi_sizes),
+            None => 1,
+        },
+        _ => 1,
+    }
 }
 
 /// Look up the typeck-inferred `Type` for a let binding or for-loop variable by scanning
@@ -10265,9 +16031,9 @@ fn build_cpu_trampoline<'ctx, 'g>(
     // FRAGO 009 defect C: free the staged decimal128 arg cell now — AFTER packing
     // copied the i128 out of any return pointer that may alias it. One alloc (spawn
     // site) / one free (here). A blocking-pool task dropped un-run at runtime
-    // shutdown leaks this cell (process-exit-only, same class as the shipped
-    // never-drop-locals semantics — tracked as v0.3-M6 Future-Req #17, deferred to
-    // the drop-story milestone).
+    // shutdown leaks this cell. It is held to process exit, so the alloc/free parity gate
+    // reports it; deferred, tracked as v0.3-M6 Future-Req #17 (a task dropped before it
+    // ran).
     if let Some(cell) = arg_cell {
         tramp_builder
             .build_call(
@@ -10613,8 +16379,16 @@ fn emit_io_member_init<'ctx, 'g>(
         // crossing local stages a GEP into the PARENT frame's 2-slot region, never a
         // ptr_to_int of a dying resume-fn stack temp (the FRAGO 006/007 arg UAF —
         // this was the third staging loop, missed by the initial two-loop conversion).
-        let bits = stage_suspending_call_arg_bits(cg, arg, frame_ptr)
-            .map_err(|e| format!("{arg_bits_label}: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            frame_ptr,
+            child_frame,
+            callee_name,
+            idx,
+            cg.callee_param_type(callee_name, idx),
+        )
+        .map_err(|e| format!("{arg_bits_label}: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -10622,7 +16396,7 @@ fn emit_io_member_init<'ctx, 'g>(
 }
 
 /// Shared per-member I/O sub-frame poll step (v0.3-M3g Phase 3 should-fix extraction):
-/// idempotent — a Ready child's OWN `resume_point` is set to the sentinel `0x7FFF_FFFF` so a
+/// idempotent — a Ready child's OWN `resume_point` is set to `ynz_abi::FRAME_RESUME_POINT_RETURNED` so a
 /// later re-entry via that child's `sm_dead` block returns Ready with zero re-execution. Always
 /// recomputes the child frame pointer fresh: a GEP built in a predecessor block does not dominate
 /// a re-entry landing directly in the caller's poll block via the SM dispatch switch.
@@ -10709,7 +16483,12 @@ fn emit_io_member_poll<'ctx, 'g>(
         .map_err(|e| format!("io member poll pend cont {callee_name}: {e}"))?;
 
     cg.builder.position_at_end(ready_bb);
-    state_machine::store_resume_point(ctx, &cg.builder, child_frame, 0x7FFF_FFFFu64)?;
+    state_machine::store_resume_point(
+        ctx,
+        &cg.builder,
+        child_frame,
+        ynz_abi::FRAME_RESUME_POINT_RETURNED as u64,
+    )?;
     cg.builder
         .build_unconditional_branch(after_bb)
         .map_err(|e| format!("io member poll ready cont {callee_name}: {e}"))?;
@@ -10723,6 +16502,8 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     stmts: &[&Stmt],
     f: &FunctionDecl,
+    param_names: &[String],
+    shape_table: &'g ShapeTable,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
     frame_ptr: PointerValue<'ctx>,
@@ -10844,6 +16625,28 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         .get(poll_state_idx)
         .copied()
         .ok_or_else(|| format!("spike: no poll state block at index {poll_state_idx}"))?;
+
+    {
+        let callees: Vec<&str> = children.iter().map(|child| child.callee.as_str()).collect();
+        let slots: Vec<(u64, u64)> = handle_offsets
+            .iter()
+            .copied()
+            .zip(result_offsets.iter().copied())
+            .collect();
+        let cpu_members = cpu_drop_members(cg, &callees, &slots);
+        register_drop_state(
+            cg,
+            f,
+            param_names,
+            shape_table,
+            frame_ptr,
+            ynz_typeck::release_plan::stmt_span(stmts[0]).0,
+            poll_state_idx,
+            &[],
+            &cpu_members,
+            false,
+        )?;
+    }
 
     cg.builder.position_at_end(spawn_state);
 
@@ -11159,6 +16962,26 @@ fn emit_independent_group_poll<'ctx, 'g>(
     // Consumed N slots from state_blocks; only 1 is used. The rest (N-1) will be terminated
     // as unreachable by lower_sm_body's trailing loop.
     *current_state = continuation_state + stmts.len() - 1;
+    let group_drop_children = children
+        .iter()
+        .map(|child| {
+            let mut member = embedded_drop_child(cg, f, &child.callee_name, child.resume_fn)?;
+            member.returned_value = callee_result_type(cg, &child.callee_name);
+            Ok(member)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        parent_frame,
+        ynz_typeck::release_plan::stmt_span(stmts[0]).0,
+        continuation_state,
+        &group_drop_children,
+        &[],
+        false,
+    )?;
 
     // --- Step 3 — first-poll pass: poll ALL children before deciding to yield ---
     //
@@ -11168,7 +16991,7 @@ fn emit_independent_group_poll<'ctx, 'g>(
     // start its I/O and the operations would run sequentially instead of overlapping.
     //
     // After all polls:
-    //   - Any child that returned Ready gets the sentinel (0x7FFFFFFF) stored into its
+    //   - Any child that returned Ready gets `ynz_abi::FRAME_RESUME_POINT_RETURNED` stored into its
     //     resume_point, so re-poll passes route to sm_dead and return 0 safely.
     //   - If ANY child was Pending, we yield with resume_point = continuation_state.
     //   - If ALL were Ready, we jump directly to post_call_bb.
@@ -11236,7 +17059,12 @@ fn emit_independent_group_poll<'ctx, 'g>(
         cg.builder.position_at_end(ready_bb);
         // Sentinel routes to sm_dead (default switch arm) on any subsequent re-poll,
         // preventing a null sleep_handle dereference after the handle was freed on Ready.
-        state_machine::store_resume_point(ctx, &cg.builder, child.child_frame, 0x7FFF_FFFFu64)?;
+        state_machine::store_resume_point(
+            ctx,
+            &cg.builder,
+            child.child_frame,
+            ynz_abi::FRAME_RESUME_POINT_RETURNED as u64,
+        )?;
         cg.builder
             .build_unconditional_branch(after_bb)
             .map_err(|e| format!("par ready cont {}: {e}", child.callee_name))?;
@@ -11466,7 +17294,7 @@ fn extract_call_and_args(stmt: &Stmt) -> Option<(String, &[Expr])> {
 /// **Idempotency**: re-polling an already-Ready member never double-binds its result. A Ready
 /// CPU handle's frame slot is nulled after its poll resolves Ready (mirrors
 /// `emit_cpu_group_spawn_join`'s null-check skip); a Ready I/O child's OWN `resume_point` is set
-/// to the sentinel `0x7FFF_FFFF` (mirrors `emit_independent_group_poll`'s sentinel — routes to
+/// to `ynz_abi::FRAME_RESUME_POINT_RETURNED` (mirrors `emit_independent_group_poll`'s sentinel — routes to
 /// that child's `sm_dead` block on any further poll, returning Ready with zero re-execution).
 ///
 /// **Binding**: results are read only after every member is Ready (`all_done_bb`) and bound
@@ -11495,6 +17323,8 @@ fn extract_call_and_args(stmt: &Stmt) -> Option<(String, &[Expr])> {
 fn emit_fused_group_spawn_poll<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     f: &FunctionDecl,
+    param_names: &[String],
+    shape_table: &'g ShapeTable,
     members: &[(usize, ynz_typeck::cpu_admission::FusedMemberClass)],
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
@@ -11661,6 +17491,38 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
     // poll of every member (CPU handle AND I/O sub-frame) registers the waker, exactly mirroring
     // `emit_cpu_group_spawn_join`'s "branch to poll_state immediately" discipline (skipping the
     // first poll here would leave wakers unregistered and hang the SM forever).
+    {
+        let io_drop_members = io_children
+            .iter()
+            .map(|child| {
+                let mut member = embedded_drop_child(cg, f, child.callee_name, child.resume_fn)?;
+                member.returned_value = callee_result_type(cg, child.callee_name);
+                Ok(member)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let callees: Vec<&str> = cpu_members
+            .iter()
+            .map(|member| member.callee.as_str())
+            .collect();
+        let slots: Vec<(u64, u64)> = handle_offsets
+            .iter()
+            .copied()
+            .zip(result_offsets.iter().copied())
+            .collect();
+        let cpu_drop = cpu_drop_members(cg, &callees, &slots);
+        register_drop_state(
+            cg,
+            f,
+            param_names,
+            shape_table,
+            frame_ptr,
+            ynz_typeck::release_plan::stmt_span(&f.body.stmts[members[0].0]).0,
+            poll_state_idx,
+            &io_drop_members,
+            &cpu_drop,
+            false,
+        )?;
+    }
     state_machine::store_resume_point(ctx, &cg.builder, frame_ptr, poll_state_idx as u64)?;
     cg.builder
         .build_unconditional_branch(poll_state)
@@ -11933,6 +17795,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
             f,
             shape_table,
             current_state,
+            call_expr.span().start,
         );
     }
 
@@ -11979,8 +17842,16 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         .map(|l| l.n_locals)
         .unwrap_or(arg_exprs.len());
     for (idx, arg) in arg_exprs.iter().copied().enumerate().take(child_n_locals) {
-        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
-            .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            parent_frame,
+            child_frame,
+            &callee_name,
+            idx,
+            cg.callee_param_type(&callee_name, idx),
+        )
+        .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -12030,6 +17901,24 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     // cont_state_bb: parent resumed after child suspended. Re-poll the child.
     // GEPs must be recomputed in each basic block (LLVM SSA dominance requirement).
     *current_state = continuation_state;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        parent_frame,
+        call_expr.span().start,
+        continuation_state,
+        &[DropMember {
+            child: DropChild::Embedded {
+                offset: child_offset,
+            },
+            resume: child_resume_fn,
+            returned_value: None,
+        }],
+        &[],
+        false,
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
 
@@ -12095,6 +17984,11 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     if is_errors_capable_fn(cg.typed, cg.imported_fns, &callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, child_frame_post)?;
+        if let Some((variants, maybe)) = cg.callee_ec_union_variants(&callee_name) {
+            return Ok(cg
+                .ec_region_to_standard(err_i64, ok_i64, &variants, maybe, "child_ret")?
+                .into());
+        }
         let struct_ty = errors_result_type(ctx);
         let mut result = struct_ty.const_zero();
         result = cg
@@ -12131,21 +18025,27 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 ///    crossing local: the composed frame is heap-resident and outlives the suspension,
 ///    and `flush_crossing_local_if_needed` (which runs after every non-wait statement)
 ///    keeps those slots current, so the child reads live bytes.
-/// 2. An ANONYMOUS aggregate literal (`wait crew({ ... })` — v0.3-M6 Phase 1c, same
-///    FRAGO 006/007 class): it has no LET name for the crossing classifier to anchor
-///    on, and its lowered value is a dying stack temp (`lower_struct_lit`), so staging
-///    its raw pointer bits reproduces the UAF for an UNNAMED temporary (fixture
-///    `v0_3_m6_anon_struct_arg_pure_call.ynz`: 4240380 vs 7). Route it through
-///    `value_to_stable_bits` — the ONE stable-bits marshalling point — so the staged
-///    bits point at a counted heap cell that survives the parent's suspension.
-///    Scope-minimal: `StructLit` only; other non-Ident temp forms stay recorded
-///    residuals (Phase 1c plan text).
+/// 2. A shape VALUE the argument expression just built (an anonymous literal such as
+///    `wait crew({ ... })`, or a call result): its lowered value is a pointer into this resume
+///    invocation's stack, which dies when the parent returns Pending, and the resumed child would
+///    dereference it (v0.3-M6 Phase 1c, FRAGO 006/007 class; fixture
+///    `v0_3_m6_anon_struct_arg_pure_call.ynz`: 4240380 vs 7). A shape that is a temporary of the
+///    statement (a `share` position, owning heap) is moved into its frame region by `lower_expr`
+///    (`Cg::bind_temporary`); any other (a `give` position, or a shape owning no heap) is moved
+///    into a frame region staged here (`Cg::stage_shape_in_frame`). Either way the staged bits point
+///    at frame bytes that outlive the parent's suspension and nothing is allocated.
+///
+/// `param_ty` is the callee's declared type for this position (`Cg::callee_param_type`).
 ///
 /// Time: O(1) per arg beyond `lower_expr`  Space: O(1)
 fn stage_suspending_call_arg_bits<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     arg: &Expr,
     parent_frame: PointerValue<'ctx>,
+    callee_frame: PointerValue<'ctx>,
+    callee_name: &str,
+    index: usize,
+    param_ty: Option<Type>,
 ) -> Result<inkwell::values::IntValue<'ctx>, String> {
     let ctx = cg.ctx;
     if let Expr::Ident(name, _) = arg {
@@ -12185,15 +18085,93 @@ fn stage_suspending_call_arg_bits<'ctx>(
                 .map_err(|e| format!("sm arg staging dec ptr_to_int {name}: {e}"));
         }
     }
-    if matches!(arg, Expr::StructLit { .. }) {
-        // Exception 2 (doc above): anonymous aggregate — stage from a counted heap
-        // cell via the one stable-bits marshalling point, never the dying stack temp.
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
-    }
+    let callee_takes_it = matches!(
+        cg.suspending_callee_param_ownership(callee_name, index),
+        Some(Some(OwnershipModifier::Give))
+    );
     let arg_val = lower_expr(cg, arg)?;
     let arg_ty = cg.expr_type(arg);
+    // A shape or `maybe` the expression just built that no temporary covers (a `give`
+    // position, or a shape that owns no heap): its bytes sit in this resume invocation's stack,
+    // which the callee's `wait` outlives.
+    let built_span = arg.span();
+    if cg
+        .typed
+        .temporaries
+        .is_staged_argument(built_span.start, built_span.end)
+    {
+        let resolved = cg.resolve_type(&arg_ty);
+        return cg.stage_value_in_frame(arg_val.into_pointer_value(), &resolved);
+    }
+    // An argument typeck judged a copy (`non_owned_reads`) is copied here. The callee suspends,
+    // so the copy's pointer is held in a slot of the heap frame (`Cg::hold_copy_in_frame`), which
+    // the statement's end releases.
+    let arg_span = arg.span();
+    let arg_val = if cg
+        .typed
+        .non_owned_reads
+        .must_copy(arg_span.start, arg_span.end)
+    {
+        let owned = own_read_for_store(cg, arg, arg_val, &arg_ty, false, "sm_arg_copy")?;
+        // The caller releases the copy when the statement ends, after the callee completed; a
+        // `give` position is the callee's to release. Only a string, array or map is held (the
+        // kinds a heap frame slot keeps; any other kind leaks until C8 slice 4).
+        if owned.copied
+            && !callee_takes_it
+            && owned.release_target.is_none()
+            && owned.value.is_pointer_value()
+        {
+            let resolved = cg.resolve_type(&arg_ty);
+            if matches!(
+                release_step(&resolved),
+                ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+            ) {
+                cg.hold_copy_in_frame(
+                    owned.value.into_pointer_value(),
+                    &resolved,
+                    ReleaseForm::Local,
+                )?;
+            }
+        }
+        owned.value
+    } else {
+        arg_val
+    };
+    // 3. An envelope-union parameter: `lower_expr` wrapped a plain value in a tagged envelope in
+    //    this resume function's frame, which dies with this invocation. The argument is written,
+    //    payload inline, into the callee frame's own `Param` region, which lives as long as the
+    //    callee does (`stage_union_arg`).
+    if let Some(variants) = param_ty
+        .as_ref()
+        .and_then(|param_ty| cg.envelope_union_variants(param_ty))
+    {
+        // A `give` position hands the value over whole: the callee's `Param` region takes the boxes
+        // the argument owns (the binding it came from is moved), so a clone would orphan the
+        // original, which nothing releases.
+        if callee_takes_it {
+            cg.moved_cell_values
+                .insert(arg_val.into_pointer_value().as_value_ref() as usize);
+        }
+        let staged = cg.stage_union_arg(
+            arg_val.into_pointer_value(),
+            &variants,
+            callee_name,
+            index,
+            callee_frame,
+        )?;
+        // The `Param` region owns what the staging persisted into it: a clone of a shape variant's
+        // boxes, a copy of a string variant (`union_persist_into` copies what it does not take by
+        // move). A `give` callee releases its parameter; in every other case the statement's end
+        // releases the region after the callee completed, from a slot of the heap frame.
+        if !callee_takes_it {
+            let region = cg
+                .builder
+                .build_int_to_ptr(staged, cg.ptr(), "staged_union_region")
+                .map_err(|err| format!("staged union region pointer: {err}"))?;
+            cg.hold_copy_in_frame(region, &Type::Union { variants }, ReleaseForm::Value)?;
+        }
+        return Ok(staged);
+    }
     cg.to_i64_bits(arg_val, &arg_ty)
 }
 
@@ -12232,8 +18210,9 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     waker_ctx: PointerValue<'ctx>,
     param_names: &[String],
     f: &FunctionDecl,
-    shape_table: &'_ ShapeTable,
+    shape_table: &'g ShapeTable,
     current_state: &mut usize,
+    call_offset: usize,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     let ctx = cg.ctx;
 
@@ -12294,8 +18273,16 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 
     // Write call arguments.
     for (idx, arg) in args.iter().copied().enumerate().take(child_n_locals) {
-        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
-            .map_err(|e| format!("rec arg bits: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            parent_frame,
+            child_frame,
+            callee_name,
+            idx,
+            cg.callee_param_type(callee_name, idx),
+        )
+        .map_err(|e| format!("rec arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -12345,6 +18332,29 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 
     // cont_state_bb: re-poll.
     *current_state = continuation_state;
+    let boxed_child = cg
+        .frame_layouts
+        .get(&f.name)
+        .and_then(|layout| layout.recursion_slot)
+        .map(|offset| DropMember {
+            child: DropChild::Boxed { offset },
+            resume: child_resume_fn,
+            returned_value: None,
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        parent_frame,
+        call_offset,
+        continuation_state,
+        boxed_child.as_slice(),
+        &[],
+        false,
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
 
@@ -12435,19 +18445,26 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     let ret_val = if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, rec_frame_post)?;
-        let struct_ty = errors_result_type(ctx);
-        let mut r = struct_ty.const_zero();
-        r = cg
-            .builder
-            .build_insert_value(r, err_i64, 0, "rec_ret_err")
-            .map_err(|e| format!("rec_ret_err: {e}"))?
-            .into_struct_value();
-        r = cg
-            .builder
-            .build_insert_value(r, ok_i64, 1, "rec_ret_ok")
-            .map_err(|e| format!("rec_ret_ok: {e}"))?
-            .into_struct_value();
-        r.into()
+        if let Some((variants, maybe)) = cg.callee_ec_union_variants(callee_name) {
+            // C1f (#423): copy the slot out of the child's `Return` region before the heap frame
+            // is freed below.
+            cg.ec_region_to_standard(err_i64, ok_i64, &variants, maybe, "rec_ret")?
+                .into()
+        } else {
+            let struct_ty = errors_result_type(ctx);
+            let mut errors_result = struct_ty.const_zero();
+            errors_result = cg
+                .builder
+                .build_insert_value(errors_result, err_i64, 0, "rec_ret_err")
+                .map_err(|err| format!("rec_ret_err: {err}"))?
+                .into_struct_value();
+            errors_result = cg
+                .builder
+                .build_insert_value(errors_result, ok_i64, 1, "rec_ret_ok")
+                .map_err(|err| format!("rec_ret_ok: {err}"))?
+                .into_struct_value();
+            errors_result.into()
+        }
     } else {
         load_sm_return_value_typed(cg, ctx, rec_frame_post, callee_name, "rec_ret")?
     };
@@ -12486,7 +18503,9 @@ fn lower_let_background_handle<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     name: &str,
     bg_inner: &Expr,
+    handle_ty: Type,
 ) -> Result<(), String> {
+    cg.local_types.insert(name.to_string(), handle_ty);
     // Shape-receiver MethodCall spawns normalize to the Call-form twin (UFCS identity,
     // v0.3-M6 P1-1 site 8) — same normalization as `lower_expr_background`.
     let synthesized = synthesize_ufcs_call_expr(cg, bg_inner);
@@ -12505,13 +18524,7 @@ fn lower_let_background_handle<'ctx>(
     };
     // Completion-extraction kind from the callee's declared return type (the ynz-abi
     // HANDLE_RET_KIND_* contract shared with ynz-runtime's HandleStateFnFuture).
-    let sig_ret = cg
-        .sig_table
-        .fns
-        .get(&callee_name)
-        .map(|s| s.ret.clone())
-        .or_else(|| cg.imported_fns.get(&callee_name).map(|s| s.ret.clone()))
-        .ok_or_else(|| format!("handle spawn: signature for `{callee_name}` not found"))?;
+    let sig_ret = cg.callee_result_type(&callee_name)?;
     // Heap-pointer words (`array<T>` / `map<K, V>`) get their own kinds so the runtime can
     // release a returned pointer from the child's spawn-arg drop ladder — a child that
     // returns one of its own heap-cloned arguments hands ownership to the parent, and the
@@ -12530,6 +18543,11 @@ fn lower_let_background_handle<'ctx>(
     // heap cell already (`maybe_to_heap_cell` at the return) and stays `EC_WORD`. The word
     // types are listed by name so a future aggregate return cannot fall through silently.
     let ret_kind = match &sig_ret {
+        // A union rides a cell the spawn wrapper moves it into (`handle_union_move_fn`).
+        ret if cg.handle_union_variants(ret).is_some() => ynz_abi::HANDLE_RET_KIND_UNION,
+        // A `fixed` list rides the same moved cell: its cells live in the task's frame, which dies
+        // right after the completion is read.
+        ret if cg.handle_fixed_result(ret).is_some() => ynz_abi::HANDLE_RET_KIND_UNION,
         Type::ErrorsCapable { inner } => match inner.as_ref() {
             Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_EC_NUMBER,
             t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_EC_HEAP_PTR,
@@ -12669,6 +18687,19 @@ fn emit_conduit_stmt<'ctx, 'g>(
         // EC results (send's `nothing errors`, handle-receive's `T errors`) that cross a
         // later suspension need the EC-crossing-local registration, mirroring the
         // let-suspending-call arms.
+        // A `number` a handle delivers sits in the handle's own buffer (`extract_completion`,
+        // `RET_KIND_VALUE_NUMBER` / `RET_KIND_EC_NUMBER`): the binding does not own the ok word. A bignum
+        // is not one of those: its ok word is the text the task allocated, handed over whole
+        // (`RET_KIND_EC_WORD`), so the binding releases it like any call result. A `maybe`
+        // arrives in a counted cell the binding owns (`RET_KIND_VALUE_MAYBE` copies the envelope into one;
+        // a `maybe<T> errors` result already is one), released like any call result.
+        if matches!(op, ConduitOp::HandleRecv) {
+            if let Type::ErrorsCapable { inner } = cg.resolve_type(&cg.expr_type(inner)) {
+                if matches!(*inner, Type::Number { precision } if precision <= 34) {
+                    cg.ec_borrowed_ok.insert(name.to_string());
+                }
+            }
+        }
         if cg.sm_crossing_errors_capable_set.contains(name) {
             cg.errors_capable_locals.insert(name.to_string());
         }
@@ -12726,7 +18757,9 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
     let value_bits = if is_send {
         let arg = &args[0];
         let arg_ty = cg.expr_type(arg);
-        let v = lower_expr(cg, arg)?;
+        let lowered_value = lower_expr(cg, arg)?;
+        // The channel owns what it carries: a borrowed string is copied, a movable one is sent.
+        let sent_value = own_string_for_store(cg, lowered_value, &arg_ty, "conduit_send_str")?;
         // fr12 (v0.3-M8 Phase 4 step 3d): a decimal128 payload lives on the sender's frame
         // (a pointer to per-site i128 storage) and would dangle in the buffer. Mint a fresh
         // counted 16-byte cell through the ONE `number_to_heap_cell` helper the `background`
@@ -12738,12 +18771,13 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         // classification (`channel_elem_drop == NumberCell`), never by a re-derived
         // precision test beside it (authoritative-derivation; fix round 2 replaced the twin).
         if channel_elem_drop(&cg.resolve_type(&arg_ty)) == Some(ChannelElemDrop::NumberCell) {
-            let cell = cg.number_to_heap_cell(v.into_pointer_value(), "conduit_send_num")?;
+            let cell =
+                cg.number_to_heap_cell(sent_value.into_pointer_value(), "conduit_send_num")?;
             cg.builder
                 .build_ptr_to_int(cell, i64t, "conduit_send_num_bits")
                 .map_err(|e| format!("conduit send number cell bits: {e}"))?
         } else {
-            cg.to_i64_bits(v, &arg_ty)
+            cg.to_i64_bits(sent_value, &arg_ty)
                 .map_err(|e| format!("conduit send value bits: {e}"))?
         }
     } else {
@@ -12948,6 +18982,18 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         )
         .map_err(|e| format!("conduit first switch: {e}"))?;
     *current_state = continuation_state;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        frame_ptr,
+        receiver.span().start,
+        continuation_state,
+        &[],
+        &[],
+        false,
+    )?;
 
     // suspend: save the continuation state, yield Pending (the runtime registered the
     // forwarded waker; the task is re-driven when the endpoint makes progress).
@@ -13196,6 +19242,111 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                 (&o2, ready2_bb),
                 (&zero, closed2_bb),
             ]);
+            // A union result arrives as the cell the spawn wrapper moved it into (`HANDLE_RET_KIND_UNION`):
+            // copy the slot into one the binding owns, as a call result's region is copied, then
+            // free the cell's shell (its contents moved into the binding's slot).
+            if let Type::BackgroundHandle { result, .. } = cg.expr_type(receiver) {
+                if let Some((variants, maybe)) = cg.handle_union_variants(&result) {
+                    let err = err_phi.as_basic_value().into_int_value();
+                    let cell_bits = ok_phi.as_basic_value().into_int_value();
+                    let standard =
+                        cg.ec_region_to_standard(err, cell_bits, &variants, maybe, "hrecv_union")?;
+                    let slot_size = cg.union_layout(&variants)?.slot_size;
+                    let free_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_free_cell");
+                    let after_bb = ctx.append_basic_block(cg.current_fn, "hrecv_union_done");
+                    let has_cell = cg
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            cell_bits,
+                            i64t.const_zero(),
+                            "hrecv_union_has_cell",
+                        )
+                        .map_err(|e| format!("hrecv union cell cmp: {e}"))?;
+                    cg.builder
+                        .build_conditional_branch(has_cell, free_bb, after_bb)
+                        .map_err(|e| format!("hrecv union cell branch: {e}"))?;
+                    cg.builder.position_at_end(free_bb);
+                    let cell = cg
+                        .builder
+                        .build_int_to_ptr(cell_bits, cg.ptr(), "hrecv_union_cell")
+                        .map_err(|e| format!("hrecv union cell ptr: {e}"))?;
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_free,
+                            &[cell.into(), i64t.const_int(slot_size, false).into()],
+                            "",
+                        )
+                        .map_err(|e| format!("hrecv union cell free: {e}"))?;
+                    cg.builder
+                        .build_unconditional_branch(after_bb)
+                        .map_err(|e| format!("hrecv union cell join: {e}"))?;
+                    cg.builder.position_at_end(after_bb);
+                    return Ok(standard.into());
+                }
+            }
+            // A `fixed` result arrives as the cell the spawn wrapper moved it into: copy the cells
+            // (and with them the items they point at) into a block of this frame the binding owns,
+            // then free the cell's shell. The standard pair's ok word is the block's address.
+            let mut received_ok = ok_phi.as_basic_value().into_int_value();
+            if let Type::BackgroundHandle { result, .. } = cg.expr_type(receiver) {
+                if let Some((elem, count)) = cg.handle_fixed_result(&result) {
+                    let cell_bits = received_ok;
+                    let bytes = count as u64 * cg.fixed_cell_bytes(&elem);
+                    let block = cg.alloca_in_entry_llvm(
+                        cg.fixed_block_type(&elem, count as u32),
+                        "hrecv_fixed_block",
+                    )?;
+                    let copy_bb = ctx.append_basic_block(cg.current_fn, "hrecv_fixed_copy");
+                    let after_bb = ctx.append_basic_block(cg.current_fn, "hrecv_fixed_done");
+                    let before_bb = cg
+                        .builder
+                        .get_insert_block()
+                        .ok_or("hrecv fixed: no insert block")?;
+                    let has_cell = cg
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            cell_bits,
+                            i64t.const_zero(),
+                            "hrecv_fixed_has_cell",
+                        )
+                        .map_err(|err| format!("hrecv fixed cell cmp: {err}"))?;
+                    cg.builder
+                        .build_conditional_branch(has_cell, copy_bb, after_bb)
+                        .map_err(|err| format!("hrecv fixed cell branch: {err}"))?;
+                    cg.builder.position_at_end(copy_bb);
+                    let cell = cg
+                        .builder
+                        .build_int_to_ptr(cell_bits, cg.ptr(), "hrecv_fixed_cell")
+                        .map_err(|err| format!("hrecv fixed cell ptr: {err}"))?;
+                    cg.builder
+                        .build_memcpy(block, 8, cell, 8, i64t.const_int(bytes, false))
+                        .map_err(|err| format!("hrecv fixed copy: {err}"))?;
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_free,
+                            &[cell.into(), i64t.const_int(bytes, false).into()],
+                            "",
+                        )
+                        .map_err(|err| format!("hrecv fixed cell free: {err}"))?;
+                    let block_bits = cg
+                        .builder
+                        .build_ptr_to_int(block, i64t, "hrecv_fixed_block_bits")
+                        .map_err(|err| format!("hrecv fixed block bits: {err}"))?;
+                    cg.builder
+                        .build_unconditional_branch(after_bb)
+                        .map_err(|err| format!("hrecv fixed join: {err}"))?;
+                    cg.builder.position_at_end(after_bb);
+                    let ok_after = cg
+                        .builder
+                        .build_phi(i64t, "hrecv_fixed_ok")
+                        .map_err(|err| format!("hrecv fixed ok phi: {err}"))?;
+                    ok_after
+                        .add_incoming(&[(&block_bits, copy_bb), (&i64t.const_zero(), before_bb)]);
+                    received_ok = ok_after.as_basic_value().into_int_value();
+                }
+            }
             let st = ctx.struct_type(&[i64t.into(), i64t.into()], false);
             let mut r = st.const_zero();
             r = cg
@@ -13210,12 +19361,7 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                 .into_struct_value();
             r = cg
                 .builder
-                .build_insert_value(
-                    r,
-                    ok_phi.as_basic_value().into_int_value(),
-                    1,
-                    "hrecv_ec_ok",
-                )
+                .build_insert_value(r, received_ok, 1, "hrecv_ec_ok")
                 .map_err(|e| format!("conduit hrecv ok insert: {e}"))?
                 .into_struct_value();
             Ok(r.into())
@@ -13375,6 +19521,18 @@ fn emit_wait_point<'ctx, 'g>(
     // (each resume_fn call has fresh allocas — the old allocas from state_0's call are gone).
     // Then re-poll the handle to confirm Ready and transition to post_wait_bb.
     *current_state = continuation_state;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        frame_ptr,
+        inner.span().start,
+        continuation_state,
+        &[],
+        &[],
+        true,
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
     state_machine::emit_sleep_poll_branch(
@@ -13517,6 +19675,7 @@ fn materialize_param<'ctx>(
     llvm_val: inkwell::values::BasicValueEnum<'ctx>,
     param_ty: &Type,
 ) -> Result<(), String> {
+    cg.local_types.insert(name.to_string(), param_ty.clone());
     match param_ty {
         // Pointer-typed params: incoming LLVM value is a ptr; store the ptr in a ptr-slot.
         Type::Shape { .. } | Type::Dynamic { .. }
@@ -13642,6 +19801,7 @@ fn emit_sm_loop_back_edge<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
     header_bb: inkwell::basic_block::BasicBlock<'ctx>,
     err_label: &str,
+    loop_offset: usize,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
     frame_ptr: PointerValue<'ctx>,
@@ -13703,6 +19863,18 @@ fn emit_sm_loop_back_edge<'ctx, 'g>(
     // Continuation state: fresh resume-fn invocation — reload params + crossing locals
     // (the same reload every wait continuation performs), then re-enter at the header.
     *current_state = continuation_state;
+    register_drop_state(
+        cg,
+        f,
+        param_names,
+        shape_table,
+        frame_ptr,
+        loop_offset,
+        continuation_state,
+        &[],
+        &[],
+        false,
+    )?;
     cg.builder.position_at_end(cont_state_bb);
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
     cg.builder
@@ -13751,35 +19923,46 @@ fn lower_soa_construction<'ctx>(
         let ev = lower_expr(cg, elem_expr)?;
         let src = ev.into_pointer_value();
         let idx = cg.i64().const_int(k as u64, false);
-        cg.soa_scatter(&info, arr, idx, src, "soa_ctor")?;
+        cg.soa_scatter(&info, arr, idx, src, false, "soa_ctor")?;
     }
     cg.soa_bindings.insert(name.to_string(), info);
     Ok(arr.into())
 }
 
+/// Lower one statement, then release the temporaries typeck recorded for it (`open_temporaries`,
+/// `close_temporaries`): a fresh value no binding holds dies where its statement ends. A `while`
+/// condition's temporaries die after the condition, not after the loop (`lower_stmt_while`).
+///
+/// O(1) time here.
 fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
+    let span = ynz_typeck::release_plan::stmt_span(stmt);
+    let opened = cg.open_temporaries(span)?;
+    lower_stmt_body(cg, stmt)?;
+    cg.close_temporaries(opened)
+}
+
+fn lower_stmt_body<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
     match stmt {
         Stmt::Expr(expr) => {
             lower_expr(cg, expr)?;
         }
 
         Stmt::Let {
-            name,
-            ty: ann_ty,
-            value,
-            span,
-            ..
+            name, value, span, ..
         } => {
             // v0.3-M4 Phase 2: `let h = background fn(...)` — the handle-form spawn.
             // Compile-time spawn-form keying (R8): only THIS let-bound form routes to
             // `ynz_rt_spawn_handle`; a bare `background fn(...)` statement keeps the
             // fire-and-forget `ynz_rt_spawn` path byte-for-byte.
             if let Expr::Background(bg_inner, _) = value {
-                return lower_let_background_handle(cg, name, bg_inner);
+                let handle_ty = cg.expr_type(value);
+                return lower_let_background_handle(cg, name, bg_inner, handle_ty);
             }
             let val_ty = cg.expr_type(value);
+            cg.local_types.insert(name.clone(), val_ty.clone());
             // v0.3-M5 P5: SoA construction interception. The authority keys a
-            // decision by (array_name, decl_span) — only THIS binding's literal
+            // decision by decl_span ALONE (the name is renamed per binding for codegen, the
+            // declaration span is not) — only THIS binding's literal
             // constructs segmented; every other path stays AoS byte-for-byte.
             // The returned arr pointer flows through the arm's existing binding
             // store unchanged (BuiltinArray = plain pointer store).
@@ -13788,197 +19971,169 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 .arrays
                 .iter()
                 .find(|d| {
-                    d.array_name == *name
-                        && d.decl_span == *span
+                    d.decl_span == *span
                         && matches!(d.kind, ynz_typeck::soa::LayoutKind::Soa { .. })
                 })
                 .cloned();
             let val = if let Some(decision) = soa_decision {
-                lower_soa_construction(cg, name, value, &decision)?
+                // The constructed array is fresh: the binding takes it (no store-seam copy).
+                let constructed = lower_soa_construction(cg, name, value, &decision)?;
+                cg.moved_cell_values
+                    .insert(constructed.as_value_ref() as usize);
+                constructed
             } else {
                 lower_expr(cg, value)?
             };
 
-            // M6: when annotation is a union type and value is a concrete shape variant,
-            // construct a tagged-struct { i64 tag, i64 data } on the stack.
-            let union_constructed = 'union_ctor: {
-                if let Some(ast_ann) = ann_ty.as_ref() {
-                    let resolved_ann = ast_type_to_typeck_type(ast_ann, cg.shape_table);
-                    if let Type::Union { ref variants } = resolved_ann {
-                        if let Type::Shape {
-                            name: ref shape_name,
-                        } = val_ty
-                        {
-                            let tag = variants.iter().position(|v| {
-                                if let Type::Shape { name } = v {
-                                    name == shape_name
-                                } else {
-                                    false
-                                }
-                            });
-                            if let Some(tag_idx) = tag {
-                                let union_st = cg
-                                    .ctx
-                                    .struct_type(&[cg.i64().into(), cg.i64().into()], false);
-                                let union_slot = cg
-                                    .builder
-                                    .build_alloca(union_st, &format!("{name}_union"))
-                                    .map_err(|e| format!("{e}"))?;
-                                let tag_gep = cg
-                                    .builder
-                                    .build_struct_gep(union_st, union_slot, 0, "u_tag")
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(tag_gep, cg.i64().const_int(tag_idx as u64, false))
-                                    .map_err(|e| format!("{e}"))?;
-                                let data_gep = cg
-                                    .builder
-                                    .build_struct_gep(union_st, union_slot, 1, "u_data")
-                                    .map_err(|e| format!("{e}"))?;
-                                let ptr_as_i64 = cg
-                                    .builder
-                                    .build_ptr_to_int(val.into_pointer_value(), cg.i64(), "ptr2i")
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(data_gep, ptr_as_i64)
-                                    .map_err(|e| format!("{e}"))?;
-                                // v0.3-M6 Phase 1c step 3c (FRAGOs 006/007/013): a
-                                // CROSSING union binding must not keep the STACK tagged
-                                // struct — the resume fn's stack dies on every Pending
-                                // return, so a suspending callee's tag read dangles
-                                // (fixture `v0_3_m6_union_arg_pure_call.ynz`: `circle`
-                                // vs `square`). Promote envelope + payload to counted
-                                // heap cells and store the cell into the PRE-CREATED
-                                // sm_entry crossing alloca — never a fresh `outer_slot`,
-                                // which would orphan the alloca the flush/reload
-                                // machinery reads (and, being created in a state block,
-                                // would violate LLVM SSA dominance across states).
-                                let is_sm_crossing = cg
-                                    .sm_crossing_names
-                                    .as_ref()
-                                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
-                                if is_sm_crossing {
-                                    let cell = cg.union_to_heap_cell(union_slot, variants, name)?;
-                                    let slot = *cg.locals.get(name.as_str()).ok_or_else(|| {
-                                        format!("sm crossing alloca for `{name}` missing in entry")
-                                    })?;
-                                    cg.builder
-                                        .build_store(slot, cell)
-                                        .map_err(|e| format!("{e}"))?;
-                                } else {
-                                    let outer_slot = cg
-                                        .builder
-                                        .build_alloca(cg.ptr(), name)
-                                        .map_err(|e| format!("{e}"))?;
-                                    cg.builder
-                                        .build_store(outer_slot, union_slot)
-                                        .map_err(|e| format!("{e}"))?;
-                                    cg.locals.insert(name.clone(), outer_slot);
-                                }
-                                break 'union_ctor true;
-                            }
-                        }
-                    }
-                }
-                false
+            // When inside a SM resume function and this name is a crossing local,
+            // the alloca was pre-created in the sm_entry block (LLVM SSA dominance
+            // requires allocas to be in the entry block). Reuse that alloca instead
+            // of creating a new one in the current state block.
+            //
+            // A nested `let` that reuses a crossing local's user name is a different
+            // binding with a different codegen name (`TypedModule::binding_names`), so
+            // `name` below is crossing only when THIS declaration is the crossing one.
+            let is_sm_crossing = cg
+                .sm_crossing_names
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
+            let slot = if is_sm_crossing {
+                // Crossing local: reuse the pre-created sm_entry alloca regardless of
+                // nesting depth. LLVM SSA dominance requires allocas to be in the entry
+                // block; the sm_entry alloca dominates all state blocks. Codegen names are
+                // unique per binding (`TypedModule::binding_names`), so any `let name`
+                // here is the first and only definition of that crossing local.
+                *cg.locals
+                    .get(name.as_str())
+                    .ok_or_else(|| format!("sm crossing alloca for `{name}` missing in entry"))?
+            } else {
+                // Not a crossing local: alloca in the ENTRY block so it dominates all
+                // successor blocks. Yinz allows variable shadowing (design/linting.md
+                // `shadowed-variables` lint); a shadow `let x` inside an if/while body
+                // is a separate LLVM basic block — its alloca must be in the entry block
+                // or LLVM rejects the IR with "Instruction does not dominate all uses!".
+                // The outer binding is restored to cg.locals on scope exit (restore-all
+                // protocol), so the shadow has no lasting effect outside its own scope.
+                let s = cg.alloca_in_entry(&val_ty, name)?;
+                cg.locals.insert(name.clone(), s);
+                s
             };
-            if !union_constructed {
-                // When inside a SM resume function and this name is a crossing local,
-                // the alloca was pre-created in the sm_entry block (LLVM SSA dominance
-                // requires allocas to be in the entry block). Reuse that alloca instead
-                // of creating a new one in the current state block.
-                //
-                // Exception: if we are inside a nested scope (sm_scope_depth > 0), this
-                // `let name = ...` is a SHADOW binding that creates a new inner local —
-                // not a write to the outer crossing local. Create a fresh alloca so the
-                // outer crossing alloca is not clobbered by the shadow's value.
-                let is_sm_crossing = cg
-                    .sm_crossing_names
-                    .as_ref()
-                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
-                let slot = if is_sm_crossing {
-                    // Crossing local: reuse the pre-created sm_entry alloca regardless of
-                    // nesting depth. LLVM SSA dominance requires allocas to be in the entry
-                    // block; the sm_entry alloca dominates all state blocks. Shadow bindings
-                    // (a nested `let x` where outer `x` crosses a wait) are rejected at
-                    // typeck (ShadowsCrossingLocal), so any `let name` here is the first
-                    // and only definition of that crossing local.
-                    *cg.locals.get(name.as_str()).ok_or_else(|| {
-                        format!("sm crossing alloca for `{name}` missing in entry")
-                    })?
-                } else {
-                    // Not a crossing local: alloca in the ENTRY block so it dominates all
-                    // successor blocks. Yinz allows variable shadowing (design/linting.md
-                    // `shadowed-variables` lint); a shadow `let x` inside an if/while body
-                    // is a separate LLVM basic block — its alloca must be in the entry block
-                    // or LLVM rejects the IR with "Instruction does not dominate all uses!".
-                    // The outer binding is restored to cg.locals on scope exit (restore-all
-                    // protocol), so the shadow has no lasting effect outside its own scope.
-                    let s = cg.alloca_in_entry(&val_ty, name)?;
-                    cg.locals.insert(name.clone(), s);
-                    s
+            // Shape crossing local: val is a PointerValue to a temp stack struct (from
+            // lower_struct_lit). The slot is a ptr alloca pre-wired to the frame's slot
+            // region (Step 1b). Memcpy from the temp into the frame region by loading the
+            // frame region ptr from the ptr alloca and memcpy-ing into it. Works at any
+            // nesting depth — the ptr alloca is always the sm_entry one.
+            let stored = if is_sm_crossing
+                && matches!(val_ty, Type::Shape { .. })
+                && cg.sm_crossing_shape_embed_set.contains(name.as_str())
+            {
+                let shape_name = match &val_ty {
+                    Type::Shape { name: sn } => sn.clone(),
+                    _ => unreachable!(),
                 };
-                // Shape crossing local: val is a PointerValue to a temp stack struct (from
-                // lower_struct_lit). The slot is a ptr alloca pre-wired to the frame's slot
-                // region (Step 1b). Memcpy from the temp into the frame region by loading the
-                // frame region ptr from the ptr alloca and memcpy-ing into it. Works at any
-                // nesting depth — the ptr alloca is always the sm_entry one.
-                let stored = if is_sm_crossing
-                    && matches!(val_ty, Type::Shape { .. })
-                    && cg.sm_crossing_shape_embed_set.contains(name.as_str())
-                {
-                    let shape_name = match &val_ty {
-                        Type::Shape { name: sn } => sn.clone(),
-                        _ => unreachable!(),
-                    };
-                    if cg.shape_types.get(&shape_name).is_some() {
-                        let src_ptr = val.into_pointer_value();
-                        // Copy size from the ONE authoritative shape-size source
-                        // (`shape_abi_sizes` via `shape_abi_size_const`) — the
-                        // FRAGO 010 twin (`struct_ty.size_of()` + zext) unified
-                        // away (P3 step 5(c), authoritative-derivation §1).
-                        let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
-                        // Load the frame region ptr from the ptr alloca (pre-wired to frame
-                        // in Step 1b). Memcpy from the temp stack alloca into the frame region.
-                        let dest_ptr = cg
-                            .builder
-                            .build_load(
-                                cg.ctx.ptr_type(AddressSpace::default()),
-                                slot,
-                                &format!("{name}_frame_ptr"),
-                            )
-                            .map_err(|e| format!("sm shape let load frame ptr {name}: {e}"))?
-                            .into_pointer_value();
-                        cg.builder
-                            .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
-                            .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
-                        true
-                    } else {
-                        false
-                    }
+                if cg.shape_types.get(&shape_name).is_some() {
+                    let src_ptr = val.into_pointer_value();
+                    // Copy size from the ONE authoritative shape-size source
+                    // (`shape_abi_sizes` via `shape_abi_size_const`) — the
+                    // FRAGO 010 twin (`struct_ty.size_of()` + zext) unified
+                    // away (P3 step 5(c), authoritative-derivation §1).
+                    let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
+                    // Load the frame region ptr from the ptr alloca (pre-wired to frame
+                    // in Step 1b). Memcpy from the temp stack alloca into the frame region.
+                    let dest_ptr = cg.embed_dest(name, slot)?;
+                    cg.builder
+                        .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
+                        .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
+                    // The copy owns what it owns, as every shape binding does (`shape_bytes_to_owned`):
+                    // a value read from another binding clones its boxes, a fresh one hands them over.
+                    cg.deepen_unless_moved(src_ptr, dest_ptr, &shape_name)?;
+                    cg.free_taken_shape_cell(src_ptr, size_i64)?;
+                    true
                 } else {
                     false
-                };
-                if !stored {
-                    // Binding funnel: shape/maybe values copy their bytes into
-                    // variable-owned storage here (get-side ownership contract —
-                    // see store_binding); everything else stores as before.
-                    store_binding(cg, val, &val_ty, slot, name)?;
                 }
-                // M7 P4a: track bindings that hold errors-capable results.
-                if matches!(val_ty, Type::ErrorsCapable { .. }) {
-                    cg.errors_capable_locals.insert(name.clone());
+            } else {
+                false
+            };
+            if !stored {
+                // Binding funnel: shape/maybe values copy their bytes into
+                // variable-owned storage here (get-side ownership contract —
+                // see store_binding); everything else stores as before.
+                // A `let` of a place read that typeck proved a read-only view
+                // (`TypedModule::view_bindings`) points at the place instead of copying it.
+                // Condition (c): a view never crosses a suspension. A binding that does is in
+                // the crossing set (`sm_crossing_names`, the one authoritative set that sizes the
+                // frame, which counts a call that suspends without a written `wait`) or the
+                // crossing union map; it keeps its copy. A state-machine function whose binding
+                // does not cross views like any other.
+                // Array and map values go through the store seam (`own_read_for_store`): a
+                // moved value is taken, a view points at its place, any other read is copied.
+                let is_view = read_may_point_at_place(cg, value, Some(name))
+                    && val.is_pointer_value()
+                    && matches!(
+                        cg.resolve_type(&val_ty),
+                        Type::Shape { .. }
+                            | Type::Union { .. }
+                            | Type::Maybe { .. }
+                            | Type::BuiltinArray { .. }
+                            | Type::BuiltinMap { .. }
+                            | Type::BuiltinFixed { .. }
+                    );
+                if is_view {
+                    store(cg, val, &val_ty, slot)?;
+                } else {
+                    store_binding_of_read(cg, value, val, &val_ty, slot, name)?;
                 }
+            }
+            // M7 P4a: track bindings that hold errors-capable results.
+            if matches!(val_ty, Type::ErrorsCapable { .. }) {
+                cg.errors_capable_locals.insert(name.clone());
+                cg.ec_original_slots.insert(name.clone(), slot);
             }
         }
 
-        Stmt::Assign { target, value, .. } => {
-            let slot = *cg
-                .locals
-                .get(target.as_str())
+        Stmt::Assign {
+            target,
+            value,
+            span,
+            ..
+        } => {
+            // An `is` arm re-points a narrowed union binding at its variant payload; an assignment
+            // replaces the whole union, so it writes (and releases) the binding's OUTER slot and
+            // the binding is the whole union again for the rest of the arm (typeck clears the
+            // narrowing fact at the assignment, `IMP-narrowing.md` "Reassignment Invalidation").
+            let slot = cg
+                .reload_slot(target)
                 .ok_or_else(|| format!("undefined `{target}` in codegen"))?;
             let ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
+            if cg.locals.get(target.as_str()).copied() != Some(slot) {
+                cg.locals.insert(target.clone(), slot);
+            }
+            // An errors-capable result is released through its original slot and rebound there
+            // (`assign_errors_capable`).
+            if cg.sm_frame_ptr.is_none()
+                && matches!(cg.resolve_type(&ty), Type::ErrorsCapable { .. })
+                && cg.ec_original_slots.contains_key(target.as_str())
+            {
+                if let Some(assign) = cg.typed.release_plan.assign_release(span).cloned() {
+                    if val.is_pointer_value() {
+                        cg.assign_errors_capable(
+                            target,
+                            slot,
+                            val.into_pointer_value(),
+                            &assign.held,
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
+            // The value just evaluated may have taken the old one (a null slot); what the slot
+            // holds now is released after the new value is stored.
+            let replaced = match cg.typed.release_plan.assign_release(span).cloned() {
+                Some(assign) => cg.begin_assign_release(&assign, slot)?,
+                None => None,
+            };
             // Frame-embedded crossing shape local: its owned storage IS its
             // frame region (ptr alloca pre-wired in Step 1b). Copy the RHS
             // bytes INTO the region — the plain slot store this arm used to do
@@ -14004,7 +20159,26 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 // Binding funnel: shape/maybe values copy their bytes into
                 // variable-owned storage (get-side ownership contract — see
                 // store_binding); everything else stores as before.
-                store_binding(cg, val, &ty, slot, target)?;
+                if read_may_point_at_place(cg, value, Some(target))
+                    && val.is_pointer_value()
+                    && matches!(
+                        cg.resolve_type(&ty),
+                        Type::Shape { .. }
+                            | Type::Union { .. }
+                            | Type::Maybe { .. }
+                            | Type::BuiltinArray { .. }
+                            | Type::BuiltinMap { .. }
+                            | Type::BuiltinFixed { .. }
+                    )
+                {
+                    store(cg, val, &ty, slot)?;
+                } else {
+                    store_binding_of_read(cg, value, val, &ty, slot, target)?;
+                }
+            }
+            if let Some(replaced) = replaced {
+                let replaced = cg.hold_for_walking_loops(replaced, slot)?;
+                cg.finish_assign_release(&replaced)?;
             }
         }
 
@@ -14057,11 +20231,19 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         }
 
         Stmt::For {
-            var, iter, body, ..
+            var,
+            var_span,
+            iter,
+            body,
+            ..
         } => {
             let locals_snapshot = cg.locals.clone();
             cg.sm_scope_depth += 1;
-            let r = lower_stmt_for(cg, var, iter, body);
+            let hands_rows_over = cg
+                .typed
+                .loop_row_handovers
+                .is_handover_loop(var_span.start, var_span.end);
+            let r = lower_stmt_for(cg, var, iter, body, hands_rows_over);
             cg.sm_scope_depth -= 1;
             // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
             for (name, &outer_alloca) in &locals_snapshot {
@@ -14070,8 +20252,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             r?;
         }
 
-        Stmt::Return { value, .. } => {
-            lower_stmt_return(cg, value.as_ref())?;
+        Stmt::Return { value, span } => {
+            lower_stmt_return(cg, value.as_ref(), span)?;
         }
 
         Stmt::FieldAssign { target, value, .. } => {
@@ -14098,27 +20280,17 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 let key_ty = key.as_ref().clone();
                 let val_ty = val.as_ref().clone();
                 let key_val = lower_expr(cg, index)?;
-                if key_is_string(&key_ty) {
-                    cg.map_val_set(
-                        recv_val.into_pointer_value(),
-                        key_val.into(),
-                        true,
-                        elem_val,
-                        &val_ty,
-                        "mia_s",
-                    )?;
-                } else {
-                    let kt = cg.expr_type(index);
-                    let kb = cg.to_i64_bits(key_val, &kt)?;
-                    cg.map_val_set(
-                        recv_val.into_pointer_value(),
-                        kb.into(),
-                        false,
-                        elem_val,
-                        &val_ty,
-                        "mia",
-                    )?;
-                }
+                let key_kind = cg.map_key_kind(&key_ty)?;
+                let index_ty = cg.expr_type(index);
+                let key_operand = cg.map_key_operand(key_val, &index_ty, key_kind)?;
+                cg.map_val_set(
+                    recv_val.into_pointer_value(),
+                    key_operand,
+                    key_kind,
+                    elem_val,
+                    &val_ty,
+                    "mia",
+                )?;
             } else {
                 let idx_val = lower_expr(cg, index)?.into_int_value();
                 match &recv_ty {
@@ -14135,6 +20307,16 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                             soa_info.as_ref(),
                         )?;
                     }
+                    Type::BuiltinFixed { .. } if cg.is_inline_decimal(&elem_ty) => {
+                        // A `fixed<number>` cell is the 16-byte decimal itself: copy it in, so
+                        // the slot the value came from can be reused by the next statement.
+                        cg.fixed_cell_store_decimal(
+                            recv_val.into_pointer_value(),
+                            idx_val,
+                            elem_val.into_pointer_value(),
+                            "fixed_ia_decimal",
+                        )?;
+                    }
                     Type::BuiltinFixed { size, .. } => {
                         // fixed<T> keeps its stack [N x i64] uniform-slot layout — the
                         // by-value heap-array ABI does not apply here. The slot PERSISTS
@@ -14142,6 +20324,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                         // STABLE: shape/maybe values heap-clone via the ONE marshalling
                         // choke point (fix round 4 — the round-3 closer's probe showed
                         // slots aliasing the loop binding's reused storage).
+                        let elem_val =
+                            own_string_for_store(cg, elem_val, &elem_ty, "fixed_ia_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty, "fixed_ia_val")?;
                         let arr_ptr = recv_val.into_pointer_value();
                         let gep = unsafe {
@@ -14149,6 +20333,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                                 .build_gep(cg.i64(), arr_ptr, &[idx_val], "fixed_set_elem")
                                 .map_err(|e| format!("fixed_set gep: {e}"))?
                         };
+                        release_replaced_fixed_cell(cg, gep, &elem_ty, "fixed_ia_old")?;
                         cg.builder
                             .build_store(gep, bits)
                             .map_err(|e| format!("{e}"))?;
@@ -14176,12 +20361,7 @@ fn lower_stmt_if<'ctx>(
         .map_err(|e| format!("if branch: {e}"))?;
 
     cg.builder.position_at_end(then_bb);
-    for stmt in &body.stmts {
-        if is_block_terminated(cg) {
-            break;
-        }
-        lower_stmt(cg, stmt)?;
-    }
+    lower_block_stmts(cg, body)?;
     if !is_block_terminated(cg) {
         cg.builder
             .build_unconditional_branch(merge_bb)
@@ -14302,12 +20482,19 @@ fn lower_stmt_match<'ctx>(
             .map_err(|e| format!("match branch: {e}"))?;
 
         cg.builder.position_at_end(arm_body_bb);
-        for stmt in &arm.body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        // `is Variant =>`: re-point the scrutinee binding at the variant payload for the
+        // arm body (typeck's `union_narrowed` overlay covers the same window).
+        let narrowed = if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
+            cg.narrow_union_local_to_variant(
+                scrutinee,
+                scrutinee_val.into_pointer_value(),
+                "is_arm",
+            )?
+        } else {
+            None
+        };
+        lower_block_stmts(cg, &arm.body)?;
+        cg.restore_narrowed_local(narrowed);
         if !is_block_terminated(cg) {
             cg.builder
                 .build_unconditional_branch(merge_bb)
@@ -14319,12 +20506,7 @@ fn lower_stmt_match<'ctx>(
 
     // Emit else body (current position is final_fallthrough_bb or merge_bb).
     if let Some(else_body) = else_arm {
-        for stmt in &else_body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, else_body)?;
         if !is_block_terminated(cg) {
             cg.builder
                 .build_unconditional_branch(merge_bb)
@@ -14386,6 +20568,15 @@ fn match_cmp<'ctx>(
                 )
                 .map_err(|e| format!("{e}"))
         }
+        // A bignum is decimal text: compare it as text-of-a-number, never as decimal128 bytes.
+        Type::Number { precision } if *precision > 34 => bignum_compare(
+            cg,
+            scrutinee_val.into_pointer_value(),
+            pattern_val.into_pointer_value(),
+            *precision,
+            &BinOpKind::EqEq,
+        )
+        .map(|matched| matched.into_int_value()),
         Type::Number { .. } => {
             let c = cg
                 .builder
@@ -14424,18 +20615,16 @@ fn lower_stmt_while<'ctx>(
         .map_err(|e| format!("{e}"))?;
 
     cg.builder.position_at_end(header_bb);
+    let cond_span = cond.span();
+    let opened = cg.open_temporaries((cond_span.start, cond_span.end))?;
     let cond_val = lower_expr(cg, cond)?.into_int_value();
+    cg.close_temporaries(opened)?;
     cg.builder
         .build_conditional_branch(cond_val, body_bb, exit_bb)
         .map_err(|e| format!("{e}"))?;
 
     cg.builder.position_at_end(body_bb);
-    for stmt in &body.stmts {
-        if is_block_terminated(cg) {
-            break;
-        }
-        lower_stmt(cg, stmt)?;
-    }
+    lower_block_stmts(cg, body)?;
     if !is_block_terminated(cg) {
         emit_loop_preempt(cg)?;
         cg.loop_stack_restore(loop_sp)?;
@@ -14449,11 +20638,16 @@ fn lower_stmt_while<'ctx>(
     Ok(())
 }
 
+/// `hands_rows_over`: typeck recorded this loop as one that hands its rows over
+/// (`TypedModule::loop_row_handovers`). Its variable is then a VIEW of the list's cell, whatever
+/// `non_owned_reads` says (a reader that stores the row is judged a copy, and the row is taken
+/// instead), and the read typeck records as the hand-over blanks the cell (`take_handover_row`).
 fn lower_stmt_for<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     var: &str,
     iter: &Expr,
     body: &ynz_ast::nodes::Block,
+    hands_rows_over: bool,
 ) -> Result<(), String> {
     let iter_ty = cg.expr_type(iter);
 
@@ -14484,6 +20678,8 @@ fn lower_stmt_for<'ctx>(
 
         // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
         let loop_sp = cg.loop_stack_save()?;
+        let held_before = cg.loop_held.len();
+        cg.begin_loop_held(iter, body, s_ptr, &Type::String)?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14519,14 +20715,17 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        // `ynz_string_codepoint_at` builds a fresh one-character string for each pass: the loop owns
+        // it for its iteration (a store of the variable copies it, `non_owned_reads`), so the
+        // iteration end releases it, and so does a `return` or an auto-propagation inside the body
+        // (`open_loop_copies`).
+        let open_copies = cg.open_loop_copies.len();
+        cg.open_loop_copies.push((ch_ptr, Type::String));
+        lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         if !is_block_terminated(cg) {
+            release_owned_read(cg, ch_ptr, &Type::String, "si_char")?;
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "si_ni")
@@ -14543,6 +20742,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.end_loop_held(held_before)?;
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
@@ -14611,12 +20811,7 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
-        }
+        lower_block_stmts(cg, body)?;
 
         cg.locals.remove(var);
         if !is_block_terminated(cg) {
@@ -14639,6 +20834,11 @@ fn lower_stmt_for<'ctx>(
         // stays the honest header read (len == cap, D3), so only the element
         // read below changes.
         let soa_info = cg.soa_expr_info(iter);
+        // A struct-of-arrays list has no row cell to take: the candidate walk declines a list
+        // whose loop hands a row over (`soa.rs` `ScanState::whole_value_use`), so a loop over one
+        // that typeck recorded only reads its rows, and walks them as an ordinary loop. A read
+        // recorded as a hand-over of such a loop fails loudly in `take_handover_row`.
+        let hands_rows_over = hands_rows_over && soa_info.is_none();
         let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
         let cnt = cg
             .builder
@@ -14663,6 +20863,8 @@ fn lower_stmt_for<'ctx>(
 
         // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
         let loop_sp = cg.loop_stack_save()?;
+        let held_before = cg.loop_held.len();
+        cg.begin_loop_held(iter, body, arr_ptr, &iter_ty)?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14695,29 +20897,41 @@ fn lower_stmt_for<'ctx>(
         let out = cg.array_elem_out_buffer(&elem, "for_get")?;
         let _flag = cg.array_elem_get_into(arr_ptr, i, out, "for_get_call", soa_info.as_ref())?;
         let elem_val = cg.array_elem_from_out(out, &elem, "for_get")?;
+        // The loop variable points at the element when nothing in the body writes the iterated
+        // place (typeck's `non_owned_reads`); otherwise it owns a copy, released after its
+        // iteration.
+        let owned_elem = if hands_rows_over {
+            handed_over_row(elem_val)
+        } else {
+            own_loop_element(cg, iter, elem_val, &elem, "for_elem")?
+        };
+        let elem_val = owned_elem.value;
 
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
+        let outer_row = hands_rows_over.then(|| {
+            cg.handover_rows.insert(
+                var.to_string(),
+                HandoverCell::ArrayItem {
+                    list: arr_ptr,
+                    index: i,
+                },
+            )
+        });
 
-        // v0.3-M5 P5: loop-var mask — `for (pts in pts)` shadows an admitted
-        // binding WITHOUT a `Stmt::Let` (admission's shadow-decline already
-        // covers every same-name `let`, so this is the ONLY shadow case).
-        // Inside the body the name means the by-value element, never the array.
-        let soa_masked = cg.soa_bindings.remove(var);
-
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
+        let open_copies = cg.open_loop_copies.len();
+        if owned_elem.copied {
+            cg.open_loop_copies
+                .push((owned_elem.release_value(), elem.clone()));
         }
-
-        if let Some(m) = soa_masked {
-            cg.soa_bindings.insert(var.to_string(), m);
-        }
+        lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         if !is_block_terminated(cg) {
+            if owned_elem.copied {
+                release_owned_read(cg, owned_elem.release_value(), &elem, "for_elem")?;
+            }
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "next_i")
@@ -14733,7 +20947,9 @@ fn lower_stmt_for<'ctx>(
         }
 
         cg.locals.remove(var);
+        end_handover_row(cg, var, outer_row);
         cg.builder.position_at_end(after_bb);
+        cg.end_loop_held(held_before)?;
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
@@ -14742,11 +20958,13 @@ fn lower_stmt_for<'ctx>(
     // Identical to BuiltinArray but uses compile-time size + direct GEP instead of runtime calls.
     if let Type::BuiltinFixed { elem, size } = &iter_ty {
         let elem = elem.as_ref().clone();
-        let n = match size {
-            Some(n) => *n as u64,
-            None => return Err("codegen: cannot iterate fixed array with unknown size".to_string()),
+        let item_count = match size {
+            FixedLength::Known(item_count) => *item_count as u64,
+            FixedLength::Unknown | FixedLength::OfParam { .. } => {
+                return Err("codegen: cannot iterate fixed array with unknown size".to_string())
+            }
         };
-        let size_val = cg.i64().const_int(n, false);
+        let size_val = cg.i64().const_int(item_count, false);
         let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
 
         let i_slot = cg
@@ -14782,29 +21000,38 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let elem_gep = unsafe {
-            cg.builder
-                .build_gep(cg.i64(), arr_ptr, &[i], "ff_gep")
-                .map_err(|e| format!("{e}"))?
+        let elem_val = cg.fixed_cell_value(arr_ptr, i, &elem, "ff_gep")?;
+        let owned_elem = if hands_rows_over {
+            handed_over_row(elem_val)
+        } else {
+            own_loop_element(cg, iter, elem_val, &elem, "ff_elem")?
         };
-        let bits = cg
-            .builder
-            .build_load(cg.i64(), elem_gep, "ff_bits")
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
-        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let elem_val = owned_elem.value;
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
+        let outer_row = if hands_rows_over {
+            let cell = cg.fixed_cell_ptr(arr_ptr, i, &elem, "ff_handover")?;
+            Some(
+                cg.handover_rows
+                    .insert(var.to_string(), HandoverCell::FixedItem { cell }),
+            )
+        } else {
+            None
+        };
 
-        for stmt in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, stmt)?;
+        let open_copies = cg.open_loop_copies.len();
+        if owned_elem.copied {
+            cg.open_loop_copies
+                .push((owned_elem.release_value(), elem.clone()));
         }
+        lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         if !is_block_terminated(cg) {
+            if owned_elem.copied {
+                release_owned_read(cg, owned_elem.release_value(), &elem, "ff_elem")?;
+            }
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "ff_ni")
@@ -14820,6 +21047,7 @@ fn lower_stmt_for<'ctx>(
         }
 
         cg.locals.remove(var);
+        end_handover_row(cg, var, outer_row);
         cg.builder.position_at_end(after_bb);
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
@@ -14866,7 +21094,7 @@ fn lower_stmt_for<'ctx>(
 
         // Per-site ENTRY-BLOCK key slot + value out buffer (elem_size-aware,
         // shared array/map get-side ownership contract — reused per iteration).
-        let key_slot = cg.alloca_in_entry_llvm(cg.i64(), "mf_key")?;
+        let key_slot = cg.map_key_out_buffer(&key_ty, "mf_key")?;
         let val_out = cg.array_elem_out_buffer(&val_ty, "mf_val")?;
 
         let cond_bb = cg.append_block("mfor_cond");
@@ -14875,6 +21103,8 @@ fn lower_stmt_for<'ctx>(
 
         // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
         let loop_sp = cg.loop_stack_save()?;
+        let held_before = cg.loop_held.len();
+        cg.begin_loop_held(iter, body, map_ptr, &iter_ty)?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14894,21 +21124,16 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        cg.map_iter_get_into(
-            map_ptr,
-            i,
-            key_is_string(&key_ty),
-            key_slot,
-            val_out,
-            "mf_iter",
-        )?;
-        let k_val = cg
-            .builder
-            .build_load(cg.i64(), key_slot, "mf_kv")
-            .map_err(|e| format!("{e}"))?;
+        let key_kind = cg.map_key_kind(&key_ty)?;
+        cg.map_iter_get_into(map_ptr, i, key_kind, key_slot, val_out, "mf_iter")?;
+        let k_val = cg.map_key_bits_from_out(key_slot, &key_ty, "mf_kv")?;
         // Entry val bits: shape values carry the out-buffer pointer as i64 bits
         // (MapEntry fields load i64 bits + i64_bits_to), others the loaded cell.
         let v_bits = cg.array_elem_bits_from_out(val_out, &val_ty, "mf_vv")?;
+        // The entry points at the slot when nothing in the body writes the iterated map;
+        // otherwise it owns a copy of its key and value, released after its iteration.
+        let owned_entry = own_map_entry(cg, iter, k_val, v_bits, &key_ty, &val_ty)?;
+        let (k_val, v_bits) = (owned_entry.key_bits, owned_entry.value_bits);
         let k_dst = cg
             .builder
             .build_struct_gep(entry_ty, entry_slot, 0, "mf_kd")
@@ -14926,16 +21151,20 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.insert(var.to_string(), entry_var_slot);
 
-        for s in &body.stmts {
-            if is_block_terminated(cg) {
-                break;
-            }
-            lower_stmt(cg, s)?;
+        let open_copies = cg.open_loop_copies.len();
+        if let Some(key) = owned_entry.key {
+            cg.open_loop_copies.push((key, key_ty.clone()));
         }
+        if let Some(value) = owned_entry.value {
+            cg.open_loop_copies.push((value, val_ty.clone()));
+        }
+        lower_block_stmts(cg, body)?;
+        cg.open_loop_copies.truncate(open_copies);
 
         cg.locals.remove(var);
 
         if !is_block_terminated(cg) {
+            release_map_entry(cg, &owned_entry, &key_ty, &val_ty)?;
             let next_i = cg
                 .builder
                 .build_int_add(i, cg.i64().const_int(1, false), "mf_ni")
@@ -14951,6 +21180,7 @@ fn lower_stmt_for<'ctx>(
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.end_loop_held(held_before)?;
         cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
@@ -15050,12 +21280,7 @@ fn lower_stmt_for<'ctx>(
         .build_store(var_slot, ctr_bind)
         .map_err(|e| format!("{e}"))?;
 
-    for stmt in &body.stmts {
-        if is_block_terminated(cg) {
-            break;
-        }
-        lower_stmt(cg, stmt)?;
-    }
+    lower_block_stmts(cg, body)?;
     if !is_block_terminated(cg) {
         let ctr_cur = cg
             .builder
@@ -15083,7 +21308,11 @@ fn lower_stmt_for<'ctx>(
     Ok(())
 }
 
-fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Result<(), String> {
+fn lower_stmt_return<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    value: Option<&Expr>,
+    edge: &ynz_diagnostics::SourceSpan,
+) -> Result<(), String> {
     // v0.3-M2 P7: inside a state-machine resume function, explicit `return expr` must
     // store the typed value in the frame's return_slot@16 and emit `ret i32 0` (Ready).
     // This is the fix for Bug A (value-returning SM) — the resume fn returns i32, not the Yinz type.
@@ -15101,10 +21330,110 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                let val = own_returned_value(cg, expr, val, "sm_return_str")?;
+                let (val, val_ty) = match &ret_ty {
+                    Type::ErrorsCapable { inner } => {
+                        convert_to_declared_success_number(cg, val, val_ty, inner)?
+                    }
+                    _ => (val, val_ty),
+                };
+                // C1f (#423): an `errors` function whose success value is an envelope union
+                // writes the slot, payload inline, into its frame's `Return` region and puts the
+                // region's address in the result's ok word (`ec_region_to_standard` reads it).
+                // The value is the success union itself, or an `errors` result carrying one.
+                let ec_union_variants = match cg.resolve_type(&ret_ty) {
+                    Type::ErrorsCapable { .. } => cg
+                        .union_return_slot_ty()
+                        .and_then(|union_ty| cg.ec_success_union(&union_ty)),
+                    _ => None,
+                };
                 // Detect errors-capable return: the Yinz return type is ErrorsCapable, OR
                 // the actual value is a struct (from __testFallibleAsync or a nested SM errors call).
                 let is_ec_return = matches!(val, inkwell::values::BasicValueEnum::StructValue(_));
-                if is_ec_return {
+                if let Some((variants, maybe)) = ec_union_variants {
+                    let (err_i64, view) = match val {
+                        inkwell::values::BasicValueEnum::StructValue(pair) => {
+                            let err = cg
+                                .builder
+                                .build_extract_value(pair, 0, "sm_ec_union_err")
+                                .map_err(|err| format!("sm ec union err: {err}"))?
+                                .into_int_value();
+                            let ok_bits = cg
+                                .builder
+                                .build_extract_value(pair, 1, "sm_ec_union_ok")
+                                .map_err(|err| format!("sm ec union ok: {err}"))?
+                                .into_int_value();
+                            let view = cg
+                                .builder
+                                .build_int_to_ptr(ok_bits, cg.ptr(), "sm_ec_union_view")
+                                .map_err(|err| format!("sm ec union view: {err}"))?;
+                            (err, view)
+                        }
+                        inkwell::values::BasicValueEnum::PointerValue(ptr)
+                            if matches!(val_ty, Type::ErrorsCapable { .. }) =>
+                        {
+                            let pair = cg
+                                .builder
+                                .build_load(errors_result_type(cg.ctx), ptr, "sm_ec_union_pair")
+                                .map_err(|err| format!("sm ec union pair: {err}"))?
+                                .into_struct_value();
+                            let err = cg
+                                .builder
+                                .build_extract_value(pair, 0, "sm_ec_union_pair_err")
+                                .map_err(|err| format!("sm ec union pair err: {err}"))?
+                                .into_int_value();
+                            let ok_bits = cg
+                                .builder
+                                .build_extract_value(pair, 1, "sm_ec_union_pair_ok")
+                                .map_err(|err| format!("sm ec union pair ok: {err}"))?
+                                .into_int_value();
+                            let view = cg
+                                .builder
+                                .build_int_to_ptr(ok_bits, cg.ptr(), "sm_ec_union_pair_view")
+                                .map_err(|err| format!("sm ec union pair view: {err}"))?;
+                            (err, view)
+                        }
+                        inkwell::values::BasicValueEnum::PointerValue(ptr) => {
+                            (cg.i64().const_zero(), ptr)
+                        }
+                        other => {
+                            return Err(format!(
+                                "codegen: an `errors` union return produced `{other:?}`, neither \
+                                 a union value nor an errors result; this is a compiler bug"
+                            ))
+                        }
+                    };
+                    let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
+                    let region = state_machine::frame_region_ptr(
+                        cg.ctx,
+                        &cg.builder,
+                        frame_ptr,
+                        region_offset,
+                        "sm_ec_union_region",
+                    )?;
+                    cg.union_persist_if_ok(
+                        err_i64,
+                        view,
+                        region,
+                        UnionPersist {
+                            variants: &variants,
+                            maybe,
+                            deep: None,
+                        },
+                        "sm_ec_union_ret",
+                    )?;
+                    let region_bits = cg
+                        .builder
+                        .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_ec_union_region_bits")
+                        .map_err(|err| format!("sm ec union region bits: {err}"))?;
+                    state_machine::store_return_value_errors(
+                        cg.ctx,
+                        &cg.builder,
+                        frame_ptr,
+                        err_i64,
+                        region_bits,
+                    )?;
+                } else if is_ec_return {
                     // errors-capable return: val may be {i64, i64} struct (unauto-propagated),
                     // OR an IntValue (auto-propagated success value after `.failed()` narrowing).
                     match val {
@@ -15287,9 +21616,12 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                         format!("sm_ec_maybe_ok p2i: {e}")
                                                     })?
                                             }
-                                            // String, Array, Map, Union: heap-allocated
-                                            // (global literals or ynz_alloc). The pointer
-                                            // survives resume fn return — ptr_to_int is safe.
+                                            // String, Array, Map: heap-allocated (global
+                                            // literals or ynz_alloc). An envelope union never lands
+                                            // here: its success slot rides the `Return` region
+                                            // (`UnionRegionRole::Return`); a raw-pointer union is
+                                            // heap-backed like Map). The pointer survives resume fn
+                                            // return — ptr_to_int is safe.
                                             _ => cg
                                                 .builder
                                                 .build_ptr_to_int(
@@ -15394,6 +21726,70 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 i128_val,
                             )?;
                         }
+                        // A `maybe` of an envelope union rides the frame's `Return` region like
+                        // the union itself (`none` its none tag): the pair's bits would point at a
+                        // view in this resume invocation's dead stack.
+                        Type::Maybe { ref inner }
+                            if cg.envelope_union_variants(inner).is_some() =>
+                        {
+                            let variants = cg
+                                .envelope_union_variants(inner)
+                                .ok_or("sm maybe union return: lost the variants")?;
+                            let (flag, bits) =
+                                cg.load_maybe_env_pair(val.into_pointer_value(), "sm_ret_maybe")?;
+                            let present = cg
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::NE,
+                                    flag,
+                                    cg.i64().const_zero(),
+                                    "sm_ret_maybe_present",
+                                )
+                                .map_err(|err| format!("sm maybe union present: {err}"))?;
+                            let view_bits = cg
+                                .builder
+                                .build_select(
+                                    present,
+                                    bits,
+                                    cg.i64().const_zero(),
+                                    "sm_ret_maybe_view_bits",
+                                )
+                                .map_err(|err| format!("sm maybe union view bits: {err}"))?
+                                .into_int_value();
+                            let view = cg
+                                .builder
+                                .build_int_to_ptr(view_bits, cg.ptr(), "sm_ret_maybe_view")
+                                .map_err(|err| format!("sm maybe union view: {err}"))?;
+                            let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
+                            let region = state_machine::frame_region_ptr(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_offset,
+                                "sm_maybe_union_ret_region",
+                            )?;
+                            cg.union_persist_into_as(
+                                view,
+                                region,
+                                &variants,
+                                true,
+                                "sm_maybe_union_ret",
+                            )?;
+                            let region_bits = cg
+                                .builder
+                                .build_ptr_to_int(
+                                    region,
+                                    cg.ctx.i64_type(),
+                                    "sm_maybe_union_ret_bits",
+                                )
+                                .map_err(|err| format!("sm maybe union ret ptr_to_int: {err}"))?;
+                            state_machine::store_return_value_i64(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_bits,
+                            )?;
+                        }
                         // Maybe: the envelope is a per-site STACK alloca that dies with
                         // this resume invocation — storing its raw pointer in the return
                         // slot dangles by the time the wrapper loads it (v0.3-M7 R9).
@@ -15406,12 +21802,21 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         Type::Maybe { ref inner } => {
                             let env_ptr = val.into_pointer_value();
                             let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "sm_ret_maybe")?;
+                            let moved = cg.is_moved_cells(env_ptr);
+                            // A `maybe` a Yinz function returned or a string `get` built owns its payload:
+                            // the return passes it on, as the plain return does, instead of orphaning it.
+                            let takes_a_fresh_payload =
+                                cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr);
                             let stable_bits = cg.maybe_payload_stable_bits(
                                 flag,
                                 bits,
                                 inner,
                                 "sm_ret_maybe",
-                                true,
+                                PayloadCopy {
+                                    heap: true,
+                                    moved,
+                                    take: takes_a_fresh_payload,
+                                },
                             )?;
                             state_machine::store_return_value_errors(
                                 cg.ctx,
@@ -15419,6 +21824,79 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 frame_ptr,
                                 flag,
                                 stable_bits,
+                            )?;
+                        }
+                        // C1h (#433): a `fixed` list of known length is copied, cells and all, into
+                        // the `Return` region this function's frame reserves for it; the return slot
+                        // carries the region's address. The wrapper, or the state machine that
+                        // called this one, copies the cells out before the frame is freed. The
+                        // list's items move with it (the release at this edge skips the returned
+                        // list), so the caller owns each item.
+                        Type::BuiltinFixed {
+                            ref elem,
+                            size: FixedLength::Known(count),
+                        } => {
+                            let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
+                            let region = state_machine::frame_region_ptr(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_offset,
+                                "sm_fixed_ret_region",
+                            )?;
+                            cg.builder
+                                .build_memcpy(
+                                    region,
+                                    8,
+                                    val.into_pointer_value(),
+                                    8,
+                                    cg.i64().const_int(fixed_region_bytes(elem, *count), false),
+                                )
+                                .map_err(|err| format!("sm fixed ret copy: {err}"))?;
+                            let region_bits = cg
+                                .builder
+                                .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_fixed_ret_bits")
+                                .map_err(|err| format!("sm fixed ret ptr_to_int: {err}"))?;
+                            state_machine::store_return_value_i64(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_bits,
+                            )?;
+                        }
+                        // C1f (#423): an envelope union is written, payload inline, into the union
+                        // region this function's frame reserves for it; the return slot carries the
+                        // region's address. The wrapper, or the state machine that called this one,
+                        // copies the slot out before the frame is freed.
+                        union @ Type::Union { .. }
+                            if cg.envelope_union_variants(union).is_some() =>
+                        {
+                            let variants = cg
+                                .envelope_union_variants(union)
+                                .ok_or("sm union return: lost the variants")?;
+                            let region_offset = cg.sm_union_region(UnionRegionRole::Return)?;
+                            let region = state_machine::frame_region_ptr(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_offset,
+                                "sm_union_ret_region",
+                            )?;
+                            cg.union_persist_into(
+                                val.into_pointer_value(),
+                                region,
+                                &variants,
+                                "sm_union_ret",
+                            )?;
+                            let region_bits = cg
+                                .builder
+                                .build_ptr_to_int(region, cg.ctx.i64_type(), "sm_union_ret_bits")
+                                .map_err(|err| format!("sm union ret ptr_to_int: {err}"))?;
+                            state_machine::store_return_value_i64(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                region_bits,
                             )?;
                         }
                         Type::String
@@ -15455,14 +21933,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 }
             }
         }
-        cg.builder
-            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-            .map_err(|e| format!("sm resume ready ret: {e}"))?;
+        cg.release_at_return(edge)?;
+        build_resume_ready_return(cg, frame_ptr, "sm resume ready ret")?;
         return Ok(());
     }
 
     if cg.is_main {
-        // Drain in-flight background tasks before exiting.
+        // Release every open scope, then drain in-flight background tasks before exiting.
+        cg.release_at_return(edge)?;
         cg.builder
             .build_call(cg.rt.ynz_rt_shutdown, &[], "rt_shutdown")
             .map_err(|e| format!("rt_shutdown: {e}"))?;
@@ -15480,14 +21958,71 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         match value {
             None => {
                 // `-> nothing errors` function returning without a value.
-                let zero_result = errors_result_type(cg.ctx).const_zero();
-                cg.builder
-                    .build_return(Some(&zero_result))
-                    .map_err(|e| format!("ec void ret: {e}"))?;
+                let zero_result = cg.ec_result_llvm()?.const_zero();
+                build_return_after_release(cg, edge, Some(&zero_result), "ec void ret")?;
             }
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                // A shape read out of an errors-capable local (`let r = make(); return r`) that the return
+                // moves lives in the result's ok-word cell: the return builds its own cell and takes the
+                // boxes, so the old cell's shell is freed below and the result's ok word is nulled.
+                let taken_shell = match (expr, cg.resolve_type(&val_ty)) {
+                    (Expr::Ident(name, _), Type::Shape { .. })
+                        if val.is_pointer_value()
+                            && cg.is_moved_cells(val.into_pointer_value()) =>
+                    {
+                        cg.ec_original_slots
+                            .get(name.as_str())
+                            .map(|slot| (*slot, val.into_pointer_value()))
+                    }
+                    _ => None,
+                };
+                let val = own_returned_value(cg, expr, val, "ec_return_str")?;
+                let declared_success = cg.current_fn_ret_ty.clone();
+                let (val, val_ty) =
+                    convert_to_declared_success_number(cg, val, val_ty, &declared_success)?;
+                // C1f (#423): an envelope union success value returns BY VALUE as the result's
+                // slot (`ec_result_type`), payload inline, so neither this frame's envelope nor a
+                // payload in this frame is read after `ret`. An `errors` value (a call result or
+                // an `errors` local returned as it is) is the standard `{ err, ok = view }` pair:
+                // its error passes through and its view is copied into the slot.
+                if let Some((variants, maybe)) = cg
+                    .union_return_slot_ty()
+                    .and_then(|union_ty| cg.ec_success_union(&union_ty))
+                {
+                    let (err, view) = if matches!(val_ty, Type::ErrorsCapable { .. }) {
+                        let pair = cg
+                            .builder
+                            .build_load(
+                                errors_result_type(cg.ctx),
+                                val.into_pointer_value(),
+                                "ec_union_pair",
+                            )
+                            .map_err(|err| format!("ec union ret load: {err}"))?
+                            .into_struct_value();
+                        let err = cg
+                            .builder
+                            .build_extract_value(pair, 0, "ec_union_pair_err")
+                            .map_err(|err| format!("ec union ret err: {err}"))?
+                            .into_int_value();
+                        let ok_bits = cg
+                            .builder
+                            .build_extract_value(pair, 1, "ec_union_pair_ok")
+                            .map_err(|err| format!("ec union ret ok: {err}"))?
+                            .into_int_value();
+                        let view = cg
+                            .builder
+                            .build_int_to_ptr(ok_bits, cg.ptr(), "ec_union_pair_view")
+                            .map_err(|err| format!("ec union ret view: {err}"))?;
+                        (err, view)
+                    } else {
+                        (cg.i64().const_zero(), val.into_pointer_value())
+                    };
+                    let result = cg.ec_union_result(err, view, &variants, maybe, "ec_union_ret")?;
+                    build_return_after_release(cg, edge, Some(&result), "ec union ret")?;
+                    return Ok(());
+                }
                 // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
                 // pointer into the callee's own stack. maybe / shape / number
                 // success values are per-site stack storage (envelope alloca,
@@ -15495,7 +22030,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 // cell before packing its address into the ok word (verified live:
                 // `-> maybe<int> errors` / `-> Coin errors` / `-> number errors`
                 // all returned garbage under default<O2> pre-fix). Same
-                // never-drop-cells posture as store_field (FRAGO 009); everything
+                // promotion as store_field (FRAGO 009); everything
                 // else is self-contained bits or already heap-backed.
                 let success_bits = match cg.resolve_type(&val_ty) {
                     Type::Maybe { ref inner } => {
@@ -15508,6 +22043,9 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     Type::Shape { ref name } if !name.is_empty() => {
                         let cell =
                             cg.shape_bytes_to_heap_cell(val.into_pointer_value(), name, "ec_ret")?;
+                        if let Some((result_slot, old_cell)) = taken_shell {
+                            cg.free_taken_ec_shape_cell(result_slot, old_cell, name)?;
+                        }
                         cg.builder
                             .build_ptr_to_int(cell, cg.i64(), "ec_ret_shape_bits")
                             .map_err(|e| format!("ec ret shape bits: {e}"))?
@@ -15534,21 +22072,21 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     .build_insert_value(result, success_bits, 1, "ec_val")
                     .map_err(|e| format!("ec insert val: {e}"))?
                     .into_struct_value();
-                cg.builder
-                    .build_return(Some(&result))
-                    .map_err(|e| format!("ec success ret: {e}"))?;
+                build_return_after_release(cg, edge, Some(&result), "ec success ret")?;
             }
         }
         return Ok(());
     }
     match value {
         None => {
-            cg.builder
-                .build_return(None)
-                .map_err(|e| format!("void ret: {e}"))?;
+            build_return_after_release(cg, edge, None, "void ret")?;
         }
         Some(expr) => {
-            let val = lower_expr(cg, expr)?;
+            let mut val = lower_expr(cg, expr)?;
+            val = own_returned_value(cg, expr, val, "return_str")?;
+            let returned_ty = cg.expr_type(expr);
+            let declared_ty = cg.current_fn_ret_ty.clone();
+            (val, _) = convert_to_declared_success_number(cg, val, returned_ty, &declared_ty)?;
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -15571,9 +22109,43 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                             .ok_or("ret number load: no instruction value")?,
                         ptr_v,
                     )?;
-                    cg.builder
-                        .build_return(Some(&i128_val))
-                        .map_err(|e| format!("ret number: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&i128_val), "ret number")?;
+                }
+                // A `maybe` of an envelope union returns the union's slot BY VALUE (`none` the
+                // none tag), so the view in this frame is never read after `ret`.
+                Type::Maybe { ref inner } if cg.envelope_union_variants(inner).is_some() => {
+                    let variants = cg
+                        .envelope_union_variants(inner)
+                        .ok_or("maybe union return: lost the variants")?;
+                    let layout = cg.union_layout(&variants)?;
+                    let slot_ty = cg.union_slot_llvm(&layout);
+                    let scratch = cg.alloca_in_entry_llvm(slot_ty, "maybe_union_ret_slot")?;
+                    let (flag, bits) =
+                        cg.load_maybe_env_pair(val.into_pointer_value(), "ret_maybe")?;
+                    let present = cg
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            flag,
+                            cg.i64().const_zero(),
+                            "ret_maybe_present",
+                        )
+                        .map_err(|err| format!("maybe union ret present: {err}"))?;
+                    let view_bits = cg
+                        .builder
+                        .build_select(present, bits, cg.i64().const_zero(), "ret_maybe_view_bits")
+                        .map_err(|err| format!("maybe union ret view bits: {err}"))?
+                        .into_int_value();
+                    let view = cg
+                        .builder
+                        .build_int_to_ptr(view_bits, cg.ptr(), "ret_maybe_view")
+                        .map_err(|err| format!("maybe union ret view: {err}"))?;
+                    cg.union_persist_into_as(view, scratch, &variants, true, "maybe_union_ret")?;
+                    let slot_value = cg
+                        .builder
+                        .build_load(slot_ty, scratch, "maybe_union_ret_value")
+                        .map_err(|err| format!("maybe union ret load: {err}"))?;
+                    build_return_after_release(cg, edge, Some(&slot_value), "maybe union ret")?;
                 }
                 Type::Maybe { ref inner } => {
                     let env_ptr = val.into_pointer_value();
@@ -15581,10 +22153,35 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     // A wide payload's pointer (shape struct alloca / number i128
                     // slot) targets the callee's own stack — promote it to a counted
                     // heap cell (flag-guarded; the shared promotion discipline, never
-                    // a return-side twin). Same never-drop-cells posture as
+                    // a return-side twin). Same promotion as
                     // store_field (FRAGO 009).
-                    let stable_bits =
-                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true)?;
+                    // A `.copy()` of a `maybe` already holds its payload in a heap cell of its own: the
+                    // return keeps it and gives the emptied envelope cell back.
+                    let minted = cg
+                        .minted_maybe_copies
+                        .contains(&(env_ptr.as_value_ref() as usize));
+                    let moved = cg.is_moved_cells(env_ptr);
+                    // A `maybe` a function returned or a string `get` built owns its payload and
+                    // nothing else holds it: the return passes that payload on instead of copying
+                    // it and orphaning the first.
+                    let takes_a_fresh_payload =
+                        cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr);
+                    let stable_bits = if minted {
+                        cg.free_minted_maybe_cell(env_ptr, "ret_maybe")?;
+                        bits
+                    } else {
+                        cg.maybe_payload_stable_bits(
+                            flag,
+                            bits,
+                            inner,
+                            "ret_maybe",
+                            PayloadCopy {
+                                heap: true,
+                                moved,
+                                take: takes_a_fresh_payload,
+                            },
+                        )?
+                    };
                     let mut env = cg.maybe_type().const_zero();
                     env = cg
                         .builder
@@ -15596,9 +22193,46 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         .build_insert_value(env, stable_bits, 1, "ret_maybe_bits")
                         .map_err(|e| format!("ret maybe bits insert: {e}"))?
                         .into_struct_value();
-                    cg.builder
-                        .build_return(Some(&env))
-                        .map_err(|e| format!("ret maybe: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&env), "ret maybe")?;
+                }
+                // C1f (#423): an envelope union returns its slot BY VALUE, payload inline. The
+                // persist routine copies the value into a scratch slot (a shape variant's bytes
+                // included), so neither this frame's envelope nor a payload in this frame is read
+                // after `ret`.
+                union @ Type::Union { .. } if cg.envelope_union_variants(&union).is_some() => {
+                    let variants = cg
+                        .envelope_union_variants(&union)
+                        .ok_or("union return: lost the variants")?;
+                    let layout = cg.union_layout(&variants)?;
+                    let slot_ty = cg.union_slot_llvm(&layout);
+                    let scratch = cg.alloca_in_entry_llvm(slot_ty, "union_ret_slot")?;
+                    cg.union_persist_into(
+                        val.into_pointer_value(),
+                        scratch,
+                        &variants,
+                        "union_ret",
+                    )?;
+                    let returned = cg
+                        .builder
+                        .build_load(slot_ty, scratch, "union_ret_value")
+                        .map_err(|err| format!("ret union load: {err}"))?;
+                    build_return_after_release(cg, edge, Some(&returned), "ret union")?;
+                }
+                // C1h (#433): a `fixed` list returns its cells BY VALUE. The list's items move
+                // with it: the release at this edge skips the returned list (the plan's returned
+                // holders), so the caller owns each item.
+                Type::BuiltinFixed {
+                    ref elem,
+                    size: FixedLength::Known(count),
+                } => {
+                    let cells = cg.i64().array_type(fixed_cell_words(elem, count));
+                    let loaded = load_fixed_cells(
+                        &cg.builder,
+                        cells,
+                        val.into_pointer_value(),
+                        "ret_fixed_val",
+                    )?;
+                    build_return_after_release(cg, edge, Some(&loaded), "ret fixed")?;
                 }
                 Type::Shape { ref name } if !name.is_empty() => {
                     let ptr_v = val.into_pointer_value();
@@ -15612,14 +22246,10 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                         .builder
                         .build_load(struct_ty, ptr_v, "ret_shape_val")
                         .map_err(|e| format!("ret shape load: {e}"))?;
-                    cg.builder
-                        .build_return(Some(&sv))
-                        .map_err(|e| format!("ret shape: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&sv), "ret shape")?;
                 }
                 _ => {
-                    cg.builder
-                        .build_return(Some(&val))
-                        .map_err(|e| format!("ret: {e}"))?;
+                    build_return_after_release(cg, edge, Some(&val), "ret")?;
                 }
             }
         }
@@ -15669,11 +22299,11 @@ fn extract_range_bounds<'ctx>(
 /// residual buffered element / suspended-send payload at last-ref teardown, and
 /// `refuse_closed` on a refused send. The element-kind classification is THE one in
 /// `ynz_typeck::types::channel_elem_drop` (v0.3-M8 Phase 4): `None` → null glue (int/float/
-/// bool value bits; `string`'s DELIBERATELY glue-less immortal bytes — raw-malloc'd, invisible
-/// to the alloc counter, freeing would be unsound); `Some(kind)` → an EXHAUSTIVE match whose
+/// bool value bits); `Some(kind)` → an EXHAUSTIVE match whose
 /// arms are function values, so a new kind cannot register a null:
-///   - `Array`      → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
-///   - `Map`        → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+///   - `String`     → `void glue(i64 bits) { ynz_release_string(bits as ptr) }`
+///   - `Array`      → `void glue(i64 bits) { ynz_release_<array>(bits as ptr) }`
+///   - `Map`        → `void glue(i64 bits) { ynz_release_<map>(bits as ptr) }`
 ///   - `NumberCell` → `void glue(i64 bits) { ynz_number_cell_free(bits as ptr) }` (fr12: the
 ///     16-byte cell a `number` send mints)
 ///
@@ -15696,8 +22326,16 @@ fn channel_drop_glue<'ctx>(
     let drop_fn = match channel_elem_drop(&elem) {
         None => return Ok(cg.ptr().const_null()),
         Some(kind) => match kind {
-            ChannelElemDrop::Array => cg.rt.ynz_array_drop,
-            ChannelElemDrop::Map => cg.rt.ynz_map_drop,
+            // A string, array or map payload is released by the one release function of its type:
+            // its items, entries and strings go with it (`release_fn`).
+            ChannelElemDrop::String | ChannelElemDrop::Array | ChannelElemDrop::Map => {
+                cg.release_fn(&elem, false)?.ok_or_else(|| {
+                    format!(
+                        "internal: channel element `{}` has no release function",
+                        ynz_typeck::types::type_name(&elem)
+                    )
+                })?
+            }
             ChannelElemDrop::NumberCell => cg.rt.ynz_number_cell_free,
         },
     };
@@ -15728,9 +22366,1006 @@ fn channel_drop_glue<'ctx>(
     Ok(glue_fn.as_global_value().as_pointer_value())
 }
 
+/// Lower `expr` to its value — THE one place a plain value entering a union-typed slot is
+/// wrapped. Typeck records every such flow (`TypedModule::union_coercions`: annotated `let`,
+/// argument, `return`, shape field, `.or` fallback); the node lowers against its own plain type
+/// (`Cg::coercion_inner`), then `wrap_into_union_envelope` makes the tagged envelope, so every
+/// consumer of the result sees the union (`Cg::expr_type`). An `is` arm's narrowed binding
+/// already lowers to its envelope and is not wrapped again.
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    let span = expr.span();
+    let key = (span.start, span.end);
+    let Some(coercion) = cg.coercion_at(key).cloned() else {
+        let val = lower_expr_node(cg, expr)?;
+        remember_movable_string(cg, expr, val)?;
+        remember_moved_cells(cg, expr, val);
+        remember_fresh_payload_maybe(cg, expr, val);
+        remember_box_cell_view(cg, expr, val);
+        let val = cg.bind_temporary(expr, val)?;
+        return Ok(val);
+    };
+    let outer = cg.coercion_inner.replace(key);
+    let lowered = lower_expr_node(cg, expr);
+    // The plain type is read while `coercion_inner` still names this node: once it is restored,
+    // `expr_type` answers with the union slot, which is never a string.
+    let plain_ty = cg.expr_type(expr);
+    if let (Ok(val), false) = (&lowered, cg.is_narrowed_envelope_ident(expr)) {
+        // A string entering a union slot is stored in the envelope: the slot owns its bytes.
+        remember_movable_string(cg, expr, *val)?;
+    }
+    cg.coercion_inner = outer;
+    let val = lowered?;
+    if cg.is_narrowed_envelope_ident(expr) {
+        return Ok(val);
+    }
+    let val = own_string_for_store(cg, val, &plain_ty, "union_wrap")?;
+    // The envelope views the value it wraps: a value that moves in moves on through its view.
+    // A string, array, map or channel variant is owned by the envelope the moment it is wrapped (the
+    // string just copied above, a fresh or consumed array, map or channel): a slot the envelope is
+    // persisted into takes it as it is (`union_persist_into_as`). A shape variant moves only when
+    // typeck says the shape does.
+    let wraps_a_shape = matches!(
+        cg.coerced_variant(&coercion, "union_wrap"),
+        Ok((_, Type::Shape { .. }))
+    );
+    let wrapped_value_moves = !wraps_a_shape || cg.typed.heap_moves.contains(span.start, span.end);
+    let view = cg.wrap_into_union_envelope(expr, val, &coercion)?;
+    if wrapped_value_moves && view.is_pointer_value() {
+        cg.moved_cell_values.insert(view.as_value_ref() as usize);
+    }
+    let view = cg.bind_temporary(expr, view)?;
+    Ok(view)
+}
+
+/// A `maybe` a Yinz function returned, or a string `get` built, owns its payload: a later persist
+/// takes it (`Cg::fresh_payload_maybes`), in a resume function as in a plain one.
+fn remember_fresh_payload_maybe<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+) {
+    if val.is_pointer_value()
+        && (cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr))
+        && matches!(
+            cg.resolve_type(&cg.expr_type(expr)),
+            Type::Maybe { ref inner } if matches!(
+                cg.resolve_type(inner),
+                Type::String | Type::Shape { .. } | Type::Number { .. }
+            )
+        )
+    {
+        cg.fresh_payload_maybes.insert(val.as_value_ref() as usize);
+    }
+}
+
+/// A heap value typeck says a store takes by move (`TypedModule::heap_moves`) is remembered, so
+/// the copy that follows takes its boxes instead of cloning them.
+fn remember_moved_cells<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValueEnum<'ctx>) {
+    let span = expr.span();
+    if val.is_pointer_value() && cg.typed.heap_moves.contains(span.start, span.end) {
+        cg.moved_cell_values.insert(val.as_value_ref() as usize);
+    }
+}
+
+/// A moved read of a union binding, or a moved result of a Yinz function, is a view over the box
+/// cell the binding's slot (the caller's result slot) owns (`Cg::box_cell_views`).
+fn remember_box_cell_view<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr, val: BasicValueEnum<'ctx>) {
+    if (matches!(expr, Expr::Ident(..)) || cg.is_user_call(expr))
+        && val.is_pointer_value()
+        && cg.is_moved_cells(val.into_pointer_value())
+        && cg.envelope_union_variants(&cg.expr_type(expr)).is_some()
+    {
+        cg.box_cell_views.insert(val.as_value_ref() as usize);
+    }
+}
+
+/// A string typeck says nobody else holds (a fresh string, or the last use of its binding:
+/// `TypedModule::string_moves`) is remembered, so the store that takes it can move it instead
+/// of copying it.
+fn remember_movable_string<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+) -> Result<(), String> {
+    let span = expr.span();
+    if val.is_pointer_value()
+        && (cg.typed.string_moves.contains(span.start, span.end) || cg.is_type_parameter_move(expr))
+        && is_string_like(&cg.resolve_type(&cg.expr_type(expr)))
+    {
+        cg.owned_string_values.insert(val.as_value_ref() as usize);
+        // A string read off an errors-capable result is the result's ok word: the store seam nulls
+        // that word if it takes the string, so the result's release skips it.
+        if let Expr::Ident(name, _) = expr {
+            if let Some(original) = cg.ec_original_slots.get(name.as_str()).copied() {
+                let result = cg
+                    .builder
+                    .build_load(cg.ptr(), original, "ec_take_result")
+                    .map_err(|err| format!("ec take result load: {err}"))?
+                    .into_pointer_value();
+                let ok_word = cg
+                    .builder
+                    .build_struct_gep(errors_result_type(cg.ctx), result, 1, "ec_take_ok")
+                    .map_err(|err| format!("ec take ok gep: {err}"))?;
+                let frame_ok_word = cg.frame_slot_of(name).map(|first| first + 1);
+                cg.string_take_ec_words
+                    .insert(val.as_value_ref() as usize, (ok_word, frame_ok_word));
+            }
+        }
+        // A binding read at its last use: the store seam nulls its slot if it takes the string.
+        if matches!(expr, Expr::Ident(..)) {
+            cg.note_string_last_use(val, span)?;
+        }
+    }
+    Ok(())
+}
+
+/// True for the types whose value is a string pointer (`string`, `sensitive string`).
+fn is_string_like(ty: &Type) -> bool {
+    match ty {
+        Type::String => true,
+        // A bignum is heap decimal text: owned, copied and released like a string.
+        Type::Number { .. } => ynz_typeck::types::is_bignum(ty),
+        Type::Sensitive { inner } => matches!(inner.as_ref(), Type::String),
+        _ => false,
+    }
+}
+
+/// THE seam every store of a string goes through: the string a place keeps. A string typeck
+/// recorded as movable (`TypedModule::string_moves`, remembered by `lower_expr`) is taken as it
+/// is; any other is copied by `emit_owned_copy`, the one routine that copies a string, so the
+/// place owns bytes no other holder can free. Types that are not strings pass through.
+///
+/// O(1) time at the call site; the copy it emits is O(n) in the string's length.
+fn own_string_for_store<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    site: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    if !is_string_like(&cg.resolve_type(ty)) || !val.is_pointer_value() {
+        return Ok(val);
+    }
+    if cg
+        .owned_string_values
+        .contains(&(val.as_value_ref() as usize))
+    {
+        cg.take_string_slots(val)?;
+        return Ok(val);
+    }
+    let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
+    Ok(copied)
+}
+
+/// A function declared `-> number<N>` or `-> number<N> errors` with N > 34 (`declared_success` is
+/// the `number<N>`) returns a bignum, an owned text (in an errors function it rides the ok word),
+/// whatever width the returned value was typed at: a literal or an expression of 34 digits or fewer
+/// is a decimal128 cell (typeck keeps a literal's own width under an `errors` return, and a narrower
+/// local is narrower), and handing that cell over reads a decimal as text, then frees it as a string.
+/// This converts such a value to the declared bignum through `decimal_to_bignum_text`, the emission
+/// `coerce_to_bignum_pair` shares, and returns the value and its type unchanged for every other pair.
+///
+/// Time: O(1) in the compiler, the conversion is O(digits) at run time. Space: one fresh string.
+fn convert_to_declared_success_number<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    val_ty: Type,
+    declared_success: &Type,
+) -> Result<(BasicValueEnum<'ctx>, Type), String> {
+    let declared_success = cg.resolve_type(declared_success);
+    let widens_to_bignum = matches!(declared_success, Type::Number { precision } if precision > 34)
+        && matches!(val_ty, Type::Number { precision } if precision <= 34);
+    if !widens_to_bignum {
+        return Ok((val, val_ty));
+    }
+    let text = decimal_to_bignum_text(cg, val, "ec_ret_dec2str")?;
+    Ok((text, declared_success))
+}
+
+/// The value a `return` hands its caller: a function returns an owned string, array, map or shape
+/// (the caller binds a call result by move: typeck classifies it `Fresh`), so a borrowed one (a
+/// parameter, a field or element read, a literal) is copied here by the store seam and a value that
+/// moves (a fresh one, a returned local at its last use) is taken. No read is a view across a frame. A value coerced into
+/// a union slot was owned when it entered the envelope (`lower_expr`), so it is left alone.
+fn own_returned_value<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    site: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let span = expr.span();
+    if cg.coercion_at((span.start, span.end)).is_some() {
+        return Ok(val);
+    }
+    // A union that is not an envelope union is its one variant's raw pointer, returned as that
+    // variant is (`stored_form_type`, as `copied_at_return` reads it).
+    let ty = cg.stored_form_type(&cg.expr_type(expr));
+    // A channel, or a `maybe` of one, is returned as one counted reference the caller owns: a value
+    // that moves (a fresh one, an owned local at its last use) hands over the reference it holds, any
+    // other read (a parameter, an element, a field) takes a reference of its own.
+    if let Some(shared) = share_returned_channel(cg, val, &ty, site)? {
+        return Ok(shared);
+    }
+    // An envelope union is copied by the `return` itself (`union_persist_into` into the returned
+    // slot, deep unless the value moves), so the store seam does not copy it a second time.
+    if matches!(cg.resolve_type(&ty), Type::Union { .. }) {
+        return Ok(val);
+    }
+    // A `maybe` is copied by the `return` itself too (its payload through `maybe_payload_stable_bits`).
+    if matches!(cg.resolve_type(&ty), Type::Maybe { .. }) {
+        return Ok(val);
+    }
+    if !ynz_typeck::owned_copy::copied_at_return(&cg.resolve_type(&ty)) {
+        return Ok(val);
+    }
+    let owned = own_read_for_store(cg, expr, val, &ty, false, site)?;
+    // A shape copy returned whole is not copied again where the return form persists it.
+    if owned.value.is_pointer_value() && matches!(cg.resolve_type(&ty), Type::Shape { .. }) {
+        cg.moved_cell_values
+            .insert(owned.value.as_value_ref() as usize);
+    }
+    Ok(owned.value)
+}
+
+/// The value a `return` hands back for a channel or a `maybe` of one that does not move: a counted
+/// reference of its own (`ynz_channel_share`). `None` for any other type, and for a value that
+/// moves (it keeps the reference it holds).
+///
+/// O(1) time.
+fn share_returned_channel<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    site: &str,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    if !val.is_pointer_value() {
+        return Ok(None);
+    }
+    let pointer = val.into_pointer_value();
+    match cg.resolve_type(ty) {
+        Type::BuiltinChannel { .. } => {
+            if cg.is_moved_cells(pointer) {
+                return Ok(None);
+            }
+            let shared = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_channel_share,
+                    &[val.into()],
+                    &format!("{site}_share"),
+                )
+                .map_err(|err| format!("share the returned channel: {err}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_channel_share returned void")?;
+            Ok(Some(shared))
+        }
+        Type::Maybe { inner } if matches!(cg.resolve_type(&inner), Type::BuiltinChannel { .. }) => {
+            if cg.is_moved_cells(pointer) {
+                return Ok(None);
+            }
+            let owned = cg.maybe_to_owned(pointer, &inner, site)?;
+            share_maybe_channel_payload(cg, owned, site)?;
+            Ok(Some(owned.into()))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// True when the read of a place at `expr` may point at the place instead of copying it:
+/// typeck judged it a view (`TypedModule::non_owned_reads`, rule (b)) and nothing in codegen's
+/// own crossing sets (rule (c)) keeps it from being one. `binding` is the codegen name of the
+/// binding the value is stored in, `None` for a loop variable or an argument.
+fn read_may_point_at_place(cg: &Cg<'_, '_>, expr: &Expr, binding: Option<&str>) -> bool {
+    let span = expr.span();
+    if !cg.typed.non_owned_reads.is_view(span.start, span.end) {
+        return false;
+    }
+    match binding {
+        Some(name) => {
+            !cg.sm_crossing_names
+                .as_deref()
+                .is_some_and(|names| names.iter().any(|crossing| crossing == name))
+                && !cg.sm_crossing_unions.contains_key(name)
+        }
+        None => true,
+    }
+}
+
+/// A value the store seam copied, and what releases it.
+struct OwnedRead<'ctx> {
+    value: BasicValueEnum<'ctx>,
+    /// True when the seam allocated `value`: its holder releases it (`release_owned_read`).
+    copied: bool,
+    /// What the release is called on when that is not `value` itself: a union copy is read through
+    /// a view, and released through the slot that holds it.
+    release_target: Option<PointerValue<'ctx>>,
+}
+
+impl<'ctx> OwnedRead<'ctx> {
+    /// The value `release_owned_read` is handed for a copy.
+    fn release_value(&self) -> BasicValueEnum<'ctx> {
+        self.release_target
+            .map_or(self.value, |target| target.into())
+    }
+}
+
+/// THE store seam of a read of a place that someone else owns (`IMP-ownership.md`
+/// "Non-owned reads"): a `let` or reassignment value, a loop variable, a call argument and a
+/// `return` all store what they read through here. `expr` is the expression that reads the
+/// place and `may_point` says the site may keep a typeck view (`read_may_point_at_place`).
+///
+/// * a value typeck says a store takes by move (`string_moves`, `heap_moves`) is taken as it is;
+/// * a read typeck judged a view stays a pointer at its place;
+/// * anything else is copied by `emit_owned_copy`, the one routine that copies a string, array
+///   or map, and `shape_bytes_to_owned`, the one that copies a shape's bytes and deepens them.
+///
+/// Types the seam does not own (bits, `maybe`, unions, channels) pass through.
+///
+/// O(1) time at the call site; the copy it emits is O(n) in the value's size.
+fn own_read_for_store<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    may_point: bool,
+    site: &str,
+) -> Result<OwnedRead<'ctx>, String> {
+    let resolved = cg.resolve_type(ty);
+    let kept = OwnedRead {
+        value: val,
+        copied: false,
+        release_target: None,
+    };
+    if !val.is_pointer_value() {
+        return Ok(kept);
+    }
+    let pointer = val.into_pointer_value();
+    match &resolved {
+        string if is_string_like(string) => {
+            if may_point {
+                return Ok(kept);
+            }
+            if cg
+                .owned_string_values
+                .contains(&(val.as_value_ref() as usize))
+            {
+                cg.take_string_slots(val)?;
+                return Ok(kept);
+            }
+            let (copied, _free) = emit_owned_copy(cg, None, val, ty, CopyMode::Body, site)?;
+            Ok(OwnedRead {
+                value: copied,
+                copied: true,
+                release_target: None,
+            })
+        }
+        Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => {
+            if may_point || cg.is_moved_cells(pointer) {
+                return Ok(kept);
+            }
+            let (copied, _free) = emit_owned_copy(cg, Some(expr), val, ty, CopyMode::Body, site)?;
+            Ok(OwnedRead {
+                value: copied,
+                copied: true,
+                release_target: None,
+            })
+        }
+        Type::Shape { name } => {
+            if may_point {
+                return Ok(kept);
+            }
+            let moved = cg.is_moved_cells(pointer);
+            let owned = cg.shape_bytes_to_owned(pointer, name, site)?;
+            Ok(OwnedRead {
+                value: owned.into(),
+                copied: !moved,
+                release_target: None,
+            })
+        }
+        union @ Type::Union { .. } if cg.envelope_union_variants(union).is_some() => {
+            if may_point {
+                return Ok(kept);
+            }
+            let variants = cg
+                .envelope_union_variants(union)
+                .ok_or("store seam: union lost its variants")?;
+            let layout = cg.union_layout(&variants)?;
+            let slot =
+                cg.alloca_in_entry_llvm(cg.union_slot_llvm(&layout), &format!("{site}_owned"))?;
+            cg.union_persist_into(pointer, slot, &variants, &format!("{site}_owned"))?;
+            let view = cg.union_slot_to_value(slot, &variants, &format!("{site}_owned"))?;
+            Ok(OwnedRead {
+                value: view.into(),
+                copied: !cg.is_moved_cells(pointer),
+                release_target: Some(slot),
+            })
+        }
+        // A `fixed<T, N>` read out of a place that stays where it is (a shape field, or the list
+        // an `.or` picks: the receiver's own, or its fallback): the reader owns a copy of the
+        // cells, and of the items they point at. A read typeck judged a view never gets here as a
+        // copy (`may_point`), so this is the owned form of exactly the reads that are not views.
+        // Which reads these are is typeck's one list (`store_seam_copies_fixed_read`), the same
+        // one that decides whether a temporary behind the read is released.
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } if ynz_typeck::temporaries::store_seam_copies_fixed_read(expr) => {
+            if may_point || cg.is_moved_cells(pointer) {
+                return Ok(kept);
+            }
+            let copy = cg.copy_fixed_cells_into_entry_slot(pointer, elem, *count as u64, site)?;
+            Ok(OwnedRead {
+                value: copy.into(),
+                copied: true,
+                release_target: None,
+            })
+        }
+        _ => Ok(kept),
+    }
+}
+
+/// Release a value `own_read_for_store` copied, once its holder is done with it: a loop
+/// variable after its iteration, an argument after the call. One call of the type's release
+/// helper (`release_fn`), the function a scope exit and an overwrite use.
+///
+/// O(n) time in the heap the value owns; O(1) space.
+fn release_owned_read<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    value: BasicValueEnum<'ctx>,
+    ty: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let resolved = cg.resolve_type(ty);
+    let Some(glue) = cg.release_fn(&resolved, false)? else {
+        return Ok(());
+    };
+    cg.builder
+        .build_call(glue, &[value.into_pointer_value().into()], "")
+        .map_err(|err| format!("release_owned_read {site}: {err}"))?;
+    Ok(())
+}
+
+/// True when `expr` is `string.get(i)` or `string.graphemeAt(i)`: a `maybe<string>` whose string is a
+/// fresh allocation (`ynz_typeck::builtins::builtin_method_returns_fresh_maybe_string`), which a
+/// binding takes the way it takes a `maybe` a Yinz function returned.
+fn is_fresh_maybe_string_call(cg: &Cg<'_, '_>, expr: &Expr) -> bool {
+    matches!(expr, Expr::MethodCall { receiver, method, .. }
+        if ynz_typeck::builtins::builtin_method_returns_fresh_maybe_string(&cg.expr_type(receiver), method))
+}
+
+/// Store the value of `expr` into the binding slot `slot` of `name`: an array or map goes through
+/// the store seam (`own_read_for_store`, which takes a moved value and copies a read of a place
+/// that is not a view); every other type through `store_binding`.
+fn store_binding_of_read<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    slot: PointerValue<'ctx>,
+    name: &str,
+) -> Result<(), String> {
+    // A `fixed` list homed in a frame region takes the cells of the block it was given.
+    if let Some((region, bytes)) = cg.sm_crossing_fixed_regions.get(name).copied() {
+        cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+        let source = val.into_pointer_value();
+        cg.builder
+            .build_memmove(region, 8, source, 8, cg.i64().const_int(bytes, false))
+            .map_err(|err| format!("{name}: copy the cells into the fixed region: {err}"))?;
+        return store(cg, region.into(), ty, slot);
+    }
+    // A `maybe` homed in a frame region is copied INTO the region (envelope, then a shape or
+    // decimal payload behind it); the bind makes the local live again.
+    let Some(region) = cg.sm_crossing_maybe_regions.get(name).copied() else {
+        return store_binding_of_read_into(cg, expr, val, ty, slot, name);
+    };
+    cg.set_moved_flag(cg.region_flag_of(name), 0)?;
+    cg.maybe_env_dest.set(Some(region));
+    cg.maybe_payload_dest
+        .set(Some(cg.maybe_region_payload_ptr(region, name)?));
+    let stored = store_binding_of_read_into(cg, expr, val, ty, slot, name);
+    cg.maybe_env_dest.set(None);
+    cg.maybe_payload_dest.set(None);
+    stored
+}
+
+/// `store_binding_of_read` for a binding whose destination storage is already decided.
+fn store_binding_of_read_into<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    slot: PointerValue<'ctx>,
+    name: &str,
+) -> Result<(), String> {
+    if matches!(
+        cg.resolve_type(ty),
+        Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::BuiltinFixed { .. }
+    ) {
+        let owned = own_read_for_store(cg, expr, val, ty, false, name)?;
+        return store(cg, owned.value, ty, slot);
+    }
+    // A `maybe` of an array or map holds the container's pointer as its payload, which a copy of
+    // the envelope shares: a read of a place that is not a view copies the payload as well.
+    if let Type::Maybe { inner } = cg.resolve_type(ty) {
+        if matches!(
+            cg.resolve_type(&inner),
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+        ) && val.is_pointer_value()
+        {
+            let envelope = val.into_pointer_value();
+            let moved = cg.is_moved_cells(envelope);
+            let owned = cg.maybe_to_owned(envelope, &inner, name)?;
+            if !moved {
+                copy_maybe_container_payload(cg, expr, owned, &inner, name)?;
+            }
+            return store(cg, owned.into(), ty, slot);
+        }
+    }
+    // A `maybe` a function written in Yinz returned owns its payload (a heap cell or string the
+    // return made): the binding takes it instead of copying it, so nothing is orphaned and the
+    // binding's release frees each allocation once (`Cg::maybe_to_owned_taking`).
+    if let Type::Maybe { inner } = cg.resolve_type(ty) {
+        let inner = cg.resolve_type(&inner);
+        let owns_payload =
+            matches!(inner, Type::String | Type::Shape { .. }) || cg.is_inline_decimal(&inner);
+        if owns_payload
+            && val.is_pointer_value()
+            && (cg.is_user_call(expr) || is_fresh_maybe_string_call(cg, expr))
+        {
+            let owned = cg.maybe_to_owned_taking(val.into_pointer_value(), &inner, name)?;
+            return store(cg, owned.into(), ty, slot);
+        }
+    }
+    store_binding(cg, val, ty, slot, name)
+}
+
+/// Replace the array or map a `maybe` envelope holds by a copy of it (when the maybe is set), so
+/// the envelope's holder owns its payload.
+///
+/// O(1) time at the call site; the copy it emits is O(n) in the container's size.
+fn copy_maybe_container_payload<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    expr: &Expr,
+    envelope: PointerValue<'ctx>,
+    inner: &Type,
+    site: &str,
+) -> Result<(), String> {
+    replace_maybe_payload(cg, envelope, site, |payload| {
+        let (copied, _free) =
+            emit_owned_copy(cg, Some(expr), payload, inner, CopyMode::Body, site)?;
+        Ok(copied)
+    })
+}
+
+/// Take a counted reference of its own to the channel a `maybe` envelope holds (when the maybe is
+/// set): a holder of a copy of an untraceable result owns one reference, which its scope exit
+/// gives back (`ynz_channel_free`).
+///
+/// O(1) time.
+fn share_maybe_channel_payload<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    envelope: PointerValue<'ctx>,
+    site: &str,
+) -> Result<(), String> {
+    replace_maybe_payload(cg, envelope, site, |payload| {
+        cg.builder
+            .build_call(
+                cg.rt.ynz_channel_share,
+                &[payload.into()],
+                &format!("{site}_mc_share"),
+            )
+            .map_err(|err| format!("share the channel held by `{site}`: {err}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "ynz_channel_share returned void".to_string())
+    })
+}
+
+/// Replace the payload a set `maybe` envelope holds by `replace(payload)`; a `none` is left alone.
+///
+/// O(1) time to emit.
+fn replace_maybe_payload<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    envelope: PointerValue<'ctx>,
+    site: &str,
+    replace: impl FnOnce(BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, String>,
+) -> Result<(), String> {
+    let flag_ptr = cg
+        .builder
+        .build_struct_gep(cg.maybe_type(), envelope, 0, &format!("{site}_mc_flag_ptr"))
+        .map_err(|err| format!("maybe payload copy flag gep {site}: {err}"))?;
+    let flag = cg
+        .builder
+        .build_load(cg.i64(), flag_ptr, &format!("{site}_mc_flag"))
+        .map_err(|err| format!("maybe payload copy flag load {site}: {err}"))?
+        .into_int_value();
+    let is_set = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            flag,
+            cg.i64().const_zero(),
+            &format!("{site}_mc_set"),
+        )
+        .map_err(|err| format!("maybe payload copy cmp {site}: {err}"))?;
+    let copy_bb = cg.append_block(&format!("{site}_mc_copy"));
+    let done_bb = cg.append_block(&format!("{site}_mc_done"));
+    cg.builder
+        .build_conditional_branch(is_set, copy_bb, done_bb)
+        .map_err(|err| format!("maybe payload copy branch {site}: {err}"))?;
+    cg.builder.position_at_end(copy_bb);
+    let bits_ptr = cg
+        .builder
+        .build_struct_gep(cg.maybe_type(), envelope, 1, &format!("{site}_mc_bits_ptr"))
+        .map_err(|err| format!("maybe payload copy bits gep {site}: {err}"))?;
+    let payload = cg
+        .builder
+        .build_load(cg.ptr(), bits_ptr, &format!("{site}_mc_payload"))
+        .map_err(|err| format!("maybe payload copy load {site}: {err}"))?;
+    let replaced = replace(payload)?;
+    cg.builder
+        .build_store(bits_ptr, replaced)
+        .map_err(|err| format!("maybe payload copy store {site}: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(done_bb)
+        .map_err(|err| format!("maybe payload copy join {site}: {err}"))?;
+    cg.builder.position_at_end(done_bb);
+    Ok(())
+}
+
+/// The element a `for` loop variable reads from `iter`'s collection: the element itself when
+/// typeck judged the loop variable a view (nothing in the body writes the iterated place), else a
+/// copy the loop variable owns for its iteration (`own_read_for_store`; the loop releases it after
+/// the iteration). A loop cell is never a value typeck moves.
+fn own_loop_element<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    iter: &Expr,
+    element: BasicValueEnum<'ctx>,
+    element_type: &Type,
+    site: &str,
+) -> Result<OwnedRead<'ctx>, String> {
+    let may_point = read_may_point_at_place(cg, iter, None);
+    own_read_for_store(cg, iter, element, element_type, may_point, site)
+}
+
+/// The loop variable of a hand-over loop points at the row where the list keeps it: nothing was
+/// copied and nothing is released at the end of the iteration (`lower_stmt_for`).
+fn handed_over_row<'ctx>(row: BasicValueEnum<'ctx>) -> OwnedRead<'ctx> {
+    OwnedRead {
+        value: row,
+        copied: false,
+        release_target: None,
+    }
+}
+
+/// After a loop: the variable no longer names a list cell, and a variable of the same name an
+/// enclosing hand-over loop declared does again. `outer_row` is what `lower_stmt_for` displaced
+/// when the loop registered its cell (`None` when the loop hands nothing over).
+fn end_handover_row<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    var: &str,
+    outer_row: Option<Option<HandoverCell<'ctx>>>,
+) {
+    match outer_row {
+        Some(Some(outer)) => {
+            cg.handover_rows.insert(var.to_string(), outer);
+        }
+        Some(None) => {
+            cg.handover_rows.remove(var);
+        }
+        None => {}
+    }
+}
+
+/// The key and value bits a map-iteration entry holds, and which of them the entry owns.
+struct OwnedMapEntry<'ctx> {
+    key_bits: inkwell::values::IntValue<'ctx>,
+    value_bits: inkwell::values::IntValue<'ctx>,
+    key: Option<BasicValueEnum<'ctx>>,
+    value: Option<BasicValueEnum<'ctx>>,
+}
+
+/// `own_loop_element` for a map entry: a string key and a heap value are each copied unless the
+/// loop variable is a view.
+fn own_map_entry<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    iter: &Expr,
+    key_bits: inkwell::values::IntValue<'ctx>,
+    value_bits: inkwell::values::IntValue<'ctx>,
+    key_type: &Type,
+    value_type: &Type,
+) -> Result<OwnedMapEntry<'ctx>, String> {
+    let mut entry = OwnedMapEntry {
+        key_bits,
+        value_bits,
+        key: None,
+        value: None,
+    };
+    let key_value = cg.i64_bits_to(key_bits, key_type)?;
+    let owned_key = own_loop_element(cg, iter, key_value, key_type, "mf_key_own")?;
+    if owned_key.copied {
+        entry.key_bits = cg.to_i64_bits(owned_key.value, key_type)?;
+        entry.key = Some(owned_key.release_value());
+    }
+    let value_value = cg.i64_bits_to(value_bits, value_type)?;
+    let owned_value = own_loop_element(cg, iter, value_value, value_type, "mf_val_own")?;
+    if owned_value.copied {
+        entry.value_bits = cg.to_i64_bits(owned_value.value, value_type)?;
+        entry.value = Some(owned_value.release_value());
+    }
+    Ok(entry)
+}
+
+/// Release what `own_map_entry` copied.
+fn release_map_entry<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    entry: &OwnedMapEntry<'ctx>,
+    key_type: &Type,
+    value_type: &Type,
+) -> Result<(), String> {
+    if let Some(key) = entry.key {
+        release_owned_read(cg, key, key_type, "mf_key_own")?;
+    }
+    if let Some(value) = entry.value {
+        release_owned_read(cg, value, value_type, "mf_val_own")?;
+    }
+    Ok(())
+}
+
+/// The copies a call made of its arguments, released once the call returns.
+type CallCopies<'ctx> = Vec<(BasicValueEnum<'ctx>, Type)>;
+
+/// Lower one argument of a call to a Yinz function. An argument typeck judged `MustCopy`
+/// (`non_owned_reads`: a read of a place that another argument of the same call may write) is
+/// copied by the store seam; the copy is recorded in `copies` for `release_call_copies`. Any
+/// other argument is passed as it is: a position the callee writes is the place itself, and a
+/// view reads the place the callee only reads.
+///
+/// At a `give` position (`gives`) the copy is handed over: the callee releases it, so the call does
+/// not record it in `copies` (releasing it after the call as well freed it twice).
+fn lower_call_argument<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &Expr,
+    copies: &mut CallCopies<'ctx>,
+    gives: bool,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let val = lower_expr(cg, arg)?;
+    let span = arg.span();
+    if !cg.typed.non_owned_reads.must_copy(span.start, span.end) {
+        return Ok(val);
+    }
+    let ty = cg.expr_type(arg);
+    let owned = own_read_for_store(cg, arg, val, &ty, false, "call_arg")?;
+    if owned.copied && !gives {
+        copies.push((owned.release_value(), ty));
+    }
+    Ok(owned.value)
+}
+
+/// The value of a `maybe` argument at a `give` position, as the callee releases it: a local's
+/// envelope with the payload inline. A `.copy()` of a `maybe` (a heap envelope cell and a payload
+/// cell) or a `maybe` a function returned (a payload cell) is that value's only holder, so the
+/// envelope takes the payload and gives the emptied cells back; any other argument is passed as it is.
+fn own_given_maybe<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &Expr,
+    val: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let Type::Maybe { inner } = cg.resolve_type(&cg.expr_type(arg)) else {
+        return Ok(val);
+    };
+    if !val.is_pointer_value() {
+        return Ok(val);
+    }
+    let envelope = val.into_pointer_value();
+    let key = envelope.as_value_ref() as usize;
+    let inner = cg.resolve_type(&inner);
+    if cg.minted_maybe_copies.contains(&key) {
+        return Ok(cg.maybe_to_owned(envelope, &inner, "give_arg")?.into());
+    }
+    if cg.fresh_payload_maybes.contains(&key) {
+        return Ok(cg
+            .maybe_to_owned_taking(envelope, &inner, "give_arg")?
+            .into());
+    }
+    Ok(val)
+}
+
+/// Release the argument copies a call made, right after the call instruction.
+fn release_call_copies<'ctx>(cg: &Cg<'ctx, '_>, copies: &CallCopies<'ctx>) -> Result<(), String> {
+    for (value, ty) in copies {
+        release_owned_read(cg, *value, ty, "call_arg")?;
+    }
+    Ok(())
+}
+
+/// Release the item a `fixed` list cell holds before a write replaces it: a `fixed<string>` cell
+/// holds a string, a `fixed<Shape>` a heap cell owning the shape, a `fixed<array<T>>`, map or
+/// `maybe` the pointer the list owns. The same glue an array `set` and a shape field assignment
+/// replace with (`stored_release`), so one dispatch frees every overwritten item, and an item
+/// type it cannot release is an error naming the type, never a skipped release. A cell no write
+/// has filled holds null: nothing to release.
+///
+/// A union item is the pointer to the VIEW the list was given (`value_to_stable_bits` stores a
+/// union's view, not a slot), so it is released through the union view release
+/// (`ReleaseHome::FixedCell`); `v03_m9_c7_slice3` pins that layout.
+///
+/// O(1) time at the call site plus the item's release; O(1) space.
+fn release_replaced_fixed_cell<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    cell: PointerValue<'ctx>,
+    element_type: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let element_type = cg.resolve_type(element_type);
+    let Some(glue) = cg.stored_release(&element_type, ReleaseHome::FixedCell)? else {
+        return Ok(());
+    };
+    let old = cg
+        .builder
+        .build_load(cg.ptr(), cell, &format!("{site}_old"))
+        .map_err(|err| format!("fixed release load {site}: {err}"))?
+        .into_pointer_value();
+    let is_set = cg
+        .builder
+        .build_is_not_null(old, &format!("{site}_old_set"))
+        .map_err(|err| format!("fixed release null check {site}: {err}"))?;
+    let release_bb = cg.append_block(&format!("{site}_old_release"));
+    let done_bb = cg.append_block(&format!("{site}_old_done"));
+    cg.builder
+        .build_conditional_branch(is_set, release_bb, done_bb)
+        .map_err(|err| format!("fixed release branch {site}: {err}"))?;
+    cg.builder.position_at_end(release_bb);
+    cg.call_stored_release(glue, cell, site)?;
+    cg.builder
+        .build_unconditional_branch(done_bb)
+        .map_err(|err| format!("fixed release join {site}: {err}"))?;
+    cg.builder.position_at_end(done_bb);
+    Ok(())
+}
+
+/// Evaluate the iterated expression of a suspending `for` ONCE, before its header, when it is a
+/// fresh value typeck recorded as a temporary of the statement that lives in the heap frame (an
+/// array or map literal, a call result, `.copy()`): the temporary's slot then holds the one
+/// collection the header and every iteration read back (`loop_iterable_pointer`). The header and
+/// the body used to evaluate it again each time, which called the function again on every pass
+/// (an effect repeated) and allocated a collection per evaluation that only the last one's slot
+/// ever freed. A place (`rows`, `board.rows`) is not a temporary: it is re-read each time, so a
+/// write that replaces the place in the body is seen.
+///
+/// O(1) time to emit; the evaluation runs once per loop.
+fn hold_loop_iterable<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    iter: &Expr,
+) -> Result<Option<PointerValue<'ctx>>, String> {
+    let span = iter.span();
+    let Some(slot) = cg.held_temporary_slot((span.start, span.end)) else {
+        return Ok(None);
+    };
+    lower_expr(cg, iter)?;
+    Ok(Some(slot))
+}
+
+/// The collection a suspending `for` iterates, read back at the header and in the body: the held
+/// temporary when `hold_loop_iterable` kept one, else the iterated place re-read.
+///
+/// O(1) time.
+fn loop_iterable_pointer<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    iter: &Expr,
+    held: Option<PointerValue<'ctx>>,
+) -> Result<PointerValue<'ctx>, String> {
+    match held {
+        Some(slot) => Ok(cg
+            .builder
+            .build_load(cg.ptr(), slot, "sm_iterable")
+            .map_err(|err| format!("sm for iterable load: {err}"))?
+            .into_pointer_value()),
+        None => Ok(lower_expr(cg, iter)?.into_pointer_value()),
+    }
+}
+
+/// Keep the copy a suspending loop made for its variable in the iteration's frame slot, so the
+/// iteration's end (and a `return` or propagation in the body) releases it from there. The copy
+/// is an SSA value of one resume invocation and the body may suspend, so only the slot reaches
+/// the release. A string, array or map only (the kinds a heap frame slot keeps, as
+/// `ReleaseKind::has_frame_backing`); returns whether the copy is held. Any other kind stays
+/// with `release_sm_loop_copy` (a leak until C8 slice 4).
+///
+/// O(1) time.
+fn hold_loop_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    copy: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<bool, String> {
+    let resolved = cg.resolve_type(ty);
+    if !copy.is_pointer_value()
+        || !matches!(
+            release_step(&resolved),
+            ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+        )
+    {
+        return Ok(false);
+    }
+    if cg.hold_copy_in_frame(copy.into_pointer_value(), &resolved, ReleaseForm::Local)? {
+        Ok(true)
+    } else {
+        Err(
+            "internal: a suspending loop copied its variable outside a heap-frame statement"
+                .to_string(),
+        )
+    }
+}
+
+/// Release what a state-machine loop copied for its variable, at the end of an iteration.
+///
+/// * A shape embedded in the frame (`embed_copy`) lives in the frame region its pointer slot
+///   names: its owned fields are released there, whatever the body does.
+/// * A copy made in a body that does not suspend is an SSA value of the same resume function:
+///   released directly.
+/// * A string, array or map copy made in a body that suspends is `held` in a slot of the
+///   iteration's heap frame (`hold_loop_copy`): `Cg::close_temporaries` released it already, and a
+///   `return` in the body did too, so nothing is emitted here.
+/// * Any other kind made in a body that suspends is released from the loop variable's frame slot
+///   when the variable is a crossing local (the slot is reloaded after a resume); otherwise it
+///   leaks until C8 slice 4 gives the kind frame bytes.
+///
+/// O(1) time at the call site plus the copy's release; O(1) space.
+fn release_sm_loop_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    var: &str,
+    var_slot: PointerValue<'ctx>,
+    element_type: &Type,
+    owned: Option<&OwnedRead<'ctx>>,
+    copy: SmLoopCopy,
+) -> Result<(), String> {
+    let SmLoopCopy {
+        embed_copy,
+        body_suspends,
+        held,
+    } = copy;
+    if held {
+        return Ok(());
+    }
+    if embed_copy {
+        let region = cg
+            .builder
+            .build_load(cg.ptr(), var_slot, &format!("{var}_embed_region"))
+            .map_err(|err| format!("sm loop embed release load {var}: {err}"))?;
+        return release_owned_read(cg, region, element_type, "sm_embed_elem");
+    }
+    let Some(owned) = owned.filter(|owned| owned.copied) else {
+        return Ok(());
+    };
+    if !body_suspends {
+        return release_owned_read(cg, owned.release_value(), element_type, "sm_elem");
+    }
+    let persisted = owned.release_target.is_none()
+        && cg
+            .sm_crossing_names
+            .as_deref()
+            .is_some_and(|names| names.iter().any(|name| name == var));
+    if !persisted {
+        return Ok(());
+    }
+    let current = load(cg, var_slot, element_type, var)?;
+    release_owned_read(cg, current, element_type, "sm_elem")
+}
+
+fn lower_expr_node<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
-        Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
+        Expr::IntLit(n, _) => {
+            // Typeck types an int literal as `Float` under a float hint. The i64 constant
+            // would be stored (or passed) as f64 bits — a denormal — so the constant must
+            // be f64 when the type typeck computed says so. O(1).
+            if cg.expr_type(expr) == Type::Float {
+                return Ok(cg.f64().const_float(*n as f64).into());
+            }
+            Ok(cg.i64().const_int(*n as u64, true).into())
+        }
 
         Expr::NumberLit(s, _) => {
             let ty = cg.expr_type(expr);
@@ -15749,6 +23384,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     );
                     return Ok(global.as_pointer_value().into());
                 }
+            }
+            // A decimal literal under a `float` annotation (`let x: float = 0.317`) is an f64
+            // constant: typeck types it `float`, so its value must be f64 bits like every other
+            // `float`, not the address of a decimal cell.
+            if ty == Type::Float {
+                let value: f64 = s
+                    .parse()
+                    .map_err(|err| format!("bad float literal `{s}`: {err}"))?;
+                return Ok(cg.f64().const_float(value).into());
             }
             // Hardware decimal128 path (N ≤ 34): stack alloca holds i128 bits.
             let bits: u128 =
@@ -15772,25 +23416,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::StringLit(bytes, _) => {
             let mut null = bytes.clone();
             push_c_string_terminator(&mut null);
-            let i8t = cg.i8();
-            let arr_ty = i8t.array_type(null.len() as u32);
-            let arr = i8t.const_array(
-                &null
-                    .iter()
-                    .map(|&b| i8t.const_int(b as u64, false))
-                    .collect::<Vec<_>>(),
-            );
-            let g = cg
-                .module
-                .add_global(arr_ty, Some(AddressSpace::default()), "str");
-            g.set_initializer(&arr);
-            g.set_constant(true);
-            g.set_linkage(inkwell::module::Linkage::Private);
-            g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-            Ok(g.as_pointer_value().into())
+            Ok(build_static_string(cg.ctx, cg.module, &null, "str")
+                .as_pointer_value()
+                .into())
         }
 
-        Expr::Ident(name, _) => {
+        Expr::Ident(name, ident_span) => {
+            if let Some(envelope) = cg.narrowed_envelope_use(name, ident_span)? {
+                return Ok(envelope.into());
+            }
             let slot = *cg
                 .locals
                 .get(name.as_str())
@@ -15826,10 +23460,12 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     } else {
                         ty.clone()
                     };
-                    let success_val = lower_ec_auto_propagate(cg, result_struct, &inner_ty)?;
+                    let success_val =
+                        lower_ec_auto_propagate(cg, result_struct, &inner_ty, ident_span)?;
                     let new_slot = cg.alloca(&inner_ty, &format!("{name}_ec_inner"))?;
                     store(cg, success_val, &inner_ty, new_slot)?;
                     cg.locals.insert(name.to_string(), new_slot);
+                    cg.null_handed_founders(ident_span)?;
                     return Ok(success_val);
                 } else if !matches!(ty, Type::ErrorsCapable { .. }) {
                     // Typeck narrowed the binding to the inner type (after a .failed() check or
@@ -15876,6 +23512,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .map_err(|e| format!("sm nap branch: {e}"))?;
                         // Error path: store {error_ptr, 0} to frame return slot, signal Ready.
                         cg.builder.position_at_end(propagate_bb);
+                        cg.release_at_narrowed_error_path(ident_span)?;
                         state_machine::store_return_value_errors(
                             cg.ctx,
                             &cg.builder,
@@ -15883,9 +23520,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             err_ptr_i64,
                             cg.i64().const_int(0, false),
                         )?;
-                        cg.builder
-                            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
-                            .map_err(|e| format!("sm nap error ret: {e}"))?;
+                        build_resume_ready_return(cg, frame_ptr, "sm nap error ret")?;
                         // Success path: extract field1 (success bits), update slot to inner type.
                         cg.builder.position_at_end(success_bb);
                         let success_bits = cg
@@ -15894,10 +23529,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .map_err(|e| format!("sm nap extract val: {e}"))?
                             .into_int_value();
                         let success_val = cg.i64_bits_to(success_bits, &ty)?;
-                        cg.errors_capable_locals.remove(name.as_str());
-                        let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
-                        store(cg, success_val, &ty, new_slot)?;
-                        cg.locals.insert(name.to_string(), new_slot);
+                        // A crossing local keeps its entry-block slot: every resume reloads the frame words
+                        // into it, and a narrowed slot made in this branch does not dominate the states
+                        // after a `wait`. Each read extracts the success word again.
+                        if !cg.sm_crossing_errors_capable_set.contains(name.as_str()) {
+                            cg.errors_capable_locals.remove(name.as_str());
+                            let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
+                            store(cg, success_val, &ty, new_slot)?;
+                            cg.locals.insert(name.to_string(), new_slot);
+                        }
                         return Ok(success_val);
                     }
 
@@ -15922,13 +23562,17 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
                     store(cg, success_val, &ty, new_slot)?;
                     cg.locals.insert(name.to_string(), new_slot);
+                    cg.null_handed_founders(ident_span)?;
                     return Ok(success_val);
                 }
                 // If ErrorsCapable AND not errors-capable caller: fall through to load
                 // which returns the ptr for .or()/.failed() method dispatch.
             }
 
-            load(cg, slot, &ty, name)
+            let loaded = load(cg, slot, &ty, name)?;
+            cg.null_handed_founders(ident_span)?;
+            cg.take_handover_row(name, ident_span, loaded, &ty)?;
+            Ok(loaded)
         }
 
         Expr::BinOp { op, lhs, rhs, .. } => {
@@ -16208,8 +23852,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     // Prefer the direct name. If not found, check for an aliased import
                     // (`import { getValue as fetchVal }`) — the LLVM module declares the
                     // function under the original exported name, not the local alias.
-                    // Fall back to monomorphization lookup, then the name itself.
-                    let effective_name = if cg.module.get_function(name).is_some() {
+                    // Then a generic call: the instance the type checker recorded for this
+                    // call site, or an internal error (no guess).
+                    let effective_name = if let Some(symbol) =
+                        cg.fixed_version_symbol((call.span.start, call.span.end))?
+                    {
+                        symbol
+                    } else if cg.module.get_function(name).is_some() {
                         name.to_string()
                     } else if let Some(orig) = cg
                         .imported_fns
@@ -16218,11 +23867,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     {
                         orig.to_string()
                     } else {
-                        // Infer concrete arg types from the call site to pick the right mono.
-                        let arg_types: Vec<Type> =
-                            call.args.iter().map(|a| cg.expr_type(a)).collect();
-                        find_mono_name_by_args(cg.mono_table, name, &arg_types)
-                            .unwrap_or_else(|| name.to_string())
+                        recorded_generic_instance_name(
+                            &cg.typed.generic_call_instances,
+                            &cg.type_subst,
+                            name,
+                            &call.span,
+                            |instance| cg.module.get_function(instance).is_some(),
+                        )?
                     };
 
                     // The direct wrapper-fn invocation below serves ONLY callees that do not
@@ -16244,8 +23895,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         format!("codegen: function `{effective_name}` not found in module")
                     })?;
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
-                    for arg in &call.args {
-                        let val = lower_expr(cg, arg)?;
+                    let mut arg_copies: CallCopies<'ctx> = Vec::new();
+                    for (arg_index, arg) in call.args.iter().enumerate() {
+                        let gives = matches!(
+                            cg.plain_callee_param_ownership(name, arg_index),
+                            Some(Some(OwnershipModifier::Give))
+                        );
+                        let mut val = lower_call_argument(cg, arg, &mut arg_copies, gives)?;
+                        if gives {
+                            val = own_given_maybe(cg, arg, val)?;
+                        }
                         call_args.push(val.into());
                     }
                     // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
@@ -16258,6 +23917,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .builder
                         .build_call(fn_val, &call_args, "call")
                         .map_err(|e| format!("call {effective_name}: {e}"))?;
+                    release_call_copies(cg, &arg_copies)?;
 
                     // M7 P4a: if callee is errors-capable, handle the {i64, i64} result.
                     let callee_is_ec =
@@ -16270,6 +23930,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                                 format!("errors-capable call `{effective_name}` returned void")
                             })?
                             .into_struct_value();
+                        // C1f (#423): a union success value comes back as the slot; hand the
+                        // rest of the lowering the standard `{ err, ok = view }` pair over a
+                        // caller-owned copy.
+                        let result_struct = match cg.callee_ec_union_variants(&effective_name) {
+                            Some((variants, maybe)) => cg.ec_union_result_to_standard(
+                                result_struct,
+                                &variants,
+                                maybe,
+                                "ec_call_union",
+                            )?,
+                            None => result_struct,
+                        };
                         return lower_errors_capable_call_result(
                             cg,
                             result_struct,
@@ -16295,6 +23967,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::MethodCall {
             receiver,
             method,
+            method_span,
             args,
             ..
         } => {
@@ -16303,7 +23976,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             match &recv_ty {
                 Type::Shape { name } => {
                     let name = name.clone();
-                    let raw = lower_ufcs_call(cg, recv_val, &name, method, args)?;
+                    let raw =
+                        lower_ufcs_call(cg, receiver, recv_val, &name, method, method_span, args)?;
                     // v0.3-M7 R9: a UFCS call is the same C-ABI invocation as the
                     // direct-call arm — by-value number/maybe/shape results wrap into
                     // a caller-owned slot here too (one reception discipline).
@@ -16349,8 +24023,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 }
                 Type::BuiltinFixed { elem, size } => {
                     let elem = elem.as_ref().clone();
-                    let sz = *size;
-                    lower_fixed_method(cg, recv_val.into_pointer_value(), &elem, sz, method, args)
+                    let known_length = size.known();
+                    lower_fixed_method(
+                        cg,
+                        recv_val.into_pointer_value(),
+                        &elem,
+                        known_length,
+                        method,
+                        args,
+                    )
                 }
                 Type::Maybe { inner } => {
                     let inner = inner.as_ref().clone();
@@ -16417,6 +24098,10 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::FieldAccess {
             receiver, field, ..
         } => {
+            let span = expr.span();
+            if cg.typed.non_owned_reads.is_take(span.start, span.end) {
+                return lower_taken_field(cg, receiver, field);
+            }
             // M4 P5: type-attached constants (int.max, number.epsilon, etc.)
             if let Expr::Ident(type_name_str, _) = receiver.as_ref() {
                 if type_attached_const_type(type_name_str, field).is_some() {
@@ -16435,14 +24120,27 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::StructLit { fields, .. } => {
             // When typeck resolved this to a BuiltinMap, the user wrote `{ key: value }` syntax
             // with a map annotation — lower identifier names as string literal keys.
-            if let Type::BuiltinMap { val, .. } = cg.expr_type(expr) {
+            if let Type::BuiltinMap { key, val } = cg.expr_type(expr) {
                 let val_ty = val.as_ref().clone();
-                let map_ptr = cg.map_new(&val_ty, "map_new")?;
+                let key_ty = key.as_ref().clone();
+                if !fields.is_empty() && cg.map_key_kind(&key_ty)? != MapKeyKind::String {
+                    return Err(format!(
+                        "codegen: `{{ name: value }}` fields are string keys, but the map is keyed by {key_ty:?}"
+                    ));
+                }
+                let map_ptr = cg.map_new(&key_ty, &val_ty, "map_new")?;
                 for f in fields {
                     let key_global = build_string_global(cg.ctx, cg.module, &f.name, "imap_key");
                     let key_ptr = key_global.as_pointer_value();
                     let val_val = lower_expr(cg, &f.value)?;
-                    cg.map_val_set(map_ptr, key_ptr.into(), true, val_val, &val_ty, "imap_set")?;
+                    cg.map_val_set(
+                        map_ptr,
+                        key_ptr.into(),
+                        MapKeyKind::String,
+                        val_val,
+                        &val_ty,
+                        "imap_set",
+                    )?;
                 }
                 Ok(map_ptr.into())
             } else {
@@ -16473,8 +24171,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             let arr_ty = cg.resolve_type(&cg.expr_type(expr));
             match &arr_ty {
                 Type::BuiltinFixed { elem, size } => {
-                    let n = size.unwrap_or(elements.len()) as u32;
-                    let arr_t = cg.i64().array_type(n.max(1));
+                    let item_count = size.known().unwrap_or(elements.len()) as u32;
+                    let arr_t = cg.fixed_block_type(elem, item_count.max(1));
                     let slot = cg
                         .builder
                         .build_alloca(arr_t, "fixed_arr")
@@ -16482,10 +24180,22 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     for (i, elem_expr) in elements.iter().enumerate() {
                         let elem_val = lower_expr(cg, elem_expr)?;
                         let elem_ty2 = cg.expr_type(elem_expr);
+                        if cg.is_inline_decimal(elem) {
+                            let cell_index = cg.i64().const_int(i as u64, false);
+                            cg.fixed_cell_store_decimal(
+                                slot,
+                                cell_index,
+                                elem_val.into_pointer_value(),
+                                "fixed_lit_decimal",
+                            )?;
+                            continue;
+                        }
                         // Fixed slots persist past the element expr's site — shape/maybe
                         // bits must be stable (heap-cloned via the ONE choke point, fix
                         // round 4), or a later mutation of the source binding silently
                         // rewrites the stored element.
+                        let elem_val =
+                            own_string_for_store(cg, elem_val, &elem_ty2, "fixed_lit_str")?;
                         let bits = cg.value_to_stable_bits(elem_val, &elem_ty2, "fixed_lit_val")?;
                         let idx = cg.i64().const_int(i as u64, false);
                         let gep = unsafe {
@@ -16504,34 +24214,12 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     // BuiltinArray: heap-allocate via the by-value choke point.
                     let elem_ty = elem.as_ref().clone();
                     let arr_ptr = cg.array_new(&elem_ty, "arr_new")?;
-                    let in_sm = cg.sm_frame_ptr.is_some();
-                    for (elem_idx, elem_expr) in elements.iter().enumerate() {
+                    for elem_expr in elements.iter() {
                         let elem_ty2 = cg.expr_type(elem_expr);
-                        // NumberLit decimal128 elements in SM functions: emit a module-level
-                        // constant global instead of a stack alloca so the pointer survives
-                        // across suspension boundaries. Number elements remain POINTER cells
-                        // under the by-value ABI (elem_size 8, Option A), so this global is
-                        // still load-bearing — unlike shape elements, whose bytes now live
-                        // inline in the heap buffer (the former shape-global fold and its
-                        // `try_build_shape_global` helper were deleted with the M5 P2 cut:
-                        // push memcpys the struct-literal alloca's bytes before it dies, so
-                        // the buffer, not a global/stack pointer, is the stable owner).
-                        let elem_val = if in_sm
-                            && matches!(elem_ty2, Type::Number { precision } if precision <= 34)
-                        {
-                            if let Expr::NumberLit(s, _) = elem_expr {
-                                let bits: u128 = ynz_numerics::parse(s)
-                                    .ok_or_else(|| format!("bad decimal literal `{s}`"))?;
-                                let gname =
-                                    format!(".arr.dec.{}.{}", elem_idx, &s[..s.len().min(8)]);
-                                let g = build_decimal_global(cg.ctx, cg.module, bits, &gname);
-                                g.as_pointer_value().into()
-                            } else {
-                                lower_expr(cg, elem_expr)?
-                            }
-                        } else {
-                            lower_expr(cg, elem_expr)?
-                        };
+                        // The element's 16 bytes are copied into the array cell by the runtime
+                        // before the push returns, so whatever slot the literal or computed number
+                        // sits in may die or be reused straight away.
+                        let elem_val = lower_expr(cg, elem_expr)?;
                         // Always AoS: an ADMITTED array's literal is intercepted at
                         // its `Stmt::Let` (lower_soa_construction) and never
                         // reaches this arm.
@@ -16556,25 +24244,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 let key_ty = key.as_ref().clone();
                 let val_ty = val.as_ref().clone();
                 let idx_val = lower_expr(cg, index)?;
-                let maybe_slot = if key_is_string(&key_ty) {
-                    cg.map_val_get_maybe(
-                        recv_val.into_pointer_value(),
-                        idx_val.into(),
-                        true,
-                        &val_ty,
-                        "mi_gs",
-                    )?
-                } else {
-                    let kt = cg.expr_type(index);
-                    let key_bits = cg.to_i64_bits(idx_val, &kt)?;
-                    cg.map_val_get_maybe(
-                        recv_val.into_pointer_value(),
-                        key_bits.into(),
-                        false,
-                        &val_ty,
-                        "mi_g",
-                    )?
-                };
+                let key_kind = cg.map_key_kind(&key_ty)?;
+                let index_ty = cg.expr_type(index);
+                let key_operand = cg.map_key_operand(idx_val, &index_ty, key_kind)?;
+                let maybe_slot = cg.map_val_get_maybe(
+                    recv_val.into_pointer_value(),
+                    key_operand,
+                    key_kind,
+                    &val_ty,
+                    "mi_g",
+                )?;
                 return Ok(maybe_slot.into());
             }
 
@@ -16594,14 +24273,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     )?;
                     Ok(maybe_slot.into())
                 }
-                Type::BuiltinFixed { size, .. } => {
-                    let n = size.unwrap_or(0) as u64;
+                Type::BuiltinFixed { elem, size } => {
+                    let fixed_elem_ty = elem.as_ref().clone();
+                    let item_count = size.known().unwrap_or(0) as u64;
                     let maybe_slot = cg
                         .builder
                         .build_alloca(cg.maybe_type(), "fixed_get")
                         .map_err(|e| format!("{e}"))?;
 
-                    let in_bounds = if n > 0 {
+                    let in_bounds = if item_count > 0 {
                         let idx_ext = cg
                             .builder
                             .build_int_z_extend_or_bit_cast(idx, cg.i64(), "ie")
@@ -16610,7 +24290,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .build_int_compare(
                                 IntPredicate::ULT,
                                 idx_ext,
-                                cg.i64().const_int(n, false),
+                                cg.i64().const_int(item_count, false),
                                 "in_bounds",
                             )
                             .map_err(|e| format!("{e}"))?
@@ -16628,16 +24308,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     // ok: load element and write maybe_some
                     cg.builder.position_at_end(ok_bb);
                     let arr_ptr = recv_val.into_pointer_value();
-                    let gep = unsafe {
-                        cg.builder
-                            .build_gep(cg.i64(), arr_ptr, &[idx], "fixed_elem_ok")
-                            .map_err(|e| format!("fixed gep ok: {e}"))?
-                    };
-                    let elem_bits = cg
-                        .builder
-                        .build_load(cg.i64(), gep, "elem_bits")
-                        .map_err(|e| format!("{e}"))?
-                        .into_int_value();
+                    let elem_bits =
+                        cg.fixed_cell_envelope_bits(arr_ptr, idx, &fixed_elem_ty, "fixed_elem_ok")?;
                     let has_ok = cg
                         .builder
                         .build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_ok")
@@ -16690,25 +24362,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 _ => return Err("MapLit with non-BuiltinMap type".to_string()),
             };
 
-            let map_ptr = cg.map_new(&val_ty, "map_new")?;
+            let map_ptr = cg.map_new(&key_ty, &val_ty, "map_new")?;
 
             for (key_expr, val_expr) in entries {
                 let key_val = lower_expr(cg, key_expr)?;
                 let val_val = lower_expr(cg, val_expr)?;
-                if key_is_string(&key_ty) {
-                    cg.map_val_set(
-                        map_ptr,
-                        key_val.into(),
-                        true,
-                        val_val,
-                        &val_ty,
-                        "map_set_str",
-                    )?;
-                } else {
-                    let kt = cg.expr_type(key_expr);
-                    let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                    cg.map_val_set(map_ptr, key_bits.into(), false, val_val, &val_ty, "map_set")?;
-                }
+                let key_kind = cg.map_key_kind(&key_ty)?;
+                let key_expr_ty = cg.expr_type(key_expr);
+                let key_operand = cg.map_key_operand(key_val, &key_expr_ty, key_kind)?;
+                cg.map_val_set(map_ptr, key_operand, key_kind, val_val, &val_ty, "map_set")?;
             }
             Ok(map_ptr.into())
         }
@@ -16739,22 +24401,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     })
                     .collect();
                 push_c_string_terminator(&mut bytes);
-                let i8t = cg.i8();
-                let arr_ty = i8t.array_type(bytes.len() as u32);
-                let arr = i8t.const_array(
-                    &bytes
-                        .iter()
-                        .map(|&b| i8t.const_int(b as u64, false))
-                        .collect::<Vec<_>>(),
-                );
-                let g = cg
-                    .module
-                    .add_global(arr_ty, Some(AddressSpace::default()), "bts");
-                g.set_initializer(&arr);
-                g.set_constant(true);
-                g.set_linkage(inkwell::module::Linkage::Private);
-                g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-                Ok(g.as_pointer_value().into())
+                Ok(build_static_string(cg.ctx, cg.module, &bytes, "bts")
+                    .as_pointer_value()
+                    .into())
             } else {
                 // Interpolated string: build via ynz_string_builder_*.
                 let builder = cg
@@ -16801,14 +24450,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             let val = lower_expr(cg, sub_expr)?;
                             let sub_ty = cg.expr_type(sub_expr);
                             // Produce a null-terminated string from the expression value.
-                            let s_ptr = expr_to_cstring(cg, val, &sub_ty)?;
-                            cg.builder
-                                .build_call(
-                                    cg.rt.ynz_string_builder_append,
-                                    &[builder.into(), s_ptr.into()],
-                                    "",
-                                )
-                                .map_err(|e| format!("{e}"))?;
+                            if let Type::Options { name } = &sub_ty {
+                                // An options value arrives as its i8 tag, not the i64 a field load gives.
+                                let text = Text::fresh(
+                                    lower_options_to_string(cg, val, name)?.into_pointer_value(),
+                                );
+                                write_and_release_text(cg, TextSink::Builder(builder), text)?;
+                            } else {
+                                write_value_text(cg, val, &sub_ty, TextSink::Builder(builder))?;
+                            }
                         }
                     }
                 }
@@ -16856,14 +24506,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 /// What the background task closure must do with a heap-copied arg after the call returns.
 ///
 /// Each `background` arg that was heap-copied (to survive the spawner's frame return) needs
-/// exactly one matching free call inside the closure. Primitives and strings need no free:
-/// primitives are i64 by-value, strings are immutable heap pointers that outlive the frame.
+/// exactly one matching free call inside the closure. Primitives need no free (i64 by-value). A
+/// string the task owns (moved, or an owned copy) starts as `None` here and is upgraded to
+/// `ReleaseGlue` by `release_glue_free_kind`, like any other value the task owns.
 ///
 /// This enum is produced by `prepare_bg_arg_for_ctx` at the spawn site and consumed by the
 /// closure body emitter to generate the matching `ynz_free` / `ynz_array_drop` calls.
 #[derive(Clone, Debug)]
 enum BgArgFreeKind {
-    /// No heap allocation to free — primitives (int/float/bool) and strings.
+    /// No free call in the closure — primitives (int/float/bool), and a value
+    /// `release_glue_free_kind` then upgrades to `ReleaseGlue` (a string or map the task owns).
     None,
     /// Shape heap copy: call `ynz_free(ptr, byte_size)` after the fn call.
     HeapShape { byte_size: u64 },
@@ -16885,6 +24537,22 @@ enum BgArgFreeKind {
     /// (`ynz_arc_clone` at the spawn site): release with `ynz_arc_free(ptr, byte_size)`
     /// after the call (CPU arm) or at retire via `BG_ARG_KIND_ARC_SHAPE` (SM ladder).
     ArcShape { byte_size: u64 },
+    /// v0.3-M9 C3c/C6: the task's own value, released by the type's release glue (the module
+    /// function named here, `Cg::release_fn`): it frees the value's items, entries and fields and
+    /// the value itself. CPU arm: called after the call; SM ladder: `BG_ARG_KIND_RELEASE_GLUE`.
+    ReleaseGlue { glue_name: String },
+    /// v0.3-M9 C8 slice 5: a shape cell the spawn allocated for a SUSPENDING callee that takes it at a
+    /// `give` position. The callee releases the shape's fields and nulls its frame slot, so the ladder
+    /// cannot find the cell there: the descriptor carries the cell's own pointer
+    /// (`BG_ARG_KIND_OWNED_CELL`) and frees it with `ynz_free(cell, byte_size)`. Never reaches the CPU arm
+    /// (a plain callee keeps `HeapShape`, its closure frees the cell from the context).
+    OwnedCell { byte_size: u64 },
+    /// v0.3-M9 C8: the cells a spawn minted for a `maybe` whose payload has a cell of its own (a
+    /// shape, a decimal), given to a SUSPENDING callee at a `give` position. The callee releases the
+    /// payload's contents and nulls its frame slot, so the ladder frees the envelope cell and the
+    /// payload cell through two `BG_ARG_KIND_OWNED_CELL` entries that carry the pointers themselves
+    /// (the payload cell's is read from the envelope at the spawn, null when the `maybe` is `none`).
+    OwnedMaybeCells { payload_size: u64 },
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -16936,7 +24604,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // returns, matching the ynz_alloc emitted here.
     //
     // Primitives (Int/Bool/Float) are i64 by-value and need no heap-upgrade.
-    // Strings are immutable heap bytes; the pointer itself survives any frame.
+    // Strings are handled before this point: the task owns its string, moved or copied.
     // v0.3-M4: a channel argument is SHARED with the task — refcounted alias via
     // ynz_channel_share (both sides must operate on the SAME bounded buffer; neither give
     // nor copy is correct for a conduit). The task's drop ladder releases the reference
@@ -16970,15 +24638,15 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         // with the spawner's frame (sweep probe: the task read the ADVANCED slot — 2/20 vs
         // expected 1/10). Route through the ONE stable-bits choke point
         // (`value_to_stable_bits` — no bg-side marshalling twin); the free ladder reuses
-        // `HeapShape` for the 16-byte entry cell (`ynz_free` ignores its size arg today). The
-        // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011 accounted
-        // persist-cell class, deferred to the drop story.
+        // `HeapShape` for the 16-byte entry cell until `release_glue_free_kind` upgrades it to
+        // `bg_mapentry_release_fn`, which also frees the deep-copied key and value sub-cells.
         Some(ynz_typeck::owned_copy::SpawnRehoming::StabilizeLoopView) => {
             let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
             let cell_ptr = cg
                 .builder
                 .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
                 .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
+            copy_map_entry_halves(cg, cell_ptr, ty)?;
             return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
         }
         // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg ALWAYS
@@ -16998,6 +24666,14 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
             return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
         }
+        // A union gets its slot before this function is called (the spawn arms' own union step:
+        // `bg_union_arg_cell` / `stage_union_arg`), so one that arrives here has skipped it.
+        Some(ynz_typeck::owned_copy::SpawnRehoming::UnionSlot) => {
+            return Err(format!(
+                "a union background argument reached the owned-copy path without a slot ({})",
+                ynz_typeck::types::type_name(ty)
+            ));
+        }
         None => {}
     }
 
@@ -17006,7 +24682,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // ONE block instead of taking its own heap copy. Codegen reads typeck's recorded
     // `BgOwnership::Arc { group, first, last }` and consults no ownership fact of its own
     // (authoritative-derivation): `first` mints the block (`ynz_arc_new` + a copy of the
-    // struct bytes) into the caller-side transient; EVERY member (the first included — the
+    // struct bytes, then a copy of each heap field it owns) into the caller-side transient; EVERY member (the first included — the
     // transient's own reference is separate) takes the task's reference with
     // `ynz_arc_clone`; `last` queues the transient for release right after this spawn call.
     // The task's reference rides the drop ladder as `BG_ARG_KIND_ARC_SHAPE`. The transient is
@@ -17022,7 +24698,8 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         {
             let (group, first, last) = (*group, *first, *last);
             let arc = arc_decls(cg.ctx, cg.module);
-            let Type::Shape { name } = cg.resolve_type(ty) else {
+            let resolved_shape = cg.resolve_type(ty);
+            let Type::Shape { name } = &resolved_shape else {
                 return Err(format!(
                     "auto-arc: typeck admitted a non-shape argument ({}) to an Arc group",
                     ynz_typeck::types::type_name(ty)
@@ -17030,17 +24707,25 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             };
             let struct_ty = cg
                 .shape_types
-                .get(&name)
+                .get(name)
                 .ok_or_else(|| format!("auto-arc: LLVM type for `{name}` not found"))?;
             let abi_size =
-                cg.shape_abi_sizes.get(&name).copied().ok_or_else(|| {
+                cg.shape_abi_sizes.get(name).copied().ok_or_else(|| {
                     format!("auto-arc: shape `{name}` missing from shape_abi_sizes")
                 })?;
             if first {
                 let size_val = cg.i64().const_int(abi_size, false);
+                // The block owns what the shape's heap fields point at (C1o): `deepen_shape_fields`
+                // below gives it a copy of each, and the block's drop glue is the shape's own
+                // release function (`release_fn`, the one release helper), which the LAST
+                // `ynz_arc_free` runs. A shape that owns no heap has no release function: null glue.
+                let drop_glue = match cg.release_fn(&resolved_shape, false)? {
+                    Some(release) => release.as_global_value().as_pointer_value(),
+                    None => cg.ptr().const_null(),
+                };
                 let block = cg
                     .builder
-                    .build_call(arc.new, &[size_val.into()], "arc_new")
+                    .build_call(arc.new, &[size_val.into(), drop_glue.into()], "arc_new")
                     .map_err(|e| format!("auto-arc: ynz_arc_new call: {e}"))?
                     .try_as_basic_value()
                     .basic()
@@ -17053,6 +24738,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                 cg.builder
                     .build_store(block, struct_val)
                     .map_err(|e| format!("auto-arc: store to block: {e}"))?;
+                cg.deepen_shape_fields(block, name)?;
                 cg.arc_transients.insert(group, (block, abi_size));
             }
             let (transient, size) = cg.arc_transients.get(&group).copied().ok_or_else(|| {
@@ -17071,6 +24757,32 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             }
             return Ok((task_ref, BgArgFreeKind::ArcShape { byte_size: size }));
         }
+    }
+
+    // A `string` argument: the task owns its bytes. A string nobody else holds goes over as it
+    // is: one typeck recorded as movable (`string_moves`: fresh, or the last use of its
+    // binding) or a binding this spawn consumes. Every other (a field, element, parameter or
+    // `.or()` result the spawner or a container still holds) is copied by `emit_owned_copy`.
+    // Decided here, before the generic `is_heap_arg` gate, because a borrowed string reaches
+    // that gate as "provably safe" and would otherwise be passed through uncopied.
+    if is_string_like(&cg.resolve_type(ty)) {
+        let arg_span = arg.span();
+        let consumed_by_spawn = matches!(
+            cg.typed
+                .background_arg_sole_holder
+                .get(&(arg_span.start, arg_span.end)),
+            Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
+        );
+        if consumed_by_spawn
+            || val.is_pointer_value()
+                && cg
+                    .owned_string_values
+                    .contains(&(val.as_value_ref() as usize))
+        {
+            return Ok((val, BgArgFreeKind::None));
+        }
+        let resolved = cg.resolve_type(ty);
+        return emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg");
     }
 
     let is_heap_arg = match arg {
@@ -17207,9 +24919,9 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // change WHICH allocation the task's drop ladder releases (today it owns and frees the
     // clone, and the several exact-gap E8 pins over the hand-off path encode that), which is
     // release-pass work and not a copy fix. That boundary is the one commit `6be6773` drew and
-    // this round keeps; the residual sharing left in the REFUSED arm — a default-deny `Give` of
-    // a union, where no copy exists to make — is named in parked entry 71 rather than left
-    // resting on the false claim above.
+    // this round keeps. A REFUSED type that reaches this arm is a type with no owned copy; a
+    // union parameter never does: both spawn arms give the task a slot of its own first (the
+    // state-machine arm persists it into the callee frame, the CPU arm into `bg_union_arg_cell`).
     let consumed_shape_needs_no_copy = matches!(resolved, Type::BuiltinMap { .. })
         || matches!(
             ynz_typeck::owned_copy::owned_copy_plan(&resolved),
@@ -17231,11 +24943,169 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         // back to, so narrowing the gate here would only turn a shipped pass-through into a
         // backend error. For a `map` the fallback is a real clone, so the honest gate applies.
         if (refused && recorded_give) || (!refused && sole_holder.is_some()) {
+            // Typeck refuses a named `fixed` whose items cannot be copied (`SpawnArgNotIndependent`
+            // under either label), because its cells sit in the spawner's frame and this arm
+            // would hand the task that frame. A `fixed` that is not a plain name (a shape field,
+            // which has storage of its own) is not refused and does reach here.
+            debug_assert!(
+                !(refused
+                    && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
+                    && matches!(resolved, Type::BuiltinFixed { .. })),
+                "a named `fixed` with uncopyable items reached the background hand-over arm"
+            );
+            // A piece of another value (`bag.rows`, `make().rows`) that `spawn_arg_refusal`
+            // refuses is refused by typeck (`Temporaries::refused_spawn_pieces`, the same
+            // question), because this arm would hand the task storage the value it was read from
+            // still owns and releases. Only a piece the spawn re-homes itself or can copy gets
+            // here.
+            debug_assert!(
+                !(matches!(
+                    arg,
+                    ynz_ast::nodes::Expr::FieldAccess { .. }
+                        | ynz_ast::nodes::Expr::IndexAccess { .. }
+                ) && ynz_typeck::owned_copy::spawn_arg_refusal(&resolved).is_some()),
+                "a piece of another value that spawn_arg_refusal refuses reached the background \
+                 hand-over arm; typeck must have refused it"
+            );
             return Ok((val, BgArgFreeKind::None));
         }
     }
 
-    emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg")
+    let copied = emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg")?;
+    // The spawn consumed the binding (its slot was nulled at the read) but the task got a copy
+    // of its own: nobody holds the original, so it is released here, once the copy exists.
+    if matches!(
+        sole_holder,
+        Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
+    ) && matches!(arg, ynz_ast::nodes::Expr::Ident(..))
+        && cg.plain_releases_type(&resolved)
+    {
+        release_owned_read(cg, val, &resolved, "bg_consumed_original")?;
+    } else if let Some(form) = bg_maybe_original_release_form(arg, sole_holder, &resolved) {
+        // A `maybe` the task got a copy of (a counted envelope cell, `MaybeCellClone`): the original
+        // is a binding the spawn consumed (released as its scope exit would, `Local`); nothing else
+        // releases it.
+        release_maybe_original(cg, val, &resolved, form)?;
+    } else if matches!(
+        sole_holder,
+        Some(ynz_typeck::check::SoleHolder::FreshTemporary)
+    ) && matches!(resolved, Type::Shape { .. } | Type::BuiltinFixed { .. })
+        && cg.plain_releases_type(&resolved)
+    {
+        // A fresh shape or `fixed` (a call result, a literal) is re-homed by a copy (`ShapeMemcpy`
+        // and the fixed items copy have no transfer: the original sits on the spawner's frame),
+        // and `Expr::Background` suppresses its statement-end temporary: nobody else releases the
+        // original's fields or items.
+        release_owned_read(cg, val, &resolved, "bg_fresh_original")?;
+    }
+    Ok(copied)
+}
+
+/// The form in which the original of a `maybe` `background` argument is released once the task
+/// holds a copy of it, or `None` when this spawn does not own the original: a binding the spawn
+/// consumes is released as its scope exit would (`Local`). A fresh call result is not this spawn's:
+/// it is a statement-end temporary, which releases it (releasing it here frees it twice), and an
+/// argument the caller still holds is the caller's.
+///
+/// Time: O(1)  Space: O(1)
+fn bg_maybe_original_release_form(
+    arg: &ynz_ast::nodes::Expr,
+    sole_holder: Option<ynz_typeck::check::SoleHolder>,
+    resolved: &Type,
+) -> Option<ReleaseForm> {
+    if !matches!(resolved, Type::Maybe { .. }) {
+        return None;
+    }
+    match sole_holder {
+        Some(ynz_typeck::check::SoleHolder::ConsumedBinding)
+            if matches!(arg, ynz_ast::nodes::Expr::Ident(..)) =>
+        {
+            Some(ReleaseForm::Local)
+        }
+        _ => None,
+    }
+}
+
+/// Release the original `maybe` envelope `value` of a `background` argument in `form`
+/// (`bg_maybe_original_release_form`), through the one per-type release function every scope exit
+/// and temporary uses.
+///
+/// O(n) time in the heap the value owns; O(1) space.
+fn release_maybe_original<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    value: BasicValueEnum<'ctx>,
+    ty: &Type,
+    form: ReleaseForm,
+) -> Result<(), String> {
+    let Some(glue) = cg.release_form_fn(ty, form)? else {
+        return Ok(());
+    };
+    cg.builder
+        .build_call(glue, &[value.into_pointer_value().into()], "")
+        .map_err(|err| format!("release the original of a background maybe: {err}"))?;
+    Ok(())
+}
+
+/// Give the 16-byte cell of a spawned `MapEntry` argument (`value_to_stable_bits`) its own copy of
+/// every half that points into the map: a string key, a string value, an array or map value. The
+/// cell holds the map's own pointers for those, and the spawner's scope exit releases the map while
+/// the task still reads the entry, so a task would read freed memory (C7's release made the sharing
+/// unsound). Each copy is the one owned-copy operation every other spawn argument goes through
+/// (`emit_owned_copy`), released by the entry's ladder glue (`bg_mapentry_release_fn`). A shape,
+/// `maybe` or decimal half is already a copy `value_to_stable_bits` made; an int, float, boolean or
+/// options half is the value itself.
+///
+/// One to two copies per spawned entry, as Rust's `clone` on a moved-in `(String, String)`.
+///
+/// Time: O(1) here, O(n) at run time in the copied value  Space: O(1)
+fn copy_map_entry_halves<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    cell: PointerValue<'ctx>,
+    entry_ty: &Type,
+) -> Result<(), String> {
+    let Type::MapEntry { key, val } = cg.resolve_type(entry_ty) else {
+        return Err("internal: a MapEntry spawn argument has no MapEntry type".to_string());
+    };
+    let entry_struct = cg
+        .ctx
+        .struct_type(&[cg.i64().into(), cg.i64().into()], false);
+    for (index, half_ty) in [(0u32, key), (1u32, val)] {
+        let half_ty = cg.resolve_type(&half_ty);
+        let shares_the_maps_pointer = is_string_like(&half_ty)
+            || matches!(half_ty, Type::BuiltinArray { .. } | Type::BuiltinMap { .. });
+        if !shares_the_maps_pointer {
+            continue;
+        }
+        let slot = cg
+            .builder
+            .build_struct_gep(entry_struct, cell, index, "bg_mapentry_half_slot")
+            .map_err(|e| format!("bg mapentry half gep: {e}"))?;
+        let bits = cg
+            .builder
+            .build_load(cg.i64(), slot, "bg_mapentry_half_bits")
+            .map_err(|e| format!("bg mapentry half load: {e}"))?
+            .into_int_value();
+        let original = cg
+            .builder
+            .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_half_ptr")
+            .map_err(|e| format!("bg mapentry half inttoptr: {e}"))?;
+        let (copy, _) = emit_owned_copy(
+            cg,
+            None,
+            original.into(),
+            &half_ty,
+            CopyMode::SpawnArg,
+            "bg_mapentry_half",
+        )?;
+        let copy_bits = cg
+            .builder
+            .build_ptr_to_int(copy.into_pointer_value(), cg.i64(), "bg_mapentry_half_copy")
+            .map_err(|e| format!("bg mapentry half copy bits: {e}"))?;
+        cg.builder
+            .build_store(slot, copy_bits)
+            .map_err(|e| format!("bg mapentry half store: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Emit the free calls for heap-copied `background` args inside the closure body.
@@ -17250,13 +25120,16 @@ fn prepare_bg_arg_for_ctx<'ctx>(
 /// program with no admitted group carries no `ynz_arc_*` declaration).
 fn emit_bg_arg_frees<'ctx>(
     cg_builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
     rt: &RuntimeDecls<'ctx>,
     arc: Option<&ArcDecls<'ctx>>,
     i64_ty: inkwell::types::IntType<'ctx>,
-    ptr_ty: inkwell::types::PointerType<'ctx>,
     ctx_arg: inkwell::values::PointerValue<'ctx>,
     free_kinds: &[BgArgFreeKind],
 ) -> Result<(), String> {
+    let ptr_ty = module
+        .get_context()
+        .ptr_type(inkwell::AddressSpace::default());
     for (i, kind) in free_kinds.iter().enumerate() {
         match kind {
             BgArgFreeKind::None => {}
@@ -17362,6 +25235,38 @@ fn emit_bg_arg_frees<'ctx>(
                     .build_call(rt.ynz_channel_free, &[chan_ptr.into()], "bg_chan_free")
                     .map_err(|e| format!("bg chan free call: {e}"))?;
             }
+            // v0.3-M9: the value's release glue frees it whole.
+            BgArgFreeKind::ReleaseGlue { glue_name } => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "release_slot",
+                        )
+                        .map_err(|e| format!("bg release gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "release_bits")
+                    .map_err(|e| format!("bg release load: {e}"))?
+                    .into_int_value();
+                let release_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "release_ptr")
+                    .map_err(|e| format!("bg release inttoptr: {e}"))?;
+                let glue = module.get_function(glue_name).ok_or_else(|| {
+                    format!("bg release: glue `{glue_name}` is not in the module")
+                })?;
+                cg_builder
+                    .build_call(glue, &[release_ptr.into()], "")
+                    .map_err(|e| format!("bg release call: {e}"))?;
+            }
+            BgArgFreeKind::OwnedCell { .. } | BgArgFreeKind::OwnedMaybeCells { .. } => {
+                return Err(
+                    "internal: an owned-cell free kind belongs to a suspending callee, which the CPU arm never spawns"
+                        .to_string(),
+                );
+            }
             // v0.3-M8 Phase 5 Auto-Arc: release the task's counted reference to the shared
             // block (the CPU-arm twin of the SM ladder's `BG_ARG_KIND_ARC_SHAPE` arm).
             BgArgFreeKind::ArcShape { byte_size } => {
@@ -17399,9 +25304,11 @@ fn emit_bg_arg_frees<'ctx>(
 /// the same `declare_fn` `RuntimeDecls` uses) rather than eagerly in `RuntimeDecls`: a module
 /// with no admitted spawn group then carries no `ynz_arc_*` declaration at all, so its IR is
 /// byte-identical to the pre-emission compiler's — the single-reader no-op proof. The DATA
-/// pointer is what codegen holds and passes; the refcount header (data − 8) is runtime-private.
+/// pointer is what codegen holds and passes; the refcount header (data − 16) is runtime-private.
 struct ArcDecls<'ctx> {
-    /// `ynz_arc_new(size: i64) -> ptr` — a block for `size` data bytes, count = 1.
+    /// `ynz_arc_new(size: i64, drop_glue: ptr) -> ptr` — a block for `size` data bytes, count = 1;
+    /// `drop_glue` (`void(data)`, or null) is run by the last `ynz_arc_free` and releases what the
+    /// data owns.
     new: FunctionValue<'ctx>,
     /// `ynz_arc_clone(data: ptr) -> ptr` — one more reference (same pointer back).
     clone: FunctionValue<'ctx>,
@@ -17416,7 +25323,7 @@ fn arc_decls<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) -> ArcDecls<'ctx> 
         new: crate::runtime_decls::declare_fn(
             module,
             "ynz_arc_new",
-            ptr.fn_type(&[i64.into()], false),
+            ptr.fn_type(&[i64.into(), ptr.into()], false),
         ),
         clone: crate::runtime_decls::declare_fn(
             module,
@@ -17561,10 +25468,27 @@ fn lower_expr_background<'ctx>(
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
     let mut arg_types: Vec<Type> = Vec::new();
     let mut free_kinds: Vec<BgArgFreeKind> = Vec::new();
-    for arg in &call.args {
+    for (arg_index, arg) in call.args.iter().enumerate() {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        // An envelope-union argument is the spawner's per-site view, which dies with the
+        // spawner's frame: the task gets a slot of its own (`bg_union_arg_cell`), which the
+        // closure reads back as a view and releases after the call.
+        if let Some(union_ty) = cg
+            .callee_param_type(&callee_name, arg_index)
+            .filter(|param_ty| cg.envelope_union_variants(param_ty).is_some())
+        {
+            mark_union_spawn_argument_moved(cg, arg, val.into_pointer_value());
+            let (cell_bits, kind) =
+                bg_union_arg_cell(cg, val.into_pointer_value(), &union_ty, &callee_name)?;
+            arg_vals_i64.push(cell_bits);
+            arg_types.push(union_ty);
+            free_kinds.push(kind);
+            continue;
+        }
+        reject_union_argument_without_slot(cg, &ty, &callee_name, arg_index)?;
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
+        let kind = release_glue_free_kind(cg, kind, &ty, &callee_name, arg_index)?;
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("background arg to_i64_bits: {e}"))?;
@@ -17652,9 +25576,24 @@ fn lower_expr_background<'ctx>(
             .build_load(cg.i64(), slot, "cl_arg")
             .map_err(|e| format!("closure load: {e}"))?
             .into_int_value();
-        let val = cg
-            .i64_bits_to(bits, ty)
-            .map_err(|e| format!("closure i64_bits_to: {e}"))?;
+        let val = match cg.envelope_union_variants(ty) {
+            // The ctx holds the task's own union slot; the callee takes a view of it.
+            Some(variants) => {
+                let slot = cg
+                    .builder
+                    .build_int_to_ptr(bits, cg.ptr(), "cl_union_slot")
+                    .map_err(|err| format!("closure union slot: {err}"))?;
+                // The view's frame envelope belongs to the closure, not to the spawning
+                // function whose `current_fn` the emitter still holds.
+                let spawning_fn = std::mem::replace(&mut cg.current_fn, closure_fn);
+                let view = cg.union_slot_to_value(slot, &variants, "cl_union");
+                cg.current_fn = spawning_fn;
+                view?.into()
+            }
+            None => cg
+                .i64_bits_to(bits, ty)
+                .map_err(|err| format!("closure i64_bits_to: {err}"))?,
+        };
         call_args.push(val.into());
     }
 
@@ -17671,11 +25610,18 @@ fn lower_expr_background<'ctx>(
         .and_then(|sig| sig.original_name.as_deref())
     {
         orig.to_string()
+    } else if let Some(symbol) = cg.fixed_version_symbol((call.span.start, call.span.end))? {
+        symbol
     } else if cg.module.get_function(&callee_name).is_some() {
         callee_name.clone()
     } else {
-        find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)
-            .unwrap_or_else(|| callee_name.clone())
+        recorded_generic_instance_name(
+            &cg.typed.generic_call_instances,
+            &cg.type_subst,
+            &callee_name,
+            &call.span,
+            |instance| cg.module.get_function(instance).is_some(),
+        )?
     };
     let target_fn = cg
         .module
@@ -17688,17 +25634,16 @@ fn lower_expr_background<'ctx>(
     // Free any heap-copied args now that the original fn has returned.
     // Each BgArgFreeKind::HeapShape/HeapArrayPrimitive slot holds a heap pointer that was
     // ynz_alloc'd at spawn time and must be freed exactly once here.
-    let ptr_ty = cg.ctx.ptr_type(inkwell::AddressSpace::default());
     let arc = free_kinds
         .iter()
         .any(|k| matches!(k, BgArgFreeKind::ArcShape { .. }))
         .then(|| arc_decls(cg.ctx, cg.module));
     emit_bg_arg_frees(
         &cg.builder,
+        cg.module,
         cg.rt,
         arc.as_ref(),
         cg.i64(),
-        ptr_ty,
         ctx_arg,
         &free_kinds,
     )
@@ -17794,10 +25739,35 @@ fn lower_sm_background_spawn<'ctx>(
     // v0.3-M4: the FIRST channel-typed argument is the handle's `.send()` conduit
     // (`ynz_rt_spawn_handle` takes its own refcounted reference to it).
     let mut first_channel_arg: Option<inkwell::values::PointerValue<'ctx>> = None;
-    for arg in &call.args {
+    // An envelope-union argument cannot be staged before the callee frame exists: it is
+    // persisted into the frame's `Param` region (`stage_union_arg`) once the frame is allocated.
+    let mut pending_union_args: Vec<(usize, PointerValue<'ctx>, Vec<Type>)> = Vec::new();
+    for (arg_index, arg) in call.args.iter().enumerate() {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        if let Some(variants) = cg
+            .callee_param_type(callee_name, arg_index)
+            .and_then(|param_ty| cg.envelope_union_variants(&param_ty))
+        {
+            mark_union_spawn_argument_moved(cg, arg, val.into_pointer_value());
+            pending_union_args.push((arg_index, val.into_pointer_value(), variants));
+            arg_vals_i64.push(cg.i64().const_zero());
+            let union_ty = cg
+                .callee_param_type(callee_name, arg_index)
+                .ok_or_else(|| {
+                    "internal: a union spawn argument has no parameter type".to_string()
+                })?;
+            free_kinds.push(sm_union_arg_free_kind(
+                cg,
+                &union_ty,
+                callee_name,
+                arg_index,
+            )?);
+            continue;
+        }
+        reject_union_argument_without_slot(cg, &ty, callee_name, arg_index)?;
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
+        let kind = release_glue_free_kind(cg, kind, &ty, callee_name, arg_index)?;
         if first_channel_arg.is_none()
             && matches!(cg.resolve_type(&ty), Type::BuiltinChannel { .. })
         {
@@ -17819,6 +25789,11 @@ fn lower_sm_background_spawn<'ctx>(
         .map(|l| l.total_size)
         .unwrap_or_else(|| ynz_abi::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals));
     let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, total_frame_size)?;
+
+    for (arg_index, value, variants) in &pending_union_args {
+        arg_vals_i64[*arg_index] =
+            cg.stage_union_arg(*value, variants, callee_name, *arg_index, frame_ptr)?;
+    }
 
     // Step 3: write parameter values to frame local slots (at offset 32+).
     for (idx, bits) in arg_vals_i64.iter().enumerate() {
@@ -17861,11 +25836,12 @@ fn lower_sm_background_spawn<'ctx>(
 
     // Step 5: build the arg-drop descriptor array for SpawnStateFnFuture::drop.
     //
-    // Each BgArgDropEntry has three i64 fields (24 bytes total):
+    // Each BgArgDropEntry has four i64 fields (32 bytes total):
     //   byte_offset: u64 — byte offset in the frame to the i64 slot holding the heap pointer
     //   kind: u64        — ynz_abi::BG_ARG_KIND_* (HEAP_SHAPE → ynz_free, HEAP_ARRAY →
     //                      ynz_array_drop, SHARED_CHANNEL → ynz_channel_free)
     //   size: u64        — byte count for ynz_free (HEAP_SHAPE); 0 for the other kinds
+    //   cell: u64        — the cell's own pointer (OWNED_CELL: the callee nulls its frame slot); 0 otherwise
     //
     // Build the descriptor list only for args that were actually heap-copied; skip None.
     // If no args need freeing, pass null pointer + count=0 (no allocation needed).
@@ -17904,8 +25880,40 @@ fn lower_sm_background_spawn<'ctx>(
                 let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, *byte_size))
             }
+            BgArgFreeKind::ReleaseGlue { .. } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, 0_u64))
+            }
+            BgArgFreeKind::OwnedCell { byte_size } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, *byte_size))
+            }
+            BgArgFreeKind::OwnedMaybeCells { .. } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, 16_u64))
+            }
             BgArgFreeKind::None => None,
         })
+        .collect();
+    // A `maybe` given to a suspending callee also frees the payload's own cell: a second entry for
+    // the same slot, after the others (`BgArgFreeKind::OwnedMaybeCells`).
+    let payload_entries: Vec<(usize, u64, u64, bool)> = free_kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(slot_idx, kind)| match kind {
+            BgArgFreeKind::OwnedMaybeCells { payload_size } => Some((
+                slot_idx,
+                state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8,
+                *payload_size,
+                true,
+            )),
+            _ => None,
+        })
+        .collect();
+    let heap_args: Vec<(usize, u64, u64, bool)> = heap_args
+        .into_iter()
+        .map(|(slot_idx, byte_offset, size)| (slot_idx, byte_offset, size, false))
+        .chain(payload_entries)
         .collect();
 
     let (arg_drop_ptr_val, arg_drop_count_val) = if heap_args.is_empty() {
@@ -17916,8 +25924,8 @@ fn lower_sm_background_spawn<'ctx>(
             .const_null();
         (null_ptr.into(), cg.ctx.i64_type().const_int(0, false))
     } else {
-        // Allocate the descriptor array: heap_args.len() entries × 24 bytes each.
-        let desc_entry_size: u64 = 24; // 3 × u64
+        // Allocate the descriptor array: heap_args.len() entries × 32 bytes each.
+        let desc_entry_size: u64 = 32; // 4 × u64
         let desc_total = desc_entry_size * heap_args.len() as u64;
         let desc_total_val = cg.ctx.i64_type().const_int(desc_total, false);
         let desc_ptr = cg
@@ -17932,7 +25940,9 @@ fn lower_sm_background_spawn<'ctx>(
         // Fill each descriptor: { byte_offset: u64, kind: u64, size: u64 }.
         let i64_ty = cg.ctx.i64_type();
         let i8_ty = cg.ctx.i8_type();
-        for (entry_idx, (slot_idx, byte_offset, size)) in heap_args.iter().enumerate() {
+        for (entry_idx, (slot_idx, byte_offset, size, is_payload_cell)) in
+            heap_args.iter().enumerate()
+        {
             let entry_byte_base = entry_idx as u64 * desc_entry_size;
 
             // field 0: byte_offset
@@ -17962,6 +25972,10 @@ fn lower_sm_background_spawn<'ctx>(
                 BgArgFreeKind::HeapArrayPrimitive => ynz_abi::BG_ARG_KIND_HEAP_ARRAY,
                 BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
                 BgArgFreeKind::ArcShape { .. } => ynz_abi::BG_ARG_KIND_ARC_SHAPE,
+                BgArgFreeKind::ReleaseGlue { .. } => ynz_abi::BG_ARG_KIND_RELEASE_GLUE,
+                BgArgFreeKind::OwnedCell { .. } | BgArgFreeKind::OwnedMaybeCells { .. } => {
+                    ynz_abi::BG_ARG_KIND_OWNED_CELL
+                }
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -17989,9 +26003,45 @@ fn lower_sm_background_spawn<'ctx>(
                     )
                     .map_err(|e| format!("desc gep 2: {e}"))?
             };
+            // A glue descriptor carries the glue's address where the others carry a byte count.
+            let size_value = match &free_kinds[*slot_idx] {
+                BgArgFreeKind::ReleaseGlue { glue_name } => cg
+                    .module
+                    .get_function(glue_name)
+                    .ok_or_else(|| format!("bg release: glue `{glue_name}` is not in the module"))?
+                    .as_global_value()
+                    .as_pointer_value()
+                    .const_to_int(i64_ty),
+                _ => i64_ty.const_int(*size, false),
+            };
             cg.builder
-                .build_store(off2, i64_ty.const_int(*size, false))
+                .build_store(off2, size_value)
                 .map_err(|e| format!("desc store 2: {e}"))?;
+
+            // field 3: the cell's own pointer for an owned cell, 0 for every kind that reads its slot.
+            let off3 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base + 24, false)],
+                        "desc_off3",
+                    )
+                    .map_err(|e| format!("desc gep 3: {e}"))?
+            };
+            let cell_value = match &free_kinds[*slot_idx] {
+                BgArgFreeKind::OwnedCell { .. } => arg_vals_i64[*slot_idx],
+                BgArgFreeKind::OwnedMaybeCells { .. } if !*is_payload_cell => {
+                    arg_vals_i64[*slot_idx]
+                }
+                BgArgFreeKind::OwnedMaybeCells { .. } => {
+                    maybe_payload_cell_bits(cg, arg_vals_i64[*slot_idx])?
+                }
+                _ => i64_ty.const_zero(),
+            };
+            cg.builder
+                .build_store(off3, cell_value)
+                .map_err(|e| format!("desc store 3: {e}"))?;
         }
 
         (
@@ -18013,6 +26063,28 @@ fn lower_sm_background_spawn<'ctx>(
                 .const_null()
                 .into(),
         };
+        let callee_return = cg.callee_result_type(callee_name)?;
+        let result_release_val: inkwell::values::BasicMetadataValueEnum =
+            match cg.handle_result_release_fn(&callee_return)? {
+                Some(glue) => glue.as_global_value().as_pointer_value().into(),
+                None => cg
+                    .ctx
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .const_null()
+                    .into(),
+            };
+        let result_move_val: inkwell::values::BasicMetadataValueEnum =
+            if ret_kind == ynz_abi::HANDLE_RET_KIND_UNION as u64 {
+                cg.handle_union_move_fn(&callee_return)?
+                    .as_global_value()
+                    .as_pointer_value()
+                    .into()
+            } else {
+                cg.ctx
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .const_null()
+                    .into()
+            };
         let handle = cg
             .builder
             .build_call(
@@ -18026,6 +26098,8 @@ fn lower_sm_background_spawn<'ctx>(
                     arg_drop_count_val.into(),
                     ret_kind_val.into(),
                     msg_chan_val,
+                    result_release_val,
+                    result_move_val,
                 ],
                 "sm_spawn_handle",
             )
@@ -18056,43 +26130,62 @@ fn lower_sm_background_spawn<'ctx>(
     Ok(cg.i32().const_int(0, false).into())
 }
 
+/// The bignum text (an owned, heap-allocated C string) of a decimal128 value: the one emission of
+/// the conversion a `number<=34>` needs wherever a bignum (`number<N>`, N > 34) is expected, shared
+/// by `coerce_to_bignum_pair` and `convert_to_declared_success_number`.
+///
+/// O(1) time in the compiler, O(digits) at run time. Space: one fresh string.
+fn decimal_to_bignum_text<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    decimal: BasicValueEnum<'ctx>,
+    label: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    cg.builder
+        .build_call(cg.rt.decimal_to_string, &[decimal.into()], label)
+        .map_err(|err| format!("decimal to bignum text {label}: {err}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| "decimal_to_string returned void".to_string())
+}
+
 /// Coerce a decimal128 (N≤34) operand to a bignum C-string when the other side is
-/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed.
+/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed, and the
+/// strings the coercion allocated: the caller releases them once the operation has read them.
 fn coerce_to_bignum_pair<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
     lhs_ty: &Type,
     rhs_ty: &Type,
-) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), String> {
+) -> Result<
+    (
+        BasicValueEnum<'ctx>,
+        BasicValueEnum<'ctx>,
+        Vec<PointerValue<'ctx>>,
+    ),
+    String,
+> {
     let lhs_big = matches!(lhs_ty, Type::Number { precision } if *precision > 34);
     let rhs_big = matches!(rhs_ty, Type::Number { precision } if *precision > 34);
     if !lhs_big && !rhs_big {
-        return Ok((lhs, rhs));
+        return Ok((lhs, rhs, Vec::new()));
     }
+    let mut converted = Vec::new();
     let lhs2 = if matches!(lhs_ty, Type::Number { precision } if *precision <= 34) {
-        let s = cg
-            .builder
-            .build_call(cg.rt.decimal_to_string, &[lhs.into()], "lhs_dec2str")
-            .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
-            .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+        let text = decimal_to_bignum_text(cg, lhs, "lhs_dec2str")?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         lhs
     };
     let rhs2 = if matches!(rhs_ty, Type::Number { precision } if *precision <= 34) {
-        let s = cg
-            .builder
-            .build_call(cg.rt.decimal_to_string, &[rhs.into()], "rhs_dec2str")
-            .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
-            .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+        let text = decimal_to_bignum_text(cg, rhs, "rhs_dec2str")?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         rhs
     };
-    Ok((lhs2, rhs2))
+    Ok((lhs2, rhs2, converted))
 }
 
 fn lower_binop<'ctx>(
@@ -18112,43 +26205,83 @@ fn lower_binop<'ctx>(
 
     // M8 P6: when one operand is bignum (N>34) and the other is decimal128 (N≤34),
     // coerce the N≤34 side to a C string so both operands are bignum-compatible.
-    let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    let (lhs, rhs, converted_operands) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    // The operation follows the operands as they are now: a `number<=34>` left side coerced to
+    // bignum text takes the right side's bignum type (typeck's max(lhs, rhs) precision).
+    // Dispatching on the left side's own type would read that text as 16 decimal128 bytes:
+    // a wrong result and a read past the end of its exact-size heap buffer.
+    let lhs_was_coerced = matches!(lhs_ty, Type::Number { precision } if *precision <= 34)
+        && matches!(rhs_ty, Type::Number { precision } if *precision > 34);
+    let operand_ty = if lhs_was_coerced { rhs_ty } else { lhs_ty };
+    // A bignum comparison parses both texts at one precision: the wider of the two bignum
+    // operands (the left type alone would round a wider right operand down).
+    let is_comparison = matches!(op, EqEq | NotEq | Lt | LtEq | Gt | GtEq);
+    let widest_bignum_ty;
+    let operand_ty = match (is_comparison, lhs_ty, rhs_ty) {
+        (true, Type::Number { precision: left }, Type::Number { precision: right })
+            if *left > 34 && *right > 34 =>
+        {
+            widest_bignum_ty = Type::Number {
+                precision: *left.max(right),
+            };
+            &widest_bignum_ty
+        }
+        _ => operand_ty,
+    };
+    let result = lower_binop_operands(cg, op, lhs, rhs, lhs_e.span().start as u32, operand_ty)?;
+    for converted in converted_operands {
+        cg.builder
+            .build_call(cg.rt.ynz_string_release, &[converted.into()], "")
+            .map_err(|err| format!("{err}"))?;
+    }
+    Ok(result)
+}
 
+/// The operation itself, on operands already lowered (and coerced to bignum text where needed).
+fn lower_binop_operands<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    op: &BinOpKind,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    lhs_start: u32,
+    lhs_ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    use BinOpKind::*;
     match (op, lhs_ty) {
         (Add, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Sub, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Mul, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Div, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             false,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Rem, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             true,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
 
         (Add, Type::Float) => cg
@@ -18271,6 +26404,15 @@ fn lower_binop<'ctx>(
         (EqEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::OEQ, lhs, rhs, "feq"),
         (NotEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::ONE, lhs, rhs, "fne"),
 
+        (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { precision }) if *precision > 34 => {
+            bignum_compare(
+                cg,
+                lhs.into_pointer_value(),
+                rhs.into_pointer_value(),
+                *precision,
+                op,
+            )
+        }
         (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { .. }) => {
             decimal_compare(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), op)
         }
@@ -18578,6 +26720,60 @@ fn decimal_div<'ctx>(
     decimal_binop(cg, lhs, rhs, cg.rt.decimal_div, "ddiv")
 }
 
+/// Bignum comparison: `ynz_bignum_compare` gives -1 / 0 / 1, or 2 when unordered (NaN), and each
+/// operator is tested against that so an unordered pair is false for everything but `!=`
+/// (`2 > 0` and `2 >= 0` would otherwise read as true).
+///
+/// The operands are decimal text: reading them as decimal128 compares garbage and runs past a
+/// short exact-size string.
+fn bignum_compare<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+    op: &BinOpKind,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let order = bignum_compare_order(cg, lhs, rhs, precision)?;
+    let int32 = cg.i32();
+    let (predicate, bound) = match op {
+        BinOpKind::Lt => (IntPredicate::EQ, int32.const_int(-1i64 as u64, true)),
+        BinOpKind::LtEq => (IntPredicate::SLE, int32.const_int(0, false)),
+        BinOpKind::EqEq => (IntPredicate::EQ, int32.const_int(0, false)),
+        BinOpKind::NotEq => (IntPredicate::NE, int32.const_int(0, false)),
+        BinOpKind::Gt => (IntPredicate::EQ, int32.const_int(1, false)),
+        // unsigned: -1 wraps high and 2 is above 1, so only 0 and 1 pass
+        BinOpKind::GtEq => (IntPredicate::ULE, int32.const_int(1, false)),
+        other => return Err(format!("codegen: {other:?} is not a bignum comparison")),
+    };
+    cg.builder
+        .build_int_compare(predicate, order, bound, "bncmp_b")
+        .map(|value| value.into())
+        .map_err(|err| format!("{err}"))
+}
+
+/// The raw -1 / 0 / 1 / 2 order of two bignum texts (see `bignum_compare`).
+fn bignum_compare_order<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let precision_val = cg.i32().const_int(precision as u64, false);
+    let call = cg
+        .builder
+        .build_call(
+            cg.rt.ynz_bignum_compare,
+            &[lhs.into(), rhs.into(), precision_val.into()],
+            "bncmp",
+        )
+        .map_err(|err| format!("{err}"))?;
+    Ok(call
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_bignum_compare void")?
+        .into_int_value())
+}
+
 fn decimal_compare<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: PointerValue<'ctx>,
@@ -18670,6 +26866,23 @@ fn lower_unary<'ctx>(
             .build_float_neg(val.into_float_value(), "fneg")
             .map(|v| v.into())
             .map_err(|e| format!("{e}")),
+        // A bignum is decimal text: the decimal128 `0 - value` below would read it as 16 raw bytes
+        // and return a stack cell where a heap string is expected.
+        (UnaryOpKind::Neg, Type::Number { precision }) if *precision > 34 => {
+            let precision_val = cg.i32().const_int(*precision as u64, false);
+            let negated = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_bignum_neg,
+                    &[val.into(), precision_val.into()],
+                    "bn_neg",
+                )
+                .map_err(|err| format!("{err}"))?;
+            Ok(negated
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_bignum_neg void")?)
+        }
         (UnaryOpKind::Neg, Type::Number { .. }) => {
             let zero = cg.globals.dec_zero.as_pointer_value();
             decimal_binop(
@@ -18699,11 +26912,7 @@ fn lower_print<'ctx>(
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<(), String> {
-    let p = to_c_string(cg, val, ty)?;
-    cg.builder
-        .build_call(cg.rt.puts, &[p.into()], "puts")
-        .map_err(|e| format!("{e}"))?;
-    Ok(())
+    write_value_text(cg, val, ty, TextSink::Stdout)
 }
 
 /// Terminate a byte vector as a C string, aborting with an ICE message if any
@@ -18724,13 +26933,43 @@ fn push_c_string_terminator(bytes: &mut Vec<u8>) {
     bytes.push(0);
 }
 
+/// NUL-terminated text and who owns it, as [`to_text`] reports it: the producer alone knows whether it
+/// just built a heap string (a debug text, a `toString` result) or hands back one something else owns
+/// (a held string, a static, a bignum's decimal text). A consumer that drops the text after reading
+/// it releases a `fresh` one and leaves a `borrowed` one alone, so no caller re-derives which is which.
+#[derive(Clone, Copy)]
+struct Text<'ctx> {
+    ptr: PointerValue<'ctx>,
+    fresh: bool,
+}
+
+impl<'ctx> Text<'ctx> {
+    fn fresh(ptr: PointerValue<'ctx>) -> Self {
+        Self { ptr, fresh: true }
+    }
+
+    fn borrowed(ptr: PointerValue<'ctx>) -> Self {
+        Self { ptr, fresh: false }
+    }
+}
+
+/// The text of `val` as a string pointer the CALLER owns when `ty` is `int`, `float`, `number` or a
+/// `boolean` (`toString()`: a fresh heap string, or a static one for a `boolean`).
 fn to_c_string<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<PointerValue<'ctx>, String> {
+    to_text(cg, val, ty).map(|text| text.ptr)
+}
+
+fn to_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<Text<'ctx>, String> {
     match ty {
-        Type::String => Ok(val.into_pointer_value()),
+        Type::String => Ok(Text::borrowed(val.into_pointer_value())),
 
         // M8 P4: sensitive string — delegate to the runtime, which checks
         // YNZ_REVEAL_SENSITIVE at first call and returns either the raw pointer
@@ -18745,7 +26984,7 @@ fn to_c_string<'ctx>(
                 .basic()
                 .ok_or("ynz_sensitive_to_string returned void")?
                 .into_pointer_value();
-            Ok(ptr)
+            Ok(Text::borrowed(ptr))
         }
 
         Type::Bool => cg
@@ -18756,42 +26995,49 @@ fn to_c_string<'ctx>(
                 cg.globals.str_false.as_pointer_value(),
                 "bstr",
             )
-            .map(|v| v.into_pointer_value())
+            .map(|v| Text::borrowed(v.into_pointer_value()))
             .map_err(|e| format!("{e}")),
 
-        // Runtime format shims return a ptr into a thread-local static buffer.
+        // Runtime format shims return a fresh heap string the caller owns: `toString()` hands it to
+        // the program; `print`/`${}` never call these (`write_value_text`).
         Type::Int => {
             let c = cg
                 .builder
                 .build_call(cg.rt.int_to_string, &[val.into()], "int_str")
                 .map_err(|e| format!("{e}"))?;
-            Ok(c.try_as_basic_value()
-                .basic()
-                .ok_or("int_to_string returned void")?
-                .into_pointer_value())
+            Ok(Text::fresh(
+                c.try_as_basic_value()
+                    .basic()
+                    .ok_or("int_to_string returned void")?
+                    .into_pointer_value(),
+            ))
         }
         Type::Float => {
             let c = cg
                 .builder
                 .build_call(cg.rt.float_to_string, &[val.into()], "flt_str")
                 .map_err(|e| format!("{e}"))?;
-            Ok(c.try_as_basic_value()
-                .basic()
-                .ok_or("float_to_string returned void")?
-                .into_pointer_value())
+            Ok(Text::fresh(
+                c.try_as_basic_value()
+                    .basic()
+                    .ok_or("float_to_string returned void")?
+                    .into_pointer_value(),
+            ))
         }
         Type::Number { precision } if *precision <= 34 => {
             let c = cg
                 .builder
                 .build_call(cg.rt.decimal_to_string, &[val.into()], "dec_str")
                 .map_err(|e| format!("{e}"))?;
-            Ok(c.try_as_basic_value()
-                .basic()
-                .ok_or("decimal_to_string returned void")?
-                .into_pointer_value())
+            Ok(Text::fresh(
+                c.try_as_basic_value()
+                    .basic()
+                    .ok_or("decimal_to_string returned void")?
+                    .into_pointer_value(),
+            ))
         }
         // M8 P6: bignum (N > 34) is stored as a pointer to a decimal string — pass directly.
-        Type::Number { .. } => Ok(val.into_pointer_value()),
+        Type::Number { .. } => Ok(Text::borrowed(val.into_pointer_value())),
         // Default debug representation for user-defined shapes: "ShapeName { field: val, ... }"
         // Visible fields only. Nested shapes are printed recursively.
         Type::Shape { name } => {
@@ -18828,7 +27074,7 @@ fn to_c_string<'ctx>(
 
             // Helper closure: append a static string literal to the builder.
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "dbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "dbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -18858,10 +27104,12 @@ fn to_c_string<'ctx>(
                     .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
                     .map_err(|e| format!("GEP {field_name}: {e}"))?;
                 // Fields use different LLVM types depending on the Yinz type:
-                //   Number (decimal128) → i128 → pass as pointer
+                //   Number (decimal128, N <= 34) → i128 → pass as pointer
+                //   Number (bignum, N > 34)      → 8-byte pointer to decimal text → i64_bits_to
                 //   Options            → i8   → zero-extend to i64, use as tag
                 //   everything else    → i64  → i64_bits_to
-                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
+                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { precision } if *precision <= 34)
+                {
                     let i128t = cg.ctx.i128_type();
                     let raw = cg
                         .builder
@@ -18887,6 +27135,9 @@ fn to_c_string<'ctx>(
                         .build_int_z_extend(raw, cg.i64(), "dbg_opt_ext")
                         .map_err(|e| format!("{e}"))?;
                     extended.into()
+                } else if let Some(variants) = cg.envelope_union_variants(field_ty) {
+                    // An envelope union field is the inline 16-byte slot, not a pointer cell.
+                    cg.union_slot_to_value(gep, &variants, "dbg_union")?.into()
                 } else {
                     let bits = cg
                         .builder
@@ -18895,15 +27146,7 @@ fn to_c_string<'ctx>(
                         .into_int_value();
                     cg.i64_bits_to(bits, field_ty)?
                 };
-                let field_str = to_c_string(cg, field_val, field_ty)?;
-
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_string_builder_append,
-                        &[builder_val.into(), field_str.into()],
-                        "",
-                    )
-                    .map_err(|e| format!("{e}"))?;
+                write_value_text(cg, field_val, field_ty, TextSink::Builder(builder_val))?;
             }
 
             append_static(cg, builder_val, " }")?;
@@ -18921,7 +27164,7 @@ fn to_c_string<'ctx>(
                 .ok_or("ynz_string_builder_finalize void")?
                 .into_pointer_value();
 
-            Ok(result)
+            Ok(Text::fresh(result))
         }
 
         // Array debug representation: "[elem1, elem2, ..., elem20, ... and N more]"
@@ -18941,7 +27184,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "arr_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "arr_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19033,15 +27276,7 @@ fn to_c_string<'ctx>(
             let out = cg.array_elem_out_buffer(&elem, "arr_dbg")?;
             let _flag = cg.array_elem_get_into(arr_ptr, i, out, "arr_dbg_get", None)?;
             let elem_val = cg.array_elem_from_out(out, &elem, "arr_dbg")?;
-            let elem_str = to_c_string(cg, elem_val, &elem)?;
-
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), elem_str.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
+            write_value_text(cg, elem_val, &elem, TextSink::Builder(builder_val))?;
 
             // i += 1
             let next_i = cg
@@ -19090,6 +27325,9 @@ fn to_c_string<'ctx>(
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_call(cg.rt.ynz_string_release, &[rem_str.into()], "")
+                .map_err(|err| format!("{err}"))?;
             append_static(cg, builder_val, " more")?;
             cg.builder
                 .build_unconditional_branch(finish_bb)
@@ -19111,7 +27349,7 @@ fn to_c_string<'ctx>(
                 .ok_or("ynz_string_builder_finalize void")?
                 .into_pointer_value();
 
-            Ok(result)
+            Ok(Text::fresh(result))
         }
 
         // Map debug representation: "{ key: val, key2: val2 }" using insertion order.
@@ -19132,7 +27370,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "mdbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "mdbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19197,7 +27435,14 @@ fn to_c_string<'ctx>(
             // (shared array/map get-side ownership contract).
             let key_slot = cg.alloca_in_entry_llvm(cg.i64(), "mdbg_key")?;
             let val_out = cg.array_elem_out_buffer(&val_ty, "mdbg_val")?;
-            cg.map_iter_get_into(map_ptr, i, true, key_slot, val_out, "mdbg_iter")?;
+            cg.map_iter_get_into(
+                map_ptr,
+                i,
+                MapKeyKind::String,
+                key_slot,
+                val_out,
+                "mdbg_iter",
+            )?;
 
             let key_ptr = cg
                 .builder
@@ -19218,14 +27463,7 @@ fn to_c_string<'ctx>(
             append_static(cg, builder_val, ": ")?;
 
             let val_val = cg.array_elem_from_out(val_out, &val_ty, "mdbg_vv")?;
-            let val_str = to_c_string(cg, val_val, &val_ty)?;
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), val_str.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
+            write_value_text(cg, val_val, &val_ty, TextSink::Builder(builder_val))?;
 
             let next_i = cg
                 .builder
@@ -19253,64 +27491,19 @@ fn to_c_string<'ctx>(
                 .basic()
                 .ok_or("finalize void")?
                 .into_pointer_value();
-            Ok(result)
+            Ok(Text::fresh(result))
         }
         Type::BuiltinMap { .. } => {
             let g = build_string_global(cg.ctx, cg.module, "{ <map> }", "map_ph");
-            Ok(g.as_pointer_value())
+            Ok(Text::borrowed(g.as_pointer_value()))
         }
 
-        // Union printing: for `T | nothing`, check null → "none", else print as T.
-        // For other union shapes, show a placeholder — full union introspection is future work.
-        Type::Union { variants } => {
-            let non_nothing: Vec<&Type> = variants
-                .iter()
-                .filter(|v| !matches!(v, Type::Nothing))
-                .collect();
-
-            if non_nothing.len() == 1 {
-                let inner = non_nothing[0].clone();
-                let ptr = val.into_pointer_value();
-                let is_null = cg
-                    .builder
-                    .build_is_null(ptr, "union_null")
-                    .map_err(|e| format!("{e}"))?;
-
-                let none_bb = cg.append_block("union_none");
-                let some_bb = cg.append_block("union_some");
-                let merge_bb = cg.append_block("union_merge");
-
-                cg.builder
-                    .build_conditional_branch(is_null, none_bb, some_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(none_bb);
-                let none_str = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(some_bb);
-                let some_str = to_c_string(cg, val, &inner)?;
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-                let some_bb_end = cg.builder.get_insert_block().unwrap();
-
-                cg.builder.position_at_end(merge_bb);
-                let phi = cg
-                    .builder
-                    .build_phi(cg.ptr(), "union_str")
-                    .map_err(|e| format!("{e}"))?;
-                phi.add_incoming(&[
-                    (&none_str.as_pointer_value(), none_bb),
-                    (&some_str, some_bb_end),
-                ]);
-                Ok(phi.as_basic_value().into_pointer_value())
-            } else {
-                let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
-                Ok(g.as_pointer_value())
-            }
+        // A `T | nothing` union is written by `write_value_text` (branch on null, no string is
+        // built). Here, as a value to hold, any union shows a placeholder — full union
+        // introspection is future work.
+        Type::Union { .. } => {
+            let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
+            Ok(Text::borrowed(g.as_pointer_value()))
         }
 
         // Options type — val is the i64-extended i8 tag; delegate to options toString.
@@ -19321,47 +27514,197 @@ fn to_c_string<'ctx>(
                 .builder
                 .build_int_truncate(tag_i64, cg.ctx.i8_type(), "opt_tag_i8")
                 .map_err(|e| format!("{e}"))?;
-            lower_options_to_string(cg, tag_i8.into(), name).map(|v| v.into_pointer_value())
+            // `ynz_string_from_static` wraps the name in a counted string: fresh, the caller releases it.
+            lower_options_to_string(cg, tag_i8.into(), name)
+                .map(|text| Text::fresh(text.into_pointer_value()))
         }
 
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
     }
 }
 
-/// Convert any Yinz value to a null-terminated C string pointer for interpolation.
+/// Where a consumer that reads a value's text once puts it: `print` writes it to stdout, a
+/// `${}` part, a debug-print part or an array/map element appends it to a string builder.
+#[derive(Clone, Copy)]
+enum TextSink<'ctx> {
+    Stdout,
+    Builder(PointerValue<'ctx>),
+}
+
+/// Put NUL-terminated text at `text` into `sink`. The sink never frees the text.
+fn write_text_ptr<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    sink: TextSink<'ctx>,
+    text: PointerValue<'ctx>,
+) -> Result<(), String> {
+    match sink {
+        TextSink::Stdout => cg
+            .builder
+            .build_call(cg.rt.puts, &[text.into()], "puts")
+            .map(|_| ())
+            .map_err(|err| format!("{err}")),
+        TextSink::Builder(builder) => cg
+            .builder
+            .build_call(
+                cg.rt.ynz_string_builder_append,
+                &[builder.into(), text.into()],
+                "",
+            )
+            .map(|_| ())
+            .map_err(|err| format!("{err}")),
+    }
+}
+
+/// [`write_text_ptr`], then release the text when it is a heap string this lowering just built (a
+/// shape's, array's or map's debug text, nested ones included): nothing holds it past the write.
+fn write_and_release_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    sink: TextSink<'ctx>,
+    text: Text<'ctx>,
+) -> Result<(), String> {
+    write_text_ptr(cg, sink, text.ptr)?;
+    if text.fresh {
+        cg.builder
+            .build_call(cg.rt.ynz_string_release, &[text.ptr.into()], "")
+            .map_err(|err| format!("release text: {err}"))?;
+    }
+    Ok(())
+}
+
+/// Write the text of `val` (type `ty`) to `sink`: the one path every consumer that reads the
+/// text at once and drops it goes through (`print`, `${}`, shape/array/map debug text).
 ///
-/// Delegates to `to_c_string` for the types it knows. For Options types, emits a call
-/// to the options toString runtime helper. For all other types, defers to `to_c_string`.
-fn expr_to_cstring<'ctx>(
+/// `int`, `float` and `number` (decimal128) call a runtime print/append entry that formats and
+/// writes straight to the sink: no heap string is built and nothing is released, which is what
+/// keeps `print(n)` at or below its cost before strings carried an owned header (Golden Rule 6).
+/// Only `n.toString()` builds an owned string (`to_c_string`). A `T | nothing` union branches on
+/// null and writes `none` or the inner text the same way. Every other type's text comes from
+/// [`to_text`], which says whether it is a heap string it just built (a shape's, array's or map's debug
+/// text, at any nesting depth): that one is released right after the write, so `print(shape)` and the
+/// nested text of its fields free what they build. A held string, a static or a bignum's text is
+/// written and left alone.
+fn write_value_text<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
-) -> Result<inkwell::values::PointerValue<'ctx>, String> {
-    match ty {
-        Type::Options { name } => {
-            lower_options_to_string(cg, val, name).map(|v| v.into_pointer_value())
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let (print_entry, append_entry) = match ty {
+        Type::Int => (cg.rt.int_print, cg.rt.int_append),
+        Type::Float => (cg.rt.float_print, cg.rt.float_append),
+        Type::Number { precision } if *precision <= 34 => {
+            (cg.rt.decimal_print, cg.rt.decimal_append)
         }
-        _ => to_c_string(cg, val, ty),
-    }
+        Type::Union { variants } => {
+            let mut non_nothing = variants
+                .iter()
+                .filter(|variant| !matches!(variant, Type::Nothing));
+            return match (non_nothing.next(), non_nothing.next()) {
+                (Some(inner), None) => write_optional_text(cg, val, inner, sink),
+                _ => {
+                    let text = to_text(cg, val, ty)?;
+                    write_and_release_text(cg, sink, text)
+                }
+            };
+        }
+        _ => {
+            let text = to_text(cg, val, ty)?;
+            return write_and_release_text(cg, sink, text);
+        }
+    };
+    let call = match sink {
+        TextSink::Stdout => cg.builder.build_call(print_entry, &[val.into()], ""),
+        TextSink::Builder(builder) => {
+            cg.builder
+                .build_call(append_entry, &[builder.into(), val.into()], "")
+        }
+    };
+    call.map(|_| ()).map_err(|err| format!("{err}"))
+}
+
+/// The text of a `T | nothing` value: `none` when `val` is null, else the text of `T`.
+fn write_optional_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    inner: &Type,
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let is_null = cg
+        .builder
+        .build_is_null(val.into_pointer_value(), "union_null")
+        .map_err(|err| format!("{err}"))?;
+    let none_bb = cg.append_block("union_none");
+    let some_bb = cg.append_block("union_some");
+    let merge_bb = cg.append_block("union_merge");
+    cg.builder
+        .build_conditional_branch(is_null, none_bb, some_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(none_bb);
+    let none_text = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
+    write_text_ptr(cg, sink, none_text.as_pointer_value())?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(some_bb);
+    write_value_text(cg, val, inner, sink)?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(merge_bb);
+    Ok(())
 }
 
 /// UFCS dispatch: `receiver.method(args)` → call standalone function `method(receiver, args)`.
 fn lower_ufcs_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,
+    receiver: &Expr,
     recv_val: BasicValueEnum<'ctx>,
     _shape_name: &str,
     method: &str,
+    method_span: &ynz_diagnostics::SourceSpan,
     extra_args: &[Expr],
 ) -> Result<BasicValueEnum<'ctx>, String> {
+    // A callee with `fixed<T>` length parameters runs the version typeck recorded for this call.
+    let symbol = cg
+        .fixed_version_symbol((method_span.start, method_span.end))?
+        .unwrap_or_else(|| method.to_string());
     let fn_val = cg
         .module
-        .get_function(method)
-        .ok_or_else(|| format!("codegen UFCS: function `{}` not found in module", method))?;
+        .get_function(&symbol)
+        .ok_or_else(|| format!("codegen UFCS: function `{symbol}` not found in module"))?;
 
+    // The receiver is the call's first argument: a copy typeck judged necessary is made here.
+    let mut copies: CallCopies<'ctx> = Vec::new();
+    let receiver_span = receiver.span();
+    let recv_val = if cg
+        .typed
+        .non_owned_reads
+        .must_copy(receiver_span.start, receiver_span.end)
+    {
+        let receiver_ty = cg.expr_type(receiver);
+        let owned = own_read_for_store(cg, receiver, recv_val, &receiver_ty, false, "ufcs_recv")?;
+        if owned.copied {
+            copies.push((owned.release_value(), receiver_ty));
+        }
+        owned.value
+    } else {
+        recv_val
+    };
     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
-    for arg in extra_args {
-        let arg_val = lower_expr(cg, arg)?;
-        // If the function param expects dynamic but arg is a concrete shape, coerce.
+    for (extra_index, arg) in extra_args.iter().enumerate() {
+        // The receiver is parameter 0, so the extra arguments start at parameter 1.
+        let gives = matches!(
+            cg.plain_callee_param_ownership(method, extra_index + 1),
+            Some(Some(OwnershipModifier::Give))
+        );
+        let mut arg_val = lower_call_argument(cg, arg, &mut copies, gives)?;
+        // A `maybe` at a `give` position is handed over as a plain call's is (`own_given_maybe`).
+        if gives {
+            arg_val = own_given_maybe(cg, arg, arg_val)?;
+        }
         args.push(arg_val.into());
     }
 
@@ -19369,6 +27712,7 @@ fn lower_ufcs_call<'ctx>(
         .builder
         .build_call(fn_val, &args, "ufcs")
         .map_err(|e| format!("UFCS call `{method}`: {e}"))?;
+    release_call_copies(cg, &copies)?;
     match call.try_as_basic_value().basic() {
         Some(v) => Ok(v),
         None => Ok(cg.i32().const_int(0, false).into()),
@@ -19501,11 +27845,8 @@ fn lower_field_access<'ctx>(
                 .ok_or_else(|| "ec_msg: builder has no insert block after call".to_string())?;
 
             cg.builder.position_at_end(merge_bb);
-            let empty = cg
-                .builder
-                .build_global_string_ptr("", "ec_msg_empty")
-                .map_err(|e| format!("{e}"))?
-                .as_pointer_value();
+            let empty =
+                build_string_global(cg.ctx, cg.module, "", "ec_msg_empty").as_pointer_value();
             let phi = cg
                 .builder
                 .build_phi(cg.ptr(), "ec_msg")
@@ -19541,7 +27882,63 @@ fn lower_field_access<'ctx>(
     }
 
     let (field_ptr, field_ty) = field_gep(cg, receiver, field_name)?;
+    // An envelope union field is read in place: a pointer to the field's own 16 bytes, or null
+    // for `none`.
+    if let Some(variants) = cg.envelope_union_variants(&field_ty) {
+        return Ok(cg
+            .union_slot_to_value(field_ptr, &variants, field_name)?
+            .into());
+    }
+    // A `fixed<T, N>` field holds its cells inside the shape: the value is the address of the
+    // first cell, as a local list's value is the address of its block.
+    if cg.is_stored_fixed_field(&field_ty) {
+        return Ok(field_ptr.into());
+    }
     load(cg, field_ptr, &field_ty, field_name)
+}
+
+/// A string, array or map field of a temporary that a `let` or assignment keeps
+/// (`ReadVerdict::Take`, `IMP-ownership.md` "Non-owned reads"): the binding takes the field's
+/// pointer and no copy is made, as Rust moves a field out of a temporary and drops the rest.
+/// The field is nulled in the temporary, so its statement-end release (`release_fn` accepts a
+/// null string, array or map) skips it, and the value is marked moved so the store seam keeps it.
+/// A resume function releases its temporaries too (C8), so it nulls the field as a plain one does.
+///
+/// O(1) time.
+fn lower_taken_field<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    receiver: &Expr,
+    field_name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let (field_ptr, field_ty) = field_gep(cg, receiver, field_name)?;
+    let taken = load(cg, field_ptr, &field_ty, field_name)?;
+    if !taken.is_pointer_value() {
+        return Err(format!(
+            "internal: the taken field `{field_name}` is not a pointer value"
+        ));
+    }
+    if let Type::Shape { name } = cg.resolve_type(&field_ty) {
+        if !cg.typed.non_owned_reads.takes_nested_shape(&name) {
+            return Err(format!(
+                "internal: the take of nested shape `{name}` nulls a cell its release does not \
+                 check for null"
+            ));
+        }
+    }
+    cg.builder
+        .build_store(field_ptr, cg.ptr().const_null())
+        .map_err(|err| format!("null the taken field `{field_name}`: {err}"))?;
+    if is_string_like(&cg.resolve_type(&field_ty)) {
+        cg.owned_string_values.insert(taken.as_value_ref() as usize);
+    } else {
+        cg.moved_cell_values.insert(taken.as_value_ref() as usize);
+        // A nested shape is a heap cell: the binding copies its bytes (strings and cells stay,
+        // nothing deepens) and frees the emptied cell (`shape_bytes_to_owned`).
+        if matches!(cg.resolve_type(&field_ty), Type::Shape { .. }) {
+            cg.taken_shape_cells.insert(taken.as_value_ref() as usize);
+        }
+    }
+    Ok(taken)
 }
 
 /// Get a GEP pointer to a field inside a shape value (for reads AND writes).
@@ -19663,77 +28060,15 @@ fn lower_struct_lit<'ctx>(
         store_field(cg, val, &field_ty, gep)?;
     }
 
-    // Evaluate and store non-zero hidden-field defaults.
-    //
-    // Walk all AST ShapeDecls in the inheritance chain (current shape + every ancestor
-    // via `extends`) to find hidden fields with explicit default expressions.
-    // Zero-init above already covers zero-default fields; only emit a GEP+store when
-    // the default expression evaluates to something non-zero.
-    //
-    // Inherited hidden fields live in the parent's AST ShapeDecl, not the child's —
-    // so we must walk the chain.  The GEP index is always looked up from the resolved
-    // ShapeDef.fields (which includes inherited fields in layout order) to produce
-    // the correct LLVM struct offset.
-    let ast_shape_decl_for = |name: &str| -> Option<&ynz_ast::nodes::ShapeDecl> {
-        cg.typed.module.items.iter().find_map(|item| {
-            if let ynz_ast::nodes::Item::ShapeDecl(s) = item {
-                if s.name == name {
-                    Some(s)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-    };
-
-    // Collect the shape names to visit: walk up the extends chain.
-    let mut chain: Vec<String> = vec![shape_name.clone()];
-    {
-        let mut cur = shape_name.clone();
-        while let Some(parent) = cg.shape_table.get(&cur).and_then(|s| s.extends.clone()) {
-            chain.push(parent.clone());
-            cur = parent;
-        }
-    }
-
-    for decl_name in &chain {
-        let Some(ast_shape) = ast_shape_decl_for(decl_name) else {
-            continue;
-        };
-        for ast_field in &ast_shape.fields {
-            if !ast_field.is_hidden {
-                continue;
-            }
-            let Some(default_expr) = &ast_field.default else {
-                continue;
-            };
-            // Find this field's index in the resolved ShapeDef (which includes
-            // inherited fields; the LLVM struct layout follows ShapeDef.fields order).
-            let field_idx = match shape_def
-                .fields
-                .iter()
-                .position(|f| f.name == ast_field.name)
-            {
-                Some(idx) => idx,
-                None => continue, // field not in resolved def — skip safely
-            };
-            let field_ty = shape_def.fields[field_idx].ty.clone();
-
-            let gep = cg
-                .builder
-                .build_struct_gep(
-                    struct_ty,
-                    slot,
-                    field_idx as u32,
-                    &format!("{}.{}_default", shape_name, ast_field.name),
-                )
-                .map_err(|e| format!("hidden default GEP `{}`: {e}", ast_field.name))?;
-
-            let val = lower_expr(cg, default_expr)?;
-            store_field(cg, val, &field_ty, gep)?;
-        }
+    // Write the hidden-field defaults: ONE initializer per shape, defined by the module that
+    // declares the shape (`lower_shape_defaults_initializer`) so each default is lowered with
+    // that module's own typed data, and called here whether the shape is local or imported.
+    // Defaults land after the provided fields, as the inline lowering always did.
+    if shape_has_hidden_fields(&shape_def) {
+        let initializer = shape_defaults_initializer(cg.ctx, cg.module, &shape_def);
+        cg.builder
+            .build_call(initializer, &[slot.into()], "hidden_defaults")
+            .map_err(|err| format!("hidden defaults call `{shape_name}`: {err}"))?;
     }
 
     Ok(slot.into())
@@ -19758,7 +28093,88 @@ fn lower_stmt_field_assign<'ctx>(
 
     let (field_ptr, field_ty) = field_gep(cg, receiver, field)?;
     let val = lower_expr(cg, value)?;
-    store_field(cg, val, &field_ty, field_ptr)
+    // The shape owns what its field holds, so the value this assignment replaces has no other
+    // holder: release it with the field type's glue. The store is what copies a borrowed value
+    // (`own_string_for_store`), so an assignment that reads the old value (`tag.name = tag.name`)
+    // copies it first: the old value is set aside, the new one stored, and only then is the old
+    // one released.
+    let Some(glue) = cg.stored_release(&field_ty, ReleaseHome::Field)? else {
+        return store_field(cg, val, &field_ty, field_ptr);
+    };
+    let mut old_pointer = None;
+    let old_slot = match cg.envelope_union_variants(&cg.resolve_type(&field_ty)) {
+        // A `fixed<T, N>` field: keep a copy of its cells (the items they point at are still the
+        // old list's, which the release below frees after the new list is stored).
+        None if cg.is_stored_fixed_field(&field_ty) => {
+            let Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } = cg.resolve_type(&field_ty)
+            else {
+                return Err("field assign: fixed field lost its length".to_string());
+            };
+            let block_ty = cg.fixed_block_type(&elem, count as u32);
+            let size = block_ty
+                .size_of()
+                .ok_or("field assign: fixed block size unavailable")?;
+            let saved = cg.alloca_in_entry_llvm(block_ty, "field_old_fixed")?;
+            cg.builder
+                .build_memcpy(saved, 8, field_ptr, 8, size)
+                .map_err(|err| format!("field assign save fixed: {err}"))?;
+            saved
+        }
+
+        // An inline union slot: keep a copy of its bytes.
+        Some(variants) => {
+            let layout = cg.union_layout(&variants)?;
+            let slot_ty = cg.union_slot_llvm(&layout);
+            let size = slot_ty
+                .size_of()
+                .ok_or("field assign: union slot size unavailable")?;
+            let saved = cg.alloca_in_entry_llvm(slot_ty, "field_old_union")?;
+            cg.builder
+                .build_memcpy(saved, 1, field_ptr, 1, size)
+                .map_err(|err| format!("field assign save union: {err}"))?;
+            saved
+        }
+        // A stored pointer: keep it.
+        None => {
+            let old_value = cg
+                .builder
+                .build_load(cg.ptr(), field_ptr, "field_old")
+                .map_err(|err| format!("field assign save: {err}"))?;
+            let saved = cg.alloca_in_entry_llvm(cg.ptr(), "field_old_slot")?;
+            cg.builder
+                .build_store(saved, old_value)
+                .map_err(|err| format!("field assign save store: {err}"))?;
+            old_pointer = Some(old_value.into_pointer_value());
+            saved
+        }
+    };
+    store_field(cg, val, &field_ty, field_ptr)?;
+    // A `for` loop walking this very field keeps the list it started with: it takes the old value
+    // over and releases it when the loop ends (`Cg::hold_for_walking_field_loops`).
+    let walked_by_loop = match (old_pointer, ynz_typeck::cpu_admission::place_path(target)) {
+        (Some(old_pointer), Some(path)) if !cg.loop_held.is_empty() => {
+            cg.hold_for_walking_field_loops(&path, field_ptr, old_pointer)?
+        }
+        _ => None,
+    };
+    let Some(walked_by_loop) = walked_by_loop else {
+        return cg.call_stored_release(glue, old_slot, "field_assign");
+    };
+    let release_bb = cg.append_block("field_assign_release");
+    let done_bb = cg.append_block("field_assign_released");
+    cg.builder
+        .build_conditional_branch(walked_by_loop, done_bb, release_bb)
+        .map_err(|err| format!("field assign loop-held branch: {err}"))?;
+    cg.builder.position_at_end(release_bb);
+    cg.call_stored_release(glue, old_slot, "field_assign")?;
+    cg.builder
+        .build_unconditional_branch(done_bb)
+        .map_err(|err| format!("field assign loop-held join: {err}"))?;
+    cg.builder.position_at_end(done_bb);
+    Ok(())
 }
 
 /// PostfixOp lowering: `.copy()` and `.freeze()`.
@@ -19789,6 +28205,9 @@ fn lower_postfix_op<'ctx>(
                 CopyMode::Body,
                 "copy",
             )?;
+            if matches!(cg.resolve_type(&recv_ty), Type::Maybe { .. }) && val.is_pointer_value() {
+                cg.minted_maybe_copies.insert(val.as_value_ref() as usize);
+            }
             Ok(val)
         }
     }
@@ -19814,14 +28233,14 @@ enum CopyMode {
 /// heap-upgrade path both call it. Neither classifies a type itself.
 ///
 /// The returned [`BgArgFreeKind`] tells the spawn path what the task must release at retire;
-/// `CopyMode::Body` callers ignore it (nothing releases a body-local heap value yet — the
-/// scope-exit release pass is separate, later work).
+/// `CopyMode::Body` callers ignore it (a body-local value is released by `release_fn`, which
+/// the scope-exit pass, C7/C8, calls).
 ///
 /// The `match` below is exhaustive over `OwnedCopy` with NO `_` arm on purpose: a plan added to
 /// the shared table fails to compile here until someone says how to emit it, which is the same
 /// forcing function `owned_copy_plan` itself uses over `Type`.
 fn emit_owned_copy<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
+    cg: &Cg<'ctx, '_>,
     receiver: Option<&Expr>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
@@ -19834,6 +28253,14 @@ fn emit_owned_copy<'ctx>(
         // Contents nothing can change: a second name for the same bits cannot disagree with
         // the first, so the receiver IS the copy — in a body and across a spawn alike.
         OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
+
+        // A `string`: a fresh heap copy, the same one in a body and across a spawn. The copy is
+        // released by its owner: the spawn ladder's release glue, a store's container, or the
+        // scope-exit pass.
+        OwnedCopy::StringClone => {
+            let cloned = cg.string_clone_call(val, &format!("{site}_str"))?;
+            Ok((cloned.into(), BgArgFreeKind::None))
+        }
 
         // Immutable, but living in storage the producing frame owns.
         OwnedCopy::FrameLocalImmutable { heap_cell } => match (mode, heap_cell) {
@@ -19900,6 +28327,9 @@ fn emit_owned_copy<'ctx>(
             cg.builder
                 .build_store(dst, struct_val)
                 .map_err(|e| format!("{site} store: {e}"))?;
+            // An explicit copy (and a task's copy of an argument) owns a copy of everything the
+            // shape owns: its strings, containers, cells and boxes.
+            cg.deepen_shape_fields(dst, name)?;
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape {
@@ -19913,19 +28343,23 @@ fn emit_owned_copy<'ctx>(
         // cells, so `b = a.copy(); b.set(0, 99)` changed `a` too — the silent wrong answer this
         // emitter's whole existence is about.
         OwnedCopy::FixedMemcpy => {
-            let Type::BuiltinFixed { size, .. } = &resolved else {
+            let Type::BuiltinFixed {
+                size,
+                elem: fixed_elem,
+            } = &resolved
+            else {
                 return Err(format!(
                     "{site}: owned_copy_plan classified a non-fixed as FixedMemcpy"
                 ));
             };
-            let n = size.ok_or_else(|| {
+            let item_count = size.known().ok_or_else(|| {
                 format!(
                     "{site}: the length of this `fixed` list is not known here, so its copy \
                      cannot be sized — this is a compiler bug"
                 )
             })? as u64;
-            let bytes = n * 8;
-            let cells_ty = cg.i64().array_type(n as u32);
+            let bytes = item_count * cg.fixed_cell_bytes(fixed_elem);
+            let cells_ty = cg.fixed_block_type(fixed_elem, item_count as u32);
             let dst = match mode {
                 CopyMode::Body => cg
                     .builder
@@ -19951,6 +28385,15 @@ fn emit_owned_copy<'ctx>(
                     cg.i64().const_int(bytes, false),
                 )
                 .map_err(|e| format!("{site} fixed memcpy: {e}"))?;
+            // A `fixed<string>` or `fixed<Shape>` holds pointers to items in its cells: the block
+            // copy above shares them, so give each cell an item of its own (a string copy, or a
+            // fresh heap cell holding a deep copy of the shape).
+            if let Type::BuiltinFixed { elem, .. } = &resolved {
+                let elem = cg.resolve_type(elem);
+                if is_string_like(&elem) || matches!(elem, Type::Shape { .. }) {
+                    emit_fixed_item_cells_copy(cg, dst, item_count, &elem, site)?;
+                }
+            }
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapShape { byte_size: bytes },
@@ -19993,6 +28436,13 @@ fn emit_owned_copy<'ctx>(
             if elem == ElemCopy::Nested {
                 emit_array_elem_deep_copy(cg, cloned, &elem_ty, mode, site)?;
             }
+            // Shape elements live inline in the buffer, so the clone's strings are the
+            // source's: copy each element's string fields.
+            if let Type::Shape { name } = cg.resolve_type(&elem_ty) {
+                if cg.shape_needs_deepen(&name) {
+                    emit_array_shape_deepen(cg, cloned, &name, site)?;
+                }
+            }
             let free = match mode {
                 CopyMode::Body => BgArgFreeKind::None,
                 CopyMode::SpawnArg => BgArgFreeKind::HeapArrayPrimitive,
@@ -20013,23 +28463,33 @@ fn emit_owned_copy<'ctx>(
                 .try_as_basic_value()
                 .basic()
                 .ok_or_else(|| format!("{site} map clone: returned void"))?;
-            // DEFERRED, four fields, for the SpawnArg case only.
-            // WHAT: the task's own copy of a `map` argument is not released when the task
-            //   retires, so a spawn that passes a map leaks that copy.
-            // WHY: releasing it needs a new `BG_ARG_KIND_*` wire value, which the runtime's
-            //   retire ladder, the channel-side release rewrite, and both of their
-            //   kind-enumerating parity tests all read. That is a wire-format change, and
-            //   this change is a correctness fix that must land BEFORE the scope-exit release
-            //   pass (a release pass landing first would emit frees on the pointers this fix
-            //   exists to stop aliasing). Shipping the wire change here would invert that
-            //   order for a leak, to fix an alias.
-            // COST to fix later: one `BG_ARG_KIND_HEAP_MAP` constant, one arm in the runtime
-            //   retire ladder calling `ynz_map_drop`, one arm here, and the `ALL_BG_ARG_KINDS`
-            //   / releasable-payload parity tests that enumerate the kinds.
-            // TRIGGER: the scope-exit release pass, which owns the release ladder — or the
-            //   first program that spawns with a `map` argument from inside a loop.
-            // Until then this is strictly better than what it replaces: the task used to
-            //   share the spawner's map outright.
+            // The cells were copied, so a `string` key or value still points at the source's
+            // string: give the clone strings of its own (`ynz_map_clone_strings`).
+            if let Type::BuiltinMap { key, val: value } = &resolved {
+                let clone_keys = is_string_like(&cg.resolve_type(key));
+                let clone_values = is_string_like(&cg.resolve_type(value));
+                if clone_keys || clone_values {
+                    let flag = |on: bool| cg.i32().const_int(on as u64, false);
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_map_clone_strings,
+                            &[
+                                cloned.into_pointer_value().into(),
+                                flag(clone_keys).into(),
+                                flag(clone_values).into(),
+                            ],
+                            "",
+                        )
+                        .map_err(|err| format!("{site} map string clone: {err}"))?;
+                }
+            }
+            // A value that is itself heap (an array, a map, a `maybe` cell, a shape owning heap, a
+            // union slot) was copied as bits too: copy each through the one owned-copy emitter.
+            if let Type::BuiltinMap { key, val: value } = &resolved {
+                emit_map_values_deep_copy(cg, cloned.into_pointer_value(), key, value, site)?;
+            }
+            // The task's copy is released by the type's release glue (`release_glue_free_kind`), so
+            // the arm itself reports no flat free.
             Ok((cloned, BgArgFreeKind::None))
         }
 
@@ -20091,10 +28551,9 @@ fn sole_holder_transfer_free_kind<'ctx>(
         ynz_typeck::owned_copy::OwnedCopy::ArrayClone { .. } => {
             Some(BgArgFreeKind::HeapArrayPrimitive)
         }
-        // `BgArgFreeKind::None` is what the `MapClone` SpawnArg emission returns too: the drop
-        // ladder still has no map kind (that arm's own four-field deferral). Transferring is
-        // strictly better than copying anyway — one allocation instead of two, and the one
-        // that leaks is the one the program already made.
+        // `BgArgFreeKind::None` is what the `MapClone` SpawnArg emission returns too:
+        // `release_glue_free_kind` upgrades both to the map's release glue. Transferring is
+        // strictly better than copying — one allocation instead of two.
         ynz_typeck::owned_copy::OwnedCopy::MapClone => Some(BgArgFreeKind::None),
         // A `maybe` envelope is an entry-block alloca unless `emit_owned_copy` heap-celled it.
         ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone if minted_here => {
@@ -20115,9 +28574,295 @@ fn sole_holder_transfer_free_kind<'ctx>(
         // into frame storage the SpawnArg path must re-home (or refuse) for itself.
         ynz_typeck::owned_copy::OwnedCopy::ReceiverIsCopy
         | ynz_typeck::owned_copy::OwnedCopy::FrameLocalImmutable { .. } => None,
+        // A string a task solely holds (a fresh one, or a binding the spawn consumes) is the
+        // task's already: copying it would leave the original held by nobody.
+        ynz_typeck::owned_copy::OwnedCopy::StringClone => Some(BgArgFreeKind::None),
         // No copy exists; the caller's own refusal arm handles it.
         ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
     }
+}
+
+/// Copy the item in each of the `cell_count` i64 cells at `cells` (a `fixed<string>` or
+/// `fixed<Shape>` block just byte-copied from its source): a counted loop that loads a cell,
+/// copies the string it points at (`emit_owned_copy`) or the shape (a fresh heap cell and a deep
+/// copy of its fields, `shape_bytes_to_heap_cell`) and stores the copy back. The release helper
+/// frees exactly these (`ReleaseStep::Fixed`). O(n) time in the cells and what they hold.
+fn emit_fixed_item_cells_copy<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    cells: PointerValue<'ctx>,
+    cell_count: u64,
+    elem_ty: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let idx_slot = cg
+        .builder
+        .build_alloca(i64_ty, &format!("{site}_fixed_i"))
+        .map_err(|err| format!("{site} fixed copy idx alloca: {err}"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|err| format!("{site} fixed copy idx init: {err}"))?;
+    let head = cg.append_block(&format!("{site}_fixed_head"));
+    let body = cg.append_block(&format!("{site}_fixed_body"));
+    let done = cg.append_block(&format!("{site}_fixed_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} fixed copy br: {err}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_fixed_iv"))
+        .map_err(|err| format!("{site} fixed copy idx load: {err}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::SLT,
+            i,
+            i64_ty.const_int(cell_count, false),
+            &format!("{site}_fixed_more"),
+        )
+        .map_err(|err| format!("{site} fixed copy cmp: {err}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|err| format!("{site} fixed copy cond: {err}"))?;
+
+    cg.builder.position_at_end(body);
+    let cell = unsafe {
+        cg.builder
+            .build_gep(i64_ty, cells, &[i], &format!("{site}_fixed_cell"))
+            .map_err(|err| format!("{site} fixed copy gep: {err}"))?
+    };
+    let bits = cg
+        .builder
+        .build_load(i64_ty, cell, &format!("{site}_fixed_bits"))
+        .map_err(|err| format!("{site} fixed copy load: {err}"))?
+        .into_int_value();
+    let item = cg
+        .builder
+        .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_fixed_item"))
+        .map_err(|err| format!("{site} fixed copy inttoptr: {err}"))?;
+    let copied: BasicValueEnum<'ctx> = match elem_ty {
+        Type::Shape { name } => cg
+            .shape_bytes_to_heap_cell(item, name, &format!("{site}_item"))?
+            .into(),
+        _ => {
+            emit_owned_copy(
+                cg,
+                None,
+                item.into(),
+                elem_ty,
+                CopyMode::Body,
+                &format!("{site}_item"),
+            )?
+            .0
+        }
+    };
+    let copied_bits = cg
+        .builder
+        .build_ptr_to_int(
+            copied.into_pointer_value(),
+            i64_ty,
+            &format!("{site}_fixed_new_bits"),
+        )
+        .map_err(|err| format!("{site} fixed copy ptrtoint: {err}"))?;
+    cg.builder
+        .build_store(cell, copied_bits)
+        .map_err(|err| format!("{site} fixed copy store: {err}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_fixed_next"))
+        .map_err(|err| format!("{site} fixed copy add: {err}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|err| format!("{site} fixed copy idx store: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} fixed copy loop br: {err}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
+}
+
+/// Give every entry of an already-cloned map a copy of the heap its value owns, when the value is
+/// not a plain string (strings are copied by `ynz_map_clone_strings`): a counted loop over the
+/// insertion order that reads the entry, copies the value (`deepen_shape_fields` for a shape,
+/// `union_deepen_fn` for an envelope union, `emit_owned_copy` for a pointer value) and writes it
+/// back over the same key without releasing the old cell (it is the source's). O(n) time in the
+/// entries plus the copies, O(1) memory here.
+fn emit_map_values_deep_copy<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    map: PointerValue<'ctx>,
+    key_ty: &Type,
+    value_ty: &Type,
+    site: &str,
+) -> Result<(), String> {
+    let value_ty = cg.resolve_type(value_ty);
+    if is_string_like(&value_ty) || !cg.field_needs_deepen(&value_ty) {
+        return Ok(());
+    }
+    let key_kind = cg.map_key_kind(key_ty)?;
+    let i64_ty = cg.i64();
+    let count = cg.map_count_val(map, &format!("{site}_values_count"))?;
+    let position_slot = cg.alloca_in_entry_llvm(i64_ty, &format!("{site}_values_i"))?;
+    let key_slot = cg.map_key_out_buffer(key_ty, &format!("{site}_values_key"))?;
+    let value_buffer = cg.array_elem_out_buffer(&value_ty, &format!("{site}_values"))?;
+    cg.builder
+        .build_store(position_slot, i64_ty.const_zero())
+        .map_err(|err| format!("{site} map values init: {err}"))?;
+    let head = cg.append_block(&format!("{site}_values_head"));
+    let body = cg.append_block(&format!("{site}_values_body"));
+    let done = cg.append_block(&format!("{site}_values_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} map values br: {err}"))?;
+    cg.builder.position_at_end(head);
+    let position = cg
+        .builder
+        .build_load(i64_ty, position_slot, &format!("{site}_values_pos"))
+        .map_err(|err| format!("{site} map values pos: {err}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::SLT,
+            position,
+            count,
+            &format!("{site}_values_more"),
+        )
+        .map_err(|err| format!("{site} map values cmp: {err}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|err| format!("{site} map values cond: {err}"))?;
+    cg.builder.position_at_end(body);
+    cg.map_iter_get_into(
+        map,
+        position,
+        key_kind,
+        key_slot,
+        value_buffer,
+        &format!("{site}_values_get"),
+    )?;
+    if let Some(variants) = cg.envelope_union_variants(&value_ty) {
+        let deepen = cg.union_deepen_fn(&variants)?;
+        cg.builder
+            .build_call(deepen, &[value_buffer.into()], "")
+            .map_err(|err| format!("{site} map values union: {err}"))?;
+    } else if let Type::Shape { name } = &value_ty {
+        cg.deepen_shape_fields(value_buffer, name)?;
+    } else {
+        let bits = cg
+            .builder
+            .build_load(i64_ty, value_buffer, &format!("{site}_values_bits"))
+            .map_err(|err| format!("{site} map values bits: {err}"))?
+            .into_int_value();
+        let original = cg
+            .builder
+            .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_values_item"))
+            .map_err(|err| format!("{site} map values inttoptr: {err}"))?;
+        let (copied, _) = emit_owned_copy(
+            cg,
+            None,
+            original.into(),
+            &value_ty,
+            CopyMode::Body,
+            &format!("{site}_values_item"),
+        )?;
+        let copied_bits = cg
+            .builder
+            .build_ptr_to_int(
+                copied.into_pointer_value(),
+                i64_ty,
+                &format!("{site}_values_new"),
+            )
+            .map_err(|err| format!("{site} map values ptrtoint: {err}"))?;
+        cg.builder
+            .build_store(value_buffer, copied_bits)
+            .map_err(|err| format!("{site} map values store: {err}"))?;
+    }
+    let null = cg.ptr().const_null();
+    let zero = cg.i32().const_zero();
+    match key_kind {
+        MapKeyKind::Number => {
+            // The key sits in its 16-byte buffer; the runtime copies it and finds the cloned entry
+            // (an equal key), so only the value is replaced.
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_set_decimal,
+                    &[
+                        map.into(),
+                        key_slot.into(),
+                        value_buffer.into(),
+                        null.into(),
+                        zero.into(),
+                    ],
+                    "",
+                )
+                .map_err(|err| format!("{site} map values set: {err}"))?;
+        }
+        MapKeyKind::String => {
+            let key_bits = cg
+                .builder
+                .build_load(i64_ty, key_slot, &format!("{site}_values_key_bits"))
+                .map_err(|err| format!("{site} map values key: {err}"))?
+                .into_int_value();
+            let key = cg
+                .builder
+                .build_int_to_ptr(key_bits, cg.ptr(), &format!("{site}_values_key_ptr"))
+                .map_err(|err| format!("{site} map values key ptr: {err}"))?;
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_set_str,
+                    &[
+                        map.into(),
+                        key.into(),
+                        value_buffer.into(),
+                        null.into(),
+                        null.into(),
+                        zero.into(),
+                    ],
+                    "",
+                )
+                .map_err(|err| format!("{site} map values set: {err}"))?;
+        }
+        MapKeyKind::Int => {
+            let key_bits = cg
+                .builder
+                .build_load(i64_ty, key_slot, &format!("{site}_values_key_bits"))
+                .map_err(|err| format!("{site} map values key: {err}"))?
+                .into_int_value();
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_set,
+                    &[
+                        map.into(),
+                        key_bits.into(),
+                        value_buffer.into(),
+                        null.into(),
+                        zero.into(),
+                    ],
+                    "",
+                )
+                .map_err(|err| format!("{site} map values set: {err}"))?;
+        }
+    }
+    let next = cg
+        .builder
+        .build_int_add(
+            position,
+            i64_ty.const_int(1, false),
+            &format!("{site}_values_next"),
+        )
+        .map_err(|err| format!("{site} map values add: {err}"))?;
+    cg.builder
+        .build_store(position_slot, next)
+        .map_err(|err| format!("{site} map values step: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} map values loop br: {err}"))?;
+    cg.builder.position_at_end(done);
+    Ok(())
 }
 
 /// Copy every element of an already-cloned array whose cells hold pointers to separately
@@ -20128,23 +28873,10 @@ fn sole_holder_transfer_free_kind<'ctx>(
 /// produces a fresh allocation (`array`, `map`, `maybe`); an element that cannot be copied
 /// makes the whole container a refusal in the shared table, so it never reaches here.
 ///
-/// DEFERRED, four fields:
-/// - WHAT: the items this loop allocates are not released when the copy is dropped —
-///   `ynz_array_drop` is element-blind by design (recorded decision D6), so it frees the
-///   buffer and the header and nothing else.
-/// - WHY: an element-aware drop needs the element TYPE at the drop site. The runtime does not
-///   have it, and a task's retire ladder carries only a wire kind — so giving it one is the
-///   same `BG_ARG_KIND_*` wire-format change the `MapClone` arm's deferral names, and this
-///   change must land BEFORE the scope-exit release pass, not carry a piece of it. The
-///   alternative in the meantime is leaving the items SHARED, which is the alias this loop
-///   exists to remove and the thing that produced a use-after-free; a leak is the strictly
-///   less harmful of the two.
-/// - COST to fix later: per-element-kind drop glue, which codegen already mints for channel
-///   payloads (`channel_elem_drop` is the pattern), plus a way for the drop site to reach it.
-/// - TRIGGER: the scope-exit release pass, which is where a body-local array's own release
-///   lands and where this element walk has to exist anyway.
+/// The items this loop allocates are released with the array by `release_fn` (`ynz_array_release`
+/// walks the items with the element type's glue), so the copy frees exactly what this makes.
 fn emit_array_elem_deep_copy<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
+    cg: &Cg<'ctx, '_>,
     arr: PointerValue<'ctx>,
     elem_ty: &Type,
     mode: CopyMode,
@@ -20233,7 +28965,13 @@ fn emit_array_elem_deep_copy<'ctx>(
     cg.builder
         .build_call(
             cg.rt.ynz_array_set,
-            &[arr.into(), i.into(), cell_slot.into()],
+            &[
+                arr.into(),
+                i.into(),
+                cell_slot.into(),
+                cg.ptr().const_null().into(),
+                cg.i32().const_zero().into(),
+            ],
             &format!("{site}_deep_set"),
         )
         .map_err(|e| format!("{site} deep set: {e}"))?;
@@ -20252,9 +28990,4505 @@ fn emit_array_elem_deep_copy<'ctx>(
     Ok(())
 }
 
+/// Give every element of an already-cloned `array<Shape>` a copy of what it owns, when the shape
+/// owns any heap: the clone's buffer was byte-copied, so each element's strings, arrays, maps and
+/// cells still point at the source's. A counted loop that reads an element into a scratch slot,
+/// deepens it ([`Cg::deepen_shape_fields`], the same copy a shape `.copy()` makes) and writes it
+/// back. O(n) time in the elements plus the copies each one costs.
+fn emit_array_shape_deepen<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    arr: PointerValue<'ctx>,
+    shape_name: &str,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let struct_ty = cg
+        .shape_types
+        .get(shape_name)
+        .ok_or_else(|| format!("{site}: LLVM type for `{shape_name}` not found"))?;
+    let len = cg
+        .builder
+        .build_call(cg.rt.ynz_array_count, &[arr.into()], &format!("{site}_len"))
+        .map_err(|err| format!("{site} shape copy count: {err}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| format!("{site} shape copy count: returned void"))?
+        .into_int_value();
+    let idx_slot = cg.alloca_in_entry_llvm(i64_ty, &format!("{site}_shape_i"))?;
+    let element_slot = cg.alloca_in_entry_llvm(struct_ty, &format!("{site}_shape_elem"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|err| format!("{site} shape copy idx init: {err}"))?;
+
+    let head = cg.append_block(&format!("{site}_shape_head"));
+    let body = cg.append_block(&format!("{site}_shape_body"));
+    let done = cg.append_block(&format!("{site}_shape_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} shape copy br: {err}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_shape_iv"))
+        .map_err(|err| format!("{site} shape copy idx load: {err}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(IntPredicate::SLT, i, len, &format!("{site}_shape_more"))
+        .map_err(|err| format!("{site} shape copy cmp: {err}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|err| format!("{site} shape copy cond: {err}"))?;
+
+    cg.builder.position_at_end(body);
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_get,
+            &[arr.into(), i.into(), element_slot.into()],
+            &format!("{site}_shape_get"),
+        )
+        .map_err(|err| format!("{site} shape copy get: {err}"))?;
+    cg.deepen_shape_fields(element_slot, shape_name)?;
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_set,
+            &[
+                arr.into(),
+                i.into(),
+                element_slot.into(),
+                cg.ptr().const_null().into(),
+                cg.i32().const_zero().into(),
+            ],
+            &format!("{site}_shape_set"),
+        )
+        .map_err(|err| format!("{site} shape copy set: {err}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_shape_next"))
+        .map_err(|err| format!("{site} shape copy add: {err}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|err| format!("{site} shape copy idx store: {err}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|err| format!("{site} shape copy loop br: {err}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
+}
+
+// ── The one release helper (v0.3-M9 C3c / C6) ───────────────────────────────────────────────
+//
+// Releasing a value frees EXACTLY what a copy of it allocates: `emit_owned_copy` (and the
+// `deepen_shape_fields` seam it shares with every shape copy) is the one place a copy is made,
+// and the release functions below are the one place a copy is undone. Nothing else decides how
+// a heap value is freed (`.claude/rules/authoritative-derivation.md`): the task drop ladder, the
+// channel's element glue and C7/C8's scope exits all call [`Cg::release_fn`].
+
+/// What releasing a value of one type does. THE per-type release table: [`release_step`] is
+/// exhaustive over `Type` with no `_` arm, and `copy_parity_tests` holds it to
+/// `owned_copy_plan` and to the release plan's `ReleaseKind`s for every type variant, so a copy
+/// plan with no release (or the reverse) fails a test instead of leaking or double-freeing.
+#[derive(Clone, Debug, PartialEq)]
+enum ReleaseStep {
+    /// The value owns no heap memory.
+    Nothing,
+    /// A `string`: `ynz_string_release` (a static string is left alone).
+    String,
+    /// An `array<T>`: each item by `T`'s step, then the header and buffer.
+    Array { elem: Type },
+    /// A `map<K, V>`: each occupied entry's key and value, then the buffers.
+    Map { key: Type, value: Type },
+    /// A `fixed<string>` or `fixed<Shape>`: each of its `size` cells holds a pointer to an item
+    /// the list owns (a string, or a heap cell holding a shape), released by `elem`'s step. (Any
+    /// other heap item of a `fixed` list is [`ReleaseStep::Unsupported`]: the copy table refuses
+    /// it, so nothing allocates it for a release to free.)
+    Fixed { elem: Type, size: u64 },
+    /// A shape: each field that owns heap, by the field type's step.
+    Shape { name: String },
+    /// A `maybe<T>` envelope `{flag, bits}`: the payload it owns (a string, a shape's heap cell,
+    /// a `number`'s cell), and, in the cell flavor, the envelope cell.
+    Maybe { inner: Type },
+    /// An ENVELOPE union (`is_envelope_union`): the variant its tag names (a slot, or the
+    /// `{tag, data}` view of one a binding owns). Any other union is its one variant's raw pointer,
+    /// which `release_step` answers as that variant's step.
+    Union { variants: Vec<Type> },
+    /// A `channel<T>`: one counted reference (`ynz_channel_free`).
+    Channel,
+    /// A background task handle: aborts the task and frees the handle (`ynz_handle_free`).
+    Handle,
+    /// An errors-capable `{err, ok}` value: the error object, or the payload when it is ok.
+    ErrorsCapable { inner: Type },
+    /// A type with a heap value that cannot be released as written, or none to release. Reaching
+    /// one is an internal error naming the type, never a silent skip.
+    Unsupported(&'static str),
+}
+
+/// THE exhaustive per-`Type` release table (see [`ReleaseStep`]).
+fn release_step(ty: &Type) -> ReleaseStep {
+    match ty {
+        // A bignum (`number<N>`, N > 34) is a pointer to heap decimal text: released like a string.
+        Type::Number { .. } if ynz_typeck::types::is_bignum(ty) => ReleaseStep::String,
+        Type::Nothing
+        | Type::Error
+        | Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Number { .. }
+        | Type::Range { .. }
+        | Type::Options { .. }
+        // A map-iteration entry is the loop's view of one slot: never an owner.
+        | Type::MapEntry { .. } => ReleaseStep::Nothing,
+        Type::String => ReleaseStep::String,
+        Type::Sensitive { inner } => release_step(inner),
+        Type::BuiltinArray { elem } => ReleaseStep::Array {
+            elem: elem.as_ref().clone(),
+        },
+        Type::BuiltinMap { key, val } => ReleaseStep::Map {
+            key: key.as_ref().clone(),
+            value: val.as_ref().clone(),
+        },
+        Type::BuiltinFixed { elem, size } => match (release_step(elem), size) {
+            (ReleaseStep::Nothing, _) => ReleaseStep::Nothing,
+            (ReleaseStep::Unsupported(reason), _) => ReleaseStep::Unsupported(reason),
+            (_, FixedLength::Known(size)) => ReleaseStep::Fixed {
+                elem: elem.as_ref().clone(),
+                size: *size as u64,
+            },
+            (_, FixedLength::Unknown | FixedLength::OfParam { .. }) => ReleaseStep::Unsupported(
+                "the length of this `fixed` list is not known here, so its cells cannot be walked",
+            ),
+        },
+        Type::Shape { name } => ReleaseStep::Shape { name: name.clone() },
+        Type::Maybe { inner } => ReleaseStep::Maybe {
+            inner: inner.as_ref().clone(),
+        },
+        // An envelope union is a tagged slot. Any other union is its one variant's raw pointer or
+        // bits (`map<..> | nothing`), released as that variant, or owns nothing (`int | float`).
+        Type::Union { variants } if ynz_typeck::check::is_envelope_union(ty) => {
+            ReleaseStep::Union {
+                variants: variants.clone(),
+            }
+        }
+        Type::Union { variants } => match ynz_typeck::check::raw_union_variant(variants) {
+            Some(held) => release_step(held),
+            None => ReleaseStep::Nothing,
+        },
+        Type::BuiltinChannel { .. } => ReleaseStep::Channel,
+        Type::BackgroundHandle { .. } => ReleaseStep::Handle,
+        Type::ErrorsCapable { inner } => ReleaseStep::ErrorsCapable {
+            inner: inner.as_ref().clone(),
+        },
+        Type::Dynamic { .. } => ReleaseStep::Unsupported(
+            "a `dynamic` value cannot be released: dynamic dispatch is not lowered yet, so no \
+             such value exists in generated code",
+        ),
+        Type::TypeParam { .. } | Type::Generic { .. } => ReleaseStep::Unsupported(
+            "a type parameter or an unresolved generic shape has no size to release; release is \
+             emitted per instance, after the type is substituted",
+        ),
+    }
+}
+
+/// How the value a release function is called on sits where it lives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReleaseForm {
+    /// The value itself: a shape's bytes inline, a union slot, a `maybe` envelope whose cell is
+    /// someone else's.
+    Value,
+    /// The value sits in a heap cell of its own, which the release frees after the contents.
+    Cell,
+    /// What a local binding holds (`store_binding`): a `maybe` envelope in an entry-block slot,
+    /// whose shape and number payloads sit in entry-block slots too (never a heap cell) and whose
+    /// array and map payloads the binding owns; a union VIEW of a slot the binding owns.
+    Local,
+}
+
+/// Where a released value is stored: an array or map cell holds a shape's bytes inline, but a
+/// shape's own field holds a nested shape as a pointer to a heap cell.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReleaseHome {
+    Element,
+    Field,
+    /// A cell of a `fixed` list: an i64 holding the item's pointer. As `Field`, except a union
+    /// item is the pointer to the VIEW the list was given (`value_to_stable_bits` stores a
+    /// union's view, not a slot).
+    FixedCell,
+}
+
+/// What a container walk or a field release calls on one stored value: the release function and
+/// whether the value lives inline at the storage address (so the function gets the address) or
+/// behind the pointer the storage holds.
+type StoredRelease<'ctx> = Option<(PointerValue<'ctx>, bool)>;
+
+impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// True when `expr` is a call of a function written in Yinz (this module's or an imported
+    /// one): typeck's `string_ownership::is_user_call`, over `TypedModule::callable_fns`. Such a
+    /// call returns an owned value: a `maybe`'s shape or number payload is a heap cell the return
+    /// made and its string a clone it made.
+    ///
+    /// O(1) time.
+    fn is_user_call(&self, expr: &Expr) -> bool {
+        ynz_typeck::string_ownership::is_user_call(
+            expr,
+            &self.typed.expr_types,
+            &self.typed.callable_fns,
+        )
+    }
+
+    /// Does the callee take any parameter written `give`? Unknown callees (imported, generic
+    /// instances) answer yes: the safe side. A given parameter can be stored into another
+    /// parameter's container, so one `give` anywhere makes every deep release of the call
+    /// unsound until move sites null their slots.
+    ///
+    /// Time: O(f) for f items  Space: O(1)
+    fn callee_takes_a_given_parameter(&self, callee: &str) -> bool {
+        self.typed
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == callee => {
+                    Some(function.params.iter().any(|param| {
+                        matches!(
+                            param.ownership,
+                            Some(ynz_ast::nodes::OwnershipModifier::Give)
+                        )
+                    }))
+                }
+                _ => None,
+            })
+            .unwrap_or(true)
+    }
+
+    /// The declared ownership of parameter `index` of `callee` when `callee` is a plain
+    /// (non-suspending) function whose signature is known: `Some(declared modifier)`. `None` for a
+    /// suspending, generic or unknown callee, whose body this module does not release.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn plain_callee_param_ownership(
+        &self,
+        callee: &str,
+        index: usize,
+    ) -> Option<Option<OwnershipModifier>> {
+        if self.suspend_set.contains(callee) {
+            return None;
+        }
+        let signature = self
+            .sig_table
+            .fns
+            .get(callee)
+            .or_else(|| self.imported_fns.get(callee))?;
+        if signature.suspends {
+            return None;
+        }
+        signature.param_ownerships.get(index).cloned()
+    }
+
+    /// The declared ownership of parameter `index` of `callee` when `callee` is a SUSPENDING
+    /// function whose signature is known (the counterpart of `plain_callee_param_ownership`): a
+    /// state machine releases the frame-backed kinds of its own `give` parameters at its scope
+    /// exits, as a plain callee does. `None` for a plain, generic or unknown callee.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn suspending_callee_param_ownership(
+        &self,
+        callee: &str,
+        index: usize,
+    ) -> Option<Option<OwnershipModifier>> {
+        if !self.suspend_set.contains(callee) {
+            return None;
+        }
+        let signature = self
+            .sig_table
+            .fns
+            .get(callee)
+            .or_else(|| self.imported_fns.get(callee))?;
+
+        signature.param_ownerships.get(index).cloned()
+    }
+
+    /// True when a binding of the (resolved) type `ty` is one the plain emitter releases at its
+    /// scope exits: an array, a map, a `fixed` list (whose items are released, the cells are the
+    /// frame's), or a shape, flat or nested (`ReleaseKind::Shape` and `NestedShape`; strings,
+    /// channels and handles are never copied by a spawn). A shape the shape table does not
+    /// describe is not released here.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn plain_releases_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::BuiltinFixed { .. } => true,
+            Type::Shape { name } => self.shape_table.layout_shape(name).is_some(),
+            _ => false,
+        }
+    }
+
+    /// What the ladder frees of an argument at a `give` position of a plain or suspending callee
+    /// that releases it (`plain_releases_kind`): nothing for a string, array, map or channel (the callee frees
+    /// all of it), the shape's own cell for a flat shape (the callee frees the fields). A type the
+    /// plain emitter does not release keeps its free kind.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn free_kind_of_a_given_argument(&self, kind: BgArgFreeKind, ty: &Type) -> BgArgFreeKind {
+        let resolved = self.resolve_type(ty);
+        match &resolved {
+            string_like if is_string_like(string_like) => BgArgFreeKind::None,
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. } | Type::BuiltinChannel { .. } => {
+                BgArgFreeKind::None
+            }
+            _ => kind,
+        }
+    }
+
+    /// The release of one stored value of type `ty` in `home`; `None` when it owns nothing.
+    /// Errors, naming the type, for a value whose release is unsupported.
+    ///
+    /// Time: O(1) plus emitting the value's release function once  Space: O(1)
+    fn stored_release(&self, ty: &Type, home: ReleaseHome) -> Result<StoredRelease<'ctx>, String> {
+        let ty = self.resolve_type(ty);
+        let as_pointer = |glue: FunctionValue<'ctx>| glue.as_global_value().as_pointer_value();
+        match release_step(&ty) {
+            ReleaseStep::Nothing => Ok(None),
+            ReleaseStep::String => Ok(Some((
+                self.rt
+                    .ynz_string_release
+                    .as_global_value()
+                    .as_pointer_value(),
+                false,
+            ))),
+            ReleaseStep::Array { .. }
+            | ReleaseStep::Map { .. }
+            | ReleaseStep::Channel
+            | ReleaseStep::Handle
+            | ReleaseStep::ErrorsCapable { .. } => Ok(self
+                .release_fn(&ty, false)?
+                .map(|glue| (as_pointer(glue), false))),
+            // An element holds a shape's bytes in its cell; a field holds a heap cell.
+            ReleaseStep::Shape { .. } => match home {
+                ReleaseHome::Element => Ok(self
+                    .release_fn(&ty, false)?
+                    .map(|glue| (as_pointer(glue), true))),
+                ReleaseHome::Field | ReleaseHome::FixedCell => Ok(self
+                    .release_fn(&ty, true)?
+                    .map(|glue| (as_pointer(glue), false))),
+            },
+            // A stored `maybe` is a pointer to a heap envelope cell.
+            ReleaseStep::Maybe { .. } => Ok(self
+                .release_fn(&ty, true)?
+                .map(|glue| (as_pointer(glue), false))),
+            ReleaseStep::Union { .. } if home == ReleaseHome::FixedCell => Ok(self
+                .local_release_fn(&ty)?
+                .map(|glue| (as_pointer(glue), false))),
+            ReleaseStep::Union { .. } => Ok(self
+                .release_fn(&ty, false)?
+                .map(|glue| (as_pointer(glue), true))),
+            // A `fixed<T, N>` field holds its cells inline: the release walks them in place.
+            ReleaseStep::Fixed { .. } if home == ReleaseHome::Field => Ok(self
+                .release_fn(&ty, false)?
+                .map(|glue| (as_pointer(glue), true))),
+            ReleaseStep::Fixed { .. } => Err(format!(
+                "internal: cannot release a stored `{}`: a `fixed` list is stored by value only in a shape field",
+                ynz_typeck::types::type_name(&ty)
+            )),
+            ReleaseStep::Unsupported(reason) => Err(format!(
+                "internal: cannot release a stored value of type `{}`: {reason}",
+                ynz_typeck::types::type_name(&ty)
+            )),
+        }
+    }
+
+    /// The `(glue, inline)` arguments a runtime container call (`ynz_array_set`, `ynz_map_set`,
+    /// `ynz_array_release`, `ynz_map_release`) takes for the items of type `ty`: the item's release
+    /// from [`Cg::stored_release`], or the null glue the runtime reads as "the items own nothing".
+    /// The null glue is the runtime's defined answer for an item that owns nothing, never a stand-in
+    /// for an unsupported type (`stored_release` errors for one).
+    ///
+    /// Time: O(1) plus emitting the item's release once  Space: O(1)
+    fn element_release_arguments(&self, ty: &Type) -> Result<(PointerValue<'ctx>, bool), String> {
+        Ok(self
+            .stored_release(ty, ReleaseHome::Element)?
+            .unwrap_or((self.ptr().const_null(), false)))
+    }
+
+    /// The fields of shape `shape_name` that own heap, each with its release: `(field index,
+    /// glue, inline)`. Empty when the shape owns nothing a release frees.
+    ///
+    /// Time: O(f)  Space: O(f)
+    fn shape_field_releases(
+        &self,
+        shape_name: &str,
+    ) -> Result<Vec<(u32, PointerValue<'ctx>, bool)>, String> {
+        let fields = self
+            .shape_table
+            .layout_shape(shape_name)
+            .ok_or_else(|| format!("release: shape `{shape_name}` not in the shape table"))?
+            .fields
+            .clone();
+        let mut releases = Vec::new();
+        for (index, field) in fields.iter().enumerate() {
+            if let Some((glue, inline)) = self.stored_release(&field.ty, ReleaseHome::Field)? {
+                releases.push((index as u32, glue, inline));
+            }
+        }
+        Ok(releases)
+    }
+
+    /// The byte size of the heap cell a value of `step` lives in when it owns its cell.
+    fn release_cell_size(
+        &self,
+        step: &ReleaseStep,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        match step {
+            ReleaseStep::Shape { name } => self.shape_abi_size_const(name, "release cell"),
+            ReleaseStep::Maybe { .. } => {
+                let raw = self
+                    .maybe_type()
+                    .size_of()
+                    .ok_or("release: maybe envelope size_of unavailable")?;
+                self.builder
+                    .build_int_z_extend(raw, self.i64(), "release_env_size")
+                    .map_err(|err| format!("release env size: {err}"))
+            }
+            ReleaseStep::Fixed { size, .. } => Ok(self.i64().const_int(size * 8, false)),
+            // An envelope union's own cell is its slot: the tag and the largest variant.
+            ReleaseStep::Union { variants } => Ok(self
+                .i64()
+                .const_int(self.union_layout(variants)?.slot_size, false)),
+            other => Err(format!("internal: {other:?} has no heap cell of its own")),
+        }
+    }
+
+    /// The module function `void(ptr value)` that releases a value of `ty`, or `None` when the
+    /// value owns nothing. `owns_cell` says the value sits in a heap cell of its own (a spawn
+    /// argument's shape copy, a stored `maybe`, a nested shape field), which the function frees
+    /// after the value's contents; a value that is its own heap object (a string, an array, a
+    /// map) ignores it.
+    ///
+    /// One function per type and flavor, declared before its body is emitted so a type that
+    /// reaches itself is a call, as in `union_deepen_fn`.
+    ///
+    /// Time: O(size of the type) to emit once; at run time O(n) in the heap the value owns
+    /// Space: O(1) here
+    fn release_fn(
+        &self,
+        ty: &Type,
+        owns_cell: bool,
+    ) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let form = if owns_cell {
+            ReleaseForm::Cell
+        } else {
+            ReleaseForm::Value
+        };
+        self.release_form_fn(ty, form)
+    }
+
+    /// The release of a value that a LOCAL slot holds (`ReleaseForm::Local`): a `maybe` envelope
+    /// or a union view the binding owns, as `store_binding` built them. Any other type releases
+    /// as `release_fn(ty, false)` does. The release `emit_slot_release` and the assignment
+    /// release call.
+    ///
+    /// Time: as `release_fn`  Space: O(1)
+    fn local_release_fn(&self, ty: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
+        self.release_form_fn(ty, ReleaseForm::Local)
+    }
+
+    /// `release_fn` and `local_release_fn`: the one emitter of the per-type release function, one
+    /// function per type and form. A form that says nothing for the type (a `Cell` of a string,
+    /// a `Local` of an array) is the type's `Value` form, so no two forms emit one body twice.
+    fn release_form_fn(
+        &self,
+        ty: &Type,
+        form: ReleaseForm,
+    ) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let resolved = self.resolve_type(ty);
+        let step = release_step(&resolved);
+        let owns_cell = form == ReleaseForm::Cell
+            && (matches!(
+                step,
+                ReleaseStep::Shape { .. }
+                    | ReleaseStep::Maybe { .. }
+                    | ReleaseStep::Fixed { .. }
+                    | ReleaseStep::Union { .. }
+            ));
+        let local = form == ReleaseForm::Local
+            && matches!(step, ReleaseStep::Maybe { .. } | ReleaseStep::Union { .. });
+        let name = format!(
+            "ynz_release_{}{}",
+            mangle_type(&resolved),
+            if owns_cell {
+                "_cell"
+            } else if local {
+                "_local"
+            } else {
+                ""
+            }
+        );
+        match &step {
+            ReleaseStep::Nothing => return Ok(None),
+            ReleaseStep::Unsupported(reason) => {
+                return Err(format!(
+                    "internal: cannot release a value of type `{}`: {reason}",
+                    ynz_typeck::types::type_name(&resolved)
+                ))
+            }
+            // A shape that owns nothing still frees its cell when it lives in one.
+            ReleaseStep::Shape { name: shape_name }
+                if !owns_cell && self.shape_field_releases(shape_name)?.is_empty() =>
+            {
+                return Ok(None)
+            }
+            _ => {}
+        }
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let value = release
+            .get_nth_param(0)
+            .ok_or("release: missing value parameter")?
+            .into_pointer_value();
+        // A nested shape's cell is null once a `let` took it out of a temporary
+        // (`lower_taken_field`), and the temporary's release skips it. Only a shape some `Take` of
+        // this module moves out can have a null cell here, so only its release checks (Rust's
+        // `Box` drop has no check; `Option<Box>`, where one can be absent, carries this one).
+        if owns_cell
+            && matches!(&step, ReleaseStep::Shape { name } if self.typed.non_owned_reads.takes_nested_shape(name))
+        {
+            let release_cell = self.ctx.append_basic_block(release, "release_cell");
+            let taken = self.ctx.append_basic_block(release, "release_cell_taken");
+            let is_null = self
+                .builder
+                .build_is_null(value, "cell_taken")
+                .map_err(|err| format!("release cell null check {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(is_null, taken, release_cell)
+                .map_err(|err| format!("release cell branch {name}: {err}"))?;
+            self.builder.position_at_end(taken);
+            self.builder
+                .build_return(None)
+                .map_err(|err| format!("release cell taken return {name}: {err}"))?;
+            self.builder.position_at_end(release_cell);
+        }
+        self.emit_release_body(release, &step, local, value, &name)?;
+        if owns_cell {
+            let size = self.release_cell_size(&step)?;
+            self.builder
+                .build_call(self.rt.ynz_free, &[value.into(), size.into()], "")
+                .map_err(|err| format!("release cell free {name}: {err}"))?;
+        }
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("release return {name}: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
+
+    /// Call the stored-value release `glue` on the value at `address`: the address itself for an
+    /// inline value, the pointer it holds otherwise.
+    fn call_stored_release(
+        &self,
+        glue: (PointerValue<'ctx>, bool),
+        address: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let (function, inline) = glue;
+        let argument = if inline {
+            address
+        } else {
+            self.builder
+                .build_load(self.ptr(), address, &format!("{site}_stored"))
+                .map_err(|err| format!("release load {site}: {err}"))?
+                .into_pointer_value()
+        };
+        let function_type = self.ctx.void_type().fn_type(&[self.ptr().into()], false);
+        self.builder
+            .build_indirect_call(function_type, function, &[argument.into()], "")
+            .map_err(|err| format!("release call {site}: {err}"))?;
+        Ok(())
+    }
+
+    /// The body of one release function: `step` applied to the value at `value`.
+    ///
+    /// Time: O(f) for a shape's f fields or a union's variants, O(1) otherwise  Space: O(1)
+    fn emit_release_body(
+        &self,
+        function: FunctionValue<'ctx>,
+        step: &ReleaseStep,
+        local: bool,
+        value: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let null = self.ptr().const_null();
+        match step {
+            ReleaseStep::String => {
+                self.builder
+                    .build_call(self.rt.ynz_string_release, &[value.into()], "")
+                    .map_err(|err| format!("release string {site}: {err}"))?;
+            }
+            ReleaseStep::Array { elem } => {
+                let (glue, inline) = self.element_release_arguments(elem)?;
+                self.builder
+                    .build_call(
+                        self.rt.ynz_array_release,
+                        &[
+                            value.into(),
+                            glue.into(),
+                            self.i32().const_int(inline as u64, false).into(),
+                        ],
+                        "",
+                    )
+                    .map_err(|err| format!("release array {site}: {err}"))?;
+            }
+            ReleaseStep::Map {
+                key,
+                value: value_ty,
+            } => {
+                let key_glue = match release_step(&self.resolve_type(key)) {
+                    ReleaseStep::String => self
+                        .rt
+                        .ynz_string_release
+                        .as_global_value()
+                        .as_pointer_value(),
+                    _ => null,
+                };
+                let (value_glue, value_inline) = self.element_release_arguments(value_ty)?;
+                self.builder
+                    .build_call(
+                        self.rt.ynz_map_release,
+                        &[
+                            value.into(),
+                            key_glue.into(),
+                            value_glue.into(),
+                            self.i32().const_int(value_inline as u64, false).into(),
+                        ],
+                        "",
+                    )
+                    .map_err(|err| format!("release map {site}: {err}"))?;
+            }
+            ReleaseStep::Fixed { elem, size } => {
+                self.emit_fixed_cell_releases(value, elem, *size, site)?
+            }
+            ReleaseStep::Shape { name } => {
+                let struct_ty = self
+                    .shape_types
+                    .get(name)
+                    .ok_or_else(|| format!("{site}: LLVM type for `{name}` not found"))?;
+                for (index, glue, inline) in self.shape_field_releases(name)? {
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(struct_ty, value, index, "release_field")
+                        .map_err(|err| format!("{site} release field gep: {err}"))?;
+                    self.call_stored_release((glue, inline), field_ptr, site)?;
+                }
+            }
+            ReleaseStep::Maybe { inner } => {
+                self.emit_maybe_payload_release(function, value, inner, local, site)?
+            }
+            ReleaseStep::Union { variants } => {
+                if !local {
+                    self.emit_union_slot_release(function, value, variants, site)?;
+                } else {
+                    self.emit_union_view_release(function, value, variants, site)?;
+                }
+            }
+            ReleaseStep::Channel => {
+                self.builder
+                    .build_call(self.rt.ynz_channel_free, &[value.into()], "")
+                    .map_err(|err| format!("release channel {site}: {err}"))?;
+            }
+            ReleaseStep::Handle => {
+                self.builder
+                    .build_call(self.rt.ynz_handle_free, &[value.into()], "")
+                    .map_err(|err| format!("release handle {site}: {err}"))?;
+            }
+            ReleaseStep::ErrorsCapable { inner } => {
+                self.emit_errors_capable_release(function, value, inner, site)?;
+            }
+            ReleaseStep::Nothing | ReleaseStep::Unsupported(_) => {
+                return Err(format!("internal: {site} has no release body"))
+            }
+        }
+        Ok(())
+    }
+
+    /// Release the item each of a `fixed` list's `size` i64 cells at `cells` points at, with the
+    /// element type's glue (a string, or a shape's heap cell and what it owns). O(size) time.
+    fn emit_fixed_cell_releases(
+        &self,
+        cells: PointerValue<'ctx>,
+        elem: &Type,
+        size: u64,
+        site: &str,
+    ) -> Result<(), String> {
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|block| block.get_parent())
+            .ok_or_else(|| format!("{site}: no function to walk the cells in"))?;
+        let glue = self
+            .stored_release(elem, ReleaseHome::FixedCell)?
+            .ok_or_else(|| format!("{site}: the items of this `fixed` list own nothing"))?;
+        let counter = self
+            .builder
+            .build_alloca(self.i64(), "release_fixed_i")
+            .map_err(|err| format!("{site} fixed counter alloca: {err}"))?;
+        self.builder
+            .build_store(counter, self.i64().const_zero())
+            .map_err(|err| format!("{site} fixed counter init: {err}"))?;
+        let head = self.ctx.append_basic_block(function, "fixed_head");
+        let body = self.ctx.append_basic_block(function, "fixed_body");
+        let done = self.ctx.append_basic_block(function, "fixed_done");
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|err| format!("{site} fixed br: {err}"))?;
+        self.builder.position_at_end(head);
+        let index = self
+            .builder
+            .build_load(self.i64(), counter, "fixed_index")
+            .map_err(|err| format!("{site} fixed index: {err}"))?
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULT,
+                index,
+                self.i64().const_int(size, false),
+                "fixed_more",
+            )
+            .map_err(|err| format!("{site} fixed cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(more, body, done)
+            .map_err(|err| format!("{site} fixed cond: {err}"))?;
+        self.builder.position_at_end(body);
+        // SAFETY: `index` < `size`, the number of i64 cells in the block.
+        let cell = unsafe {
+            self.builder
+                .build_gep(self.i64(), cells, &[index], "fixed_cell")
+                .map_err(|err| format!("{site} fixed gep: {err}"))?
+        };
+        // A cell no write has filled holds null: nothing to release.
+        let held = self
+            .builder
+            .build_load(self.i64(), cell, "fixed_held")
+            .map_err(|err| format!("{site} fixed held load: {err}"))?
+            .into_int_value();
+        let filled = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                held,
+                self.i64().const_zero(),
+                "fixed_filled",
+            )
+            .map_err(|err| format!("{site} fixed filled: {err}"))?;
+        let release_bb = self.ctx.append_basic_block(function, "fixed_release");
+        let step_bb = self.ctx.append_basic_block(function, "fixed_step");
+        self.builder
+            .build_conditional_branch(filled, release_bb, step_bb)
+            .map_err(|err| format!("{site} fixed filled branch: {err}"))?;
+        self.builder.position_at_end(release_bb);
+        self.call_stored_release(glue, cell, site)?;
+        self.builder
+            .build_unconditional_branch(step_bb)
+            .map_err(|err| format!("{site} fixed release join: {err}"))?;
+        self.builder.position_at_end(step_bb);
+        let next = self
+            .builder
+            .build_int_add(index, self.i64().const_int(1, false), "fixed_next")
+            .map_err(|err| format!("{site} fixed add: {err}"))?;
+        self.builder
+            .build_store(counter, next)
+            .map_err(|err| format!("{site} fixed counter store: {err}"))?;
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|err| format!("{site} fixed loop br: {err}"))?;
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// Release what a `maybe<inner>` envelope's payload owns when it is present. In the stored
+    /// forms: a string, the heap cell of a shape (its contents and the cell), or the 16-byte cell
+    /// of a `number`; anything else in a payload is not allocated by a copy of the envelope, so it
+    /// is not freed here (an array or map payload is the producer's, `MaybeCellClone` refuses to
+    /// copy one). In the `local` form (a binding's envelope, `ReleaseForm::Local`): a string, the
+    /// contents of a shape whose bytes sit in an entry-block slot of the binding's own (no cell
+    /// to free), nothing for a `number` (its 16 bytes are an entry-block slot too), and the array
+    /// or map the binding copied (`copy_maybe_container_payload`).
+    fn emit_maybe_payload_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        envelope: PointerValue<'ctx>,
+        inner: &Type,
+        local: bool,
+        site: &str,
+    ) -> Result<(), String> {
+        let inner = self.resolve_type(inner);
+        let payload_release: Option<PointerValue<'ctx>> = match release_step(&inner) {
+            ReleaseStep::String => Some(
+                self.rt
+                    .ynz_string_release
+                    .as_global_value()
+                    .as_pointer_value(),
+            ),
+            ReleaseStep::Shape { .. } => self
+                .release_fn(&inner, !local)?
+                .map(|glue| glue.as_global_value().as_pointer_value()),
+            ReleaseStep::Array { .. } | ReleaseStep::Map { .. } if local => self
+                .release_fn(&inner, false)?
+                .map(|glue| glue.as_global_value().as_pointer_value()),
+            // A local `maybe` of an envelope union owns the union slot its view names (a copy
+            // `maybe_to_owned` made, or the slot a call's result landed in): the variant it holds
+            // is released through the view, as a local union binding's is. A stored `maybe` of a
+            // union has no release here.
+            ReleaseStep::Union { .. } if local => self
+                .release_form_fn(&inner, ReleaseForm::Local)?
+                .map(|glue| glue.as_global_value().as_pointer_value()),
+            // A local `maybe` of a channel owns one counted reference (its holder took it or was
+            // handed it); a `maybe` stored in a shape field or a list does not release it here.
+            ReleaseStep::Channel if local => Some(
+                self.rt
+                    .ynz_channel_free
+                    .as_global_value()
+                    .as_pointer_value(),
+            ),
+            _ if !local
+                && matches!(inner, Type::Number { precision } if precision <= ynz_typeck::types::DECIMAL128_MAX_PRECISION) =>
+            {
+                Some(
+                    self.rt
+                        .ynz_number_cell_free
+                        .as_global_value()
+                        .as_pointer_value(),
+                )
+            }
+            _ => None,
+        };
+        let Some(glue) = payload_release else {
+            return Ok(());
+        };
+        let present_bb = self.ctx.append_basic_block(function, "maybe_present");
+        let done_bb = self.ctx.append_basic_block(function, "maybe_done");
+        let flag_ptr = self
+            .builder
+            .build_struct_gep(self.maybe_type(), envelope, 0, "maybe_flag_ptr")
+            .map_err(|err| format!("{site} maybe flag gep: {err}"))?;
+        let flag = self
+            .builder
+            .build_load(self.i64(), flag_ptr, "maybe_flag")
+            .map_err(|err| format!("{site} maybe flag load: {err}"))?
+            .into_int_value();
+        let present = self
+            .builder
+            .build_int_compare(IntPredicate::NE, flag, self.i64().const_zero(), "maybe_has")
+            .map_err(|err| format!("{site} maybe cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, present_bb, done_bb)
+            .map_err(|err| format!("{site} maybe cond: {err}"))?;
+        self.builder.position_at_end(present_bb);
+        let bits_ptr = self
+            .builder
+            .build_struct_gep(self.maybe_type(), envelope, 1, "maybe_bits_ptr")
+            .map_err(|err| format!("{site} maybe bits gep: {err}"))?;
+        self.call_stored_release((glue, false), bits_ptr, site)?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("{site} maybe br: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// Release the variant an envelope union SLOT `{tag, payload}` holds: a shape variant frees
+    /// the shape's fields (inline) or its box cell (a recursive union), a string, array or map
+    /// variant frees that value, every other variant and `none` own nothing.
+    fn emit_union_slot_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        slot: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<(), String> {
+        let layout = self.union_layout(variants)?;
+        let tag = self
+            .builder
+            .build_load(self.i64(), slot, "release_tag")
+            .map_err(|err| format!("{site} union tag load: {err}"))?
+            .into_int_value();
+        let payload_addr = self.union_payload_addr(slot, &layout, site)?;
+        let done = self.ctx.append_basic_block(function, "union_done");
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let mut bodies: Vec<(BasicBlock<'ctx>, Option<(PointerValue<'ctx>, bool)>)> = Vec::new();
+        for (index, variant) in variants.iter().enumerate() {
+            let release = match self.resolve_type(variant) {
+                Type::Shape { ref name } if layout.boxed => self
+                    .release_fn(&Type::Shape { name: name.clone() }, true)?
+                    .map(|glue| (glue.as_global_value().as_pointer_value(), false)),
+                Type::Shape { ref name } => self
+                    .release_fn(&Type::Shape { name: name.clone() }, false)?
+                    .map(|glue| (glue.as_global_value().as_pointer_value(), true)),
+                other => self.stored_release(&other, ReleaseHome::Field)?,
+            };
+            if release.is_some() {
+                let block = self
+                    .ctx
+                    .append_basic_block(function, &format!("union_variant{index}"));
+                cases.push((self.i64().const_int(index as u64, false), block));
+                bodies.push((block, release));
+            }
+        }
+        self.builder
+            .build_switch(tag, done, &cases)
+            .map_err(|err| format!("{site} union switch: {err}"))?;
+        for (block, release) in bodies {
+            self.builder.position_at_end(block);
+            if let Some(glue) = release {
+                self.call_stored_release(glue, payload_addr, site)?;
+            }
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("{site} union case br: {err}"))?;
+        }
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// Release the variant a union VIEW `{tag, data}` holds; a null view is `none`. The data word
+    /// is the value's bits: a string, array or map pointer is owned. An envelope union's view (a
+    /// local binding's, `ReleaseForm::Local`) may name a shape variant: its data word is the
+    /// address of the shape's bytes in the binding's slot (the fields are released, no cell is
+    /// freed), or, in a recursive (boxed) union, the box cell (its contents and the cell).
+    fn emit_union_view_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        view: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<(), String> {
+        let present_bb = self.ctx.append_basic_block(function, "view_present");
+        let done = self.ctx.append_basic_block(function, "view_done");
+        let is_none = self
+            .builder
+            .build_is_null(view, "view_is_none")
+            .map_err(|err| format!("{site} view null: {err}"))?;
+        self.builder
+            .build_conditional_branch(is_none, done, present_bb)
+            .map_err(|err| format!("{site} view cond: {err}"))?;
+        self.builder.position_at_end(present_bb);
+        let tag = self.union_tag_bits(view, site)?;
+        let payload = self.union_payload_ptr(view, site)?;
+        let envelope_variants = self
+            .envelope_union_variants(&Type::Union {
+                variants: variants.to_vec(),
+            })
+            .ok_or_else(|| format!("internal: {site} released a non-envelope union as a view"))?;
+        let boxed = self.union_layout(&envelope_variants)?.boxed;
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let mut bodies: Vec<(BasicBlock<'ctx>, PointerValue<'ctx>)> = Vec::new();
+        for (index, variant) in variants.iter().enumerate() {
+            let release = match self.resolve_type(variant) {
+                Type::Shape { name } => self
+                    .release_fn(&Type::Shape { name }, boxed)?
+                    .map(|glue| (glue.as_global_value().as_pointer_value(), boxed)),
+                other => self.stored_release(&other, ReleaseHome::Field)?,
+            };
+            if let Some((glue, _)) = release {
+                let block = self
+                    .ctx
+                    .append_basic_block(function, &format!("view_variant{index}"));
+                cases.push((self.i64().const_int(index as u64, false), block));
+                bodies.push((block, glue));
+            }
+        }
+        self.builder
+            .build_switch(tag, done, &cases)
+            .map_err(|err| format!("{site} view switch: {err}"))?;
+        let function_type = self.ctx.void_type().fn_type(&[self.ptr().into()], false);
+        for (block, glue) in bodies {
+            self.builder.position_at_end(block);
+            self.builder
+                .build_indirect_call(function_type, glue, &[payload.into()], "")
+                .map_err(|err| format!("{site} view release: {err}"))?;
+            self.builder
+                .build_unconditional_branch(done)
+                .map_err(|err| format!("{site} view case br: {err}"))?;
+        }
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// Release an errors-capable `{err, ok}` value: the error object when it holds one, else the
+    /// ok payload (any stored value: `stored_release`).
+    fn emit_errors_capable_release(
+        &self,
+        function: FunctionValue<'ctx>,
+        result: PointerValue<'ctx>,
+        inner: &Type,
+        site: &str,
+    ) -> Result<(), String> {
+        let result_ty = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let err_ptr = self
+            .builder
+            .build_struct_gep(result_ty, result, 0, "ec_err_ptr")
+            .map_err(|err| format!("{site} ec err gep: {err}"))?;
+        let err_bits = self
+            .builder
+            .build_load(self.i64(), err_ptr, "ec_err")
+            .map_err(|err| format!("{site} ec err load: {err}"))?
+            .into_int_value();
+        let failed_bb = self.ctx.append_basic_block(function, "ec_failed");
+        let ok_bb = self.ctx.append_basic_block(function, "ec_ok");
+        let done = self.ctx.append_basic_block(function, "ec_done");
+        let failed = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                err_bits,
+                self.i64().const_zero(),
+                "ec_failed",
+            )
+            .map_err(|err| format!("{site} ec cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(failed, failed_bb, ok_bb)
+            .map_err(|err| format!("{site} ec cond: {err}"))?;
+        self.builder.position_at_end(failed_bb);
+        let error_object = self
+            .builder
+            .build_int_to_ptr(err_bits, self.ptr(), "ec_error_object")
+            .map_err(|err| format!("{site} ec inttoptr: {err}"))?;
+        self.builder
+            .build_call(self.rt.ynz_error_drop, &[error_object.into()], "")
+            .map_err(|err| format!("{site} ec drop: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done)
+            .map_err(|err| format!("{site} ec br: {err}"))?;
+        self.builder.position_at_end(ok_bb);
+        // The ok word holds the payload as a stored value of its type (a string, array or map
+        // pointer, a shape's or `maybe`'s heap cell, a channel reference): the one dispatch
+        // every stored value releases through.
+        // An envelope union is the exception: the standard result pair holds a `{tag, data}` VIEW of it
+        // (`ec_union_result_to_standard`), not the slot a `Field` home would release in place, so the
+        // view form is called on the pointer the ok word holds.
+        let inner_resolved = self.resolve_type(inner);
+        // A `maybe` of an envelope union rides the result as the maybe pair over the union's view
+        // (`ec_standard_over_slot`), a stack pair and not a heap envelope cell, so it releases through
+        // the local form of the `maybe` (which reads the pair), never the cell form.
+        let view_form = self.envelope_union_variants(&inner_resolved).is_some()
+            || matches!(&inner_resolved, Type::Maybe { inner: maybe_inner }
+                if self.envelope_union_variants(&self.resolve_type(maybe_inner)).is_some());
+        // A `fixed` payload's ok word is the address of the list's cells (a block of the frame that
+        // received it): release the items in place, through the pointer.
+        let payload_release = if self.is_stored_fixed_field(&inner_resolved) {
+            self.release_fn(&inner_resolved, false)?
+                .map(|glue| (glue.as_global_value().as_pointer_value(), false))
+        } else if view_form {
+            self.release_form_fn(&inner_resolved, ReleaseForm::Local)?
+                .map(|glue| (glue.as_global_value().as_pointer_value(), false))
+        } else {
+            self.stored_release(inner, ReleaseHome::Field)?
+        };
+        if let Some(glue) = payload_release {
+            let ok_ptr = self
+                .builder
+                .build_struct_gep(result_ty, result, 1, "ec_ok_ptr")
+                .map_err(|err| format!("{site} ec ok gep: {err}"))?;
+            // A taken payload leaves its word null.
+            let ok_word = self
+                .builder
+                .build_load(self.i64(), ok_ptr, "ec_ok_word")
+                .map_err(|err| format!("{site} ec ok load: {err}"))?
+                .into_int_value();
+            let held = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    ok_word,
+                    self.i64().const_zero(),
+                    "ec_ok_held",
+                )
+                .map_err(|err| format!("{site} ec ok cmp: {err}"))?;
+            let release_bb = self.ctx.append_basic_block(function, "ec_ok_release");
+            self.builder
+                .build_conditional_branch(held, release_bb, done)
+                .map_err(|err| format!("{site} ec ok branch: {err}"))?;
+            self.builder.position_at_end(release_bb);
+            self.call_stored_release(glue, ok_ptr, site)?;
+        }
+        self.builder
+            .build_unconditional_branch(done)
+            .map_err(|err| format!("{site} ec ok br: {err}"))?;
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+}
+
+// ── Scope-exit release on the plain path (v0.3-M9 C7, slice 1) ──────────────────────────────
+//
+// ONE emitter, `Cg::emit_release_edge`, releases the heap locals of a plain (non-suspending)
+// function at every exit edge `TypedModule::release_plan` records: the end of a block, a `return`,
+// an errors auto-propagation. It reads the plan and calls the one release helper
+// (`Cg::release_fn`); it derives no transfer fact of its own (`authoritative-derivation.md`).
+// A state-machine resume function emits no scope release (C8's frame release).
+//
+// `Cg::plain_release_of` is the ONE place that says which plan entries are released, and every
+// entry it declines is named there. A move site (`MoveSite`) nulls the founder's slot at the take,
+// so a `ReleaseIfLive` entry is released exactly when its slot is non-null: `Cg::null_handed_founders`
+// at the identifier read of a value handed over, `Cg::take_string_slots` where the store seam takes
+// a string at its last use.
+
+/// A founder's slot a move site nulls: the local's slot, and in a resume function the frame slot
+/// that backs it across a suspension (a parameter's, or a crossing local's). A resume re-reads the
+/// frame slot into the local's slot, so a move that nulled only the local's slot would be undone
+/// at the next resume and the scope exit would release a value that was handed away.
+struct MoveSlot<'ctx> {
+    local: PointerValue<'ctx>,
+    frame_slot: Option<usize>,
+    /// Further consecutive frame slots a move nulls with `frame_slot`: an errors-capable local keeps
+    /// its error word and its ok word in two (`Cg::frame_words_of`), and a take of either must leave
+    /// the next resume no stale word to release.
+    extra_frame_slots: usize,
+    /// The moved flag of a region-homed local (`Cg::sm_region_flags`): a move sets it, so the
+    /// next resume re-derives a null local instead of the region pointer.
+    moved_flag: Option<usize>,
+}
+
+/// The cell of the list a hand-over loop is walking that the current row sits in
+/// (`TypedModule::loop_row_handovers`). Blanking it (`Cg::blank_handover_cell`) leaves the list's
+/// release nothing to free for that row.
+#[derive(Clone, Copy)]
+enum HandoverCell<'ctx> {
+    /// Item `index` of the `array` at `list`.
+    ArrayItem {
+        list: PointerValue<'ctx>,
+        index: inkwell::values::IntValue<'ctx>,
+    },
+    /// The 8-byte cell of a `fixed` list at `cell`.
+    FixedItem { cell: PointerValue<'ctx> },
+}
+
+/// One temporary of a statement: the entry-block slot that holds the value it builds (null until it
+/// is built) and the type its release is called with (`Cg::open_temporaries`).
+struct TemporarySlot<'ctx> {
+    /// The span of the expression that builds the temporary (`TypedModule::temporaries`).
+    span: (usize, usize),
+    slot: PointerValue<'ctx>,
+    /// The frame slot index when the temporary lives in the heap frame (a suspending statement's),
+    /// so its release nulls it: the next pass of a loop must not free it again.
+    frame_slot: Option<usize>,
+    ty: Type,
+    /// How the value in the slot sits: the form its release is called with.
+    form: ReleaseForm,
+    /// The frame region behind the slot when the temporary's bytes live in the heap frame (a
+    /// suspending statement's shape, `fixed` list, `maybe` envelope or union): `bind_temporary` moves
+    /// the value in and points the slot at it.
+    region: Option<TemporaryRegion>,
+}
+
+/// The frame region of a temporary of a suspending statement.
+struct TemporaryRegion {
+    /// The frame slot index the region starts at (the slot after the temporary's pointer slot).
+    first_slot: usize,
+    kind: TemporaryRegionKind,
+}
+
+/// A collection a plain `for` loop walks while its own body reassigns the iterated binding or
+/// field. The loop reads the collection it started with on every pass, so the assignment that
+/// replaces it must not release it: the loop takes it over (`Cg::hold_for_walking_loops`,
+/// `Cg::hold_for_walking_field_loops`) and releases it when it exits (`Cg::release_loop_held`).
+struct LoopHeld<'ctx> {
+    /// What holds `collection`: the iterated binding's slot, or the address of the iterated field
+    /// (`field_path` is set). An assignment to that place replaces `collection`.
+    slot: PointerValue<'ctx>,
+    /// The iterated field as `["holder", "rows"]` for `for (row in holder.rows)`; `None` for a
+    /// loop over a binding.
+    field_path: Option<Vec<String>>,
+    /// The collection the loop walks (a list, map or string pointer).
+    collection: PointerValue<'ctx>,
+    /// An `i1` entry-block slot, set once an assignment left `collection` for the loop to release.
+    taken_over: PointerValue<'ctx>,
+    ty: Type,
+}
+
+/// The value an assignment replaces (`Cg::begin_assign_release`).
+struct ReplacedValue<'ctx> {
+    /// The slot held a value (not null: nothing took it).
+    live: inkwell::values::IntValue<'ctx>,
+    /// What the release is called on: the old pointer, or a snapshot of a shape's old bytes.
+    held: PointerValue<'ctx>,
+    ty: Type,
+    name: String,
+}
+
+/// True for the plan kinds the plain emitter releases, and so nulls slots of. Exhaustive: a new
+/// kind fails to compile until it says what it does.
+fn plain_releases_kind(kind: ynz_typeck::release_plan::ReleaseKind) -> bool {
+    use ynz_typeck::release_plan::ReleaseKind;
+    match kind {
+        ReleaseKind::String
+        | ReleaseKind::Array
+        | ReleaseKind::Map
+        | ReleaseKind::Channel
+        | ReleaseKind::TaskHandle
+        | ReleaseKind::Shape
+        | ReleaseKind::NestedShape
+        | ReleaseKind::Maybe
+        | ReleaseKind::Union
+        | ReleaseKind::Fixed
+        | ReleaseKind::ErrorsCapable
+        // Whether an instance releases anything is `Cg::releases_in_instance`'s answer.
+        | ReleaseKind::TypeParameter => true,
+        // `dynamic` and a map entry never own a local slot.
+        ReleaseKind::Dynamic | ReleaseKind::MapEntry => false,
+    }
+}
+
+impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// The slot a binding's value is released from and a move nulls: an errors-capable local's
+    /// original slot (a read re-points `locals` at the success value), the outer slot of a union an
+    /// `is` arm narrows, else the local's slot.
+    fn release_slot(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        self.ec_original_slots
+            .get(name)
+            .copied()
+            .or_else(|| self.reload_slot(name))
+    }
+
+    /// True when `expr` reads a value typeck knows only as a type parameter `T` and says its store
+    /// takes by move (`TypedModule::heap_moves`). Typeck judged that store once, for the generic
+    /// body, as the move it is for any heap type (`give value` stored into `held` hands `value`
+    /// over and `value` is `Omitted(Moved)`), so an instance whose `T` is a string takes the
+    /// string too: a copy would leave `value` unreleased, and the string record
+    /// (`string_moves`) holds only reads typed `string` in the body.
+    ///
+    /// O(1) time.
+    fn is_type_parameter_move(&self, expr: &Expr) -> bool {
+        let span = expr.span();
+        matches!(
+            self.typed.expr_types.get(&(span.start, span.end)),
+            Some(Type::TypeParam { .. })
+        ) && self.typed.heap_moves.contains(span.start, span.end)
+    }
+
+    /// True when the plain emitter releases a binding of `kind` whose slot holds `held` in this
+    /// function (one instance of a generic function, or a plain one). A `TypeParameter` binding
+    /// releases only when its instance type owns heap: `T` = `int` has no pointer in its slot, so
+    /// nulling or releasing it would destroy the value.
+    ///
+    /// O(size of the type) time.
+    fn releases_in_instance(
+        &self,
+        kind: ynz_typeck::release_plan::ReleaseKind,
+        held: &Type,
+    ) -> bool {
+        if !plain_releases_kind(kind) {
+            return false;
+        }
+        // A resume function releases exactly the kinds that keep their bytes across a suspension
+        // (`ReleaseKind::has_frame_backing`), the kinds the crossing set reads: a string, array,
+        // map, channel and handle are a pointer in a frame slot, a shape, nested shape, union,
+        // `maybe` and `fixed` list live in a frame region, and an errors-capable local keeps its two words
+        // in frame slots. A type-parameter value never reaches a resume function: a generic function
+        // is never a state machine.
+        if self.sm_frame_ptr.is_some() && !kind.has_frame_backing() {
+            return false;
+        }
+        kind != ynz_typeck::release_plan::ReleaseKind::TypeParameter
+            || release_step(&self.resolve_type(held)) != ReleaseStep::Nothing
+    }
+
+    /// The slots of the founders a read at `span` takes a value out of for `cause`, in a plain
+    /// function or a resume function. A founder whose kind the emitter does not release has no slot
+    /// nulled. A founder with no slot is an internal error: nulling the wrong slot, or none, is a double free.
+    ///
+    /// O(founders at the span) time.
+    fn founder_slots_at(
+        &self,
+        span: &ynz_diagnostics::SourceSpan,
+        cause: ynz_typeck::release_plan::MoveCause,
+    ) -> Result<Vec<MoveSlot<'ctx>>, String> {
+        let mut slots = Vec::new();
+        for site in self.typed.release_plan.move_site(span) {
+            let name = site.founder_codegen_name.as_str();
+            if site.cause != cause
+                || !self.releases_in_instance(site.kind, &site.held)
+                || self.soa_bindings.contains_key(name)
+            {
+                continue;
+            }
+            let slot = self.release_slot(name).ok_or_else(|| {
+                format!(
+                    "internal: the read at {}..{} takes a value out of `{name}`, which has no slot",
+                    span.start, span.end
+                )
+            })?;
+            slots.push(MoveSlot {
+                local: slot,
+                frame_slot: self.frame_slot_of(name),
+                extra_frame_slots: self.frame_words_of(name) - 1,
+                moved_flag: self.region_flag_of(name),
+            });
+        }
+        Ok(slots)
+    }
+
+    /// An assignment replaces the value in `slot` (`assign.codegen_name`): load it, note whether it
+    /// is live (a take nulls a slot), and for a flat shape snapshot its bytes first, because the
+    /// shape's per-site region is reused by the new value's copy. `None` where the emitter does
+    /// not release the binding (a kind a resume function leaves to slice 4, an errors-capable
+    /// local, an SoA array). In a resume function the new value reaches the frame slot through the
+    /// statement's flush (`collect_crossing_writes`), as any assignment to a crossing local.
+    ///
+    /// O(1) time to emit; the snapshot is one struct-sized copy at run time (shape only).
+    fn begin_assign_release(
+        &self,
+        assign: &ynz_typeck::release_plan::AssignRelease,
+        slot: PointerValue<'ctx>,
+    ) -> Result<Option<ReplacedValue<'ctx>>, String> {
+        let name = assign.codegen_name.as_str();
+        // An errors-capable local is released through its original slot (a read re-points its slot at
+        // the success value). A plain function releases the old result in `assign_errors_capable`;
+        // a resume function snapshots the old words here and releases them after the store, and the
+        // statement's flush carries the new words to the frame.
+        if assign.kind == ynz_typeck::release_plan::ReleaseKind::ErrorsCapable {
+            if self.sm_frame_ptr.is_none() {
+                return Ok(None);
+            }
+            return self.begin_assign_release_errors_capable(assign);
+        }
+        if !self.releases_in_instance(assign.kind, &assign.held)
+            || self.soa_bindings.contains_key(name)
+        {
+            return Ok(None);
+        }
+        let resolved = self.resolve_type(&assign.held);
+        let old = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_old"))
+            .map_err(|err| format!("assign old load {name}: {err}"))?
+            .into_pointer_value();
+        let live = self
+            .builder
+            .build_is_not_null(old, &format!("{name}_old_live"))
+            .map_err(|err| format!("assign old null check {name}: {err}"))?;
+        let held = match &resolved {
+            Type::Shape { name: shape_name } => {
+                let struct_ty = self.shape_types.get(shape_name).ok_or_else(|| {
+                    format!("assign release: LLVM type for `{shape_name}` missing")
+                })?;
+                let snapshot =
+                    self.alloca_in_entry_llvm(struct_ty, &format!("{name}_old_snapshot"))?;
+                let size = self.shape_abi_size_const(shape_name, "assign release")?;
+                let copy_bb = self.append_block(&format!("{name}_old_snapshot_copy"));
+                let done_bb = self.append_block(&format!("{name}_old_snapshot_done"));
+                self.builder
+                    .build_conditional_branch(live, copy_bb, done_bb)
+                    .map_err(|err| format!("assign snapshot branch {name}: {err}"))?;
+                self.builder.position_at_end(copy_bb);
+                self.builder
+                    .build_memcpy(snapshot, 1, old, 1, size)
+                    .map_err(|err| format!("assign snapshot copy {name}: {err}"))?;
+                self.builder
+                    .build_unconditional_branch(done_bb)
+                    .map_err(|err| format!("assign snapshot join {name}: {err}"))?;
+                self.builder.position_at_end(done_bb);
+                snapshot
+            }
+            Type::Maybe { inner } => self.snapshot_old_maybe(old, live, inner, name)?,
+            Type::Union { variants } => self.snapshot_old_union(old, live, variants, name)?,
+            Type::BuiltinFixed {
+                size: FixedLength::Known(size),
+                ..
+            } => {
+                let snapshot = self.alloca_in_entry_llvm(
+                    self.i64().array_type(*size as u32),
+                    &format!("{name}_old_cells"),
+                )?;
+                let copy_bb = self.append_block(&format!("{name}_old_cells_copy"));
+                let done_bb = self.append_block(&format!("{name}_old_cells_done"));
+                self.builder
+                    .build_conditional_branch(live, copy_bb, done_bb)
+                    .map_err(|err| format!("assign fixed snapshot branch {name}: {err}"))?;
+                self.builder.position_at_end(copy_bb);
+                self.builder
+                    .build_memcpy(
+                        snapshot,
+                        8,
+                        old,
+                        8,
+                        self.i64().const_int(*size as u64 * 8, false),
+                    )
+                    .map_err(|err| format!("assign fixed snapshot copy {name}: {err}"))?;
+                self.builder
+                    .build_unconditional_branch(done_bb)
+                    .map_err(|err| format!("assign fixed snapshot join {name}: {err}"))?;
+                self.builder.position_at_end(done_bb);
+                snapshot
+            }
+            _ => old,
+        };
+        Ok(Some(ReplacedValue {
+            live,
+            held,
+            ty: resolved,
+            name: name.to_string(),
+        }))
+    }
+
+    /// `begin_assign_release` for an errors-capable local of a resume function: the old result's two
+    /// words, copied before the new result takes the binding's slot. `None` for a local with no original
+    /// slot (a binding the emitter does not release).
+    ///
+    /// O(1) time to emit; one 16-byte copy at run time.
+    fn begin_assign_release_errors_capable(
+        &self,
+        assign: &ynz_typeck::release_plan::AssignRelease,
+    ) -> Result<Option<ReplacedValue<'ctx>>, String> {
+        let name = assign.codegen_name.as_str();
+        let Some(original) = self.ec_original_slots.get(name).copied() else {
+            return Ok(None);
+        };
+        let result_ty = errors_result_type(self.ctx);
+        let old = self
+            .builder
+            .build_load(self.ptr(), original, &format!("{name}_old_result"))
+            .map_err(|err| format!("assign ec old load {name}: {err}"))?
+            .into_pointer_value();
+        let live = self
+            .builder
+            .build_is_not_null(old, &format!("{name}_old_result_live"))
+            .map_err(|err| format!("assign ec old null check {name}: {err}"))?;
+        let snapshot = self.alloca_in_entry_llvm(result_ty, &format!("{name}_old_result_words"))?;
+        let copy_bb = self.append_block(&format!("{name}_old_result_copy"));
+        let copied_bb = self.append_block(&format!("{name}_old_result_copied"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, copied_bb)
+            .map_err(|err| format!("assign ec snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        self.builder
+            .build_memcpy(snapshot, 8, old, 8, self.i64().const_int(16, false))
+            .map_err(|err| format!("assign ec snapshot copy {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(copied_bb)
+            .map_err(|err| format!("assign ec snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(copied_bb);
+        Ok(Some(ReplacedValue {
+            live,
+            held: snapshot,
+            ty: self.resolve_type(&assign.held),
+            name: name.to_string(),
+        }))
+    }
+
+    /// A copy of the inline storage of a local `maybe` the assignment replaces: the envelope's
+    /// two words and, for a shape payload, the payload's bytes (the new value's copy reuses both
+    /// entry-block slots when the assignment sits in a loop). Written inside the `live` branch;
+    /// the release that reads it is behind the same `live` flag.
+    ///
+    /// O(1) time to emit; one envelope and one shape-sized copy at run time.
+    fn snapshot_old_maybe(
+        &self,
+        old: PointerValue<'ctx>,
+        live: inkwell::values::IntValue<'ctx>,
+        inner: &Type,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let snapshot = self.alloca_in_entry_llvm(self.maybe_type(), &format!("{name}_old_env"))?;
+        let payload_shape = match self.resolve_type(inner) {
+            Type::Shape { name: shape_name } => Some(shape_name),
+            _ => None,
+        };
+        let payload_snapshot = match &payload_shape {
+            Some(shape_name) => {
+                let struct_ty = self.shape_types.get(shape_name).ok_or_else(|| {
+                    format!("assign release: LLVM type for `{shape_name}` missing")
+                })?;
+                Some(self.alloca_in_entry_llvm(struct_ty, &format!("{name}_old_payload"))?)
+            }
+            None => None,
+        };
+        let copy_bb = self.append_block(&format!("{name}_old_env_copy"));
+        let done_bb = self.append_block(&format!("{name}_old_env_done"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, done_bb)
+            .map_err(|err| format!("assign maybe snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let (flag, bits) = self.load_maybe_env_pair(old, &format!("{name}_old"))?;
+        let flag_slot = self
+            .builder
+            .build_struct_gep(self.maybe_type(), snapshot, 0, &format!("{name}_old_flag"))
+            .map_err(|err| format!("assign maybe snapshot flag gep {name}: {err}"))?;
+        self.builder
+            .build_store(flag_slot, flag)
+            .map_err(|err| format!("assign maybe snapshot flag {name}: {err}"))?;
+        let bits_slot = self
+            .builder
+            .build_struct_gep(self.maybe_type(), snapshot, 1, &format!("{name}_old_bits"))
+            .map_err(|err| format!("assign maybe snapshot bits gep {name}: {err}"))?;
+        self.builder
+            .build_store(bits_slot, bits)
+            .map_err(|err| format!("assign maybe snapshot bits {name}: {err}"))?;
+        if let (Some(shape_name), Some(payload_snapshot)) = (&payload_shape, payload_snapshot) {
+            let has = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    flag,
+                    self.i64().const_zero(),
+                    &format!("{name}_old_has"),
+                )
+                .map_err(|err| format!("assign maybe snapshot has {name}: {err}"))?;
+            let payload_bb = self.append_block(&format!("{name}_old_payload_copy"));
+            self.builder
+                .build_conditional_branch(has, payload_bb, done_bb)
+                .map_err(|err| format!("assign maybe snapshot payload branch {name}: {err}"))?;
+            self.builder.position_at_end(payload_bb);
+            let source = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), &format!("{name}_old_payload_src"))
+                .map_err(|err| format!("assign maybe snapshot payload cast {name}: {err}"))?;
+            let size = self.shape_abi_size_const(shape_name, "assign release")?;
+            self.builder
+                .build_memcpy(payload_snapshot, 1, source, 1, size)
+                .map_err(|err| format!("assign maybe snapshot payload copy {name}: {err}"))?;
+            let repointed = self
+                .builder
+                .build_ptr_to_int(payload_snapshot, self.i64(), &format!("{name}_old_repoint"))
+                .map_err(|err| format!("assign maybe snapshot repoint {name}: {err}"))?;
+            self.builder
+                .build_store(bits_slot, repointed)
+                .map_err(|err| format!("assign maybe snapshot repoint store {name}: {err}"))?;
+        }
+        // An envelope union payload sits in the local's region as a view and a slot, both of which
+        // the new value's copy overwrites: snapshot the view and the slot's inline payload too.
+        if let Some(variants) = self.envelope_union_variants(&self.resolve_type(inner)) {
+            let has = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    flag,
+                    self.i64().const_zero(),
+                    &format!("{name}_old_has_union"),
+                )
+                .map_err(|err| format!("assign maybe snapshot has {name}: {err}"))?;
+            let union_bb = self.append_block(&format!("{name}_old_union_snapshot"));
+            let after_bb = self.append_block(&format!("{name}_old_union_snapshotted"));
+            self.builder
+                .build_conditional_branch(has, union_bb, after_bb)
+                .map_err(|err| format!("assign maybe union snapshot branch {name}: {err}"))?;
+            self.builder.position_at_end(union_bb);
+            let view = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), &format!("{name}_old_union_view"))
+                .map_err(|err| format!("assign maybe union view cast {name}: {err}"))?;
+            let snapshot_view = self.snapshot_old_union(
+                view,
+                self.ctx.bool_type().const_int(1, false),
+                &variants,
+                &format!("{name}_old_maybe"),
+            )?;
+            let repointed = self
+                .builder
+                .build_ptr_to_int(snapshot_view, self.i64(), &format!("{name}_old_union_bits"))
+                .map_err(|err| format!("assign maybe union repoint {name}: {err}"))?;
+            self.builder
+                .build_store(bits_slot, repointed)
+                .map_err(|err| format!("assign maybe union repoint store {name}: {err}"))?;
+            self.builder
+                .build_unconditional_branch(after_bb)
+                .map_err(|err| format!("assign maybe union snapshot join {name}: {err}"))?;
+            self.builder.position_at_end(after_bb);
+        }
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("assign maybe snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(snapshot)
+    }
+
+    /// A copy of the union view a local holds, for the assignment that replaces it: the view's
+    /// two words and, for a shape variant that sits inline in the binding's slot (an unboxed
+    /// envelope union), the slot's payload bytes. The slot is reused by the new value's copy.
+    ///
+    /// O(1) time to emit; one view and one payload-sized copy at run time.
+    fn snapshot_old_union(
+        &self,
+        old: PointerValue<'ctx>,
+        live: inkwell::values::IntValue<'ctx>,
+        variants: &[Type],
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let view_ty = self.union_envelope_type();
+        let snapshot = self.alloca_in_entry_llvm(view_ty, &format!("{name}_old_view"))?;
+        let inline_payload = match self.envelope_union_variants(&Type::Union {
+            variants: variants.to_vec(),
+        }) {
+            Some(envelope_variants) => {
+                let layout = self.union_layout(&envelope_variants)?;
+                if layout.boxed {
+                    None
+                } else {
+                    Some(layout)
+                }
+            }
+            None => None,
+        };
+        let payload_snapshot = match &inline_payload {
+            Some(layout) => Some(self.alloca_in_entry_llvm(
+                self.ctx.i8_type().array_type(layout.payload_size as u32),
+                &format!("{name}_old_union_payload"),
+            )?),
+            None => None,
+        };
+        let copy_bb = self.append_block(&format!("{name}_old_view_copy"));
+        let done_bb = self.append_block(&format!("{name}_old_view_done"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, done_bb)
+            .map_err(|err| format!("assign union snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let tag = self.union_tag_bits(old, &format!("{name}_old"))?;
+        let data = self.union_data_bits(old, &format!("{name}_old"))?;
+        let tag_slot = self
+            .builder
+            .build_struct_gep(view_ty, snapshot, 0, &format!("{name}_old_tag"))
+            .map_err(|err| format!("assign union snapshot tag gep {name}: {err}"))?;
+        self.builder
+            .build_store(tag_slot, tag)
+            .map_err(|err| format!("assign union snapshot tag {name}: {err}"))?;
+        let data_slot = self
+            .builder
+            .build_struct_gep(view_ty, snapshot, 1, &format!("{name}_old_data"))
+            .map_err(|err| format!("assign union snapshot data gep {name}: {err}"))?;
+        self.builder
+            .build_store(data_slot, data)
+            .map_err(|err| format!("assign union snapshot data {name}: {err}"))?;
+        if let (Some(layout), Some(payload_snapshot)) = (&inline_payload, payload_snapshot) {
+            let mut is_shape = self.ctx.bool_type().const_zero();
+            for (index, _) in &layout.shape_variants {
+                let is_this = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        self.i64().const_int(*index, false),
+                        &format!("{name}_old_is_shape{index}"),
+                    )
+                    .map_err(|err| format!("assign union snapshot compare {name}: {err}"))?;
+                is_shape = self
+                    .builder
+                    .build_or(is_shape, is_this, &format!("{name}_old_is_shape"))
+                    .map_err(|err| format!("assign union snapshot or {name}: {err}"))?;
+            }
+            let payload_bb = self.append_block(&format!("{name}_old_union_payload_copy"));
+            self.builder
+                .build_conditional_branch(is_shape, payload_bb, done_bb)
+                .map_err(|err| format!("assign union snapshot payload branch {name}: {err}"))?;
+            self.builder.position_at_end(payload_bb);
+            let source = self
+                .builder
+                .build_int_to_ptr(data, self.ptr(), &format!("{name}_old_union_src"))
+                .map_err(|err| format!("assign union snapshot payload cast {name}: {err}"))?;
+            self.builder
+                .build_memcpy(
+                    payload_snapshot,
+                    1,
+                    source,
+                    1,
+                    self.i64().const_int(layout.payload_size, false),
+                )
+                .map_err(|err| format!("assign union snapshot payload copy {name}: {err}"))?;
+            let repointed = self
+                .builder
+                .build_ptr_to_int(
+                    payload_snapshot,
+                    self.i64(),
+                    &format!("{name}_old_union_repoint"),
+                )
+                .map_err(|err| format!("assign union snapshot repoint {name}: {err}"))?;
+            self.builder
+                .build_store(data_slot, repointed)
+                .map_err(|err| format!("assign union snapshot repoint store {name}: {err}"))?;
+        }
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("assign union snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(snapshot)
+    }
+
+    /// Release the value `begin_assign_release` found in the slot, if it was live, after the new
+    /// value is stored.
+    fn finish_assign_release(&self, replaced: &ReplacedValue<'ctx>) -> Result<(), String> {
+        let Some(glue) = self.local_release_fn(&replaced.ty)? else {
+            return Ok(());
+        };
+        let name = replaced.name.as_str();
+        let release_bb = self.append_block(&format!("{name}_old_release"));
+        let done_bb = self.append_block(&format!("{name}_old_released"));
+        self.builder
+            .build_conditional_branch(replaced.live, release_bb, done_bb)
+            .map_err(|err| format!("assign release branch {name}: {err}"))?;
+        self.builder.position_at_end(release_bb);
+        self.builder
+            .build_call(glue, &[replaced.held.into()], "")
+            .map_err(|err| format!("assign release call {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("assign release join {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// `name = value` where `name` holds an errors-capable result: the old result is released and
+    /// the new one is bound. The new result is copied into a region of this assignment's own
+    /// (the call's result slot is per call site, so a loop's next call would overwrite what an
+    /// earlier pass bound), the old words are snapshotted before that copy, and the result goes
+    /// into the binding's original slot, the one its scope exit releases from (a narrowing read
+    /// re-points `locals` at a slot of the inner type). Returns after the old result's release.
+    /// A taken ok word is null and releases nothing.
+    ///
+    /// O(1) time to emit; at run time one 16-byte copy plus the release of the old result.
+    fn assign_errors_capable(
+        &self,
+        name: &str,
+        assign_slot: PointerValue<'ctx>,
+        new_result: PointerValue<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        let original = self
+            .ec_original_slots
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("internal: `{name}` holds no errors-capable result slot"))?;
+        let result_ty = errors_result_type(self.ctx);
+        let old = self
+            .builder
+            .build_load(self.ptr(), original, &format!("{name}_old_result"))
+            .map_err(|err| format!("assign ec old load {name}: {err}"))?
+            .into_pointer_value();
+        let live = self
+            .builder
+            .build_is_not_null(old, &format!("{name}_old_result_live"))
+            .map_err(|err| format!("assign ec old null check {name}: {err}"))?;
+        let snapshot = self.alloca_in_entry_llvm(result_ty, &format!("{name}_old_result_words"))?;
+        let copy_bb = self.append_block(&format!("{name}_old_result_copy"));
+        let copied_bb = self.append_block(&format!("{name}_old_result_copied"));
+        self.builder
+            .build_conditional_branch(live, copy_bb, copied_bb)
+            .map_err(|err| format!("assign ec snapshot branch {name}: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let words = self.i64().const_int(16, false);
+        self.builder
+            .build_memcpy(snapshot, 8, old, 8, words)
+            .map_err(|err| format!("assign ec snapshot copy {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(copied_bb)
+            .map_err(|err| format!("assign ec snapshot join {name}: {err}"))?;
+        self.builder.position_at_end(copied_bb);
+        let owned = self.alloca_in_entry_llvm(result_ty, &format!("{name}_assigned_result"))?;
+        self.builder
+            .build_memcpy(owned, 8, new_result, 8, words)
+            .map_err(|err| format!("assign ec own copy {name}: {err}"))?;
+        self.builder
+            .build_store(original, owned)
+            .map_err(|err| format!("assign ec store original {name}: {err}"))?;
+        if assign_slot != original {
+            self.builder
+                .build_store(assign_slot, owned)
+                .map_err(|err| format!("assign ec store slot {name}: {err}"))?;
+        }
+        self.finish_assign_release(&ReplacedValue {
+            live,
+            held: snapshot,
+            ty: self.resolve_type(ty),
+            name: name.to_string(),
+        })
+    }
+
+    /// Store null into each of `slots`: the founder no longer holds what was taken.
+    fn null_slots(&self, slots: &[MoveSlot<'ctx>]) -> Result<(), String> {
+        for slot in slots {
+            self.builder
+                .build_store(slot.local, self.ptr().const_null())
+                .map_err(|err| format!("null a taken slot: {err}"))?;
+            self.null_frame_slot(slot.frame_slot)?;
+            if let Some(first) = slot.frame_slot {
+                for offset in 1..=slot.extra_frame_slots {
+                    self.null_frame_slot(Some(first + offset))?;
+                }
+            }
+            self.set_moved_flag(slot.moved_flag, 1)?;
+        }
+        Ok(())
+    }
+
+    /// The frame slot index that backs the binding `name` across a suspension in a resume
+    /// function: its parameter index, or its crossing slot. `None` for a local that never leaves
+    /// one resume invocation, and in a plain function.
+    ///
+    /// O(parameters + crossing locals) time.
+    fn frame_slot_of(&self, name: &str) -> Option<usize> {
+        self.sm_frame_ptr?;
+        if self.sm_region_flags.contains_key(name) {
+            return None;
+        }
+        if let Some(index) = self.sm_param_names.iter().position(|param| param == name) {
+            return Some(index);
+        }
+        let position = self
+            .sm_crossing_names
+            .as_ref()?
+            .iter()
+            .position(|crossing| crossing == name)?;
+        self.sm_crossing_slot_indices.get(position).copied()
+    }
+
+    /// How many consecutive frame slots hold the value of `name` that a take must null: two for an
+    /// errors-capable crossing local (the error word, then the ok word), else one.
+    ///
+    /// O(1) time.
+    fn frame_words_of(&self, name: &str) -> usize {
+        if self.sm_crossing_errors_capable_set.contains(name) {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// The moved-flag frame slot of the region-homed local `name` (`sm_region_flags`).
+    fn region_flag_of(&self, name: &str) -> Option<usize> {
+        self.sm_region_flags.get(name).copied()
+    }
+
+    /// Store `value` into the moved-flag slot `flag` (nothing for `None`): 1 after a move or a
+    /// release, 0 when the local is bound again.
+    fn set_moved_flag(&self, flag: Option<usize>, value: u64) -> Result<(), String> {
+        let (Some(index), Some(frame_ptr)) = (flag, self.sm_frame_ptr) else {
+            return Ok(());
+        };
+        state_machine::store_local_slot(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            index,
+            self.i64().const_int(value, false),
+        )
+    }
+
+    /// Store null into frame slot `frame_slot` of this resume function (nothing for `None`).
+    fn null_frame_slot(&self, frame_slot: Option<usize>) -> Result<(), String> {
+        let (Some(index), Some(frame_ptr)) = (frame_slot, self.sm_frame_ptr) else {
+            return Ok(());
+        };
+        state_machine::store_local_slot(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            index,
+            self.i64().const_zero(),
+        )
+    }
+
+    /// The identifier read at `span` hands its value over (a give, a send, a store, a spawn that
+    /// gives it): null the founder's slot, so a `ReleaseIfLive` release skips it.
+    fn null_handed_founders(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        let slots = self.founder_slots_at(span, ynz_typeck::release_plan::MoveCause::Handed)?;
+        self.null_slots(&slots)
+    }
+
+    /// `value` is a string read at its last use: remember the founders' slots, so that the store
+    /// seam nulls them if (and only if) it takes the string (`take_string_slots`).
+    fn note_string_last_use(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        span: &ynz_diagnostics::SourceSpan,
+    ) -> Result<(), String> {
+        let slots = self.founder_slots_at(span, ynz_typeck::release_plan::MoveCause::LastUse)?;
+        if !slots.is_empty() {
+            self.string_take_slots
+                .insert(value.as_value_ref() as usize, slots);
+        }
+        Ok(())
+    }
+
+    /// The store seam took the string `value` instead of copying it: null the slots it was read
+    /// from (`note_string_last_use`). Nothing for a string no binding held.
+    fn take_string_slots(&self, value: BasicValueEnum<'ctx>) -> Result<(), String> {
+        if let Some((ok_word, frame_ok_word)) = self
+            .string_take_ec_words
+            .get(&(value.as_value_ref() as usize))
+        {
+            self.builder
+                .build_store(*ok_word, self.i64().const_zero())
+                .map_err(|err| format!("null a taken ok word: {err}"))?;
+            self.null_frame_slot(*frame_ok_word)?;
+        }
+        if let Some(cell) = self.string_take_cells.get(&(value.as_value_ref() as usize)) {
+            self.blank_handover_cell(*cell)?;
+        }
+        match self.string_take_slots.get(&(value.as_value_ref() as usize)) {
+            Some(slots) => self.null_slots(slots),
+            None => Ok(()),
+        }
+    }
+
+    /// Blank the list cell a handed-over loop row was read from: zero it, so the release of the
+    /// list skips what its new holder owns (`ynz_array_blank_cell`; an all-zero cell is the blank
+    /// of every row type, proven by `v03_m9_c1q_blanked_cell_release`).
+    ///
+    /// O(elem_size) time at run time, O(1) memory.
+    fn blank_handover_cell(&self, cell: HandoverCell<'ctx>) -> Result<(), String> {
+        match cell {
+            HandoverCell::ArrayItem { list, index } => {
+                self.builder
+                    .build_call(
+                        self.rt.ynz_array_blank_cell,
+                        &[list.into(), index.into()],
+                        "",
+                    )
+                    .map_err(|err| format!("blank a handed-over list cell: {err}"))?;
+            }
+            HandoverCell::FixedItem { cell } => {
+                self.builder
+                    .build_store(cell, self.i64().const_zero())
+                    .map_err(|err| format!("blank a handed-over fixed cell: {err}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The read of `name` at `span` is one typeck recorded as the hand-over of a loop row
+    /// (`TypedModule::loop_row_handovers`); `loaded` is the row. A string row is taken only if the
+    /// store seam takes it (`take_string_slots` blanks the cell then, and a store that copies
+    /// leaves the cell, so the list still owns the string); any other row's store always takes it
+    /// (`heap_moves`), so its cell is blanked here. A read that is not recorded changes nothing.
+    ///
+    /// O(1) time.
+    fn take_handover_row(
+        &mut self,
+        name: &str,
+        span: &ynz_diagnostics::SourceSpan,
+        loaded: BasicValueEnum<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        if !self
+            .typed
+            .loop_row_handovers
+            .is_handover_store(span.start, span.end)
+        {
+            return Ok(());
+        }
+        let cell = *self.handover_rows.get(name).ok_or_else(|| {
+            format!("internal: `{name}` is recorded as a handed-over loop row, outside its loop")
+        })?;
+        if is_string_like(&self.resolve_type(ty)) {
+            let key = loaded.as_value_ref() as usize;
+            self.owned_string_values.insert(key);
+            self.string_take_cells.insert(key, cell);
+            return Ok(());
+        }
+        self.blank_handover_cell(cell)
+    }
+
+    /// What the plain emitter releases of one plan entry: its type and whether its slot is null-checked
+    /// first, or `None` for an entry this slice leaves unreleased (a leak, never an early or double
+    /// free). THE rule; every declined fate is named here.
+    ///
+    /// O(1) time.
+    fn plain_release_of(
+        &self,
+        entry: &ynz_typeck::release_plan::ReleaseEntry,
+    ) -> Result<Option<(Type, bool)>, String> {
+        use ynz_typeck::release_plan::{Fate, ReleaseKind};
+        let name = entry.codegen_name.as_str();
+        let (kind, only_if_live) = match entry.fate {
+            Fate::Omitted(_) => return Ok(None),
+            Fate::Release(kind) => (kind, false),
+            Fate::ReleaseIfLive(kind) => (kind, true),
+        };
+        if !self.releases_in_instance(kind, &entry.held) {
+            return Ok(None);
+        }
+        // The type the slot holds, as the plan records it (`ReleaseEntry::held`): a binding declared
+        // as a union with no shape variant holds its one heap variant's raw pointer.
+        let resolved = self.resolve_type(&entry.held);
+        let step = release_step(&resolved);
+        let kind_matches_type = matches!(
+            (kind, &step),
+            (ReleaseKind::String, ReleaseStep::String)
+                | (ReleaseKind::Array, ReleaseStep::Array { .. })
+                | (ReleaseKind::Map, ReleaseStep::Map { .. })
+                | (ReleaseKind::Channel, ReleaseStep::Channel)
+                | (ReleaseKind::TaskHandle, ReleaseStep::Handle)
+                | (
+                    ReleaseKind::Shape | ReleaseKind::NestedShape,
+                    ReleaseStep::Shape { .. }
+                )
+                | (ReleaseKind::Maybe, ReleaseStep::Maybe { .. })
+                | (ReleaseKind::Union, ReleaseStep::Union { .. })
+                | (ReleaseKind::Fixed, ReleaseStep::Fixed { .. })
+                | (
+                    ReleaseKind::ErrorsCapable,
+                    ReleaseStep::ErrorsCapable { .. }
+                )
+                // A type parameter's instance: any type that owns heap (`releases_in_instance` already
+                // declined an instance that owns none).
+                | (ReleaseKind::TypeParameter, _)
+        );
+        if !kind_matches_type {
+            return Err(format!(
+                "internal: the release plan lists `{name}` as {kind:?}, but its type is `{}`",
+                ynz_typeck::types::type_name(&resolved)
+            ));
+        }
+        Ok(Some((resolved, only_if_live)))
+    }
+
+    /// THE emitter of a scope exit on the plain path: for each entry of `entries` whose fate
+    /// releases (`plain_release_of`), release the binding's slot (`emit_slot_release`). A shape
+    /// local's slot holds the address of its entry-block region, so its release does not free a
+    /// cell (`owns_cell` false).
+    ///
+    /// O(entries) time to emit; at run time O(heap each entry owns).
+    fn emit_release_edge(
+        &self,
+        entries: &[ynz_typeck::release_plan::ReleaseEntry],
+        site: &str,
+    ) -> Result<(), String> {
+        self.emit_release_edge_with(entries, site, false)
+    }
+
+    /// `emit_release_edge`, with every release null-checked when `null_checked`: a task dropped
+    /// (C8 slice 6) may be parked in a statement that already took a value, so a fate that says
+    /// "not moved" is not enough there.
+    fn emit_release_edge_with(
+        &self,
+        entries: &[ynz_typeck::release_plan::ReleaseEntry],
+        site: &str,
+        null_checked: bool,
+    ) -> Result<(), String> {
+        for entry in entries {
+            let Some((ty, only_if_live)) = self.plain_release_of(entry)? else {
+                continue;
+            };
+            let only_if_live = only_if_live || null_checked;
+            let name = entry.codegen_name.as_str();
+            // An `is` arm re-points a narrowed union binding at its variant payload; the release
+            // reads the binding's own (outer) slot, which holds the view.
+            let slot = self
+                .release_slot(name)
+                .ok_or_else(|| format!("internal: release of `{name}` at {site}: no slot"))?;
+            // An admitted-SoA array holds its items in per-field segments, not in the layout the array
+            // release walks: it walks the segments instead.
+            if let Some(info) = self.soa_bindings.get(name) {
+                self.emit_soa_release(slot, info, only_if_live, name, site)?;
+                continue;
+            }
+            if self.ec_borrowed_ok.contains(name) {
+                self.emit_error_only_release(slot, only_if_live, name, site)?;
+                continue;
+            }
+            self.emit_slot_release(slot, &ty, ReleaseForm::Local, only_if_live, name, site)?;
+        }
+        Ok(())
+    }
+
+    /// The scope exit of an errors-capable local whose ok word the handle owns (`ec_borrowed_ok`): drop
+    /// the error object when the result failed, and nothing of the ok word.
+    ///
+    /// O(1) time to emit.
+    fn emit_error_only_release(
+        &self,
+        slot: PointerValue<'ctx>,
+        only_if_live: bool,
+        name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let result = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_borrowed_result"))
+            .map_err(|err| format!("borrowed result load {name}: {err}"))?
+            .into_pointer_value();
+        let check_bb = self.append_block(&format!("{site}_borrowed_check_{name}"));
+        let drop_bb = self.append_block(&format!("{site}_borrowed_drop_{name}"));
+        let done_bb = self.append_block(&format!("{site}_borrowed_done_{name}"));
+        if only_if_live {
+            let live = self
+                .builder
+                .build_is_not_null(result, &format!("{name}_borrowed_live"))
+                .map_err(|err| format!("borrowed null check {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(live, check_bb, done_bb)
+                .map_err(|err| format!("borrowed live branch {name}: {err}"))?;
+        } else {
+            self.builder
+                .build_unconditional_branch(check_bb)
+                .map_err(|err| format!("borrowed check branch {name}: {err}"))?;
+        }
+        self.builder.position_at_end(check_bb);
+        let err_gep = self
+            .builder
+            .build_struct_gep(
+                errors_result_type(self.ctx),
+                result,
+                0,
+                &format!("{name}_borrowed_err_gep"),
+            )
+            .map_err(|err| format!("borrowed err gep {name}: {err}"))?;
+        let err_bits = self
+            .builder
+            .build_load(self.i64(), err_gep, &format!("{name}_borrowed_err"))
+            .map_err(|err| format!("borrowed err load {name}: {err}"))?
+            .into_int_value();
+        let failed = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                err_bits,
+                self.i64().const_zero(),
+                &format!("{name}_borrowed_failed"),
+            )
+            .map_err(|err| format!("borrowed err cmp {name}: {err}"))?;
+        self.builder
+            .build_conditional_branch(failed, drop_bb, done_bb)
+            .map_err(|err| format!("borrowed drop branch {name}: {err}"))?;
+        self.builder.position_at_end(drop_bb);
+        let error_object = self
+            .builder
+            .build_int_to_ptr(
+                err_bits,
+                self.ptr(),
+                &format!("{name}_borrowed_error_object"),
+            )
+            .map_err(|err| format!("borrowed err inttoptr {name}: {err}"))?;
+        self.builder
+            .build_call(self.rt.ynz_error_drop, &[error_object.into()], "")
+            .map_err(|err| format!("borrowed err drop {name}: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("borrowed done branch {name}: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// Release an admitted-SoA array local: its items sit in per-field segments of ONE buffer, not
+    /// in the item layout `release_fn(array<Shape>)` walks. Each heap-owning field of each of the
+    /// `cap` items is released with the field glue every shape release uses
+    /// (`shape_field_releases`), then the header and buffer go with an item-blind
+    /// `ynz_array_release` (the array owns nothing else; `len == cap` for its whole life).
+    ///
+    /// O(cap · heap fields) time at run time, O(1) to emit.
+    fn emit_soa_release(
+        &self,
+        slot: PointerValue<'ctx>,
+        info: &SoaArrayInfo<'ctx>,
+        only_if_live: bool,
+        name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let arr = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_soa_release_value"))
+            .map_err(|err| format!("soa release load {name}: {err}"))?
+            .into_pointer_value();
+        let after = if only_if_live {
+            let release_bb = self.append_block(&format!("{site}_soa_release_{name}"));
+            let after_bb = self.append_block(&format!("{site}_soa_released_{name}"));
+            let live = self
+                .builder
+                .build_is_not_null(arr, &format!("{name}_soa_live"))
+                .map_err(|err| format!("soa release null check {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(live, release_bb, after_bb)
+                .map_err(|err| format!("soa release branch {name}: {err}"))?;
+            self.builder.position_at_end(release_bb);
+            Some(after_bb)
+        } else {
+            None
+        };
+        let field_releases = self.shape_field_releases(&info.shape_name)?;
+        if !field_releases.is_empty() {
+            let data = self.soa_data_ptr(arr, &format!("{name}_soa_release"))?;
+            let counter =
+                self.alloca_in_entry_llvm(self.i64(), &format!("{name}_soa_release_i"))?;
+            self.builder
+                .build_store(counter, self.i64().const_zero())
+                .map_err(|err| format!("soa release counter {name}: {err}"))?;
+            let head = self.append_block(&format!("{name}_soa_release_head"));
+            let body = self.append_block(&format!("{name}_soa_release_body"));
+            let done = self.append_block(&format!("{name}_soa_release_done"));
+            self.builder
+                .build_unconditional_branch(head)
+                .map_err(|err| format!("soa release br {name}: {err}"))?;
+            self.builder.position_at_end(head);
+            let index = self
+                .builder
+                .build_load(self.i64(), counter, &format!("{name}_soa_release_index"))
+                .map_err(|err| format!("soa release index {name}: {err}"))?
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::ULT,
+                    index,
+                    self.i64().const_int(info.cap, false),
+                    &format!("{name}_soa_release_more"),
+                )
+                .map_err(|err| format!("soa release cmp {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(more, body, done)
+                .map_err(|err| format!("soa release cond {name}: {err}"))?;
+            self.builder.position_at_end(body);
+            for (field_index, glue, inline) in field_releases {
+                let segment = info.segments.get(field_index as usize).ok_or_else(|| {
+                    format!(
+                        "soa release: shape `{}` has no segment for field {field_index}",
+                        info.shape_name
+                    )
+                })?;
+                let address =
+                    self.soa_field_addr(data, segment, index, &format!("{name}_soa_rel"))?;
+                self.call_stored_release((glue, inline), address, &format!("{name}_soa_rel"))?;
+            }
+            let next = self
+                .builder
+                .build_int_add(
+                    index,
+                    self.i64().const_int(1, false),
+                    &format!("{name}_soa_release_next"),
+                )
+                .map_err(|err| format!("soa release add {name}: {err}"))?;
+            self.builder
+                .build_store(counter, next)
+                .map_err(|err| format!("soa release store {name}: {err}"))?;
+            self.builder
+                .build_unconditional_branch(head)
+                .map_err(|err| format!("soa release loop {name}: {err}"))?;
+            self.builder.position_at_end(done);
+        }
+        self.builder
+            .build_call(
+                self.rt.ynz_array_release,
+                &[
+                    arr.into(),
+                    self.ptr().const_null().into(),
+                    self.i32().const_zero().into(),
+                ],
+                "",
+            )
+            .map_err(|err| format!("soa release free {name}: {err}"))?;
+        if let Some(after_bb) = after {
+            self.builder
+                .build_unconditional_branch(after_bb)
+                .map_err(|err| format!("soa release join {name}: {err}"))?;
+            self.builder.position_at_end(after_bb);
+        }
+        Ok(())
+    }
+
+    /// The variants of the envelope union a handle task returns (`-> Thing`, `-> Thing errors`,
+    /// `-> maybe<Thing>` or `-> maybe<Thing> errors`) and whether it is a `maybe` of it, `None` for any
+    /// other result type. All four ride the member frame's `Return` region, so one move and one
+    /// release serve them.
+    ///
+    /// Time: O(v)  Space: O(v)
+    fn handle_union_variants(&self, ret: &Type) -> Option<(Vec<Type>, bool)> {
+        let resolved = self.resolve_type(ret);
+        let success = match &resolved {
+            Type::ErrorsCapable { inner } => self.resolve_type(inner),
+            other => other.clone(),
+        };
+        self.ec_success_union(&success)
+    }
+
+    /// The type a call of the function `callee` returns, as its callers read it: the length typeck
+    /// worked out for a `fixed` return written without one, else the signature's (an imported
+    /// function writes its length: `FixedLengthMissingInExport`). O(1).
+    fn callee_result_type(&self, callee: &str) -> Result<Type, String> {
+        if let Some(worked_out) = self.typed.inferred_return_types.get(callee) {
+            return Ok(worked_out.clone());
+        }
+        self.sig_table
+            .fns
+            .get(callee)
+            .map(|signature| signature.ret.clone())
+            .or_else(|| {
+                self.imported_fns
+                    .get(callee)
+                    .map(|signature| signature.ret.clone())
+            })
+            .ok_or_else(|| format!("handle spawn: signature for `{callee}` not found"))
+    }
+
+    /// The element type and length of a background task's result when it is a plain `fixed` list
+    /// of known length, `None` for any other result. Such a result rides the moved cell a union
+    /// result rides (`HANDLE_RET_KIND_UNION`). O(1).
+    fn handle_fixed_result(&self, ret: &Type) -> Option<(Type, usize)> {
+        match self.resolve_type(ret) {
+            Type::BuiltinFixed {
+                elem,
+                size: FixedLength::Known(count),
+            } => Some((self.resolve_type(&elem), count)),
+            _ => None,
+        }
+    }
+
+    /// The bytes of the cell a background task's union or `fixed` result is moved into. O(v).
+    fn handle_cell_bytes(&self, ret: &Type) -> Result<u64, String> {
+        if let Some((elem, count)) = self.handle_fixed_result(ret) {
+            return Ok(count as u64 * self.fixed_cell_bytes(&elem));
+        }
+        let (variants, _) = self.handle_union_variants(ret).ok_or(
+            "internal: a handle cell for a result that is neither a union nor a fixed list",
+        )?;
+        Ok(self.union_layout(&variants)?.slot_size)
+    }
+
+    /// `handle_result_release_fn` for a `fixed` result nobody received: the completion's `ok` is the
+    /// cell the result was moved into; release the items its cells point at (a string, or a
+    /// shape's heap cell), then free the cell. Time: O(1) to emit  Space: O(1)
+    fn handle_fixed_release_fn(&self, ret: &Type) -> Result<FunctionValue<'ctx>, String> {
+        let resolved = self.resolve_type(ret);
+        let bytes = self.handle_cell_bytes(&resolved)?;
+        let name = format!("ynz_handle_result_release_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx
+                .void_type()
+                .fn_type(&[self.i64().into(), self.i64().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let items = self.release_fn(&resolved, false)?;
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        let release_bb = self.ctx.append_basic_block(release, "release");
+        let done_bb = self.ctx.append_basic_block(release, "done");
+        self.builder.position_at_end(entry);
+        let ok_bits = release
+            .get_nth_param(1)
+            .ok_or("handle fixed release: missing ok")?
+            .into_int_value();
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                ok_bits,
+                self.i64().const_zero(),
+                "completion_present",
+            )
+            .map_err(|err| format!("handle fixed release cmp: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, release_bb, done_bb)
+            .map_err(|err| format!("handle fixed release branch: {err}"))?;
+        self.builder.position_at_end(release_bb);
+        let cell = self
+            .builder
+            .build_int_to_ptr(ok_bits, self.ptr(), "completion_cell")
+            .map_err(|err| format!("handle fixed release cell: {err}"))?;
+        if let Some(glue) = items {
+            self.builder
+                .build_call(glue, &[cell.into()], "")
+                .map_err(|err| format!("handle fixed release items: {err}"))?;
+        }
+        self.builder
+            .build_call(
+                self.rt.ynz_free,
+                &[cell.into(), self.i64().const_int(bytes, false).into()],
+                "",
+            )
+            .map_err(|err| format!("handle fixed release free: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("handle fixed release join: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("handle fixed release return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(release)
+    }
+
+    /// The function `void(ptr slot, ptr err_out, ptr ok_out)` that moves a union result out of the
+    /// finished child's return slot into one cell of its own (`HANDLE_RET_KIND_UNION`): the
+    /// slot holds the address of the union's region in the child's frame, which dies right after
+    /// the completion is read. The cell is the completion's `ok`; a failed task has none (0). It is
+    /// a MOVE, one `memcpy` of the union slot (`union_layout`): the region owns the value's boxes
+    /// and the frame is never read again, so a deep copy (`union_persist_into` of an unmoved view)
+    /// would leave the originals with no owner.
+    ///
+    /// One function per result type. Time: O(1) to emit; O(slot size) at run time  Space: O(1)
+    fn handle_union_move_fn(&self, ret: &Type) -> Result<FunctionValue<'ctx>, String> {
+        let resolved = self.resolve_type(ret);
+        let slot_size = self.handle_cell_bytes(&resolved)?;
+        let name = format!("ynz_handle_move_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let move_fn = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(
+                &[self.ptr().into(), self.ptr().into(), self.ptr().into()],
+                false,
+            ),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(move_fn, "entry");
+        let move_bb = self.ctx.append_basic_block(move_fn, "move");
+        let done_bb = self.ctx.append_basic_block(move_fn, "done");
+        self.builder.position_at_end(entry);
+        let param = |index: u32| -> Result<PointerValue<'ctx>, String> {
+            Ok(move_fn
+                .get_nth_param(index)
+                .ok_or("handle union move: missing parameter")?
+                .into_pointer_value())
+        };
+        let (slot, err_out, ok_out) = (param(0)?, param(1)?, param(2)?);
+        let is_errors = matches!(resolved, Type::ErrorsCapable { .. });
+        let word = |offset: u64, label: &str| -> Result<inkwell::values::IntValue<'ctx>, String> {
+            // SAFETY: the return slot is 16 bytes (`FRAME_OFFSET_RETURN_SLOT`).
+            let address = unsafe {
+                self.builder
+                    .build_gep(
+                        self.ctx.i8_type(),
+                        slot,
+                        &[self.i64().const_int(offset, false)],
+                        label,
+                    )
+                    .map_err(|e| format!("handle union move gep {label}: {e}"))?
+            };
+            Ok(self
+                .builder
+                .build_load(self.i64(), address, label)
+                .map_err(|e| format!("handle union move load {label}: {e}"))?
+                .into_int_value())
+        };
+        let (err, region_bits) = if is_errors {
+            (word(0, "move_err")?, word(8, "move_region")?)
+        } else {
+            (self.i64().const_zero(), word(0, "move_region")?)
+        };
+        self.builder
+            .build_store(err_out, err)
+            .map_err(|e| format!("handle union move err store: {e}"))?;
+        self.builder
+            .build_store(ok_out, self.i64().const_zero())
+            .map_err(|e| format!("handle union move ok init: {e}"))?;
+        let succeeded = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err,
+                self.i64().const_zero(),
+                "move_succeeded",
+            )
+            .map_err(|e| format!("handle union move cmp: {e}"))?;
+        self.builder
+            .build_conditional_branch(succeeded, move_bb, done_bb)
+            .map_err(|e| format!("handle union move branch: {e}"))?;
+        self.builder.position_at_end(move_bb);
+        let cell = self.heap_cell(self.i64().const_int(slot_size, false), "handle_union")?;
+        let region = self
+            .builder
+            .build_int_to_ptr(region_bits, self.ptr(), "move_region_ptr")
+            .map_err(|e| format!("handle union move region: {e}"))?;
+        self.builder
+            .build_memcpy(cell, 1, region, 1, self.i64().const_int(slot_size, false))
+            .map_err(|e| format!("handle union move copy: {e}"))?;
+        let cell_bits = self
+            .builder
+            .build_ptr_to_int(cell, self.i64(), "move_cell_bits")
+            .map_err(|e| format!("handle union move cell bits: {e}"))?;
+        self.builder
+            .build_store(ok_out, cell_bits)
+            .map_err(|e| format!("handle union move ok store: {e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("handle union move join: {e}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_return(None)
+            .map_err(|e| format!("handle union move return: {e}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(move_fn)
+    }
+
+    /// `handle_result_release_fn` for a union result: the completion's `ok` is the cell
+    /// `handle_union_move_fn` moved the union into, released through the union's own release
+    /// (`release_fn` in its cell form: the variant's contents, then the cell); the error object
+    /// of a failed `errors` completion is dropped instead.
+    ///
+    /// Time: O(1) to emit  Space: O(1)
+    fn handle_union_release_fn(&self, ret: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let resolved = self.resolve_type(ret);
+        let (variants, _) = self
+            .handle_union_variants(&resolved)
+            .ok_or("internal: a union handle release for a result that is not a union")?;
+        let union_result = Type::Union { variants };
+        let Some(glue) = self.release_fn(&union_result, true)? else {
+            return Ok(None);
+        };
+        let name = format!("ynz_handle_result_release_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx
+                .void_type()
+                .fn_type(&[self.i64().into(), self.i64().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        let failed_bb = self.ctx.append_basic_block(release, "failed");
+        let ok_bb = self.ctx.append_basic_block(release, "ok");
+        let release_bb = self.ctx.append_basic_block(release, "release");
+        let done_bb = self.ctx.append_basic_block(release, "done");
+        self.builder.position_at_end(entry);
+        let error_bits = release
+            .get_nth_param(0)
+            .ok_or("handle union release: missing err")?
+            .into_int_value();
+        let ok_bits = release
+            .get_nth_param(1)
+            .ok_or("handle union release: missing ok")?
+            .into_int_value();
+        let failed = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                error_bits,
+                self.i64().const_zero(),
+                "completion_failed",
+            )
+            .map_err(|e| format!("handle union release cmp: {e}"))?;
+        self.builder
+            .build_conditional_branch(failed, failed_bb, ok_bb)
+            .map_err(|e| format!("handle union release branch: {e}"))?;
+        self.builder.position_at_end(failed_bb);
+        let error_object = self
+            .builder
+            .build_int_to_ptr(error_bits, self.ptr(), "completion_error")
+            .map_err(|e| format!("handle union release error: {e}"))?;
+        self.builder
+            .build_call(self.rt.ynz_error_drop, &[error_object.into()], "")
+            .map_err(|e| format!("handle union release error drop: {e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("handle union release failed join: {e}"))?;
+        self.builder.position_at_end(ok_bb);
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                ok_bits,
+                self.i64().const_zero(),
+                "completion_present",
+            )
+            .map_err(|e| format!("handle union release present: {e}"))?;
+        self.builder
+            .build_conditional_branch(present, release_bb, done_bb)
+            .map_err(|e| format!("handle union release ok branch: {e}"))?;
+        self.builder.position_at_end(release_bb);
+        let cell = self
+            .builder
+            .build_int_to_ptr(ok_bits, self.ptr(), "completion_cell")
+            .map_err(|e| format!("handle union release cell: {e}"))?;
+        self.builder
+            .build_call(glue, &[cell.into()], "")
+            .map_err(|e| format!("handle union release call: {e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("handle union release join: {e}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_return(None)
+            .map_err(|e| format!("handle union release return: {e}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
+
+    /// The function `void(i64 err, i64 ok)` that releases the heap a completion of a background task
+    /// owns, when nobody received it (`ynz_rt_spawn_handle`'s `result_release`): the completion
+    /// `(err, ok)` is what the task returned through its handle's outbox, so the release is the
+    /// receiver's own: a string, array or map word; a `maybe`'s counted cell; an errors-capable
+    /// result's error object and, on success, its ok payload. `None` for a result that owns no heap,
+    /// and for a number (its ok word points into the handle's own buffer, freed with the handle).
+    ///
+    /// O(1) time to emit, once per return type.
+    fn handle_result_release_fn(&self, ret: &Type) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let resolved = self.resolve_type(ret);
+        if self.handle_union_variants(&resolved).is_some() {
+            return self.handle_union_release_fn(&resolved);
+        }
+        if self.handle_fixed_result(&resolved).is_some() {
+            return Ok(Some(self.handle_fixed_release_fn(&resolved)?));
+        }
+        let plain_word = |ty: &Type| {
+            matches!(
+                ty,
+                Type::String | Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+            )
+        };
+        let (value_type, owns_cell) = match &resolved {
+            ty if plain_word(ty) => (resolved.clone(), false),
+            Type::Maybe { .. } => (resolved.clone(), true),
+            // The ok word of an errors result is the payload as a stored value: a string, array or
+            // map word, a `maybe`'s counted cell, or a bignum's text. A result that is or holds an
+            // envelope union never reaches this match: `handle_union_variants` took it above.
+            Type::ErrorsCapable { inner }
+                if plain_word(inner)
+                    || matches!(&**inner, Type::Number { precision } if *precision > 34)
+                    || matches!(&**inner, Type::Maybe { .. }) =>
+            {
+                (resolved.clone(), false)
+            }
+            Type::ErrorsCapable { inner }
+                if matches!(
+                    **inner,
+                    Type::Int | Type::Bool | Type::Float | Type::Nothing
+                ) =>
+            {
+                (resolved.clone(), false)
+            }
+            _ => return Ok(None),
+        };
+        let name = format!("ynz_handle_result_release_{}", mangle_type(&resolved));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let Some(glue) = self.release_fn(&value_type, owns_cell)? else {
+            return Ok(None);
+        };
+        let release = self.module.add_function(
+            &name,
+            self.ctx
+                .void_type()
+                .fn_type(&[self.i64().into(), self.i64().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let error_bits = release
+            .get_nth_param(0)
+            .ok_or("handle result release: missing err")?
+            .into_int_value();
+        let ok_bits = release
+            .get_nth_param(1)
+            .ok_or("handle result release: missing ok")?
+            .into_int_value();
+        if matches!(resolved, Type::ErrorsCapable { .. }) {
+            let companion = self
+                .builder
+                .build_alloca(errors_result_type(self.ctx), "completion")
+                .map_err(|e| format!("handle result companion: {e}"))?;
+            let mut result = errors_result_type(self.ctx).const_zero();
+            result = self
+                .builder
+                .build_insert_value(result, error_bits, 0, "completion_err")
+                .map_err(|e| format!("handle result err: {e}"))?
+                .into_struct_value();
+            result = self
+                .builder
+                .build_insert_value(result, ok_bits, 1, "completion_ok")
+                .map_err(|e| format!("handle result ok: {e}"))?
+                .into_struct_value();
+            self.builder
+                .build_store(companion, result)
+                .map_err(|e| format!("handle result store: {e}"))?;
+            self.builder
+                .build_call(glue, &[companion.into()], "")
+                .map_err(|e| format!("handle result release call: {e}"))?;
+        } else {
+            let release_bb = self.ctx.append_basic_block(release, "release");
+            let done_bb = self.ctx.append_basic_block(release, "done");
+            let present = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    ok_bits,
+                    self.i64().const_zero(),
+                    "completion_present",
+                )
+                .map_err(|e| format!("handle result cmp: {e}"))?;
+            self.builder
+                .build_conditional_branch(present, release_bb, done_bb)
+                .map_err(|e| format!("handle result branch: {e}"))?;
+            self.builder.position_at_end(release_bb);
+            let pointer = self
+                .builder
+                .build_int_to_ptr(ok_bits, self.ptr(), "completion_ptr")
+                .map_err(|e| format!("handle result inttoptr: {e}"))?;
+            self.builder
+                .build_call(glue, &[pointer.into()], "")
+                .map_err(|e| format!("handle result release call: {e}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|e| format!("handle result join: {e}"))?;
+            self.builder.position_at_end(done_bb);
+        }
+        self.builder
+            .build_return(None)
+            .map_err(|e| format!("handle result return: {e}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
+
+    /// Release the value of type `ty` (`callee_result_type`) a finished callee left in the return slot
+    /// of the frame `child_frame`, behind a null check: a group's drop state, when a member returned
+    /// before the group joined.
+    ///
+    /// O(1) time to emit; at run time O(heap the value owns).
+    fn release_returned_value(
+        &self,
+        child_frame: PointerValue<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        let holder = self.alloca_in_entry_llvm(self.ptr(), "returned_value_slot")?;
+        let resolved = self.resolve_type(ty);
+        let mut form = ReleaseForm::Local;
+        if matches!(ty, Type::ErrorsCapable { .. }) {
+            let (error_bits, ok_bits) =
+                state_machine::load_return_value_errors(self.ctx, &self.builder, child_frame)?;
+            let companion =
+                self.alloca_in_entry_llvm(errors_result_type(self.ctx), "returned_result")?;
+            let union_variants = match &resolved {
+                Type::ErrorsCapable { inner } => self.ec_success_union(inner),
+                _ => None,
+            };
+            let result = if let Some((variants, maybe)) = union_variants {
+                // The ok word is the address of the member frame's `Return` region; the release
+                // reads the standard pair over a copy of the slot, as a caller binding would.
+                self.ec_region_to_standard(
+                    error_bits,
+                    ok_bits,
+                    &variants,
+                    maybe,
+                    "returned_union_result",
+                )?
+            } else {
+                let mut pair = errors_result_type(self.ctx).const_zero();
+                pair = self
+                    .builder
+                    .build_insert_value(pair, error_bits, 0, "returned_err")
+                    .map_err(|e| format!("returned result err: {e}"))?
+                    .into_struct_value();
+                self.builder
+                    .build_insert_value(pair, ok_bits, 1, "returned_ok")
+                    .map_err(|e| format!("returned result ok: {e}"))?
+                    .into_struct_value()
+            };
+            self.builder
+                .build_store(companion, result)
+                .map_err(|e| format!("returned result store: {e}"))?;
+            self.builder
+                .build_store(holder, companion)
+                .map_err(|e| format!("returned result holder: {e}"))?;
+        } else if let Some((variants, true)) = self.ec_success_union(&resolved) {
+            // A plain `maybe` of an envelope union: the slot holds the address of the member frame's
+            // `Return` region (the union slot, `none` as its tag), released as the union slot it is.
+            let bits = state_machine::load_return_value_i64(
+                self.ctx,
+                &self.builder,
+                child_frame,
+                "returned_bits",
+            )?;
+            let pointer = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), "returned_ptr")
+                .map_err(|e| format!("returned maybe union inttoptr: {e}"))?;
+            self.builder
+                .build_store(holder, pointer)
+                .map_err(|e| format!("returned maybe union holder: {e}"))?;
+            return self.emit_slot_release(
+                holder,
+                &Type::Union { variants },
+                ReleaseForm::Value,
+                true,
+                "returned_value",
+                "drop_returned",
+            );
+        } else if matches!(resolved, Type::Maybe { .. }) {
+            // The slot holds the `{flag, bits}` pair itself: rebuild the envelope on the stack and
+            // release it in the form of a `maybe` a function returned (its payload is the cell
+            // or string the `return` allocated).
+            let (flag, bits) =
+                state_machine::load_return_value_errors(self.ctx, &self.builder, child_frame)?;
+            let envelope = self.alloca_in_entry_llvm(self.maybe_type(), "returned_maybe")?;
+            let mut pair = self.maybe_type().const_zero();
+            pair = self
+                .builder
+                .build_insert_value(pair, flag, 0, "returned_flag")
+                .map_err(|e| format!("returned maybe flag: {e}"))?
+                .into_struct_value();
+            pair = self
+                .builder
+                .build_insert_value(pair, bits, 1, "returned_bits")
+                .map_err(|e| format!("returned maybe bits: {e}"))?
+                .into_struct_value();
+            self.builder
+                .build_store(envelope, pair)
+                .map_err(|e| format!("returned maybe store: {e}"))?;
+            self.builder
+                .build_store(holder, envelope)
+                .map_err(|e| format!("returned maybe holder: {e}"))?;
+            form = self.temporary_release_form(&resolved);
+        } else {
+            let bits = state_machine::load_return_value_i64(
+                self.ctx,
+                &self.builder,
+                child_frame,
+                "returned_bits",
+            )?;
+            let pointer = self
+                .builder
+                .build_int_to_ptr(bits, self.ptr(), "returned_ptr")
+                .map_err(|e| format!("returned value inttoptr: {e}"))?;
+            self.builder
+                .build_store(holder, pointer)
+                .map_err(|e| format!("returned value holder: {e}"))?;
+            // An envelope union's slot is the member's own frame region: release the slot, not a view.
+            if matches!(resolved, Type::Union { .. }) {
+                form = ReleaseForm::Value;
+            }
+        }
+        self.emit_slot_release(holder, ty, form, true, "returned_value", "drop_returned")
+    }
+
+    /// THE one release of a slot: load the pointer `slot` holds, skip a null one when
+    /// `only_if_live`, and call the type's release (`release_fn`). A binding's scope exit
+    /// (`emit_release_edge`) and a temporary's statement end (`release_temporaries`) both come
+    /// here, so nothing else decides how a slot's value is freed. `name` and `site` only name the
+    /// emitted blocks.
+    ///
+    /// O(1) time to emit; at run time O(heap the value owns).
+    fn emit_slot_release(
+        &self,
+        slot: PointerValue<'ctx>,
+        ty: &Type,
+        form: ReleaseForm,
+        only_if_live: bool,
+        name: &str,
+        site: &str,
+    ) -> Result<(), String> {
+        let Some(glue) = self.release_form_fn(ty, form)? else {
+            return Ok(());
+        };
+        let value = self
+            .builder
+            .build_load(self.ptr(), slot, &format!("{name}_release_value"))
+            .map_err(|err| format!("release load {name}: {err}"))?
+            .into_pointer_value();
+        let after = if only_if_live {
+            let release_bb = self.append_block(&format!("{site}_release_{name}"));
+            let after_bb = self.append_block(&format!("{site}_released_{name}"));
+            let live = self
+                .builder
+                .build_is_not_null(value, &format!("{name}_is_live"))
+                .map_err(|err| format!("release null check {name}: {err}"))?;
+            self.builder
+                .build_conditional_branch(live, release_bb, after_bb)
+                .map_err(|err| format!("release branch {name}: {err}"))?;
+            self.builder.position_at_end(release_bb);
+            Some(after_bb)
+        } else {
+            None
+        };
+        self.builder
+            .build_call(glue, &[value.into()], "")
+            .map_err(|err| format!("release call {name}: {err}"))?;
+        if let Some(after_bb) = after {
+            self.builder
+                .build_unconditional_branch(after_bb)
+                .map_err(|err| format!("release join {name}: {err}"))?;
+            self.builder.position_at_end(after_bb);
+        }
+        Ok(())
+    }
+
+    /// A statement is about to run: open a frame of the temporaries typeck recorded for the
+    /// release point `key` (`TypedModule::temporaries`), one entry-block slot each, set to null
+    /// here so a temporary built on one path only (or not yet built) releases nothing. Returns
+    /// whether a frame was opened, for `close_temporaries`.
+    ///
+    /// A state-machine function opens frames the same way, for the statements it lowers through
+    /// `lower_stmt`. Those never contain a suspension (`stmt_needs_sm_walker` routes a statement
+    /// with a `wait`, a suspending call or a conduit suspension to `lower_sm_stmt_with_wait`, which
+    /// opens its frame with `open_wait_temporaries`), so a slot is built, read and released inside
+    /// one resume invocation and an entry-block `alloca` is enough.
+    ///
+    /// O(t) time for t temporaries of the statement.
+    fn open_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
+        self.open_temporary_frame(key, false)
+    }
+
+    /// `open_temporaries` for a statement the resume function routes through the SM walker (it
+    /// contains a `wait`, a suspending call or a conduit suspension): each temporary lives in the
+    /// heap frame (after the crossing locals; `wait_temporary_slot_count` reserved it), because an
+    /// entry-block `alloca` does not survive the resume. A string, array or map is a pointer in one
+    /// slot; a shape, `fixed` list, `maybe` envelope or union is moved into a frame region behind
+    /// its slot (`temporary_home`, `bind_temporary`). A kind with no frame home leaks, as a temporary
+    /// of an unsupported kind does on the plain path.
+    ///
+    /// O(t) time for t temporaries of the statement.
+    fn open_wait_temporaries(&mut self, key: (usize, usize)) -> Result<bool, String> {
+        self.open_temporary_frame(key, true)
+    }
+
+    /// The one frame opener behind `open_temporaries` and `open_wait_temporaries`.
+    fn open_temporary_frame(
+        &mut self,
+        key: (usize, usize),
+        frame_backed: bool,
+    ) -> Result<bool, String> {
+        let spans = self.typed.temporaries.released_at(key.0, key.1).to_vec();
+        if spans.is_empty() && !frame_backed {
+            return Ok(false);
+        }
+        let mut frame = Vec::with_capacity(spans.len());
+        for span in spans {
+            let ty = self.typed.expr_types.get(&span).cloned().ok_or_else(|| {
+                format!(
+                    "internal: the temporary at {}..{} has no recorded type",
+                    span.0, span.1
+                )
+            })?;
+            // An argument coerced into a union parameter: the temporary is the envelope the call mints
+            // (`envelope_argument` in typeck), of the union slot's type, not of the plain value.
+            let ty = match self.coercion_at(span) {
+                Some(coercion) => coercion.slot.clone(),
+                None => ty,
+            };
+            // Typeck records a temporary of type `T` as one that may own heap. This instance owns
+            // what its type says: no slot for an `int`, and none for a kind this emitter does not
+            // release as a temporary (a leak, never a double free).
+            let declared_as_type_parameter = matches!(ty, Type::TypeParam { .. });
+            let ty = self.resolve_type(&ty);
+            // A `.copy()` of a `maybe` sits in a heap envelope cell of its own (typeck says which; for a
+            // `T` it says the temporary is a `.copy()`, and this instance says `T` is a `maybe`).
+            let minted_maybe_copy = self.typed.temporaries.is_minted_maybe_copy(span.0, span.1)
+                || (declared_as_type_parameter
+                    && self
+                        .typed
+                        .temporaries
+                        .is_type_parameter_copy(span.0, span.1)
+                    && matches!(
+                        ynz_typeck::owned_copy::owned_copy_plan(&ty),
+                        ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone
+                    ));
+            if declared_as_type_parameter
+                && !(self.releases_in_instance(
+                    ynz_typeck::release_plan::ReleaseKind::TypeParameter,
+                    &ty,
+                ) && (minted_maybe_copy
+                    || matches!(
+                        release_step(&ty),
+                        ReleaseStep::String
+                            | ReleaseStep::Array { .. }
+                            | ReleaseStep::Map { .. }
+                            | ReleaseStep::Shape { .. }
+                    )))
+            {
+                continue;
+            }
+            let mut form = if minted_maybe_copy {
+                ReleaseForm::Cell
+            } else {
+                self.temporary_release_form(&ty)
+            };
+            // A temporary of a suspending statement lives in the heap frame: a pointer to heap that
+            // stays put, or a region of bytes the value is moved into (`temporary_home`).
+            let home = if !frame_backed
+                || matches!(
+                    release_step(&ty),
+                    ReleaseStep::String | ReleaseStep::Array { .. } | ReleaseStep::Map { .. }
+                ) {
+                TemporaryHome::Pointer
+            } else {
+                temporary_home(&ty, minted_maybe_copy, self.shape_abi_sizes)
+            };
+            if home == TemporaryHome::Skip {
+                continue;
+            }
+            let mut region = None;
+            let (slot, frame_slot) = if frame_backed {
+                let region_slots = match &home {
+                    TemporaryHome::Region(_, slots) => *slots,
+                    _ => 0,
+                };
+                let index = self.take_wait_temporary_slots(1 + region_slots)?;
+                if let TemporaryHome::Region(kind, _) = home {
+                    // A union region holds a slot: its release is the slot form.
+                    if matches!(kind, TemporaryRegionKind::Union(_)) {
+                        form = ReleaseForm::Value;
+                    }
+                    region = Some(TemporaryRegion {
+                        first_slot: index + 1,
+                        kind,
+                    });
+                }
+                (self.frame_slot_ptr_in_entry(index)?, Some(index))
+            } else {
+                (self.alloca_in_entry_llvm(self.ptr(), "temporary")?, None)
+            };
+            self.builder
+                .build_store(slot, self.ptr().const_null())
+                .map_err(|err| format!("null a temporary slot: {err}"))?;
+            frame.push(TemporarySlot {
+                span,
+                slot,
+                frame_slot,
+                ty,
+                form,
+                region,
+            });
+        }
+        self.temporary_frames.push(frame);
+        if frame_backed {
+            self.wait_frame_marks.push(self.temporary_frames.len());
+        }
+        Ok(true)
+    }
+
+    /// Move the bytes of the shape or `maybe` value `value` (an expression's result, which
+    /// sits in this resume invocation's stack) into a frame region of the statement, and return the
+    /// region's address as the frame slot bits a suspending callee is staged: the region outlives the
+    /// callee's `wait`, which the stack does not. A `maybe` moves its 16-byte envelope (the payload is
+    /// a heap pointer or a value already). The region's contents belong to the callee (`give`) or own
+    /// no heap, so no slot releases it. `wait_temporary_slot_count` reserved the region
+    /// (`staged_argument_slot_count`).
+    ///
+    /// Time: O(1) + one memcpy of the value's bytes  Space: O(1)
+    fn stage_value_in_frame(
+        &mut self,
+        value: PointerValue<'ctx>,
+        ty: &Type,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let frame_ptr = self
+            .sm_frame_ptr
+            .ok_or("internal: a value was staged into a frame outside a resume function")?;
+        let size = match ty {
+            Type::Shape { name } => self.shape_abi_size_const(name, "stage_value_in_frame")?,
+            Type::Maybe { .. } => self.i64().const_int(MAYBE_ENVELOPE_BYTES, false),
+            Type::Number { precision } if *precision <= 34 => {
+                self.i64().const_int(DECIMAL_CELL_SIZE, false)
+            }
+            other => {
+                return Err(format!(
+                    "internal: a `{}` argument has no staging region",
+                    ynz_typeck::types::type_name(other)
+                ))
+            }
+        };
+        let first =
+            self.take_wait_temporary_slots(staged_region_slots(ty, self.shape_abi_sizes))?;
+        let region = state_machine::shape_frame_region_ptr(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            state_machine::FRAME_OFFSET_LOCALS_START
+                + (first as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE,
+            "staged_shape",
+        )?;
+        self.builder
+            .build_memcpy(region, 1, value, 1, size)
+            .map_err(|err| format!("stage a shape into the frame: {err}"))?;
+        if let Type::Maybe { inner } = ty {
+            self.stage_maybe_payload(value, region, inner)?;
+            // The envelope cell an explicit `.copy()` minted is empty now (its flag and payload bits
+            // are in the region): give it back.
+            if self
+                .minted_maybe_copies
+                .contains(&(value.as_value_ref() as usize))
+            {
+                self.free_minted_maybe_cell(value, "staged_maybe")?;
+            }
+        }
+        self.builder
+            .build_ptr_to_int(region, self.i64(), "staged_shape_bits")
+            .map_err(|err| format!("staged shape bits: {err}"))
+    }
+
+    /// Move the payload of the `maybe` `value` into the region behind its staged envelope at `region`
+    /// and point the staged envelope at it. The payload cell a call result owns (a flat shape's, a
+    /// decimal's) is the caller's to free, and the callee releases a `give` parameter in its `Local`
+    /// form, which frees what the payload owns and no cell. So the bytes move (the strings and cells
+    /// they own are the callee's now) and the emptied cell is freed here (a call result's, or the one an explicit `.copy()`
+    /// minted). A payload that sits in this resume invocation's stack is copied the same way and left
+    /// alone. A payload with no bytes of
+    /// its own (`staged_maybe_payload_bytes`) stays as the envelope has it.
+    ///
+    /// Time: O(1) + one memcpy of the payload's bytes  Space: O(1)
+    fn stage_maybe_payload(
+        &self,
+        value: PointerValue<'ctx>,
+        region: PointerValue<'ctx>,
+        inner: &Type,
+    ) -> Result<(), String> {
+        let inner = self.resolve_type(inner);
+        let payload_bytes = staged_maybe_payload_bytes(&inner, self.shape_abi_sizes);
+        if payload_bytes == 0 {
+            return Ok(());
+        }
+        let copy_bb = self
+            .ctx
+            .append_basic_block(self.current_fn, "staged_maybe_payload");
+        let done_bb = self
+            .ctx
+            .append_basic_block(self.current_fn, "staged_maybe_done");
+        let (flag, bits) = self.load_maybe_env_pair(value, "staged_maybe")?;
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                "staged_maybe_present",
+            )
+            .map_err(|err| format!("staged maybe present: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, copy_bb, done_bb)
+            .map_err(|err| format!("staged maybe branch: {err}"))?;
+        self.builder.position_at_end(copy_bb);
+        let source = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), "staged_maybe_source")
+            .map_err(|err| format!("staged maybe source: {err}"))?;
+        // SAFETY: the region holds the 16-byte envelope, then `payload_bytes` for the payload
+        // (`staged_region_slots`).
+        let payload_home = unsafe {
+            self.builder
+                .build_gep(
+                    self.ctx.i8_type(),
+                    region,
+                    &[self.i64().const_int(MAYBE_ENVELOPE_BYTES, false)],
+                    "staged_maybe_home",
+                )
+                .map_err(|err| format!("staged maybe home: {err}"))?
+        };
+        let size = self.i64().const_int(payload_bytes, false);
+        self.builder
+            .build_memcpy(payload_home, 1, source, 1, size)
+            .map_err(|err| format!("staged maybe payload copy: {err}"))?;
+        let value_key = value.as_value_ref() as usize;
+        if self.fresh_payload_maybes.contains(&value_key)
+            || self.minted_maybe_copies.contains(&value_key)
+        {
+            if matches!(inner, Type::Shape { .. }) {
+                self.builder
+                    .build_call(self.rt.ynz_free, &[source.into(), size.into()], "")
+                    .map_err(|err| format!("staged maybe free the cell: {err}"))?;
+            } else {
+                self.builder
+                    .build_call(self.rt.ynz_number_cell_free, &[source.into()], "")
+                    .map_err(|err| format!("staged maybe free the number cell: {err}"))?;
+            }
+        }
+        let home_bits = self
+            .builder
+            .build_ptr_to_int(payload_home, self.i64(), "staged_maybe_home_bits")
+            .map_err(|err| format!("staged maybe home bits: {err}"))?;
+        let bits_slot = self
+            .builder
+            .build_struct_gep(self.maybe_type(), region, 1, "staged_maybe_bits_slot")
+            .map_err(|err| format!("staged maybe bits slot: {err}"))?;
+        self.builder
+            .build_store(bits_slot, home_bits)
+            .map_err(|err| format!("staged maybe bits store: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("staged maybe join: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// The next free frame slot for a temporary of a suspending statement. Running out is an
+    /// internal error: `wait_temporary_slot_count` and the statements lowered disagree, and a slot
+    /// past the reservation would be bytes of another local or a child frame.
+    fn next_wait_temporary_slot(&mut self) -> Result<usize, String> {
+        self.take_wait_temporary_slots(1)
+    }
+
+    /// The first of `count` contiguous free frame slots for a temporary of a suspending statement:
+    /// its pointer slot and the region behind it (`temporary_home`). Running out is an internal
+    /// error, as for `next_wait_temporary_slot`.
+    fn take_wait_temporary_slots(&mut self, count: usize) -> Result<usize, String> {
+        if self.sm_wait_temporary_next + count > self.sm_wait_temporary_end {
+            return Err(format!(
+                "internal: the frame of `{}` reserves {} slot(s) for temporaries of suspending \
+                 statements and a statement needs {count} more",
+                self.current_fn.get_name().to_string_lossy(),
+                self.sm_wait_temporary_end - self.sm_wait_temporary_base
+            ));
+        }
+        let index = self.sm_wait_temporary_next;
+        self.sm_wait_temporary_next += count;
+        Ok(index)
+    }
+
+    /// The address of frame slot `index` of this resume function, computed in the ENTRY block so
+    /// it dominates every state block (a continuation state is reached from the dispatch switch,
+    /// not from the block that opened the statement).
+    fn frame_slot_ptr_in_entry(&self, index: usize) -> Result<PointerValue<'ctx>, String> {
+        let frame_ptr = self
+            .sm_frame_ptr
+            .ok_or("internal: a frame slot was asked for outside a resume function")?;
+        let entry_bb = self
+            .current_fn
+            .get_first_basic_block()
+            .ok_or("internal: a resume function has no entry block")?;
+        let saved_bb = self.builder.get_insert_block();
+        self.position_for_entry_alloca(entry_bb);
+        let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
+            + (index as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+        // SAFETY: `index` is below `sm_wait_temporary_end`, inside the slots the frame layout
+        // reserved for this function's own locals.
+        let slot = unsafe {
+            self.builder.build_gep(
+                self.ctx.i8_type(),
+                frame_ptr,
+                &[self.i64().const_int(byte_offset, false)],
+                "wait_temporary_slot",
+            )
+        }
+        .map_err(|err| format!("wait temporary slot gep: {err}"));
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        slot
+    }
+
+    /// The statement `open_temporaries` opened a frame for is done: release its temporaries when
+    /// control reaches here, and drop the frame. Nothing is emitted after a `return` (it released
+    /// the frame itself).
+    fn close_temporaries(&mut self, opened: bool) -> Result<(), String> {
+        if !opened {
+            return Ok(());
+        }
+        if self.wait_frame_marks.last() == Some(&self.temporary_frames.len()) {
+            self.wait_frame_marks.pop();
+        }
+        let frame = self.temporary_frames.pop().ok_or_else(|| {
+            "internal: a statement closed a temporary frame nobody opened".to_string()
+        })?;
+        if is_block_terminated(self) {
+            return Ok(());
+        }
+        self.release_temporary_frame(&frame, "statement_end")
+    }
+
+    /// Open an empty frame of heap-frame slots for one iteration of a suspending loop: the copies
+    /// its variable makes (`hold_copy_in_frame`) are released by `close_temporaries(true)` at the
+    /// iteration's end, and by a `return` or auto-propagation inside the body
+    /// (`release_open_temporaries`), which read every open frame.
+    fn open_iteration_frame(&mut self) {
+        self.temporary_frames.push(Vec::new());
+        self.wait_frame_marks.push(self.temporary_frames.len());
+    }
+
+    /// The slot of the temporary built by the expression at `span` when it lives in a slot of the
+    /// heap frame (a suspending statement's temporary): what survives a `wait` and can be read back
+    /// after a resume. `None` for a value no open frame names, or one in an entry-block slot.
+    fn held_temporary_slot(&self, span: (usize, usize)) -> Option<PointerValue<'ctx>> {
+        self.temporary_frames
+            .iter()
+            .rev()
+            .flat_map(|frame| frame.iter())
+            .find(|temporary| temporary.span == span && temporary.frame_slot.is_some())
+            .map(|temporary| temporary.slot)
+    }
+
+    /// Keep `value`, a copy a suspending statement made (a loop variable's, an argument staged into
+    /// a suspending call), in a slot of the heap frame and give it to the innermost open frame, so
+    /// the end of that statement or iteration releases it, as does a `return` or auto-propagation
+    /// in between. The pointer survives a `wait` there: an SSA value does not (a resume gets a new
+    /// stack frame). Returns false, holding nothing, when the innermost open frame is not a
+    /// heap-frame one (a statement routed here for a CPU group alone, which reserves no slots).
+    /// Running out of reserved slots is an internal error (`copy_slot_count`).
+    ///
+    /// O(1) time.
+    fn hold_copy_in_frame(
+        &mut self,
+        value: PointerValue<'ctx>,
+        ty: &Type,
+        form: ReleaseForm,
+    ) -> Result<bool, String> {
+        if self.wait_frame_marks.last() != Some(&self.temporary_frames.len()) {
+            return Ok(false);
+        }
+        let index = self.next_wait_temporary_slot()?;
+        let slot = self.frame_slot_ptr_in_entry(index)?;
+        self.builder
+            .build_store(slot, value)
+            .map_err(|err| format!("hold a copy in the frame: {err}"))?;
+        let frame = self
+            .temporary_frames
+            .last_mut()
+            .ok_or("internal: a copy was held with no open frame")?;
+        frame.push(TemporarySlot {
+            span: (usize::MAX, usize::MAX),
+            slot,
+            frame_slot: Some(index),
+            ty: ty.clone(),
+            form,
+            region: None,
+        });
+        Ok(true)
+    }
+
+    /// Release every live temporary of every open statement, innermost first: what a `return` and
+    /// an auto-propagation do before the scope entries, since the statements they leave never
+    /// reach their own end.
+    fn release_open_temporaries(&self, site: &str) -> Result<(), String> {
+        for frame in self.temporary_frames.iter().rev() {
+            self.release_temporary_frame(frame, site)?;
+        }
+        Ok(())
+    }
+
+    /// The release form of a temporary's value. A `maybe` a function returned carries the payload
+    /// its `return` allocated (a string clone, a shape's heap cell, a number's cell: the stored
+    /// forms `emit_maybe_payload_release` frees); every other temporary releases as a local does.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn temporary_release_form(&self, ty: &Type) -> ReleaseForm {
+        match ty {
+            Type::Maybe { inner } => match self.resolve_type(inner) {
+                Type::String | Type::Shape { .. } => ReleaseForm::Value,
+                Type::Number { precision }
+                    if precision <= ynz_typeck::types::DECIMAL128_MAX_PRECISION =>
+                {
+                    ReleaseForm::Value
+                }
+                _ => ReleaseForm::Local,
+            },
+            _ => ReleaseForm::Local,
+        }
+    }
+
+    /// The release of one statement's temporaries, last built first: each slot's value if it is
+    /// non-null.
+    fn release_temporary_frame(
+        &self,
+        frame: &[TemporarySlot<'ctx>],
+        site: &str,
+    ) -> Result<(), String> {
+        for (index, temporary) in frame.iter().enumerate().rev() {
+            self.emit_slot_release(
+                temporary.slot,
+                &temporary.ty,
+                temporary.form,
+                true,
+                &format!("temporary{index}"),
+                site,
+            )?;
+            self.null_frame_slot(temporary.frame_slot)?;
+        }
+        Ok(())
+    }
+
+    /// `expr` has just been lowered to `value`: when typeck recorded it as a temporary of an open
+    /// statement, keep the value in the temporary's slot, so the statement's end releases it. A
+    /// value no open statement names (a state-machine function, a form typeck did not record) is
+    /// left alone: a leak, never a double free.
+    ///
+    /// A temporary of a suspending statement whose value sits in this resume invocation's stack (a
+    /// shape, a `fixed` list, a `maybe` envelope, a union) is moved into the frame region behind its
+    /// slot, and the slot names the region: the bytes survive the `wait`, and every later reader of
+    /// the expression (a field read, an argument staged into a suspending callee) reads the region
+    /// too. The value it returns is that region (a view of it for a union), or `value` itself.
+    ///
+    /// Time: O(1) + one memcpy of the region's bytes  Space: O(1)
+    fn bind_temporary(
+        &self,
+        expr: &Expr,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !value.is_pointer_value() {
+            return Ok(value);
+        }
+        let span = expr.span();
+        let key = (span.start, span.end);
+        let Some(temporary) = self
+            .temporary_frames
+            .iter()
+            .rev()
+            .flat_map(|frame| frame.iter())
+            .find(|temporary| temporary.span == key)
+        else {
+            return Ok(value);
+        };
+        let Some(region) = &temporary.region else {
+            self.builder
+                .build_store(temporary.slot, value.into_pointer_value())
+                .map_err(|err| format!("store a temporary: {err}"))?;
+            return Ok(value);
+        };
+        let frame_ptr = self
+            .sm_frame_ptr
+            .ok_or("internal: a frame region temporary outside a resume function")?;
+        let site = format!("temporary_{}_{}", key.0, key.1);
+        let region_ptr = state_machine::shape_frame_region_ptr(
+            self.ctx,
+            &self.builder,
+            frame_ptr,
+            state_machine::FRAME_OFFSET_LOCALS_START
+                + (region.first_slot as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE,
+            &site,
+        )?;
+        let source = value.into_pointer_value();
+        let held: BasicValueEnum<'ctx> = match &region.kind {
+            TemporaryRegionKind::Bytes(bytes) => {
+                self.builder
+                    .build_memcpy(
+                        region_ptr,
+                        1,
+                        source,
+                        1,
+                        self.i64().const_int(*bytes, false),
+                    )
+                    .map_err(|err| format!("{site}: move the temporary into its region: {err}"))?;
+                region_ptr.into()
+            }
+            TemporaryRegionKind::MaybeUnion(variants) => {
+                // The envelope is the call's result (`take`: it owns its payload): the union its view
+                // names moves into the slot behind the region's envelope, and the envelope names the
+                // region's view of it.
+                let flag_gep = self
+                    .builder
+                    .build_struct_gep(self.maybe_type(), source, 0, &format!("{site}_src_flag"))
+                    .map_err(|err| format!("{site}: maybe flag gep: {err}"))?;
+                let flag = self
+                    .builder
+                    .build_load(self.i64(), flag_gep, &format!("{site}_flag"))
+                    .map_err(|err| format!("{site}: maybe flag load: {err}"))?
+                    .into_int_value();
+                let bits_gep = self
+                    .builder
+                    .build_struct_gep(self.maybe_type(), source, 1, &format!("{site}_src_bits"))
+                    .map_err(|err| format!("{site}: maybe bits gep: {err}"))?;
+                let bits = self
+                    .builder
+                    .build_load(self.i64(), bits_gep, &format!("{site}_bits"))
+                    .map_err(|err| format!("{site}: maybe bits load: {err}"))?
+                    .into_int_value();
+                let payload = self.maybe_region_payload_ptr(region_ptr, &site)?;
+                let region_bits =
+                    self.maybe_union_payload_into(flag, bits, variants, payload, false, &site)?;
+                for (index, word) in [(0u32, flag), (1u32, region_bits)] {
+                    let gep = self
+                        .builder
+                        .build_struct_gep(
+                            self.maybe_type(),
+                            region_ptr,
+                            index,
+                            &format!("{site}_word"),
+                        )
+                        .map_err(|err| format!("{site}: region word gep: {err}"))?;
+                    self.builder
+                        .build_store(gep, word)
+                        .map_err(|err| format!("{site}: region word store: {err}"))?;
+                }
+                region_ptr.into()
+            }
+            TemporaryRegionKind::ErrorsUnion(variants) => {
+                // The pair is the call's result: the union its `ok` view names (only when the call
+                // succeeded) moves into the slot behind the region's view, and `ok` names the view.
+                let (err, ok) = self.load_errors_pair(source, &site)?;
+                let succeeded = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err,
+                        self.i64().const_zero(),
+                        &format!("{site}_ec_succeeded"),
+                    )
+                    .map_err(|err| format!("{site}: errors flag compare: {err}"))?;
+                let flag = self
+                    .builder
+                    .build_int_z_extend(succeeded, self.i64(), &format!("{site}_ec_flag"))
+                    .map_err(|err| format!("{site}: errors flag extend: {err}"))?;
+                let payload = self.maybe_region_payload_ptr(region_ptr, &site)?;
+                let region_ok =
+                    self.maybe_union_payload_into(flag, ok, variants, payload, false, &site)?;
+                self.store_errors_pair(region_ptr, err, region_ok, &site)?;
+                region_ptr.into()
+            }
+            TemporaryRegionKind::ErrorsMaybeUnion(variants) => {
+                // The pair's `ok` names a stack `maybe` pair over a union view. On success that pair
+                // moves behind the region's own pair, its union into the slot behind a view of the
+                // region, and `ok` names the region's `maybe` pair.
+                let (err, ok) = self.load_errors_pair(source, &site)?;
+                let succeeded = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err,
+                        self.i64().const_zero(),
+                        &format!("{site}_ec_succeeded"),
+                    )
+                    .map_err(|err| format!("{site}: errors flag compare: {err}"))?;
+                let pre_bb = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+                let held_bb = self.append_block(&format!("{site}_ec_maybe_held"));
+                let cont_bb = self.append_block(&format!("{site}_ec_maybe_cont"));
+                self.builder
+                    .build_conditional_branch(succeeded, held_bb, cont_bb)
+                    .map_err(|err| format!("{site}: errors maybe branch: {err}"))?;
+                self.builder.position_at_end(held_bb);
+                let source_maybe = self
+                    .builder
+                    .build_int_to_ptr(ok, self.ptr(), &format!("{site}_ec_maybe_src"))
+                    .map_err(|err| format!("{site}: errors maybe cast: {err}"))?;
+                let (flag, bits) = self.load_errors_pair(source_maybe, &format!("{site}_maybe"))?;
+                // SAFETY: `temporary_home` reserved the pair, the `maybe` pair, the view and the slot.
+                let region_maybe = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            self.ctx.i8_type(),
+                            region_ptr,
+                            &[self.i64().const_int(16, false)],
+                            &format!("{site}_ec_maybe_pair"),
+                        )
+                        .map_err(|err| format!("{site}: errors maybe pair gep: {err}"))?
+                };
+                let payload = self.maybe_region_payload_ptr(region_maybe, &site)?;
+                let region_bits =
+                    self.maybe_union_payload_into(flag, bits, variants, payload, false, &site)?;
+                self.store_errors_pair(region_maybe, flag, region_bits, &format!("{site}_maybe"))?;
+                let region_maybe_bits = self
+                    .builder
+                    .build_ptr_to_int(region_maybe, self.i64(), &format!("{site}_ec_maybe_bits"))
+                    .map_err(|err| format!("{site}: errors maybe pair bits: {err}"))?;
+                let held_end_bb = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+                self.builder
+                    .build_unconditional_branch(cont_bb)
+                    .map_err(|err| format!("{site}: errors maybe join: {err}"))?;
+                self.builder.position_at_end(cont_bb);
+                let phi = self
+                    .builder
+                    .build_phi(self.i64(), &format!("{site}_ec_maybe_phi"))
+                    .map_err(|err| format!("{site}: errors maybe phi: {err}"))?;
+                phi.add_incoming(&[(&region_maybe_bits, held_end_bb), (&ok, pre_bb)]);
+                self.store_errors_pair(
+                    region_ptr,
+                    err,
+                    phi.as_basic_value().into_int_value(),
+                    &site,
+                )?;
+                region_ptr.into()
+            }
+            TemporaryRegionKind::Union(variants) => {
+                // The region takes what the value owns (`deep` false): the value is a fresh envelope
+                // or a call's result, which nothing else releases.
+                self.union_persist_into_core(
+                    source,
+                    region_ptr,
+                    variants,
+                    self.union_has_nothing(variants),
+                    false,
+                    &site,
+                )?;
+                self.union_slot_to_value(region_ptr, variants, &site)?
+                    .into()
+            }
+        };
+        self.builder
+            .build_store(temporary.slot, region_ptr)
+            .map_err(|err| format!("{site}: point the temporary at its region: {err}"))?;
+        Ok(held)
+    }
+
+    /// Start holding the collection a plain `for` loop over the binding or field `iter` walks, when
+    /// the loop body reassigns it (`stmt_assigns_name`, `stmt_assigns_field_path`): the loop reads
+    /// `collection` on every pass, and the release an assignment makes of the value it replaces
+    /// (plan #17) would free it under the loop. Any other loop is left as it was. Call after
+    /// `collection` is evaluated and before the loop's first branch; `held_before` is
+    /// `self.loop_held.len()` then, for `end_loop_held`. A resume function is not covered: its loop
+    /// state lives in the frame.
+    ///
+    /// O(body) time to scan, O(1) to emit.
+    fn begin_loop_held(
+        &mut self,
+        iter: &Expr,
+        body: &ynz_ast::nodes::Block,
+        collection: PointerValue<'ctx>,
+        ty: &Type,
+    ) -> Result<(), String> {
+        if self.sm_frame_ptr.is_some() {
+            return Ok(());
+        }
+        let (slot, field_path) = match iter {
+            Expr::Ident(name, _) => {
+                if !body
+                    .stmts
+                    .iter()
+                    .any(|stmt| ynz_typeck::cpu_admission::stmt_assigns_name(stmt, name))
+                {
+                    return Ok(());
+                }
+                let slot = self.reload_slot(name).ok_or_else(|| {
+                    format!("internal: the iterated binding `{name}` has no slot")
+                })?;
+                (slot, None)
+            }
+            Expr::FieldAccess {
+                receiver, field, ..
+            } => {
+                let Some(path) = ynz_typeck::cpu_admission::place_path(iter) else {
+                    return Ok(());
+                };
+                if !body
+                    .stmts
+                    .iter()
+                    .any(|stmt| ynz_typeck::cpu_admission::stmt_assigns_field_path(stmt, &path))
+                {
+                    return Ok(());
+                }
+                let path = path.into_iter().map(str::to_string).collect();
+                let (address, _) = field_gep(self, receiver, field)?;
+                (address, Some(path))
+            }
+            _ => return Ok(()),
+        };
+        let taken_over = self.alloca_in_entry_llvm(self.ctx.bool_type(), "loop_held")?;
+        self.builder
+            .build_store(taken_over, self.ctx.bool_type().const_zero())
+            .map_err(|err| format!("loop held flag init: {err}"))?;
+        self.loop_held.push(LoopHeld {
+            slot,
+            field_path,
+            collection,
+            taken_over,
+            ty: ty.clone(),
+        });
+        Ok(())
+    }
+
+    /// The loop that `begin_loop_held` registered (when `self.loop_held` grew past `held_before`)
+    /// is done: release the collection it took over, if an assignment left it. Call with the
+    /// builder at the loop's exit block.
+    fn end_loop_held(&mut self, held_before: usize) -> Result<(), String> {
+        if self.loop_held.len() > held_before {
+            let held = self.loop_held.remove(held_before);
+            self.release_loop_held(&held)?;
+        }
+        Ok(())
+    }
+
+    /// Release `held.collection` when an assignment left it to the loop.
+    fn release_loop_held(&self, held: &LoopHeld<'ctx>) -> Result<(), String> {
+        let Some(glue) = self.local_release_fn(&held.ty)? else {
+            return Ok(());
+        };
+        let taken_over = self
+            .builder
+            .build_load(self.ctx.bool_type(), held.taken_over, "loop_held_taken")
+            .map_err(|err| format!("loop held flag load: {err}"))?
+            .into_int_value();
+        let release_bb = self.append_block("loop_held_release");
+        let done_bb = self.append_block("loop_held_released");
+        self.builder
+            .build_conditional_branch(taken_over, release_bb, done_bb)
+            .map_err(|err| format!("loop held release branch: {err}"))?;
+        self.builder.position_at_end(release_bb);
+        self.builder
+            .build_call(glue, &[held.collection.into()], "")
+            .map_err(|err| format!("loop held release call: {err}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|err| format!("loop held release join: {err}"))?;
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// An assignment to the binding in `slot` replaces `replaced`: the plain `for` loops walking
+    /// that binding's old collection (`begin_loop_held`) keep it instead of seeing it released.
+    /// Returns `replaced` with `live` cleared when a loop took it over. The outermost loop that
+    /// walks the replaced pointer takes it, so two nested loops over one binding free it once; a
+    /// pointer no loop walks (a later list the binding got) is released as before.
+    ///
+    /// O(nested loops over the binding) to emit; a few instructions at run time.
+    fn hold_for_walking_loops(
+        &self,
+        mut replaced: ReplacedValue<'ctx>,
+        slot: PointerValue<'ctx>,
+    ) -> Result<ReplacedValue<'ctx>, String> {
+        let mut claimed = self.ctx.bool_type().const_zero();
+        for held in self
+            .loop_held
+            .iter()
+            .filter(|held| held.field_path.is_none() && held.slot == slot)
+        {
+            claimed = self.claim_for_loop(held, replaced.held, replaced.live, claimed)?;
+        }
+        let not_claimed = self
+            .builder
+            .build_not(claimed, "loop_held_not_claimed")
+            .map_err(|err| format!("loop held not: {err}"))?;
+        replaced.live = self
+            .builder
+            .build_and(replaced.live, not_claimed, "loop_held_release_live")
+            .map_err(|err| format!("loop held and: {err}"))?;
+        Ok(replaced)
+    }
+
+    /// An assignment to the field `path` (its cell at `field_address`) replaces `old_value`:
+    /// returns an `i1` that is set when a plain `for` loop walking that field's old collection
+    /// (`begin_loop_held`) took it over, and the assignment must then not release it. `None` when
+    /// no loop around this point walks that field.
+    ///
+    /// O(nested loops over the field) to emit; a few instructions at run time.
+    fn hold_for_walking_field_loops(
+        &self,
+        path: &[&str],
+        field_address: PointerValue<'ctx>,
+        old_value: PointerValue<'ctx>,
+    ) -> Result<Option<inkwell::values::IntValue<'ctx>>, String> {
+        let mut claimed = self.ctx.bool_type().const_zero();
+        let mut any_loop = false;
+        for held in self.loop_held.iter().filter(|held| {
+            held.field_path
+                .as_ref()
+                .is_some_and(|walked| walked.iter().map(String::as_str).eq(path.iter().copied()))
+        }) {
+            let same_cell = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    held.slot,
+                    field_address,
+                    "loop_held_same_cell",
+                )
+                .map_err(|err| format!("loop held cell compare: {err}"))?;
+            claimed = self.claim_for_loop(held, old_value, same_cell, claimed)?;
+            any_loop = true;
+        }
+        Ok(any_loop.then_some(claimed))
+    }
+
+    /// One loop's turn to take the value an assignment replaces: it takes it when the assignment
+    /// replaces `held.collection` (`replaced_pointer`), `applies` is set, and no outer loop took it
+    /// already (`claimed`). Records the take in the loop's flag and returns `claimed` with it.
+    fn claim_for_loop(
+        &self,
+        held: &LoopHeld<'ctx>,
+        replaced_pointer: PointerValue<'ctx>,
+        applies: inkwell::values::IntValue<'ctx>,
+        claimed: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let bool_type = self.ctx.bool_type();
+        let same_collection = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                held.collection,
+                replaced_pointer,
+                "loop_held_same",
+            )
+            .map_err(|err| format!("loop held compare: {err}"))?;
+        let unclaimed = self
+            .builder
+            .build_not(claimed, "loop_held_unclaimed")
+            .map_err(|err| format!("loop held not: {err}"))?;
+        let walked = self
+            .builder
+            .build_and(same_collection, unclaimed, "loop_held_walked")
+            .map_err(|err| format!("loop held and: {err}"))?;
+        let takes = self
+            .builder
+            .build_and(walked, applies, "loop_held_takes")
+            .map_err(|err| format!("loop held and: {err}"))?;
+        let was_taken = self
+            .builder
+            .build_load(bool_type, held.taken_over, "loop_held_was_taken")
+            .map_err(|err| format!("loop held flag load: {err}"))?
+            .into_int_value();
+        let now_taken = self
+            .builder
+            .build_or(was_taken, takes, "loop_held_now_taken")
+            .map_err(|err| format!("loop held or: {err}"))?;
+        self.builder
+            .build_store(held.taken_over, now_taken)
+            .map_err(|err| format!("loop held flag store: {err}"))?;
+        self.builder
+            .build_or(claimed, takes, "loop_held_claimed")
+            .map_err(|err| format!("loop held or: {err}"))
+    }
+
+    /// Release the copy every plain `for` loop around this point made for its variable, innermost
+    /// first: a `return` or an auto-propagation inside a body leaves the iteration before its end
+    /// releases the copy (`open_loop_copies`). The copy is an SSA value of the loop body, which
+    /// dominates everything the body lowers. One call of the release helper per copy, as the
+    /// iteration end makes (`release_owned_read`).
+    ///
+    /// O(open loops) to emit.
+    fn release_open_loop_copies(&self) -> Result<(), String> {
+        for (value, ty) in self.open_loop_copies.iter().rev() {
+            release_owned_read(self, *value, ty, "loop_copy_early_exit")?;
+        }
+        for held in self.loop_held.iter().rev() {
+            self.release_loop_held(held)?;
+        }
+        Ok(())
+    }
+
+    /// The release at the end of `block`.
+    fn release_at_block_end(&self, block: &ynz_ast::nodes::Block) -> Result<(), String> {
+        let entries = self
+            .typed
+            .release_plan
+            .block_end(&block.span)
+            .ok_or_else(|| {
+                format!(
+                    "internal: the release plan has no block-end edge for the block at {}..{}",
+                    block.span.start, block.span.end
+                )
+            })?;
+        self.emit_release_edge(entries, "block_end")?;
+        // The function runs on after a block end, and may suspend and be dropped there (C8 slice
+        // 6 releases a dropped task's frame from its slots): a released frame slot is nulled so
+        // that nothing frees it a second time. `return` and propagation leave the function.
+        for entry in entries {
+            if self.plain_release_of(entry)?.is_none() {
+                continue;
+            }
+            let name = entry.codegen_name.as_str();
+            if let (Some(frame_slot), Some(slot)) =
+                (self.frame_slot_of(name), self.release_slot(name))
+            {
+                self.null_slots(&[MoveSlot {
+                    local: slot,
+                    frame_slot: Some(frame_slot),
+                    extra_frame_slots: self.frame_words_of(name) - 1,
+                    moved_flag: None,
+                }])?;
+            } else if let (Some(flag), Some(slot)) =
+                (self.region_flag_of(name), self.release_slot(name))
+            {
+                self.null_slots(&[MoveSlot {
+                    local: slot,
+                    frame_slot: None,
+                    extra_frame_slots: 0,
+                    moved_flag: Some(flag),
+                }])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The release at the `return` whose statement span is `span`.
+    fn release_at_return(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        self.release_open_temporaries("return_temporary")?;
+        self.release_open_loop_copies()?;
+        let entries = self.typed.release_plan.return_edge(span).ok_or_else(|| {
+            format!(
+                "internal: the release plan has no return edge for the `return` at {}..{}",
+                span.start, span.end
+            )
+        })?;
+        self.emit_release_edge(entries, "return")
+    }
+
+    /// The release at the auto-propagation fired by the identifier read at `span`.
+    fn release_at_propagation(&self, span: &ynz_diagnostics::SourceSpan) -> Result<(), String> {
+        self.release_open_temporaries("propagation_temporary")?;
+        self.release_open_loop_copies()?;
+        let entries = self
+            .typed
+            .release_plan
+            .propagation_edge(span)
+            .ok_or_else(|| {
+                format!(
+                    "internal: the release plan has no propagation edge for the read at {}..{}",
+                    span.start, span.end
+                )
+            })?;
+        self.emit_release_edge(entries, "propagation")
+    }
+
+    /// The error path a resume function emits for a re-read of an errors-capable local that typeck
+    /// already narrowed (`.failed()` checked, or propagated by an earlier read). It cannot run: the
+    /// error was handled before the narrowing. Typeck records an auto-propagation edge only for an
+    /// unnarrowed read, so there is usually no edge here; when one exists it is released, otherwise
+    /// the open statements' temporaries and loop copies are, and the locals are not.
+    fn release_at_narrowed_error_path(
+        &self,
+        span: &ynz_diagnostics::SourceSpan,
+    ) -> Result<(), String> {
+        match self.typed.release_plan.propagation_edge(span) {
+            Some(_) => self.release_at_propagation(span),
+            None => {
+                self.release_open_temporaries("narrowed_error_temporary")?;
+                self.release_open_loop_copies()
+            }
+        }
+    }
+}
+
+/// Lower the statements of `block`, then release its bindings at its end when control reaches it.
+/// THE block loop of every plain body: a function, an `if`, a `while`, a `for` and a `match` arm.
+///
+/// O(statements) time.
+fn lower_block_stmts<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    block: &ynz_ast::nodes::Block,
+) -> Result<(), String> {
+    for stmt in &block.stmts {
+        if is_block_terminated(cg) {
+            break;
+        }
+        lower_stmt(cg, stmt)?;
+    }
+    if !is_block_terminated(cg) {
+        cg.release_at_block_end(block)?;
+    }
+    Ok(())
+}
+
+/// Release every open scope at the `return` at `edge`, then return `value`. The value is fully
+/// built by the caller before this runs, so nothing it reads is released first.
+fn build_return_after_release<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    edge: &ynz_diagnostics::SourceSpan,
+    value: Option<&dyn BasicValue<'ctx>>,
+    what: &str,
+) -> Result<(), String> {
+    cg.release_at_return(edge)?;
+    cg.builder
+        .build_return(value)
+        .map_err(|err| format!("{what}: {err}"))?;
+    Ok(())
+}
+
+/// A `background` argument that is an envelope union but reaches a parameter the callee declares as
+/// something else (a generic `T`) has no slot to be copied into: the ctx would carry the spawner's
+/// per-site union view, which dangles once the spawner returns. Typeck refuses that spawn
+/// (`check_background_union_argument_for_generic_callee`); this only asserts it did.
+///
+/// Time: O(1)  Space: O(1)
+fn reject_union_argument_without_slot(
+    cg: &Cg<'_, '_>,
+    argument_ty: &Type,
+    callee: &str,
+    arg_index: usize,
+) -> Result<(), String> {
+    if cg.envelope_union_variants(argument_ty).is_none() {
+        return Ok(());
+    }
+    Err(format!(
+        "internal error: argument {} of `background {callee}(..)` is a union passed to a generic \
+         parameter, which typeck refuses (`check_background_union_argument_for_generic_callee`)",
+        arg_index + 1
+    ))
+}
+
+impl<'ctx, 'g> Cg<'ctx, 'g> {
+    /// The module function `void(ptr cell)` that releases the cell `value_to_stable_bits` makes of
+    /// a `MapEntry` `background` argument: the key half when it is a decimal's own cell, the
+    /// value half when it is a shape's cell, a `maybe`'s cell or a decimal's cell (each a copy the
+    /// spawn made, because the loop's per-site buffer the original points into is rewritten by
+    /// the next iteration), and the 16-byte `{key, value}` cell itself. Every other half is the
+    /// map's own bits (an int, a string pointer, a collection the map still holds) and is left
+    /// alone, as the copy left it. `None` is never returned: the cell is always freed.
+    ///
+    /// One function per key and value type. Time: O(1) to emit and to run  Space: O(1)
+    fn bg_mapentry_release_fn(
+        &self,
+        key_ty: &Type,
+        value_ty: &Type,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let key_ty = self.resolve_type(key_ty);
+        let value_ty = self.resolve_type(value_ty);
+        let name = format!(
+            "ynz_release_bg_mapentry_{}_{}",
+            mangle_type(&key_ty),
+            mangle_type(&value_ty)
+        );
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(existing);
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        self.builder.position_at_end(entry);
+        let cell = release
+            .get_nth_param(0)
+            .ok_or("bg mapentry release: missing cell parameter")?
+            .into_pointer_value();
+        let entry_ty = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let decimal_cell_size = self.i64().const_int(16, false);
+        let half_pointer = |index: u32, label: &str| -> Result<PointerValue<'ctx>, String> {
+            let slot = self
+                .builder
+                .build_struct_gep(entry_ty, cell, index, &format!("{label}_slot"))
+                .map_err(|err| format!("bg mapentry release gep {label}: {err}"))?;
+            let bits = self
+                .builder
+                .build_load(self.i64(), slot, &format!("{label}_bits"))
+                .map_err(|err| format!("bg mapentry release load {label}: {err}"))?
+                .into_int_value();
+            self.builder
+                .build_int_to_ptr(bits, self.ptr(), &format!("{label}_ptr"))
+                .map_err(|err| format!("bg mapentry release inttoptr {label}: {err}"))
+        };
+        if self.is_inline_decimal(&key_ty) {
+            let key_cell = half_pointer(0, "key")?;
+            self.builder
+                .build_call(
+                    self.rt.ynz_free,
+                    &[key_cell.into(), decimal_cell_size.into()],
+                    "",
+                )
+                .map_err(|err| format!("bg mapentry release key cell: {err}"))?;
+        } else if is_string_like(&key_ty) {
+            // The key is the spawn's own copy (`copy_map_entry_halves`).
+            let key_string = half_pointer(0, "key")?;
+            self.builder
+                .build_call(self.rt.ynz_string_release, &[key_string.into()], "")
+                .map_err(|err| format!("bg mapentry release key string: {err}"))?;
+        }
+        match &value_ty {
+            Type::Shape { .. } | Type::Maybe { .. } => {
+                if let Some(glue) = self.release_fn(&value_ty, true)? {
+                    let value_cell = half_pointer(1, "value")?;
+                    self.builder
+                        .build_call(glue, &[value_cell.into()], "")
+                        .map_err(|err| format!("bg mapentry release value: {err}"))?;
+                }
+            }
+            // A string, array or map value is the spawn's own copy (`copy_map_entry_halves`).
+            held if is_string_like(held)
+                || matches!(held, Type::BuiltinArray { .. } | Type::BuiltinMap { .. }) =>
+            {
+                if let Some(glue) = self.release_fn(held, false)? {
+                    let value_heap = half_pointer(1, "value")?;
+                    self.builder
+                        .build_call(glue, &[value_heap.into()], "")
+                        .map_err(|err| format!("bg mapentry release value heap: {err}"))?;
+                }
+            }
+            decimal if self.is_inline_decimal(decimal) => {
+                let value_cell = half_pointer(1, "value")?;
+                self.builder
+                    .build_call(
+                        self.rt.ynz_free,
+                        &[value_cell.into(), decimal_cell_size.into()],
+                        "",
+                    )
+                    .map_err(|err| format!("bg mapentry release value cell: {err}"))?;
+            }
+            _ => {}
+        }
+        self.builder
+            .build_call(
+                self.rt.ynz_free,
+                &[cell.into(), decimal_cell_size.into()],
+                "",
+            )
+            .map_err(|err| format!("bg mapentry release cell: {err}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("bg mapentry release return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(release)
+    }
+
+    /// The size of the cell a `maybe`'s payload sits in when the spawn copy minted one besides the
+    /// envelope: a flat shape's ABI size, or a decimal's 16 bytes. `None` for a payload with no cell
+    /// of its own (a string, an array, a map) and for a type that is not a `maybe`.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn maybe_payload_cell_size(&self, maybe_ty: &Type) -> Option<u64> {
+        let Type::Maybe { inner } = self.resolve_type(maybe_ty) else {
+            return None;
+        };
+        match self.resolve_type(&inner) {
+            Type::Shape { name } if self.shape_table.layout_shape(&name).is_some() => {
+                self.shape_abi_sizes.get(&name).copied()
+            }
+            number if self.is_inline_decimal(&number) => Some(16),
+            _ => None,
+        }
+    }
+
+    /// The module function `void(ptr envelope)` that frees the two cells a `background` spawn minted
+    /// for a `maybe` argument (`MaybeCellClone`): the payload's own cell (a shape's, a decimal's;
+    /// only when the `maybe` holds one) and the 16-byte envelope cell, and NOTHING they hold. For a
+    /// callee that takes the `maybe` at a `give` position: it releases what the payload owns (a
+    /// shape's fields) at its scope exit, in the `Local` form, which has no cell to free, so the
+    /// cells are the ladder's. `None` when the payload has no cell of its own (a string, an array,
+    /// a map: the callee's release frees the payload whole and only the envelope remains, which
+    /// the flat free kind frees).
+    ///
+    /// One function per payload type. Time: O(1) to emit and to run  Space: O(1)
+    fn given_maybe_shell_release_fn(
+        &self,
+        maybe_ty: &Type,
+    ) -> Result<Option<FunctionValue<'ctx>>, String> {
+        let Type::Maybe { inner } = self.resolve_type(maybe_ty) else {
+            return Ok(None);
+        };
+        let inner = self.resolve_type(&inner);
+        let Some(payload_cell_size) = self.maybe_payload_cell_size(maybe_ty) else {
+            return Ok(None);
+        };
+        let payload_size = self.i64().const_int(payload_cell_size, false);
+        let name = format!("ynz_release_given_maybe_shell_{}", mangle_type(&inner));
+        if let Some(existing) = self.module.get_function(&name) {
+            return Ok(Some(existing));
+        }
+        let release = self.module.add_function(
+            &name,
+            self.ctx.void_type().fn_type(&[self.ptr().into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let entry = self.ctx.append_basic_block(release, "entry");
+        let present_bb = self.ctx.append_basic_block(release, "payload_cell");
+        let envelope_bb = self.ctx.append_basic_block(release, "envelope_cell");
+        self.builder.position_at_end(entry);
+        let envelope = release
+            .get_nth_param(0)
+            .ok_or("given maybe shell release: missing envelope parameter")?
+            .into_pointer_value();
+        let (flag, bits) = self.load_maybe_env_pair(envelope, "given_maybe_shell")?;
+        let present = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                "given_maybe_shell_present",
+            )
+            .map_err(|err| format!("given maybe shell present: {err}"))?;
+        self.builder
+            .build_conditional_branch(present, present_bb, envelope_bb)
+            .map_err(|err| format!("given maybe shell branch: {err}"))?;
+        self.builder.position_at_end(present_bb);
+        let payload = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), "given_maybe_shell_payload")
+            .map_err(|err| format!("given maybe shell payload: {err}"))?;
+        self.builder
+            .build_call(self.rt.ynz_free, &[payload.into(), payload_size.into()], "")
+            .map_err(|err| format!("given maybe shell payload free: {err}"))?;
+        self.builder
+            .build_unconditional_branch(envelope_bb)
+            .map_err(|err| format!("given maybe shell join: {err}"))?;
+        self.builder.position_at_end(envelope_bb);
+        let envelope_size = self.release_cell_size(&ReleaseStep::Maybe {
+            inner: inner.clone(),
+        })?;
+        self.builder
+            .build_call(
+                self.rt.ynz_free,
+                &[envelope.into(), envelope_size.into()],
+                "",
+            )
+            .map_err(|err| format!("given maybe shell envelope free: {err}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|err| format!("given maybe shell return: {err}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(Some(release))
+    }
+}
+
+/// Mark the view `view` of an envelope-union `background` argument as MOVED when this spawn is
+/// the argument's sole holder (`background_arg_sole_holder`: a binding the spawn consumes, or a
+/// temporary nobody names), so the task's slot takes the boxes the value owns instead of cloning
+/// them. The spawner releases neither (a consumed binding is `Omitted(Moved)` in the release
+/// plan, and a value that enters a union slot is no temporary), so a clone would leave the
+/// original with no owner (`plain_shape_into_union_parameter_spawn`). A value the spawner keeps
+/// (a field read, a binding used again) stays a deep copy, which the spawner's own scope exit
+/// and the task's ladder release once each.
+///
+/// Time: O(1)  Space: O(1)
+fn mark_union_spawn_argument_moved<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &ynz_ast::nodes::Expr,
+    view: PointerValue<'ctx>,
+) {
+    let span = arg.span();
+    if cg
+        .typed
+        .background_arg_sole_holder
+        .contains_key(&(span.start, span.end))
+    {
+        cg.moved_cell_values.insert(view.as_value_ref() as usize);
+    }
+}
+
+/// The ladder's free kind of an envelope-union argument of a SUSPENDING `background` callee: the
+/// union sits in the callee frame's `Param` region (`stage_union_arg`), so the entry releases what
+/// the slot owns and frees no cell. Nothing at a `give` position: the callee releases its own
+/// `give` parameter at its scope exits, and its move sites null the frame slot.
+///
+/// Time: O(1) to emit once per union type  Space: O(1)
+fn sm_union_arg_free_kind<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    union_ty: &Type,
+    callee: &str,
+    arg_index: usize,
+) -> Result<BgArgFreeKind, String> {
+    if let Some(Some(OwnershipModifier::Give)) =
+        cg.suspending_callee_param_ownership(callee, arg_index)
+    {
+        return Ok(BgArgFreeKind::None);
+    }
+    Ok(match cg.release_fn(union_ty, false)? {
+        Some(glue) => BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        },
+        None => BgArgFreeKind::None,
+    })
+}
+/// The task's own slot for an envelope-union `background` argument of a CPU callee: a heap cell
+/// holding the union persisted by value (a copy of what it owns, as a stored union does), plus
+/// the free kind the closure uses after the call.
+///
+/// A union value is a per-site view on the spawner's frame, so passing it through the ctx would
+/// hand the task a pointer that dangles once the spawner returns (parked entry 71). The closure
+/// rebuilds a view of the cell for the callee. A callee that declares `give` may move the payload
+/// somewhere else, so only the cell itself is freed then (the same limit as
+/// `release_glue_free_kind`); otherwise the slot's contents are released and the cell freed by
+/// the one release helper.
+///
+/// Time: O(1) here, O(n) at run time in the cells the union owns; Space: O(1)
+fn bg_union_arg_cell<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    value: PointerValue<'ctx>,
+    union_ty: &Type,
+    callee: &str,
+) -> Result<(inkwell::values::IntValue<'ctx>, BgArgFreeKind), String> {
+    let variants = cg.envelope_union_variants(union_ty).ok_or_else(|| {
+        "internal: a background union argument is not an envelope union".to_string()
+    })?;
+    let byte_size = cg.union_layout(&variants)?.slot_size;
+    let cell = cg.heap_cell(cg.i64().const_int(byte_size, false), "bg_union")?;
+    cg.union_persist_into(value, cell, &variants, "bg_union")?;
+    let kind = if cg.callee_takes_a_given_parameter(callee) {
+        BgArgFreeKind::HeapShape { byte_size }
+    } else {
+        match cg.release_fn(union_ty, true)? {
+            Some(glue) => BgArgFreeKind::ReleaseGlue {
+                glue_name: glue.get_name().to_string_lossy().into_owned(),
+            },
+            None => BgArgFreeKind::HeapShape { byte_size },
+        }
+    };
+    let bits = cg
+        .builder
+        .build_ptr_to_int(cell, cg.i64(), "bg_union_bits")
+        .map_err(|err| format!("bg union cell bits: {err}"))?;
+    Ok((bits, kind))
+}
+
+/// The payload cell of the `maybe` envelope cell whose address is `envelope_bits`, as the bits of a
+/// pointer: the envelope's payload word when its flag says present, zero when it is `none` (a
+/// descriptor entry with a zero cell frees nothing). Read at the spawn, while the cell is intact.
+///
+/// Time: O(1)  Space: O(1)
+fn maybe_payload_cell_bits<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    envelope_bits: inkwell::values::IntValue<'ctx>,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let envelope = cg
+        .builder
+        .build_int_to_ptr(envelope_bits, cg.ptr(), "spawn_maybe_envelope")
+        .map_err(|err| format!("spawn maybe envelope: {err}"))?;
+    let (flag, bits) = cg.load_maybe_env_pair(envelope, "spawn_maybe_payload")?;
+    let present = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            flag,
+            cg.i64().const_zero(),
+            "spawn_maybe_present",
+        )
+        .map_err(|err| format!("spawn maybe present: {err}"))?;
+    Ok(cg
+        .builder
+        .build_select(present, bits, cg.i64().const_zero(), "spawn_maybe_cell")
+        .map_err(|err| format!("spawn maybe cell: {err}"))?
+        .into_int_value())
+}
+
+/// The free kind of a `maybe` the task's copy holds in cells of its own (`HeapMaybeEnv`) at a `give`
+/// position, when the payload has a cell besides the envelope: the callee releases the payload's
+/// contents at its scope exit, so the ladder frees the two cells and nothing in them
+/// (`Cg::given_maybe_shell_release_fn`). `None` for every other kind and type.
+///
+/// Time: O(1)  Space: O(1)
+fn given_maybe_shell_glue(
+    cg: &Cg<'_, '_>,
+    kind: &BgArgFreeKind,
+    ty: &Type,
+) -> Result<Option<BgArgFreeKind>, String> {
+    if !matches!(kind, BgArgFreeKind::HeapMaybeEnv { .. }) {
+        return Ok(None);
+    }
+    Ok(cg
+        .given_maybe_shell_release_fn(ty)?
+        .map(|glue| BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        }))
+}
+
+/// Upgrade the flat free kind of a `background` argument to the type's release glue, when the
+/// glue frees more than the flat free does and the task may free it deeply. A type whose release
+/// is not supported is an internal error, not a silent fall back to the flat free.
+///
+/// A `give` parameter of a plain callee is the callee's: it releases it at its scope exits (or
+/// moves it on, nulling its slot), so the ladder frees nothing of it but a shape's own cell (the
+/// callee releases the fields, never the cell it was handed). Every other position of such a
+/// callee is released deep like any argument: a given value the callee stored in one of them is
+/// owned by that container from then on, and the callee nulled its own slot at the store. A
+/// suspending callee releases the frame-backed kinds (string, array, map, channel) of its own `give`
+/// parameters at its scope exits (C8 slice 2), so the ladder frees nothing of such an argument
+/// either; its other positions, and every position of an unknown callee, keep the flat free when
+/// any parameter is `give`. Pinned by `bg_arg_container_add_gives_row`
+/// (integration: a `give` row stored into a container the ladder also owns must not double free)
+/// and `a_spawned_callee_releases_the_give_parameters_the_ladder_no_longer_frees`.
+fn release_glue_free_kind<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    kind: BgArgFreeKind,
+    ty: &Type,
+    callee: &str,
+    arg_index: usize,
+) -> Result<BgArgFreeKind, String> {
+    // A `MapEntry` is never an owner of a slot, so no callee releases or moves one on, whatever the
+    // parameter's modifier: the task's copy is the ladder's, entry cell and halves alike.
+    if let Type::MapEntry {
+        key: entry_key,
+        val: entry_value,
+    } = cg.resolve_type(ty)
+    {
+        let glue = cg.bg_mapentry_release_fn(&entry_key, &entry_value)?;
+        return Ok(BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        });
+    }
+    match cg.plain_callee_param_ownership(callee, arg_index) {
+        Some(Some(OwnershipModifier::Give)) => {
+            if let Some(glue) = given_maybe_shell_glue(cg, &kind, ty)? {
+                return Ok(glue);
+            }
+            return Ok(cg.free_kind_of_a_given_argument(kind, ty));
+        }
+        Some(_) => {}
+        None => {
+            // A suspending callee releases a `give` parameter of a frame-backed kind itself (a
+            // string, array, map or channel: `ReleaseKind::has_frame_backing`), so the ladder
+            // frees nothing of it; any other kind stays the ladder's (the state machine does not
+            // release it).
+            if let Some(Some(OwnershipModifier::Give)) =
+                cg.suspending_callee_param_ownership(callee, arg_index)
+            {
+                if let (BgArgFreeKind::HeapMaybeEnv { .. }, Some(payload_size)) =
+                    (&kind, cg.maybe_payload_cell_size(ty))
+                {
+                    return Ok(BgArgFreeKind::OwnedMaybeCells { payload_size });
+                }
+                // The callee releases a flat shape's fields and nulls its frame slot, so the ladder
+                // frees the cell it allocated through the descriptor, not through the slot.
+                return Ok(match cg.free_kind_of_a_given_argument(kind, ty) {
+                    BgArgFreeKind::HeapShape { byte_size } => {
+                        BgArgFreeKind::OwnedCell { byte_size }
+                    }
+                    BgArgFreeKind::HeapMaybeEnv { byte_size } => {
+                        BgArgFreeKind::OwnedCell { byte_size }
+                    }
+                    other => other,
+                });
+            }
+            // A position of a suspending callee that is KNOWN not to be `give` is borrowed: the callee
+            // neither releases nor moves it on, so the value the task holds is the ladder's to release
+            // whole, as for a plain callee. Only an unknown callee keeps the flat free.
+            let known_borrowed = cg
+                .suspending_callee_param_ownership(callee, arg_index)
+                .is_some();
+            if !known_borrowed && cg.callee_takes_a_given_parameter(callee) {
+                return Ok(kind);
+            }
+        }
+    }
+    let resolved = cg.resolve_type(ty);
+    let upgrade = match (&kind, &resolved) {
+        (BgArgFreeKind::HeapArrayPrimitive, Type::BuiltinArray { elem }) => {
+            cg.stored_release(elem, ReleaseHome::Element)?.is_some()
+        }
+        // A `string` the task owns: the spawn-time clone, or the moved original.
+        (BgArgFreeKind::None, string_like) if is_string_like(string_like) => true,
+        (BgArgFreeKind::None, Type::BuiltinMap { .. }) => true,
+        // A union that is not an envelope union is its one variant's raw pointer, handed to the task
+        // as it is (a refused copy type, `prepare_bg_arg_for_ctx`'s hand-over): the task owns what
+        // that variant owns, released as the variant is (`release_step`). A union that owns nothing
+        // (`int | float`) has no release.
+        (BgArgFreeKind::None, Type::Union { .. })
+            if !ynz_typeck::check::is_envelope_union(&resolved) =>
+        {
+            release_step(&resolved) != ReleaseStep::Nothing
+        }
+        (BgArgFreeKind::HeapShape { .. }, Type::Shape { name }) => {
+            !cg.shape_field_releases(name)?.is_empty()
+        }
+        (BgArgFreeKind::HeapShape { .. }, Type::BuiltinFixed { .. }) => true,
+        (BgArgFreeKind::HeapMaybeEnv { .. }, Type::Maybe { .. }) => true,
+        _ => false,
+    };
+    if !upgrade {
+        return Ok(kind);
+    }
+    match cg.release_fn(&resolved, true)? {
+        Some(glue) => Ok(BgArgFreeKind::ReleaseGlue {
+            glue_name: glue.get_name().to_string_lossy().into_owned(),
+        }),
+        None => Ok(kind),
+    }
+}
+
 #[cfg(test)]
 mod copy_parity_tests {
-    use super::CopyMode;
+    use super::{release_step, CopyMode, ReleaseStep};
     use ynz_typeck::owned_copy::{owned_copy_plan, ElemCopy, HeapCell, OwnedCopy};
     use ynz_typeck::type_variant_sampler::{all_type_variants, TYPE_VARIANT_COUNT};
     use ynz_typeck::types::Type;
@@ -20271,6 +33505,252 @@ mod copy_parity_tests {
             "ynz_typeck::type_variant_sampler::all_type_variants must have one sample per \
              Type variant"
         );
+    }
+
+    /// Bug: a copy plan with no matching release leaks what the copy allocates, and a release
+    /// with no matching copy frees what nobody allocated (High: the helper frees exactly what a
+    /// copy allocates). `release_step` and `owned_copy_plan` are two exhaustive matches over
+    /// `Type`; this holds every sampled variant to the pairing, so an edit to one fails here.
+    #[test]
+    fn release_step_matches_the_owned_copy_plan_for_every_type_variant() {
+        for ty in all_type_variants() {
+            let step = release_step(&ty);
+            let plan = owned_copy_plan(&ty);
+            let consistent = match &plan {
+                OwnedCopy::StringClone => step == ReleaseStep::String,
+                OwnedCopy::ArrayClone { .. } => matches!(step, ReleaseStep::Array { .. }),
+                OwnedCopy::MapClone => matches!(step, ReleaseStep::Map { .. }),
+                OwnedCopy::MaybeCellClone => matches!(step, ReleaseStep::Maybe { .. }),
+                OwnedCopy::ShapeMemcpy => matches!(step, ReleaseStep::Shape { .. }),
+                OwnedCopy::FixedMemcpy => {
+                    matches!(step, ReleaseStep::Nothing | ReleaseStep::Fixed { .. })
+                }
+                OwnedCopy::ReceiverIsCopy | OwnedCopy::FrameLocalImmutable { .. } => {
+                    step == ReleaseStep::Nothing
+                }
+                // A refused copy still has a release: the type is held, and dropped, without
+                // ever being copied.
+                OwnedCopy::Refused(_) => true,
+            };
+            assert!(
+                consistent,
+                "{ty:?}: the owned-copy table plans {plan:?} but the release table says {step:?}"
+            );
+        }
+    }
+
+    /// Bug: a type the copy table refuses (a channel, a handle, a union, an errors-capable value)
+    /// has no release, so its holder leaks it or, worse, a later change frees it as something
+    /// else (High). Each refused heap-holding variant names its release.
+    #[test]
+    fn every_refused_type_still_has_its_own_release() {
+        for ty in all_type_variants() {
+            if !matches!(owned_copy_plan(&ty), OwnedCopy::Refused(_)) {
+                continue;
+            }
+            let step = release_step(&ty);
+            let expected = match ty {
+                Type::BuiltinChannel { .. } => matches!(step, ReleaseStep::Channel),
+                Type::BackgroundHandle { .. } => matches!(step, ReleaseStep::Handle),
+                Type::Union { .. } => matches!(step, ReleaseStep::Union { .. }),
+                Type::ErrorsCapable { .. } => matches!(step, ReleaseStep::ErrorsCapable { .. }),
+                // No such value exists in generated code: loud, never a skip.
+                Type::Dynamic { .. } | Type::TypeParam { .. } | Type::Generic { .. } => {
+                    matches!(step, ReleaseStep::Unsupported(_))
+                }
+                // A loop's view of a slot, `nothing`, the error placeholder and a bignum owns no
+                // heap this table frees.
+                Type::MapEntry { .. } | Type::Nothing | Type::Error | Type::Number { .. } => {
+                    step == ReleaseStep::Nothing
+                }
+                // The remaining refusals are containers refused for their items (none sampled:
+                // the samples hold `int` items).
+                _ => true,
+            };
+            assert!(
+                expected,
+                "{ty:?}: refused to copy, but its release is {step:?}"
+            );
+        }
+    }
+
+    /// Bug: a union with no tag (`array<int> | nothing`, `int | float`) is the raw pointer or
+    /// bits of its one variant, and the release table said "no stored form" for it, so a shape
+    /// with such a field did not build (High: release). The release plan classifies the same
+    /// union by the same variant (`raw_union_variant`); this holds the two together, so an edit
+    /// to one fails here instead of leaking or double-freeing.
+    #[test]
+    fn a_union_without_a_tag_releases_as_the_variant_the_release_plan_classifies() {
+        use ynz_typeck::generics::GenericShapeTable;
+        use ynz_typeck::release_plan::{heap_class_of, HeapClass, ReleaseKind, TypeTables};
+        use ynz_typeck::shapes::ShapeTable;
+        let shapes = ShapeTable::default();
+        let generic_shapes = GenericShapeTable::default();
+        let tables = TypeTables {
+            shapes: &shapes,
+            generic_shapes: &generic_shapes,
+        };
+        let array = Type::BuiltinArray {
+            elem: Box::new(Type::Int),
+        };
+        let map = Type::BuiltinMap {
+            key: Box::new(Type::String),
+            val: Box::new(Type::Int),
+        };
+        let channel = Type::BuiltinChannel {
+            elem: Box::new(Type::Int),
+        };
+        let cases = [
+            (vec![Type::Int, Type::Float], HeapClass::NoHeap),
+            (vec![Type::Int, Type::Nothing], HeapClass::NoHeap),
+            (
+                vec![Type::Bool, Type::Float, Type::Nothing],
+                HeapClass::NoHeap,
+            ),
+            (
+                vec![Type::String, Type::Nothing],
+                HeapClass::Heap(ReleaseKind::String),
+            ),
+            (
+                vec![array, Type::Nothing],
+                HeapClass::Heap(ReleaseKind::Array),
+            ),
+            (vec![map, Type::Nothing], HeapClass::Heap(ReleaseKind::Map)),
+            (
+                vec![channel, Type::Nothing],
+                HeapClass::Heap(ReleaseKind::Channel),
+            ),
+        ];
+        for (variants, class) in cases {
+            let ty = Type::Union { variants };
+            assert!(
+                !ynz_typeck::check::is_envelope_union(&ty),
+                "{ty:?} must be a union with no tag"
+            );
+            assert_eq!(heap_class_of(&ty, &tables), class, "{ty:?}");
+            let step = release_step(&ty);
+            let consistent = match class {
+                HeapClass::NoHeap => step == ReleaseStep::Nothing,
+                HeapClass::Heap(ReleaseKind::String) => step == ReleaseStep::String,
+                HeapClass::Heap(ReleaseKind::Array) => matches!(step, ReleaseStep::Array { .. }),
+                HeapClass::Heap(ReleaseKind::Map) => matches!(step, ReleaseStep::Map { .. }),
+                HeapClass::Heap(ReleaseKind::Channel) => step == ReleaseStep::Channel,
+                _ => false,
+            };
+            assert!(
+                consistent,
+                "{ty:?}: the release plan says {class:?} but the release table says {step:?}"
+            );
+        }
+    }
+
+    /// Bug: the release plan names a kind of binding to release and the helper has nothing for it
+    /// (a silent skip at C7), or a new kind is added to the plan with no answer here (High).
+    /// The match over `ReleaseKind` has no `_` arm, so a new kind fails to compile until this
+    /// test says what releases it.
+    #[test]
+    fn every_kind_the_release_plan_names_has_a_release() {
+        use ynz_typeck::release_plan::ReleaseKind;
+        let kinds = [
+            ReleaseKind::String,
+            ReleaseKind::Array,
+            ReleaseKind::Map,
+            ReleaseKind::Channel,
+            ReleaseKind::TaskHandle,
+            ReleaseKind::Shape,
+            ReleaseKind::NestedShape,
+            ReleaseKind::Maybe,
+            ReleaseKind::Union,
+            ReleaseKind::Dynamic,
+            ReleaseKind::Fixed,
+            ReleaseKind::MapEntry,
+            ReleaseKind::ErrorsCapable,
+            ReleaseKind::TypeParameter,
+        ];
+        for kind in kinds {
+            let (representative, expected): (Type, fn(&ReleaseStep) -> bool) = match kind {
+                ReleaseKind::String => (Type::String, |step| *step == ReleaseStep::String),
+                ReleaseKind::Array => (
+                    Type::BuiltinArray {
+                        elem: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::Array { .. }),
+                ),
+                ReleaseKind::Map => (
+                    Type::BuiltinMap {
+                        key: Box::new(Type::String),
+                        val: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::Map { .. }),
+                ),
+                ReleaseKind::Channel => (
+                    Type::BuiltinChannel {
+                        elem: Box::new(Type::Int),
+                    },
+                    |step| *step == ReleaseStep::Channel,
+                ),
+                ReleaseKind::TaskHandle => (
+                    Type::BackgroundHandle {
+                        result: Box::new(Type::Int),
+                        msg_elem: None,
+                    },
+                    |step| *step == ReleaseStep::Handle,
+                ),
+                ReleaseKind::Shape | ReleaseKind::NestedShape => (
+                    Type::Shape {
+                        name: "Player".to_string(),
+                    },
+                    |step| matches!(step, ReleaseStep::Shape { .. }),
+                ),
+                ReleaseKind::Maybe => (
+                    Type::Maybe {
+                        inner: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::Maybe { .. }),
+                ),
+                ReleaseKind::Union => (
+                    Type::Union {
+                        variants: vec![Type::Int, Type::String],
+                    },
+                    |step| matches!(step, ReleaseStep::Union { .. }),
+                ),
+                // Dynamic dispatch is not lowered, so no such value exists: loud, not a skip.
+                ReleaseKind::Dynamic => (
+                    Type::Dynamic {
+                        contract: "Damageable".to_string(),
+                    },
+                    |step| matches!(step, ReleaseStep::Unsupported(_)),
+                ),
+                ReleaseKind::Fixed => (
+                    Type::BuiltinFixed {
+                        elem: Box::new(Type::String),
+                        size: ynz_typeck::FixedLength::Known(2),
+                    },
+                    |step| matches!(step, ReleaseStep::Fixed { .. }),
+                ),
+                // A loop cell is never an owner.
+                ReleaseKind::MapEntry => (
+                    Type::MapEntry {
+                        key: Box::new(Type::String),
+                        val: Box::new(Type::String),
+                    },
+                    |step| *step == ReleaseStep::Nothing,
+                ),
+                ReleaseKind::ErrorsCapable => (
+                    Type::ErrorsCapable {
+                        inner: Box::new(Type::String),
+                    },
+                    |step| matches!(step, ReleaseStep::ErrorsCapable { .. }),
+                ),
+                // A type parameter releases by what its instance is: `T` = `string` here.
+                ReleaseKind::TypeParameter => (Type::String, |step| *step == ReleaseStep::String),
+            };
+            let step = release_step(&representative);
+            assert!(
+                expected(&step),
+                "{kind:?}: a `{representative:?}` releases as {step:?}"
+            );
+        }
     }
 
     #[test]
@@ -20336,6 +33816,10 @@ mod copy_parity_tests {
                     matches!(ty, Type::Maybe { .. }),
                     "{ty:?}: planned MaybeCellClone, which the emitter destructures as \
                      Type::Maybe"
+                ),
+                OwnedCopy::StringClone => assert!(
+                    matches!(ty, Type::String | Type::Sensitive { .. }),
+                    "{ty:?}: planned StringClone, which the emitter copies with ynz_string_clone"
                 ),
                 OwnedCopy::ReceiverIsCopy
                 | OwnedCopy::FrameLocalImmutable { .. }
@@ -20417,17 +33901,22 @@ mod copy_parity_tests {
     }
 
     #[test]
-    fn bignum_number_is_refused_not_aliased() {
+    fn bignum_number_is_cloned_text_not_aliased() {
         // WHY: v0.3-M8 Phase 4 fix round 3, should-fix 5 — bignum (precision > 34) lowers as a
         // POINTER to a heap decimal string (`llvm_type_for`), not an i128 value; the
         // whole-variant sweep above only samples `Number { precision: 34 }` (a value), so it
-        // cannot see this within-variant edge case. It used to sit in the alias arm; under the
-        // 2026-09-06 ruling an alias is not an answer, so it is a refusal until the design for
-        // wider numbers lands.
+        // cannot see this within-variant edge case. An alias is not an answer (2026-09-06
+        // ruling), and since C7 r1 a bignum is released like a string, so it is COPIED like one:
+        // the copy table and the release table agree on the same one type fact (`is_bignum`).
         let bignum = Type::Number { precision: 40 };
+        assert_eq!(
+            owned_copy_plan(&bignum),
+            OwnedCopy::StringClone,
+            "bignum `number` (a pointer to heap text) must be copied as text, never aliased"
+        );
         assert!(
-            matches!(owned_copy_plan(&bignum), OwnedCopy::Refused(_)),
-            "bignum `number` (a pointer) must not be copied by handing back the pointer"
+            matches!(release_step(&bignum), ReleaseStep::String),
+            "a bignum is released exactly as a string, the form its copy allocates"
         );
         assert!(
             !ynz_typeck::types::is_trivially_copyable(&bignum),
@@ -20645,33 +34134,192 @@ fn declare_sat_intrinsic<'ctx>(
         .unwrap_or_else(|| module.add_function(name, fn_ty, None))
 }
 
-/// Find the mangled name for a generic function call by matching the base name in the mono table.
+/// The mangled name of the generic instance the call at `call_span` runs: the type arguments
+/// the type checker checked that call with (`TypedModule::generic_call_instances`), with the
+/// enclosing instance's own type parameters substituted (`type_subst`), so a generic call
+/// inside a generic body runs the instance built for the outer instance's types.
 ///
-/// When there are multiple instantiations of the same generic (e.g. `identity<int>` and
-/// `identity<string>`), this picks the first match. For P4a the typical case is a single
-/// instantiation per call site — a precise match by argument types is a P4b refinement.
-fn find_mono_name_by_args(
-    mono_table: &MonomorphizationTable,
+/// Never re-derived from the argument types: `pickA(tiny, big)` against `pickA<T>(first: T |
+/// Tiny, second: T)` fits both `pickA<Big>` and `pickA<Big | Tiny>`, and a guess runs a
+/// function built for other types (a `Tiny` read as a `Big`). A call with no record, a call
+/// recorded twice with different type arguments, or an instance that was never declared is an
+/// internal error — the type checker and codegen disagree, a compiler bug and never a user
+/// mistake (C1g, #424).
+///
+/// O(size of the type arguments) time and space.
+fn recorded_generic_instance_name(
+    instances: &ynz_typeck::GenericCallInstances,
+    type_subst: &HashMap<String, Type>,
     fn_name: &str,
-    arg_types: &[Type],
-) -> Option<String> {
-    // Try exact match on param types first.
-    for (key, sig) in &mono_table.entries {
-        if key.fn_name != fn_name {
-            continue;
-        }
-        if sig.param_types.len() == arg_types.len()
-            && sig.param_types.iter().zip(arg_types).all(|(a, b)| a == b)
-        {
-            return Some(mangle_mono_name(&key.fn_name, &key.type_args));
+    call_span: &ynz_diagnostics::SourceSpan,
+    instance_is_declared: impl Fn(&str) -> bool,
+) -> Result<String, String> {
+    let internal_error = |detail: String| {
+        format!(
+            "internal compiler error: cannot tell which instance of generic `{fn_name}` to call: \
+             {detail}. This is a compiler bug."
+        )
+    };
+    let recorded = instances
+        .type_args_at((call_span.start, call_span.end))
+        .map_err(internal_error)?;
+    let type_args: Vec<Type> = recorded
+        .iter()
+        .map(|type_arg| ynz_typeck::generics::apply_substitution(type_arg, type_subst))
+        .collect();
+    let mangled = mangle_mono_name(fn_name, &type_args);
+    if !instance_is_declared(&mangled) {
+        return Err(internal_error(format!(
+            "the call was checked with type arguments {type_args:?}, but no instance `{mangled}` \
+             was built"
+        )));
+    }
+    Ok(mangled)
+}
+
+#[cfg(test)]
+mod recorded_generic_instance_tests {
+    use super::{mangle_mono_name, recorded_generic_instance_name};
+    use std::collections::HashMap;
+    use ynz_diagnostics::SourceSpan;
+    use ynz_typeck::{GenericCallInstances, Type};
+
+    fn big() -> Type {
+        Type::Shape { name: "Big".into() }
+    }
+
+    fn tiny() -> Type {
+        Type::Shape {
+            name: "Tiny".into(),
         }
     }
-    // Fall back: first entry with matching name (single-instantiation case).
-    mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == fn_name)
-        .map(|k| mangle_mono_name(&k.fn_name, &k.type_args))
+
+    fn call_at(start: usize) -> SourceSpan {
+        SourceSpan::new("main.ynz", start, start + 10)
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_runs_the_instance_it_was_checked_with() {
+        // BUG (High: call dispatch, memory safety): `pickA(tiny, big)` fits both `pickA<Big>`
+        // and `pickA<Big | Tiny>`; re-deriving the instance from argument types could not tell
+        // them apart. Two calls with the same argument types run their own recorded instance.
+        let big_or_tiny = Type::Union {
+            variants: vec![big(), tiny()],
+        };
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![big()]);
+        instances.record((20, 30), vec![big_or_tiny.clone()]);
+        let declared = [
+            mangle_mono_name("pickA", &[big()]),
+            mangle_mono_name("pickA", std::slice::from_ref(&big_or_tiny)),
+        ];
+        let is_declared = |name: &str| declared.iter().any(|known| known == name);
+        let no_subst = HashMap::new();
+        assert_eq!(
+            recorded_generic_instance_name(
+                &instances,
+                &no_subst,
+                "pickA",
+                &call_at(0),
+                is_declared
+            ),
+            Ok(mangle_mono_name("pickA", &[big()]))
+        );
+        assert_eq!(
+            recorded_generic_instance_name(
+                &instances,
+                &no_subst,
+                "pickA",
+                &call_at(20),
+                is_declared
+            ),
+            Ok(mangle_mono_name("pickA", &[big_or_tiny]))
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_inside_a_generic_body_runs_the_outer_instances_types() {
+        // BUG (High: call dispatch): a call recorded as `inner<T | nothing>` inside `outer<T>`
+        // must run `inner<Big | nothing>` in `outer<Big>`, never the unsubstituted instance.
+        let maybe_t = Type::Union {
+            variants: vec![Type::TypeParam { name: "T".into() }, Type::Nothing],
+        };
+        let maybe_big = Type::Union {
+            variants: vec![big(), Type::Nothing],
+        };
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![maybe_t]);
+        let declared = mangle_mono_name("inner", std::slice::from_ref(&maybe_big));
+        let outer_big = HashMap::from([("T".to_string(), big())]);
+        assert_eq!(
+            recorded_generic_instance_name(&instances, &outer_big, "inner", &call_at(0), |name| {
+                name == declared
+            }),
+            Ok(declared.clone())
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_with_no_record_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a call the type checker recorded nothing
+        // for must stop codegen, never fall back to some instance of that name.
+        let mut instances = GenericCallInstances::default();
+        instances.record((20, 30), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(40),
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error")
+                && error.contains("recorded no type arguments"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_with_two_different_records_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a call checked with two different sets of
+        // type arguments must stop codegen, never run the first or the last one.
+        let mut instances = GenericCallInstances::default();
+        instances.record((0, 10), vec![big()]);
+        instances.record((0, 10), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(0),
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("two different sets"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_call_recorded_for_an_instance_never_built_is_an_internal_error() {
+        // BUG (High: call dispatch, memory safety): a recorded instance the module does not
+        // declare must stop codegen, never resolve to another instance of that name.
+        let mut instances = GenericCallInstances::default();
+        instances.record((20, 30), vec![tiny()]);
+        let error = recorded_generic_instance_name(
+            &instances,
+            &HashMap::new(),
+            "same",
+            &call_at(20),
+            |_| false,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("was built"),
+            "{error}"
+        );
+    }
 }
 
 // ── BuiltinArray method dispatch ─────────────────────────────────────────────
@@ -20740,8 +34388,9 @@ fn lower_array_method<'ctx>(
             //
             // Element comparison semantics (v0.3-M5 P2):
             //   - non-shape elements: 8-byte cell BIT equality (int/bool value; float
-            //     bit pattern; string/number pointer identity — behavior-preserving
-            //     vs the uniform-slot ABI, locked by the step-1 matrix goldens);
+            //     bit pattern);
+            //   - decimal128 `number` elements: VALUE equality (`decimal_compare`, as `==`);
+            //   - string elements: byte equality (`ynz_string_eq`, as `==`);
             //   - shape elements: field-wise VALUE equality via `shape_value_eq`
             //     (pointer identity has no by-value analogue; locked by the two RED
             //     matrix contract cells).
@@ -20768,7 +34417,8 @@ fn lower_array_method<'ctx>(
             };
             // Non-shape target: marshal to the full-width i64 cell ONCE, before the
             // loop (the widening also fixes the raw-i1 bool-target compare).
-            let target_bits = if elem_shape_name.is_none() {
+            let compares_decimals = cg.is_inline_decimal(elem);
+            let target_bits = if elem_shape_name.is_none() && !compares_decimals {
                 Some(cg.array_elem_bits64(target_val, &target_ty)?)
             } else {
                 None
@@ -20819,6 +34469,41 @@ fn lower_array_method<'ctx>(
                 // Field-wise value equality between the copied element bytes and
                 // the target shape pointer.
                 cg.shape_value_eq(target_val.into_pointer_value(), out, shape_name, "c_eq")?
+            } else if compares_decimals {
+                // A decimal element is found by its VALUE (`1.0` equals `1.00`, as `==` says), never
+                // by the address of the cell it sits in.
+                decimal_compare(cg, out, target_val.into_pointer_value(), &BinOpKind::EqEq)?
+                    .into_int_value()
+            } else if matches!(cg.resolve_type(elem), Type::String) {
+                // A string element is found by its bytes (`ynz_string_eq`, the same equality
+                // as `==`), never by its pointer: every stored string is a copy of the one
+                // that was put in, so two equal strings are never one pointer.
+                let elem_bits = cg.array_elem_bits_from_out(out, elem, "c_get")?;
+                let elem_ptr = cg
+                    .builder
+                    .build_int_to_ptr(elem_bits, cg.ptr(), "c_elem_str")
+                    .map_err(|err| format!("contains string inttoptr: {err}"))?;
+                let call = cg
+                    .builder
+                    .build_call(
+                        cg.rt.string_eq,
+                        &[elem_ptr.into(), target_val.into()],
+                        "c_str_eq",
+                    )
+                    .map_err(|err| format!("contains string_eq: {err}"))?;
+                let result = call
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("contains string_eq returned void")?
+                    .into_int_value();
+                cg.builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        result,
+                        cg.i32().const_int(0, false),
+                        "c_str_eq_b",
+                    )
+                    .map_err(|err| format!("{err}"))?
             } else {
                 let elem_bits = cg.array_elem_bits_from_out(out, elem, "c_get")?;
                 cg.builder
@@ -20917,16 +34602,7 @@ fn lower_fixed_method<'ctx>(
                 .map_err(|e| format!("{e}"))?;
 
             cg.builder.position_at_end(ok_bb);
-            let gep = unsafe {
-                cg.builder
-                    .build_gep(cg.i64(), arr, &[idx], "fg_elem")
-                    .map_err(|e| format!("{e}"))?
-            };
-            let bits = cg
-                .builder
-                .build_load(cg.i64(), gep, "bits")
-                .map_err(|e| format!("{e}"))?
-                .into_int_value();
+            let bits = cg.fixed_cell_envelope_bits(arr, idx, elem, "fg_elem")?;
             let has0 = cg
                 .builder
                 .build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_ok")
@@ -20972,15 +34648,21 @@ fn lower_fixed_method<'ctx>(
             let idx = lower_expr(cg, &args[0])?.into_int_value();
             let val = lower_expr(cg, &args[1])?;
             let vty = cg.expr_type(&args[1]);
+            if cg.is_inline_decimal(&vty) {
+                cg.fixed_cell_store_decimal(arr, idx, val.into_pointer_value(), "fs_decimal")?;
+                return Ok(cg.i64().const_zero().into());
+            }
             // Persist surface: the fixed slot outlives the value expr's site —
             // shape/maybe bits route through the ONE stable-bits choke point
             // (fix round 4).
+            let val = own_string_for_store(cg, val, &vty, "fs_str")?;
             let bits = cg.value_to_stable_bits(val, &vty, "fs_val")?;
             let gep = unsafe {
                 cg.builder
                     .build_gep(cg.i64(), arr, &[idx], "fs_elem")
                     .map_err(|e| format!("{e}"))?
             };
+            release_replaced_fixed_cell(cg, gep, &vty, "fs_old")?;
             cg.builder
                 .build_store(gep, bits)
                 .map_err(|e| format!("{e}"))?;
@@ -21160,11 +34842,15 @@ fn is_number_errors_callee(
 /// 3. If null → falls through to a "success" block and returns the success
 ///    value converted to the given inner type.
 ///
+/// `edge` is the span of the identifier read that fires it: the key of the plan's propagation
+/// edge.
+///
 /// Must only be called when `cg.is_errors_capable = true`.
 fn lower_ec_auto_propagate<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     result_struct: inkwell::values::StructValue<'ctx>,
     inner_ty: &Type,
+    edge: &ynz_diagnostics::SourceSpan,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let result_ty = errors_result_type(cg.ctx);
 
@@ -21191,6 +34877,8 @@ fn lower_ec_auto_propagate<'ctx>(
 
     // Propagation block: pop frame, wrap error, early-return.
     cg.builder.position_at_end(propagate_bb);
+    // Every open scope leaves here; the error object is the caller's (its class is `Returned`).
+    cg.release_at_propagation(edge)?;
     cg.builder
         .build_call(cg.rt.ynz_frame_pop, &[], "ap_pop")
         .map_err(|e| format!("ap pop: {e}"))?;
@@ -21231,11 +34919,10 @@ fn lower_ec_auto_propagate<'ctx>(
 /// - **Outside an errors-capable caller**: just stores the struct; the caller
 ///   handles it via `.or()` / `.failed()`.
 ///
-/// For `-> number errors` callees the ok-word is a pointer into the callee's decimal128
-/// stack alloca. Non-SM (non-suspending) callees' stack allocas become invalid the
-/// moment the callee returns; calling the same callee a second time allocates a new
-/// frame at the same stack slot, clobbering the first binding's ok-pointer. Copy-on-bind
-/// copies the i128 into a per-binding alloca so each binding owns stable storage.
+/// For `-> number errors` callees the ok-word is a pointer to a 16-byte heap cell the callee's
+/// `return` made (`number_to_heap_cell`). Copy-on-bind copies the i128 into a per-binding alloca
+/// so each binding owns stable storage, and frees the cell, so the binding's result releases
+/// nothing for the number (its ok-word is a stack address).
 fn lower_errors_capable_call_result<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     mut result_struct: inkwell::values::StructValue<'ctx>,
@@ -21296,14 +34983,19 @@ fn lower_errors_capable_call_result<'ctx>(
             .build_load(cg.ctx.i128_type(), dec_ptr, "ec_cob_i128")
             .map_err(|e| format!("ec_result cob load i128 {callee_name}: {e}"))?
             .into_int_value();
-        // The ok-word points at the callee's frame-interior staging slot: only
-        // 8-aligned — claim that, not ABI 16.
+        // The ok-word points at the callee's heap cell, 16 bytes from `ynz_alloc` (8-aligned): claim
+        // that, not ABI 16.
         state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
             || format!("ec_result cob load i128 {callee_name}: no instruction value"),
         )?)?;
         cg.builder
             .build_store(binding_alloca, i128_val)
             .map_err(|e| format!("ec_result cob store {callee_name}: {e}"))?;
+        // The callee's `return` made the 16-byte heap cell this ok-word points at (`number_to_heap_cell`);
+        // the binding now owns its own copy in the alloca, so the cell is freed here, once.
+        cg.builder
+            .build_call(cg.rt.ynz_number_cell_free, &[dec_ptr.into()], "")
+            .map_err(|e| format!("ec_result cob free cell {callee_name}: {e}"))?;
         cg.builder
             .build_unconditional_branch(cob_merge_bb)
             .map_err(|e| format!("ec_result cob copy->merge {callee_name}: {e}"))?;
@@ -21424,6 +35116,18 @@ fn key_is_string(key_ty: &Type) -> bool {
     matches!(key_ty, Type::String)
 }
 
+/// How a map stores and compares its keys (`Cg::map_key_kind`): the runtime has one entry-point
+/// family per kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MapKeyKind {
+    /// An int, bool or float key: its 8 bytes as i64 bits.
+    Int,
+    /// A string key: a pointer to its bytes, compared by content.
+    String,
+    /// A decimal128 `number` key: held inline in 16 bytes, hashed and compared as those 16 bytes.
+    Number,
+}
+
 // ── Map method dispatch (M5 P4b) ──────────────────────────────────────────────
 
 fn lower_map_method<'ctx>(
@@ -21434,7 +35138,7 @@ fn lower_map_method<'ctx>(
     method: &str,
     args: &[Expr],
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    let is_str = key_is_string(key_ty);
+    let key_kind = cg.map_key_kind(key_ty)?;
     match method {
         "count" => {
             let n = cg.map_count_val(map, "mc")?;
@@ -21442,15 +35146,16 @@ fn lower_map_method<'ctx>(
         }
         "has" => {
             let key_val = lower_expr(cg, &args[0])?;
-            let n = if is_str {
-                // Str-keyed `has` = the get flag (the runtime's has is int-key
+            let key_expr_ty = cg.expr_type(&args[0]);
+            let n = if key_kind == MapKeyKind::Int {
+                let key_bits = cg.to_i64_bits(key_val, &key_expr_ty)?;
+                cg.map_has_int(map, key_bits, "mhas")?
+            } else {
+                // Str- and number-keyed `has` = the get flag (the runtime's has is int-key
                 // only); the out buffer is a discarded elem_size-aware scratch.
                 let out = cg.array_elem_out_buffer(val_ty, "has_out")?;
-                cg.map_val_get_into(map, key_val.into(), true, out, "hg")?
-            } else {
-                let kt = cg.expr_type(&args[0]);
-                let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                cg.map_has_int(map, key_bits, "mhas")?
+                let key_operand = cg.map_key_operand(key_val, &key_expr_ty, key_kind)?;
+                cg.map_val_get_into(map, key_operand, key_kind, out, "hg")?
             };
             let b = cg
                 .builder
@@ -21460,25 +35165,17 @@ fn lower_map_method<'ctx>(
         }
         "get" => {
             let key_val = lower_expr(cg, &args[0])?;
-            let maybe_slot = if is_str {
-                cg.map_val_get_maybe(map, key_val.into(), true, val_ty, "mg_s")?
-            } else {
-                let kt = cg.expr_type(&args[0]);
-                let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                cg.map_val_get_maybe(map, key_bits.into(), false, val_ty, "mg")?
-            };
+            let key_expr_ty = cg.expr_type(&args[0]);
+            let key_operand = cg.map_key_operand(key_val, &key_expr_ty, key_kind)?;
+            let maybe_slot = cg.map_val_get_maybe(map, key_operand, key_kind, val_ty, "mg")?;
             Ok(maybe_slot.into())
         }
         "set" => {
             let key_val = lower_expr(cg, &args[0])?;
             let val_val = lower_expr(cg, &args[1])?;
-            if is_str {
-                cg.map_val_set(map, key_val.into(), true, val_val, val_ty, "ms_s")?;
-            } else {
-                let kt = cg.expr_type(&args[0]);
-                let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                cg.map_val_set(map, key_bits.into(), false, val_val, val_ty, "ms")?;
-            }
+            let key_expr_ty = cg.expr_type(&args[0]);
+            let key_operand = cg.map_key_operand(key_val, &key_expr_ty, key_kind)?;
+            cg.map_val_set(map, key_operand, key_kind, val_val, val_ty, "ms")?;
             Ok(cg.i64().const_zero().into())
         }
         other => Err(format!("map method `{other}` not yet lowered in P4b")),
@@ -21548,7 +35245,7 @@ fn lower_options_to_string<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(arm_bb);
-        let g = build_string_global(
+        let g = build_c_string_global(
             cg.ctx,
             cg.module,
             display,
@@ -21684,28 +35381,76 @@ fn lower_float_to_int<'ctx>(
     Ok(result_slot.into())
 }
 
-/// Lower `(number).toInt()` → `maybe<int>`.
-fn lower_number_to_int<'ctx>(
+/// Lower a `number<N>` → `f64` conversion, the one route `.toFloat()` and `.toInt()` share.
+///
+/// N ≤ 34 reads the decimal128 cell through `ynz_decimal_to_float`; N > 34 (bignum, a pointer to
+/// its decimal string) parses that string through `ynz_bignum_to_float`. Each representation
+/// has its own runtime reader because passing one's value to the other's reads wrong bytes.
+fn lower_number_to_f64<'ctx>(
     cg: &mut Cg<'ctx, '_>,
-    num_ptr: inkwell::values::PointerValue<'ctx>,
-) -> Result<BasicValueEnum<'ctx>, String> {
-    // Use ynz_decimal_to_float then float_to_int.
-    let f64t = cg.f64();
-    let prt = cg.ptr();
-    let fn_ty = f64t.fn_type(&[prt.into()], false);
-    let f = cg
-        .module
-        .get_function("ynz_decimal_to_float")
-        .unwrap_or_else(|| cg.module.add_function("ynz_decimal_to_float", fn_ty, None));
-    let f_val = cg
+    number: BasicValueEnum<'ctx>,
+    number_ty: &Type,
+) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+    let reader = match number_ty {
+        Type::Number { precision } if *precision > 34 => cg.rt.ynz_bignum_to_float,
+        Type::Number { .. } => {
+            let f64t = cg.f64();
+            let prt = cg.ptr();
+            let fn_ty = f64t.fn_type(&[prt.into()], false);
+            cg.module
+                .get_function("ynz_decimal_to_float")
+                .unwrap_or_else(|| cg.module.add_function("ynz_decimal_to_float", fn_ty, None))
+        }
+        other => return Err(format!("lower_number_to_f64: `{other:?}` is not a number")),
+    };
+    Ok(cg
         .builder
-        .build_call(f, &[num_ptr.into()], "d2f")
+        .build_call(reader, &[number.into()], "number_to_f64")
         .map_err(|e| format!("{e}"))?
         .try_as_basic_value()
         .basic()
-        .ok_or("decimal_to_float void")?
-        .into_float_value();
-    lower_float_to_int(cg, f_val)
+        .ok_or("number-to-f64 reader returned void")?
+        .into_float_value())
+}
+
+/// Lower `(number).toInt()` → `maybe<int>`: number → f64 → int, for every precision.
+fn lower_number_to_int<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    number: BasicValueEnum<'ctx>,
+    number_ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let as_float = lower_number_to_f64(cg, number, number_ty)?;
+    lower_float_to_int(cg, as_float)
+}
+
+/// Copy a null-terminated string into a fresh heap string (`ynz_string_from_static` allocates
+/// and copies), so the result shares no memory with `source` (a bignum's buffer or the
+/// runtime's thread-local format buffer).
+///
+/// O(n) time, O(n) memory: one strlen plus one malloc/memcpy of the string.
+fn lower_owned_string_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    source: PointerValue<'ctx>,
+) -> Result<PointerValue<'ctx>, String> {
+    let byte_count = cg
+        .builder
+        .build_call(cg.rt.ynz_string_byte_count, &[source.into()], "copy_len")
+        .map_err(|e| format!("{e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_string_byte_count returned void")?;
+    Ok(cg
+        .builder
+        .build_call(
+            cg.rt.ynz_string_from_static,
+            &[source.into(), byte_count.into()],
+            "owned_copy",
+        )
+        .map_err(|e| format!("{e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_string_from_static returned void")?
+        .into_pointer_value())
 }
 
 /// Lower `(string).toInt()` → `maybe<int>` via `ynz_string_to_int` runtime.
@@ -22270,23 +36015,14 @@ fn lower_method_call<'ctx>(
         }
         (Type::Float, "toString") => to_c_string(cg, recv, &Type::Float).map(|p| p.into()),
         (Type::Number { .. }, "toFloat") => {
-            let f64t = cg.f64();
-            let prt = cg.ptr();
-            let fn_ty = f64t.fn_type(&[prt.into()], false);
-            let f = cg
-                .module
-                .get_function("ynz_decimal_to_float")
-                .unwrap_or_else(|| cg.module.add_function("ynz_decimal_to_float", fn_ty, None));
-            let r = cg
-                .builder
-                .build_call(f, &[recv.into()], "d2f")
-                .map_err(|e| format!("{e}"))?;
-            Ok(r.try_as_basic_value()
-                .basic()
-                .ok_or("decimal_to_float void")?)
+            lower_number_to_f64(cg, recv, recv_ty).map(|float_value| float_value.into())
         }
         (Type::Number { .. }, "toString") => {
-            to_c_string(cg, recv, &Type::Number { precision: 34 }).map(|p| p.into())
+            // `to_c_string` returns memory the result must not alias: a bignum's own buffer
+            // (N > 34), or the runtime's one thread-local format buffer (N <= 34), which the
+            // next `toString` call overwrites. Copy so the caller owns its string.
+            let text = to_c_string(cg, recv, recv_ty)?;
+            lower_owned_string_copy(cg, text).map(|copy| copy.into())
         }
         (Type::Bool, "toString") => to_c_string(cg, recv, &Type::Bool).map(|p| p.into()),
 
@@ -22296,7 +36032,7 @@ fn lower_method_call<'ctx>(
             Ok(recv)
         }
         (Type::Float, "toInt") => lower_float_to_int(cg, recv.into_float_value()),
-        (Type::Number { .. }, "toInt") => lower_number_to_int(cg, recv.into_pointer_value()),
+        (Type::Number { .. }, "toInt") => lower_number_to_int(cg, recv, recv_ty),
         (Type::String, "toInt") => lower_string_to_int(cg, recv.into_pointer_value()),
         (Type::String, "toFloat") => lower_string_to_float(cg, recv.into_pointer_value()),
         (Type::String, "toNumber") => lower_string_to_number(cg, recv.into_pointer_value()),
@@ -22417,10 +36153,13 @@ fn store_binding<'ctx>(
             Ok(())
         }
         Type::Maybe { ref inner } => {
+            // A crossing `maybe` homed in a frame region is copied into it (`store_binding_of_read`),
+            // not promoted to a heap cell.
             let is_crossing = cg
                 .sm_crossing_names
                 .as_deref()
-                .is_some_and(|v| v.iter().any(|n| n == name));
+                .is_some_and(|v| v.iter().any(|n| n == name))
+                && !cg.sm_crossing_maybe_regions.contains_key(name);
             let owned = if is_crossing {
                 cg.maybe_to_heap_cell(val.into_pointer_value(), inner, name)?
             } else {
@@ -22431,26 +36170,32 @@ fn store_binding<'ctx>(
                 .map_err(|e| format!("store_binding maybe {name}: {e}"))?;
             Ok(())
         }
-        // v0.3-M6 Phase 1c step 3c: a CROSSING union binding promotes to counted
-        // heap cells — same stable-pointer contract as the maybe arm above; see
-        // `union_to_heap_cell` for the null-preserving envelope + payload clone.
-        // A non-crossing union stores its pointer exactly as the default arm
-        // always did (byte-identical outside SM crossing contexts —
-        // `sm_crossing_names` is None there by construction).
-        Type::Union { ref variants } => {
-            let is_crossing = cg
-                .sm_crossing_names
-                .as_deref()
-                .is_some_and(|v| v.iter().any(|n| n == name));
+        // An envelope union binding owns a by-value copy of the value it was given, so it never
+        // aliases the per-site wrap slot or the binding it was copied from. A CROSSING one keeps
+        // the given view until the flush after the statement persists it into its frame region
+        // (`Cg::flush_crossing_union`), which is the same copy.
+        union @ Type::Union { .. } if cg.envelope_union_variants(&union).is_some() => {
+            let variants = cg
+                .envelope_union_variants(&union)
+                .ok_or("store_binding: union lost its variants")?;
+            let is_crossing = cg.sm_crossing_unions.contains_key(name);
             if is_crossing {
-                let cell = cg.union_to_heap_cell(val.into_pointer_value(), variants, name)?;
-                cg.builder
-                    .build_store(slot, cell)
-                    .map_err(|e| format!("store_binding union {name}: {e}"))?;
-                Ok(())
-            } else {
-                store(cg, val, ty, slot)
+                // A bind makes the local live again, whatever a move or a release left in its flag.
+                cg.set_moved_flag(cg.region_flag_of(name), 0)?;
             }
+            let view = if is_crossing {
+                val.into_pointer_value()
+            } else {
+                cg.union_to_owned(val.into_pointer_value(), &variants, name)?
+            };
+            store(cg, view.into(), ty, slot)
+        }
+        // A string binding owns its bytes: a borrowed string is copied, a movable one is taken.
+        Type::String | Type::Sensitive { .. } | Type::Number { .. }
+            if is_string_like(&cg.resolve_type(ty)) =>
+        {
+            let owned = own_string_for_store(cg, val, ty, name)?;
+            store(cg, owned, ty, slot)
         }
         _ => store(cg, val, ty, slot),
     }
@@ -22491,6 +36236,39 @@ fn store_field<'ctx>(
                 .build_store(field_ptr, cell)
                 .map_err(|e| format!("{e}"))?;
         }
+        // C1f (#423): an envelope union field is the inline slot (`UnionLayout`); a shape variant's
+        // bytes are copied into it, so the shape can leave the frame carrying the union.
+        union @ Type::Union { .. } if cg.envelope_union_variants(union).is_some() => {
+            let variants = cg
+                .envelope_union_variants(union)
+                .ok_or("store_field: union lost its variants")?;
+            cg.union_persist_into(
+                val.into_pointer_value(),
+                field_ptr,
+                &variants,
+                "field_union",
+            )?;
+        }
+        // A `fixed<T, N>` field holds its N cells inside the shape: the list's cells are copied in,
+        // and a `fixed<string>` / `fixed<Shape>` field then owns an item of its own per cell, unless
+        // the source is a value this store takes by move (`deepen_unless_moved` rule).
+        Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } => {
+            let elem = cg.resolve_type(elem);
+            let count = *count as u64;
+            let bytes = count * cg.fixed_cell_bytes(&elem);
+            let source = val.into_pointer_value();
+            cg.builder
+                .build_memcpy(field_ptr, 8, source, 8, cg.i64().const_int(bytes, false))
+                .map_err(|err| format!("store_field fixed memcpy: {err}"))?;
+            if (is_string_like(&elem) || matches!(elem, Type::Shape { .. }))
+                && !cg.is_moved_cells(source)
+            {
+                emit_fixed_item_cells_copy(cg, field_ptr, count, &elem, "field_fixed")?;
+            }
+        }
         Type::Number { precision } if *precision <= 34 => {
             // N ≤ 34: field stores i128 bits inline; val is ptr-to-i128.
             let bits = cg
@@ -22507,11 +36285,13 @@ fn store_field<'ctx>(
                 .build_store(field_ptr, bits)
                 .map_err(|e| format!("{e}"))?;
         }
-        Type::Number { .. } => {
-            // N > 34: field stores a pointer to the decimal string; val is already a ptr.
+        // A string field owns its bytes: a borrowed string is copied, a movable one is taken. A
+        // bignum (N > 34) is a pointer to heap decimal text and is stored the same way.
+        Type::String | Type::Sensitive { .. } | Type::Number { .. } => {
+            let owned = own_string_for_store(cg, val, ty, "field_str")?;
             cg.builder
-                .build_store(field_ptr, val)
-                .map_err(|e| format!("{e}"))?;
+                .build_store(field_ptr, owned)
+                .map_err(|err| format!("{err}"))?;
         }
         _ => {
             cg.builder
@@ -22601,28 +36381,95 @@ fn load<'ctx>(
     }
 }
 
+/// A static Yinz `string`: `{ i64 STATIC_STRING_HEADER, [N x i8] }`, the header telling
+/// `ynz_string_release` these bytes are never freed.
+#[derive(Clone, Copy)]
+struct StaticString<'ctx> {
+    bytes: PointerValue<'ctx>,
+}
+
+impl<'ctx> StaticString<'ctx> {
+    /// The string pointer Yinz code holds: the first byte, with the header in front of it.
+    fn as_pointer_value(&self) -> PointerValue<'ctx> {
+        self.bytes
+    }
+}
+
+/// Emit `bytes_with_nul` as a static Yinz `string` (header + bytes, private constant) and
+/// return its string pointer. O(n) time and memory in the string length.
+fn build_static_string<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    bytes_with_nul: &[u8],
+    name: &str,
+) -> StaticString<'ctx> {
+    let i8_type = ctx.i8_type();
+    let i32_type = ctx.i32_type();
+    let header = ctx
+        .i64_type()
+        .const_int(ynz_abi::STATIC_STRING_HEADER, false);
+    let bytes = i8_type.const_array(
+        &bytes_with_nul
+            .iter()
+            .map(|&byte| i8_type.const_int(byte as u64, false))
+            .collect::<Vec<_>>(),
+    );
+    let initializer = ctx.const_struct(&[header.into(), bytes.into()], false);
+    let global = module.add_global(initializer.get_type(), Some(AddressSpace::default()), name);
+    global.set_initializer(&initializer);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    // The header is read as a u64 in front of the first byte.
+    global.set_alignment(ynz_abi::STRING_HEADER_BYTES as u32);
+    // SAFETY: field 1 of the struct just built; index 0 steps over the global itself.
+    let bytes = unsafe {
+        global.as_pointer_value().const_in_bounds_gep(
+            initializer.get_type(),
+            &[i32_type.const_zero(), i32_type.const_int(1, false)],
+        )
+    };
+    StaticString { bytes }
+}
+
+/// A static Yinz `string` from Rust text (no embedded NUL; the NUL terminator is added).
 fn build_string_global<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
-    s: &str,
+    text: &str,
+    name: &str,
+) -> StaticString<'ctx> {
+    let mut bytes: Vec<u8> = text.bytes().collect();
+    bytes.push(0);
+    build_static_string(ctx, module, &bytes, name)
+}
+
+/// A static C string the compiler uses internally (a panic message, a source file name, a
+/// debug-print fragment, the source of a copy): never a Yinz `string` value, so it has no
+/// ownership header. Anything that can reach Yinz code as a `string` goes through
+/// `build_string_global` instead.
+fn build_c_string_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    text: &str,
     name: &str,
 ) -> GlobalValue<'ctx> {
-    let i8t = ctx.i8_type();
-    let mut bytes: Vec<u8> = s.bytes().collect();
+    let i8_type = ctx.i8_type();
+    let mut bytes: Vec<u8> = text.bytes().collect();
     bytes.push(0);
-    let arr_ty = i8t.array_type(bytes.len() as u32);
-    let arr = i8t.const_array(
+    let arr_ty = i8_type.array_type(bytes.len() as u32);
+    let arr = i8_type.const_array(
         &bytes
             .iter()
-            .map(|&b| i8t.const_int(b as u64, false))
+            .map(|&byte| i8_type.const_int(byte as u64, false))
             .collect::<Vec<_>>(),
     );
-    let g = module.add_global(arr_ty, Some(AddressSpace::default()), name);
-    g.set_initializer(&arr);
-    g.set_constant(true);
-    g.set_linkage(inkwell::module::Linkage::Private);
-    g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-    g
+    let global = module.add_global(arr_ty, Some(AddressSpace::default()), name);
+    global.set_initializer(&arr);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    global
 }
 
 fn build_decimal_global<'ctx>(
@@ -22768,6 +36615,7 @@ mod tests {
             children: Vec::new(),
             recursion_slot: None,
             number_errors_staging_offset: None,
+            union_regions: Vec::new(),
             cpu_group_slots,
         }
     }
@@ -22911,7 +36759,7 @@ mod tests {
                 },
                 resolved: Resolved::BuiltinFixed {
                     elem: Box::new(Resolved::Int),
-                    size: None,
+                    size: ynz_typeck::FixedLength::Unknown,
                 },
                 bare_expected: false,
                 ec_expected: false,
@@ -23140,7 +36988,7 @@ mod tests {
             },
             Resolved::BuiltinFixed {
                 elem: Box::new(Resolved::Int),
-                size: None,
+                size: ynz_typeck::FixedLength::Unknown,
             },
             Resolved::Maybe {
                 inner: Box::new(Resolved::Int),
@@ -23557,5 +37405,226 @@ mod tests {
             !sync_call_fallback_is_codegen_bug("sleep", &with_sleep),
             "a base suspension intrinsic must be excluded from the block_on fallback guard"
         );
+    }
+}
+
+/// The union slots each function's composed frame reserves (`UnionRegion`), with their sizes:
+/// one `Return` slot when the function returns an envelope union (or an `errors` result whose
+/// success value is one), and one `Param(n)` slot for every envelope-union parameter. Computed
+/// once from the slot layouts (`ShapeLlvmTypes::union_layout`) and read by both frame-size
+/// computations, so a frame and its embedding parent agree on every byte.
+///
+/// Generic functions are skipped: they are never suspending state machines
+/// (`build_frame_layouts_with_unions` only lays out non-generic ones).
+///
+/// Errors when a union's layout cannot be computed: leaving its region out would size the frame
+/// without the slot the function writes.
+///
+/// Time: O(f * p) for f functions of p parameters  Space: O(f * p)
+pub fn union_region_roles(
+    typed: &TypedModule,
+    shape_table: &ShapeTable,
+    shape_types: &ShapeLlvmTypes<'_>,
+) -> Result<HashMap<String, Vec<(UnionRegionRole, u64)>>, String> {
+    let slot_size = |ty: &Type| -> Result<Option<u64>, String> {
+        let Type::Union { variants } = ty else {
+            return Ok(None);
+        };
+        if !ynz_typeck::check::is_envelope_union(ty) {
+            return Ok(None);
+        }
+        Ok(Some(
+            shape_types.union_layout(variants)?.slot_size
+                + state_machine::FRAME_SHAPE_REGION_SLACK_BYTES,
+        ))
+    };
+    // A returned `maybe` of an envelope union rides the `Return` region like the union itself.
+    let return_slot_size = |ty: &Type| -> Result<Option<u64>, String> {
+        match ty {
+            Type::Maybe { inner } => slot_size(inner),
+            other => slot_size(other),
+        }
+    };
+    let mut roles: HashMap<String, Vec<(UnionRegionRole, u64)>> = HashMap::new();
+    for item in &typed.module.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if !function.generics.is_empty() {
+            continue;
+        }
+        let mut function_roles = Vec::new();
+        let returned = match &function.return_type {
+            ynz_ast::nodes::Type::ErrorCapable { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        if let Some(size) = return_slot_size(&ast_type_to_typeck_type(returned, shape_table))? {
+            function_roles.push((UnionRegionRole::Return, size));
+        }
+        // C1h (#433): a returned `fixed` list of known length rides the `Return` region as well
+        // (the cells, then the slack the region's 8-byte alignment needs).
+        // The length is the one typeck worked out for a return type written without one, else the
+        // one the signature writes.
+        let returned_list = typed
+            .inferred_return_types
+            .get(&function.name)
+            .cloned()
+            .unwrap_or_else(|| ast_type_to_typeck_type(returned, shape_table));
+        if let Type::BuiltinFixed {
+            elem,
+            size: FixedLength::Known(count),
+        } = &returned_list
+        {
+            function_roles.push((
+                UnionRegionRole::Return,
+                fixed_region_bytes(elem, *count) + state_machine::FRAME_SHAPE_REGION_SLACK_BYTES,
+            ));
+        }
+        for (index, param) in function.params.iter().enumerate() {
+            if let Some(size) = slot_size(&ast_type_to_typeck_type(&param.ty, shape_table))? {
+                function_roles.push((UnionRegionRole::Param(index), size));
+            }
+        }
+        if !function_roles.is_empty() {
+            roles.insert(function.name.clone(), function_roles);
+        }
+    }
+    Ok(roles)
+}
+
+/// The frame bytes of every envelope union a crossing local of `typed` can hold, keyed by
+/// `union_key`: the one `UnionLayout::slot_size` answer, merged into the shape-size map the frame
+/// layout and the resume function both read (`union_frame_slots`), so a frame and its lowering
+/// agree on every region byte. Collected from the types of all expressions, from the slots of
+/// all union coercions (`let thing: Thing = big` types its value as `Big`, the slot is `Thing`),
+/// and from the success type of every `errors` result.
+///
+/// A union whose layout cannot be computed is left out; lowering a crossing local of it reports
+/// the missing entry (`lower_function_with_waits`).
+///
+/// Time: O(e * v) for e expressions of v variants  Space: O(u) for u distinct unions
+pub fn union_frame_sizes(
+    typed: &TypedModule,
+    shape_types: &ShapeLlvmTypes<'_>,
+) -> HashMap<String, u64> {
+    fn collect(ty: &Type, out: &mut Vec<Vec<Type>>) {
+        match ty {
+            Type::ErrorsCapable { inner } => collect(inner, out),
+            Type::Union { variants } if ynz_typeck::check::is_envelope_union(ty) => {
+                out.push(variants.clone());
+            }
+            _ => {}
+        }
+    }
+    let mut unions: Vec<Vec<Type>> = Vec::new();
+    for ty in typed.expr_types.values() {
+        collect(ty, &mut unions);
+    }
+    for coercion in typed.union_coercions.values() {
+        collect(&coercion.slot, &mut unions);
+    }
+    let mut sizes = HashMap::new();
+    for variants in unions {
+        if let Ok(layout) = shape_types.union_layout(&variants) {
+            sizes.insert(crate::shape_types::union_key(&variants), layout.slot_size);
+        }
+    }
+    sizes
+}
+
+#[cfg(test)]
+mod errors_capable_release_tests {
+    use super::{Cg, CG_PROBE};
+    use std::cell::RefCell;
+    use ynz_parser::{CompilerDb, SourceFile};
+    use ynz_typeck::types::Type;
+
+    thread_local! {
+        static OUTCOMES: RefCell<Vec<(String, Result<bool, String>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    const PROGRAM: &str = "shape Tag {\n  name: string\n  id: int\n}\nfunction entrypoint() -> nothing {\n  print(`x`)\n}\n";
+
+    /// The `ok` payloads an `errors` value can carry, each a stored value of its own kind.
+    fn payloads() -> Vec<(&'static str, Type)> {
+        vec![
+            ("string", Type::String),
+            (
+                "array",
+                Type::BuiltinArray {
+                    elem: Box::new(Type::String),
+                },
+            ),
+            (
+                "map",
+                Type::BuiltinMap {
+                    key: Box::new(Type::String),
+                    val: Box::new(Type::String),
+                },
+            ),
+            (
+                "shape",
+                Type::Shape {
+                    name: "Tag".to_string(),
+                },
+            ),
+            (
+                "maybe of a shape",
+                Type::Maybe {
+                    inner: Box::new(Type::Shape {
+                        name: "Tag".to_string(),
+                    }),
+                },
+            ),
+            (
+                "channel",
+                Type::BuiltinChannel {
+                    elem: Box::new(Type::String),
+                },
+            ),
+        ]
+    }
+
+    fn probe(cg: &Cg<'_, '_>) {
+        for (label, inner) in payloads() {
+            let errors = Type::ErrorsCapable {
+                inner: Box::new(inner),
+            };
+            let outcome = cg.release_fn(&errors, false).map(|glue| glue.is_some());
+            OUTCOMES.with(|outcomes| outcomes.borrow_mut().push((label.to_string(), outcome)));
+        }
+    }
+
+    /// Bug: `emit_errors_capable_release` asked a second per-type dispatch (`union_variant_release`,
+    /// which knew a string, array and map) for the `ok` payload, so the release of a `Tag errors`,
+    /// `maybe<Tag> errors` or `channel<T> errors` value failed with an internal error where every
+    /// other stored value releases through `stored_release` (High: C7 releases every local, so the
+    /// first `errors` local of a shape would stop the compile).
+    #[test]
+    fn every_ok_payload_of_an_errors_value_has_a_release() {
+        OUTCOMES.with(|outcomes| outcomes.borrow_mut().clear());
+        CG_PROBE.with(|slot| slot.set(Some(probe)));
+        let db = CompilerDb::default();
+        let source = SourceFile::new(&db, "probe.ynz".to_string(), PROGRAM.to_string());
+        let output = crate::queries::codegen_query(&db, source);
+        CG_PROBE.with(|slot| slot.set(None));
+        assert!(
+            output.diagnostics.is_empty(),
+            "the probe program must compile: {:?}",
+            output.diagnostics
+        );
+        let outcomes = OUTCOMES.with(|outcomes| outcomes.borrow().clone());
+        assert_eq!(
+            outcomes.len(),
+            payloads().len(),
+            "the probe ran once: {outcomes:?}"
+        );
+        for (label, outcome) in outcomes {
+            assert_eq!(
+                outcome,
+                Ok(true),
+                "an `errors` value with a {label} ok payload must have a release"
+            );
+        }
     }
 }

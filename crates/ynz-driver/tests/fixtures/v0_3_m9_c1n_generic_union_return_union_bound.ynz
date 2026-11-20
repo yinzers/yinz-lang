@@ -1,0 +1,33 @@
+// v0.3-M9 C1n: a generic function returns `T | nothing` with `T` = a union (`Big | Tiny`). The value
+// already is an envelope union whose tags are the instance's (`Big | Tiny | nothing`): the instance
+// returns it as it is, and the caller narrows it and reads the payload.
+// Before the C1n fix's first round: the coercion typeck now records for the generic return was
+// handed to the lowering, which refused the build with an internal error.
+// Expected output: `hello`.
+
+shape Big {
+  label: string
+  items: array<int>
+}
+shape Tiny {
+  count: int
+}
+function wrap<T>(give item: T) -> T | nothing {
+  return item
+}
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`.toUpperCase(), items: [1] }
+  let choice: Big | Tiny = big
+  let got = wrap(choice)
+  if (got) {
+    is Big => {
+      print(got.label.toLowerCase())
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+    else => {
+      print(`absent`)
+    }
+  }
+}

@@ -1,0 +1,30 @@
+// v0.3-M9 C1h: a shape with a fixed field nested in another shape, copied, and held in a union.
+// Expected output: J, 6, I, 5, J
+
+shape Bag {
+  names: fixed<string, 2>
+}
+shape Outer {
+  bag: Bag
+  pair: fixed<int, 2>
+}
+shape Choice = Bag | Outer
+
+function entrypoint() -> nothing {
+  let inner: Bag = { names: [`i`.toUpperCase(), `j`.toUpperCase()] }
+  let outer: Outer = { bag: inner, pair: [5, 6] }
+  print(outer.bag.names[1].or(`?`))
+  print(outer.pair[1].or(-1))
+  let backup = outer.copy()
+  print(backup.bag.names[0].or(`?`))
+  let choice: Choice = backup
+  if (choice) {
+    is Bag => {
+      print(choice.names[0].or(`?`))
+    }
+    is Outer => {
+      print(choice.pair[0].or(-1))
+      print(choice.bag.names[1].or(`?`))
+    }
+  }
+}

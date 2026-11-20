@@ -1,0 +1,14 @@
+// v0.3-M9 C6: reassigning a binding from an array field aliases it
+// The reader keeps the value it read after the place is overwritten: no freed memory is read.
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+function entrypoint() -> nothing {
+  let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+  let heldRows: array<int> = [1]
+  heldRows = bucket.rows
+  bucket.rows = [9]
+  print(heldRows.count())
+}

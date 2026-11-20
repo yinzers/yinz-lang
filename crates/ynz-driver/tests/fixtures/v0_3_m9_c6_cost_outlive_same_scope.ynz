@@ -1,0 +1,18 @@
+// v0.3-M9 C6 cost fixture: a `let` of a field whose reader dies with the root's scope copies
+// nothing (the reader does not outlive its root).
+// Allocations per pass: the field's literal (header + buffer), two passes.
+
+shape Bucket {
+  rows: array<int>
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let pass: int = 0
+  while (pass < 2) {
+    let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
+    let rows = bucket.rows
+    print(rows.count())
+    pass = pass + 1
+  }
+}

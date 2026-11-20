@@ -1,3 +1,8 @@
+// v0.3-M9 C5a: REFUSED since storing hands the value over — `entry` is the loop's view of one
+// slot of `stock`, so `saved.add(entry)` would give a second container a value `stock` still
+// holds (`TransferNeedsCopy`; a copy of a map entry is refused too, so the fix is to store
+// `entry.key` / `entry.value.copy()`). Asserted in `v03_m9_store_hands_over.rs`.
+//
 // WHY: v0.3-M5 P3 step-5 item (b) — a MapEntry loop variable persisted as an
 // ARRAY ELEMENT (`saved.add(entry)`) escapes its per-site entry slot. Pre-fix
 // the element cell held ptr_to_int(entry slot), reused every iteration, so both

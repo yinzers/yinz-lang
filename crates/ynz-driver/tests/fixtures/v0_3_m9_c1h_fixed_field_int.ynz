@@ -1,0 +1,23 @@
+// v0.3-M9 C1h: a shape holds a `fixed<int, 3>` list in a field, and the shape leaves the function that
+// built it. The caller reads the list's count and items.
+// Before: the field held a pointer into the building function's dead stack frame with no length:
+// `count()` printed 0 and every read was `none`.
+// Expected output: the count, then the first and last item.
+
+shape Bag {
+  label: string
+  items: fixed<int, 3>
+}
+
+function makeBag() -> Bag {
+  let numbers: fixed<int> = [1, 2, 3]
+  let bag: Bag = { label: `bag`, items: numbers }
+  return bag
+}
+
+function entrypoint() -> nothing {
+  let bag = makeBag()
+  print(bag.items.count())
+  print(bag.items[0].or(-1))
+  print(bag.items[2].or(-1))
+}

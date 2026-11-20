@@ -1,0 +1,20 @@
+// v0.3-M9 C1h: a background task returns a `fixed<string>`, and the parent receives it. The strings
+// move to the parent, which releases each one exactly once.
+// Before: the parent read count 0 and the strings were never released.
+// Expected output: the count, then the last name.
+
+function build() -> fixed<string> {
+  wait sleep(1)
+  let names: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return names
+}
+
+function entrypoint() -> nothing {
+  let task = background build()
+  wait sleep(20)
+  let got = task.receive()
+  let fallback: fixed<string> = [`x`, `y`]
+  let list = got.or(fallback)
+  print(list.count())
+  print(list[1].or(`?`))
+}

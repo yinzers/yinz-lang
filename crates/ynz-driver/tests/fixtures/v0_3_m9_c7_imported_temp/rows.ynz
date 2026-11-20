@@ -1,0 +1,6 @@
+// v0.3-M9 C7 slice 2: the library half of the imported-call temporary fixture.
+
+export function freshRows(width: int) -> array<int> {
+  let rows: array<int> = [width, width]
+  return rows
+}

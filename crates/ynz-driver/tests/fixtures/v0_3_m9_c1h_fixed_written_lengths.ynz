@@ -1,0 +1,38 @@
+// v0.3-M9 C1h: a `fixed<T, N>` that WRITES its length: a parameter of 4, a returned list of strings
+// (every string must be released), an exported function, and a parameter of 0 items.
+// Expected output: the sum of the four, the returned count and last string, the exported count,
+// then 0 for the empty list.
+
+function sumOfFour(share values: fixed<int, 4>) -> int {
+  let sum: int = 0
+  for (value in values) {
+    sum = sum + value
+  }
+  return sum
+}
+
+function twoNames() -> fixed<string, 2> {
+  let names: fixed<string> = [`ann`, `bo`]
+  return names
+}
+
+export function exportedThree() -> fixed<int, 3> {
+  let numbers: fixed<int> = [7, 8, 9]
+  return numbers
+}
+
+function countOfNone(share values: fixed<int, 0>) -> int {
+  return values.count()
+}
+
+
+function entrypoint() -> nothing {
+  let four: fixed<int> = [1, 2, 3, 4]
+  print(sumOfFour(four))
+  let names = twoNames()
+  print(names.count())
+  print(names[1].or(`?`))
+  print(exportedThree().count())
+  let emptyList: fixed<int> = []
+  print(countOfNone(emptyList))
+}

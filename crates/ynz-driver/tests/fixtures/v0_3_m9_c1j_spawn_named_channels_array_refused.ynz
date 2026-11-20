@@ -1,0 +1,29 @@
+// v0.3-M9 C1j: a `background` call passes the `array<channel<int>>` field of a NAMED value
+// (`bag.rows`). The array has no independent copy, so the task was handed the array the spawner's
+// `bag` still owns: `launch` returned, released `bag`, and the task read the freed array (garbage
+// count). Refused at compile time instead.
+// Expected: a compile error naming the type and the line.
+
+shape Bag {
+  rows: array<channel<int>>
+  id: int
+}
+
+function f(rows: array<channel<int>>) -> nothing {
+  wait sleep(100)
+  print(rows.count())
+}
+
+function launch() -> nothing {
+  let first: channel<int> = channel<int>(1)
+  let second: channel<int> = channel<int>(1)
+  let lines: array<channel<int>> = [first, second]
+  let bag: Bag = { rows: lines, id: 1 }
+  background f(bag.rows)
+}
+
+function entrypoint() -> nothing {
+  launch()
+  wait sleep(300)
+  print(`done`)
+}

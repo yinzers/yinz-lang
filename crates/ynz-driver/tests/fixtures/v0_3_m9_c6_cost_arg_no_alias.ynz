@@ -1,0 +1,13 @@
+// v0.3-M9 C6 cost fixture: `share` arguments read from one collection with no `lend` of it in
+// the call copy nothing.
+// Allocations: the outer literal and two inner literals (6) and the fallback literal (2).
+
+function show(share first: array<int>, share second: array<int>) -> nothing {
+  print(first.count() + second.count())
+}
+
+function entrypoint() -> nothing {
+  let rows: array<array<int>> = [[1], [2, 3]]
+  let fallback: array<int> = []
+  show(rows[0].or(fallback), rows[1].or(fallback))
+}

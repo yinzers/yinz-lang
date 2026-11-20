@@ -869,20 +869,71 @@ fn expr_contains_suspending_call(
 ///
 /// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
 pub fn stmt_assigns_name(stmt: &Stmt, name: &str) -> bool {
-    match stmt {
-        Stmt::Assign { target, .. } => target.as_str() == name,
-        Stmt::If { body, .. } => body.stmts.iter().any(|s| stmt_assigns_name(s, name)),
-        Stmt::While { body, .. } | Stmt::For { body, .. } => {
-            body.stmts.iter().any(|s| stmt_assigns_name(s, name))
-        }
-        Stmt::Match { arms, else_arm, .. } => {
-            arms.iter()
-                .any(|a| a.body.stmts.iter().any(|s| stmt_assigns_name(s, name)))
-                || else_arm
-                    .as_ref()
-                    .is_some_and(|b| b.stmts.iter().any(|s| stmt_assigns_name(s, name)))
+    stmt_find_assignment(
+        stmt,
+        &|assignment| matches!(assignment, Stmt::Assign { target, .. } if target.as_str() == name),
+    )
+    .is_some()
+}
+
+/// True when `stmt` (at any nesting depth) assigns the field path `path` (`holder.rows = ...` is
+/// `["holder", "rows"]`) with a field assignment `=`.
+///
+/// Time: O(N * P) where N = AST nodes, P = path length  Space: O(D) recursion depth.
+pub fn stmt_assigns_field_path(stmt: &Stmt, path: &[&str]) -> bool {
+    stmt_find_assignment(stmt, &|assignment| match assignment {
+        Stmt::FieldAssign { target, .. } => {
+            place_path(target).is_some_and(|assigned| assigned == path)
         }
         _ => false,
+    })
+    .is_some()
+}
+
+/// The names a place expression is made of, root binding first: `holder.inner.rows` is
+/// `["holder", "inner", "rows"]`. `None` for any other expression (a call, an index, a literal).
+/// The one rule for "which place" is `crate::walked_place::place_steps`; this keeps only the
+/// field paths.
+///
+/// Time: O(P) where P = path length  Space: O(P).
+pub fn place_path(expr: &Expr) -> Option<Vec<&str>> {
+    crate::walked_place::place_steps(expr)?
+        .into_iter()
+        .map(|step| match step {
+            crate::walked_place::PlaceStep::Root(name)
+            | crate::walked_place::PlaceStep::Field(name) => Some(name),
+            crate::walked_place::PlaceStep::Element(_) => None,
+        })
+        .collect()
+}
+
+/// The first assignment statement `matches_assignment` holds for, in `stmt` or any statement
+/// nested in it. THE walk over nested assignments: `stmt_assigns_name`, `stmt_assigns_field_path`
+/// and `crate::walked_place::assignment_freeing_walked_list` all read it.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
+pub(crate) fn stmt_find_assignment<'a>(
+    stmt: &'a Stmt,
+    matches_assignment: &dyn Fn(&Stmt) -> bool,
+) -> Option<&'a Stmt> {
+    if matches_assignment(stmt) {
+        return Some(stmt);
+    }
+    let block_find = |block: &'a Block| {
+        block
+            .stmts
+            .iter()
+            .find_map(|nested| stmt_find_assignment(nested, matches_assignment))
+    };
+    match stmt {
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            block_find(body)
+        }
+        Stmt::Match { arms, else_arm, .. } => arms
+            .iter()
+            .find_map(|arm| block_find(&arm.body))
+            .or_else(|| else_arm.as_ref().and_then(block_find)),
+        _ => None,
     }
 }
 

@@ -29,12 +29,12 @@ use unicode_normalization::UnicodeNormalization;
 /// byte order.  Callers (the LLVM codegen) use `alloca [16 x i8]` for stack-allocated
 /// `number` locals and pass their addresses directly.
 ///
-/// # String buffers
+/// # String ownership
 ///
-/// The `.toString()` conversion functions return a pointer to a **thread-local static
-/// buffer**.  The buffer is valid until the next call to any `ynz_*_to_string` function
-/// on the same thread.  This is safe for M2's single-threaded programs; it is NOT
-/// safe for multi-threaded use.  A comment at each function marks this limitation.
+/// A `string` is a pointer to NUL-terminated bytes with a `u64` header in front (see
+/// `ynz_abi::STATIC_STRING_HEADER`): 0 for static bytes, the byte capacity for a heap string.
+/// Every function that returns a string (`.toString()` conversions included) returns either a
+/// fresh heap string or static bytes; `ynz_string_release` frees the first and ignores the second.
 use ynz_numerics::{abs, add, compare, div, format, mul, neg, parse, sub};
 
 /// Raw decimal128 storage: 16 bytes = 128 bits, BID encoding.
@@ -104,24 +104,10 @@ pub extern "C" fn ynz_decimal_from_int(x: i64, out: *mut D128) {
 
 /// Convert a decimal128 to its string representation.
 ///
-/// # Safety note (M2 limitation)
-/// Returns a pointer into a thread-local static buffer.  Valid until the next
-/// call to any `ynz_*_to_string` function on this thread.  NOT safe for
-/// multi-threaded programs (see module doc).
+/// Returns a fresh heap string the caller owns (`ynz_string_release` frees it).
 #[no_mangle]
 pub extern "C" fn ynz_decimal_to_string(a: *const D128) -> *const u8 {
-    thread_local! {
-        static BUF: std::cell::RefCell<[u8; DECIMAL128_STRING_BUF_LEN]> = const { std::cell::RefCell::new([0u8; DECIMAL128_STRING_BUF_LEN]) };
-    }
-    let s = format(load(a));
-    let bytes = s.as_bytes();
-    BUF.with(|buf| {
-        let mut b = buf.borrow_mut();
-        let len = bytes.len().min(b.len() - 1);
-        b[..len].copy_from_slice(&bytes[..len]);
-        b[len] = 0;
-        b.as_ptr()
-    })
+    heap_string_from_str(&format(load(a)))
 }
 
 /// Called by compiled code on integer overflow.
@@ -178,43 +164,196 @@ pub unsafe extern "C" fn ynz_panic_div_by_zero(
     std::process::abort();
 }
 
+/// Write `x`'s decimal digits at the end of `buffer`, with a NUL after them, and return the
+/// index of the first digit (a `-` counts as one). O(1) time, no allocation.
+fn write_int_digits(x: i64, buffer: &mut [u8; I64_DECIMAL_MAX_BYTES + 1]) -> usize {
+    buffer[I64_DECIMAL_MAX_BYTES] = 0;
+    let mut first_digit = I64_DECIMAL_MAX_BYTES;
+    let mut remaining = x.unsigned_abs();
+    loop {
+        first_digit -= 1;
+        buffer[first_digit] = b'0' + (remaining % 10) as u8;
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    if x < 0 {
+        first_digit -= 1;
+        buffer[first_digit] = b'-';
+    }
+    first_digit
+}
+
 /// Convert an i64 to its decimal string representation.
 ///
-/// Returns a pointer into a thread-local static buffer (same M2 limitation as
-/// `ynz_decimal_to_string` above).
+/// Returns a fresh heap string the caller owns (`ynz_string_release` frees it). O(1) time and
+/// one allocation: the digits are written to a stack buffer, then copied once.
 #[no_mangle]
 pub extern "C" fn ynz_int_to_string(x: i64) -> *const u8 {
-    thread_local! {
-        static BUF: std::cell::RefCell<[u8; INT64_STRING_BUF_LEN]> = const { std::cell::RefCell::new([0u8; INT64_STRING_BUF_LEN]) };
-    }
-    let s = format!("{x}");
-    let bytes = s.as_bytes();
-    BUF.with(|buf| {
-        let mut b = buf.borrow_mut();
-        let len = bytes.len().min(b.len() - 1);
-        b[..len].copy_from_slice(&bytes[..len]);
-        b[len] = 0;
-        b.as_ptr()
-    })
+    let mut digits = [0u8; I64_DECIMAL_MAX_BYTES + 1];
+    let first_digit = write_int_digits(x, &mut digits);
+    heap_string_from_bytes(&digits[first_digit..I64_DECIMAL_MAX_BYTES])
 }
 
 /// Convert an f64 to its decimal string representation.
 ///
-/// Returns a pointer into a thread-local static buffer (same M2 limitation).
+/// Returns a fresh heap string the caller owns (`ynz_string_release` frees it).
 #[no_mangle]
 pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
-    thread_local! {
-        static BUF: std::cell::RefCell<[u8; 32]> = const { std::cell::RefCell::new([0u8; 32]) };
+    heap_string_from_str(&format!("{x}"))
+}
+
+// ── Print and interpolation of a number ───────────────────────────────────────
+//
+// `print(n)` and `${n}` read the text of an `int`, `float` or `number` once and drop it, so the
+// text is never a Yinz `string`: these entries format and write (`puts`) or append it directly,
+// with no headered heap string and no release. Owned results are `ynz_*_to_string` above.
+
+extern "C" {
+    fn puts(text: *const core::ffi::c_char) -> i32;
+}
+
+/// Longest text `{f64}` prints: `-0.` then 307 zeros then 17 digits (`-2.2250738585072014e-308`
+/// written out), 328 bytes; 330 leaves a margin. The max-length test pins it.
+const F64_DISPLAY_MAX_BYTES: usize = 330;
+
+/// A fixed-capacity text buffer on the stack that `write!` can fill and `puts` can read.
+/// Holds `CAPACITY` bytes of text plus the NUL.
+struct StackText<const CAPACITY: usize> {
+    bytes: [u8; CAPACITY],
+    len: usize,
+}
+
+impl<const CAPACITY: usize> StackText<CAPACITY> {
+    fn new() -> Self {
+        StackText {
+            bytes: [0u8; CAPACITY],
+            len: 0,
+        }
     }
-    let s = format!("{x}");
-    let bytes = s.as_bytes();
-    BUF.with(|buf| {
-        let mut b = buf.borrow_mut();
-        let len = bytes.len().min(b.len() - 1);
-        b[..len].copy_from_slice(&bytes[..len]);
-        b[len] = 0;
-        b.as_ptr()
-    })
+
+    /// Write the NUL after the text and `puts` it. The caller guarantees the text holds no NUL.
+    fn puts(&mut self) {
+        self.bytes[self.len] = 0;
+        // SAFETY: `bytes[..=len]` is NUL-terminated text that lives through the call.
+        unsafe { puts(self.bytes.as_ptr() as *const core::ffi::c_char) };
+    }
+}
+
+impl<const CAPACITY: usize> core::fmt::Write for StackText<CAPACITY> {
+    fn write_str(&mut self, piece: &str) -> core::fmt::Result {
+        let end = self.len + piece.len();
+        if end > CAPACITY - 1 {
+            return Err(core::fmt::Error);
+        }
+        self.bytes[self.len..end].copy_from_slice(piece.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+/// Text up to this many bytes (plus its NUL) is printed from the stack; longer decimal text
+/// (a number with a large positive exponent writes its zeros out) reuses its `String`'s buffer.
+const PRINT_STACK_TEXT_BYTES: usize = 128;
+
+/// `puts` text that came back from the numerics crate as an owned `String`. O(n) time; no
+/// allocation beyond the `String` the caller already paid for, except that text of
+/// `PRINT_STACK_TEXT_BYTES` or more may grow that `String` by its NUL.
+fn puts_formatted(text: String) {
+    if text.len() < PRINT_STACK_TEXT_BYTES {
+        let mut stack_text = StackText::<PRINT_STACK_TEXT_BYTES>::new();
+        let written = core::fmt::Write::write_str(&mut stack_text, &text);
+        debug_assert!(written.is_ok(), "text shorter than the buffer always fits");
+        stack_text.puts();
+    } else {
+        let mut bytes = text.into_bytes();
+        bytes.push(0);
+        // SAFETY: `bytes` is NUL-terminated text that lives through the call.
+        unsafe { puts(bytes.as_ptr() as *const core::ffi::c_char) };
+    }
+}
+
+/// The byte vector a string builder handle owns.
+///
+/// # Safety
+/// `builder` must be a live handle from `ynz_string_builder_new`, used by one caller at a time.
+unsafe fn builder_bytes<'builder>(builder: *mut u8) -> &'builder mut Vec<u8> {
+    &mut *(builder as *mut Vec<u8>)
+}
+
+/// `print(int)`: write the decimal text and a newline to stdout. O(1) time, no allocation: the
+/// digits live on this call's stack, so two prints never share a buffer.
+#[no_mangle]
+pub extern "C" fn ynz_int_print(x: i64) {
+    let mut digits = [0u8; I64_DECIMAL_MAX_BYTES + 1];
+    let first_digit = write_int_digits(x, &mut digits);
+    // SAFETY: `write_int_digits` NUL-terminated `digits`, and it outlives the call.
+    unsafe { puts(digits[first_digit..].as_ptr() as *const core::ffi::c_char) };
+}
+
+/// `${int}`: append the decimal text to a string builder. O(1) time, no allocation.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_int_append(builder: *mut u8, x: i64) {
+    let mut digits = [0u8; I64_DECIMAL_MAX_BYTES + 1];
+    let first_digit = write_int_digits(x, &mut digits);
+    builder_bytes(builder).extend_from_slice(&digits[first_digit..I64_DECIMAL_MAX_BYTES]);
+}
+
+/// `print(float)`: write the text and a newline to stdout. O(1) time (bounded text), no
+/// allocation: the text is formatted into a stack buffer.
+#[no_mangle]
+pub extern "C" fn ynz_float_print(x: f64) {
+    let mut stack_text = StackText::<{ F64_DISPLAY_MAX_BYTES + 1 }>::new();
+    if core::fmt::Write::write_fmt(&mut stack_text, format_args!("{x}")).is_err() {
+        // Unreachable while F64_DISPLAY_MAX_BYTES holds (a test pins it); never print cut text.
+        eprintln!(
+            "INTERNAL ERROR: the text of a float is longer than {F64_DISPLAY_MAX_BYTES} bytes. \
+             This is a compiler bug — please file an issue at \
+             https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
+        std::process::abort();
+    }
+    stack_text.puts();
+}
+
+/// `${float}`: append the text to a string builder. O(1) time (bounded text); formats straight
+/// into the builder's buffer, so it allocates only when that buffer grows.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_float_append(builder: *mut u8, x: f64) {
+    use std::io::Write;
+    if write!(builder_bytes(builder), "{x}").is_err() {
+        // Writing into a `Vec` cannot fail.
+        eprintln!(
+            "INTERNAL ERROR: appending the text of a float to a string builder failed. \
+             This is a compiler bug — please file an issue at \
+             https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
+        std::process::abort();
+    }
+}
+
+/// `print(number)` for a decimal128 value: write the text and a newline to stdout. One
+/// allocation (the numerics crate's `String`), as before C3a.
+#[no_mangle]
+pub extern "C" fn ynz_decimal_print(decimal: *const D128) {
+    puts_formatted(format(load(decimal)));
+}
+
+/// `${number}` for a decimal128 value: append the text to a string builder. One allocation
+/// (the numerics crate's `String`), as before C3a.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_decimal_append(builder: *mut u8, decimal: *const D128) {
+    builder_bytes(builder).extend_from_slice(format(load(decimal)).as_bytes());
 }
 
 /// Compare two null-terminated UTF-8 strings for NFC canonical equivalence.
@@ -250,6 +389,10 @@ pub unsafe extern "C" fn ynz_string_eq(a: *const u8, b: *const u8) -> i32 {
     (a_nfc == b_nfc) as i32
 }
 
+/// What `ynz_sensitive_to_string` returns unless the value is revealed: static bytes, so a
+/// release of the result leaves them alone.
+static REDACTED_TEXT: StaticString<11> = StaticString::new(*b"[REDACTED]\0");
+
 /// Format a `sensitive string` value for output.
 ///
 /// Checks `YNZ_REVEAL_SENSITIVE` once per process (via `OnceLock`). If the env var
@@ -268,7 +411,7 @@ pub unsafe extern "C" fn ynz_sensitive_to_string(raw_ptr: *const u8) -> *const u
     if reveal {
         raw_ptr
     } else {
-        c"[REDACTED]".as_ptr().cast()
+        REDACTED_TEXT.string_pointer()
     }
 }
 
@@ -335,6 +478,19 @@ static YNZ_HANDLE_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 /// `Drop` is the one choke point that observes them all.
 static YNZ_HANDLE_FREE_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Running count of heap strings allocated since last reset, across EVERY string allocator
+/// (`heap_string_buffer` is the single allocation point). Strings are raw `malloc` buffers, not
+/// `ynz_alloc` ones, so `YNZ_ALLOC_COUNT`/`YNZ_FREE_COUNT` never see them and they need their own
+/// pair.
+static YNZ_STRING_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Total bytes of those string allocations (length + 1 NUL), so a leak of one long string cannot
+/// hide behind a balanced count of short ones.
+static YNZ_STRING_ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Running count of heap strings released through `ynz_string_release` since last reset.
+static YNZ_STRING_FREE_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Total bytes of those releases (length + 1 NUL, measured at free time).
+static YNZ_STRING_FREE_BYTES: AtomicU64 = AtomicU64::new(0);
+
 /// Return true when alloc-counter instrumentation is enabled.
 ///
 /// Reads a `static AtomicBool` set once at `ynz_rt_init`; cost is a single
@@ -393,13 +549,18 @@ pub extern "C" fn ynz_free_count() -> u64 {
     YNZ_FREE_COUNT.load(Ordering::Relaxed)
 }
 
-/// Reset all counters to zero (frame alloc/free AND CpuJoinHandle alloc/free).
+/// Reset all counters to zero (frame alloc/free, CpuJoinHandle alloc/free AND heap-string
+/// alloc/free).
 #[no_mangle]
 pub extern "C" fn ynz_alloc_count_reset() {
     YNZ_ALLOC_COUNT.store(0, Ordering::Relaxed);
     YNZ_FREE_COUNT.store(0, Ordering::Relaxed);
     YNZ_HANDLE_ALLOC_COUNT.store(0, Ordering::Relaxed);
     YNZ_HANDLE_FREE_COUNT.store(0, Ordering::Relaxed);
+    YNZ_STRING_ALLOC_COUNT.store(0, Ordering::Relaxed);
+    YNZ_STRING_ALLOC_BYTES.store(0, Ordering::Relaxed);
+    YNZ_STRING_FREE_COUNT.store(0, Ordering::Relaxed);
+    YNZ_STRING_FREE_BYTES.store(0, Ordering::Relaxed);
 }
 
 /// Record one `CpuJoinHandle` creation. No-op unless the alloc counter is enabled
@@ -427,6 +588,147 @@ pub(crate) fn ynz_handle_alloc_count() -> u64 {
 /// Read the current `CpuJoinHandle` free count. Zero when counter not enabled.
 pub(crate) fn ynz_handle_free_count() -> u64 {
     YNZ_HANDLE_FREE_COUNT.load(Ordering::Relaxed)
+}
+
+/// Static string bytes with their header, laid out exactly as codegen emits a literal
+/// (`{ i64 STATIC_STRING_HEADER, [N x i8] }`). The runtime's own static strings, and the
+/// runtime tests' stand-ins for a literal, are built from this so the layout is stated once on
+/// the Rust side.
+#[repr(C)]
+pub struct StaticString<const BYTE_COUNT: usize> {
+    header: u64,
+    bytes: [u8; BYTE_COUNT],
+}
+
+impl<const BYTE_COUNT: usize> StaticString<BYTE_COUNT> {
+    /// `bytes` must include the terminating NUL.
+    pub const fn new(bytes: [u8; BYTE_COUNT]) -> Self {
+        Self {
+            header: ynz_abi::STATIC_STRING_HEADER,
+            bytes,
+        }
+    }
+
+    /// The string pointer Yinz code holds: the first byte, with the header in front of it.
+    /// Derived from a pointer to the whole struct so reading the header through it stays inside
+    /// the pointer's provenance.
+    pub fn string_pointer(&'static self) -> *const u8 {
+        let whole = std::ptr::from_ref(self).cast::<u8>();
+        // SAFETY: `bytes` lies inside `self`, `offset_of!` bytes past its start.
+        unsafe { whole.add(std::mem::offset_of!(Self, bytes)) }
+    }
+}
+
+/// Allocate a heap string buffer of `size` bytes (the caller includes the NUL terminator).
+/// Aborts on OOM — Yinz programs cannot recover from OOM.
+///
+/// THE single allocation point for every heap string (`ynz_string_from_static`,
+/// `ynz_string_concat`, `ynz_string_codepoint_at`, `ynz_string_builder_finalize`,
+/// `heap_string_from_str` and so everything built on it). Counting here, in one place, is what
+/// makes a string alloc/free balance check trustworthy: a sixth allocator that bypassed this
+/// helper would be invisible to the counter and make a leak assertion pass vacuously.
+///
+/// The allocation is `STRING_HEADER_BYTES` of header (the byte capacity `size`, never 0) then
+/// the bytes; the pointer returned is the first byte. `ynz_string_release` reads the header to
+/// tell this string from static bytes.
+///
+/// Why abort instead of returning null or a static empty string: a static fallback is not
+/// something this allocator's callers can tell from heap bytes, and `ynz_string_codepoint_at`
+/// uses null as its out-of-bounds sentinel, so a null on OOM would be indistinguishable from a
+/// normal miss.
+///
+/// Cost: one relaxed atomic load when the counter is off (same `YNZ_ALLOC_COUNTER` gate as
+/// `ynz_alloc`), one 8-byte store for the header; O(1) time, `size + 8` bytes of memory.
+unsafe fn heap_string_buffer(size: usize) -> *mut u8 {
+    debug_assert!(size > 0, "a heap string holds at least its NUL terminator");
+    if alloc_counter_enabled() {
+        YNZ_STRING_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+        YNZ_STRING_ALLOC_BYTES.fetch_add(size as u64, Ordering::Relaxed);
+    }
+    let header_bytes = ynz_abi::STRING_HEADER_BYTES as usize;
+    let allocation = malloc(header_bytes + size) as *mut u8;
+    if allocation.is_null() {
+        std::process::abort();
+    }
+    (allocation as *mut u64).write(size as u64);
+    allocation.add(header_bytes)
+}
+
+/// Release a string: free its bytes if the runtime owns them, do nothing if they are static.
+///
+/// THE one release entry point for string bytes. It accepts every string value, so a caller
+/// never has to know where a string came from: static bytes (a literal, `true`/`false`, a
+/// display name, `[REDACTED]`) carry `STATIC_STRING_HEADER` and are left alone; a heap string
+/// carries its byte capacity and is freed, counted (count and bytes) when the
+/// `YNZ_ALLOC_COUNTER` gate is on. A null pointer is a no-op.
+///
+/// Does NOT decide whether the caller still holds another pointer to the same bytes: the
+/// caller must be the string's only owner (one owner per heap string; a store copies).
+///
+/// Cost: one load, one compare, then `free`; no atomics. O(1) time.
+///
+/// # Safety
+/// `string` must be null or a string pointer produced by Yinz code or a string allocator of
+/// this module (header in front), and an owned one must not have been released already.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_release(string: *const u8) {
+    if string.is_null() {
+        return;
+    }
+    let header_bytes = ynz_abi::STRING_HEADER_BYTES as usize;
+    let allocation = string.sub(header_bytes);
+    let byte_capacity = (allocation as *const u64).read();
+    if byte_capacity == ynz_abi::STATIC_STRING_HEADER {
+        return;
+    }
+    if alloc_counter_enabled() {
+        YNZ_STRING_FREE_COUNT.fetch_add(1, Ordering::Relaxed);
+        YNZ_STRING_FREE_BYTES.fetch_add(byte_capacity, Ordering::Relaxed);
+    }
+    free(allocation as *mut core::ffi::c_void);
+}
+
+/// Copy a string: a fresh heap string with the same bytes, which the caller owns
+/// (`ynz_string_release` frees it). THE copy a store makes of a borrowed string (a literal, a
+/// field or element read, a parameter, an `.or()` result) so the place holds bytes of its own;
+/// accepts static and heap strings alike, and a null string stays null (the `none` of a
+/// `T | nothing` union).
+///
+/// Cost: one `strlen`, one allocation, one `memcpy`; O(n) time, n + 9 bytes of memory.
+///
+/// # Safety
+/// `string` must be null or a valid pointer to a null-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_clone(string: *const u8) -> *const u8 {
+    if string.is_null() {
+        return string;
+    }
+    let bytes = unsafe { std::ffi::CStr::from_ptr(string as *const i8) }.to_bytes();
+    heap_string_from_bytes(bytes)
+}
+
+/// Read the current heap-string alloc count. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_alloc_count() -> u64 {
+    YNZ_STRING_ALLOC_COUNT.load(Ordering::Relaxed)
+}
+
+/// Read the total bytes of heap-string allocations. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_alloc_bytes() -> u64 {
+    YNZ_STRING_ALLOC_BYTES.load(Ordering::Relaxed)
+}
+
+/// Read the current heap-string free count. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_free_count() -> u64 {
+    YNZ_STRING_FREE_COUNT.load(Ordering::Relaxed)
+}
+
+/// Read the total bytes of heap-string frees. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_free_bytes() -> u64 {
+    YNZ_STRING_FREE_BYTES.load(Ordering::Relaxed)
 }
 
 /// Allocate `size` bytes. Aborts on OOM — Yinz programs cannot recover from OOM.
@@ -493,16 +795,8 @@ pub unsafe extern "C" fn ynz_free(ptr: *mut u8, _size: usize) {
 // Named here so the rationale is co-located with the values and tuning them
 // updates all uses automatically.
 
-/// Thread-local buffer length for `ynz_decimal_to_string`.
-///
-/// decimal128 max: 34 significant digits + sign + decimal point + exponent ("E+N") +
-/// null terminator = ≤ 40 bytes. 48 rounds up to a cache-friendly size with margin.
-const DECIMAL128_STRING_BUF_LEN: usize = 48;
-
-/// Thread-local buffer length for `ynz_int_to_string`.
-///
-/// i64 max: 20 decimal digits + sign + null terminator = 22 bytes.
-const INT64_STRING_BUF_LEN: usize = 22;
+/// Longest decimal text of an i64: 19 digits plus the sign of `i64::MIN` (`-9223372036854775808`).
+const I64_DECIMAL_MAX_BYTES: usize = 20;
 
 /// Initial insertion-order buffer capacity for a new map.
 ///
@@ -655,7 +949,11 @@ pub unsafe extern "C" fn ynz_siphash_str(ptr: *const u8) -> u64 {
 //
 // Open-addressing hash map. Each slot has:
 //   1 byte control: 0x80 = empty, 0xFE = deleted, low 7 bits of hash = present.
-//   8 bytes key (stored as i64 — int/bool/float by value, string/ptr as i64 cast).
+//   `key_size` bytes key: 8 (stored as i64 — int/bool/float by value, string/ptr as i64 cast), or 16
+//   for a decimal128 `number` key, held INLINE (a key that pointed into the producing frame read a
+//   dead frame once that returned). A decimal key is hashed and compared as its 16 stored BYTES,
+//   nothing more: the same value in the same scale is one key, while `1.0` and `1.00` are two (a
+//   key is not normalized: that is a hashing semantic the storage does not need).
 //   `elem_size` bytes value, stored BY VALUE inline in one contiguous `vals`
 //   buffer of `elem_size`-byte cells (mirrors the array ABI 1:1 — no twin):
 //     - non-shape values: elem_size = 8 (i64 bits by value, or stable pointer bits),
@@ -683,13 +981,22 @@ pub struct YnzMap {
     capacity: i64,
     order_cap: i64,
     elem_size: i64,
+    /// Bytes of one key: [`INT_KEY_SIZE`] (an int, bool, float or string pointer) or
+    /// [`DECIMAL_KEY_SIZE`] (a decimal128 held inline). It sizes `keys` and `insert_order`.
+    key_size: i64,
 }
+
+/// Bytes of an i64 map key (an int, bool or float by value, a string by pointer).
+const INT_KEY_SIZE: i64 = 8;
+
+/// Bytes of a decimal128 `number` map key, held inline.
+const DECIMAL_KEY_SIZE: i64 = 16;
 
 /// THE value-slot address derivation: `vals + idx * elem_size`. Every read and
 /// write of a value cell against the map's OWN `vals` field routes through this
 /// one helper (authoritative-derivation — no second derivation of the
-/// value-slot address against the map's own `vals` field). `map_grow_int` /
-/// `map_grow_str` compute raw destination addresses into a NEW, not-yet-installed
+/// value-slot address against the map's own `vals` field). `map_grow`
+/// computes raw destination addresses into a NEW, not-yet-installed
 /// `vals` buffer during growth — that's a different field, not a second
 /// derivation of this one, and `val_slot` can't address a buffer that isn't
 /// installed on the map yet.
@@ -697,16 +1004,27 @@ unsafe fn val_slot(map: *const YnzMap, idx: usize) -> *mut u8 {
     (*map).vals.add(idx * (*map).elem_size as usize)
 }
 
-unsafe fn map_alloc(capacity: i64, elem_size: i64) -> *mut YnzMap {
+/// The address of key slot `slot_index` of a map of decimal128 keys: `keys + slot_index * 16`. Only a map made
+/// by [`ynz_map_new_decimal_keys`] has such slots; int and string maps index `keys` as i64.
+unsafe fn decimal_key_slot(map: *const YnzMap, slot_index: usize) -> *mut u8 {
+    ((*map).keys as *mut u8).add(slot_index * DECIMAL_KEY_SIZE as usize)
+}
+
+/// The address of position `position` of a decimal-keyed map's insertion-order buffer.
+unsafe fn decimal_order_slot(map: *const YnzMap, position: usize) -> *mut u8 {
+    ((*map).insert_order as *mut u8).add(position * DECIMAL_KEY_SIZE as usize)
+}
+
+unsafe fn map_alloc(capacity: i64, elem_size: i64, key_size: i64) -> *mut YnzMap {
     // ynz_alloc aborts on OOM (Yinz programs cannot recover from OOM), so no null
     // checks are needed; routing through it keeps all five buffers visible to the
     // alloc counter (E8).
     let hdr = ynz_alloc(std::mem::size_of::<YnzMap>()) as *mut YnzMap;
     let ctrl = ynz_alloc(capacity as usize);
-    let keys = ynz_alloc((capacity as usize) * 8) as *mut i64;
+    let keys = ynz_alloc((capacity * key_size) as usize) as *mut i64;
     let vals = ynz_alloc((capacity * elem_size) as usize);
     let order_cap: i64 = INITIAL_ORDER_CAP;
-    let order = ynz_alloc((order_cap as usize) * 8) as *mut i64;
+    let order = ynz_alloc((order_cap * key_size) as usize) as *mut i64;
     std::ptr::write_bytes(ctrl, CTRL_EMPTY, capacity as usize);
     *hdr = YnzMap {
         ctrl,
@@ -717,6 +1035,7 @@ unsafe fn map_alloc(capacity: i64, elem_size: i64) -> *mut YnzMap {
         capacity,
         order_cap,
         elem_size,
+        key_size,
     };
     hdr
 }
@@ -731,6 +1050,26 @@ unsafe fn map_alloc(capacity: i64, elem_size: i64) -> *mut YnzMap {
 /// The returned pointer is valid and must be freed with [`ynz_map_drop`].
 #[no_mangle]
 pub unsafe extern "C" fn ynz_map_new(elem_size: i64) -> *mut YnzMap {
+    check_map_elem_size(elem_size);
+    map_alloc(INITIAL_MAP_CAPACITY, elem_size, INT_KEY_SIZE)
+}
+
+/// Allocate a new empty map of `elem_size`-byte values keyed by decimal128 `number`s, each key
+/// held inline (16 bytes). Use it with [`ynz_map_set_decimal`], [`ynz_map_get_decimal`] and
+/// [`ynz_map_iter_get_decimal`] only; the i64 and string entry points would read a 16-byte key as 8.
+/// Same abort and ownership contract as [`ynz_map_new`]; [`ynz_map_drop`] and [`ynz_map_clone`]
+/// read the key size from the map, and a number key owns nothing to release.
+///
+/// # Safety
+/// The returned pointer is valid and must be freed with [`ynz_map_drop`].
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_new_decimal_keys(elem_size: i64) -> *mut YnzMap {
+    check_map_elem_size(elem_size);
+    map_alloc(INITIAL_MAP_CAPACITY, elem_size, DECIMAL_KEY_SIZE)
+}
+
+/// Aborts on `elem_size <= 0`: the compiler always passes the value type's real ABI size (>= 1).
+fn check_map_elem_size(elem_size: i64) {
     if elem_size <= 0 {
         eprintln!(
             "INTERNAL ERROR: map created with a non-positive element size \
@@ -739,7 +1078,6 @@ pub unsafe extern "C" fn ynz_map_new(elem_size: i64) -> *mut YnzMap {
         );
         std::process::abort();
     }
-    map_alloc(INITIAL_MAP_CAPACITY, elem_size)
 }
 
 /// THE bucket-math derivation shared by `find_slot` and `find_slot_str`: the h2
@@ -803,6 +1141,47 @@ unsafe fn find_slot_str(map: *const YnzMap, hash: u64, key: *const u8) -> Option
     }
 }
 
+/// The decimal128 bits stored at `key`, 16 bytes of a key slot or of a caller's number.
+unsafe fn decimal_key_bits(key: *const u8) -> u128 {
+    u128::from_ne_bytes(std::ptr::read_unaligned(key as *const [u8; 16]))
+}
+
+/// The hash of a decimal128 key: SipHash-2-4 of its 16 stored bytes. Two keys hash alike exactly
+/// when [`find_slot_decimal`] holds them equal (the same 16 bytes). The one hash every decimal-key
+/// probe, growth and lookup uses.
+///
+/// O(1) time, O(1) space.
+fn decimal_key_hash(bits: u128) -> u64 {
+    siphash24(&bits.to_ne_bytes())
+}
+
+/// THE decimal-key slot probe: the same bucket walk as `find_slot` and `find_slot_str`, comparing
+/// the 16 stored bytes of a candidate slot with the 16 bytes of `key`. A bit comparison is all the
+/// inline storage needs; the bytes are not normalized, so `1.0` and `1.00` are two keys. Every
+/// decimal-key lookup (`ynz_map_get_decimal`, `ynz_map_set_decimal`'s overwrite check,
+/// `ynz_map_iter_get_decimal`) routes through this one helper.
+///
+/// Time: O(1) expected, O(cap) worst case. Space: O(1).
+unsafe fn find_slot_decimal(map: *const YnzMap, hash: u64, key: *const u8) -> Option<usize> {
+    let cap = (*map).capacity as usize;
+    let (h2, start) = h2_and_start(hash, cap);
+    let wanted = decimal_key_bits(key);
+    let mut slot_index = start;
+    loop {
+        let ctrl = *(*map).ctrl.add(slot_index);
+        if ctrl == CTRL_EMPTY {
+            return None;
+        }
+        if ctrl == h2 && decimal_key_bits(decimal_key_slot(map, slot_index)) == wanted {
+            return Some(slot_index);
+        }
+        slot_index = (slot_index + 1) & (cap - 1);
+        if slot_index == start {
+            return None;
+        }
+    }
+}
+
 unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
     let cap = (*map).capacity as usize;
     let (_h2, mut idx) = h2_and_start(hash, cap);
@@ -825,15 +1204,36 @@ unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
     }
 }
 
-/// Grow an int-keyed map to ×2 capacity.
+/// How a map hashes one of its stored keys while rehashing: the key's bytes in, the hash out.
+type KeyHash = unsafe fn(key: *const u8) -> u64;
+
+unsafe fn hash_stored_int_key(key: *const u8) -> u64 {
+    ynz_siphash_i64(std::ptr::read_unaligned(key as *const i64))
+}
+
+unsafe fn hash_stored_str_key(key: *const u8) -> u64 {
+    // The slot holds the string's address as an `i64` (`ynz_map_set_str` writes `key as i64`), so
+    // it is read back as an `i64` and cast, as `find_slot_str` does. Reading the same bytes as a
+    // pointer would give a pointer that carries no provenance, and hashing it is undefined
+    // behavior (Miri: "dangling pointer (it has no provenance)").
+    ynz_siphash_str(std::ptr::read_unaligned(key as *const i64) as *const u8)
+}
+
+unsafe fn hash_stored_decimal_key(key: *const u8) -> u64 {
+    decimal_key_hash(decimal_key_bits(key))
+}
+
+/// Grow a map to ×2 capacity: THE one growth for int, string and decimal keys, which differ
+/// only in how a stored key is hashed (`hash_key`) and in `key_size` (read from the map).
 ///
 /// # Side effects
 ///
 /// - Allocates three new arrays (ctrl, keys, vals) of `2 × capacity` slots each
-///   (vals cells are `elem_size` bytes each), all via counted `ynz_alloc`.
-/// - Rehashes all live entries into the new arrays (value cells memcpy'd whole).
+///   (keys cells are `key_size` bytes, vals cells `elem_size` bytes), all via counted `ynz_alloc`.
+/// - Rehashes all live entries into the new arrays (key and value cells memcpy'd whole; a string
+///   key's POINTER is preserved — the map stores pointers, not copies).
 /// - Frees the old ctrl, keys, and vals arrays via counted `ynz_free` with their
-///   true old byte sizes (ctrl = cap, keys = cap*8, vals = cap*elem_size).
+///   true old byte sizes (ctrl = cap, keys = cap*key_size, vals = cap*elem_size).
 /// - Updates `map.ctrl`, `map.keys`, `map.vals`, and `map.capacity` in place.
 ///   Any previously obtained raw pointers into these arrays are INVALIDATED.
 ///   The `insert_order` / `order_cap` / `count` / `elem_size` fields are NOT modified.
@@ -841,102 +1241,77 @@ unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
 ///
 /// # Growth trigger
 ///
-/// Called by `ynz_map_set` when `count * 4 >= capacity * 3` (75% load factor).
-unsafe fn map_grow_int(map: *mut YnzMap) {
-    let old_cap = (*map).capacity;
-    let elem_size = (*map).elem_size;
-    let new_cap = old_cap * 2;
-    let new_ctrl = ynz_alloc(new_cap as usize);
-    let new_keys = ynz_alloc((new_cap as usize) * 8) as *mut i64;
-    let new_vals = ynz_alloc((new_cap * elem_size) as usize);
-    std::ptr::write_bytes(new_ctrl, CTRL_EMPTY, new_cap as usize);
-
-    for i in 0..old_cap as usize {
-        let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
-            continue;
-        }
-        let k = *(*map).keys.add(i);
-        let hash = ynz_siphash_i64(k);
-        let (h2, mut idx) = h2_and_start(hash, new_cap as usize);
-        while *new_ctrl.add(idx) != CTRL_EMPTY {
-            idx = (idx + 1) & (new_cap as usize - 1);
-        }
-        *new_ctrl.add(idx) = h2;
-        *new_keys.add(idx) = k;
-        std::ptr::copy_nonoverlapping(
-            val_slot(map, i),
-            new_vals.add(idx * elem_size as usize),
-            elem_size as usize,
-        );
-    }
-
-    ynz_free((*map).ctrl, old_cap as usize);
-    ynz_free((*map).keys as *mut u8, (old_cap as usize) * 8);
-    ynz_free((*map).vals, (old_cap * elem_size) as usize);
-    (*map).ctrl = new_ctrl;
-    (*map).keys = new_keys;
-    (*map).vals = new_vals;
-    (*map).capacity = new_cap;
-}
-
-/// Grow a string-keyed map to ×2 capacity.
+/// Called by `ynz_map_set*` when `count * 4 >= capacity * 3` (75% load factor).
 ///
-/// Same side-effect contract as `map_grow_int` except rehashing uses
-/// `ynz_siphash_str` (pointer-to-string keys) instead of `ynz_siphash_i64`.
-/// String key POINTERS are preserved as-is (the map stores pointers, not copies).
-unsafe fn map_grow_str(map: *mut YnzMap) {
+/// O(capacity) time and space.
+unsafe fn map_grow(map: *mut YnzMap, hash_key: KeyHash) {
     let old_cap = (*map).capacity;
     let elem_size = (*map).elem_size;
+    let key_size = (*map).key_size as usize;
     let new_cap = old_cap * 2;
     let new_ctrl = ynz_alloc(new_cap as usize);
-    let new_keys = ynz_alloc((new_cap as usize) * 8) as *mut i64;
+    let new_keys = ynz_alloc((new_cap as usize) * key_size);
     let new_vals = ynz_alloc((new_cap * elem_size) as usize);
     std::ptr::write_bytes(new_ctrl, CTRL_EMPTY, new_cap as usize);
 
+    let old_keys = (*map).keys as *mut u8;
     for i in 0..old_cap as usize {
         let ctrl = *(*map).ctrl.add(i);
         if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
             continue;
         }
-        let k = *(*map).keys.add(i);
-        let hash = ynz_siphash_str(k as *const u8);
-        let (h2, mut idx) = h2_and_start(hash, new_cap as usize);
-        while *new_ctrl.add(idx) != CTRL_EMPTY {
-            idx = (idx + 1) & (new_cap as usize - 1);
+        let old_key = old_keys.add(i * key_size);
+        let hash = hash_key(old_key);
+        let (h2, mut slot_index) = h2_and_start(hash, new_cap as usize);
+        while *new_ctrl.add(slot_index) != CTRL_EMPTY {
+            slot_index = (slot_index + 1) & (new_cap as usize - 1);
         }
-        *new_ctrl.add(idx) = h2;
-        *new_keys.add(idx) = k;
+        *new_ctrl.add(slot_index) = h2;
+        std::ptr::copy_nonoverlapping(old_key, new_keys.add(slot_index * key_size), key_size);
         std::ptr::copy_nonoverlapping(
             val_slot(map, i),
-            new_vals.add(idx * elem_size as usize),
+            new_vals.add(slot_index * elem_size as usize),
             elem_size as usize,
         );
     }
 
     ynz_free((*map).ctrl, old_cap as usize);
-    ynz_free((*map).keys as *mut u8, (old_cap as usize) * 8);
+    ynz_free(old_keys, (old_cap as usize) * key_size);
     ynz_free((*map).vals, (old_cap * elem_size) as usize);
     (*map).ctrl = new_ctrl;
-    (*map).keys = new_keys;
+    (*map).keys = new_keys as *mut i64;
     (*map).vals = new_vals;
     (*map).capacity = new_cap;
 }
 
-unsafe fn order_push(map: *mut YnzMap, key: i64) {
+/// Record `key` (`key_size` bytes) as the newest entry of the insertion-order buffer, growing the
+/// buffer when full. Call it BEFORE `count` is incremented.
+unsafe fn order_push(map: *mut YnzMap, key: *const u8) {
+    let key_size = (*map).key_size as usize;
     if (*map).count >= (*map).order_cap {
         let old_cap = (*map).order_cap;
         let new_cap = old_cap * 2;
         // Counted growth path: alloc-new + copy + free-old. NOT realloc — the alloc
         // counter instruments ynz_alloc/ynz_free only, and a raw realloc would make
         // E8's parity accounting blind to the grown buffer (FRAGO 005).
-        let new_order = ynz_alloc((new_cap as usize) * 8) as *mut i64;
-        std::ptr::copy_nonoverlapping((*map).insert_order, new_order, (*map).count as usize);
-        ynz_free((*map).insert_order as *mut u8, (old_cap as usize) * 8);
-        (*map).insert_order = new_order;
+        let new_order = ynz_alloc((new_cap as usize) * key_size);
+        std::ptr::copy_nonoverlapping(
+            (*map).insert_order as *const u8,
+            new_order,
+            (*map).count as usize * key_size,
+        );
+        ynz_free(
+            (*map).insert_order as *mut u8,
+            (old_cap as usize) * key_size,
+        );
+        (*map).insert_order = new_order as *mut i64;
         (*map).order_cap = new_cap;
     }
-    *(*map).insert_order.add((*map).count as usize) = key;
+    std::ptr::copy_nonoverlapping(
+        key,
+        ((*map).insert_order as *mut u8).add((*map).count as usize * key_size),
+        key_size,
+    );
 }
 
 unsafe fn cstr_eq_raw(a: *const u8, b: *const u8) -> bool {
@@ -1006,6 +1381,20 @@ pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out
     }
 }
 
+/// Release the value a `set` is about to overwrite at slot `idx`, with the glue for the value type
+/// (none when the value owns nothing). The map owns its values, so the replaced one has no other
+/// holder.
+unsafe fn release_replaced_value(
+    map: *const YnzMap,
+    idx: usize,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
+    if let Some(glue) = value_glue {
+        glue(item_argument(val_slot(map, idx), values_inline));
+    }
+}
+
 /// Set a key-value pair with an i64 key: copies `elem_size` bytes from `src` into
 /// the value cell (overwrite on hit, insert on miss).
 ///
@@ -1019,13 +1408,20 @@ pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8) {
+pub unsafe extern "C" fn ynz_map_set(
+    map: *mut YnzMap,
+    key: i64,
+    src: *const u8,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
     if (*map).count * 4 >= (*map).capacity * 3 {
-        map_grow_int(map);
+        map_grow(map, hash_stored_int_key);
     }
     let elem_size = (*map).elem_size;
     let hash = ynz_siphash_i64(key);
     if let Some(idx) = find_slot(map, hash, key) {
+        release_replaced_value(map, idx, value_glue, values_inline);
         std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
         return;
     }
@@ -1034,7 +1430,7 @@ pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8)
     *(*map).ctrl.add(idx) = h2;
     *(*map).keys.add(idx) = key;
     std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
-    order_push(map, key);
+    order_push(map, &key as *const i64 as *const u8);
     (*map).count += 1;
 }
 
@@ -1045,18 +1441,35 @@ pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8)
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 /// - `key` must be a non-null pointer to a valid null-terminated byte string that
-///   remains valid for the lifetime of the map (the map stores the pointer, not a copy).
+///   remains valid for the lifetime of the map (the map stores the pointer, not a copy of the
+///   bytes: codegen hands it a string the map owns, an owned copy of a borrowed key or a moved
+///   fresh one, `IMP-strings.md` "Storing a string").
 /// - `src` must be valid for `elem_size` bytes.
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, src: *const u8) {
+pub unsafe extern "C" fn ynz_map_set_str(
+    map: *mut YnzMap,
+    key: *const u8,
+    src: *const u8,
+    key_glue: Option<ReleaseGlue>,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
     if (*map).count * 4 >= (*map).capacity * 3 {
-        map_grow_str(map);
+        map_grow(map, hash_stored_str_key);
     }
     let elem_size = (*map).elem_size;
     let hash = ynz_siphash_str(key);
     if let Some(idx) = find_slot_str(map, hash, key) {
+        // The map keeps the key it already owns; the one handed in is the caller's to free, and
+        // is released here unless it IS the stored one (a read of the map's own key).
+        if let Some(glue) = key_glue {
+            if *(*map).keys.add(idx) as *const u8 != key {
+                glue(key as *mut u8);
+            }
+        }
+        release_replaced_value(map, idx, value_glue, values_inline);
         std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
         return;
     }
@@ -1065,8 +1478,108 @@ pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, src: 
     *(*map).ctrl.add(idx) = h2;
     *(*map).keys.add(idx) = key as i64;
     std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
-    order_push(map, key as i64);
+    order_push(map, &(key as i64) as *const i64 as *const u8);
     (*map).count += 1;
+}
+
+/// Get a value by decimal128 key (a pointer to the number's 16 bytes): copies `elem_size` bytes
+/// into `out` and returns 1 on hit; zeroes `out` and returns 0 on miss. The key matches when its
+/// 16 bytes equal the stored ones, so `2.50` does not find the entry stored under `2.5`. Same
+/// flag-return contract as [`ynz_map_get`]; a map holds `has` as this flag too.
+///
+/// # Safety
+/// - `map` must be a non-null pointer returned by `ynz_map_new_decimal_keys` and not yet freed.
+/// - `key` must be valid for 16 bytes (the runtime reads them before returning).
+/// - `out` must be a writable pointer valid for `elem_size` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_get_decimal(
+    map: *const YnzMap,
+    key: *const u8,
+    out: *mut u8,
+) -> i64 {
+    let elem_size = (*map).elem_size;
+    let hash = decimal_key_hash(decimal_key_bits(key));
+    match find_slot_decimal(map, hash, key) {
+        Some(slot_index) => {
+            std::ptr::copy_nonoverlapping(val_slot(map, slot_index), out, elem_size as usize);
+            1
+        }
+        None => {
+            std::ptr::write_bytes(out, 0, elem_size as usize);
+            0
+        }
+    }
+}
+
+/// Set a key-value pair with a decimal128 key (a pointer to the number's 16 bytes): copies the 16
+/// key bytes and `elem_size` value bytes out of `key` and `src` BEFORE returning (overwrite on a
+/// hit, insert on a miss), so both may point at stack slots that die at once. A hit is a key whose
+/// 16 bytes equal the stored ones (`2.5` and `2.50` are two keys); it keeps the stored key and
+/// replaces only the value, as `ynz_map_set_str` keeps its stored key. Same value-glue contract as
+/// [`ynz_map_set`]; a number key owns nothing to release.
+///
+/// # Safety
+/// - `map` must be a non-null pointer returned by `ynz_map_new_decimal_keys` and not yet freed.
+/// - `key` must be valid for 16 bytes; `src` must be valid for `elem_size` bytes.
+/// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
+///   obtained slot pointers into the map's internal arrays.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_set_decimal(
+    map: *mut YnzMap,
+    key: *const u8,
+    src: *const u8,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
+    if (*map).count * 4 >= (*map).capacity * 3 {
+        map_grow(map, hash_stored_decimal_key);
+    }
+    let elem_size = (*map).elem_size;
+    let hash = decimal_key_hash(decimal_key_bits(key));
+    if let Some(slot_index) = find_slot_decimal(map, hash, key) {
+        release_replaced_value(map, slot_index, value_glue, values_inline);
+        std::ptr::copy_nonoverlapping(src, val_slot(map, slot_index), elem_size as usize);
+        return;
+    }
+    let (h2, _) = h2_and_start(hash, (*map).capacity as usize);
+    let slot_index = find_insert_slot(map, hash);
+    *(*map).ctrl.add(slot_index) = h2;
+    std::ptr::copy_nonoverlapping(
+        key,
+        decimal_key_slot(map, slot_index),
+        DECIMAL_KEY_SIZE as usize,
+    );
+    std::ptr::copy_nonoverlapping(src, val_slot(map, slot_index), elem_size as usize);
+    order_push(map, key);
+    (*map).count += 1;
+}
+
+/// Get the entry at insertion-order position `position` of a decimal-keyed map: copies the 16 key
+/// bytes into `key_out`, `elem_size` value bytes into `val_out`, and returns the has-flag (1 on
+/// success; 0 on out of range, with `key_out` and `val_out` zeroed).
+///
+/// The slot lookup DELEGATES to `find_slot_decimal`, like `ynz_map_iter_get_str` to its probe: a key
+/// is stored once, so the recorded key finds its own slot.
+///
+/// # Safety
+/// - `map` must be a non-null pointer returned by `ynz_map_new_decimal_keys` and not yet freed.
+/// - `key_out` must be writable for 16 bytes; `val_out` must be writable for `elem_size` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_iter_get_decimal(
+    map: *const YnzMap,
+    position: i64,
+    key_out: *mut u8,
+    val_out: *mut u8,
+) -> i64 {
+    let elem_size = (*map).elem_size as usize;
+    if position < 0 || position >= (*map).count {
+        std::ptr::write_bytes(key_out, 0, DECIMAL_KEY_SIZE as usize);
+        std::ptr::write_bytes(val_out, 0, elem_size);
+        return 0;
+    }
+    let recorded_key = decimal_order_slot(map, position as usize);
+    std::ptr::copy_nonoverlapping(recorded_key, key_out, DECIMAL_KEY_SIZE as usize);
+    ynz_map_get_decimal(map, key_out, val_out)
 }
 
 /// Return the number of key-value pairs.
@@ -1184,12 +1697,13 @@ pub unsafe extern "C" fn ynz_map_iter_get_str(
 pub unsafe extern "C" fn ynz_map_drop(map: *mut YnzMap) {
     let cap = (*map).capacity;
     let elem_size = (*map).elem_size;
+    let key_size = (*map).key_size;
     ynz_free((*map).ctrl, cap as usize);
-    ynz_free((*map).keys as *mut u8, (cap as usize) * 8);
+    ynz_free((*map).keys as *mut u8, (cap * key_size) as usize);
     ynz_free((*map).vals, (cap * elem_size) as usize);
     ynz_free(
         (*map).insert_order as *mut u8,
-        ((*map).order_cap as usize) * 8,
+        ((*map).order_cap * key_size) as usize,
     );
     ynz_free(map as *mut u8, std::mem::size_of::<YnzMap>());
 }
@@ -1237,15 +1751,20 @@ pub unsafe extern "C" fn ynz_map_clone(src: *mut YnzMap) -> *mut YnzMap {
     let cap = s.capacity as usize;
     let elem_size = s.elem_size as usize;
     let order_cap = s.order_cap as usize;
+    let key_size = s.key_size as usize;
     let hdr = ynz_alloc(std::mem::size_of::<YnzMap>()) as *mut YnzMap;
     let ctrl = ynz_alloc(cap);
-    let keys = ynz_alloc(cap * 8) as *mut i64;
+    let keys = ynz_alloc(cap * key_size) as *mut i64;
     let vals = ynz_alloc(cap * elem_size);
-    let order = ynz_alloc(order_cap * 8) as *mut i64;
+    let order = ynz_alloc(order_cap * key_size) as *mut i64;
     std::ptr::copy_nonoverlapping(s.ctrl, ctrl, cap);
-    std::ptr::copy_nonoverlapping(s.keys, keys, cap);
+    std::ptr::copy_nonoverlapping(s.keys as *const u8, keys as *mut u8, cap * key_size);
     std::ptr::copy_nonoverlapping(s.vals, vals, cap * elem_size);
-    std::ptr::copy_nonoverlapping(s.insert_order, order, order_cap);
+    std::ptr::copy_nonoverlapping(
+        s.insert_order as *const u8,
+        order as *mut u8,
+        order_cap * key_size,
+    );
     *hdr = YnzMap {
         ctrl,
         keys,
@@ -1255,8 +1774,60 @@ pub unsafe extern "C" fn ynz_map_clone(src: *mut YnzMap) -> *mut YnzMap {
         capacity: s.capacity,
         order_cap: s.order_cap,
         elem_size: s.elem_size,
+        key_size: s.key_size,
     };
     hdr
+}
+
+/// Give a just-cloned map strings of its own: replace, in place, every string key (when
+/// `clone_keys` is non-zero) and every string value (when `clone_values` is non-zero) of
+/// `map` with a fresh copy (`ynz_string_clone`). [`ynz_map_clone`] copies the cells, so a clone
+/// of a `map<string, V>` or `map<K, string>` still points at the source's strings, and two
+/// maps holding one string would free it twice. The caller passes the flags because the map does
+/// not record what its keys and values are.
+///
+/// A key lives in two places (`keys` and `insert_order`); both get the same copy.
+///
+/// O(capacity + count) time, one allocation per string copied; O(distinct keys) memory.
+///
+/// # Safety
+/// `map` must be a valid non-null pointer returned by [`ynz_map_clone`] (or `ynz_map_new`), whose
+/// keys (when `clone_keys` is set) and values (when `clone_values` is set) are string pointers.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_clone_strings(
+    map: *mut YnzMap,
+    clone_keys: i32,
+    clone_values: i32,
+) {
+    if map.is_null() {
+        return;
+    }
+    let capacity = (*map).capacity as usize;
+    let mut renamed_keys: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    for slot in 0..capacity {
+        let control = *(*map).ctrl.add(slot);
+        if control == CTRL_EMPTY || control == CTRL_DELETED {
+            continue;
+        }
+        if clone_keys != 0 {
+            let old_key = *(*map).keys.add(slot);
+            let new_key = ynz_string_clone(old_key as *const u8) as i64;
+            *(*map).keys.add(slot) = new_key;
+            renamed_keys.insert(old_key, new_key);
+        }
+        if clone_values != 0 {
+            let value_slot = val_slot(map, slot) as *mut *const u8;
+            *value_slot = ynz_string_clone(*value_slot);
+        }
+    }
+    if clone_keys != 0 {
+        for position in 0..(*map).count as usize {
+            let entry = (*map).insert_order.add(position);
+            if let Some(new_key) = renamed_keys.get(&*entry) {
+                *entry = *new_key;
+            }
+        }
+    }
 }
 
 // ── Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) ──────────
@@ -1264,7 +1835,8 @@ pub unsafe extern "C" fn ynz_map_clone(src: *mut YnzMap) -> *mut YnzMap {
 // array<T> is a heap-allocated growable list storing elements BY VALUE, inline in
 // one contiguous buffer of `elem_size`-byte cells:
 //   - non-shape elements: elem_size = 8 (int/float/bool as i64 bits by value;
-//     string/number/other pointer types as pointer bits — scratch-doc Option A),
+//     string/other pointer types as pointer bits — scratch-doc Option A),
+//   - decimal128 `number` elements: elem_size = 16, the decimal inline in the cell,
 //   - shape elements: elem_size = the shape's LLVM ABI byte size; the element's
 //     struct bytes live inline in the buffer (the array OWNS them — no dangling
 //     stack/global element pointers, the M3a-guard miscompile class by construction).
@@ -1419,13 +1991,51 @@ pub unsafe extern "C" fn ynz_array_get(arr: *const YnzArray, idx: i64, out: *mut
 /// `arr` must be a valid non-null pointer. `idx` must be in [0, len).
 /// `src` must be valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_array_set(arr: *mut YnzArray, idx: i64, src: *const u8) {
+pub unsafe extern "C" fn ynz_array_set(
+    arr: *mut YnzArray,
+    idx: i64,
+    src: *const u8,
+    item_glue: Option<ReleaseGlue>,
+    items_inline: i32,
+) {
     if idx < 0 || idx >= (*arr).len {
         std::process::abort();
     }
     let elem_size = (*arr).elem_size;
     let slot = (*arr).data.add((idx * elem_size) as usize);
+    // The array owns its items, so the one being replaced has no other holder: release it with
+    // the glue for the element type (none when the caller overwrites a cell it does not own, or
+    // the items own nothing).
+    if let Some(glue) = item_glue {
+        glue(item_argument(slot, items_inline));
+    }
     std::ptr::copy_nonoverlapping(src, slot, elem_size as usize);
+}
+
+/// Blank the cell at `idx`: zero all `elem_size` bytes of it, owning nothing afterwards.
+///
+/// The hand-over of a loop row (C1q): the row's new holder took what the cell owned, so the list's
+/// own release must skip the cell. An all-zero cell is a null pointer (a string, array, map or
+/// `fixed` item) or an inline cell whose heap fields are null (a shape, a union slot), and every
+/// release glue skips a null (`ynz_string_release`, `ynz_array_release`, `ynz_map_release`, the
+/// `fixed` cell walk's filled check). Aborts when `idx` is out of range, as `ynz_array_set` does.
+///
+/// O(elem_size) time, O(1) memory.
+///
+/// # Safety
+/// `arr` must be a valid non-null pointer returned by `ynz_array_new`; the cell's old contents
+/// must already be owned elsewhere (or garbage the caller means to leak).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_blank_cell(arr: *mut YnzArray, idx: i64) {
+    if idx < 0 || idx >= (*arr).len {
+        std::process::abort();
+    }
+    let elem_size = (*arr).elem_size;
+    std::ptr::write_bytes(
+        (*arr).data.add((idx * elem_size) as usize),
+        0,
+        elem_size as usize,
+    );
 }
 
 /// Return the number of elements in the array.
@@ -1454,6 +2064,91 @@ pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
         (*arr).data = std::ptr::null_mut();
     }
     ynz_free(arr as *mut u8, std::mem::size_of::<YnzArray>());
+}
+
+/// The release glue codegen emits for a type (`ynz_release_<type>`): frees everything the value at
+/// the pointer owns. THE one callback shape every container walk and the task drop ladder share.
+pub type ReleaseGlue = unsafe extern "C" fn(*mut u8);
+
+/// Release an array and everything its cells own: call `item_glue` on each item, then
+/// [`ynz_array_drop`] the header and buffer. The array does not record what its cells are, so the
+/// caller passes the glue for the element type, or none when the cells own nothing (`int`, `float`,
+/// `bool`, a `number` cell that points into a frame).
+///
+/// `items_inline` says where the item lives: non-zero for an element stored inline in the cell (a
+/// shape's bytes, an envelope-union slot) where the glue gets the cell's address; zero for a cell
+/// holding a pointer (a `string`, an `array`, a `map`) where the glue gets that pointer.
+///
+/// A null array is a no-op. O(len) time plus what the glue costs per item; O(1) memory.
+///
+/// # Safety
+/// `arr` is null or a live array not yet dropped, and `item_glue` frees exactly what the element
+/// type owns.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_release(
+    arr: *mut YnzArray,
+    item_glue: Option<ReleaseGlue>,
+    items_inline: i32,
+) {
+    if arr.is_null() {
+        return;
+    }
+    if let Some(glue) = item_glue {
+        let elem_size = (*arr).elem_size as usize;
+        for index in 0..(*arr).len as usize {
+            let cell = (*arr).data.add(index * elem_size);
+            glue(item_argument(cell, items_inline));
+        }
+    }
+    ynz_array_drop(arr);
+}
+
+/// What a glue receives for one cell: the cell's own address for an inline item, the pointer the
+/// cell holds otherwise.
+unsafe fn item_argument(cell: *mut u8, inline: i32) -> *mut u8 {
+    if inline != 0 {
+        cell
+    } else {
+        *(cell as *const *mut u8)
+    }
+}
+
+/// Release a map and everything its entries own: for each occupied slot call `key_glue` on the key
+/// (a string key is a raw pointer the map owns) and `value_glue` on the value, then
+/// [`ynz_map_drop`] the buffers. `values_inline` is as in [`ynz_array_release`]. Either glue may
+/// be none (an `int` key, a value that owns nothing). The insertion-order buffer repeats the keys
+/// as pointers it does not own, so keys are released from the key buffer only.
+///
+/// A null map is a no-op. O(capacity) time plus the glue's cost per entry; O(1) memory.
+///
+/// # Safety
+/// `map` is null or a live map not yet dropped; the glues free exactly what the key and value
+/// types own.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_release(
+    map: *mut YnzMap,
+    key_glue: Option<ReleaseGlue>,
+    value_glue: Option<ReleaseGlue>,
+    values_inline: i32,
+) {
+    if map.is_null() {
+        return;
+    }
+    if key_glue.is_some() || value_glue.is_some() {
+        for slot in 0..(*map).capacity as usize {
+            let control = *(*map).ctrl.add(slot);
+            if control == CTRL_EMPTY || control == CTRL_DELETED {
+                continue;
+            }
+            if let Some(glue) = key_glue {
+                glue(*(*map).keys.add(slot) as *mut u8);
+            }
+            if let Some(glue) = value_glue {
+                glue(item_argument(val_slot(map, slot), values_inline));
+            }
+        }
+    }
+    ynz_map_drop(map);
 }
 
 /// Clone an array of primitive elements (int/float/bool — each an 8-byte i64 bit
@@ -1621,20 +2316,10 @@ pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mu
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *const u8 {
     let size = len as usize + 1; // +1 for null terminator
-    let buf = malloc(size) as *mut u8;
-    if buf.is_null() {
-        // Abort on OOM like every other allocation site in this runtime (`ynz_alloc`,
-        // `ynz_error_new`, map/array allocs) — Yinz programs cannot recover from OOM.
-        // Returning a pointer to a STATIC empty string here was inconsistent with that
-        // policy AND a footgun:
-        // codegen assumes every string pointer this family returns is heap-owned and
-        // freeable, so a caller that later `ynz_free`s (or drops) this "string" would
-        // free a static buffer — undefined behavior.
-        std::process::abort();
-    }
-    std::ptr::copy_nonoverlapping(ptr, buf, len as usize);
-    *buf.add(len as usize) = 0;
-    buf as *const u8
+    let buffer = heap_string_buffer(size);
+    std::ptr::copy_nonoverlapping(ptr, buffer, len as usize);
+    *buffer.add(len as usize) = 0;
+    buffer as *const u8
 }
 
 // ── M6 helper: float → maybe<int> (locked codegen sequence from design/narrowing.md) ──
@@ -1795,16 +2480,11 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
     let a_str = unsafe { std::ffi::CStr::from_ptr(a as *const i8) }.to_bytes();
     let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }.to_bytes();
     let total = a_str.len() + b_str.len() + 1;
-    let buf = malloc(total) as *mut u8;
-    if buf.is_null() {
-        // Abort on OOM — see ynz_string_from_static for the full rationale
-        // (consistent OOM policy across the runtime; no free-of-static hazard).
-        std::process::abort();
-    }
-    std::ptr::copy_nonoverlapping(a_str.as_ptr(), buf, a_str.len());
-    std::ptr::copy_nonoverlapping(b_str.as_ptr(), buf.add(a_str.len()), b_str.len());
-    *buf.add(a_str.len() + b_str.len()) = 0;
-    buf as *const u8
+    let buffer = heap_string_buffer(total);
+    std::ptr::copy_nonoverlapping(a_str.as_ptr(), buffer, a_str.len());
+    std::ptr::copy_nonoverlapping(b_str.as_ptr(), buffer.add(a_str.len()), b_str.len());
+    *buffer.add(a_str.len() + b_str.len()) = 0;
+    buffer as *const u8
 }
 
 /// Count Unicode code points in a null-terminated UTF-8 string.
@@ -1849,19 +2529,7 @@ pub unsafe extern "C" fn ynz_string_codepoint_at(s: *const u8, n: i64) -> *const
             let mut buf = [0u8; 5];
             let encoded = ch.encode_utf8(&mut buf[..4]);
             let len = encoded.len();
-            let heap = malloc(len + 1) as *mut u8;
-            if heap.is_null() {
-                // Abort on OOM — see ynz_string_from_static for the full rationale
-                // (consistent OOM policy across the runtime; no free-of-static hazard).
-                // This site was a sibling allocation the runtime's original OOM-policy
-                // sweep missed: it silently returned null on malloc failure, which is a
-                // documented sentinel for a DIFFERENT case (the `None` arm above, `n`
-                // out of bounds) — conflating the two would make an out-of-memory
-                // failure indistinguishable from a normal out-of-bounds index to every
-                // caller. Aborting removes the conflation without touching the real OOB
-                // sentinel.
-                std::process::abort();
-            }
+            let heap = heap_string_buffer(len + 1);
             std::ptr::copy_nonoverlapping(encoded.as_ptr(), heap, len);
             *heap.add(len) = 0;
             heap as *const u8
@@ -2132,7 +2800,7 @@ pub extern "C" fn ynz_string_builder_new() -> *mut u8 {
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_builder_append(builder: *mut u8, s: *const u8) {
-    let vec = unsafe { &mut *(builder as *mut Vec<u8>) };
+    let vec = unsafe { builder_bytes(builder) };
     let bytes = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
     vec.extend_from_slice(bytes);
 }
@@ -2148,14 +2816,9 @@ pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const
     let mut vec = unsafe { *Box::from_raw(builder as *mut Vec<u8>) };
     vec.push(0); // null-terminate
     let len = vec.len();
-    let buf = malloc(len) as *mut u8;
-    if buf.is_null() {
-        // Abort on OOM — see ynz_string_from_static for the full rationale
-        // (consistent OOM policy across the runtime; no free-of-static hazard).
-        std::process::abort();
-    }
-    std::ptr::copy_nonoverlapping(vec.as_ptr(), buf, len);
-    buf as *const u8
+    let buffer = heap_string_buffer(len);
+    std::ptr::copy_nonoverlapping(vec.as_ptr(), buffer, len);
+    buffer as *const u8
 }
 
 /// Free the builder without producing a string.
@@ -2168,24 +2831,20 @@ pub unsafe extern "C" fn ynz_string_builder_drop(builder: *mut u8) {
 }
 
 /// Internal helper: allocate a heap null-terminated copy of a Rust `&str`.
-fn heap_string_from_str(s: &str) -> *const u8 {
-    let bytes = s.as_bytes();
+fn heap_string_from_str(text: &str) -> *const u8 {
+    heap_string_from_bytes(text.as_bytes())
+}
+
+/// Internal helper: allocate a heap null-terminated copy of `bytes` (which hold no NUL).
+fn heap_string_from_bytes(bytes: &[u8]) -> *const u8 {
     let len = bytes.len();
-    let buf = unsafe { malloc(len + 1) as *mut u8 };
-    if buf.is_null() {
-        // Abort on OOM — see ynz_string_from_static for the full rationale
-        // (consistent OOM policy across the runtime; no free-of-static hazard).
-        std::process::abort();
-    }
-    if len > 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
-        }
-    }
+    let buffer = unsafe { heap_string_buffer(len + 1) };
+    // SAFETY: `buffer` holds `len + 1` bytes.
     unsafe {
-        *buf.add(len) = 0;
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, len);
+        *buffer.add(len) = 0;
     }
-    buf as *const u8
+    buffer as *const u8
 }
 
 // ── M7 P4a: errors runtime — YnzError, YnzFrame, frame stack ─────────────────
@@ -2701,7 +3360,7 @@ mod m7_string_runtime {
             let result = ynz_string_concat(c(b"Hello\0"), c(b" World\0"));
             assert!(!result.is_null());
             assert_eq!(str_from_ptr(result), "Hello World");
-            free(result as *mut core::ffi::c_void);
+            ynz_string_release(result);
         }
     }
 
@@ -2712,7 +3371,7 @@ mod m7_string_runtime {
             let r = ynz_string_concat(c(b"\0"), c(b"\0"));
             assert!(!r.is_null());
             assert_eq!(str_from_ptr(r), "");
-            free(r as *mut core::ffi::c_void);
+            ynz_string_release(r);
         }
     }
 
@@ -2745,7 +3404,7 @@ mod m7_string_runtime {
             let ch = ynz_string_codepoint_at(c(s), 1); // 'e'
             assert!(!ch.is_null());
             assert_eq!(str_from_ptr(ch), "e");
-            free(ch as *mut core::ffi::c_void);
+            ynz_string_release(ch);
         }
     }
 
@@ -2794,12 +3453,12 @@ mod m7_string_runtime {
             let upper = ynz_string_to_upper(c(b"hello\0"));
             assert!(!upper.is_null());
             assert_eq!(str_from_ptr(upper), "HELLO");
-            free(upper as *mut core::ffi::c_void);
+            ynz_string_release(upper);
 
             let lower = ynz_string_to_lower(c(b"HELLO\0"));
             assert!(!lower.is_null());
             assert_eq!(str_from_ptr(lower), "hello");
-            free(lower as *mut core::ffi::c_void);
+            ynz_string_release(lower);
         }
     }
 
@@ -2810,7 +3469,7 @@ mod m7_string_runtime {
             let trimmed = ynz_string_trim(c(b"  hello  \0"));
             assert!(!trimmed.is_null());
             assert_eq!(str_from_ptr(trimmed), "hello");
-            free(trimmed as *mut core::ffi::c_void);
+            ynz_string_release(trimmed);
         }
     }
 
@@ -2821,7 +3480,7 @@ mod m7_string_runtime {
             let sub = ynz_string_substring(c(b"hello\0"), 1, 4); // "ell"
             assert!(!sub.is_null());
             assert_eq!(str_from_ptr(sub), "ell");
-            free(sub as *mut core::ffi::c_void);
+            ynz_string_release(sub);
         }
     }
 
@@ -2849,7 +3508,7 @@ mod m7_string_runtime {
             let result = ynz_string_builder_finalize(b);
             assert!(!result.is_null());
             assert_eq!(str_from_ptr(result), "Hello, World!");
-            free(result as *mut core::ffi::c_void);
+            ynz_string_release(result);
         }
     }
 
@@ -2885,7 +3544,7 @@ mod m7_string_runtime {
                 let mut elem_bits: i64 = 0;
                 let has = ynz_array_get(parts, i, (&mut elem_bits as *mut i64) as *mut u8);
                 assert_eq!(has, 1);
-                free(elem_bits as *mut core::ffi::c_void);
+                ynz_string_release(elem_bits as *const u8);
             }
             ynz_array_drop(parts);
         }
@@ -2898,7 +3557,7 @@ mod m7_string_runtime {
             let result = ynz_string_replace(c(b"hello world\0"), c(b"world\0"), c(b"Yinz\0"));
             assert!(!result.is_null());
             assert_eq!(str_from_ptr(result), "hello Yinz");
-            free(result as *mut core::ffi::c_void);
+            ynz_string_release(result);
         }
     }
 
@@ -2953,7 +3612,7 @@ mod array_runtime {
             assert!(!arr.is_null(), "ynz_array_new_sized must return non-null");
             assert_eq!(ynz_array_count(arr), 5, "len must be pre-set to cap");
             let v: i64 = 42;
-            ynz_array_set(arr, 4, (&v as *const i64) as *const u8);
+            ynz_array_set(arr, 4, (&v as *const i64) as *const u8, None, 0);
             let (flag, got) = get_i64(arr, 4);
             assert_eq!(flag, 1, "index 4 must be in range (len == cap == 5)");
             assert_eq!(got, 42, "set/get roundtrip through the sized buffer");
@@ -3043,7 +3702,7 @@ mod array_runtime {
             );
 
             let replacement = [7i64, 70];
-            ynz_array_set(arr, 4, replacement.as_ptr() as *const u8);
+            ynz_array_set(arr, 4, replacement.as_ptr() as *const u8, None, 0);
             let flag = ynz_array_get(arr, 4, out.as_mut_ptr() as *mut u8);
             assert_eq!(flag, 1);
             assert_eq!(out, [7, 70], "set must overwrite the full 16-byte cell");
@@ -3060,12 +3719,14 @@ mod array_runtime {
 // ── M8 P6: bignum runtime — `number<N>` for N > 34 ──────────────────────────
 //
 // Bignum values at the ABI boundary are null-terminated decimal strings
-// (pointer to i8). The runtime allocates result strings with `malloc`;
-// callers are responsible for eventual cleanup (deferred to v0.2 arena).
+// (pointer to i8). Every result string comes from the counted heap-string
+// allocator (`heap_string_from_str`), so it is a heap string like any other:
+// the caller owns it and `ynz_string_release` releases it. Generated code releases only
+// the temporaries `print`/`${}` make of numbers; the scope-exit release pass frees the rest.
 
 use ynz_numerics::decimal_n::{
-    add as bignum_add_op, div as bignum_div_op, format_bignum, mul as bignum_mul_op, parse_bignum,
-    sub as bignum_sub_op,
+    add as bignum_add_op, compare as bignum_compare_op, div as bignum_div_op, format_bignum,
+    mul as bignum_mul_op, parse_bignum, sub as bignum_sub_op,
 };
 use ynz_numerics::BigNum;
 
@@ -3106,31 +3767,110 @@ pub unsafe extern "C" fn ynz_bignum_div(a: *const i8, b: *const i8, precision: u
     bignum_binop(a, b, precision, bignum_div_op)
 }
 
+/// Compare `left_text` and `right_text` as exact decimal numbers: -1 (left < right), 0 (equal),
+/// 1 (left > right), or 2 (unordered: either side is NaN, so every ordering test is false and
+/// only `!=` holds).
+///
+/// Both texts are parsed at `precision` digits like the arithmetic above, so a compare sees
+/// the same rounded operands a `+` would. `2.5` equals `2.50`, and `9` is less than `10`.
+/// O(digits) time and memory; allocates nothing the caller must release.
+///
+/// # Safety
+/// `left_text` and `right_text` must be valid null-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_compare(
+    left_text: *const i8,
+    right_text: *const i8,
+    precision: u16,
+) -> i32 {
+    let left = parse_bignum_operand(left_text, precision);
+    let right = parse_bignum_operand(right_text, precision);
+    match bignum_compare_op(&left, &right) {
+        Some(std::cmp::Ordering::Less) => -1,
+        Some(std::cmp::Ordering::Equal) => 0,
+        Some(std::cmp::Ordering::Greater) => 1,
+        None => 2,
+    }
+}
+
+/// Negate: `0 - text` at `precision` digits (the same result a decimal128 `0 - text` gives).
+///
+/// # Safety
+/// Same as `ynz_bignum_add`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_neg(text: *const i8, precision: u16) -> *mut i8 {
+    bignum_binop(c"0".as_ptr().cast(), text, precision, bignum_sub_op)
+}
+
+/// Parse one bignum operand of an arithmetic or comparison entry point. Text that is not a
+/// number is a compiler bug (every bignum text comes from a bignum operation or a decimal128
+/// conversion): abort loudly rather than compute with a made-up zero.
+///
+/// # Safety
+/// `text` must be a valid null-terminated string.
+unsafe fn parse_bignum_operand(text: *const i8, precision: u16) -> BigNum {
+    let parsed = std::ffi::CStr::from_ptr(text)
+        .to_str()
+        .ok()
+        .and_then(|decimal_text| parse_bignum(decimal_text, precision));
+    match parsed {
+        Some(number) => number,
+        None => {
+            eprintln!(
+                "INTERNAL ERROR: a bignum operation was given text that is not a number. \
+                 This is a compiler bug — please file an issue at \
+                 https://github.com/yinz-lang/yinz/issues with the source file attached."
+            );
+            std::process::abort();
+        }
+    }
+}
+
+/// Convert a bignum (null-terminated decimal string) to the nearest `f64`.
+///
+/// Backs `(number<N>).toFloat()` and `.toInt()` for N > 34, the same f64 route the
+/// decimal128 path takes (`ynz_decimal_to_float`). A bignum string is produced only by
+/// `format_bignum`, so it always parses; a string that does not is a runtime-contract
+/// breach and yields NaN (which `.toInt()` turns into `nothing`) rather than a silent 0.
+///
+/// # Safety
+/// `num_ptr` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_to_float(num_ptr: *const i8) -> f64 {
+    std::ffi::CStr::from_ptr(num_ptr)
+        .to_str()
+        .ok()
+        .and_then(|text| text.parse::<f64>().ok())
+        .unwrap_or(f64::NAN)
+}
+
 /// Helper: parse, apply op, format, return as heap-allocated C string.
 ///
 /// # Safety
-/// `a` and `b` must be valid null-terminated UTF-8 strings.
+/// `left_text` and `right_text` must be valid null-terminated UTF-8 strings.
 unsafe fn bignum_binop(
-    a: *const i8,
-    b: *const i8,
+    left_text: *const i8,
+    right_text: *const i8,
     precision: u16,
     op: fn(&BigNum, &BigNum) -> BigNum,
 ) -> *mut i8 {
-    let a_str = std::ffi::CStr::from_ptr(a).to_str().unwrap_or("0");
-    let b_str = std::ffi::CStr::from_ptr(b).to_str().unwrap_or("0");
-    let an = parse_bignum(a_str, precision).unwrap_or_else(|| BigNum::zero(precision));
-    let bn_val = parse_bignum(b_str, precision).unwrap_or_else(|| BigNum::zero(precision));
-    let result = op(&an, &bn_val);
-    let s = format_bignum(&result);
-    let cstr = std::ffi::CString::new(s).unwrap_or_else(|_| {
+    let left = parse_bignum_operand(left_text, precision);
+    let right = parse_bignum_operand(right_text, precision);
+    let result = op(&left, &right);
+    let formatted = format_bignum(&result);
+    if formatted.as_bytes().contains(&0) {
         eprintln!(
             "INTERNAL ERROR: bignum formatting produced an unexpected NUL byte. \
                   This is a compiler bug — please file an issue at \
                   https://github.com/yinz-lang/yinz/issues with the source file attached."
         );
         std::process::abort();
-    });
-    cstr.into_raw()
+    }
+    // A high-precision `number` is a heap string like any other: it must come from the ONE
+    // counted, libc-`malloc` string allocator (`heap_string_from_str`), never `CString::into_raw`
+    // (the Rust allocator, invisible to the string alloc/free counter and not freeable by
+    // `ynz_string_release`).
+    heap_string_from_str(&formatted) as *mut i8
 }
 
 // The CPU-parallel join shim tests exercise the three production C-ABI shims in isolation —
@@ -4721,6 +5461,8 @@ mod m6_pending_send_aba {
             0,
             2, // RET_KIND_VALUE_WORD
             chan,
+            std::ptr::null(),
+            std::ptr::null(),
         )
     }
 
@@ -4813,6 +5555,503 @@ mod m6_pending_send_aba {
             }
             tokio::task::yield_now().await;
             ynz_channel_free(chan);
+        }
+    }
+}
+
+#[cfg(test)]
+mod print_text_tests {
+    use super::*;
+    use core::fmt::Write;
+
+    /// Bug caught: a stack buffer smaller than the longest `{f64}` text would make `print(float)`
+    /// abort on a legal value. (High: a fixed bound on untrusted-range numeric text)
+    #[test]
+    fn f64_display_text_never_exceeds_the_print_buffer() {
+        let extremes = [
+            f64::MAX,
+            f64::MIN,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            5e-324,
+            -5e-324,
+            -2.2250738585072014e-308,
+            -1.2345678901234567e-308,
+        ];
+        let mut longest = extremes.iter().map(|x| format!("{x}").len()).max().unwrap();
+        // Sweep the exponent range with a full-width mantissa: 17-digit shortest text.
+        for exponent_bits in 0u64..0x7ff {
+            let bits = (exponent_bits << 52) | 0x000f_edcb_a987_6543 | (1 << 63);
+            longest = longest.max(format!("{}", f64::from_bits(bits)).len());
+        }
+        assert!(
+            longest <= F64_DISPLAY_MAX_BYTES,
+            "longest f64 text is {longest} bytes, buffer holds {F64_DISPLAY_MAX_BYTES}"
+        );
+    }
+
+    /// Bug caught: `StackText` accepting text that leaves no room for the NUL, so `puts` reads
+    /// past the buffer. (High: memory safety)
+    #[test]
+    fn stack_text_rejects_text_that_leaves_no_room_for_the_nul() {
+        let mut stack_text = StackText::<4>::new();
+        assert!(stack_text.write_str("abc").is_ok());
+        assert!(stack_text.write_str("d").is_err());
+        let mut stack_text = StackText::<4>::new();
+        assert!(stack_text.write_str("abcd").is_err());
+    }
+
+    /// Bug caught: an append entry that writes different bytes than the owned `toString` of the
+    /// same value, so `${n}` and `n.toString()` disagree. (High: output correctness)
+    #[test]
+    fn appended_text_equals_the_owned_to_string_text() {
+        let builder = ynz_string_builder_new();
+        unsafe {
+            ynz_int_append(builder, i64::MIN);
+            ynz_float_append(builder, -1.5);
+            ynz_float_append(builder, f64::NAN);
+            ynz_float_append(builder, 1e21);
+            let mut decimal = [0u8; 16];
+            ynz_decimal_from_int(-42, &mut decimal);
+            ynz_decimal_append(builder, &decimal);
+            let joined = ynz_string_builder_finalize(builder);
+            let text = std::ffi::CStr::from_ptr(joined as *const i8)
+                .to_str()
+                .unwrap();
+            let expected = format!(
+                "{}{}{}{}{}",
+                i64::MIN,
+                -1.5f64,
+                f64::NAN,
+                1e21f64,
+                format(u128::from_ne_bytes(decimal))
+            );
+            assert_eq!(text, expected);
+            ynz_string_release(joined);
+        }
+    }
+}
+
+#[cfg(test)]
+mod release_walk_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ARRAY_POINTER_ITEMS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static ARRAY_INLINE_ITEMS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static MAP_KEYS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static MAP_VALUES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn record_array_pointer_item(item: *mut u8) {
+        ARRAY_POINTER_ITEMS.lock().unwrap().push(item as usize);
+    }
+    unsafe extern "C" fn record_array_inline_item(item: *mut u8) {
+        ARRAY_INLINE_ITEMS.lock().unwrap().push(item as usize);
+    }
+    unsafe extern "C" fn record_map_key(key: *mut u8) {
+        MAP_KEYS.lock().unwrap().push(key as usize);
+    }
+    unsafe extern "C" fn record_map_value(value: *mut u8) {
+        MAP_VALUES.lock().unwrap().push(value as usize);
+    }
+
+    /// Bug: the array walk hands the glue the cell's address where the item is a pointer (or the
+    /// pointer where the item is inline), so a string or a shape is released from the wrong
+    /// address; or it skips an item. High: data integrity (a wrong release is a double free).
+    #[test]
+    fn an_array_release_walks_every_item_with_the_right_argument() {
+        unsafe {
+            let pointers = ynz_array_new(8);
+            let fake_items: [usize; 3] = [0x1000, 0x2000, 0x3000];
+            for item in fake_items {
+                ynz_array_push(pointers, &item as *const usize as *const u8);
+            }
+            ynz_array_release(pointers, Some(record_array_pointer_item), 0);
+            assert_eq!(*ARRAY_POINTER_ITEMS.lock().unwrap(), fake_items.to_vec());
+
+            let inline = ynz_array_new(16);
+            let first_cell = inline_data_address(inline);
+            let cell = [1u8; 16];
+            for _ in 0..2 {
+                ynz_array_push(inline, cell.as_ptr());
+            }
+            let data = (*inline).data as usize;
+            assert_eq!(data, first_cell);
+            ynz_array_release(inline, Some(record_array_inline_item), 1);
+            assert_eq!(*ARRAY_INLINE_ITEMS.lock().unwrap(), vec![data, data + 16]);
+        }
+    }
+
+    unsafe fn inline_data_address(array: *mut YnzArray) -> usize {
+        (*array).data as usize
+    }
+
+    /// Bug: the map walk releases a deleted or empty slot, releases a key twice (the insertion
+    /// order buffer repeats every key), or ignores the key glue, so a string key (a raw pointer
+    /// the map owns) leaks. High: data integrity.
+    #[test]
+    fn a_map_release_walks_each_occupied_slot_once_keys_and_values() {
+        unsafe {
+            let map = ynz_map_new(8);
+            let keys: [usize; 3] = [0x11, 0x22, 0x33];
+            for key in keys {
+                let value = key * 2;
+                ynz_map_set(
+                    map,
+                    key as i64,
+                    &value as *const usize as *const u8,
+                    None,
+                    0,
+                );
+            }
+            ynz_map_release(map, Some(record_map_key), Some(record_map_value), 0);
+            let mut seen_keys = MAP_KEYS.lock().unwrap().clone();
+            seen_keys.sort();
+            assert_eq!(seen_keys, keys.to_vec());
+            assert_eq!(MAP_VALUES.lock().unwrap().len(), 3);
+        }
+    }
+
+    static DUPLICATE_KEY_RELEASES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    static REPLACED_VALUE_RELEASES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn record_duplicate_key(key: *mut u8) {
+        DUPLICATE_KEY_RELEASES.lock().unwrap().push(key as usize);
+    }
+    unsafe extern "C" fn record_replaced_value(value: *mut u8) {
+        REPLACED_VALUE_RELEASES.lock().unwrap().push(value as usize);
+    }
+
+    /// Bug: a `set` over a present string key releases the stored key (the map keeps the key it
+    /// owns, so the next lookup reads freed bytes), or fails to release the duplicate key it was
+    /// handed (a leak per overwrite), or fails to release the value it replaces. The stored key
+    /// itself is handed back in (a read of the map's own key) and must be left alone. High: data
+    /// integrity.
+    #[test]
+    fn a_set_over_a_present_key_releases_the_duplicate_key_and_the_replaced_value_only() {
+        unsafe {
+            let map = ynz_map_new(8);
+            let stored_key = ynz_string_clone(c"key".as_ptr().cast());
+            let duplicate_key = ynz_string_clone(c"key".as_ptr().cast());
+            let first_value: usize = 0xAAA0;
+            let second_value: usize = 0xBBB0;
+            let third_value: usize = 0xCCC0;
+            let set = |key: *const u8, value: &usize| {
+                ynz_map_set_str(
+                    map,
+                    key,
+                    value as *const usize as *const u8,
+                    Some(record_duplicate_key),
+                    Some(record_replaced_value),
+                    0,
+                )
+            };
+            set(stored_key, &first_value);
+            assert!(
+                DUPLICATE_KEY_RELEASES.lock().unwrap().is_empty(),
+                "an insert replaces nothing"
+            );
+
+            set(duplicate_key, &second_value);
+            assert_eq!(
+                *DUPLICATE_KEY_RELEASES.lock().unwrap(),
+                vec![duplicate_key as usize],
+                "the key copy the set was handed is released"
+            );
+            assert_eq!(
+                *REPLACED_VALUE_RELEASES.lock().unwrap(),
+                vec![first_value],
+                "the value the set replaced is released"
+            );
+
+            set(stored_key, &third_value);
+            assert_eq!(
+                DUPLICATE_KEY_RELEASES.lock().unwrap().len(),
+                1,
+                "the stored key handed back in is the map's own and is not released"
+            );
+            assert_eq!(
+                *REPLACED_VALUE_RELEASES.lock().unwrap(),
+                vec![first_value, second_value]
+            );
+            ynz_string_release(duplicate_key);
+            ynz_map_release(map, Some(release_string_glue), None, 0);
+        }
+    }
+
+    unsafe extern "C" fn release_string_glue(key: *mut u8) {
+        ynz_string_release(key as *const u8);
+    }
+
+    /// Bug: a null container (a moved-out slot) makes the release dereference null.
+    #[test]
+    fn releasing_a_null_container_is_a_no_op() {
+        unsafe {
+            ynz_array_release(std::ptr::null_mut(), None, 0);
+            ynz_map_release(std::ptr::null_mut(), None, None, 0);
+        }
+    }
+
+    fn decimal(text: &str) -> [u8; 16] {
+        ynz_numerics::parse(text).expect(text).to_ne_bytes()
+    }
+
+    unsafe fn decimal_get(map: *const YnzMap, key: &str) -> Option<i64> {
+        let mut out = [0u8; 8];
+        let found = ynz_map_get_decimal(map, decimal(key).as_ptr(), out.as_mut_ptr());
+        (found == 1).then(|| i64::from_ne_bytes(out))
+    }
+
+    unsafe fn decimal_set(map: *mut YnzMap, key: &str, value: i64) {
+        ynz_map_set_decimal(
+            map,
+            decimal(key).as_ptr(),
+            value.to_ne_bytes().as_ptr(),
+            None,
+            0,
+        );
+    }
+
+    /// Bug: a decimal key stored as 8 bytes, or its slot moved by the wrong width, so a key does not
+    /// round-trip, an identical key is not found, growth loses keys, iteration reads half a key, or
+    /// a copy shares the source's key buffer. A key of another scale is another key: the map holds
+    /// the 16 bytes and nothing more. High: data integrity.
+    #[test]
+    fn decimal_keys_round_trip_overwrite_grow_iterate_and_clone() {
+        unsafe {
+            let map = ynz_map_new_decimal_keys(8);
+            decimal_set(map, "2.5", 1);
+            assert_eq!(decimal_get(map, "2.5"), Some(1));
+            assert_eq!(decimal_get(map, "2.6"), None);
+            assert_eq!(
+                decimal_get(map, "2.50"),
+                None,
+                "2.50 is other bytes than 2.5: the map does not normalize a key"
+            );
+            decimal_set(map, "2.5", 2);
+            assert_eq!(ynz_map_count(map), 1, "an identical key overwrites");
+            assert_eq!(decimal_get(map, "2.5"), Some(2));
+
+            // Past several growths of the slot buffers and the order buffer (64 entries).
+            for entry in 0..300i64 {
+                decimal_set(map, &format!("{entry}.25"), entry);
+            }
+            assert_eq!(ynz_map_count(map), 301);
+            for entry in 0..300i64 {
+                assert_eq!(decimal_get(map, &format!("{entry}.25")), Some(entry));
+            }
+            assert_eq!(decimal_get(map, "2.5"), Some(2));
+
+            let mut key = [0u8; 16];
+            let mut value = [0u8; 8];
+            assert_eq!(
+                ynz_map_iter_get_decimal(map, 0, key.as_mut_ptr(), value.as_mut_ptr()),
+                1
+            );
+            assert_eq!(key, decimal("2.5"), "the key round-trips byte for byte");
+            assert_eq!(i64::from_ne_bytes(value), 2);
+            assert_eq!(
+                ynz_map_iter_get_decimal(map, 1, key.as_mut_ptr(), value.as_mut_ptr()),
+                1
+            );
+            assert_eq!(key, decimal("0.25"));
+            assert_eq!(i64::from_ne_bytes(value), 0);
+            assert_eq!(
+                ynz_map_iter_get_decimal(map, 301, key.as_mut_ptr(), value.as_mut_ptr()),
+                0
+            );
+            assert_eq!(key, [0u8; 16]);
+
+            let copy = ynz_map_clone(map);
+            decimal_set(map, "2.5", 99);
+            decimal_set(map, "7", 7);
+            assert_eq!(decimal_get(copy, "2.5"), Some(2), "a copy is independent");
+            assert_eq!(decimal_get(copy, "7"), None);
+            assert_eq!(ynz_map_count(copy), 301);
+            assert_eq!(
+                ynz_map_iter_get_decimal(copy, 300, key.as_mut_ptr(), value.as_mut_ptr()),
+                1
+            );
+            assert_eq!(key, decimal("299.25"));
+            ynz_map_release(copy, None, None, 0);
+            ynz_map_release(map, None, None, 0);
+        }
+    }
+
+    /// Bug: a key whose bytes are not an ordinary finite number (a NaN, an infinity, a negative
+    /// zero) mis-stored or mis-hashed, so an identical key is inserted again by every `set` or
+    /// never found. Each is held as the bytes it is. High: data integrity.
+    #[test]
+    fn special_decimal_keys_are_found_by_their_own_bytes() {
+        unsafe {
+            let map = ynz_map_new_decimal_keys(8);
+            for (key, value) in [
+                ("NaN", 1),
+                ("Infinity", 2),
+                ("-Infinity", 3),
+                ("0", 4),
+                ("-0", 5),
+                ("1E+33", 6),
+            ] {
+                decimal_set(map, key, value);
+                decimal_set(map, key, value * 10);
+            }
+            assert_eq!(ynz_map_count(map), 6, "one entry per distinct key bytes");
+            assert_eq!(decimal_get(map, "NaN"), Some(10));
+            assert_eq!(decimal_get(map, "Infinity"), Some(20));
+            assert_eq!(decimal_get(map, "-Infinity"), Some(30));
+            assert_eq!(decimal_get(map, "0"), Some(40));
+            assert_eq!(decimal_get(map, "-0"), Some(50));
+            assert_eq!(decimal_get(map, "1E+33"), Some(60));
+            assert_eq!(decimal_get(map, "1"), None);
+            ynz_map_release(map, None, None, 0);
+        }
+    }
+
+    /// Bug: the one `map_grow` (shared by int, string and decimal keys) or `order_push` moving an
+    /// int or string key by the wrong width or hash, so growth past the first rehash loses or
+    /// scrambles entries. Int and string keys behave as before decimal keys existed. High: data
+    /// integrity.
+    #[test]
+    fn int_and_string_keys_still_grow_find_and_keep_insertion_order() {
+        const KEYS: i64 = 300;
+        unsafe {
+            let ints = ynz_map_new(8);
+            let strings = ynz_map_new(8);
+            for entry in 0..KEYS {
+                let value = entry * 3;
+                ynz_map_set(ints, entry * 7919, value.to_ne_bytes().as_ptr(), None, 0);
+                let key = ynz_string_clone(format!("key {entry}\0").as_ptr());
+                ynz_map_set_str(strings, key, value.to_ne_bytes().as_ptr(), None, None, 0);
+            }
+            assert_eq!(ynz_map_count(ints), KEYS);
+            assert_eq!(ynz_map_count(strings), KEYS);
+            let mut out = [0u8; 8];
+            for entry in 0..KEYS {
+                assert_eq!(ynz_map_get(ints, entry * 7919, out.as_mut_ptr()), 1);
+                assert_eq!(i64::from_ne_bytes(out), entry * 3);
+                let probe = ynz_string_clone(format!("key {entry}\0").as_ptr());
+                assert_eq!(ynz_map_get_str(strings, probe, out.as_mut_ptr()), 1);
+                assert_eq!(i64::from_ne_bytes(out), entry * 3);
+                ynz_string_release(probe);
+            }
+            assert_eq!(ynz_map_get(ints, -1, out.as_mut_ptr()), 0);
+            let mut key_bits = 0i64;
+            for position in [0, KEYS - 1] {
+                assert_eq!(
+                    ynz_map_iter_get(ints, position, &mut key_bits, out.as_mut_ptr()),
+                    1
+                );
+                assert_eq!(key_bits, position * 7919, "insertion order of int keys");
+                assert_eq!(i64::from_ne_bytes(out), position * 3);
+                assert_eq!(
+                    ynz_map_iter_get_str(strings, position, &mut key_bits, out.as_mut_ptr()),
+                    1
+                );
+                assert_eq!(i64::from_ne_bytes(out), position * 3);
+            }
+            ynz_map_release(ints, None, None, 0);
+            ynz_map_release(strings, Some(release_string_glue), None, 0);
+        }
+    }
+}
+
+/// The drop-entry contract of `SpawnStateFnFuture` (C8 slice 6): a task retired before it returned
+/// re-enters its resume function at the complement of its `resume_point`; a task that returned, or
+/// whose resume function unwound, does not. Bug each test catches: running the entry on a returned
+/// frame frees what the function's own scope exit already freed (a double free); skipping it on a
+/// parked frame leaks every heap local. Tier: High (data integrity at the runtime/codegen seam).
+#[cfg(test)]
+mod drop_entry_contract {
+    use super::*;
+    use crate::runtime::SpawnStateFnFuture;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+    use ynz_abi::FRAME_RESUME_POINT_RETURNED;
+
+    struct NoopWaker;
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    const FRAME_BYTES: usize = 64;
+
+    /// A frame with its `resume_point` set to `resume_point`; a stub resume function records the
+    /// `resume_point` it was entered with and how often it ran.
+    unsafe fn parked_future(
+        resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
+        resume_point: i32,
+    ) -> SpawnStateFnFuture {
+        let frame = ynz_alloc_zeroed(FRAME_BYTES);
+        let future = SpawnStateFnFuture::new(
+            resume_fn,
+            frame,
+            FRAME_BYTES as i64,
+            -1,
+            std::ptr::null::<runtime::BgArgDropEntry>(),
+            0,
+        );
+        *(frame as *mut i32) = resume_point;
+        future
+    }
+
+    static PARKED_ENTERED: AtomicUsize = AtomicUsize::new(0);
+    static PARKED_RESUME_POINT: AtomicI32 = AtomicI32::new(0);
+    unsafe extern "C-unwind" fn record_parked(frame: *mut u8, waker: *mut u8) -> i32 {
+        assert!(waker.is_null(), "the drop entry runs with no waker");
+        PARKED_ENTERED.fetch_add(1, Ordering::SeqCst);
+        PARKED_RESUME_POINT.store(*(frame as *const i32), Ordering::SeqCst);
+        0
+    }
+
+    #[test]
+    fn a_parked_frame_is_entered_at_the_complement_of_its_resume_point() {
+        unsafe {
+            let before = PARKED_ENTERED.load(Ordering::SeqCst);
+            drop(parked_future(record_parked, 3));
+            assert_eq!(PARKED_ENTERED.load(Ordering::SeqCst), before + 1);
+            assert_eq!(PARKED_RESUME_POINT.load(Ordering::SeqCst), !3);
+        }
+    }
+
+    static RETURNED_ENTERED: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C-unwind" fn count_returned(_frame: *mut u8, _waker: *mut u8) -> i32 {
+        RETURNED_ENTERED.fetch_add(1, Ordering::SeqCst);
+        0
+    }
+
+    #[test]
+    fn a_returned_frame_is_not_entered() {
+        unsafe {
+            drop(parked_future(count_returned, FRAME_RESUME_POINT_RETURNED));
+            assert_eq!(RETURNED_ENTERED.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    static UNWOUND_ENTERED: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C-unwind" fn unwind_when_polled(_frame: *mut u8, waker: *mut u8) -> i32 {
+        if waker.is_null() {
+            UNWOUND_ENTERED.fetch_add(1, Ordering::SeqCst);
+            return 0;
+        }
+        panic!("the resume function unwinds mid-statement");
+    }
+
+    #[test]
+    fn a_frame_whose_resume_function_unwound_is_not_entered() {
+        unsafe {
+            let mut future = parked_future(unwind_when_polled, 2);
+            let waker = Waker::from(Arc::new(NoopWaker));
+            let mut context = Context::from_waker(&waker);
+            let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _: Poll<()> = Pin::new(&mut future).poll(&mut context);
+            }));
+            assert!(polled.is_err(), "the stub must have unwound");
+            drop(future);
+            assert_eq!(UNWOUND_ENTERED.load(Ordering::SeqCst), 0);
         }
     }
 }

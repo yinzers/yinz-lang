@@ -144,6 +144,26 @@ pub fn store_resume_point<'ctx>(
     Ok(())
 }
 
+/// Store `ynz_abi::FRAME_RESUME_POINT_RETURNED` to the `resume_point` of a frame / sub-frame: the
+/// function has returned, so a task dropped later has nothing left to drop.
+///
+/// # Side effects
+///
+/// Mutates the frame's `resume_point`; every Ready return of a resume function runs it (C8 slice 6).
+pub fn store_resume_point_returned<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let returned = ctx
+        .i32_type()
+        .const_int(ynz_abi::FRAME_RESUME_POINT_RETURNED as u64, false);
+    builder
+        .build_store(frame_ptr, returned)
+        .map_err(|e| format!("store_resume_point_returned: {e}"))?;
+    Ok(())
+}
+
 /// Return a GEP pointer to the 16-byte return slot at `FRAME_OFFSET_RETURN_SLOT` (offset 16).
 ///
 /// # Side effects
@@ -400,6 +420,11 @@ pub const FRAME_SHAPE_REGION_ALIGN: u32 = 16;
 /// `FRAME_SHAPE_REGION_ALIGN - FRAME_LOCAL_SLOT_SIZE` bytes.
 pub const FRAME_SHAPE_REGION_SLACK_SLOTS: usize =
     ((FRAME_SHAPE_REGION_ALIGN as u64 - FRAME_LOCAL_SLOT_SIZE) / FRAME_LOCAL_SLOT_SIZE) as usize;
+
+/// [`FRAME_SHAPE_REGION_SLACK_SLOTS`] in bytes: what a union region of a frame layout reserves beyond
+/// its slot so that [`frame_region_ptr`] can round the region up to [`FRAME_SHAPE_REGION_ALIGN`].
+pub const FRAME_SHAPE_REGION_SLACK_BYTES: u64 =
+    FRAME_SHAPE_REGION_SLACK_SLOTS as u64 * FRAME_LOCAL_SLOT_SIZE;
 
 /// The ONE producer of a frame-embedded shape's region pointer: `frame_ptr + byte_offset`
 /// rounded up to [`FRAME_SHAPE_REGION_ALIGN`].
@@ -1048,4 +1073,22 @@ pub fn default_target_machine(
             CodeModel::Default,
         )
         .ok_or_else(|| "LLVM: failed to create target machine".to_string())
+}
+
+/// Return a pointer to the frame region at `region_byte_offset` within `frame_ptr` (a union slot a
+/// `UnionRegion` reserves), rounded up to [`FRAME_SHAPE_REGION_ALIGN`] by [`shape_frame_region_ptr`]:
+/// a union slot holds shape variants whose `number` fields are `align 16` i128 loads, and the
+/// region's frame offset is only 8-aligned (a child sub-frame sits at any 8-multiple of its parent).
+/// `UnionRegion::size` includes the slack. Produces a pointer without reading or writing it.
+///
+/// Time: O(1)  Space: O(1)
+pub fn frame_region_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    region_byte_offset: u64,
+    name: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    // The offset comes from `FrameLayout::union_regions`, which reserved the slack the rounding uses.
+    shape_frame_region_ptr(ctx, builder, frame_ptr, region_byte_offset, name)
 }

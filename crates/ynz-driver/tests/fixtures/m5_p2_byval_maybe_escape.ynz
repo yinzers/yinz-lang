@@ -28,7 +28,7 @@ function entrypoint() -> nothing {
     let m = parts.get(i)
     if (m.exists()) {
       if (m.value.qty == 2) {
-        saved = m
+        saved = m.copy()
       }
     }
     i = i + 1

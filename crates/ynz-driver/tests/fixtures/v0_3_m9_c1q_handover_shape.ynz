@@ -1,0 +1,27 @@
+// v0.3-M9 C1q: the same hand-over for shape rows (stored inline in the list's cells).
+// Correct behavior: prints 2, A, C.
+
+shape Tag {
+  label: string
+  nums: array<int>
+}
+
+function entrypoint() -> nothing {
+  let matrix: array<Tag> = [
+    { label: `a`.toUpperCase(), nums: [1] },
+    { label: `b`.toUpperCase(), nums: [2] },
+    { label: `c`.toUpperCase(), nums: [3] }
+  ]
+  let kept: array<Tag> = []
+  let seen = 0
+  for (row in matrix) {
+    seen = seen + 1
+    if (seen != 2) {
+      kept.add(row)
+    }
+  }
+  print(kept.count())
+  for (tag in kept) {
+    print(tag.label)
+  }
+}

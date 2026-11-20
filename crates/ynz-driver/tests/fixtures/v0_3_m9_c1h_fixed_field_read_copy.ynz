@@ -1,0 +1,28 @@
+// v0.3-M9 C1h: reading a fixed field into a binding gives the binding its own copy when the binding is written; a lend function writes the field in place.
+// Expected output: 1, 99, B, 11, 16
+
+shape Bag {
+  items: fixed<int, 3>
+  names: fixed<string, 2>
+}
+
+function bump(lend bag: Bag) -> nothing {
+  bag.items.set(0, bag.items[0].or(0) + 10)
+}
+
+function entrypoint() -> nothing {
+  let bag: Bag = { items: [1, 2, 3], names: [`a`.toUpperCase(), `b`.toUpperCase()] }
+  let alias = bag.items
+  alias.set(0, 99)
+  print(bag.items[0].or(-1))
+  print(alias[0].or(-1))
+  let aliasNames = bag.names
+  print(aliasNames[1].or(`?`))
+  bump(bag)
+  print(bag.items[0].or(-1))
+  let total: int = 0
+  for (n in bag.items) {
+    total = total + n
+  }
+  print(total)
+}

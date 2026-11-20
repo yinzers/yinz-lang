@@ -1,0 +1,47 @@
+// v0.3-M9 C8 slice 4b: a plain function binds a `maybe<Thing> errors` result and reads it with
+// `or(none)`. The result's ok word is the union's VIEW (null for `none`), not a heap envelope
+// cell, so the scope-exit release of the local must release the view, not free a cell.
+// Before: the release took the `maybe` cell path and freed a pointer that was never allocated
+// (`free(): invalid pointer`, introduced by C7 `b669d67`). Correct behavior: prints `big kept`, then `end`, every allocation
+// freed, clean under AddressSanitizer at both optimization levels.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share thing: Thing) -> string {
+  if (thing) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${thing.label}`
+    }
+  }
+  return `none`
+}
+
+function fetch(share things: array<Thing>, index: int) -> maybe<Thing> errors {
+  let found = things.get(index)
+  return found
+}
+
+function entrypoint() -> nothing {
+  let things: array<Thing> = []
+  let big: Big = { label: `kept`, count: 1 }
+  things.add(big)
+  let picked = fetch(things, 0)
+  let value = picked.or(none)
+  if (value.exists()) {
+    print(describe(value.value))
+  }
+  if (value.exists() == false) {
+    print(`none`)
+  }
+  print(`end`)
+}

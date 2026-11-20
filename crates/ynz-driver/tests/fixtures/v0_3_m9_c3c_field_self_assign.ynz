@@ -1,0 +1,17 @@
+// v0.3-M9 C3c fixture: assigning a string field from itself reads the old string before it is
+// released. The store copies a borrowed string, so `tag.name = tag.name` must copy the bytes and
+// only then free the original.
+// Heap strings: `name` 1 (fresh, moved into the literal); the assignment copies it 1 and releases
+// the original, and the shape is released at the scope end (C7): 2 allocated, 2 released.
+// Expected output: the name, unchanged.
+
+shape Tag {
+  name: string
+  id: int
+}
+
+function entrypoint() -> nothing {
+  let tag: Tag = { name: `x-${1}`, id: 1 }
+  tag.name = tag.name
+  print(tag.name)
+}

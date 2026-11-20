@@ -1,0 +1,15 @@
+// v0.3-M9 C1i: a fire-and-forget `background` call passes a `fixed<string>` list literal, a fresh
+// value no name holds. The spawn releases the literal's original strings.
+// Before: 2 of the 4 strings leaked.
+// Expected output: the count, the first name, then `done`.
+
+function crunch(xs: fixed<string>) -> nothing {
+  print(xs.count())
+  print(xs[0].or(`?`))
+}
+
+function entrypoint() -> nothing {
+  background crunch([`a`.toUpperCase(), `b`.toUpperCase()])
+  wait sleep(50)
+  print(`done`)
+}

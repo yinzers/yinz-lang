@@ -1,0 +1,19 @@
+// v0.3-M9 C1l: one `background` call passes the same array binding in two parameter positions
+// (`consume(v, v)`, neither declared `give`). The task gets two copies of its own, and the spawn
+// consumes `v` once: its original is released once, after the last copy is made.
+// Before: the spawn recorded BOTH reads as consuming the binding, codegen nulled the slot at the
+// first read, and the second read cloned a null pointer (the program aborted with a null
+// pointer dereference at both optimization levels).
+// Expected output: the two counts, then `done` (the task's two lines may come after `done`).
+
+function consume(first: array<int>, second: array<int>) -> nothing {
+  print(first.count())
+  print(second.count())
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  background consume(rows, rows)
+  wait sleep(50)
+  print(`done`)
+}

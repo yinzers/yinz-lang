@@ -51,8 +51,8 @@
 //! the task's next yield point — i.e. the child's next suspension — whereupon the embedded
 //! `SpawnStateFnFuture::Drop` runs the full cleanup ladder (sleep handle, arg-copies incl.
 //! shared-channel refs, recursion chain, frame). The handle then releases its own conduit
-//! reference and the R8 buffer, each exactly once. Source-level automatic drop insertion
-//! awaits the language-wide scope-drop mechanism (recorded deferral — see the plan).
+//! reference and the R8 buffer, each exactly once. Codegen calls it when a handle binding
+//! leaves its scope (v0.3-M9 C8, card #385), so a handle leaving scope stops its task.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -98,6 +98,7 @@ use crate::channel::{CHANNEL_CLOSED, CHANNEL_PENDING, CHANNEL_READY};
 pub use ynz_abi::{
     HANDLE_RET_KIND_EC_HEAP_PTR as RET_KIND_EC_HEAP_PTR,
     HANDLE_RET_KIND_EC_NUMBER as RET_KIND_EC_NUMBER, HANDLE_RET_KIND_EC_WORD as RET_KIND_EC_WORD,
+    HANDLE_RET_KIND_UNION as RET_KIND_UNION,
     HANDLE_RET_KIND_VALUE_HEAP_PTR as RET_KIND_VALUE_HEAP_PTR,
     HANDLE_RET_KIND_VALUE_MAYBE as RET_KIND_VALUE_MAYBE,
     HANDLE_RET_KIND_VALUE_NUMBER as RET_KIND_VALUE_NUMBER,
@@ -107,6 +108,14 @@ pub use ynz_abi::{
 /// State shared between the handle object (parent side) and the spawned child future:
 /// the R8 handle-owned ok-value buffer + the receive-waiter registry (P2-7).
 struct HandleShared {
+    /// Releases the heap a completion `(err, ok)` owns, per the callee's return type (codegen emits
+    /// the function at the spawn site); `None` when the result owns no heap. Run on a completion
+    /// nobody received: one left in the outbox when the handle is freed, or one the finished task
+    /// could not deliver because the handle was already gone (C8 slice 6).
+    result_release: Option<unsafe extern "C" fn(i64, i64)>,
+    /// Moves a union result out of the finished frame into a cell of its own: `(return slot, err out,
+    /// ok out)`. Present exactly when the kind is `RET_KIND_UNION`.
+    result_move: Option<unsafe extern "C" fn(*const u8, *mut i64, *mut i64)>,
     /// The 16-byte heap buffer holding a copied wide ok-value (`number` cases). `None` until
     /// the child completes with one; freed exactly once at handle drop via `Option::take`.
     ok_buf: Mutex<Option<Box<[u8; 16]>>>,
@@ -121,6 +130,16 @@ struct HandleShared {
 }
 
 impl HandleShared {
+    /// Release the heap of the completion `(err, ok)` that nobody will receive.
+    ///
+    /// # Safety
+    /// The pair must be a completion this handle's task produced and no receiver took.
+    unsafe fn release_completion(&self, err: i64, ok: i64) {
+        if let Some(release) = self.result_release {
+            release(err, ok);
+        }
+    }
+
     /// Wake every recorded receive-waiter (the completion just landed). Mirrors
     /// `YnzChannel::wake_recv_waiters` — the one shared discipline, not a bespoke ordering.
     /// O(n) wakes where n = suspended receivers (typically 0 or 1).
@@ -219,7 +238,11 @@ impl Future for HandleStateFnFuture {
                     // Capacity >= 1 and this is the sole sender in v0.3-M4, so try_send
                     // cannot observe Full; a dropped-receiver (handle already freed) makes
                     // delivery moot — either way, never a blocking call.
-                    let _ = tx.try_send((err, ok));
+                    if let Err(undelivered) = tx.try_send((err, ok)) {
+                        let (err, ok) = undelivered.into_inner();
+                        // SAFETY: the pair is this task's own completion, owned by nobody else.
+                        unsafe { this.shared.release_completion(err, ok) };
+                    }
                 }
                 // Completion delivered — drain the receive-waiter registry (P2-7), the
                 // producer-side half of register-before-poll: mpsc's native wake reaches
@@ -255,15 +278,32 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
             }
             (err, ok)
         }
-        RET_KIND_VALUE_NUMBER | RET_KIND_VALUE_MAYBE => {
-            // The return slot itself holds a 16-byte aggregate — the decimal128, or (v0.3-M8
-            // Phase 4) a plain `maybe<T>`'s `{flag, bits}` envelope pair — copy it out before
-            // the frame is freed; the parent reads the handle-owned buffer through `ok`.
+        RET_KIND_VALUE_NUMBER => {
+            // The return slot itself holds the 16-byte decimal128 — copy it out before the frame
+            // is freed; the parent reads the handle-owned buffer through `ok`.
             let mut buf = Box::new([0u8; 16]);
             std::ptr::copy_nonoverlapping(slot as *const u8, buf.as_mut_ptr(), 16);
             let ok = buf.as_ptr() as i64;
             *lock_or_recover(&shared.ok_buf) = Some(buf);
             (0, ok)
+        }
+        RET_KIND_UNION => {
+            let move_out = shared
+                .result_move
+                .expect("a union completion needs the move glue the spawn site passes");
+            let (mut err, mut ok) = (0_i64, 0_i64);
+            move_out(slot as *const u8, &mut err, &mut ok);
+            (err, ok)
+        }
+        RET_KIND_VALUE_MAYBE => {
+            // The return slot holds a plain `maybe<T>`'s `{flag, bits}` envelope pair inline. The
+            // parent OWNS what it receives (it releases the envelope cell and the payload it holds
+            // at its scope exit, as it does a `-> maybe<T> errors` result, whose ok word is a heap
+            // cell the callee made): a counted cell of its own, copied before the frame is freed
+            // (C8 slice 5; a handle-owned buffer left the payload with no owner).
+            let cell = crate::ynz_alloc(16);
+            std::ptr::copy_nonoverlapping(slot as *const u8, cell, 16);
+            (0, cell as i64)
         }
         // RET_KIND_VALUE_WORD / RET_KIND_VALUE_HEAP_PTR and any future kind default: the
         // slot's first word is the self-contained value (int/bool/float bits, heap-stable
@@ -277,6 +317,10 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
 /// spawn-form key (R8).
 ///
 /// `ret_kind` — completion-extraction kind (see `RET_KIND_*`).
+/// `result_release` — releases the heap of a completion nobody received (`void(err, ok)`), or null
+///   when the callee's result owns none.
+/// `result_move` — moves a union result out of the finished frame (`void(slot, *err, *ok)`), or null;
+///   non-null exactly for `RET_KIND_UNION`.
 /// `msg_chan` — the child's first `channel<T>` argument (the `.send()` conduit), or null.
 ///   The handle takes its OWN refcounted reference (the child's arg reference is separate,
 ///   released by the arg-drop machinery).
@@ -288,6 +332,8 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
 /// # Safety
 /// Same contract as `ynz_rt_spawn` for `resume_fn`/`frame_ptr`/`arg_drop_ptr`; `msg_chan`
 /// must be null or a live channel pointer.
+/// `result_move` — moves a union result out of the finished frame (`void(slot, *err, *ok)`), or null;
+///   non-null exactly for `RET_KIND_UNION`.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_rt_spawn_handle(
     resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
@@ -298,11 +344,31 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
     arg_drop_count: i64,
     ret_kind: i64,
     msg_chan: *mut u8,
+    result_release: *const u8,
+    result_move: *const u8,
 ) -> *mut u8 {
     // Bounded outbox (stdlib Rule 4): sized for the single completion delivery plus headroom
     // for the future child-side message-reply surface (the locked default capacity).
     let (outbox_tx, outbox_rx) = mpsc::channel::<(i64, i64)>(64);
     let shared = Arc::new(HandleShared {
+        // SAFETY: codegen passes null or the address of a `void(i64, i64)` function of its module.
+        result_release: if result_release.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(i64, i64),
+            >(result_release))
+        },
+        result_move: if result_move.is_null() {
+            None
+        } else {
+            // SAFETY: codegen passes null or the address of a `void(ptr, ptr, ptr)` function.
+            Some(std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(*const u8, *mut i64, *mut i64),
+            >(result_move))
+        },
         ok_buf: Mutex::new(None),
         recv_waiters: Mutex::new(Vec::new()),
     });
@@ -465,6 +531,16 @@ pub unsafe extern "C" fn ynz_handle_free(handle_ptr: *mut u8) {
     // no in-flight send (or a double-cancel) is a safe no-op.
     purge_pending_sends(handle.msg_chan, handle.send_gen);
     ynz_channel_free(handle.msg_chan);
+    // A completion nobody received is the handle's to release: close the outbox first (a task
+    // finishing from now on finds it closed and releases its own result), then drain what was
+    // delivered before. The ok_buf a number result sits in is freed with `shared` below.
+    {
+        let mut outbox = lock_or_recover(&handle.outbox_rx);
+        outbox.close();
+        while let Ok((err, ok)) = outbox.try_recv() {
+            handle.shared.release_completion(err, ok);
+        }
+    }
     // ok_buf (if any) drops with `handle.shared` unless the child future still holds the
     // other Arc — then it drops when the aborted task retires. Either way exactly once,
     // via the Arc + Option ownership chain.
@@ -522,6 +598,8 @@ mod tests {
                 0,
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
             );
             // Drive the runtime so the spawned task completes.
             rt.block_on(async { tokio::task::yield_now().await });
@@ -566,6 +644,8 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
             );
             rt.block_on(async { tokio::task::yield_now().await });
             // Never receive; just free. Frame already freed by the task; buffer path empty.
@@ -615,6 +695,8 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 chan,
+                std::ptr::null(),
+                std::ptr::null(),
             );
             assert_eq!(ynz_handle_send_poll(h, 111, cx_ptr), CHANNEL_PENDING);
             assert_eq!(crate::channel::pending_send_count(chan), 1);
@@ -688,6 +770,8 @@ mod tests {
                 0,
                 RET_KIND_VALUE_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
             );
             rt.block_on(async { tokio::task::yield_now().await });
             ynz_handle_free(h); // aborts the parked child
@@ -772,6 +856,8 @@ mod tests {
                 0,
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
             );
             // The child is scheduled but NOT yet driven — the outbox is empty, so the
             // parent's first poll takes the Pending path (the registration under test).
@@ -846,6 +932,8 @@ mod tests {
                 0,
                 RET_KIND_EC_WORD,
                 std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
             );
             let probe = HandleOrderProbe {
                 shared: crate::sync::Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),

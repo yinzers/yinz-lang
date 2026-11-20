@@ -1,0 +1,35 @@
+// v0.3-M9 C3b fixture: a string sent into a channel and a string passed to a `background` task.
+// Allocations: `sentCopy` 1 (fresh) is sent while still read afterwards, so the channel gets a
+// copy 1. `sentLast` 1 (fresh) is sent at its last use: moved 0. `wire.send(`lit`)` copies a
+// literal 1. `taskText` 1 (fresh) goes to a task as `taskText.copy()` 1 (the spawner reads it
+// again). `handedOver` 1 (fresh) is given to a task at its last use: moved 0.
+// Total 1+1+1+0+1+1+1+1+0 = 7.
+// Expected output: one value per line below (each task finishes inside the sleep).
+
+function echo(give text: string) -> nothing {
+  print(text)
+}
+
+function entrypoint() -> nothing {
+  let count: int = 3
+  let wire: channel<string> = channel<string>(4)
+  let sentCopy: string = `copy-${count}`
+  wire.send(sentCopy)
+  print(sentCopy)
+  let sentLast: string = `last-${count}`
+  wire.send(sentLast)
+  wire.send(`lit`)
+  let first = wire.receive()
+  print(first.or(`none`))
+  let second = wire.receive()
+  print(second.or(`none`))
+  let third = wire.receive()
+  print(third.or(`none`))
+  let taskText: string = `task-${count}`
+  background echo(taskText.copy())
+  wait sleep(50)
+  print(taskText)
+  let handedOver: string = `over-${count}`
+  background echo(handedOver)
+  wait sleep(50)
+}

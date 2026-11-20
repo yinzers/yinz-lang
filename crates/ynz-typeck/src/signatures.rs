@@ -50,6 +50,15 @@ pub struct FunctionSig {
     /// Propagated cross-module through `module_signatures_query` / `exports.rs`
     /// exactly as `suspends` is.
     pub does_real_work: bool,
+    /// The places the body writes through each parameter, by parameter position
+    /// (`crate::walked_place::analyze_written_param_places`): for `function reset(lend holder:
+    /// Holder) { holder.rows = ... }`, `[[[Field("rows")]]]`. A caller's `for` loop that passes
+    /// the list it walks to such a parameter is refused when the callee writes the walked place
+    /// or a prefix of it (`WalkedListWrittenInLoop`).
+    ///
+    /// Empty in the signature pre-pass and set by `check_query` before the bodies are checked,
+    /// exactly like `suspends`; carried across modules with the export table.
+    pub written_param_places: Vec<Vec<crate::walked_place::WrittenPlace>>,
     /// The function's exported name in its defining module, when the caller imported it
     /// under an alias (`import { getValue as fetchVal } from "data_ops"`).
     ///
@@ -134,11 +143,13 @@ pub fn collect_signatures(
                 continue;
             }
             Item::Function(f) => {
-                let params: Vec<(String, Type)> = f
+                let mut params: Vec<(String, Type)> = f
                     .params
                     .iter()
                     .map(|p| (p.name.clone(), sig_ast_type_to_type(&p.ty, shape_table)))
                     .collect();
+                // A parameter written `fixed<T>` is compiled once per length its callers pass.
+                crate::fixed_length::mark_length_parameters(&mut params);
                 let param_ownerships: Vec<Option<OwnershipModifier>> =
                     f.params.iter().map(|p| p.ownership.clone()).collect();
                 // sig_ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner }
@@ -196,6 +207,7 @@ pub fn collect_signatures(
                         // `may_block::does_real_work_set` runs. False during the
                         // signature pre-pass; must not be used there.
                         does_real_work: false,
+                        written_param_places: Vec::new(),
                         // Functions from the local module are never aliased from the
                         // module's own perspective — their local name IS their symbol name.
                         original_name: None,
@@ -417,16 +429,59 @@ fn resolve_sig_type_with_params(
     type_params: &[String],
     shape_table: &ShapeTable,
 ) -> Type {
+    let resolve = |inner: &AstType| resolve_sig_type_with_params(inner, type_params, shape_table);
     match ast_ty {
         AstType::Named(n, _) if type_params.contains(n) => Type::TypeParam { name: n.clone() },
+        // A type parameter nested in a container keeps its place (`maybe<T>`, `T | nothing`,
+        // `array<T>`). Resolved through the shape table alone it became `Error`, and a call's
+        // substituted parameter type could never equal its argument's type (C1g, #424).
+        AstType::Maybe { inner, .. } => Type::Maybe {
+            inner: Box::new(resolve(inner)),
+        },
+        AstType::Union { variants, .. } => {
+            let resolved: Vec<Type> = variants.iter().map(resolve).collect();
+            if resolved.len() < 2 {
+                Type::Error
+            } else {
+                Type::Union { variants: resolved }
+            }
+        }
+        AstType::ErrorCapable { inner, .. } => Type::ErrorsCapable {
+            inner: Box::new(resolve(inner)),
+        },
+        AstType::Sensitive(inner) => Type::Sensitive {
+            inner: Box::new(resolve(inner)),
+        },
         AstType::Generic { name, args, .. } => {
-            let resolved_args = args
-                .iter()
-                .map(|a| resolve_sig_type_with_params(a, type_params, shape_table))
-                .collect();
-            Type::Generic {
-                name: name.clone(),
-                args: resolved_args,
+            if name == "fixed" {
+                let written = crate::fixed_length::read_fixed_arguments(args);
+                let element = written.element.map(resolve).unwrap_or(Type::Error);
+                return crate::fixed_length::fixed_type(element, &written.length);
+            }
+            let mut resolved_args: Vec<Type> = args.iter().map(resolve).collect();
+            // The built-in containers are their own types; `Generic` is a user-declared
+            // generic shape. The arguments of a call have the built-in types.
+            match (name.as_str(), resolved_args.len()) {
+                ("array", 1) => Type::BuiltinArray {
+                    elem: Box::new(resolved_args.remove(0)),
+                },
+                ("channel", 1) => Type::BuiltinChannel {
+                    elem: Box::new(resolved_args.remove(0)),
+                },
+                ("map", 2) => {
+                    let val = Box::new(resolved_args.remove(1));
+                    let key = Box::new(resolved_args.remove(0));
+                    Type::BuiltinMap { key, val }
+                }
+                ("MapEntry", 2) => {
+                    let val = Box::new(resolved_args.remove(1));
+                    let key = Box::new(resolved_args.remove(0));
+                    Type::MapEntry { key, val }
+                }
+                _ => Type::Generic {
+                    name: name.clone(),
+                    args: resolved_args,
+                },
             }
         }
         other => shape_table.resolve_ast_type(other),

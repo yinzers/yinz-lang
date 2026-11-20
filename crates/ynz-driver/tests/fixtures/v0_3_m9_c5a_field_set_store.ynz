@@ -1,0 +1,18 @@
+// v0.3-M9 C5a (spike S3 probe t6b): `b.items = a` stores `a` into `b` with no sink, then `b` is
+// returned. A scope-exit release pass that frees `a` here hands the caller a freed array.
+// GREEN today (nothing frees); guards the release pass (C7). Expected output: `3`.
+shape Bag {
+  items: array<int>
+}
+
+function make() -> Bag {
+  let a: array<int> = [1, 2, 3]
+  let b: Bag = { items: [0] }
+  b.items = a
+  return b
+}
+
+function entrypoint() -> nothing {
+  let bag: Bag = make()
+  print(bag.items.count().toString())
+}

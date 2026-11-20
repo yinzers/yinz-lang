@@ -26,7 +26,7 @@ pub fn analyze_return_paths(block: &Block) -> ReturnAnalysis {
     analyze_stmts(&block.stmts)
 }
 
-fn analyze_stmts(stmts: &[Stmt]) -> ReturnAnalysis {
+pub fn analyze_stmts(stmts: &[Stmt]) -> ReturnAnalysis {
     let mut dead = Vec::new();
     let mut definite_return = false;
 

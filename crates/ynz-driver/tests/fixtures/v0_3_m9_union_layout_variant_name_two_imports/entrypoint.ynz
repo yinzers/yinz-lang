@@ -1,0 +1,19 @@
+// v0.3-M9 C1f security round 1 (#423): two imported modules each size a union field by their
+// own, different, unexported shape `Big`. Neither `Big` is named here.
+// Correct behavior: does not compile — this module would have to size both union fields with one
+// `Big`.
+// Failure before the fix (measured): compiles; the last import's 1-byte `Big` sizes `HolderA.slot`
+// too, and `a` writes its 48-byte `Big` past it: AddressSanitizer stack-buffer-overflow at -O0
+// and -O2.
+import { HolderA, Tiny, fillA, showA } from `a`
+import { HolderB, makeB } from `b`
+
+function entrypoint() -> nothing {
+  let tiny: Tiny = { flag: true }
+  let holder: HolderA = { slot: tiny, id: 5 }
+  fillA(holder)
+  print(showA(holder))
+  print(holder.id)
+  let other: HolderB = makeB()
+  print(other.id)
+}

@@ -1,0 +1,40 @@
+// v0.3-M9 C1q: the same hand-over for union rows (envelope slots stored inline).
+// Correct behavior: prints 2, N1, tiny.
+
+shape Big {
+  name: string
+  weight: int
+}
+shape Tiny {
+  flag: boolean
+}
+shape Thing = Big | Tiny
+
+function entrypoint() -> nothing {
+  let matrix: array<Thing> = []
+  let first: Big = { name: `n1`.toUpperCase(), weight: 1 }
+  matrix.add(first)
+  let second: Big = { name: `n2`.toUpperCase(), weight: 2 }
+  matrix.add(second)
+  let third: Tiny = { flag: true }
+  matrix.add(third)
+  let kept: array<Thing> = []
+  let seen = 0
+  for (row in matrix) {
+    seen = seen + 1
+    if (seen != 2) {
+      kept.add(row)
+    }
+  }
+  print(kept.count())
+  for (thing in kept) {
+    if (thing) {
+      is Big => {
+        print(thing.name)
+      }
+      is Tiny => {
+        print(`tiny`)
+      }
+    }
+  }
+}
