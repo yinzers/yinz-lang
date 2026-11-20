@@ -28,22 +28,22 @@ The compiler maps which line needs which value. Lines that don't need each other
 
 ```ynz
 function fetchCurrentUser() -> Int {
-  sleep(10)
+  wait sleep(10)
   return 1
 }
 
 function fetchFeed(user: Int) -> Int {
-  sleep(10)
+  wait sleep(10)
   return user + 10
 }
 
 function fetchMessages(user: Int) -> Int {
-  sleep(10)
+  wait sleep(10)
   return user + 20
 }
 
 function fetchStats(user: Int) -> Int {
-  sleep(10)
+  wait sleep(10)
   return user + 30
 }
 
@@ -76,19 +76,19 @@ You write 6 lines of normal code. The compiler runs the three independent fetche
 
 ## The IDE shows you the execution plan
 
-The IDE marks which lines run at the same time and which run one after another, so you can always see what the compiler decided.
+The IDE adds a muted note after each line that runs at the same time as other lines. The note names the other lines, counted from the top of the file. For `loadDashboard` in the example above, the IDE shows:
 
 ```
 function loadDashboard() -> Int {
-  let user = fetchCurrentUser()          // ① sequential
-  let feed = fetchFeed(user)             // ② ┐
-  let messages = fetchMessages(user)     // ② ├ concurrent group
-  let stats = fetchStats(user)           // ② ┘
-  return buildDashboard(user, feed, messages, stats)  // ③ sequential
+  let user = fetchCurrentUser()
+  let feed = fetchFeed(user)             // runs at the same time as line 28, line 29
+  let messages = fetchMessages(user)     // runs at the same time as line 27, line 29
+  let stats = fetchStats(user)           // runs at the same time as line 27, line 28
+  return buildDashboard(user, feed, messages, stats)
 }
 ```
 
-Hovering over any line shows: "Runs concurrently with lines X and Y. Waits for: user (line 2)."
+A line with no note runs on its own, in order. Hover over a note to read why: the lines run together because no data flows between them. Writing `wait` before the second call forces them to run in order.
 
 ---
 
@@ -110,6 +110,13 @@ function addRow(lend db: Database) -> Nothing {
   // lend = may change it — the compiler runs this in the right order
   db.rows = db.rows + 1
 }
+
+function entrypoint() -> Nothing {
+  let db: Database = { rows: 0 }
+  addRow(db)
+  let count = countRows(db)
+  print(count.toString())
+}
 ```
 
 `share` on a parameter means the function only reads that value. Several readers can run at the same time.
@@ -120,7 +127,7 @@ function addRow(lend db: Database) -> Nothing {
 
 ## `wait` — when you need explicit ordering
 
-**Pausing is automatic — you never type `wait` to make a slow call pause.** When a call has to wait for the outside world (a network fetch, `sleep`, a file read), the compiler pauses your function by itself. The IDE shows that pause as a muted `wait` hint. You don't write it.
+**Calling a function that waits is automatic — you never type `wait` before it.** When a function you call has to wait for the outside world, the compiler pauses your function until the call is done. The base pause itself is the one place you write `wait`: `wait sleep(10)` pauses for 10 milliseconds. A bare `sleep(10)` does not pause.
 
 **`wait` is only for ordering.** Use it when one call must finish before the next line runs, but the compiler can't see that. That happens when the two calls touch different things and no value passes between them.
 
@@ -130,7 +137,7 @@ Most code never needs `wait`. The compiler orders reads and writes from the owne
 
 ```ynz
 function chargePayment(orderId: Int) -> Nothing {
-  sleep(20)
+  wait sleep(20)
   print(`charged order ${orderId.toString()}`)
 }
 
@@ -153,13 +160,13 @@ function entrypoint() -> Nothing {
 }
 ```
 
-Without `wait`, the compiler would run all three at the same time, because none of them uses another's result. `wait chargePayment(orderId)` tells the compiler: "finish this before moving on."
+Each call passes no value to the next, so `wait chargePayment(orderId)` is how you say "finish this before moving on."
 
 **When to use `wait` — one request at a time:**
 
 ```ynz
 function fetchPage(page: Int) -> Int {
-  sleep(10)
+  wait sleep(10)
   return page * 100
 }
 
@@ -179,12 +186,12 @@ A loop already runs one pass at a time, so this loop would fetch the pages in or
 
 ```ynz
 function fetchUser(id: Int) -> Int {
-  sleep(10)
+  wait sleep(10)
   return id + 1000
 }
 
 function fetchPermissions(user: Int) -> Int {
-  sleep(10)
+  wait sleep(10)
   return user + 1
 }
 
@@ -193,6 +200,11 @@ function buildProfile(id: Int) -> Int {
   let permissions = fetchPermissions(user)       // depends on user — auto-waits
   let profile = user + permissions               // depends on both — auto-waits
   return profile
+}
+
+function entrypoint() -> Nothing {
+  let profile = buildProfile(1)
+  print(profile.toString())
 }
 ```
 
@@ -214,7 +226,7 @@ Separate statements that don't need each other run at the same time. The passes 
 
 ```ynz
 function sendWelcomeEmail(userId: Int) -> Nothing {
-  sleep(10)
+  wait sleep(10)
   print(`welcome email sent to ${userId.toString()}`)
 }
 
@@ -226,7 +238,7 @@ function entrypoint() -> Nothing {
   background sendWelcomeEmail(7)
   background logAnalytics(3)
   // the function carries on right away — these tasks run on their own
-  sleep(50)
+  wait sleep(50)
 }
 ```
 
@@ -234,8 +246,16 @@ Each task runs on its own. If it fails, it has to deal with the failure itself. 
 
 **Long-running — keep the handle so you can talk to the task:**
 
-```
-let scout = background gradeProspect(requests)
+```ynz
+function gradeProspect(lend requests: Channel<Int>) -> Int errors {
+  let command = requests.receive()
+  return command.or(0)
+}
+
+function entrypoint() -> Nothing {
+  let requests: Channel<Int> = Channel<Int>(4)
+  let scout = background gradeProspect(requests)
+}
 ```
 
 If you store the result of `background`, you get a **handle**: a line you can use to talk to the running task with `.send()` and `.receive()`. If you don't store it, the task is fire-and-forget. It is the same keyword either way. Handles are built on channels, so read the next section first, then see "Talking to a background task" below.
@@ -247,8 +267,10 @@ If you store the result of `background`, you get a **handle**: a line you can us
 A channel carries values of one type from one task to another. You create one with `Channel<T>()`, where `T` is the type of value it carries:
 
 ```ynz
-let scores: Channel<Int> = Channel<Int>()        // holds up to 64 values (the default)
-let names: Channel<String> = Channel<String>(8)  // holds up to 8 values
+function entrypoint() -> Nothing {
+  let scores: Channel<Int> = Channel<Int>()        // holds up to 64 values (the default)
+  let names: Channel<String> = Channel<String>(8)  // holds up to 8 values
+}
 ```
 
 The number is the channel's **capacity** — how many values it can hold at once. Leave the parens empty and you get the default of 64. The IDE shows the default as a muted `64` hint inside the empty parens; click it to write `64` into your source.
@@ -368,12 +390,20 @@ After `close()`:
 - `.send()` is refused with a channel-closed error. Because `send()` is declared `-> Nothing errors`, you can check it with `.failed()` if you want to notice a late send:
 
 ```ynz
-let late = wire.send(9)
-if (late.failed()) {
-  print(late.message)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(4)
+  wire.close()
+  let late = wire.send(9)
+  if (late.failed()) {
+    print(late.message)
+  }
 }
-// The channel is closed — close() was called, so this value cannot be delivered.
-// Check .failed() on the send, or send everything before close().
+```
+
+The program prints:
+
+```
+The channel is closed — close() was called, so this value cannot be delivered. Check .failed() on the send, or send everything before close().
 ```
 
 - Calling `.close()` again does nothing — it is safe to close twice.
@@ -410,13 +440,19 @@ Bind the channel first (`let commands = makeWire()`), then spawn with `backgroun
 An `Int`, a `String`, or a `Number` is copied into the channel — your variable keeps working after the send. An `Array<T>` or a `Map<K, V>` is different: the channel hands the *same* value to whichever task receives it, so `send()` gives it away and the compiler refuses any later use of that variable:
 
 ```ynz
-let rows: Array<Int> = [1, 2, 3]
-wire.send(rows)
-print(rows.count())
-// COMPILE ERROR: `rows` was sent into `wire` and cannot be used here — `send()` gave it away.
-// If you still need `rows` after sending it, send a copy instead: `wire.send(rows.copy())`.
-// If you only need it before the send, put this line above the `send()`.
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(4)
+  let rows: Array<Int> = [1, 2, 3]
+  wire.send(rows)
+  print(rows.count().toString())
+}
 ```
+
+```
+`rows` was sent into `wire` and cannot be used here — `send()` gave it away.
+```
+
+If you still need `rows` after sending it, send a copy instead: `wire.send(rows.copy())`. If you only need it before the send, put that line above the `send()`.
 
 Two more rules follow from the same idea:
 
@@ -452,7 +488,7 @@ Because of that, the function you start must take a channel parameter to receive
 
 ```ynz
 function slowCount() -> Int errors {
-  sleep(10)
+  wait sleep(10)
   return 3
 }
 
@@ -583,7 +619,7 @@ function entrypoint() -> Nothing {
   let event: WebhookEvent = { id: 1, kind: `push` }
   let status = handleWebhook(event)
   print(status.toString())
-  sleep(50)
+  wait sleep(50)
 }
 ```
 
@@ -609,7 +645,7 @@ function entrypoint() -> Nothing {
   let event: WebhookEvent = { id: 1, kind: `push` }
   let status = handleWebhook(event)
   print(status.toString())
-  sleep(50)
+  wait sleep(50)
 }
 ```
 
@@ -619,24 +655,38 @@ function entrypoint() -> Nothing {
 
 ## Error handling with concurrency
 
-`errors` works the same as everywhere else. Running things at the same time doesn't change the rules.
+`errors` works the same as everywhere else. Running things at the same time doesn't change the rules. A function marked `errors` can call other `errors` functions, and a failure goes up to its caller:
 
-If one operation fails while others are still running:
-- Operations already in progress run to the end, but their results are thrown away
-- Operations not yet started are cancelled before they begin
-- The function ends with the error
+```ynz
+function fetchCurrentUser() -> Int errors {
+  return 1
+}
 
-```
+function fetchFeed(user: Int) -> Int errors {
+  wait sleep(10)
+  return user + 10
+}
+
+function fetchMessages(user: Int) -> Int errors {
+  wait sleep(10)
+  return user + 20
+}
+
 function loadDashboard() -> Int errors {
   let user = fetchCurrentUser()
   let feed = fetchFeed(user)
-  let messages = fetchMessages(user)    // if this fails while feed is still running:
-  let stats = fetchStats(user)          // feed result is discarded, stats is cancelled
-  return buildDashboard(user, feed, messages, stats)
+  let messages = fetchMessages(user)
+  return user + feed + messages
+}
+
+function entrypoint() -> Nothing {
+  let total = loadDashboard()
+  let safeTotal = total.or(0)
+  print(safeTotal.toString())
 }
 ```
 
-Here the four `fetch` functions are the ones from the first example, each marked `errors`. Because `loadDashboard()` is marked `errors`, the failure goes up to the caller automatically. Same rules as everywhere else.
+`fetchFeed` and `fetchMessages` run at the same time. Because `loadDashboard()` is marked `errors`, a failure in either one goes up to its caller. `entrypoint` handles it with `.or(0)`. See [REF-errors.md](REF-errors.md).
 
 ---
 
@@ -684,13 +734,13 @@ The compiler only does this when `crunchStat` does heavy work (a loop or
 lots of math inside).  A small function that returns right away isn't worth it:
 starting work on another core would take longer than just running it.
 
-Your editor shows what's happening in muted text:
+Your editor shows what is happening in muted text. Line numbers count from the top of the example above:
 
 ```
 function analyzeGame(hitsSeed: Int, rbiSeed: Int, averageSeed: Int) -> Int {
-  let hits    = crunchStat(hitsSeed)       // runs at the same time as line 3, line 4 — separate core
-  let rbi     = crunchStat(rbiSeed)        // runs at the same time as line 2, line 4 — separate core
-  let average = crunchStat(averageSeed)    // runs at the same time as line 2, line 3 — separate core
+  let hits    = crunchStat(hitsSeed)       // runs at the same time as line 15, line 16 — separate core
+  let rbi     = crunchStat(rbiSeed)        // runs at the same time as line 14, line 16 — separate core
+  let average = crunchStat(averageSeed)    // runs at the same time as line 14, line 15 — separate core
   return combineStats(hits, rbi, average)
 }
 ```
