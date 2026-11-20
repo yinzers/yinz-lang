@@ -10837,7 +10837,7 @@ impl<'b> Checker<'b> {
                 if !is_safe {
                     self.diags.push(Diagnostic::error(
                         field_span.clone(),
-                        "`maybe.value` requires you to first check `m.exists()`.",
+                        "`Maybe.value` requires you to first check `m.exists()`.",
                         "Add a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.",
                         "The compiler cannot prove this `Maybe` has a value here. `.value` without a prior `.exists()` check is a compile error.",
                     ));

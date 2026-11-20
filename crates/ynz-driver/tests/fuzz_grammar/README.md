@@ -23,11 +23,11 @@ Declarations, emitted per program from the seed:
 
 | Construct | Shape emitted |
 |---|---|
-| Shapes | 0–2 × `shape CrateN { weight: int, label: string }` |
-| Pure helpers | 1–2 × `function tallyN(a: int, b: int) -> int` |
-| Suspending helpers | 1–2 × `function fetchN(n: int) -> int { wait sleep(1) … }` |
-| Channel feeders | 1–2 × `function feedN(lend wire: channel<T>)` — sends 1–3 values of `T`, then `close()`; `T` is drawn from `{int, array<int>, map<string,int>, number}` |
-| Shape readers | one per declared shape — `function weighN(item: CrateN, out: channel<int>)` |
+| Shapes | 0–2 × `shape CrateN { weight: Int, label: String }` |
+| Pure helpers | 1–2 × `function tallyN(a: Int, b: Int) -> Int` |
+| Suspending helpers | 1–2 × `function fetchN(n: Int) -> Int { wait sleep(1) … }` |
+| Channel feeders | 1–2 × `function feedN(lend wire: Channel<T>)` — sends 1–3 values of `T`, then `close()`; `T` is drawn from `{Int, Array<Int>, Map<String,Int>, Number}` |
+| Shape readers | one per declared shape — `function weighN(item: CrateN, out: Channel<Int>)` |
 
 `entrypoint` body statements, drawn by weight from a 14-way menu, 10–19 statements per program:
 
@@ -35,12 +35,12 @@ Declarations, emitted per program from the seed:
 - `print(v.toString())` and interpolated `print(\`v is ${v.toString()}\`)`;
 - calls to the pure helpers;
 - `wait fetchN(k)` — always `wait`-prefixed (see "Why the grammar is shaped this way" below);
-- `array<int>` literals, `.add()`, `.count()`, in-range `arr[i].or(-1)`;
-- `map<string, int>` literals, index read `.or(0)`, index assign, `.count()`;
+- `Array<Int>` literals, `.add()`, `.count()`, in-range `arr[i].or(-1)`;
+- `Map<String, Int>` literals, index read `.or(0)`, index assign, `.count()`;
 - shape literals and field reads;
-- inline channels: `channel<T>(cap)`, `send`, `receive`, and — half the time — `close()` followed
+- inline channels: `Channel<T>(cap)`, `send`, `receive`, and — half the time — `close()` followed
   by a receive past end-of-stream (the v0.3-M8 Phase 4 contract: `none`, never a hang, never an
-  error). `T` is drawn from `{int, array<int>, map<string,int>, number}` (v0.3-M8 Phase 8 fix
+  error). `T` is drawn from `{Int, Array<Int>, Map<String,Int>, Number}` (v0.3-M8 Phase 8 fix
   round 3 — see "The owned-heap widening" below); `int` receives use `.or(0)`, the other three
   kinds use `.exists()`/`.value`;
 - **handle-form spawn**: `let h = background fetchN(k)` then a blocking `h.receive()`;
@@ -55,7 +55,7 @@ Roughly 90% of generated programs spawn `background` work — the surface this m
 ## The owned-heap widening (v0.3-M8 Phase 8 fix round 3)
 
 Channel element types were, until this round, locked to `int` — the prior text here claimed
-`array<int>`/`map<string,int>` payloads "would produce correctly-REJECTED programs" because
+`Array<Int>`/`Map<String,Int>` payloads "would produce correctly-REJECTED programs" because
 v0.3-M8's transfer rules (`ConsumedBySend`, `TransferNeedsCopy`, `ParamNeedsGive`) "require
 `.copy()`/`give` plumbing the grammar does not model." **That claim was checked directly and was
 false.** A `let` built inside a feeder function (or directly in `entrypoint`, never read again
@@ -63,10 +63,10 @@ after its send) needs neither: nothing else in the program reads it back, so no 
 diagnostic can fire. The only real bookkeeping the widening needed was keeping a SENT binding out
 of the pool a later statement could read from (`take_or_make_array`/`take_or_make_map` in
 `mod.rs`) — verified by hand with three programs in the generator's own idiom before the widening
-landed (a `background` feeder + drain loop for `channel<array<int>>`; a `channel<map<…>>` and a
-`channel<number>` in one program; an inline `channel<array<int>>` send with no `background`
+landed (a `background` feeder + drain loop for `Channel<Array<Int>>`; a `Channel<Map<…>>` and a
+`Channel<Number>` in one program; an inline `Channel<Array<Int>>` send with no `background`
 involved at all), all three compiling and running clean, byte-identical across the full mode
-matrix. `channel<number>` exercises fr12's copy-through contract directly: the SAME `number`
+matrix. `Channel<Number>` exercises fr12's copy-through contract directly: the SAME `Number`
 binding is sent more than once and is still readable afterward, proving it never joins the give
 set.
 
@@ -74,7 +74,7 @@ set.
 and disposition in Future Requirements #11 (`plan.md`) and the v0.3-M8 plan's `audit.md`,
 FRAGO 015:
 
-1. An `array<int>`/`map<string,int>` LOCAL declared before ANY suspension point in `entrypoint`
+1. An `Array<Int>`/`Map<String,Int>` LOCAL declared before ANY suspension point in `entrypoint`
    (a `wait`, a `background`-handle `.receive()`, a channel `.receive()`) and later `.send()`-ed
    into a channel AFTER that suspension reads back corrupted (`SIGABRT`, null/misaligned pointer
    in `ynz_map_count`/`ynz_array_count`). A fresh local built and sent immediately, or the same
@@ -131,7 +131,7 @@ guard against this construct silently going dead again.
   never smaller than the producer's own send count — so that composite's producer can never
   block. The other two channel composites already couldn't block by construction
   (`stmt_channel_inline_kind` draws its send count FROM the capacity; the two-spawn Auto-Arc
-  topology hardcodes `channel<int>(4)` against 2 sends). Corpus-wide, that leaves ZERO coverage
+  topology hardcodes `Channel<Int>(4)` against 2 sends). Corpus-wide, that leaves ZERO coverage
   of the blocked-send path — coverage this generator HAD before this round, and lost as the
   direct cost of containing defect #2. Restoring it is exactly the trigger recorded for defect
   #2 in Future Requirements #11 / the v0.3-M8 plan's `audit.md`, FRAGO 015: fix the blocked-send path, then let

@@ -21528,7 +21528,7 @@ fn lower_stmt_return<'ctx>(
                                                 let staging_offset = cg
                                                     .sm_number_errors_staging_offset
                                                     .ok_or_else(|| {
-                                                        "ICE: `-> number errors` SM return: \
+                                                        "ICE: `-> Number errors` SM return: \
                                                          sm_number_errors_staging_offset is None — \
                                                          build_frame_layouts must have omitted the \
                                                          staging slot for this function"
