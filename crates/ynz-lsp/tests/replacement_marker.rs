@@ -174,6 +174,7 @@ fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
         hover.contains("**WHAT**")
             && hover.contains("fixed-size")
             && hover.contains("**WHAT INSTEAD**")
+            && hover.contains("the \"Write 'fixed' instead of 'array'\" action")
             && hover.contains("**WHY**"),
         "hover on `array` must teach the array→fixed decision, got: {hover}"
     );
@@ -198,6 +199,10 @@ fn array_to_fixed_marks_array_token_with_hover_and_rewrite_action() {
         rewrites.len(),
         1,
         "exactly the `array` rewrite at that cursor"
+    );
+    assert_eq!(
+        rewrites[0]["title"], "Write 'fixed' instead of 'array'",
+        "the action title is the exact text the hover quotes"
     );
     assert_eq!(
         apply_edit(src, &rewrites[0]),
@@ -233,6 +238,7 @@ fn let_to_const_marks_let_token_with_hover_and_rewrite_action() {
         hover.contains("**WHAT**")
             && hover.contains("treats this `let` as a `const`")
             && hover.contains("**WHAT INSTEAD**")
+            && hover.contains("the \"Write 'const' instead of 'let'\" action")
             && hover.contains("**WHY**"),
         "hover on a promoted `let` replaces the plain keyword hover, got: {hover}"
     );
@@ -242,6 +248,10 @@ fn let_to_const_marks_let_token_with_hover_and_rewrite_action() {
         rewrites.len(),
         1,
         "exactly the `let` rewrite at that cursor"
+    );
+    assert_eq!(
+        rewrites[0]["title"], "Write 'const' instead of 'let'",
+        "the action title is the exact text the hover quotes"
     );
     assert_eq!(
         apply_edit(src, &rewrites[0]),

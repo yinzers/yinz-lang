@@ -54,12 +54,12 @@ pub fn promotion_marks(db: &dyn SourceFileRegistry, sf: SourceFile) -> Vec<Promo
                 PromotionKind::ArrayToFixed => (
                     ARRAY_TO_FIXED_DOMAIN,
                     "fixed",
-                    "Write `fixed` instead of `array` (this never grows)",
+                    "Write 'fixed' instead of 'array'",
                 ),
                 PromotionKind::LetToConst => (
                     LET_TO_CONST_DOMAIN,
                     "const",
-                    "Write `const` instead of `let` (this is never reassigned)",
+                    "Write 'const' instead of 'let'",
                 ),
             };
             Some(PromotionMark {
