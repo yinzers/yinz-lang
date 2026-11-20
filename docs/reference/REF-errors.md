@@ -48,7 +48,7 @@ Output:
 10
 ```
 
-The functions in the rest of this page use `safeDivide`.
+The functions in the rest of this page use `safeDivide`. Dividing by zero is not an `errors` failure: it stops the program with a runtime error. A failure you can see as a value comes from a built-in that reports one, such as `send` on a channel that is already closed (shown in "What you can do with an `errors` result" below).
 
 ---
 
