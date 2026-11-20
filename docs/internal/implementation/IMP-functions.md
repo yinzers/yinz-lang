@@ -33,11 +33,11 @@ Functions that don't return a value declare `-> Nothing`. Always required — no
 
 ---
 
-## No Tuples — Define a Type Instead
+## No Tuples — Define a Shape Instead
 
-No tuple type. Returning multiple values requires defining a named type.
+No tuple type. Returning multiple values requires declaring a named `shape`.
 
-**Why**: Positional tuple slots are anonymous — `result.0` and `result.1` tell you nothing. Named fields are always self-documenting. The slight extra ceremony of defining a type pays off immediately in readability. `result.quotient` and `result.remainder` require no documentation.
+**Why**: Positional slots are anonymous — `result.0` and `result.1` tell you nothing. Named fields are self-documenting: `result.quotient` and `result.remainder` need no documentation.
 
 ---
 
@@ -59,7 +59,7 @@ p => { ... }                    // multi-line — types inferred
 
 ## Default Argument Values — Ownership Prevents Shared Mutable Defaults
 
-Python's mutable default argument bug (`def append(x, lst=[])` sharing one list across all callers) cannot occur in Yinz. The ownership system prevents it by construction: a default value like `= []` creates an owned value. The first call that omits the argument takes ownership — moves it in. There is nothing left for a second call to share.
+A default value is never shared between calls. The ownership system guarantees it: a default like `= []` creates a fresh owned value for each call that omits the argument, so there is nothing left for a second call to share.
 
 ```ynz
 function addTo(items: Array<String>, list: Array<String> = []) -> Array<String> {
@@ -67,4 +67,4 @@ function addTo(items: Array<String>, list: Array<String> = []) -> Array<String> 
 }
 ```
 
-The `[]` default is owned. Ownership rules handle the rest — no special "evaluate fresh per call" compiler rule needed, no performance cost from repeated evaluation of expensive defaults.
+The `[]` default is owned, so the ownership rules cover it with no special "evaluate fresh per call" rule.

@@ -4,7 +4,7 @@ description: "Design for the --kernel/--bare compiler flag enabling bare-metal t
 tags:
   - "yinz-compiler"
 created_at: "2026-05-14"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,67 +13,57 @@ metadata:
 
 # No-Runtime Mode — `--kernel` Flag for Bare-Metal Targets
 
-**Status**: Locked, v0.3 implementation. Design ready when implementation is scheduled.
+**Status**: Design locked. **Not built**: the compiler has no `--kernel` flag, and the `runtime.set*` functions below do not exist yet.
 
-User spec target: [`docs/reference/REF-tooling.md`](../../reference/REF-tooling.md) (gets a `--kernel` flag section when implemented).
+User spec target: [`docs/reference/REF-tooling.md`](../../reference/REF-tooling.md) (gets a `--kernel` flag section when the flag ships).
 
 ---
 
 ## The Decision
 
-Yinz supports compiling to environments WITHOUT a standard runtime — kernels, bootloaders, firmware, microcontrollers, NASA-grade embedded systems. The mechanism: a `--kernel` (or `--bare`) compiler flag that:
+Yinz compiles to environments without a standard runtime: kernels, bootloaders, firmware, microcontrollers, safety-critical embedded systems. The mechanism is a `--kernel` (or `--bare`) compiler flag that:
 
-1. **Disables runtime-dependent features** at compile time (heap allocation, default scheduler, default panic handler, OS-dependent stdlib)
-2. **Requires the user to plug in their own primitives** for anything that would normally come from the runtime (custom allocator, custom scheduler if used, custom panic handler, custom output device)
-3. **Emits teaching compile errors** when blocked features are used, pointing to the kernel-mode alternative
+1. **Disables runtime-dependent features** at compile time (heap allocation, default scheduler, default panic handler, OS-dependent stdlib).
+2. **Requires the user to plug in their own primitives** for anything the runtime normally provides (allocator, scheduler if used, panic handler, output device).
+3. **Emits teaching compile errors** when a blocked feature is used, pointing to the kernel-mode alternative.
 
-This is Yinz's equivalent of Rust's `no_std`. The difference: Yinz's default IS the runtime (most users want it); `no_std` is opt-in via flag. Rust's default is the OTHER way around.
+The default is the runtime (most users want it); no-runtime is the opt-in.
 
----
-
-## Why Yinz needs this
-
-The goal: Yinz should eventually be usable for chipset code, OS kernels, and NASA-grade embedded systems. None of those environments have an OS providing `malloc`, threads, file I/O, or even `printf`. They have:
-- A specific memory layout (sometimes mapped registers, no heap)
-- A custom allocator (kmalloc in kernels, fixed buffers in firmware)
-- A custom output device (UART, framebuffer, system log)
-- A custom panic handler (kernel oops, firmware halt-and-flash-LED)
-
-Without `--kernel` mode, Yinz's `Array<T>` would secretly require malloc and silently fail to link in these environments. Compile-time enforcement is the only safe path.
+**Why**: those environments have no OS-provided `malloc`, threads, file I/O or `printf`. Without compile-time enforcement, `Array<T>` would silently fail to link there.
 
 ---
 
 ## What `--kernel` mode disables
 
-Any language feature or stdlib API that requires the runtime becomes a COMPILE ERROR in `--kernel` mode unless a custom primitive is plugged in:
+Any language feature or stdlib API that requires the runtime is a compile error in `--kernel` mode unless a custom primitive is plugged in:
 
 | Feature | Default behavior | `--kernel` behavior |
 |---------|------------------|---------------------|
-| `Array<T>` (growable) | Heap allocation via libc malloc | COMPILE ERROR unless `.in(myAllocator)` provided |
-| `Map<K, V>` | Heap allocation | COMPILE ERROR unless allocator provided |
-| `String` (growable) | Heap allocation | COMPILE ERROR unless allocator provided |
+| `Array<T>` (growable) | Heap allocation via libc malloc | Compile error unless `.in(myAllocator)` provided |
+| `Map<K, V>` | Heap allocation | Compile error unless allocator provided |
+| `String` (growable) | Heap allocation | Compile error unless allocator provided |
 | `Fixed<T>` | Stack allocation | Always works (no heap needed) |
-| `print()` / `println()` | libc stdio | COMPILE ERROR unless `runtime.setStdout(myWriter)` |
-| `background` (spawn task) | Runtime scheduler | COMPILE ERROR unless `runtime.setScheduler(myScheduler)` |
-| `wait` (I/O suspension) | Runtime suspension | COMPILE ERROR unless scheduler provided |
-| Default panic handler | Prints stack + exits | COMPILE ERROR unless `runtime.setPanicHandler(myHandler)` |
-| Auto-`Arc` (cross-thread shared state) | Standard atomic refcount | COMPILE ERROR unless allocator + thread primitives |
+| `print()` / `println()` | libc stdio | Compile error unless `runtime.setStdout(myWriter)` |
+| `background` (spawn task) | Runtime scheduler | Compile error unless `runtime.setScheduler(myScheduler)` |
+| `wait` (I/O suspension) | Runtime suspension | Compile error unless scheduler provided |
+| Default panic handler | Prints stack + exits | Compile error unless `runtime.setPanicHandler(myHandler)` |
+| Auto-`Arc` (cross-thread shared state) | Standard atomic refcount | Compile error unless allocator + thread primitives |
 | `arena {}` blocks | Compiler-managed scratchpad | Always works (uses user-provided allocator if no default) |
 
-`Fixed<T>`, primitive math, control flow, function calls, `shape` declarations, and value semantics all work in `--kernel` mode — they don't depend on the runtime.
+`Fixed<T>`, primitive math, control flow, function calls, `shape` declarations and value semantics work in `--kernel` mode because they do not depend on the runtime.
 
 ---
 
 ## Plug-in runtime architecture
 
-The user provides custom primitives via runtime-injection APIs (these are stdlib functions in `--kernel` mode):
+The user provides custom primitives through runtime-injection functions (stdlib functions in `--kernel` mode):
 
 ```ynz
 // Custom kernel allocator
-runtime.setAllocator(MyKernelAllocator)
+runtime.setAllocator(myKernelAllocator)
 
 // Custom output (e.g., serial port, UART)
-runtime.setStdout(MySerialWriter)
+runtime.setStdout(mySerialWriter)
 
 // Custom panic handler
 runtime.setPanicHandler((info: PanicInfo) -> Nothing {
@@ -81,20 +71,20 @@ runtime.setPanicHandler((info: PanicInfo) -> Nothing {
 })
 
 // Once configured, normal Yinz code works
-let buffer: Array<Int> = []              // uses MyKernelAllocator
-println("kernel booting")              // uses MySerialWriter
+let buffer: Array<Int> = []              // uses myKernelAllocator
+print(`kernel booting`)                  // uses mySerialWriter
 ```
 
-The runtime-injection APIs are themselves stdlib items — they're heap-free (they just store function pointers in known locations the compiler-emitted code references).
+The injection functions are heap-free: they store function pointers in known locations that compiler-emitted code references.
 
 ---
 
 ## Compile-error format for blocked features
 
-Following Golden Rule 3's three-part format:
+Every kernel-mode error follows Golden Rule 3's three parts (what, what instead, why):
 
 ```
-let buffer = Array<Int>()
+let buffer: Array<Int> = []
 // COMPILE ERROR: Array<T> requires a heap allocator — not available in --kernel mode.
 //
 //   Use Fixed<T, N> for stack-allocated storage with a compile-time-known size,
@@ -106,58 +96,38 @@ let buffer = Array<Int>()
 //   for exactly this scenario. See docs/internal/implementation/IMP-no-runtime-mode.md.
 ```
 
-Every kernel-mode error MUST follow this format. The error is also a teaching moment for kernel devs — they probably haven't seen Yinz's allocator-injection pattern before.
-
 ---
 
-## Forward-compatibility for v0.1-v0.2 features
+## Runtime statement for every new feature
 
-Every new feature states what it needs at runtime and whether it works in the no-runtime `--kernel` mode.
+Every new feature states what it needs at runtime and whether it works in `--kernel` mode, so the `--kernel` work never analyzes a feature after the fact.
 
-Examples:
-
-- `shape` declarations (M4): runtime-independent. Always works in `--kernel`.
-- `Array<T>` (M5): requires allocator. `--kernel` requires explicit `.in(allocator)` parameter on every construction.
-- `errors` keyword (M7): runtime-independent (just type-system flow). Always works.
-- `background` task spawning (M8 parsing-only, v0.2 implementation): requires scheduler. `--kernel` requires custom scheduler injection.
-
-A feature that lands without this statement forces the v0.3 `--kernel` work to analyze it retroactively.
+- `shape` declarations: runtime-independent; always work in `--kernel`.
+- `Array<T>`: requires an allocator; `--kernel` requires an explicit `.in(allocator)` on every construction.
+- `errors` keyword: runtime-independent (type-system flow only); always works.
+- `background` task spawning: requires a scheduler; `--kernel` requires custom scheduler injection.
 
 ---
 
 ## Target audiences
 
-This isn't just for hobbyists wanting to write a toy OS. Real Yinz `--kernel` users:
+- **Embedded firmware**: IoT devices, automotive ECUs, sensor controllers.
+- **Kernel modules**: drivers and utilities running in kernel space.
+- **Bootloaders**: early-boot code that runs before any OS.
+- **Safety-critical systems**: avionics, medical devices, industrial control.
+- **Aerospace**: deterministic memory layout and no allocation in the critical path.
 
-- **Embedded firmware** — IoT devices, automotive ECUs, sensor controllers
-- **Kernel modules** — Linux kernel drivers, Yinz-rewritten Unix utilities running in kernel space
-- **Bootloaders** — early-boot code that runs before any OS
-- **Safety-critical systems** — avionics, medical devices, industrial control
-- **Aerospace** — NASA-grade software where deterministic memory layout and no-allocation-in-critical-path matter
-
-Yinz's combination of memory safety + ownership + zero-cost abstractions + custom allocator support hits a niche Rust already serves but with a friendlier learning curve. Long-term: position Yinz as "Rust for embedded systems" with better ergonomics.
+Formal verification (for example "this function never allocates after initialization") is a v3+ research project outside `--kernel`. `--kernel` is its prerequisite, because verification needs controlled allocation and runtime dependencies. Tracked in the "Parking Lot" of [`docs/internal/scratchpad/SCRATCH-future-designs-index.md`](../scratchpad/SCRATCH-future-designs-index.md).
 
 ---
 
-## Beyond `--kernel`: formal verification
+## Open questions
 
-Some of these target audiences (NASA, avionics) need MORE than `--kernel` — they need formal verification of properties like "this function never allocates after initialization" or "this function terminates within N cycles."
-
-Formal verification is a v3+ research project, not in scope for `--kernel` mode itself. But `--kernel` mode is a prerequisite: without controlling memory allocation and runtime dependencies, formal verification is much harder. Adding `--kernel` now makes the formal-verification step tractable later.
-
-See [`docs/internal/scratchpad/SCRATCH-future-designs-index.md`](../scratchpad/SCRATCH-future-designs-index.md) "Parking Lot" section for formal verification.
-
----
-
-## v0.3 Implementation notes
-
-The v0.3 milestone plan must address:
-
-- Exact flag name: `--kernel` vs `--bare` vs `--no-runtime`. Probably `--kernel` since that's what users searching for "Yinz embedded" will type.
-- Runtime-injection API design: function pointers? Trait-like contracts? Global static-init?
-- Cross-compilation targets: what triples does `--kernel` mode support? ARM Cortex-M? RISC-V? Custom MMIO platforms?
-- Binary size: kernel binaries need to be SMALL. What's the no-runtime binary size baseline?
-- Test infrastructure: how do we test `--kernel` mode in CI? QEMU? Real hardware?
+- Exact flag name: `--kernel`, `--bare` or `--no-runtime`.
+- Runtime-injection API shape: function pointers, contracts, or global static initialization.
+- Cross-compilation targets: which target triples `--kernel` supports (ARM Cortex-M, RISC-V, custom MMIO platforms).
+- Binary size: the no-runtime binary size baseline.
+- Test infrastructure: how CI tests `--kernel` (QEMU, real hardware).
 
 ---
 
@@ -166,4 +136,3 @@ The v0.3 milestone plan must address:
 - [`docs/internal/implementation/IMP-no-function-coloring.md`](IMP-no-function-coloring.md) (background/wait require the scheduler, which is disabled in kernel mode unless custom-provided)
 - [`docs/internal/scratchpad/SCRATCH-future-arena.md`](../scratchpad/SCRATCH-future-arena.md) (arenas work in kernel mode with user-provided base allocator)
 - [`docs/internal/scratchpad/SCRATCH-future-packages.md`](../scratchpad/SCRATCH-future-packages.md) (binary metadata includes per-item kernel-mode compatibility flags)
-- [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](../../../.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) "Forward-Compatibility Constraints" (Phase 5 locks the requirement)

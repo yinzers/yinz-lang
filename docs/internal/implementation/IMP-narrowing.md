@@ -38,8 +38,8 @@ Full rules table — every form the compiler tracks in M6.
 | `if (m.exists() \|\| other) { m.value }` | **NO** — `\|\|` does NOT propagate single-branch narrowing | See "||  non-propagation" below. M6 adds the locked diagnostic. |
 | `if (a.exists() && b.exists()) { a.value; b.value }` | YES — independent flags per binding | Each `Maybe` binding gets its own narrowing fact. |
 | `if (m.exists()) { return ... } m.value` | YES — early-return narrowing (M6) | After the `if` block whose then-branch always exits via a recognized exit form, `m` is proven to be `T` for the rest of the enclosing block. |
-| `if (m.exists()) { panic("...") } m.value` | YES — `panic` is a recognized exit form | Same as `return`. |
-| `if (m.exists()) { loop { ... } } m.value` | YES — infinite loop is a recognized exit form | Only `loop { }` with no `break` — the compiler proves no exit from the loop body. |
+| `if (m.exists()) { panic("...") } m.value` | **Designed, not built** — only `return` is a recognized exit today | `panic` has no registry entry and the exit check (`return_paths.rs`) counts only `return`. Designed to behave like `return`. |
+| `if (m.exists()) { loop { ... } } m.value` | **Designed, not built** — only `return` is a recognized exit today | Designed: only `loop { }` with no `break` counts, because the compiler proves no exit from the body. |
 | `if (m.exists()) { someFn() } m.value` | **NO** — non-recognized exit | `someFn()` returning `Nothing` does NOT prove exit. See "recognized-exit set" below. |
 | `if (x is Foo) { x.bar }` (x: `Foo \| Bar`) | YES — `x` is narrowed to `Foo` inside then-block | M6 union narrowing. |
 | `if (!(x is Foo)) { ... } else { x.bar }` (x: `Foo \| Bar`) | YES — `x` is narrowed to `Foo` inside else-block | Negative union narrowing. |
@@ -56,10 +56,13 @@ Full rules table — every form the compiler tracks in M6.
 
 ## Recognized-Exit Set for Early-Return Narrowing
 
-**LOCKED in M6** — only these forms count as a recognized exit for early-return narrowing:
+**Built:** only `return` counts as a recognized exit for early-return narrowing (`crates/ynz-typeck/src/return_paths.rs`):
 
 1. `return <expr>` — explicit return with a value
 2. `return` — bare return (in a `Nothing`-returning function)
+
+**Designed, not built** (they are meant to join the set; today they do not count):
+
 3. `panic(msg)` — diverges; never returns
 4. `loop { /* body with no `break` */ }` — infinite loop; never exits
 
@@ -76,10 +79,9 @@ Rationale: the compiler can only prove divergence for constructs whose semantics
 >
 > **WHAT INSTEAD**: Use a recognized exit form in the if block:
 >   1. `if (!m.exists()) { return }` — bare return
->   2. `if (!m.exists()) { panic("unreachable") }` — explicit panic
 >   or restructure to: `if (m.exists()) { use(m.value) }`
 >
-> **WHY**: Only `return`, `panic`, and infinite loops are proven to never continue past the if-block. Other calls — even ones returning `Nothing` — might return normally, leaving `m` still possibly-none in the tail.
+> **WHY**: Only `return` is proven to never continue past the if-block. Other calls — even ones returning `Nothing` — might return normally, leaving `m` still possibly-none in the tail.
 
 ---
 
@@ -187,29 +189,29 @@ M7 extends the narrowing table with `errors`-capable values (parallel to `Maybe<
 | `if (e.failed()) { e.message }` | YES — inside then-block, `e` is narrowed to "failed" state; `.message` / `.suggestions` / `.trace` / `.source` accessible | Bread-and-butter case. |
 | `if (!e.failed()) { ... } else { e.message }` | YES — `e` is narrowed to "failed" state in else-block | Negative form. |
 | `if (e.failed()) { return ... } use(e)` | YES — early-return narrowing: after the if, `e` is narrowed to its success type | Same early-return machinery as `Maybe<T>`. |
-| `if (e.failed()) { panic(...) } use(e)` | YES — panic is a recognized exit form | Parallel to `Maybe<T>` rule. |
+| `if (e.failed()) { panic(...) } use(e)` | **Designed, not built** — only `return` is a recognized exit today | Parallel to `Maybe<T>` rule; see the recognized-exit set above. |
 | `let result = e; result.failed()` | YES for `result` (not `e`) — the narrowing tracks the binding | Assignment to a new binding re-tracks. |
 | `use(e)` without prior `.failed()` check (inside `errors` fn) | AUTO-PROPAGATION — compiler emits early return at this point; `e` is narrowed to success type after | The "eager feel" of the hybrid model. |
 | `use(e)` without prior `.failed()` check (outside `errors` fn) | COMPILE ERROR — must handle | Forces `.or()`, `.failed()` check, or caller `errors`. |
-| `if (e.failed()) { ... }` AFTER `use(e)` | COMPILE ERROR — check-after-use | `e` was already narrowed to success type at `use(e)`; `.failed()` no longer applies. Named diagnostic: "check-after-use". |
+| `if (e.failed()) { ... }` AFTER `use(e)` | **Designed, not built** — designed as a COMPILE ERROR, "check-after-use"; no diagnostic is emitted today | `e` was already narrowed to success type at `use(e)`; `.failed()` no longer applies. The checker records the propagated binding (`errors_consumed` in `check.rs`) but never reads it to report. |
 | `e.message` without `.failed()` check in scope | COMPILE ERROR — `.message` requires "failed" narrowing proof | Access to `.message`/`.suggestions`/`.trace`/`.source` gated by narrowing. |
 | `if (e.failed() && other) { e.message }` | YES — `&&` propagates; inside body both facts hold | Same as `Maybe<T>` `&&` rule. |
 | `if (e.failed() \|\| other) { e.message }` | **NO** — `\|\|` does NOT propagate single-branch narrowing | Same as `Maybe<T>` `\|\|` rule. Same diagnostic wording adapted for `errors`. |
 | `e = newResult; use(e)` | AUTO-PROPAGATION tracks the new binding | Reassignment resets the narrowing fact for `e`. |
 | `if (e.failed()) { mutatingFn(e.lend); e.message }` | **NO** — `lend` call invalidates the fact | Same rule as `Maybe<T>`. |
 | `if (e.failed()) { readFn(e.share); e.message }` | YES — `share` does NOT invalidate | Same rule as `Maybe<T>`. |
-| `for x in fallibleIter` (inside `errors` fn) | AUTO-PROPAGATION per step — each step's failure auto-propagates to caller | `FallibleIterable` for-loop is syntactic sugar over `errors`-capable `next()` calls. |
+| `for x in fallibleIter` (inside `errors` fn; `FallibleIterable` is designed, not built) | AUTO-PROPAGATION per step — each step's failure auto-propagates to caller | `FallibleIterable` for-loop is syntactic sugar over `errors`-capable `next()` calls. |
 | `for x in fallibleIter` (outside `errors` fn without adapter) | COMPILE ERROR — fallible for-loop in non-errors context | Must use `.orSkipFailures()` / `.withErrors()` adapter OR mark caller `errors`. |
 
 **Parallel to `Maybe<T>`:** the errors-capable narrowing is the same machinery, second flavor. The `NarrowingTable` stores a fact-per-binding; for `Maybe<T>` the fact is "exists"; for `errors`-capable the fact is "not-failed (success) / failed / unknown (pre-check)". The early-return narrowing algorithm is identical — only the fact type changes.
 
-**"Check-after-use" diagnostic (exact wording):**
+**"Check-after-use" diagnostic (designed wording; not emitted today):**
 
 > **WHAT**: `.failed()` cannot be called here. The binding `raw` was first used as a plain value on line N (in `parseConfig(raw)`). After that first use, the compiler treated `raw` as its success type.
 >
 > **WHAT INSTEAD**: Move the `.failed()` check above the first use:
 > ```ynz
-> let raw = readFile("config.txt")
+> let raw = readFile(`config.txt`)
 > if (raw.failed()) { return Config.default() }
 > let parsed = parseConfig(raw)
 > ```

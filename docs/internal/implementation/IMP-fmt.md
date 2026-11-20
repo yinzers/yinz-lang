@@ -14,7 +14,7 @@ metadata:
 # `ynz fmt` — Formatter Architecture
 
 > Spec counterpart: _none yet (formatter is tooling; no language spec needed)_
-> Related: [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) (format-on-save wiring lands in v0.2-M5), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md) (registry consumer)
+> Related: [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) (format-on-save wiring, shipped in v0.2-M5), [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md) (registry consumer)
 
 ---
 
@@ -80,7 +80,7 @@ pub enum FmtError {
 }
 ```
 
-`format(source)` is the only function v0.2-M5's LSP `textDocument/formatting` handler needs. It computes a single full-file `TextEdit` (replace `[0..end]` with the formatted output) and returns it. No range support in M3 — that's explicitly deferred to M5 if proven necessary.
+`format(source)` is the only function the LSP `textDocument/formatting` handler needs. It computes a single full-file `TextEdit` (replace `[0..end]` with the formatted output) and returns it. There is no range support.
 
 **Semver stability**: the API above is frozen at the v0.2-M3 tag. Backwards-incompatible changes require a major-version bump once v0.2.0 ships.
 
@@ -134,7 +134,7 @@ pub enum CommentKind {
 }
 ```
 
-**Comment attachment rules** (locked at plan time — see [`.claude/planning/done/2026-05-20-v0-2-m3-fmt/plan.md`](../../../.claude/planning/done/2026-05-20-v0-2-m3-fmt/plan.md) Phase 3 spec table for the full 15-case matrix):
+**Comment attachment rules** (the main cases):
 
 - **Leading**: a `//` block whose end-byte is immediately before a decl (separated by whitespace + ≤1 blank line) attaches to that decl and moves with it.
 - **Inline**: a `//` comment on the same line as code, after the code — stays on that line (2 spaces before `//`).
@@ -147,30 +147,9 @@ Doc comments (`///`) are handled separately: the AST already carries them; the w
 
 ## Algorithm Choice
 
-**Locked: Prettier-style (full AST reflow).**
+**Decision in force: full AST reflow.** Original whitespace is discarded, and the same program always formats to the same output, whatever layout the author wrote (the "one canonical output" goal above).
 
-Both spikes passed all numeric gates. Prettier-style was chosen for canonicality — a requirement the LOC tie-break cannot override.
-
-### Decision Evidence
-
-**Gate 1 (idempotency)**: both spikes produced byte-identical output over 5 iterations on all 5 fixtures (10/10 fixture × style combinations). Both algorithms converge.
-
-**Gate 2 (comment placement)**: both spikes scored 50/50 = 100% exact placement on 50 curated `//` comments across the fixture suite (> 95% gate threshold).
-
-**Tie-break (LOC)**: rustfmt slightly smaller (376 vs 421 LOC, 10.7% difference — just outside the 10% default-to-prettier window). Nominally favors rustfmt.
-
-**Canonicality override**: the LOC tie-break was designed for genuinely equivalent approaches. These approaches are NOT equivalent on the key metric that matters for Yinz:
-
-| Scenario | Prettier output | Rustfmt output |
-|----------|-----------------|----------------|
-| 103-char signature written on one line | Multi-line (>100 break) | Single-line (original preserved) |
-| Same signature written multi-line by a different author | Multi-line | Multi-line |
-
-Same program, same formatter, **two different outputs** under rustfmt. This violates Yinz's foundational "zero config, one canonical output" mandate. The tie-break is irrelevant when one approach violates the design requirement.
-
-**Prettier chosen.**
-
-### Algorithm Description (Locked)
+### Algorithm Description
 
 Prettier-style: full AST reflow. Original whitespace is discarded. Output is a pure function of the AST.
 
@@ -178,17 +157,8 @@ Prettier-style: full AST reflow. Original whitespace is discarded. Output is a p
 - **Body statements**: 2-space indent. Each statement on its own line.
 - **Comment attachment**: leading comments (within 2 lines above a stmt, no blank line between) stay with their stmt. Inline comments (on the same source line as code) emit inline with 2 spaces between code and `//`.
 - **Backtick strings**: opaque units. Never re-flowed. Reconstructed from AST parts (preserves byte content of all interpolated expressions).
-- **Blank lines**: ≤1 blank line between top-level declarations. Preserved from original if user had 1+; suppressed if user had 0. **Inside function bodies (between statements): blank lines are NOT preserved.** The canonical form produces zero blank lines between statements. Rationale: top-level blank lines are logical section separators (between exported functions, shapes, etc.) and are meaningful to preserve; blank lines inside function bodies are stylistic whitespace-preferences that vary per developer and would create non-canonical output. The formatter's job is one canonical form; inside bodies, that form has no inter-statement blanks.
+- **Blank lines**: ≤1 blank line between top-level declarations. Preserved from original if user had 1+; suppressed if user had 0. **Inside function bodies (between statements): blank lines are NOT preserved.** The canonical form produces zero blank lines between statements. Top-level blank lines separate logical sections, so they are kept; blank lines inside bodies are personal style, so the canonical form has none.
 - **Trailing newline**: always added if missing.
-
-### Why This Was Empirically Verified (Not Assumed)
-
-The Phase 1 spike built both algorithms (~400 LOC each) against a representative fixture suite and ran the decision gates numerically. The canonicality argument was known in advance (it's a first-principles consequence of the design mandate), but the spike produced the empirical evidence:
-1. Gate 1 proves both approaches CAN achieve idempotency — neither has an inherent idempotency deficit on Yinz-sized programs.
-2. Gate 2 proves comment placement is achievable with either approach — the comment-attachment algorithm design in Phase 3 is the bottleneck, not the choice of algorithm.
-3. The only observable difference is the canonicality property — which is precisely what the algorithm choice affects.
-
-Future re-litigation of this decision would need to present a Yinz use case where full AST reflow produces an unacceptable user experience AND where preserving user intent is essential. No such case exists under Yinz's "zero config" constraint.
 
 ---
 
@@ -212,7 +182,7 @@ The formatter consumes `ynz-registry` (crate `crates/ynz-registry`) for:
 - Banned-jargon list — any diagnostic text the formatter emits is checked against `banned_jargon()` in CI.
 - Reserved-identifier protection — `deferred_language_feature_lookup(name)` guards against the formatter ever emitting an identifier that collides with a deferred feature name.
 
-No new registry entries are added in M3 (formatter is a consumer-only milestone).
+The formatter is a registry consumer only; it adds no registry entries.
 
 ---
 
@@ -245,8 +215,8 @@ The tempfile MUST be in the same directory as the target (not `/tmp/`) to avoid 
 
 ## Future Proofing
 
-- **`textDocument/formatting` LSP wiring** — deferred to v0.2-M5. The library API (`format(source: &str) -> Result<String, FmtError>`) is the only hook M5 needs.
-- **`format_range(source, range)`** — deferred to v0.2-M5 if proven necessary. Range formatting is hard; whole-file is enough for format-on-save.
+- **`textDocument/formatting` LSP wiring** — shipped in v0.2-M5; the LSP calls the library API (`format(source: &str) -> Result<String, FmtError>`).
+- **`format_range(source, range)`** — not built; whole-file formatting is what format-on-save uses.
 - **Embedded SQL formatting** — deferred to database stdlib milestone (v0.5+).
 - **Embedded Markdown / regex / JSON** — not designed; v1+ at earliest.
 - **Import sorting** — belongs to Tier 3 lint suggestions (v0.4), not the formatter.
@@ -254,59 +224,11 @@ The tempfile MUST be in the same directory as the target (not `/tmp/`) to avoid 
 
 ---
 
-## Algorithm Spike Measurements (v0.2-M3 Phase 1)
-
-Empirical evidence from the Phase 1 spike. Full raw data in `crates/ynz-fmt/_spike/MEASUREMENTS.md` (preserved in git history; deleted after Phase 2 supersedes the spike).
-
-### Fixture Suite
-
-| Fixture | Comments |
-|---------|---------|
-| `long_signature.ynz` | 6 |
-| `nested_expr.ynz` | 6 |
-| `comment_heavy.ynz` | 17 |
-| `multiline_string.ynz` | 8 |
-| `shape_decl.ynz` | 13 |
-| **Total** | **50** |
-
-### Gate 1: Idempotency (5 iterations, byte-identical check)
-
-All 10 fixture × style combinations: PASS.
-
-### Gate 2: Comment Placement (50 comments, exact/near/wrong)
-
-Both spikes: 50/50 = 100% exact placement.
-
-### Tie-break
-
-LOC: prettier 421 / rustfmt 376 (10.7% difference — nominally favors rustfmt). Overridden by canonicality argument (see Algorithm Choice above).
-
-### Key Output Difference
-
-`long_signature.ynz` has a 103-char function signature. Prettier breaks it to multi-line (>100 threshold). Rustfmt preserves single-line (original was single-line). Full diff:
-
-```diff
-- function computeScore(
--   name: String,
--   health: Int,
--   attack: Int,
--   defense: Int,
--   speed: Int,
--   level: Int
-- ) -> Int {
-+ function computeScore(name: String, health: Int, attack: Int, defense: Int, speed: Int, level: Int) -> Int {
-```
-
-Prettier output (top) is canonical for any user. Rustfmt output (bottom) is only canonical if the original was single-line — a different user writing the same function multi-line would get the top form.
-
----
-
 ## Cross-References
 
 - [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md) — Rust compiler stack
 - [`docs/internal/implementation/IMP-feature-registry.md`](IMP-feature-registry.md) — registry schema + carve-out policy (formatter is consumer-only)
-- [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) — format-on-save wiring (textDocument/formatting deferred to v0.2-M5)
-- [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) — muted-hint protocol (consumption deferred to v0.2-M5)
-- [`.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`](../../../.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md) — parent roadmap
+- [`docs/internal/implementation/IMP-lsp.md`](IMP-lsp.md) — format-on-save wiring (`textDocument/formatting`, shipped in v0.2-M5)
+- [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) — muted-hint protocol
 - `crates/ynz-registry/src/lib.rs` — registry consumer adapters
 - `crates/ynz-parser/src/lexer.rs` — comment-handling refactor point

@@ -1,10 +1,10 @@
 ---
 name: "REF-performance"
-description: "Yinz is fast. Here's why."
+description: "What Yinz does for speed without you asking: native code, no garbage collector, inline fields, fixed-size lists and automatic layout choices."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,66 +13,76 @@ metadata:
 
 # Performance
 
-Yinz is fast. Here's why.
+Yinz is fast by default. This page lists what the compiler does for you and what you write to get it.
 
 ---
 
-## No interpreter, no JIT
+## Native code
 
-Yinz compiles ahead of time to native machine code via LLVM. The compiler has unlimited time to optimize — there's no overhead from an interpreter or just-in-time compiler running alongside your program.
+Yinz compiles ahead of time to native machine code. There is no interpreter and no just-in-time compiler running next to your program.
 
 ---
 
 ## No garbage collector
 
-Memory is freed when the owner goes out of scope. Ownership is tracked at compile time — no background tracking, no pause-and-scan, no 2-3x memory overhead from a runtime GC. Memory management is deterministic and free.
+Memory is freed when its owner goes out of scope. The compiler works out who owns each value, so the program does no background cleanup and has no pauses.
 
 ---
 
 ## Flat memory layout
 
-When you define a `type`, fields are laid out contiguous in memory. Nested types are embedded inline — not scattered as pointers to other parts of the heap:
+When you declare a `shape`, its fields sit side by side in memory. A shape inside another shape is stored inline, not as a link to somewhere else:
 
-```
-shape Position { x: Number, y: Number }
-shape Player { name: String, health: Number, position: Position }
+```ynz
+shape Position {
+  x: Float
+  y: Float
+}
+
+shape Player {
+  name: String
+  health: Int
+  position: Position
+}
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Ana`, health: 100, position: { x: 1.5, y: 2.5 } }
+  print(player.position.x.toString())
+}
 ```
 
-`position` lives directly inside `Player` — not a pointer to somewhere else. When you access `player.position.x`, the CPU finds it in the same cache line. On data-heavy workloads, this is 10-50x faster than pointer-chasing.
+`position` lives directly inside `Player`. Reading `player.position.x` reads memory right next to the rest of the `Player`.
 
 ---
 
-## Efficiency first by default
+## Fast choices are the default
 
-`Fixed<T>` arrays are stack-allocated and size-locked. Stack allocation is faster than heap allocation. The default path — the one you reach without thinking — is the fast path.
+`Fixed<T>` lists are stored on the stack and their size is locked at creation. Stack storage is faster than heap storage.
 
-Typed objects (`type Player`) are faster than maps (`Map<String, Number>`) because fields are at fixed offsets — direct access. Maps use hash tables — slower.
+A shape is faster than a `Map<String, Int>` for values whose names you know when you write the code. A shape field is read at a fixed position. A map looks each key up while the program runs.
 
-A developer who never thinks about performance automatically writes fast code.
+```ynz
+shape Stats {
+  health: Int
+  attack: Int
+  defense: Int
+}
+
+function entrypoint() -> Nothing {
+  let stats: Stats = { health: 100, attack: 12, defense: 8 }
+  print(stats.attack.toString())
+}
+```
 
 ---
 
-## Compiler operation fusion
+## What the compiler does for you
 
-Step-by-step operations on collections get fused by the compiler into a single optimized pass:
+- **Types:** you leave out annotations the compiler can work out from the value.
+- **Fixed lists:** an `Array<T>` that never grows is stored as `Fixed<T>`.
+- **Constants:** a `let` that is never reassigned is treated as `const`.
+- **Memory layout:** nested shapes are stored inline. A large `Array` of shape values whose loops read at most two fields is stored as one block of memory per field.
+- **Allocation:** values live on the stack when they can and on the heap only when they must.
+- **Ownership:** memory is freed exactly when its owner is done with it.
 
-```
-let active = players.filter(p => p.health > 0)   // step 1
-let ranked = active.sort(p => p.health, desc)    // step 2
-let top = ranked.limit(10)                       // step 3
-let names = top.map(p => p.name)                 // step 4
-```
-
-The compiler sees that each intermediate result is only used by the next step and fuses all four into a single loop with zero intermediate allocations. You write readable steps; the compiler writes fast code.
-
----
-
-## What you get for free
-
-The compiler handles all of this automatically — you don't have to think about it:
-
-- Type inference (you skip obvious annotations; the compiler fills them in)
-- Operation fusion (sequential collection operations become single passes)
-- Memory layout (nested types embedded inline, not as pointers)
-- Allocation strategy (stack when possible, heap only when needed)
-- Ownership tracking (memory freed exactly when it's done, no GC needed)
+The IDE shows these choices as hints. See [REF-ide-hints.md](REF-ide-hints.md) and [REF-linting.md](REF-linting.md).

@@ -19,10 +19,20 @@ Functions are blocks of code that do one job and return a result.
 
 ## Defining a function
 
-```
+```ynz
 function add(a: Number, b: Number) -> Number {
   return a + b
 }
+
+function entrypoint() -> Nothing {
+  print(add(2.0, 3.0))
+}
+```
+
+Output:
+
+```text
+5.0
 ```
 
 Every function:
@@ -37,10 +47,27 @@ Every function:
 
 The compiler enforces that every code path actually returns the declared type:
 
-```
+```ynz
+shape Player {
+  name: String
+  score: Number
+  health: Number
+}
+
 function getScore(share player: Player) -> Number {
   return player.score
 }
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Ana`, score: 120.0, health: 100.0 }
+  print(getScore(player))
+}
+```
+
+Output:
+
+```text
+120.0
 ```
 
 ---
@@ -49,40 +76,76 @@ function getScore(share player: Player) -> Number {
 
 If a function does something but gives nothing back, say `-> Nothing`:
 
-```
-function logMessage(share msg: String) -> Nothing {
-  print(msg)
+```ynz
+function logMessage(share message: String) -> Nothing {
+  print(message)
 }
+
+function entrypoint() -> Nothing {
+  logMessage(`Game started`)
+}
+```
+
+Output:
+
+```text
+Game started
 ```
 
 `Nothing` reads like English. The function runs and returns... nothing.
 
 Using `return` inside a `Nothing` function is fine for early exits:
 
-```
+```ynz
+shape Player {
+  name: String
+  health: Number
+}
+
 function processPlayer(lend player: Player) -> Nothing {
-  if (player.health <= 0) {
+  if (player.health <= 0.0) {
     return    // early exit — done
   }
-  player.health = player.health - 10
+  player.health = player.health - 10.0
 }
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Ana`, health: 100.0 }
+  processPlayer(player)
+  print(player.health)
+}
+```
+
+Output:
+
+```text
+90.0
 ```
 
 Returning a value from a `Nothing` function is a compile error:
 
-```
-function logMessage(share msg: String) -> Nothing {
-  return msg
-  // COMPILE ERROR: logMessage is declared to return `Nothing` — it cannot return a value.
-  //
-  //   Either remove the return value:
-  //     return
-  //   Or change the function's return type:
-  //     function logMessage(share msg: String) -> String { return msg }
-  //
-  //   Why: -> Nothing means the function does its work and returns no value
-  //        to the caller. Returning a value would contradict that promise.
+```ynz
+function logMessage(share message: String) -> Nothing {
+  return message
 }
+
+function entrypoint() -> Nothing {
+  logMessage(`Game started`)
+}
+```
+
+The compiler stops with:
+
+```text
+Error: `return` with a value in a `-> Nothing` function.
+   ╭─[ main.ynz:2:10 ]
+   │
+ 2 │   return message
+   │          ───┬───
+   │             ╰───── Remove the value: write `return` with no expression.
+   │
+   │ Note: Functions declared `-> Nothing` do not produce a value. A `return` inside them ends the function — no value allowed.
+───╯
 ```
 
 ---
@@ -91,73 +154,83 @@ function logMessage(share msg: String) -> Nothing {
 
 Every parameter says how the function uses the value it receives. See [Ownership](REF-ownership.md) for the full picture.
 
-```
-function greet(share name: String) -> Nothing      // just reading name
-function rename(lend player: Player) -> Nothing    // going to modify player
-function consume(give data: Data) -> Nothing       // taking ownership
-```
-
-The caller never types the ownership modifier — the compiler infers it from the function's signature. The IDE shows the inferred modifier as muted text:
-
 ```ynz
-greet(playerName)    // IDE shows muted "share" — read-only access inferred
-rename(player)       // IDE shows muted "lend" (red-tinted) — function modifies player
-consume(data)        // IDE shows muted "give" (red-tinted) — function takes ownership
+shape Player {
+  name: String
+  health: Number
+}
+
+shape Data {
+  label: String
+}
+
+function greet(share name: String) -> Nothing {      // just reading name
+  print(`Hello, ${name}`)
+}
+
+function rename(lend player: Player) -> Nothing {    // going to modify player
+  player.name = `Ana B`
+}
+
+function consume(give data: Data) -> Nothing {       // taking ownership
+  print(data.label)
+}
+
+function entrypoint() -> Nothing {
+  let playerName = `Ana`
+  let player: Player = { name: `Ana`, health: 100.0 }
+  let data: Data = { label: `save file` }
+  greet(playerName)    // IDE shows muted "share" — read-only access inferred
+  rename(player)       // IDE shows muted "lend" (red-tinted) — function modifies player
+  consume(data)        // IDE shows muted "give" (red-tinted) — function takes ownership
+  print(player.name)
+}
 ```
+
+Output:
+
+```text
+Hello, Ana
+save file
+Ana B
+```
+
+The caller never types the ownership modifier — the compiler infers it from the function's signature. The IDE shows the inferred modifier as muted text.
 
 There is no body-level syntax for `.share()` / `.lend()` / `.give()` — those modifiers live only in function signatures. See [Ownership](REF-ownership.md).
 
 ---
 
-## Arrow functions — for callbacks only
+## Every function has a name
 
-Arrow syntax is for inline callbacks passed to functions. Don't use it for standalone named functions — use `function` for those.
-
-**Simple form** — the compiler infers types from context:
-
-```
-let active = players.filter(p => p.health > 0)
-let names = players.map(p => p.name)
-```
-
-**Multi-line** — curly braces with explicit return:
-
-```
-let processed = players.map(p => {
-  let bonus = p.health * 2
-  return p.name + ": " + bonus
-})
-```
-
-**Typed form** — when the compiler needs explicit types (complex callbacks, HTTP route handlers, anywhere inference isn't enough):
-
-```
-server.get("/users", (request: Request) -> Response => {
-  let users = loadUsers()
-  return response.json(users)
-})
-```
-
-The pattern is `(params: Types) -> ReturnType => { body }` — the same shape as a named function, just `=>` where the function name would be. The `-> ReturnType` is only required when the compiler can't infer it.
-
-When to use which form:
-1. `p => expr` — when types are obvious from context
-2. `p => { ... }` — multi-line, types still inferred
-3. `(p: T) -> R => { ... }` — when the compiler asks for explicit types
+Write each function with `function` and a name. To use one function inside another, call it by name.
 
 ---
 
-## No tuples — define a type instead
+## No tuples — define a shape instead
 
-If you need to return multiple values, define a type. Named fields are always clearer than positional slots:
+If you need to return multiple values, define a shape. Named fields are always clearer than positional slots:
 
-```
+```ynz
 shape DivResult {
-  quotient: Number
-  remainder: Number
+  quotient: Int
+  remainder: Int
 }
 
-function divmod(a: Number, b: Number) -> DivResult {
+function divmod(a: Int, b: Int) -> DivResult {
   return { quotient: a / b, remainder: a % b }
 }
+
+function entrypoint() -> Nothing {
+  let result = divmod(7, 2)
+  print(result.quotient)
+  print(result.remainder)
+}
+```
+
+Output:
+
+```text
+3
+1
 ```

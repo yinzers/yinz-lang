@@ -15,29 +15,13 @@ metadata:
 
 **Cross-references**: [`.claude/rules/feature-registry.md`](../../../.claude/rules/feature-registry.md) (project rule), `crates/ynz-registry/` (the crate), [`registry/features.toml`](../../../registry/features.toml) (the data file).
 
-This document is the design rationale and schema reference for the feature registry that ships in v0.2-M1. For the project rule governing when to add entries, see [`.claude/rules/feature-registry.md`](../../../.claude/rules/feature-registry.md). For the data file itself, see [`registry/features.toml`](../../../registry/features.toml).
+This document is the schema reference and design for the feature registry. For the project rule governing when to add entries, see [`.claude/rules/feature-registry.md`](../../../.claude/rules/feature-registry.md). For the data file itself, see [`registry/features.toml`](../../../registry/features.toml).
 
 ---
 
 ## Why This Registry Exists
 
-v0.1.0 shipped with feature inventories scattered across at least 7 locations:
-
-| Location | What it holds |
-|---|---|
-| `crates/ynz-diagnostics/src/banned_jargon.rs` | 47 banned jargon words + replacements |
-| `crates/ynz-typeck/src/builtins.rs` | 16 string method names (for "did you mean" suggestions) |
-| `crates/ynz-typeck/src/intrinsics.rs` | Primitive type methods + free functions (PrimitiveIntrinsicTable) |
-| `crates/ynz-typeck/src/check.rs:3698-3707` | 7 type-attached constants (`Int.max`, `Number.epsilon`, etc.) |
-| `crates/ynz-codegen/src/emit.rs:4633-4650` | Same 7 type-attached constants (numeric values for LLVM emission) |
-| `crates/ynz-parser/src/lexer.rs:491-690` | ~50 keywords + ~20 banned declaration keywords + ~11 deferred-feature handlers |
-| [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) | Muted-hint domain catalog (design-doc-only, no runtime representation) |
-
-Adding `Int.max` in M4 P5 touched five of these locations. No tool or test enforced their consistency. When the v0.2 LSP needs to know "what keywords can autocomplete here?" or "what muted hints should I show?", it has no single place to ask.
-
-**Solution**: a TOML data file at [`registry/features.toml`](../../../registry/features.toml), parsed by `crates/ynz-registry/build.rs`, which generates typed Rust constants into `OUT_DIR/registry.rs`. Every consumer reads from this one file.
-
-**Precedent**: TypeScript's `src/compiler/diagnosticMessages.json` + `generate-diagnostics` build step. Roslyn's `Syntax.xml`. The pattern is well-established.
+The inventories of language features (keywords, banned words, built-in functions and methods, type-attached constants, deferred features, muted-hint domains, lint rules, diagnostic templates) live in one TOML data file, [`registry/features.toml`](../../../registry/features.toml). `crates/ynz-registry/build.rs` parses it and generates typed Rust constants into `OUT_DIR/registry.rs`. The lexer, type checker, code generator, diagnostics and LSP all read from that one file, so a list a user sees (autocomplete, hover, "did you mean", teaching errors) cannot drift from the list the compiler enforces. A new feature item is added to the registry first and code follows it.
 
 ---
 
@@ -311,27 +295,7 @@ design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 
 ## Deferred-Feature Catalog — Phase 5b Population Targets
 
-Every locked deferred feature documented in `design/future/*.md` gets a `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry in Phase 5b of v0.2-M1. The list below records which files map to which entry kind so reviewers can verify Phase 5b completion against this list.
-
-| `design/future/` file | Registry entry kind | Target token/name | Ships in |
-|---|---|---|---|
-| `arena.md` | `deferred_language_feature` | `scratch` (arena scope keyword) | v0.2 |
-| `auto-soa.md` | Codegen-only — no user token; no `deferred_*` entry | N/A — internal compiler optimization | v0.3+ |
-| `concurrency.md` | Covered by existing M8 keywords (`wait`, `background`) — no deferred entry | N/A — already shipped keywords | v0.2 |
-| `http-framework.md` | `deferred_stdlib_api` (RESERVED kind — zero entries in M1) | N/A — stdlib module | v0.3+ |
-| `inline-shape-types.md` | SHIPPED in v0.1-polish — no deferred entry needed | N/A | shipped |
-| `no-runtime-mode.md` | `deferred_tooling_feature` | `--kernel` flag | v0.3 |
-| `packages.md` | `deferred_tooling_feature` | binary package format reservation | v0.2 |
-| `panic-safety.md` | Covered by `errors` keyword (M7) — no deferred entry | N/A — already shipped | v0.2 |
-| `release-mode.md` | `deferred_tooling_feature` | `--release` flag | v0.4 (or a later perf-focused slot) |
-| `self-references.md` | `deferred_language_feature` | self-referential detection (compiler feature, no keyword) | v0.3+ |
-| `string-ptr-len-overhaul.md` | Compiler-internal; no user-facing token | N/A — implementation detail | TBD (v0.5+) |
-| `supervisor.md` | `deferred_stdlib_api` (RESERVED kind — zero entries in M1) | N/A — stdlib module | v0.2 |
-| `index.md` | Skip — this is the index, not a feature doc | N/A | N/A |
-
-**Phase 5b deliverable**: every row with a `deferred_language_feature` or `deferred_tooling_feature` kind gets a registry entry in [`registry/features.toml`](../../../registry/features.toml). Rows marked "N/A" or "RESERVED kind" are explicitly not added (documented here so Phase 5b reviewers know the omission is intentional). The [`docs/internal/implementation/IMP-no-function-coloring.md`](IMP-no-function-coloring.md) and [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](../scratchpad/SCRATCH-future-panic-safety.md) gaps (already shipped via M8 keywords + M7 `errors`) are documented in Phase 5b PR description.
-
-Additionally, [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) v2+ section covers: `f32`, `f64`, `i8`–`i64`, `u8`–`u64` (sized numerics — Phase 5a), `foreign` keyword (FFI), and `gpu` keyword. These get `[[deferred_language_feature]]` entries in Phase 5a (sized numerics, which have existing lexer handlers) and Phase 5b (foreign/gpu, from the design catalog).
+Every locked deferred feature that a user could try to use today gets a `[[deferred_language_feature]]` (language) or `[[deferred_tooling_feature]]` (CLI flag, tooling) entry, so the compiler answers it with a teaching error naming what to do instead. The entry's `design_doc` field points at the IMP or SCRATCH doc holding the design. Features that are compiler-internal (auto-SoA, the string pointer-and-length layout) or already shipped as keywords (`wait`, `background`, `errors`) get no entry. The `[[deferred_stdlib_api]]` kind is reserved and holds no entries. To see the current set, read `registry/features.toml`.
 
 ---
 
@@ -398,7 +362,7 @@ If a lookup table is hit on every token/expression/statement in a hot loop AND p
 - A corresponding registry entry still exists (the registry remains the source of truth; the carve-out is a performance mirror).
 - A consistency test in `crates/ynz-registry/tests/` asserting the carve-out list is a subset of the registry.
 
-**Expected frequency**: none in v0.1-scope code. All existing lookups are compile-time constants over small lists — the overhead is unmeasurable.
+No carve-out of this kind exists today: every lookup is a compile-time constant over a small list.
 
 ### 3. Compiler-internal implementation details with no user-facing surface
 
@@ -447,4 +411,4 @@ The transition is incremental: TOML stays, build script is rewritten once, consu
 4. Emits `OUT_DIR/registry.rs` — a valid Rust source file containing `pub static` arrays of the typed structs.
 5. Declares `cargo:rerun-if-changed=../../registry/features.toml` so incremental builds skip the script when the TOML hasn't changed.
 
-**Incremental build guarantee**: touching ANY file other than [`registry/features.toml`](../../../registry/features.toml) does NOT re-run `build.rs`. Verified by the Phase 1 acceptance criterion: touch a random crate source file → confirm `ynz-registry` build script does not re-run.
+**Incremental build guarantee**: touching any file other than [`registry/features.toml`](../../../registry/features.toml) does not re-run `build.rs`.

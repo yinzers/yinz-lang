@@ -1,7 +1,6 @@
 // v0.3 Concurrency Hardening — FRAGO 002 planned-RED gate (Phase 3 step 3.0,
-// dispatch hardening-p3.0-20260906-a1). Plan
-// `.claude/planning/active/2026-09-04-v0-3-concurrency-hardening/plan.md`; findings
-// `.claude/planning/active/2026-09-04-v0-3-concurrency-hardening/audit.md` FRAGO 002.
+// dispatch hardening-p3.0-20260906-a1). The v0.3 concurrency-hardening plan and its
+// FRAGO 002 findings are recorded in git history (`git log --grep=FRAGO`).
 //
 // These are the five probe programs FRAGO 002 built and verified
 // (`target/p2b-probe/`, gitignored — never committed there) as A, D, G, J, N,

@@ -15,6 +15,8 @@ metadata:
 
 User spec: [`docs/reference/REF-iterables.md`](../../reference/REF-iterables.md)
 
+> **Built and designed-not-built.** Built: the `Iterable<T>` contract with a standalone `next`, `for` over `Array<T>`, `Fixed<T>`, `Map<K, V>`, `String` and `range(...)`, and a user shape that follows `Iterable<T>` (`crates/ynz-typeck/src/check.rs`, the for-loop arm). Designed, **not built** (no typeck, registry or runtime entry exists): the `FallibleIterable<T>` contract, `file.lines`, `request.stream`, the adapters `.orSkipFailures()`, `.withErrors()` and `.logSkippedFailuresTo(sink)`, the `LogSink` contract, `.graphemes()`, and `.items()` on `Array<T>` and `Fixed<T>`. Sections below that use these say so.
+
 ---
 
 ## `follows Iterable<T>` with `next()` — Consistent with the Type System
@@ -74,7 +76,7 @@ shape Range follows Iterable<Int> {
 
 ---
 
-## Two Contracts — `Iterable<T>` and `FallibleIterable<T>`
+## Two Contracts — `Iterable<T>` and `FallibleIterable<T>` (`FallibleIterable<T>` designed, not built)
 
 Resolved: two separate contracts. In-memory iteration uses `Iterable<T>`; iteration over I/O sources (files, network, paginated APIs) uses `FallibleIterable<T>`. The user almost never sees the distinction directly — the compiler infers it from the iterator's type and propagates errors only when needed.
 
@@ -93,13 +95,13 @@ shape FallibleIterable<T> {
 
 | Source | Contract |
 |--------|----------|
-| `Array<T>.items()` | `Iterable<T>` |
-| `Fixed<T>.items()` | `Iterable<T>` |
-| `Map<K,V>.entries()` | `Iterable<Entry<K,V>>` |
+| `Array<T>.items()` (not built) | `Iterable<T>` |
+| `Fixed<T>.items()` (not built) | `Iterable<T>` |
+| `Map<K,V>.entries()` | `Iterable<MapEntry<K, V>>` |
 | `range(start, end)` | `Iterable<Int>` |
-| `file.lines(path)` | `FallibleIterable<String>` |
-| `request.stream(url)` | `FallibleIterable<Response>` |
-| Paginated API clients | `FallibleIterable<T>` |
+| `file.lines(path)` (not built) | `FallibleIterable<String>` |
+| `request.stream(url)` (not built) | `FallibleIterable<Response>` |
+| Paginated API clients (not built) | `FallibleIterable<T>` |
 
 **Compiler behavior at for-loop sites:**
 
@@ -170,27 +172,27 @@ Decided: a single contract that always returns `errors`, and swallowing errors a
 **Writing a custom iterable — the choice is clarifying:**
 
 ```ynz
-// In-memory data — implements the infallible contract.
-// Shape declaration holds data fields only; standalone function provides the implementation.
+// In-memory data — follows the infallible contract.
+// Shape declaration holds data fields only; a standalone function supplies `next`.
 shape CircularBuffer<T> follows Iterable<T> {
   items: Array<T>
   hidden position: Int = 0
 }
 
-function next(lend self: CircularBuffer<T>) -> Maybe<T> {
+function next<T>(lend self: CircularBuffer<T>) -> Maybe<T> {
   if (self.items.count() == 0) { return none }
   const value = self.items[self.position]
   self.position = (self.position + 1) % self.items.count()
   return value
 }
 
-// I/O data — implements the fallible contract.
+// I/O data — follows the fallible contract (designed, not built).
 shape ApiPager<T> follows FallibleIterable<T> {
   cursor: Maybe<String>
   hidden done: Boolean = false
 }
 
-function next(lend self: ApiPager<T>) -> Maybe<T> errors {
+function next<T>(lend self: ApiPager<T>) -> Maybe<T> errors {
   if (self.done) { return none }
   const response = request.get(self.buildUrl())   // can fail
   self.cursor = response.nextCursor

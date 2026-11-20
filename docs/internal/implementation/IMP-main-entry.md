@@ -29,7 +29,15 @@ The entry function is always `entrypoint`. The entry file is configured in `yinz
 
 ## CLI Arguments from stdlib, Not Parameters
 
-`entrypoint()` takes no parameters. Arguments come from `cli.args()`, `cli.flag()`, `cli.option()`.
+`entrypoint()` takes no parameters. Arguments come from `cli.args()`, `cli.flag()`, `cli.option()`. **Designed, not built:** the `cli` and `process` modules are planned for v0.7 and have no registry entry today, so a program using them does not build.
+
+```ynz
+function entrypoint() -> Nothing {
+  let args = cli.args()                    // all arguments → Array<String>
+  let verbose = cli.flag(`verbose`)        // --verbose flag → Boolean
+  let port = cli.option(`port`, `3000`)    // --port option → String with default
+}
+```
 
 **Why**: C's `main(int argc, char* argv[])` is famously ugly. Different languages have invented different conventions. Using the standard library keeps the signature clean (`function entrypoint() -> Nothing`), puts argument parsing where it belongs (the CLI module), and is consistent with how everything else in the language works — dot methods, autocomplete-discoverable.
 
@@ -45,6 +53,14 @@ The entry function is always `entrypoint`. The entry file is configured in `yinz
 
 ## Exit Codes via `process.exit()`
 
-`process.exit(1)` for explicit exit with a code. Normal completion automatically exits with code 0.
+`process.exit(1)` for explicit exit with a code (designed, not built; see above). Normal completion automatically exits with code 0.
+
+```ynz
+function entrypoint() -> Nothing {
+  if (setupFailed) {
+    process.exit(1)    // exit with failure code
+  }
+}
+```
 
 **Why `process.exit()` over a return value from `entrypoint()`**: Returning an exit code from `entrypoint()` would mean `-> Int` as the return type, conflicting with `-> Nothing` and `-> Nothing errors`. A stdlib function keeps the signature clean. `process.exit()` is also callable from anywhere — not just at the end of `entrypoint()`.

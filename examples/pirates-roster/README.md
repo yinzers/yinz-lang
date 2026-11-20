@@ -1,6 +1,6 @@
 # `examples/pirates-roster/` — Yinz v0.1 Language Showcase
 
-**Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — that's only for multi-entry projects (see `../stadium-fleet/` for that layout, available in v0.22).
+**Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — multi-entry projects are not supported by `ynz build` or `ynz run` yet (`../stadium-fleet/` previews the planned layout and does not build).
 
 **Theme:** Pittsburgh Pirates roster — players (Clemente, Wagner), stats (career hits, batting averages in thousandths, scouting flags), and lineups (starting / bench / IL via `options LineupStatus`). The entrypoint walks M1–M8 features in baseball-flavored context; companion modules (`services/players.ynz` for the `Pirate` shape, `utils/math_extra.ynz` for stat math) export reusable helpers.
 

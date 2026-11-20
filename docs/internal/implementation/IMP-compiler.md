@@ -25,82 +25,36 @@ Design document for compiler and IDE language server implementation. Not user-fa
 
 ---
 
-## Lessons From Other Languages
+## Compile-Speed Targets
 
-### Why Rust is slow to compile:
-1. **Monomorphization** — every generic usage (`Array<Player>`, `Array<String>`) generates separate compiled code. Multiplies the work significantly.
-2. **Borrow checker** — deep per-reference analysis to prove safety across the whole function.
-3. **LLVM optimization** — multi-pass, heavy optimization produces fast binaries at the cost of compile time.
-4. **Whole-crate compilation** — Rust compiles large units at once rather than file-by-file.
+Yinz targets two speeds:
 
-### Why Go is fast to compile:
-1. Simple type system — less analysis per file.
-2. Purpose-built compiler — optimized for compile speed from the start, not bolted on.
-3. File-level compilation — change one file, recompile that file.
-
-### Yinz targets both:
-- **Full builds**: accept Rust-like compile times — they happen once, incremental takes over.
-- **Incremental builds**: target Go-like speed — only recompile what changed.
-- **Release builds**: full LLVM optimization. Accept the time — this is for production.
+- **Full builds** keep every optimization, including ownership analysis and per-type specialization, and may take Rust-like time: they happen once, then incremental takes over.
+- **Incremental builds** recompile only what changed (see "Incremental Compilation Strategy").
 
 ---
 
 ## Build Modes
 
-### Debug (default — `ynz build`)
-- Minimal LLVM optimization
-- Fast compile
-- Decent runtime speed
-- Used during development
+**What ships today:** `ynz build` always runs the LLVM optimization pipeline. `ynz build --no-optimize` compiles at `-O0` for faster compiles; program behavior is identical in both modes. There is no `--release` flag yet (`crates/ynz-driver/src/main.rs`; `--reveal-sensitive` is documented as stripped from release builds "when it ships").
 
-### Release (`ynz build --release`)
-- Full LLVM optimization
-- Slow compile
-- Maximum runtime speed
-- Used for production binaries
+**Designed, not built:**
 
-Debug and release produce different binaries. Development always uses debug. Deployment always uses release.
-
----
-
-## Static Linking — `musl` libc as Default
-
-`ynz build --release` produces a **statically-linked binary** by default, linking against `musl libc`. The binary runs on any Linux kernel ≥ 3.2 with no glibc version dependency.
-
-Dynamic glibc linking is available via `ynz build --dynamic-glibc` for users who explicitly need glibc-specific behavior (locale support beyond what musl provides, certain NSS plugins, etc.). The `--kernel` build (per [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md)) uses no libc at all.
-
-### Why musl + static by default
-
-Rust's default (`glibc` dynamic linking) produces binaries built on Ubuntu 22.04 (`glibc 2.35`) that fail to run on RHEL 7 (`glibc 2.17`) with `GLIBC_2.35 not found`. Python's `manylinux` infrastructure exists entirely to work around this — building wheels on ancient CentOS images to target the oldest supported glibc. Go made the opposite choice in 2009: static linking by default, binaries run anywhere with the right architecture and kernel. Result: "Go binaries work everywhere" became a marketing sentence as well as a correctness property.
-
-Yinz inherits Go's choice. "`ynz build` produces a binary that runs anywhere" is high ergonomic value, especially for a language being adopted by jr devs who don't yet understand glibc symbol versioning.
-
-### Tradeoff
-
-`musl libc` has known performance differences from `glibc` in some areas:
-- `musl`'s malloc is notably slower than `glibc`'s tcmalloc-derived allocator for multithreaded workloads. **Mitigated** by Yinz's per-request arena allocator (per [`docs/internal/scratchpad/SCRATCH-future-arena.md`](../scratchpad/SCRATCH-future-arena.md)) — most allocation paths in Yinz code don't use libc malloc directly.
-- DNS resolution has known limitations (musl doesn't support `/etc/nsswitch.conf` plugins, doesn't fall back to TCP for large responses on older versions). **Mitigated** by Yinz's network stdlib using its own resolver where appropriate (decision deferred to v0.15 `request` milestone).
-
-For workloads where these specific musl limitations matter, `--dynamic-glibc` is the escape valve. The default favors deployability.
-
-### Cross-references
-
-- `lockin-build-and-crossplat.md` Finding #12 for glibc version skew details.
-- [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md) for the `--kernel` build mode (no libc at all).
+- `ynz build --release`: full LLVM optimization, the mode for production binaries.
+- A statically linked binary against `musl libc` by default for `--release`, so the binary runs on any Linux kernel from 3.2 with no glibc version dependency. `ynz build --dynamic-glibc` is the escape hatch for programs that need glibc-specific behavior (locale support beyond musl, NSS plugins). musl's slower allocator is covered by a per-request arena allocator ([`SCRATCH-future-arena.md`](../scratchpad/SCRATCH-future-arena.md)); its DNS limits by the network stdlib using its own resolver (decided at the `request` module).
+- The `--kernel` build, which uses no libc at all ([`IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md)).
 
 ---
 
 ## Generics & Monomorphization — Deduplication by Default
 
-Yinz generates a specialized version per concrete generic instantiation (each concrete type combination produces its own specialized machine code) — same model as Rust, same model as C++ templates. To prevent the compile-time scaling problem Rust hits, the compiler tracks generated instantiations in a **shared instantiation cache** keyed by `(type-path, concrete-type-arguments)` and deduplicates identical instantiations across the build graph.
+Yinz generates a specialized version per concrete generic instantiation (each concrete type combination produces its own specialized machine code), so generic code has no runtime dispatch cost. To keep compile time from growing with the number of files that use the same instantiation, the compiler tracks generated instantiations in a **shared instantiation cache** keyed by `(type-path, concrete-type-arguments)` and deduplicates identical instantiations across the build graph.
 
 > **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). Banned from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 5. Use "specialized version per type" in any text a Yinz user might read.
 
 ### Why deduplication is the default
 
-Rust generates a separate compiled copy of every generic instantiation in every crate that uses it. Ten crates all using `Vec<String>` produce ten compiled copies. Feldera documented Rust compile times of 25-45 minutes on a 64-core machine for their project before restructuring (https://www.feldera.com/blog/cutting-down-rust-compile-times-from-30-to-2-minutes-with-one-thousand-crates). Restructuring into 1,000 crates dropped compile time from 30 to 2 minutes — 15× improvement by changing crate boundaries, not the language.
-
-Yinz inherits the perf benefits of specialized-per-type generation (no runtime dispatch overhead) but avoids the quadratic scaling by deduplicating. Identical instantiations from different files share LLVM IR — compiled once, linked everywhere.
+Without deduplication every file that uses `Array<String>` would compile its own copy. With it, identical instantiations from different files share LLVM IR: compiled once, linked everywhere. Specialization keeps its speed and compile time stops scaling with the number of users of a type.
 
 ### Auto-promotion (codegen-only)
 
@@ -109,9 +63,9 @@ Per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md
 - **Muted IDE hint**: not applicable — there's no source-level "rewrite to share" form. The user wrote idiomatic generic code; the compiler handled the dedup.
 - **Tier 3 lint suggestion**: not applicable — same reason.
 
-### When dedup doesn't apply (release-perf escape hatch)
+### When dedup doesn't apply (designed, not built)
 
-Shared instantiations cannot be optimized differently per call site (no per-caller inline decisions, no per-caller constant-propagation across the generic boundary). For performance-critical instantiations where per-site optimization matters, `ynz build --release-perf` (final flag name TBD) disables deduplication and generates a fresh specialized version per call site — slower compile, potentially faster runtime for heavily-templated hot code. Standard `ynz build --release` keeps deduplication active because the typical perf delta is small and the compile-time savings are large.
+Shared instantiations cannot be optimized differently per call site (no per-caller inline decisions, no per-caller constant-propagation across the generic boundary). A release-performance flag (name not final) is designed to disable deduplication and generate a fresh specialized version per call site: slower compile, potentially faster runtime for hot generic code. The standard release build keeps deduplication on.
 
 ### Salsa integration
 
@@ -119,7 +73,6 @@ The deduplication cache is keyed by Salsa queries ([`docs/internal/implementatio
 
 ### Cross-references
 
-- `lockin-build-and-crossplat.md` Finding #13 for Rust's specialized-per-type compile-scaling pain (called "monomorphization" in the source — same concept).
 - [`docs/internal/implementation/IMP-compiler-language.md`](IMP-compiler-language.md) for the Salsa caching model.
 
 ---
@@ -207,10 +160,8 @@ IDE uses this for:
 
 ## No Direct Array Indexing — Safety Rationale
 
-`items[5]` is a compile error. All collection access goes through `.get(index)` which returns `Maybe<T>`.
+`items[5]` reads through `.get(5)` and returns `Maybe<T>`; there is no bare read that can run past the end (see [`IMP-collections.md`](IMP-collections.md), "Bracket Sugar"). A write past the end is a runtime error, or a compile error when the index is a literal on a `Fixed<T>` of known size.
 
-**Why**: Out-of-bounds array access is one of the most common causes of runtime crashes and security vulnerabilities (buffer overflows) in systems languages. If the compiler can enforce safe access universally, there's no reason not to. The cost (slightly more verbose access) is far outweighed by the elimination of an entire crash category.
+**Why**: out-of-bounds access is a common cause of crashes and buffer overflows, so the compiler makes the safe form the only form (Golden Rule 2).
 
-**Performance**: `.get(index)` compiles to a bounds check + conditional. In debug mode, this is always present. In release mode, the compiler eliminates bounds checks it can prove are safe statically (fixed-size arrays with known indices). Critically, Yinz runs its own index-range proof pass before emitting LLVM IR — LLVM's alias analysis fails to eliminate bounds checks for certain index patterns (notably widening-multiply computations like `(a as Int) * b`), but Yinz's type-level integer-range tracking can prove these safe at the Yinz IR level before LLVM ever sees them. The performance impact is negligible in practice.
-
-**Consistency**: Maps already use `.get(key)` returning `Maybe<V>`. Same pattern everywhere. No special case for arrays.
+**Performance**: `.get(index)` compiles to a bounds check and a branch. The designed optimization (not built) is an index-range proof pass over the Yinz IR before LLVM sees it, removing checks it can prove safe (a `Fixed<T>` with a known index), including patterns LLVM's own analysis misses. Maps follow the same pattern: `.get(key)` returns `Maybe<V>`.

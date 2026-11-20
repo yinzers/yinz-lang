@@ -24,9 +24,26 @@ The rule: every value has exactly one owner. When the owner goes out of scope, t
 When a function takes a value, its signature says one of three things:
 
 ```ynz
-function greet(share name: String) -> Nothing { ... }      // share — read-only; caller keeps ownership
-function rename(lend player: Player) -> Nothing { ... }    // lend — function modifies it; caller keeps ownership
-function consume(give data: Data) -> Nothing { ... }       // give — function takes it; caller loses it
+shape Player {
+  name: String
+  health: Int
+}
+
+shape Data {
+  values: Array<Int>
+}
+
+function greet(share name: String) -> Nothing {      // share — read-only; caller keeps ownership
+  print(`Hello ${name}`)
+}
+
+function rename(lend player: Player) -> Nothing {    // lend — function modifies it; caller keeps ownership
+  player.name = `Renamed`
+}
+
+function consume(give data: Data) -> Nothing {       // give — function takes it; caller loses it
+  print(data.values.count())
+}
 ```
 
 That's the contract. Anyone reading the signature knows what happens to the value.
@@ -35,13 +52,40 @@ That's the contract. Anyone reading the signature knows what happens to the valu
 
 ## You don't type the mode at the call site
 
-When you call a function, you just pass the value normally. The compiler reads the callee's signature and figures out what to do — share, lend, or give. The IDE shows what was inferred as muted text so you can see what's happening:
+When you call a function, you just pass the value normally. The compiler reads the callee's signature and figures out what to do — share, lend, or give. The IDE shows what it chose as muted text so you can see what's happening:
 
 ```ynz
-greet(name)           // IDE shows muted `share` — read-only access
-print(message)        // IDE shows muted `share` — read-only access
-rename(player)        // IDE shows muted `lend` (red-tinted) — function modifies player
-consume(data)         // IDE shows muted `give` (red-tinted) — function takes ownership
+shape Player {
+  name: String
+  health: Int
+}
+
+shape Data {
+  values: Array<Int>
+}
+
+function greet(share name: String) -> Nothing {
+  print(`Hello ${name}`)
+}
+
+function rename(lend player: Player) -> Nothing {
+  player.name = `Renamed`
+}
+
+function consume(give data: Data) -> Nothing {
+  print(data.values.count())
+}
+
+function entrypoint() -> Nothing {
+  let name = `Alice`
+  let player: Player = { name: `Patrick`, health: 100 }
+  let data: Data = { values: [1, 2, 3] }
+
+  greet(name)           // IDE shows muted `share` — read-only access
+  rename(player)        // IDE shows muted `lend` — function modifies player
+  consume(data)         // IDE shows muted `give` — function takes ownership
+  print(player.name)    // print only reads, so the IDE shows muted `share` here too
+}
 ```
 
 Hovering on any muted hint shows a tooltip explaining WHAT it means, WHAT INSTEAD you'd write to make it explicit (on the function signature, not the call site), and WHY the compiler chose it.
@@ -55,10 +99,22 @@ There is no body-level syntax for these three modes — they exist only in signa
 Once a function takes ownership via `give`, you can't use the value anymore. The compiler catches this:
 
 ```ynz
-consume(data)              // give inferred from consume's signature — data transferred
-print(data)
-// COMPILE ERROR: data was transferred to consume() on the previous line.
-// It no longer exists here. Use .copy() if you need to keep a copy.
+shape Data {
+  values: Array<Int>
+}
+
+function consume(give data: Data) -> Nothing {
+  print(data.values.count())
+}
+
+function entrypoint() -> Nothing {
+  let data: Data = { values: [1, 2, 3] }
+  consume(data)                   // consume's signature says `give` — data transferred
+  print(data.values.count())
+  // COMPILE ERROR: `data` was already given away and cannot be used here.
+  // given away
+  // Create a new value, or use `.copy()` before giving `data` away if you need it in both places. — When a function takes ownership of a value, the caller no longer holds it. Using it afterward would read memory the new owner may already have freed.
+}
 ```
 
 ---
@@ -68,11 +124,18 @@ print(data)
 A loop runs its body again and again, so a value given away on one pass is gone on the next. The compiler refuses it:
 
 ```ynz
-let rows: Array<Int> = [1, 2, 3]
-for (turn in [1, 2]) {
-  consume(rows)
-  // COMPILE ERROR: `rows` was already given away and cannot be used here, because the previous
-  // pass through this loop already gave it to `consume`.
+function consume(give rows: Array<Int>) -> Nothing {
+  print(rows.count())
+}
+
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
+  for (turn in [1, 2]) {
+    consume(rows)
+    // COMPILE ERROR: `rows` was already given away and cannot be used here, because the previous pass through this loop already gave it to `consume`.
+    // given away
+    // Create a new value, or use `.copy()` before giving `rows` away if you need it in both places. — When a function takes ownership of a value, the caller no longer holds it. Using it afterward would read memory the new owner may already have freed.
+  }
 }
 ```
 
@@ -85,17 +148,37 @@ Give a copy each pass (`consume(rows.copy())`), or make a new value inside the l
 A reassignment gives the name a new value, so the name is usable again after it, but only for the code the reassignment is sure to have run before:
 
 ```ynz
-consume(rows)
-rows = [4, 5]
-print(rows.count())      // fine: every path got here through the reassignment
-
-consume(rows)
-if (ready) {
-  rows = [4, 5]
+function consume(give rows: Array<Int>) -> Nothing {
+  print(rows.count())
 }
-print(rows.count())
-// COMPILE ERROR: `rows` was already given away and cannot be used here, because the path where
-// the `if` above did not run never reassigned it.
+
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
+  consume(rows)
+  rows = [4, 5]
+  print(rows.count())      // fine: every path got here through the reassignment
+}
+```
+
+When only some paths reassign, the compiler refuses the read:
+
+```ynz
+function consume(give rows: Array<Int>) -> Nothing {
+  print(rows.count())
+}
+
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
+  let ready: Boolean = true
+  consume(rows)
+  if (ready) {
+    rows = [4, 5]
+  }
+  print(rows.count())
+  // COMPILE ERROR: `rows` was already given away and cannot be used here, because the path where the `if` above did not run never reassigned it.
+  // given away
+  // Create a new value, or use `.copy()` before giving `rows` away if you need it in both places. — When a function takes ownership of a value, the caller no longer holds it. Using it afterward would read memory the new owner may already have freed.
+}
 ```
 
 After an `if`, a `match` or a loop, `rows` is usable again only if every arm assigned it (a match needs an `else` arm, or to cover every variant). A loop body may run zero times, so a reassignment inside it does not count after the loop.
@@ -108,8 +191,8 @@ let bucket: Array<Array<Int>> = []
 bucket.add(rows)
 print(rows.count())
 // COMPILE ERROR: `rows` was stored in `bucket` and cannot be used here — storing a value hands it over.
-//   If you still need `rows` after the store, store a copy instead: `bucket.add(rows.copy())`.
-//   If you only need it before the store, put this line above the store.
+// handed over
+// If you still need `rows` after the store, store a copy instead: `bucket.add(rows.copy())`. If you only need it before the store, put this line above the store. — Every value has one owner. Storing `rows` in `bucket` makes `bucket` its owner, and when `bucket` is done with it, it frees it. If `rows` could still read the same value, two names would reach one value and one of them would free it under the other. So a store hands the value over, and the compiler refuses any line that reads `rows` afterward. Nothing happens at runtime — `rows` is not cleared or set to `none`; the program simply does not compile until this read is placed above the store or the store takes a copy.
 ```
 
 Numbers, booleans, options, strings and ranges are copied, so storing them gives nothing away.
@@ -122,18 +205,19 @@ let kept: Array<Array<Int>> = []
 for (row in matrix) {
   kept.add(row)
 }
+print(kept.count())
 ```
 
-If you read the list inside the loop or after it, each row still belongs to the list, so the compiler asks for a copy:
+If you read the list after the loop, each row still belongs to the list, so the compiler asks for a copy:
 
 ```ynz
 let matrix: Array<Array<Int>> = [[1, 2], [3, 4], [5, 6]]
 let kept: Array<Array<Int>> = []
 for (row in matrix) {
   kept.add(row)
-  // COMPILE ERROR: This line gives `row` away — it is handed to `kept` — but `row` is one cell of
-  // `matrix`, which this loop is walking, so someone here still holds it.
-  //   Give away a copy instead: `row.copy()`.
+  // COMPILE ERROR: This line gives `row` away — it is handed to `kept` — but `row` is one cell of `matrix`, which this loop is walking, so someone here still holds it.
+  // needs `.copy()`
+  // Give away a copy instead: `row.copy()`. If you meant to hand over the whole thing, give the whole thing: the binding that owns it. — Whoever receives a `Array<Int>` will eventually free it. But `row` is one cell of `matrix`, which this loop is walking, so another holder may free it too: if the receiver and that holder both kept the one value, the same memory would be freed twice, and if one freed it first, the other would be left reading memory that is already gone. A `.copy()` belongs to nobody else, so it is safe to hand over.
 }
 print(matrix.count())
 ```
@@ -142,13 +226,25 @@ print(matrix.count())
 
 ## `const` bindings get extra protection
 
-A `const` binding can only be shared (read). The compiler refuses to infer `lend` or `give` for a `const` value:
+A `const` binding can only be shared (read). The compiler refuses to pass a `const` value to a function that asks for `lend` or `give`:
 
 ```ynz
-const player: Player = { name: `Patrick`, health: 100 }
-rename(player)
-// COMPILE ERROR: player is `const`, but rename's signature requires `lend`.
-// To allow modification, declare player with `let` instead.
+shape Player {
+  name: String
+  health: Int
+}
+
+function rename(lend player: Player) -> Nothing {
+  player.name = `Renamed`
+}
+
+function entrypoint() -> Nothing {
+  const player: Player = { name: `Patrick`, health: 100 }
+  rename(player)
+  // COMPILE ERROR: `player` is `const` — `rename` needs to mutate it but `const` blocks mutation.
+  // Declare `player` with `let` if you need `rename` to modify it.
+  // `const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.
+}
 ```
 
 ---
@@ -156,9 +252,21 @@ rename(player)
 ## `.copy()` — when you need to keep a copy
 
 ```ynz
-const original: Player = { name: `Patrick`, health: 100 }
-const backup = original.copy()    // a new value of your own
-saveForever(backup)                // backup is given to saveForever; original is unchanged
+shape Player {
+  name: String
+  health: Int
+}
+
+function saveForever(give player: Player) -> Nothing {
+  print(player.name)
+}
+
+function entrypoint() -> Nothing {
+  let original: Player = { name: `Patrick`, health: 100 }
+  let backup = original.copy()    // a new value of your own
+  saveForever(backup)             // backup is given to saveForever; original is unchanged
+  print(original.name)
+}
 ```
 
 `.copy()` gives you a value nobody else can reach. Change the copy and the original does not move; change the original and the copy does not move.
@@ -166,12 +274,12 @@ saveForever(backup)                // backup is given to saveForever; original i
 For a list, that includes the items. Copying an `Array<Array<Int>>` gives you a new outer list holding new inner lists, so writing into the copy's first row leaves the original's first row alone:
 
 ```ynz
-let inner: Array<Int> = [1, 2, 3]
-let outer: Array<Array<Int>> = [inner]
+let outer: Array<Array<Int>> = [[1, 2, 3]]
 let clone: Array<Array<Int>> = outer.copy()
 let foundRow = clone[0]                        // a maybe: the row, or nothing
-let cloneRow: Array<Int> = foundRow.or(inner)  // a plain list, `inner` if missing
+let cloneRow: Array<Int> = foundRow.or([])     // a plain list, an empty one if missing
 cloneRow.set(0, 99)
+print(cloneRow)                                // [99, 2, 3]
 // outer's first row still starts at 1
 ```
 
@@ -184,10 +292,15 @@ For the three that hold other values inside them, it depends on what is inside:
 - **`Maybe<T>`** copies when what is inside is a simple value, a number, or a shape. `Maybe<Array<Int>>`, `Maybe<Map<String, Int>>`, `Maybe<Fixed<Int>>` and a `Maybe` of a `Maybe` are refused today — those are the natural things to wrap, so you will meet this. Copy the piece instead:
 
 ```ynz
-let rows: Maybe<Array<Int>> = loadRows()
-// let backup = rows.copy()          // COMPILE ERROR — see below
+let rows: Maybe<Array<Int>> = none
 let theRows: Array<Int> = rows.or([])
 let backup: Array<Int> = theRows.copy()   // copy the list itself
+print(backup.count())
+
+let again = rows.copy()
+// COMPILE ERROR: `.copy()` cannot make a separate `Maybe<Array<Int>>` value, because its contents are `Array<Int>` values and a `Array<Int>` cannot be copied.
+// cannot be copied
+// Build a new `Maybe<Array<Int>>` holding new items, or copy the pieces you actually need one at a time. — A copy of a collection is only separate if every item in it is separate too. Copying the collection while sharing its items would leave two collections changing the same items — the surprise this refusal exists to prevent.
 ```
 
 For a shape that holds arrays or maps inside it, `.copy()` copies the shape's own fields and the inner list stays shared. Write a standalone `copy()` function that copies those pieces and call it as a normal function — that keeps an expensive copy visible in your code.
@@ -199,33 +312,12 @@ Some things cannot be copied, and Yinz says so while you build rather than handi
 ```ynz
 let orders: Channel<Int> = Channel<Int>(4)
 let secondLine = orders.copy()
-// COMPILE ERROR: `.copy()` cannot make a separate `Channel<Int>` value — a channel is the
-// line two tasks talk over, not a value you hold.
-//   Pass the channel itself to the task and every task holding it reads and writes the same
-//   line. If you want a second, separate line, make one:
-//     let replies: Channel<Int> = Channel<Int>()
-//   Why: a second channel holding the same messages would not help you — the task on the
-//   other end is listening on the first one. Anything you sent into the copy would go
-//   nowhere, and nothing would tell you.
+// COMPILE ERROR: `.copy()` cannot make a separate `Channel<Int>` value — a channel is the line two tasks talk over, not a value you hold.
+// cannot be copied
+// Pass the channel itself to the task and every task holding it reads and writes the same line. If you want a second, separate line, make one: `let replies: Channel<Int> = Channel<Int>()`. — A second channel holding the same messages would not help you: the task on the other end is listening on the first one. Anything you sent into the copy would go nowhere, and nothing would tell you.
 ```
 
 The same happens for a task handle (it names one running task), for a value written with `|` (which of the two it is, is only settled while the program runs), for a `dynamic` value, for a loop's map entry, and for an `errors` value you have not checked with `.failed()` yet. Every one of those errors tells you what to do instead.
-
----
-
-## `.freeze()` — lock a value from further changes
-
-Sometimes you want to build a value step-by-step then prevent any more changes:
-
-```ynz
-let config: ConfigBuilder = { rules: [] }
-config.addRule(`a`, 1)
-config.addRule(`b`, 2)
-config.freeze()                    // lock from this point forward
-runApp(config)                      // config can still be read; further mutation is a compile error
-```
-
-After `.freeze()`, the binding behaves like `const` for the rest of its scope. This is useful for build-then-lock patterns where you need mutability during construction but want to prevent accidental modification afterward.
 
 ---
 
@@ -233,8 +325,7 @@ After `.freeze()`, the binding behaves like `const` for the rest of its scope. T
 
 | What | Where it lives | When you type it |
 |---|---|---|
-| `share` / `lend` / `give` | Function signatures only | Always at signatures; never at call sites (compiler infers there) |
+| `share` / `lend` / `give` | Function signatures only | Always at signatures; never at call sites (the compiler reads the signature there) |
 | `.copy()` | Body expression | When you need a value of your own that nobody else can reach |
-| `.freeze()` | Body expression | When you want to lock a binding from further mutation mid-function |
 
-The compiler does the heavy lifting at call sites. The IDE shows what was inferred. You learn ownership by reading your own code with hints turned on.
+The compiler does the heavy lifting at call sites. The IDE shows what the compiler chose. You learn ownership by reading your own code with hints turned on.

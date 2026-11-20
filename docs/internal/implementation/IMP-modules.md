@@ -35,19 +35,17 @@ Named exports only. Always `export function fetchUser()`, never `export default 
 
 ## No Wildcard Imports
 
-`import * as X from "module"` is a compile error. Use module namespace import instead: `import X from "module"`.
+`import * as X from `module`` is a compile error. Use a module namespace import instead: ``import X from `module` ``.
 
-**Why**: Wildcard imports obscure where symbols come from and import everything regardless of tree shaking. Module namespace imports are explicit, readable, and still allow using the whole module as a namespace.
+Wildcard imports hide where symbols come from. A namespace import keeps every use readable as `X.name`.
 
-**Note for JavaScript developers**: `import X from "..."` in Yinz is NOT a default import — it imports the entire module as a namespace object. The syntax looks identical to JS default imports but has different semantics.
+**Note for JavaScript developers**: `import X from ...` in Yinz is NOT a default import — it imports the entire module as a namespace object.
 
 ---
 
 ## Project-Root-Relative Paths Only
 
-`"services/users"` not `"../services/users"` or `"./services/users"`. No relative paths anywhere.
-
-**Why**: Relative paths are fragile — moving a file breaks all its relative imports. Project-root paths are stable — the path is always the same regardless of which file imports it. No configuration, no mapping, no barrel files required.
+Write `` `services/users` ``, never `` `../services/users` `` or `` `./services/users` ``. No relative paths anywhere: the path reads the same from every file, so moving a file never breaks its imports.
 
 ---
 
@@ -61,7 +59,7 @@ Multi-pass compilation. Pass 1 collects all type signatures across all files bef
 
 ## Standard Library Auto-Imported
 
-The standard library is always available with no import statement. `math.sqrt()` works anywhere without `import { sqrt } from "math"`.
+The standard library is always available with no import statement. `math.sqrt()` works anywhere without `import { sqrt } from `math``.
 
 **Why**: The compiler and IDE are built alongside the language — the stdlib is fully known at compile time. Forcing imports of always-available modules adds ceremony with zero benefit. A junior developer's first program should not require knowing which import to add before they can use `math.sqrt()`.
 
@@ -79,44 +77,58 @@ Unused imports produce a compile warning. The IDE auto-removes them on save.
 
 ## Import Aliases — `as` Renaming
 
-Both named and namespace imports support `as` renaming, TypeScript-style:
+Both named and namespace imports support `as` renaming:
 
 ```ynz
 // Destructured import with rename
-import { fetchUser as getUser } from "services/users"
+import { fetchUser as getUser } from `services/users`
 
 // Namespace import with rename
-import math as advancedMath from "math"
+import math as advancedMath from `math`
 
 // Mixed within one import
-import { Player as PlayerType, Score } from "models/game"
+import { Player as PlayerType, Score } from `models/game`
 ```
 
-**Why**: Real codebases have naming collisions — a local `Player` type and a third-party `Player` type, a custom `math` namespace overlapping with stdlib. Aliasing is the only escape valve that doesn't require renaming the source. TypeScript's syntax is well-understood; reuse it rather than invent a Yinz-specific spelling.
+Aliasing resolves naming collisions (a local `Player` and a third-party `Player`, a custom `math` namespace and stdlib) without renaming the source.
+
+---
+
+## Re-Exporting — One Place to Import From
+
+A file can collect exports from several files and export them again, so a folder has one import point:
+
+```ynz
+// services/index.ynz
+export { fetchUser, createUser, User } from `services/users`
+export { processOrder, Order } from `services/orders`
+```
+
+```ynz
+// Other files import from the folder:
+import { fetchUser, processOrder } from `services`
+```
+
+Importing from `services` makes the compiler look for `services/index.ynz`. Re-exporting is optional.
+
+**Status: partly built.** The compiler reads and checks the re-export syntax. Calling a re-exported function from another file does not work yet, so import from the file that declares the function until it does.
 
 ---
 
 ## Duplicate Import Names — Compile Error, Force Aliasing
 
-When two imports bring the same name (or namespace) into the same file, the compiler refuses to silently pick one:
+When two imports bring the same name (or namespace) into the same file, the compiler refuses to pick one. The diagnostic text below is from `crates/ynz-typeck/src/resolve_import.rs`; I did not run it through `ynz build` in this lane (pending verification).
 
 ```ynz
-import { Player } from "models/game"
-import { Player } from "external/legacy"
-//
-// COMPILE ERROR: 'Player' is imported from two places.
-//
-//   Line 1: from "models/game"
-//   Line 2: from "external/legacy"
-//
-//   These can't both use the name 'Player' in the same file. Rename one:
-//
-//     import { Player } from "models/game"
-//     import { Player as LegacyPlayer } from "external/legacy"
+import { Player } from `models/game`
+import { Player } from `external/legacy`
+// COMPILE ERROR: Import name `Player` is already bound by a previous import.
+//   Use a different local name: `import { Player as otherName } from `...``
+//   Each imported name must be unique in the local scope.
 ```
 
-Same rule applies to namespace imports (`import request from "..."` collisions) and to local-vs-stdlib name collisions (a local module named `math` colliding with `stdlib/math`).
+Same rule applies to namespace imports (`import request from ...` collisions) and to local-vs-stdlib name collisions (a local module named `math` colliding with `stdlib/math`).
 
-**Why**: Silent picking is a TypeScript / JavaScript footgun — last-import-wins semantics cause subtle bugs when refactors reorder imports. Forcing the user to disambiguate makes the code's intent explicit and refactor-safe. Same principle as `Maybe`: if there's ambiguity, the compiler refuses to guess.
+The compiler never picks silently, so reordering imports cannot change which `Player` a file means.
 
 **Resolution implication for stdlib vs local**: there's no special precedence rule. If a project happens to define a local `math` module, the compiler errors at the import site and forces the user to alias. No silent shadowing of stdlib.
