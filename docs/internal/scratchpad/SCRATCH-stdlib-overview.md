@@ -144,7 +144,7 @@ Proposed 2026-06-13. These are NOT promises and NOT designed yet — they're a h
 | **test-framework extensions** | property-based testing, fuzzing, benchmarking. Next tier above the `test` keyword (v0.13). |
 | **`dns`** | name resolution; networking floor below `request`. |
 | **caching / LRU** | in-memory bounded cache (`stdlib-design.md`: bounded by default). |
-| **templating** | HTML/text templating; ties to the GUI/web work (`design/future/gui/`). |
+| **templating** | HTML/text templating; ties to the GUI/web work (`SCRATCH-future-gui-index.md`). |
 | **observability** | metrics + tracing, above basic `log` (v0.11) / logging framework (v0.23). |
 
 ### v2+ / niche (parked so they're not forgotten)

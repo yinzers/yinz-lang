@@ -23,7 +23,7 @@ User spec target: `spec/stdlib/supervisor.md` (to be created when stdlib lands).
 
 Yinz stdlib provides supervisor helpers for the common patterns around `background` tasks. The meta-rule: **any stdlib API owning a long-running loop is supervised by default**, with explicit override available.
 
-Supervisor helpers turn the [supervisor pattern](panic-safety.md#supervisor-pattern-no-trycatch-needed) into one-line stdlib calls. Without them, every server/worker/daemon would re-implement the same `while (true) { background ... }` loop with the same error handling.
+Supervisor helpers turn the [supervisor pattern](SCRATCH-future-panic-safety.md#supervisor-pattern-no-trycatch-needed) into one-line stdlib calls. Without them, every server/worker/daemon would re-implement the same `while (true) { background ... }` loop with the same error handling.
 
 ---
 

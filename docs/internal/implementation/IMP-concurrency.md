@@ -710,7 +710,7 @@ The compiler declines to promote when ANY of the following hold:
   which has no scheduler to spawn onto) turns promotion off entirely.  The flag is currently
   carried internally via the `YNZ_NO_AUTO_PARALLEL` env var read by both the promotion query and
   codegen; threading it as an explicit salsa input (so `ynz watch`/LSP codegen honor it without an
-  env var) is a deferred mechanism tracked in [`.claude/todos.md`](../../../.claude/todos.md).  It is the program-wide override
+  env var) is a deferred mechanism.  It is the program-wide override
   for the "force sequential" direction; per-site, an explicit `wait` between two statements forces
   them to run in order.
 

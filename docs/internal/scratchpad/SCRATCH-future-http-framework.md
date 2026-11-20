@@ -23,7 +23,7 @@ User spec target: `spec/stdlib/network.md` (when implemented).
 
 The Yinz stdlib HTTP server is **supervised by default**. Request handlers run in isolated `background` tasks. The accept loop is itself supervised — if it crashes, the framework restarts it. The user can override the supervision policy with explicit config, but the default is production-grade resilience.
 
-This applies the [supervisor meta-rule](supervisor.md#default-supervision-rule-meta): any stdlib API owning a long-running loop is supervised by default. HTTP is the canonical example.
+This applies the [supervisor meta-rule](SCRATCH-future-supervisor.md#supervisor--stdlib-helpers--default-supervision-rule): any stdlib API owning a long-running loop is supervised by default. HTTP is the canonical example.
 
 ---
 

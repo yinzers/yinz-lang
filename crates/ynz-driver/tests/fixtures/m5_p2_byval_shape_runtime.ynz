@@ -1,7 +1,7 @@
 // M5 P2 step 1 — by-value ABI matrix: shape × RUNTIME fields × full op set
 // (non-suspending). All field values derive from variables — the exact element class
 // whose pointer-ABI storage is the stack-dangling miscompile the by-value cut fixes
-// (latent here without suspension; see SCRATCH-future-array-by-value-element-storage.md).
+// (latent here without suspension; see IMP-collections.md "Array element storage").
 //
 // CONTRACT CELL (RED until P2 step 3): `contains` on array<Shape> asserts VALUE
 // equality (field-wise) — see m5_p2_byval_shape_literal.ynz for the recorded decision.

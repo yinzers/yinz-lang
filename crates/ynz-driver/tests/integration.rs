@@ -4812,7 +4812,7 @@ fn v03_m3a_p3_audit_dynamic_crossing_loud_rejected() {
 // fixture programs (runtime-field crossing, between-two-waits, nested-if — the exact
 // positions the guard had to catch) are repurposed as ACCEPTANCE: each must now run
 // and print the CORRECT sum. This is the scratch doc's named acceptance signal
-// (SCRATCH-future-array-by-value-element-storage.md) and E9's B1 proof.
+// (IMP-collections.md "Array element storage") and E9's B1 proof.
 // A wrong value here is the pre-M5 silent stack-garbage miscompile returning; do NOT
 // weaken these to exit-code-only checks.
 

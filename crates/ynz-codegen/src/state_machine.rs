@@ -1048,7 +1048,7 @@ pub fn run_mid_end_pipeline(
 /// Both `emit_artifact` and `frame_layouts_query` must use this single constructor so their
 /// data-layout strings are byte-identical. A divergent data-layout string between the emitter
 /// and the query would produce wrong `n_locals` counts for shape-typed crossing locals, causing
-/// silent frame mis-sizing (Guard G1 — see design/future/cross-module-frame-serialization.md).
+/// silent frame mis-sizing (Guard G1 — see docs/internal/implementation/IMP-no-function-coloring.md "Cross-Module Frame Layouts").
 ///
 /// Always initializes x86 targets before creating the machine. Callers that already initialize
 /// x86 may call it redundantly — double-init is a no-op per LLVM.
