@@ -401,7 +401,7 @@ switch (statusCode) {
 
 ### Chaining: a chain becomes named steps
 
-Yinz has no chaining. Each step goes on its own line with a name, so you can inspect every value. The example below uses a `for` loop that builds the result one item at a time.
+Yinz code puts one step on each line and gives each result a name (golden rule: *step-by-step over chaining*), so you can inspect every value. The example below uses a `for` loop that builds the result one item at a time.
 
 TypeScript:
 
@@ -440,7 +440,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-A chain of calls written on one line is not written in Yinz. Give each result a name on its own line, as above.
+In Yinz, write each step on its own line and give each result a name, as above.
 
 ### Files and imports: paths start at the project root
 

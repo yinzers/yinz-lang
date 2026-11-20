@@ -850,7 +850,7 @@ switch (statusCode) {
 
 ### Chaining: a ranges pipeline becomes named steps
 
-C++20 ranges join steps with `|`. Yinz has no chaining and no `|` pipeline: a single `|` is for unions. Each step goes on its own line with a name, so you can inspect every value. A `for` loop builds the result one item at a time.
+C++20 ranges join steps with `|`. Yinz code puts one step on each line and gives each result a name (golden rule: *step-by-step over chaining*), so you can inspect every value. A single `|` in Yinz is for unions, not for joining steps. A `for` loop builds the result one item at a time.
 
 C++:
 
@@ -898,7 +898,7 @@ function entrypoint() -> Nothing {
 }
 ```
 
-A chain of calls written on one line is not written in Yinz. Give each result a name on its own line, as above.
+In Yinz, write each step on its own line and give each result a name, as above.
 
 ### Files and imports: no `#include` and no headers; paths start at the project root
 
