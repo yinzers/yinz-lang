@@ -129,9 +129,9 @@ There is one assignment operator: `=`. Every change to a variable is written out
 
 ---
 
-## Which operator goes first
+## Operator precedence: which operator goes first
 
-When one line has several operators, the ones higher in this list run first, as in school math:
+Precedence is the order in which operators run when a line has more than one. The ones higher in this list run first, as in school math:
 
 ```
 1.  ()                   // parentheses
