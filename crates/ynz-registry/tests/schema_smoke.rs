@@ -42,7 +42,7 @@ fn keyword_iteration_finds_all() {
         names.contains(&"wait"),
         "expected 'wait' in keyword iteration; got: {names:?}"
     );
-    assert_eq!(names.len(), 29, "expected 29 keywords");
+    assert_eq!(names.len(), 28, "expected 28 keywords");
 }
 
 // ---------------------------------------------------------------------------
@@ -77,24 +77,24 @@ fn banned_jargon_lookup_miss_returns_none() {
 // ---------------------------------------------------------------------------
 #[test]
 fn primitive_intrinsic_method_lookup() {
-    let mut found = ynz_registry::primitive_intrinsic_methods("int", "toNumber");
+    let mut found = ynz_registry::primitive_intrinsic_methods("Int", "toNumber");
     let entry = found
         .next()
-        .expect("int.toNumber intrinsic not found (Phase 3 migration)");
+        .expect("Int.toNumber intrinsic not found (Phase 3 migration)");
     assert_eq!(entry.kind, "method");
-    assert_eq!(entry.receiver_type, Some("int"));
-    assert_eq!(entry.return_type, "number");
+    assert_eq!(entry.receiver_type, Some("Int"));
+    assert_eq!(entry.return_type, "Number");
 }
 
 #[test]
 fn primitive_intrinsic_method_1arg_lookup() {
-    let mut found = ynz_registry::primitive_intrinsic_methods("int", "wrappingAdd");
+    let mut found = ynz_registry::primitive_intrinsic_methods("Int", "wrappingAdd");
     let entry = found
         .next()
-        .expect("int.wrappingAdd not found (Phase 3 migration)");
+        .expect("Int.wrappingAdd not found (Phase 3 migration)");
     assert_eq!(entry.kind, "method_1arg");
-    assert_eq!(entry.param_types, &["int"]);
-    assert_eq!(entry.return_type, "int");
+    assert_eq!(entry.param_types, &["Int"]);
+    assert_eq!(entry.return_type, "Int");
 }
 
 #[test]
@@ -106,24 +106,24 @@ fn primitive_intrinsic_free_fn_lookup() {
 
 #[test]
 fn primitive_intrinsic_unknown_method_returns_empty() {
-    let count = ynz_registry::primitive_intrinsic_methods("int", "nonexistent_method").count();
+    let count = ynz_registry::primitive_intrinsic_methods("Int", "nonexistent_method").count();
     assert_eq!(count, 0);
 }
 
 #[test]
 fn type_attached_constant_lookup() {
-    let entry = ynz_registry::type_attached_constant_lookup("int", "max")
-        .expect("int.max not found (Phase 3 migration)");
-    assert_eq!(entry.type_name, "int");
-    assert_eq!(entry.value_type, "int");
+    let entry = ynz_registry::type_attached_constant_lookup("Int", "max")
+        .expect("Int.max not found (Phase 3 migration)");
+    assert_eq!(entry.type_name, "Int");
+    assert_eq!(entry.value_type, "Int");
     assert_eq!(entry.value_literal, "9223372036854775807");
 }
 
 #[test]
 fn type_attached_constant_number_epsilon() {
-    let entry = ynz_registry::type_attached_constant_lookup("number", "epsilon")
-        .expect("number.epsilon not found (Phase 3 migration)");
-    assert_eq!(entry.value_type, "number");
+    let entry = ynz_registry::type_attached_constant_lookup("Number", "epsilon")
+        .expect("Number.epsilon not found (Phase 3 migration)");
+    assert_eq!(entry.value_type, "Number");
     assert_eq!(entry.value_literal, "1e-33");
 }
 
@@ -189,10 +189,10 @@ fn render_template_escaped_braces() {
 fn render_template_multiple_vars() {
     let mut vars = HashMap::new();
     vars.insert("name", "wrappingAdd");
-    vars.insert("type", "int");
+    vars.insert("type", "Int");
 
     let result = ynz_registry::render_template("{type}.{name}() wraps on overflow.", &vars);
-    assert_eq!(result, "int.wrappingAdd() wraps on overflow.");
+    assert_eq!(result, "Int.wrappingAdd() wraps on overflow.");
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn muted_hint_domain_lookup() {
     let entry = ynz_registry::muted_hint_domain_lookup("variable_type")
         .expect("variable_type muted-hint domain not found (Phase 6 migration)");
     assert_eq!(entry.placement_category, "Addition");
-    assert_eq!(entry.example_hint_rendered, ": int (from 42)");
+    assert_eq!(entry.example_hint_rendered, ": Int (from 42)");
 }
 
 #[test]

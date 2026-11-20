@@ -44,7 +44,7 @@
     "semanticTokenModifiers": [
       {
         "id": "promotable",
-        "description": "A token the compiler already promoted to a stricter form (`array` to `fixed`, `let` to `const`). Shown with a dotted underline; hover explains why."
+        "description": "A token the compiler already promoted to a stricter form (`Array` to `Fixed`, `let` to `const`). Shown with a dotted underline; hover explains why."
       }
     ],
     "colors": [

@@ -21,12 +21,19 @@
     },
     {
       "include": "#keywords"
+    },
+    {
+      "include": "#built-in-types"
     }
   ],
   "repository": {
     "banned-keywords": {
       "match": "\\b(interface|goroutine|protected|abstract|promise|private|switch|struct|future|public|match|class|async|await|type|enum|pub)\\b",
       "name": "invalid.deprecated"
+    },
+    "built-in-types": {
+      "match": "\\b(Boolean|Channel|Nothing|Number|String|Float|Range|Maybe|Array|Fixed|Int|Map)\\b",
+      "name": "support.type.builtin.ynz"
     },
     "comments": {
       "patterns": [
@@ -46,11 +53,11 @@
       ]
     },
     "deferred-features": {
-      "match": "\\b(self-referential-shape|scratch|foreign|test|f32|f64|i16|i32|i64|u16|u32|u64|gpu|i8|u8)\\b",
+      "match": "\\b(background-handle-nonsuspending-callee|channel-auto-close-on-last-producer|function-overload-by-argument-type|unsupported-crossing-local-type|channel-op-expression-position|fixed-crossing-local-with-wait|range-crossing-local-with-wait|shadow-crossing-local-support|wide-value-suspending-return|channel-element-heap-upgrade|map-entry-fields-after-wait|nested-shape-crossing-wait|fixed-array-iter-with-wait|auto-arc-codegen-emission|expression-iter-with-wait|background-handle-close|seq-cst-ordering-opt-in|stored-range-with-wait|self-referential-shape|background.cpuBound|maybe-move-out|scratch|foreign|test|f32|f64|i16|i32|i64|u16|u32|u64|gpu|i8|u8)\\b",
       "name": "invalid.illegal"
     },
     "keywords": {
-      "match": "\\b(background|sensitive|function|nothing|follows|extends|dynamic|options|return|hidden|errors|import|export|const|while|shape|else|base|Self|self|wait|let|for|if|in|is)\\b",
+      "match": "\\b(background|sensitive|function|follows|extends|dynamic|options|return|hidden|errors|import|export|const|while|shape|else|base|Self|self|wait|let|for|if|in|is)\\b",
       "name": "keyword.control.ynz"
     },
     "literals": {
