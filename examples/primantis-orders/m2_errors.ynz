@@ -30,7 +30,7 @@ function compoundAssignBanned() -> Nothing {
 }
 
 function bignumDeferral() -> Nothing {
-  // WHY: bignum `number<N>` for N > 34 is a v0.8 / M8 feature (per design/numeric-types.md).
+  // WHY: bignum `Number<N>` for N > 34 is a v0.8 / M8 feature (per design/numeric-types.md).
   //      Parser emits a deferral diagnostic for any N != 34 with a pointer to the milestone.
   let bigTab: Number<100> = 0
   print(bigTab)

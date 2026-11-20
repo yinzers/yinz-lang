@@ -1,7 +1,7 @@
 // examples/primantis-orders/m8Errors.ynz
 //
 // Intentional compile-error gallery for M8: modules, concurrency keywords,
-// bignum, and the number[N] → number<N> migration.
+// bignum, and the number[N] → Number<N> migration.
 // Each trigger fires on a single compile (Yinz multi-errors up to 50/compile).
 //
 // Run via the error_galleries test in crates/ynz-driver/tests/error_galleries.rs.
@@ -21,7 +21,7 @@ function p5_background_share_rejected() -> Nothing {
 
 // WHY: `let h = background foo()` (handle form) must be a compile error in M8.
 // Background handles (.send/.receive) ship in v0.3. Without an explicit rejection,
-// the binding silently gets type `nothing` and the user has no signal anything is wrong.
+// the binding silently gets type `Nothing` and the user has no signal anything is wrong.
 function p5_handleTarget() -> Nothing {
     print(`running`)
 }
@@ -46,7 +46,7 @@ function polish_missing_field_in_inline_shape() -> Nothing {
 }
 
 // WHY: `hidden` inside an inline shape type must emit the specific diagnostic.
-// (The `b: int` that follows gets parsed as a regular field — secondary "missing b" error fires too.)
+// (The `b: Int` that follows gets parsed as a regular field — secondary "missing b" error fires too.)
 function polish_hidden_in_inline_shape() -> Nothing {
     let p: { a: Int, hidden b: Int } = { a: 1 }
     print(p)
@@ -71,10 +71,10 @@ function m8Eat(give rows: Array<Int>) -> Nothing {
   print(rowCount.toString())
 }
 
-// pick — returns its argument through a `maybe`. A function returning a string, array, map, shape,
-// channel, a `maybe` of a string, shape, number or channel or an envelope union hands back an owned
+// pick — returns its argument through a `Maybe`. A function returning a string, array, map, shape,
+// channel, a `Maybe` of a string, shape, number or channel or an envelope union hands back an owned
 // copy (`copied_at_return`, and a generic call result is an owned copy of the instance's type), so
-// those results are fresh; a `maybe` of an array or map still returns a piece (`MayAlias` under the
+// those results are fresh; a `Maybe` of an array or map still returns a piece (`MayAlias` under the
 // `returns_fresh` fixpoint fact), so a `let` bound to its result is `Reaches(b)`, never transferable.
 function m8Pick(share b: Maybe<Array<Int>>) -> Maybe<Array<Int>> {
   return b
@@ -103,7 +103,7 @@ function m8ConsumedBySendArray() -> Nothing {
 
 // WHY: ConsumedBySend (map) — the same rule for the other owned-heap element kind. The
 // WHAT-INSTEAD's advice (`wire.send(table.copy())`) is executable only because `.copy()` on
-// `map<K, V>` ships in the same phase (Patrick's ruling, 2026-09-03).
+// `Map<K, V>` ships in the same phase (Patrick's ruling, 2026-09-03).
 function m8ConsumedBySendMap() -> Nothing {
   let wire: Channel<Map<String, Int>> = Channel<Map<String, Int>>(2)
   let table: Map<String, Int> = { `a`: 1 }

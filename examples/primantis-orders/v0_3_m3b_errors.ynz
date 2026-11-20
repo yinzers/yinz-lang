@@ -160,7 +160,7 @@ function relayOrder(share ticket: Order) -> Nothing {
 //
 // Diagnostic (WHAT / WHAT-INSTEAD / WHY):
 //   WHAT: `lineItems` is declared `share` — read-only — so its elements cannot be changed.
-//   WHAT INSTEAD: Change the parameter to `lend lineItems: array<int>` if this function
+//   WHAT INSTEAD: Change the parameter to `lend lineItems: Array<Int>` if this function
 //                 needs to modify it.
 //   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
 //        the value is unchanged after the call. When a function modifies a value, declare
@@ -168,7 +168,7 @@ function relayOrder(share ticket: Order) -> Nothing {
 
 function appendLineItem(share lineItems: Array<Int>) -> Nothing {
   // WHY: ShareParamMutation (collection) — `.add()` appends in place, mutating the receiver.
-  // `lineItems` is `share` (read-only); declare `lend lineItems: array<int>` to grow it.
+  // `lineItems` is `share` (read-only); declare `lend lineItems: Array<Int>` to grow it.
   lineItems.add(42)
 }
 
@@ -205,7 +205,7 @@ function discountSelf(share self: Order) -> Nothing {
 //
 // Diagnostic (WHAT / WHAT-INSTEAD / WHY):
 //   WHAT: `prices` is declared `share` — read-only — so its elements cannot be changed.
-//   WHAT INSTEAD: Change the parameter to `lend prices: array<int>` if this function
+//   WHAT INSTEAD: Change the parameter to `lend prices: Array<Int>` if this function
 //                 needs to modify it.
 //   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
 //        the value is unchanged after the call. When a function modifies a value, declare
@@ -213,7 +213,7 @@ function discountSelf(share self: Order) -> Nothing {
 
 function overwriteFirst(share prices: Array<Int>) -> Nothing {
   // WHY: ShareParamMutation (element) — `prices[0] = ...` writes an element in place,
-  // mutating the receiver. `prices` is `share` (read-only); declare `lend prices: array<int>`.
+  // mutating the receiver. `prices` is `share` (read-only); declare `lend prices: Array<Int>`.
   prices[0] = 99
 }
 

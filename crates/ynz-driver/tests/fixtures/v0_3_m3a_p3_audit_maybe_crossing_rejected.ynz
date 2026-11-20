@@ -2,7 +2,7 @@
 // maybe<T> is represented as a pointer to a stack-allocated {tag,payload} struct.
 // The stack frame is freed on suspension; the crossing-local frame slot holds a dangling pointer.
 function entrypoint() -> Nothing {
-  let m: Maybe int = 42
+  let m: Maybe Int = 42
   wait sleep(5)
   print(m.or(0).toString())
 }

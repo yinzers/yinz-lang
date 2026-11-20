@@ -14,26 +14,26 @@
 // Users from TypeScript hit this first — the diagnostic teaches `shape` as
 // the single unambiguous keyword for all data type declarations.
 type Sandwich {
-  name: string
+  name: String
 }
 
 // WHY: `struct` is banned. Users from Rust/C reach for this.
 // Redirected to `shape` with a note that Yinz uses one keyword for all shapes.
 struct Order {
-  ticketNumber: int
+  ticketNumber: Int
 }
 
 // WHY: `class` is banned. Users from Java/Swift reach for this.
 // Diagnostic explicitly mentions the non-OOP model: data in `shape`,
 // behavior in standalone functions.
 class Topping {
-  weightOz: int
+  weightOz: Int
 }
 
 // WHY: `interface` is banned. Users from TypeScript/Java reach for this.
 // Redirected to `shape` + `follows` — the Yinz contract pattern.
 interface Stackable {
-  addLayer(lend self, ingredient: string) -> nothing
+  addLayer(lend self, ingredient: String) -> Nothing
 }
 
 // WHY: `enum` is banned. Users from any typed language reach for this.
@@ -46,7 +46,7 @@ enum BreadStatus {
 // WHY: `abstract` is banned. Users from Java/C# reach for this.
 // Redirected to `base shape` — the Yinz form for a non-instantiable shape.
 abstract class MenuItem {
-  name: string
+  name: String
 }
 
 // WHY: `test` is reserved for the built-in test framework (v0.13). Pre-reserving
@@ -67,7 +67,7 @@ function prefixStructLit() -> Nothing {
 // WHY: Method body inside a shape is banned — Yinz is not OOP.
 //      Parser emits teaching diagnostic telling user to move the function outside.
 shape BadKitchen {
-  function announce() -> string {
+  function announce() -> String {
     return `order's up`
   }
 }
@@ -81,7 +81,7 @@ function missingField() -> Nothing {
   let s: Sandwich = { name: `Pitts-burgher` }
 }
 
-// WHY: Field type mismatch — priceCents expects int, got string.
+// WHY: Field type mismatch — priceCents expects Int, got String.
 function wrongFieldType() -> Nothing {
   let s: Sandwich = { name: `Pitts-burgher`, priceCents: `one thousand` }
 }

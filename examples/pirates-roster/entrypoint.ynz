@@ -6,7 +6,7 @@
 //
 // v0.2-M2 — Open this file in VSCode (with the Yinz extension installed) to see:
 //   • Hover docs on every keyword — try hovering over `function`, `let`, `shape`, etc.
-//   • Autocomplete after typing `int.` — shows all primitive int methods
+//   • Autocomplete after typing `Int.` — shows all primitive Int methods
 //   • Inline diagnostics — see examples/primantis-orders/v0_2_m2_errors.ynz for intentional triggers
 //   Install: https://github.com/yinzers/yinz-lang/releases/latest/download/yinz-latest.vsix
 //
@@ -111,23 +111,23 @@ function entrypoint() -> Nothing {
   // Generic function — identity<T> infers T from argument
   print(identity(42))
   print(identity(`generic`))
-  // array<T>: heap-growable, batting averages in thousandths (317 = .317)
+  // Array<T>: heap-growable, batting averages in thousandths (317 = .317)
   let battingAverages: Array<Int> = [317, 282, 295]
   battingAverages.add(308)
   print(battingAverages.count())
   let foundFirstAverage = battingAverages[0]            // a maybe: the average, or nothing
   let firstAverage = foundFirstAverage.or(-1)           // a plain int, -1 if missing
   print(firstAverage)
-  // fixed<T>: stack-allocated, size locked — three retired Pirates numbers
+  // Fixed<T>: stack-allocated, size locked — three retired Pirates numbers
   let retiredNumbers: Fixed<Int> = [1, 4, 8]
   print(retiredNumbers.count())
   let foundRetiredNumber = retiredNumbers[2]
   let retiredNumber = foundRetiredNumber.or(-1)
   print(retiredNumber)
-  // maybe<T>: absence without null
+  // Maybe<T>: absence without null
   let nextHitter: Maybe<Int> = none
   print(nextHitter.or(0))
-  // map<K,V>: hash map with string keys — Pirates career hit leaders
+  // Map<K,V>: hash map with string keys — Pirates career hit leaders
   let hitLeaders: Map<String, Int> = { `clemente`: 3000, `wagner`: 3420 }
   let foundClementeHits = hitLeaders[`clemente`]
   let clementeHits = foundClementeHits.or(0)
@@ -161,7 +161,7 @@ function entrypoint() -> Nothing {
   print(wholeOrMissing.toString())
   let fromInt: Int = 99.toInt()
   print(fromInt.toString())
-  // Early-return narrowing on maybe<T>
+  // Early-return narrowing on Maybe<T>
   let scores: Array<Int> = [3, 5, 7]
   let firstInningRuns = firstOrDefault(scores)
   print(firstInningRuns.toString())
@@ -229,7 +229,7 @@ function entrypoint() -> Nothing {
   for (n in clock) {
     print(n.toString())
   }
-  // ────── M8: bignum (number<N> for N > 34) ──────
+  // ────── M8: bignum (Number<N> for N > 34) ──────
   let teamPayroll: Number<100> = 0.1
   let bonus: Number<100> = 0.2
   let totalCompensation: Number<100> = teamPayroll + bonus
@@ -451,7 +451,7 @@ function next(lend self: InningClock) -> Maybe<Int> {
 function demoInlineShapes() -> Nothing {
   let seat: { row: Int, number: Int } = { row: 3, number: 4 }
   print(`seat row=${seat.row} number=${seat.number}`)
-  // Inline shape in fixed<T> + for-loop destructuring — game intermission lengths.
+  // Inline shape in Fixed<T> + for-loop destructuring — game intermission lengths.
   const intermissions: Fixed<{ minutes: Int }> = [{ minutes: 5 }, { minutes: 15 }, { minutes: 60 }]
   for (__shape in intermissions) {
     let minutes = __shape.minutes
@@ -565,7 +565,7 @@ function m3m2_demo() -> Nothing {
   print(`v0.3-M2 — nested state machines (inline poll-and-yield):`)
   scheduleCheck(`Sanguillen`)
 
-  // Suspending `-> number errors` demo (v0.3-M3a Phase 1).
+  // Suspending `-> Number errors` demo (v0.3-M3a Phase 1).
   // fetchTicketPrice suspends (wait sleep) and returns an exact decimal128 price.
   // The 16-byte decimal is stored in the composed frame's staging slot — no leak.
   print(``)
@@ -585,7 +585,7 @@ function m3m2_demo() -> Nothing {
 // Cmd+click `greet` to jump to its function declaration.
 // Right-click `Player` → "Find All References" to see every use across files.
 // Press F2 on `greet` → type a new name → atomic rename across all files.
-// Note the muted `: int (from 42)` hint after `let score = 42`.
+// Note the muted `: Int (from 42)` hint after `let score = 42`.
 // Note the muted `share` hint after `player` in `greet(player)`.
 // Format on save rewrites the file to canonical Yinz style via ynz-fmt.
 // Code actions offer quick-fixes for any diagnostic with a WHAT-INSTEAD.
@@ -921,7 +921,7 @@ function m3b_demo() -> Nothing {
 // M3f closed two silent-miscompile bugs in the state-machine codegen:
 //
 // Bug 1 — Same-callee wide-`errors` staging-slot aliasing: when the same
-// `-> number errors` function was called twice, both bindings silently held the
+// `-> Number errors` function was called twice, both bindings silently held the
 // SECOND call's value. Fixed by copy-on-bind: each binding now gets its own
 // per-binding stable storage before the next call can reuse the callee's staging slot.
 //
@@ -1083,8 +1083,8 @@ function m3g_demo() -> Nothing {
 //
 // Bounded task-communication channels, live:
 //
-//     let orders: channel<int> = channel<int>()      // default capacity 64 (IDE shows 64)
-//     let names:  channel<string> = channel<string>(8)   // explicit capacity
+//     let orders: Channel<Int> = Channel<Int>()      // default capacity 64 (IDE shows 64)
+//     let names:  Channel<String> = Channel<String>(8)   // explicit capacity
 //
 // Channels are bounded by construction (there is no unbounded channel). When a producer outruns
 // the channel, `send()` SUSPENDS the producer until the reader drains a slot — that is
@@ -1103,7 +1103,7 @@ function relayScores(lend wire: Channel<Int>) -> Nothing {
 // channel parameter (fed by `scout.send(...)` through the handle), evaluates it, and its
 // completion value is delivered back through the SAME handle via `scout.receive()`.
 function gradeProspect(lend requests: Channel<Int>) -> Int errors {
-  // A bare channel's `receive()` is `maybe<int>` (v0.3-M8): `none` means the channel was
+  // A bare channel's `receive()` is `Maybe<Int>` (v0.3-M8): `none` means the channel was
   // closed and drained. One command is always sent here, so `.or(0)` is never taken.
   let command = requests.receive()
   let jerseyNumber = command.or(0)
@@ -1143,7 +1143,7 @@ function m4_demo() -> Nothing {
   // function drains it. Capacity 1 forces genuine backpressure inside relayScores.
   let wire: Channel<Int> = Channel<Int>(1)
   background relayScores(wire)
-  // Each `receive()` hands back a `maybe<int>` (v0.3-M8) — narrow it right away; this
+  // Each `receive()` hands back a `Maybe<Int>` (v0.3-M8) — narrow it right away; this
   // producer never closes the wire, so the fallback is never taken.
   let first = wire.receive()
   let firstRuns = first.or(0)
@@ -1156,7 +1156,7 @@ function m4_demo() -> Nothing {
 
   // Handle form: STORE the spawn to communicate with it (don't store = fire-and-forget —
   // same keyword, two patterns). `scout.send(21)` feeds gradeProspect's channel parameter;
-  // `scout.receive()` delivers the task's completion value, typed `int errors`.
+  // `scout.receive()` delivers the task's completion value, typed `Int errors`.
   let requests: Channel<Int> = Channel<Int>(4)
   let scout = background gradeProspect(requests)
   scout.send(21)
@@ -1183,7 +1183,7 @@ function m4_demo() -> Nothing {
   // When a read-only value is shared across a `background` boundary (used after the spawn),
   // it crosses SAFELY today via an independent copy — the task reads its own copy, the caller
   // keeps its own. A borrow across the boundary (`share`/`lend`) is a compile error (the value
-  // could dangle once the task runs); a `channel<T>` is the one exempt conduit. Those boundary
+  // could dangle once the task runs); a `Channel<T>` is the one exempt conduit. Those boundary
   // rules ship and are proven in `v0_3_m4_errors.ynz` (the auto-Arc boundary reject) and the
   // R3 boundary matrix.
   //
@@ -1201,7 +1201,7 @@ function m4_demo() -> Nothing {
 // whatever was already buffered, then returns `none`. That `none` is how a consumer loop ends —
 // no counting, no timeouts, no special error. Closing twice is a safe no-op.
 //
-// Sending an owned-heap value (an `array<T>` or a `map<K, V>`) GIVES it away: the sender's
+// Sending an owned-heap value (an `Array<T>` or a `Map<K, V>`) GIVES it away: the sender's
 // binding can't be read afterward (use it before the send, or send `.copy()`), so the receiver
 // is the value's only holder — two tasks never share one changing value.
 
@@ -1215,7 +1215,7 @@ function relayInnings(lend wire: Channel<Int>) -> Nothing {
   wire.close()
 }
 
-// tallyRuns — the canonical consumer loop: `receive()` is `maybe<int>`; the loop runs while
+// tallyRuns — the canonical consumer loop: `receive()` is `Maybe<Int>`; the loop runs while
 // values keep arriving and stops on the first `none`.
 function tallyRuns(lend wire: Channel<Int>) -> Int {
   let total = 0
@@ -1250,7 +1250,7 @@ function m8_demo() -> Nothing {
   let runs = tallyRuns(wire)
   print(`  runs after the wire closed: ${runs.toString()}`)
   // The consumer loop ended, so close() has happened: a send now is refused with the typed
-  // channel-closed error on the usual `send() -> nothing errors` surface.
+  // channel-closed error on the usual `send() -> Nothing errors` surface.
   let late = wire.send(1)
   if (late.failed()) {
     print(`  a run sent after close() is refused — the scorer already went home`)
@@ -1372,7 +1372,7 @@ function m9_demo() -> Nothing {
 // ────── v0.3-M5: per-field array layout — cannonball volley from Fort Pitt ──────
 //
 // The repo's FIRST layout-qualifying array example. `volley` below is a
-// 128-element literal `array<Cannonball>` whose loops read only `x` and `y`, so
+// 128-element literal `Array<Cannonball>` whose loops read only `x` and `y`, so
 // the compiler stores it as separate per-field arrays (one block of memory per
 // field) instead of each element's fields sitting side by side. Build this
 // project and the compiler prints the `array-using-soa-layout` SUGGESTION
@@ -1482,7 +1482,7 @@ function m5_soa_demo() -> Nothing {
   let step: Int = 0
   while (step < 64) {
     // Physics step: read each ball out by value (`volley[i]` returns
-    // `maybe<Cannonball>`; `.or(grounded)` unwraps it), write the advanced
+    // `Maybe<Cannonball>`; `.or(grounded)` unwraps it), write the advanced
     // ball back. Element mutation keeps the per-field layout — only growth
     // (`.add`) or letting the array escape this function would turn it off.
     let i: Int = 0
@@ -1523,7 +1523,7 @@ function m5_soa_demo() -> Nothing {
   print(lead.y)
 
   // The suppression filter, on display: `recordHit(lend self: Pirate, ...)`
-  // exists in this file (M4 section above), so ANY `array<Pirate>` keeps the
+  // exists in this file (M4 section above), so ANY `Array<Pirate>` keeps the
   // normal side-by-side layout — a lend-self function expects each Pirate's
   // fields together in memory, and splitting them per-field would break that.
   // `crew` otherwise fully qualifies (66 > 64, literal, 1-field loop): the
@@ -1586,7 +1586,7 @@ function m5_soa_demo() -> Nothing {
   let quartermastersFirstCrate = foundQuartermastersFirstCrate.or(-1)
   print(`  quartermaster's fore hold, first crate: ${quartermastersFirstCrate.toString()}`)
 
-  // The same rule at a fixed-size list: `fixed<T>` holds its items in one block
+  // The same rule at a fixed-size list: `Fixed<T>` holds its items in one block
   // of cells, so copying the cells copies the list.
   let watchBell: Fixed<Int> = [4, 8, 12]
   let sparebell: Fixed<Int> = watchBell.copy()
@@ -1602,7 +1602,7 @@ function m5_soa_demo() -> Nothing {
   // compile time instead of handing back the same thing. A channel is the line
   // two tasks talk over, so there is nothing to copy:
   //   let secondLine = orders.copy()
-  //   COMPILE ERROR: `.copy()` cannot make a separate `channel<int>` value —
+  //   COMPILE ERROR: `.copy()` cannot make a separate `Channel<Int>` value —
   //   a channel is the line two tasks talk over, not a value you hold.
   // The same goes for a task handle, a union, a map entry from a loop, and an
   // `errors` value you have not checked yet. See

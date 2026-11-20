@@ -8,7 +8,7 @@
 function missingReturnPath(x: Int) -> Int {
   // WHY: not all code paths return a value. Typeck's return-path analysis
   //      (M3 P3) walks the function body and reports any leaf branch that
-  //      doesn't return on a `-> int` function.
+  //      doesn't return on a `-> Int` function.
   if (x > 0) {
     return x
   }

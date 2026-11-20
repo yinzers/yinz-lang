@@ -26,7 +26,7 @@
 //   The fmt_demo file is intentionally non-canonical.
 
 // WHY: stdin parse error — exit 1.
-//   Command: echo "function broken() -> nothing { let x = 1" | ynz fmt --stdin
+//   Command: echo "function broken() -> Nothing { let x = 1" | ynz fmt --stdin
 //   Output: parse diagnostic on stderr, exit 1.
 
 function entrypoint() -> Nothing {
@@ -35,6 +35,6 @@ function entrypoint() -> Nothing {
   // compile errors (parse errors trigger FmtError::ParseError; typeck errors below
   // are caught by `ynz build` / `ynz run`, not `ynz fmt`).
   // To see the formatter's own parse-error path:
-  //   echo "function broken() -> nothing { let x = 1" | ynz fmt --stdin
+  //   echo "function broken() -> Nothing { let x = 1" | ynz fmt --stdin
   let _x: Int = "this is a string"
 }

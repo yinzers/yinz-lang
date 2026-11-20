@@ -15,13 +15,13 @@
 //   NestedShapeCrossing            — shape with a nested-shape field crosses a wait.
 //   WideValueSuspendingReturn      — suspending fn returns a shape value by value.
 //   UnsupportedCrossingLocalType   — maybe/union/dynamic crosses a wait.
-//   FixedArrayIterWithWait         — fixed<T> used as for-iterator with a wait in body.
+//   FixedArrayIterWithWait         — Fixed<T> used as for-iterator with a wait in body.
 //   StoredRangeWithWait            — range bound to a local then iterated with a wait.
 //   MapEntryFieldAfterWait         — entry.value read after a wait in for-over-map.
 //
 // Lifted guards (no longer fire; kept out of this gallery):
 //   ArrayShapeRuntimeFieldWithWait — LIFTED by v0.3-M5 by-value element storage
-//                                    (runtime-field array<Shape> now crosses a wait
+//                                    (runtime-field Array<Shape> now crosses a wait
 //                                    correctly; see integration.rs m5_p3_array_shape_*_runs).
 
 // ── Permanent Guard 1: SubExprSuspendViolation ────────────────────────────────
@@ -107,7 +107,7 @@ function shipOrder(unitPrice: Int) -> Nothing {
 // WHY: WideValueSuspendingReturn — a suspending function returning `Item` by value
 // needs a variable-size frame staging slot entangled with the shape-return base fix.
 // Deferred to a later milestone. Workaround: return primitive fields individually.
-// Note: `-> number errors` (decimal128 EC) IS supported — only Shape returns are deferred.
+// Note: `-> Number errors` (decimal128 EC) IS supported — only Shape returns are deferred.
 
 shape Item {
   price: Int
@@ -127,29 +127,29 @@ function suspendingReturnShapeErrors() -> Item errors {
 
 // ── Deferred Guard 4: UnsupportedCrossingLocalType (maybe) ───────────────────
 //
-// WHY: UnsupportedCrossingLocalType — `adjusted` is a `maybe<int>` that crosses a
-// `wait`. The frame-slot save/restore for `union`, `maybe`, and `dynamic` values is
+// WHY: UnsupportedCrossingLocalType — `adjusted` is a `Maybe<Int>` that crosses a
+// `wait`. The frame-slot save/restore for `union`, `Maybe`, and `dynamic` values is
 // not yet implemented: these types are pointers to stack-allocated tag+payload pairs
 // that become invalid after suspension. Extract the inner value before the `wait`.
 
 function processQuantity(qty: Int) -> Nothing {
   let adjusted: Maybe<Int> = qty.toString().toInt()
   wait sleep(5)
-  let val = adjusted.or(0)             // WHY: UnsupportedCrossingLocalType — maybe<int> crosses wait
+  let val = adjusted.or(0)             // WHY: UnsupportedCrossingLocalType — Maybe<Int> crosses wait
   print(val.toString())
 }
 
 // ── Deferred Guard 5: FixedArrayIterWithWait ──────────────────────────────────
 //
-// WHY: FixedArrayIterWithWait — `ratings` is a `fixed<int>` array used as a
-// for-iterator whose body contains a `wait`. `fixed<T>` is stack-allocated; its
+// WHY: FixedArrayIterWithWait — `ratings` is a `Fixed<Int>` array used as a
+// for-iterator whose body contains a `wait`. `Fixed<T>` is stack-allocated; its
 // pointer becomes dangling when the function suspends and resumes in a new call
-// frame. Use `array<int>` instead — heap-allocated pointers survive suspension.
+// frame. Use `Array<Int>` instead — heap-allocated pointers survive suspension.
 
 function scanFixed() -> Nothing {
   let ratings: Fixed<Int> = [85, 92, 78]
   for (r in ratings) {
-    wait sleep(5)                       // WHY: FixedArrayIterWithWait — fixed<int> iter + wait in body
+    wait sleep(5)                       // WHY: FixedArrayIterWithWait — Fixed<Int> iter + wait in body
     print(r.toString())
   }
 }
@@ -188,7 +188,7 @@ function scanMap() -> Nothing {
 // ── (former Deferred Guard 8: ArrayShapeRuntimeFieldWithWait — LIFTED v0.3-M5) ──
 //
 // The trigger block that lived here was removed when v0.3-M5's by-value element
-// storage lifted the guard: a runtime-computed field in an array<Shape> crossing a
+// storage lifted the guard: a runtime-computed field in an Array<Shape> crossing a
 // `wait` is no longer an error — it compiles and runs correctly. Acceptance lives in
 // crates/ynz-driver/tests/integration.rs (m5_p3_array_shape_*_runs).
 

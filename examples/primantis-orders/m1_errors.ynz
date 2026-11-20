@@ -8,7 +8,7 @@
 
 // WHY: banned-keyword diagnostic for `fn` — Yinz uses `function` keyword.
 //      Tests the lexer's banned-jargon path (lexer recovers as Identifier).
-fn cookSandwich() -> nothing {
+fn cookSandwich() -> Nothing {
   print(`order's up`)
 }
 
@@ -19,16 +19,16 @@ function unterminatedOrder() -> Nothing {
 }
 
 // WHY: unknown character `$` in source. Tests the lexer's unknown-byte recovery.
-function unknownTopping() -> nothing {
+function unknownTopping() -> Nothing {
   print($)
 }
 
-// WHY: type mismatch — function declares `-> nothing` but the body returns a string.
+// WHY: type mismatch — function declares `-> Nothing` but the body returns a string.
 //      Tests typeck's return-type check against function signature.
-function wrongOrderType() -> nothing {
+function wrongOrderType() -> Nothing {
   return `capicola provolone egg"
 }
 
-// WHY: missing body — `function name() -> nothing` with no `{` body.
+// WHY: missing body — `function name() -> Nothing` with no `{` body.
 //      Tests parser's required-body enforcement (per r9 lock: `function` always has body).
-function emptyKitchen() -> nothing
+function emptyKitchen() -> Nothing

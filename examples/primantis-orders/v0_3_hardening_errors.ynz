@@ -34,7 +34,7 @@ function ticketsSold(share neighborhood: String) -> Int errors {
 }
 
 function entrypoint() -> Nothing {
-  // WHY: CopyNotIndependent on `channel<T>` — a channel is shared on purpose. A copy would be
+  // WHY: CopyNotIndependent on `Channel<T>` — a channel is shared on purpose. A copy would be
   // a line nobody is listening on, and the messages you sent into it would vanish silently.
   let orders: Channel<Int> = Channel<Int>(4)
   let sameLine = orders.copy()
@@ -62,19 +62,19 @@ function entrypoint() -> Nothing {
   let attempt = ticketsSold(`strip district`)
   let savedAttempt = attempt.copy()
 
-  // WHY: CopyNotIndependent on `nothing` — there is no value here at all to make a second of.
+  // WHY: CopyNotIndependent on `Nothing` — there is no value here at all to make a second of.
   let void = nothingAtAll().copy()
 
   // WHY: SpawnArgNotIndependent — the `background` face of the same rule. This line still
   // reads `pings` after the task starts, so the task would need its own separate one, and an
-  // `array<channel<int>>` has no separate one to give. Hand it over instead, or read it before
+  // `Array<Channel<Int>>` has no separate one to give. Hand it over instead, or read it before
   // the spawn. (A union is not a trigger here: a task is given a slot of its own for one.)
   let pings: Array<Channel<Int>> = [orders]
   background sort(pings)
   print(pings.count())
 
   // WHY: SpawnArgStorageDiesWithTheFrame — a different rule from the seven above, and it needs
-  // its own words. A `range` is kept with the function that made it, so the problem is not that
+  // its own words. A `Range` is kept with the function that made it, so the problem is not that
   // two places would hold one value: it is that by the time the task looked, the function would
   // be gone. Handing it over instead does not help, which is why this refusal never says to.
   let stroll: Range = range(0, 3)
@@ -93,7 +93,7 @@ function entrypoint() -> Nothing {
   }
 
   // WHY: EcFieldNotYetAvailable fires here even INSIDE a correct `.failed()` guard — `.trace`
-  // type-checks fine (it really is `array<Frame>`) but has no working codegen yet. (v0.3
+  // type-checks fine (it really is `Array<Frame>`) but has no working codegen yet. (v0.3
   // concurrency hardening Phase 3 step 3.4 — closes parked item 34: before this fix the
   // program below compiled clean and reached codegen as "This is a compiler bug," a lie about
   // a program that did everything REF-errors.md asks.)

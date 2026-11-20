@@ -75,7 +75,7 @@ function triggerLargeCopyWarning() -> Nothing {
 // When --kernel is a public flag (v0.3+), this block will be updated with a real trigger.
 //
 // Placeholder comment only:
-//   function entrypoint() -> nothing {
+//   function entrypoint() -> Nothing {
 //     let order: Order = { id: 1, item: `pierogies` }
 //     background processBigOrder(order)   // ERROR in --kernel mode
 //   }

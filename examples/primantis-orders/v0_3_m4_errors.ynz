@@ -45,12 +45,12 @@ function entrypoint() -> Nothing {
   // a negative capacity is meaningless.
   let negCap: Channel<Int> = Channel<Int>(-3)
 
-  // WHY: channel-capacity-wrong-type — the capacity is a count of slots, so it must be an `int`,
+  // WHY: channel-capacity-wrong-type — the capacity is a count of slots, so it must be an `Int`,
   // not a string.
   let wrongCapType: Channel<Int> = Channel<Int>(`plenty`)
 
   // WHY: channel-missing-element-type — the compiler needs the element type `T` to check
-  // `send`/`receive` later, so `channel()` with no `<T>` is rejected.
+  // `send`/`receive` later, so `Channel()` with no `<T>` is rejected.
   let noElem = Channel()
 
   // WHY: channel-too-many-args — a channel takes at most one argument, its capacity.
@@ -86,7 +86,7 @@ function entrypoint() -> Nothing {
   // WHY: channel-receiver-origin-not-derivable — the compiler decides which functions need
   // suspend-and-resume support by reading each binding's declared type early, so a channel
   // arriving through a shape field (or a collection element, loop variable, or another
-  // module's function) must be bound WITH its type: `let line: channel<int> = window.line`.
+  // module's function) must be bound WITH its type: `let line: Channel<Int> = window.line`.
   // Unannotated, the origin is invisible and the operation is rejected with a teaching error.
   let window: PickupWindow = { line: orders }
   let line = window.line
@@ -94,7 +94,7 @@ function entrypoint() -> Nothing {
 
   // WHY: channel-element-type-not-supported — a `shape` value lives in the SENDING task's
   // stack frame, which can be freed while the value still sits in the channel; the receiver
-  // would read freed memory. Rejected until per-type heap-copying ships. (`channel<number>`
+  // would read freed memory. Rejected until per-type heap-copying ships. (`Channel<Number>`
   // was this trigger until v0.3-M8 shipped decimal128 marshalling — fr12 — so the class keeps
   // a shape instance here.)
   let widePipe: Channel<BatchNote> = Channel<BatchNote>(2)
@@ -107,7 +107,7 @@ function entrypoint() -> Nothing {
   let badHandle = background countBuns()
 
   // WHY: handle-send-task-takes-no-channel — h.send(v) feeds the spawned function's FIRST
-  // `channel<T>` parameter; a task whose function takes no channel never looks for messages,
+  // `Channel<T>` parameter; a task whose function takes no channel never looks for messages,
   // so sending to it would silently pile up values nobody reads.
   let oven = background reheatOven()
   oven.send(450)
@@ -144,9 +144,9 @@ function entrypoint() -> Nothing {
   print(`unreachable`)
 }
 
-// -- v0.3-M4 Error Class: kernel-mode rejects channel<T> construction AND channel methods --
+// -- v0.3-M4 Error Class: kernel-mode rejects Channel<T> construction AND channel methods --
 //
-// WHY: kernel-channel-rejected — `channel<T>` needs the Tokio scheduler started by ynz_rt_init to
+// WHY: kernel-channel-rejected — `Channel<T>` needs the Tokio scheduler started by ynz_rt_init to
 // suspend a task on send-when-full / receive-when-empty; that scheduler does not run in kernel
 // mode, so channel construction (Phase 1) AND the `.send()`/`.receive()` method surface (Phase 2)
 // are compile errors under --kernel.
@@ -157,17 +157,17 @@ function entrypoint() -> Nothing {
 // method-gate tests. When --kernel is a public flag, this block will be updated with a real
 // trigger:
 //
-//     let ch: channel<int> = channel<int>()   // ERROR in --kernel mode
+//     let ch: Channel<Int> = Channel<Int>()   // ERROR in --kernel mode
 //     ch.send(1)                              // ERROR in --kernel mode too
 
 // -- v0.3-M4 Error Class: sending on a channel whose receiver is gone (RUNTIME typed error) --
 //
-// WHY: channel-closed-send — Lock 8: `.send()` is typed `nothing errors`, so a dropped/closed
+// WHY: channel-closed-send — Lock 8: `.send()` is typed `Nothing errors`, so a dropped/closed
 // receiver yields a TYPED Yinz channel-closed error a program can handle with `.or()` /
 // `errors` propagation — never a silent drop, never a raw runtime crash.
 //
 // NOT triggerable from v0.3 source, deliberately: the channel OBJECT holds its own sender and
-// receiver endpoints, and a `channel<T>` binding keeps both alive (refcount-shared across
+// receiver endpoints, and a `Channel<T>` binding keeps both alive (refcount-shared across
 // `background` boundaries), so no v0.3 program shape can observe a closed channel. The path is
 // still real — it is emitted in codegen (the 3-way suspend-point's Closed arm) and proven at the
 // runtime substrate (`send_to_closed_returns_closed` in crates/ynz-runtime/src/channel.rs). It

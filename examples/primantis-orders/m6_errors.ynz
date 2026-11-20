@@ -32,7 +32,7 @@ options Single {
 // WHY: empty options is rejected — must have ≥2 variants
 options Empty { }
 
-// WHY: .toInt() on boolean is rejected — no silent 0/1 coercion
+// WHY: .toInt() on Boolean is rejected — no silent 0/1 coercion
 function boolToInt() -> Nothing {
   let x = true.toInt()
 }
@@ -94,7 +94,7 @@ function isOnString() -> Nothing {
   }
 }
 
-// WHY: `.value` without narrowing on maybe<T>
+// WHY: `.value` without narrowing on Maybe<T>
 function valueWithoutCheck() -> Nothing {
   let x: Maybe<Int> = `bad`.toInt()
   print(x.value.toString())

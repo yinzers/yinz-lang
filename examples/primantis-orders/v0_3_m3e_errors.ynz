@@ -62,9 +62,9 @@
 // The fixture shape (single-file, because cross-module is not needed to trigger it):
 //
 //   shape Worker {
-//     doWork(share self) -> nothing
+//     doWork(share self) -> Nothing
 //   }
-//   function runWithDynamicWorker(w: dynamic Worker) -> nothing {
+//   function runWithDynamicWorker(w: dynamic Worker) -> Nothing {
 //     sleep(10)
 //     w.doWork()   ← DynamicDispatch reject fires here
 //   }

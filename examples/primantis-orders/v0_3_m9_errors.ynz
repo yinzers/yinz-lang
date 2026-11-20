@@ -29,7 +29,7 @@ shape Round = Plain | Int
 shape Tip {
   amount: Int
   // WHY: hidden-field default mismatch — every new `Tip` starts with this default, but a
-  // `string` field cannot start as the `int` 4096.
+  // `String` field cannot start as the `Int` 4096.
   hidden note: String = 4096
 }
 
@@ -77,7 +77,7 @@ function entrypoint() -> Nothing {
   print(ticket.held.label)
 
   // WHY: non-exhaustive union multi-case with a non-shape variant — `describeRound`
-  // names `Plain` only, so an `int` round would fall through every arm.
+  // names `Plain` only, so an `Int` round would fall through every arm.
   let plain: Plain = { table: 4 }
   let round: Round = plain.copy()
   print(describeRound(round))
@@ -99,12 +99,12 @@ function entrypoint() -> Nothing {
   let byPlain: Map<Plain, Int> = {}
   print(byPlain.count().toString())
 
-  // WHY: MapKeyNotStorable (a `number` of more than 34 digits) — it is kept outside the 16-byte
+  // WHY: MapKeyNotStorable (a `Number` of more than 34 digits) — it is kept outside the 16-byte
   // slot, so only its address would be the key.
   let byPrice: Map<Number<50>, Int> = {}
   print(byPrice.count().toString())
 
-  // WHY: MapKeyNotStorable (`sensitive string`) — a map would free the secret as an ordinary
+  // WHY: MapKeyNotStorable (`sensitive String`) — a map would free the secret as an ordinary
   // string and compare keys in a way whose timing leaks. Keep the secret as the value.
   let bySecret: Map<sensitive String, Int> = {}
   print(bySecret.count().toString())

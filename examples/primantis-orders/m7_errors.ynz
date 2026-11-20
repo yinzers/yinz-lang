@@ -23,14 +23,14 @@ function noErrorsContext() -> Nothing {
   print(x)
 }
 
-// WHY: .or() on a non-errors value — int does not have .or()
+// WHY: .or() on a non-errors value — Int does not have .or()
 function badOr() -> Nothing {
   let x: Int = 42
   let y = x.or(0)
   print(y.toString())
 }
 
-// WHY: .failed() on a non-errors value — boolean does not have .failed()
+// WHY: .failed() on a non-errors value — Boolean does not have .failed()
 function badFailed() -> Nothing {
   let x: Boolean = true
   if (x.failed()) {
@@ -46,7 +46,7 @@ function stringMutation() -> Nothing {
   s[0] = `H`
 }
 
-// WHY: .contains() on a non-string type — int has no .contains()
+// WHY: .contains() on a non-String type — Int has no .contains()
 function badContains() -> Nothing {
   let n: Int = 42
   let r = n.contains(`4`)
@@ -55,7 +55,7 @@ function badContains() -> Nothing {
 
 // ────── iterable diagnostics ──────
 
-// WHY: iterating over a non-iterable type — int cannot be used in a for loop
+// WHY: iterating over a non-iterable type — Int cannot be used in a for loop
 function iterateInt() -> Nothing {
   let n: Int = 5
   for (x in n) {
@@ -63,7 +63,7 @@ function iterateInt() -> Nothing {
   }
 }
 
-// WHY: iterating over boolean — not iterable
+// WHY: iterating over Boolean — not iterable
 function iterateBool() -> Nothing {
   for (x in true) {
     print(x.toString())
@@ -78,7 +78,7 @@ function outer() -> String errors {
   return inner
 }
 
-// WHY: positive — .split() returns array<string>; calling .count() on it compiles.
+// WHY: positive — .split() returns Array<String>; calling .count() on it compiles.
 function splitCount() -> Nothing {
   const csv = `a,b,c`
   const parts = csv.split(`,`)

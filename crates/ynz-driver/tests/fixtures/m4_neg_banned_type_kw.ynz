@@ -1,4 +1,4 @@
-type Player { name: string }
+type Player { name: String }
 
 function entrypoint() -> Nothing {
   print(1)

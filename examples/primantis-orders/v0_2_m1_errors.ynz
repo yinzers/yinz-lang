@@ -14,19 +14,19 @@
 // ---------------------------------------------------------------------------
 
 function deferredSizedFloats() -> Nothing {
-    let x: f32 = 5.0   // WHY: f32 — deferred, substitute = use `float`
-    let y: f64 = 5.0   // WHY: f64 — deferred, substitute = use `float`
+    let x: f32 = 5.0   // WHY: f32 — deferred, substitute = use `Float`
+    let y: f64 = 5.0   // WHY: f64 — deferred, substitute = use `Float`
 }
 
 function deferredSignedInts() -> Nothing {
-    let a: i8 = 5      // WHY: i8 — deferred, substitute = use `int`
+    let a: i8 = 5      // WHY: i8 — deferred, substitute = use `Int`
     let b: i16 = 5     // WHY: i16 — deferred
     let c: i32 = 5     // WHY: i32 — deferred
-    let d: i64 = 5     // WHY: i64 — deferred, `int` is already i64
+    let d: i64 = 5     // WHY: i64 — deferred, `Int` is already i64
 }
 
 function deferredUnsignedInts() -> Nothing {
-    let a: u8 = 5      // WHY: u8 — deferred, substitute = use `int`
+    let a: u8 = 5      // WHY: u8 — deferred, substitute = use `Int`
     let b: u16 = 5     // WHY: u16 — deferred
     let c: u32 = 5     // WHY: u32 — deferred
     let d: u64 = 5     // WHY: u64 — deferred
@@ -47,7 +47,7 @@ function deferredTestKeyword() -> Nothing {
 // ---------------------------------------------------------------------------
 
 function wrongTypeConstant() -> Nothing {
-    let x = string.max  // WHY: string has no .max constant
+    let x = String.max  // WHY: String has no .max constant
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ abstract shape BaseEntity { }
 // ---------------------------------------------------------------------------
 
 function asyncExample() -> Nothing {
-    async function inner() -> nothing { }   // WHY: async banned, use wait at call site
+    async function inner() -> Nothing { }   // WHY: async banned, use wait at call site
 }
 
 // ---------------------------------------------------------------------------
