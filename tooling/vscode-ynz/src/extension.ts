@@ -24,7 +24,11 @@ const PROMOTABLE_MODIFIER = 'promotable';
 // a dotted bottom border. Colour and style live here, in one place.
 const LESSON_UNDERLINE_COLOR_ID = 'yinz.lessonUnderline';
 const promotableDecoration = vscode.window.createTextEditorDecorationType({
-    border: '0 0 1px 0 dotted',
+    // Width, style and colour are separate properties: the CSS `border` shorthand takes one
+    // width for all four sides, so `border: '0 0 1px 0 dotted'` is invalid and VS Code
+    // would drop it, drawing no underline at all.
+    borderWidth: '0 0 1px 0',
+    borderStyle: 'dotted',
     borderColor: new vscode.ThemeColor(LESSON_UNDERLINE_COLOR_ID),
 });
 
