@@ -18,7 +18,7 @@
 //! round for F functions with P parameters and S written places, and rounds are bounded because a
 //! written place is cut at `MAX_WRITTEN_PLACE_STEPS` steps.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ynz_ast::nodes::{Block, Expr, FunctionDecl, Item, Module, OwnershipModifier, Stmt};
 use ynz_diagnostics::SourceSpan;
@@ -428,11 +428,18 @@ pub fn analyze_written_param_places(
     module: &Module,
     imported: &HashMap<String, FunctionSig>,
 ) -> HashMap<String, Vec<Vec<WrittenPlace>>> {
+    // A name defined twice is reported as a duplicate definition elsewhere; its summary is the
+    // first definition's. Two bodies under one name would replace each other's summary on every
+    // round and the fixpoint would never settle (a compiler hang on the very program that
+    // deserves the diagnostic).
+    let mut defined_names: HashSet<&str> = HashSet::new();
     let functions: Vec<&FunctionDecl> = module
         .items
         .iter()
         .filter_map(|item| match item {
-            Item::Function(function) => Some(function),
+            Item::Function(function) if defined_names.insert(function.name.as_str()) => {
+                Some(function)
+            }
             _ => None,
         })
         .collect();
@@ -744,6 +751,18 @@ mod tests {
             written["twoParameters"],
             vec![Vec::<WrittenPlace>::new(), vec![vec![field("name")]]]
         );
+    }
+
+    // WHY (High): a function defined twice (a diagnosed error) with bodies that write different
+    // places must not keep the fixpoint from settling: the compiler hung on this program.
+    #[test]
+    fn a_function_defined_twice_keeps_the_summary_of_its_first_definition() {
+        let written = summaries(
+            "shape Holder { rows: array<array<int>> }\n\
+             function reset(lend holder: Holder) -> nothing { holder.rows = [[1]] }\n\
+             function reset(lend holder: Holder) -> nothing { print(holder.rows.count()) }\n",
+        );
+        assert_eq!(written["reset"], vec![vec![vec![field("rows")]]]);
     }
 
     // WHY (High): mutual recursion must reach a fixpoint, and a recursion that writes one step
