@@ -31,7 +31,7 @@ fn make_temp_project(suffix: &str) -> std::path::PathBuf {
 
 fn check_file_with_import(dir: &std::path::Path, import_path: &str) -> CheckOutput {
     let main_src =
-        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}");
+        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> Nothing {{}}");
     let main_path = dir.join("main.ynz");
     std::fs::write(&main_path, &main_src).expect("write main.ynz");
 
@@ -53,7 +53,7 @@ fn check_file_with_registered_import(
     target_src: &str,
 ) -> CheckOutput {
     let main_src =
-        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}");
+        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> Nothing {{}}");
     let main_path = dir.join("main.ynz");
     std::fs::write(&main_path, &main_src).expect("write main.ynz");
 

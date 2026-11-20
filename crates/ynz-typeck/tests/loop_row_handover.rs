@@ -311,7 +311,7 @@ function keep(give holder: Holder) -> Array<Array<Int>> {
 
 #[test]
 fn rows_of_a_fixed_list_of_unions_keep_the_copy_refusal() {
-    // WHY (High): a `fixed` list of unions is kept on the `.copy()` refusal (commit `980bdea`):
+    // WHY (High): a `Fixed` list of unions is kept on the `.copy()` refusal (commit `980bdea`):
     // no hand-over is recorded.
     let source = "shape Big { name: String }
 shape Tiny { flag: Boolean }

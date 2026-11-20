@@ -292,7 +292,7 @@ function underTest(pairValue: Pair) -> Int {
     is Circle => { numbers = [0] }
   }
   return numbers.count()
-}", "a union match counted as covering every value though its `int` variant enters no arm (High: read after give)";
+}", "a union match counted as covering every value though its `Int` variant enters no arm (High: read after give)";
 }
 
 cases! { assert_revive_rejected;

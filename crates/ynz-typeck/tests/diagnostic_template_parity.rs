@@ -483,7 +483,7 @@ fn param_needs_give_is_rendered_from_the_registry() {
         &[
             ("name", "rows"),
             ("fn", "producer"),
-            ("type", "array<int>"),
+            ("type", "Array<Int>"),
             ("modifier", "has no ownership word"),
             ("act", "sent into `wire`"),
             ("copy_form", "wire.send(rows.copy())"),
@@ -504,7 +504,7 @@ fn transfer_needs_copy_is_rendered_from_the_registry() {
         &[
             ("expr", "bucket.rows"),
             ("act", "given to `eat`"),
-            ("type", "array<int>"),
+            ("type", "Array<Int>"),
             ("reason", "a field of `bucket`"),
             ("fix", "bucket.rows.copy()"),
         ],
@@ -535,7 +535,7 @@ fn handle_channel_arg_needs_binding_is_rendered_from_the_registry() {
 #[test]
 fn message_before_failed_check_is_rendered_from_the_registry() {
     // WHY: v0.3-M8 Phase 4 fix round 3, Producer A — `.message` read on an errors-capable
-    // value that was never checked with `.failed()` used to type as `string` unconditionally
+    // value that was never checked with `.failed()` used to type as `String` unconditionally
     // (REF-errors.md:171-175 requires the check first). Not gated at typeck, this reached
     // codegen's `select` on a possibly-null error pointer and SIGABRT'd at runtime on any
     // not-yet-failed value.
@@ -602,13 +602,13 @@ fn a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch() {
     // synthetic `Stmt::Let`s (`ynz-parser`'s `parse_for_destructure`), which go through the
     // SAME binding-event path (`binding_event_origin`, a fresh `alias_class` per binding
     // event) as a source-level `let` — no special-casing needed, only verification. `v` here
-    // shadows the outer `.failed()`-checked `v`; `map<string,int>`'s value type means the
-    // inner `v` is `int`, which correctly refuses `.message` for an ordinary reason (`int` has
+    // shadows the outer `.failed()`-checked `v`; `Map<String,Int>`'s value type means the
+    // inner `v` is `Int`, which correctly refuses `.message` for an ordinary reason (`Int` has
     // no fields) — a DIFFERENT diagnostic than `MessageBeforeFailedCheck`. That difference is
     // the point: it proves the inner `v`'s alias class was never a member of
     // `errors_failed_true_branch` in the first place (had the old bare-name key survived,
     // `.message` would have been evaluated as an EC field access at all, not stopped one step
-    // earlier by ordinary field-lookup on `int`).
+    // earlier by ordinary field-lookup on `Int`).
     let errors = errors_for(
         "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
          function entrypoint() -> Nothing {\n\
@@ -641,8 +641,8 @@ fn message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops() {
     // admitted. Guards against a fix that empties the checked-set on any shadow rather than
     // scoping it correctly.
     let errors = errors_for(
-        "function mayFail(n: int) -> string errors { return `v${n}` }\n\
-         function entrypoint() -> nothing {\n\
+        "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
+         function entrypoint() -> Nothing {\n\
            let x = mayFail(1)\n\
            if (x.failed()) {\n\
              { let x = mayFail(3); print(x.toString()) }\n\
@@ -664,7 +664,7 @@ fn message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops() {
 fn ec_field_not_yet_available_is_rendered_from_the_registry() {
     // WHY: v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1, closes parked 34). RED
     // before the fix: `.trace` inside a CORRECT `.failed()` guard compiled clean (typeck typed
-    // it as `array<Frame>` unconditionally) and reached codegen's `Type::ErrorsCapable` field
+    // it as `Array<Frame>` unconditionally) and reached codegen's `Type::ErrorsCapable` field
     // arm, which has no lowering for anything but `.message` — an internal-error string
     // ("This is a compiler bug") reached a user who wrote a correct program. GREEN after the
     // fix: refused at compile time, with real teaching text, before codegen ever sees it.
@@ -880,7 +880,7 @@ fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
 
 #[test]
 fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is_arm() {
-    // `map<string, string> | nothing` is the map's own pointer: no `is` arm can name `map<..>`
+    // `Map<String, String> | Nothing` is the map's own pointer: no `is` arm can name `Map<..>`
     // (it does not even parse), and there is no tag box for the WHY to describe.
     let source =
         "function takesTable(share table: Map<String, String>) -> String { return `ok` }\n\
@@ -894,10 +894,10 @@ fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is
         source,
         &[
             ("value", "maybeTable"),
-            ("union", "map<string, string> | nothing"),
-            ("variant", "map<string, string>"),
-            ("needs", "`takesTable` expects a `map<string, string>` here"),
-            ("others", "`nothing`"),
+            ("union", "Map<String, String> | Nothing"),
+            ("variant", "Map<String, String>"),
+            ("needs", "`takesTable` expects a `Map<String, String>` here"),
+            ("others", "`Nothing`"),
         ],
     );
     let diagnostic = errors_for(source).remove(0);
@@ -918,7 +918,7 @@ fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is
 
 #[test]
 fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
-    // `is int =>` does not lower (#418): the suggestion must not name it.
+    // `is Int =>` does not lower (#418): the suggestion must not name it.
     let source = "function takesInt(share number: Int) -> Int { return number }\n\
          function entrypoint() -> Nothing {\n\
            let v: Int | String = 5\n\
@@ -929,17 +929,17 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
         source,
         &[
             ("value", "v"),
-            ("union", "int | string"),
-            ("variant", "int"),
-            ("needs", "`takesInt` expects a `int` here"),
-            ("others", "`string`"),
+            ("union", "Int | String"),
+            ("variant", "Int"),
+            ("needs", "`takesInt` expects a `Int` here"),
+            ("others", "`String`"),
         ],
     );
     let diagnostic = errors_for(source).remove(0);
     assert!(
-        !diagnostic.what_instead.contains("is int")
+        !diagnostic.what_instead.contains("is Int")
             && !diagnostic.what_instead.contains("handle each variant"),
-        "no `is int` arm exists to suggest, and a receiving slot cannot handle an `int` variant: {diagnostic:?}"
+        "no `is Int` arm exists to suggest, and a receiving slot cannot handle an `Int` variant: {diagnostic:?}"
     );
     // The caret label comes from the kind alone and is shown for every recovery, so it must not
     // tell the reader to `is`-check a value that no `is` arm can hand over (it printed
@@ -969,21 +969,21 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
 
 #[test]
 fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
-    // WHY: `Circle | number` passed typeck and died in codegen as "a compiler bug".
+    // WHY: `Circle | Number` passed typeck and died in codegen as "a compiler bug".
     let preamble = "shape Circle { radius: Int }\n\
                     function describe(share value: Circle | Number) -> String { return `ok` }\n";
     assert_rendered(
         DiagnosticKind::UnionVariantNotStorable,
         &format!(
-            "{preamble}function entrypoint() -> nothing {{\n\
-               let small: number = 5.0\n\
+            "{preamble}function entrypoint() -> Nothing {{\n\
+               let small: Number = 5.0\n\
                print(describe(small))\n\
              }}"
         ),
         &[
             ("value", "small"),
-            ("union", "Circle | number"),
-            ("variant", "number"),
+            ("union", "Circle | Number"),
+            ("variant", "Number"),
         ],
     );
     // The suggested code: the number in a shape, the shape as the variant.
@@ -1001,7 +1001,7 @@ fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
 
 #[test]
 fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text() {
-    // WHY: typeck assigns `number<10>` to `number<40>`, and the union box stored the narrow
+    // WHY: typeck assigns `Number<10>` to `Number<40>`, and the union box stored the narrow
     // value's slot address as the wide value's pointer.
     assert_template_rendered(
         "UnionVariantNotStorableNumberPrecision",
@@ -1014,9 +1014,9 @@ fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text(
          }",
         &[
             ("value", "small"),
-            ("value_ty", "number<10>"),
-            ("union", "Circle | number<40>"),
-            ("variant", "number<40>"),
+            ("value_ty", "Number<10>"),
+            ("union", "Circle | Number<40>"),
+            ("variant", "Number<40>"),
         ],
     );
     assert_compiles(
@@ -1035,10 +1035,10 @@ fn a_suspending_result_into_a_union_let_is_refused_with_its_registry_text() {
     // `is` check read its tag through address 0x4.
     let program = |bind: &str| {
         format!(
-            "shape Circle {{ name: string }}\n\
-             shape Mixed = Circle | int\n\
-             function count() -> int {{ wait sleep(1)\n return 4 }}\n\
-             function entrypoint() -> nothing {{\n\
+            "shape Circle {{ name: String }}\n\
+             shape Mixed = Circle | Int\n\
+             function count() -> Int {{ wait sleep(1)\n return 4 }}\n\
+             function entrypoint() -> Nothing {{\n\
                {bind}\n\
              }}"
         )
@@ -1049,11 +1049,11 @@ fn a_suspending_result_into_a_union_let_is_refused_with_its_registry_text() {
         &[
             ("name", "m"),
             ("call", "wait count()"),
-            ("union", "Circle | int"),
+            ("union", "Circle | Int"),
         ],
     );
     assert_compiles(&program(
-        "let got = wait count()\n let m: Circle | int = got",
+        "let got = wait count()\n let m: Circle | Int = got",
     ));
 }
 
@@ -1063,11 +1063,11 @@ fn a_suspending_result_returned_as_a_union_is_refused_with_its_registry_text() {
     // return slot; the compiler then panicked instead of teaching the recovery.
     let program = |returned: &str| {
         format!(
-            "shape Circle {{ name: string }}\n\
-             shape Mixed = Circle | int\n\
-             function count() -> int {{ wait sleep(1)\n return 4 }}\n\
+            "shape Circle {{ name: String }}\n\
+             shape Mixed = Circle | Int\n\
+             function count() -> Int {{ wait sleep(1)\n return 4 }}\n\
              function pick() -> Mixed {{ wait sleep(1)\n {returned} }}\n\
-             function entrypoint() -> nothing {{\n\
+             function entrypoint() -> Nothing {{\n\
                let m = pick()\n\
              }}"
         )
@@ -1075,12 +1075,12 @@ fn a_suspending_result_returned_as_a_union_is_refused_with_its_registry_text() {
     assert_rendered(
         DiagnosticKind::SuspendingResultIntoUnionReturn,
         &program("return wait count()"),
-        &[("call", "wait count()"), ("union", "Circle | int")],
+        &[("call", "wait count()"), ("union", "Circle | Int")],
     );
     assert_rendered(
         DiagnosticKind::SuspendingResultIntoUnionReturn,
         &program("return count()"),
-        &[("call", "count()"), ("union", "Circle | int")],
+        &[("call", "count()"), ("union", "Circle | Int")],
     );
     assert_compiles(&program("let got = count()\n return got"));
     assert_compiles(&program("let got = wait count()\n return got"));
@@ -1098,7 +1098,7 @@ fn argument_conflicts_with_type_parameter_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::ArgumentConflictsWithTypeParameter,
         &format!(
-            "{SAME_TWO_SHAPES}function entrypoint() -> nothing {{\n\
+            "{SAME_TWO_SHAPES}function entrypoint() -> Nothing {{\n\
                let big: Big = {{ label: `hello` }}\n\
                let tiny: Tiny = {{ flag: true }}\n\
                print(same(big, tiny).label)\n\
@@ -1129,7 +1129,7 @@ fn argument_conflicts_with_type_parameter_suggestions_compile() {
     // WHY: Golden Rule 3 — each alternative the WHAT-INSTEAD names must compile today:
     // `first` given a `Tiny` too, and the explicit type argument changed to `Tiny`.
     assert_compiles(&format!(
-        "{SAME_TWO_SHAPES}function entrypoint() -> nothing {{\n\
+        "{SAME_TWO_SHAPES}function entrypoint() -> Nothing {{\n\
            let tiny: Tiny = {{ flag: true }}\n\
            let other: Tiny = {{ flag: false }}\n\
            print(same(tiny, other).flag.toString())\n\
@@ -1144,10 +1144,10 @@ fn argument_conflicts_with_type_parameter_suggestions_compile() {
 fn consumed_by_store_into_a_struct_literal_names_a_literal_that_compiles() {
     assert_rendered(
         DiagnosticKind::ConsumedByStore,
-        "shape Pair { first: array<int>, second: array<int> }\n\
-         function entrypoint() -> nothing {\n\
-           let numbers: array<int> = [1]\n\
-           let moreNumbers: array<int> = [2]\n\
+        "shape Pair { first: Array<Int>, second: Array<Int> }\n\
+         function entrypoint() -> Nothing {\n\
+           let numbers: Array<Int> = [1]\n\
+           let moreNumbers: Array<Int> = [2]\n\
            let pair: Pair = { first: numbers, second: moreNumbers }\n\
            print(numbers.count())\n\
            print(pair.first.count())\n\
@@ -1196,10 +1196,10 @@ fn consumed_by_store_into_a_map_literal_names_a_literal_that_compiles() {
 fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles() {
     assert_rendered(
         DiagnosticKind::ConsumedByStore,
-        "shape Tally { first: array<int>, count: int }\n\
-         function entrypoint() -> nothing {\n\
-           let numbers: array<int> = [1]\n\
-           let factor: int = 3\n\
+        "shape Tally { first: Array<Int>, count: Int }\n\
+         function entrypoint() -> Nothing {\n\
+           let numbers: Array<Int> = [1]\n\
+           let factor: Int = 3\n\
            let tally: Tally = { first: numbers, count: (factor + 1) * 2 }\n\
            print(numbers.count())\n\
            print(tally.count)\n\
@@ -1222,8 +1222,8 @@ fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles
 
 #[test]
 fn map_key_not_storable_is_rendered_from_the_registry() {
-    // WHY: v0.3-M9 C6 follow-up — a shape key, a key of any other type and a `number` of more
-    // than 34 digits each get their own true reason, from one registry home. A `number` key of
+    // WHY: v0.3-M9 C6 follow-up — a shape key, a key of any other type and a `Number` of more
+    // than 34 digits each get their own true reason, from one registry home. A `Number` key of
     // 34 digits is a map key and gets no diagnostic. A `sensitive string` key is refused for its
     // own reason (Product Manager ruling A, C7 review r1).
     assert_rendered(
@@ -1241,8 +1241,8 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
             ),
             (
                 "recovery",
-                "Key the map by one of its fields (an `int` id or a `string` name) and keep the \
-                 `Point` as the map's value: `map<string, Point>`.",
+                "Key the map by one of its fields (an `Int` id or a `String` name) and keep the \
+                 `Point` as the map's value: `Map<String, Point>`.",
             ),
         ],
     );
@@ -1253,11 +1253,11 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
            print(rows.count())\n\
          }",
         &[
-            ("key", "array<int>"),
+            ("key", "Array<Int>"),
             ("key_is", "is not a single value of 8 or 16 bytes"),
             (
                 "recovery",
-                "Key the map by a `string` or an `int` that stands for the `array<int>`, such as \
+                "Key the map by a `String` or an `Int` that stands for the `Array<Int>`, such as \
                  an id or a name.",
             ),
         ],
@@ -1269,7 +1269,7 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
            let prices: Map<Number<50>, Int> = {}\n\
            print(prices.count())\n\
          }",
-        &[("key", "number<50>"), ("digits", "50")],
+        &[("key", "Number<50>"), ("digits", "50")],
     );
     assert_template_rendered(
         "MapKeyNotStorableSensitive",
@@ -1278,17 +1278,17 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
            let secrets: Map<sensitive String, Int> = {}\n\
            print(secrets.count())\n\
          }",
-        &[("key", "sensitive string")],
+        &[("key", "sensitive String")],
     );
     // The way out the sensitive-key refusal names, and the other keys a map holds.
     for accepted in [
-        "map<number<34>, int>",
-        "map<string, sensitive string>",
-        "map<string, Point>",
+        "Map<Number<34>, Int>",
+        "Map<String, sensitive String>",
+        "Map<String, Point>",
     ] {
         assert_compiles(&format!(
-            "shape Point {{ x: int }}\n\
-             function entrypoint() -> nothing {{\n\
+            "shape Point {{ x: Int }}\n\
+             function entrypoint() -> Nothing {{\n\
                let table: {accepted} = {{}}\n\
                print(table.count())\n\
              }}"
@@ -1302,11 +1302,11 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
     // (declare the union type, or pass a shape that holds the union) compile.
     let program = |callee: &str, argument: &str| {
         format!(
-            "shape Circle {{ radius: float }}\n\
-             shape Tag {{ name: string }}\n\
+            "shape Circle {{ radius: Float }}\n\
+             shape Tag {{ name: String }}\n\
              shape Holder {{ choice: Circle | Tag }}\n\
              {callee}\n\
-             function entrypoint() -> nothing {{\n\
+             function entrypoint() -> Nothing {{\n\
                let tag: Tag = {{ name: `boxed` }}\n\
                let choice: Circle | Tag = tag\n\
                let other: Tag = {{ name: `kept` }}\n\
@@ -1332,26 +1332,26 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
     assert_compiles(&program(generic, "holder"));
 }
 
-// ── v0.3-M9 C1h (#433): `fixed<T, N>` in signatures ─────────────────────────────────────────
+// ── v0.3-M9 C1h (#433): `Fixed<T, N>` in signatures ─────────────────────────────────────────
 //
 // Each refusal is rendered from its registry template (the slots are the ones the emit site
 // fills), and the code its WHAT-INSTEAD names compiles (Golden Rule 3).
 
 #[test]
 fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_compiles() {
-    // WHY: `fixed<int, N>` names a length the compiler cannot read; the refusal's text must come
+    // WHY: `Fixed<Int, N>` names a length the compiler cannot read; the refusal's text must come
     // from the registry, and both ways out (a whole number, no length) must compile.
     assert_rendered(
         DiagnosticKind::FixedLengthNotUsable,
         "function total(share xs: Fixed<Int, N>) -> Int { return 1 }\n\
          function entrypoint() -> Nothing { print(1) }",
         &[
-            ("written", "fixed<int, N>"),
+            ("written", "Fixed<Int, N>"),
             ("problem", "`N` is not a whole number"),
             (
                 "alternative",
-                "Write a whole number, such as `fixed<int, 4>`, or leave the length out: \
-                 `fixed<int>`. To keep values of different types together, declare a shape with \
+                "Write a whole number, such as `Fixed<Int, 4>`, or leave the length out: \
+                 `Fixed<Int>`. To keep values of different types together, declare a shape with \
                  a named field for each",
             ),
             ("limit", "4294967295"),
@@ -1377,11 +1377,11 @@ fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestio
            print(xs.count())\n\
          }",
         &[
-            ("written", "fixed<int, 3>"),
+            ("written", "Fixed<Int, 3>"),
             ("place", "on a local variable"),
             (
                 "alternative",
-                "Leave the length out: `fixed<int>`. The list you assign gives it its length",
+                "Leave the length out: `Fixed<Int>`. The list you assign gives it its length",
             ),
         ],
     );
@@ -1409,10 +1409,10 @@ fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compil
             ),
             (
                 "alternative",
-                "Pass a list of 4 items, or change `xs` to `fixed<int>` so `total` takes a list \
+                "Pass a list of 4 items, or change `xs` to `Fixed<Int>` so `total` takes a list \
                  of any length",
             ),
-            ("element", "int"),
+            ("element", "Int"),
             ("expected", "4"),
         ],
     );
@@ -1437,8 +1437,8 @@ fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggesti
         &[
             ("function", "make"),
             ("part", "return type"),
-            ("written", "fixed<int>"),
-            ("suggested", "fixed<int, 4>"),
+            ("written", "Fixed<Int>"),
+            ("suggested", "Fixed<Int, 4>"),
         ],
     );
     assert_compiles(
@@ -1500,16 +1500,16 @@ fn fixed_return_length_unknown_is_rendered_from_the_registry() {
                  from a shape field, from `filter`, or from a function whose own length cannot \
                  be worked out",
             ),
-            ("element", "int"),
+            ("element", "Int"),
         ],
     );
 }
 
 #[test]
 fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_compiles() {
-    // WHY: a shape keeps a `fixed` list inside itself, so a field written `fixed<int>` has no size;
+    // WHY: a shape keeps a `Fixed` list inside itself, so a field written `Fixed<Int>` has no size;
     // the refusal's text must come from the registry, and both ways out (write the length, or hold
-    // the items in an `array`) must compile.
+    // the items in an `Array`) must compile.
     assert_rendered(
         DiagnosticKind::FixedFieldLengthMissing,
         "shape Bag {\n\
@@ -1519,9 +1519,9 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
         &[
             ("shape", "Bag"),
             ("field", "items"),
-            ("written", "fixed<int>"),
-            ("element", "int"),
-            ("suggested", "fixed<int, 4>"),
+            ("written", "Fixed<Int>"),
+            ("element", "Int"),
+            ("suggested", "Fixed<Int, 4>"),
         ],
     );
     assert_compiles(
@@ -1542,7 +1542,7 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
 fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_suggestion_compiles()
 {
     // WHY: a function that waits, or may run as a task of its own, is built once, so an unsized
-    // `fixed` parameter has no length for it (before: an internal compiler error). Both reasons
+    // `Fixed` parameter has no length for it (before: an internal compiler error). Both reasons
     // render from the registry, and the suggestion (write the length) compiles.
     assert_rendered(
         DiagnosticKind::FixedLengthMissingInTaskFunction,
@@ -1557,8 +1557,8 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
         &[
             ("function", "slowTotal"),
             ("parameter", "xs"),
-            ("written", "fixed<int>"),
-            ("suggested", "fixed<int, 4>"),
+            ("written", "Fixed<Int>"),
+            ("suggested", "Fixed<Int, 4>"),
             ("reason", "pauses at a `wait`"),
         ],
     );
@@ -1583,8 +1583,8 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
         &[
             ("function", "host"),
             ("parameter", "xs"),
-            ("written", "fixed<int>"),
-            ("suggested", "fixed<int, 4>"),
+            ("written", "Fixed<Int>"),
+            ("suggested", "Fixed<Int, 4>"),
             ("reason", "may be run as a task of its own"),
         ],
     );
@@ -1608,10 +1608,10 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
     // it suggests (the type parameter first) must compile.
     let program = |return_type: &str| {
         format!(
-            "shape Big {{ label: string }}\n\
-             shape Tiny {{ count: int }}\n\
+            "shape Big {{ label: String }}\n\
+             shape Tiny {{ count: Int }}\n\
              function carry<T>(give item: T) -> {return_type} {{ return item }}\n\
-             function entrypoint() -> nothing {{\n\
+             function entrypoint() -> Nothing {{\n\
                let big: Big = {{ label: `hello` }}\n\
                let choice: Big | Tiny = big\n\
                let got = carry(choice)\n\
@@ -1621,15 +1621,15 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
     };
     assert_rendered(
         DiagnosticKind::GenericUnionBoundOutOfOrder,
-        &program("nothing | T"),
+        &program("Nothing | T"),
         &[
             ("callee", "carry"),
             ("typeParam", "T"),
             ("bound", "Big | Tiny"),
-            ("declared", "nothing | T"),
-            ("instance", "nothing | Big | Tiny"),
-            ("before", "nothing"),
-            ("reordered", "T | nothing"),
+            ("declared", "Nothing | T"),
+            ("instance", "Nothing | Big | Tiny"),
+            ("before", "Nothing"),
+            ("reordered", "T | Nothing"),
             ("first", "Big"),
         ],
     );
@@ -1647,7 +1647,7 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
             ("first", "Big"),
         ],
     );
-    assert_compiles(&program("T | nothing"));
+    assert_compiles(&program("T | Nothing"));
     assert_compiles(&program("T | Tiny"));
 }
 
@@ -1663,9 +1663,9 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment()
     // body assigns the original compiles.
     let program = |loop_header: &str, before_loop: &str| {
         format!(
-            "shape Inner {{ rows: array<array<int>> }}\n\
+            "shape Inner {{ rows: Array<Array<Int>> }}\n\
              shape Outer {{ inner: Inner }}\n\
-             function entrypoint() -> nothing {{\n\
+             function entrypoint() -> Nothing {{\n\
                let outer: Outer = {{ inner: {{ rows: [[1], [2]] }} }}\n\
                let total = 0\n\
                {before_loop}\n\
@@ -1701,9 +1701,9 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
     // WHY: the call form names the call and the place the callee assigns, in the caller's terms.
     let program = |loop_header: &str, before_loop: &str| {
         format!(
-            "shape Holder {{ rows: array<array<int>> }}\n\
-             function reset(lend holder: Holder) -> nothing {{ holder.rows = [[9]] }}\n\
-             function entrypoint() -> nothing {{\n\
+            "shape Holder {{ rows: Array<Array<Int>> }}\n\
+             function reset(lend holder: Holder) -> Nothing {{ holder.rows = [[9]] }}\n\
+             function entrypoint() -> Nothing {{\n\
                let holder: Holder = {{ rows: [[1], [2]] }}\n\
                let total = 0\n\
                {before_loop}\n\
@@ -1741,8 +1741,8 @@ fn walked_list_written_in_loop_names_a_map_walk_a_map() {
     // WHY: the text names what the loop walks, so a map walk is told "map", not "list".
     let program = |loop_header: &str, before_loop: &str| {
         format!(
-            "shape Holder {{ table: map<string, int> }}\n\
-             function entrypoint() -> nothing {{\n\
+            "shape Holder {{ table: Map<String, Int> }}\n\
+             function entrypoint() -> Nothing {{\n\
                let holder: Holder = {{ table: {{}} }}\n\
                {before_loop}\n\
                for ({loop_header}) {{\n\
@@ -1777,8 +1777,8 @@ fn walked_list_written_in_loop_names_a_string_walk_a_string() {
     // write that frees it is refused and told "string", not "list".
     let program = |loop_header: &str, before_loop: &str| {
         format!(
-            "shape Holder {{ text: string }}\n\
-             function entrypoint() -> nothing {{\n\
+            "shape Holder {{ text: String }}\n\
+             function entrypoint() -> Nothing {{\n\
                let holder: Holder = {{ text: `abc` }}\n\
                {before_loop}\n\
                for ({loop_header}) {{\n\

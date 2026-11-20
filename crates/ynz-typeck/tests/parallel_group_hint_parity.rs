@@ -84,7 +84,7 @@ fn clean_cpu_group_hint_fires_and_matches_admission() {
     // WHY: a single clean 2-member CPU group is the admitted case — codegen spawns it. The hint
     // must fire on BOTH members with "separate core", and `admitted_cpu_group` must return Some.
     let src = format!(
-        "{FIB}\nfunction entrypoint() -> nothing {{\n  let a = fib(20)\n  let b = fib(21)\n  print(a)\n  print(b)\n}}\n"
+        "{FIB}\nfunction entrypoint() -> Nothing {{\n  let a = fib(20)\n  let b = fib(21)\n  print(a)\n  print(b)\n}}\n"
     );
     let (db, sf) = single_file(&src);
 
@@ -121,7 +121,7 @@ fn two_cpu_groups_decline_emits_no_hint() {
     // group, or the IDE would claim both run on separate cores when the binary runs them
     // sequentially. This is the load-bearing hint↔binary agreement case.
     let src = format!(
-        "{FIB}\nfunction entrypoint() -> nothing {{\n  let a = fib(10)\n  let b = fib(11)\n  print(a)\n  print(b)\n  if (a > 0) {{\n    let c = fib(12)\n    let d = fib(13)\n    print(c)\n    print(d)\n  }}\n}}\n"
+        "{FIB}\nfunction entrypoint() -> Nothing {{\n  let a = fib(10)\n  let b = fib(11)\n  print(a)\n  print(b)\n  if (a > 0) {{\n    let c = fib(12)\n    let d = fib(13)\n    print(c)\n    print(d)\n  }}\n}}\n"
     );
     let (db, sf) = single_file(&src);
 
@@ -153,7 +153,7 @@ fn param_read_after_join_declines_emits_no_hint() {
     // WHY: a host whose parameter is READ after the join is declined (the spawn overwrites the
     // param slot). Codegen emits no spawn, so the hint must not fire.
     let src = format!(
-        "{FIB}\nfunction host(p: int) -> int {{\n  let a = fib(10)\n  let b = fib(11)\n  return a + b + p\n}}\nfunction entrypoint() -> nothing {{\n  print(host(1))\n}}\n"
+        "{FIB}\nfunction host(p: Int) -> Int {{\n  let a = fib(10)\n  let b = fib(11)\n  return a + b + p\n}}\nfunction entrypoint() -> Nothing {{\n  print(host(1))\n}}\n"
     );
     let (db, sf) = single_file(&src);
 
@@ -222,7 +222,7 @@ fn cpu_group_with_trailing_wait_is_suspending_no_separate_core() {
     // (the function has another suspension point), so NO "separate core" hint must appear — it
     // would lie about a spawn the binary's nested-group gate refuses.
     let src = format!(
-        "{FIB}\nfunction run() -> nothing {{\n  let a = fib(10)\n  let b = fib(11)\n  wait sleep(0)\n  print(a)\n  print(b)\n}}\n"
+        "{FIB}\nfunction run() -> Nothing {{\n  let a = fib(10)\n  let b = fib(11)\n  wait sleep(0)\n  print(a)\n  print(b)\n}}\n"
     );
     let (db, sf) = single_file(&src);
 
@@ -272,7 +272,7 @@ fn mixed_fused_group_hint_tags_cpu_and_io_members_and_matches_admission() {
     // extended over a genuinely mixed shape (the two existing parity fixtures above only ever
     // cover pure-CPU or pure-I/O groups).
     let src = format!(
-        "{CRUNCH_FETCH}\nfunction entrypoint() -> nothing {{\n  let a = crunch(1)\n  let b = fetchA(2)\n  print(a + b)\n}}\n"
+        "{CRUNCH_FETCH}\nfunction entrypoint() -> Nothing {{\n  let a = crunch(1)\n  let b = fetchA(2)\n  print(a + b)\n}}\n"
     );
     let (db, sf) = single_file(&src);
 

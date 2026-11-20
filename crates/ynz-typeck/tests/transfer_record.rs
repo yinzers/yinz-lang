@@ -151,7 +151,7 @@ fn stored(place: &str) -> Escape {
 fn t6b_field_set_hands_the_value_to_the_field() {
     let source = format!(
         "{BAG}function make() -> Bag {{
-  let numbers: array<int> = [1, 2, 3]
+  let numbers: Array<Int> = [1, 2, 3]
   let bag: Bag = {{ items: [0] }}
   bag.items = numbers
   return bag
@@ -238,8 +238,8 @@ fn g7_assign_from_a_loop_local_hands_the_value_to_the_outliving_binding() {
 fn t7_struct_literal_hands_every_part_to_the_literal() {
     let source = format!(
         "{PAIR}function make() -> Pair {{
-  let numbers: array<int> = [1, 2, 3]
-  let moreNumbers: array<int> = [4, 5]
+  let numbers: Array<Int> = [1, 2, 3]
+  let moreNumbers: Array<Int> = [4, 5]
   let pair: Pair = {{ first: numbers, second: moreNumbers }}
   return pair
 }}"
@@ -294,8 +294,8 @@ cases! { assert_read_after_store_rejected;
   container.add(numbers)
   return numbers.count() + container.count()
 }", "(High) `container.add(numbers)` then reading `numbers` and `container` (the old `store_then_read_both`, `bg_arg_alias_container_add_red`): accepted before, so a release pass freed `numbers`'s array under the container";
-    read_after_field_set_is_rejected: format!("{BAG}function underTest() -> int {{
-  let numbers: array<int> = [1, 2, 3]
+    read_after_field_set_is_rejected: format!("{BAG}function underTest() -> Int {{
+  let numbers: Array<Int> = [1, 2, 3]
   let bag: Bag = {{ items: [0] }}
   bag.items = numbers
   return numbers.count() + bag.items.count()
@@ -323,9 +323,9 @@ cases! { assert_read_after_store_rejected;
   table.set(1, numbers)
   return numbers.count() + table.count()
 }", "(High) `table.set(1, numbers)` then reading `numbers`: the map's own table of values is the other owner";
-    read_after_literal_part_is_rejected: format!("{PAIR}function underTest() -> int {{
-  let numbers: array<int> = [1, 2, 3]
-  let moreNumbers: array<int> = [4, 5]
+    read_after_literal_part_is_rejected: format!("{PAIR}function underTest() -> Int {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let moreNumbers: Array<Int> = [4, 5]
   let pair: Pair = {{ first: numbers, second: moreNumbers }}
   return moreNumbers.count() + pair.first.count()
 }}"), "(High) t7: `{ first: numbers, second: moreNumbers }` then reading `moreNumbers`: every part is handed over, not only the first";
@@ -347,8 +347,8 @@ function eatCircle(give circle: Circle) -> Nothing {
 ";
 
 cases! { assert_read_after_store_rejected;
-    read_after_store_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> nothing {{
-  let circles: array<Circle> = []
+    read_after_store_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> Nothing {{
+  let circles: Array<Circle> = []
   if (figure) {{
     is Circle => {{
       circles.add(figure)
@@ -357,7 +357,7 @@ cases! { assert_read_after_store_rejected;
     is Square => {{ }}
   }}
 }}"), "(High) `circles.add(figure)` inside the `is Circle` arm, then reading `figure` in the same arm: the arm's narrowed read skipped the consumed check, so a release pass freed the label under the container";
-    read_after_let_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> nothing {{
+    read_after_let_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> Nothing {{
   if (figure) {{
     is Circle => {{
       let owner: Circle = figure
@@ -369,7 +369,7 @@ cases! { assert_read_after_store_rejected;
 }
 
 cases! { assert_use_after_give;
-    read_after_give_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> nothing {{
+    read_after_give_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> Nothing {{
   if (figure) {{
     is Circle => {{
       eatCircle(figure)
@@ -378,7 +378,7 @@ cases! { assert_use_after_give;
     is Square => {{ }}
   }}
 }}"), "(High) a give inside the `is Circle` arm, then reading `figure` in the arm: the narrowed read skipped the use-after-give check";
-    second_give_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> nothing {{
+    second_give_in_a_narrowed_arm_is_rejected: format!("{FIGURE}function underTest(give figure: Figure) -> Nothing {{
   if (figure) {{
     is Circle => {{
       eatCircle(figure)
@@ -390,8 +390,8 @@ cases! { assert_use_after_give;
 }
 
 cases! { assert_accepted;
-    reads_before_the_store_in_a_narrowed_arm_are_accepted: format!("{FIGURE}function underTest(give figure: Figure) -> nothing {{
-  let circles: array<Circle> = []
+    reads_before_the_store_in_a_narrowed_arm_are_accepted: format!("{FIGURE}function underTest(give figure: Figure) -> Nothing {{
+  let circles: Array<Circle> = []
   if (figure) {{
     is Circle => {{
       print(figure.label.count().toString())
@@ -427,30 +427,30 @@ function countOf(give numbers: Array<Int>) -> Int {
 ";
 
 cases! { assert_read_after_store_rejected;
-    give_then_literal_store_in_one_call_is_rejected: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
+    give_then_literal_store_in_one_call_is_rejected: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
   eatBoth(numbers, [numbers])
 }}"), "(High) `eatBoth(numbers, [numbers])`: the literal takes `numbers` over and the call is given `numbers` too; two owners, a double free under a release pass";
-    share_then_literal_store_in_one_call_is_rejected: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
+    share_then_literal_store_in_one_call_is_rejected: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
   readAndEat(numbers, [numbers])
 }}"), "(High) `readAndEat(numbers, [numbers])`: the callee reads `numbers` while it owns `rows`, which holds the same array; a read after free inside the callee";
 }
 
 cases! { assert_use_after_give;
-    literal_store_then_give_in_one_literal_is_rejected: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
-  let container: array<array<int>> = [numbers, eatBack(numbers)]
+    literal_store_then_give_in_one_literal_is_rejected: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
+  let container: Array<Array<Int>> = [numbers, eatBack(numbers)]
   print(container.count().toString())
 }}"), "(High) `[numbers, eatBack(numbers)]`: `eatBack` takes `numbers` and hands it back, and the literal stores `numbers` as well; the literal holds one array twice";
-    collection_store_then_give_in_one_call_is_rejected: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
-  let table: map<array<int>, array<int>> = {{}}
+    collection_store_then_give_in_one_call_is_rejected: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
+  let table: Map<Array<Int>, Array<Int>> = {{}}
   table.set(numbers, eatBack(numbers))
 }}"), "(High) `table.set(numbers, eatBack(numbers))`: the key and the value are the same array, two owners in one map";
-    index_store_after_a_give_in_the_index_is_rejected: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
-  let container: array<array<int>> = [[0], [0]]
+    index_store_after_a_give_in_the_index_is_rejected: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
+  let container: Array<Array<Int>> = [[0], [0]]
   container[countOf(numbers) - 1] = numbers
 }}"), "(High) `container[countOf(numbers) - 1] = numbers`: the index gives `numbers` away and the store hands it to `container` too";
 }
@@ -469,15 +469,15 @@ function eat(give box: Box) -> Nothing {
 ";
 
 cases! { assert_read_after_store_rejected;
-    read_of_self_after_a_store_is_rejected: format!("{KEEPER}function keep(give self: Box, lend boxes: array<Box>) -> nothing {{
+    read_of_self_after_a_store_is_rejected: format!("{KEEPER}function keep(give self: Box, lend boxes: Array<Box>) -> Nothing {{
   boxes.add(self)
   print(self.items.count().toString())
 }}"), "(High) `boxes.add(self)` then reading `self`: the container frees the box under the read";
-    second_store_of_self_is_rejected: format!("{KEEPER}function keep(give self: Box, lend boxes: array<Box>) -> nothing {{
+    second_store_of_self_is_rejected: format!("{KEEPER}function keep(give self: Box, lend boxes: Array<Box>) -> Nothing {{
   boxes.add(self)
   boxes.add(self)
 }}"), "(High) `self` stored twice: one box, two slots, a double free";
-    read_of_self_after_a_let_is_rejected: format!("{KEEPER}function keep(give self: Box) -> nothing {{
+    read_of_self_after_a_let_is_rejected: format!("{KEEPER}function keep(give self: Box) -> Nothing {{
   let mine = self
   print(self.items.count().toString())
   print(mine.items.count().toString())
@@ -485,14 +485,14 @@ cases! { assert_read_after_store_rejected;
 }
 
 cases! { assert_use_after_give;
-    read_of_self_after_a_give_is_rejected: format!("{KEEPER}function keep(give self: Box) -> nothing {{
+    read_of_self_after_a_give_is_rejected: format!("{KEEPER}function keep(give self: Box) -> Nothing {{
   eat(self)
   print(self.items.count().toString())
 }}"), "(High) `eat(self)` then reading `self`: `eat` frees the box under the read";
 }
 
 cases! { assert_loop_store_rejected;
-    store_of_self_in_a_loop_is_rejected: format!("{KEEPER}function keep(give self: Box, lend boxes: array<Box>) -> nothing {{
+    store_of_self_in_a_loop_is_rejected: format!("{KEEPER}function keep(give self: Box, lend boxes: Array<Box>) -> Nothing {{
   for (i in [1, 2]) {{
     boxes.add(self)
   }}
@@ -505,24 +505,24 @@ cases! { assert_loop_store_rejected;
 // reject a read that comes before the hand-over, a read of a copy, or a read of a `share self`.
 
 cases! { assert_accepted;
-    copy_then_store_in_one_literal_is_accepted: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
-  let boxes: array<array<int>> = [numbers.copy(), numbers]
+    copy_then_store_in_one_literal_is_accepted: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
+  let boxes: Array<Array<Int>> = [numbers.copy(), numbers]
   print(boxes.count().toString())
 }}"), "(High) over-rejection: `[numbers.copy(), numbers]` stores a copy and then `numbers`; the copy is a fresh value, `numbers` is handed over once";
-    read_in_the_key_then_store_in_one_call_is_accepted: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
-  let table: map<int, array<int>> = {{}}
+    read_in_the_key_then_store_in_one_call_is_accepted: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
+  let table: Map<Int, Array<Int>> = {{}}
   table.set(numbers.count(), numbers)
 }}"), "(High) over-rejection: `table.set(numbers.count(), numbers)` reads `numbers` for the key and then hands it over; a read that ends before the hand-over is legal";
-    copy_of_the_value_beside_a_give_in_one_call_is_accepted: format!("{EATERS}function underTest() -> nothing {{
-  let numbers: array<int> = [1]
+    copy_of_the_value_beside_a_give_in_one_call_is_accepted: format!("{EATERS}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1]
   eatBoth(numbers, [numbers.copy()])
 }}"), "(High) over-rejection: `eatBoth(numbers, [numbers.copy()])` gives `numbers` once; the literal holds a copy";
-    share_self_read_twice_is_accepted: format!("{KEEPER}function twice(share self: Box) -> int {{
+    share_self_read_twice_is_accepted: format!("{KEEPER}function twice(share self: Box) -> Int {{
   return self.items.count() + self.items.count()
 }}"), "(High) over-rejection: a `share self` is never handed over, so reading it again is legal";
-    give_self_stored_once_is_accepted: format!("{KEEPER}function keep(give self: Box, lend boxes: array<Box>) -> nothing {{
+    give_self_stored_once_is_accepted: format!("{KEEPER}function keep(give self: Box, lend boxes: Array<Box>) -> Nothing {{
   print(self.items.count().toString())
   boxes.add(self)
 }}"), "(High) over-rejection: a `give self` read and then stored once is legal";
@@ -580,9 +580,9 @@ fn assert_loop_send_rejected(source: &str) {
 
 cases! { assert_loop_give_rejected;
     give_in_a_while_loop_is_rejected: format!(
-        "{EAT}function underTest(condition: boolean) -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
-  let i: int = 0
+        "{EAT}function underTest(condition: Boolean) -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let i: Int = 0
   while (i < 3) {{
     if (condition) {{ return }}
     eat(numbers)
@@ -591,37 +591,37 @@ cases! { assert_loop_give_rejected;
 }}"
     ), "(High) t3, the exact spike probe: an outer binding given on one pass of a `while` is gone on the next; typeck accepted it, so a release pass would double-free";
     give_in_a_for_loop_is_rejected: format!(
-        "{EAT}function underTest() -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
+        "{EAT}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
   for (i in range(0, 3)) {{
     eat(numbers)
   }}
 }}"
     ), "(High) t3 in numbers `for` loop: the second loop shape is checked by its own code path";
     give_of_a_binding_that_took_a_value_over_in_a_loop_is_rejected: format!(
-        "{EAT}function underTest() -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
-  let newOwner: array<int> = numbers
+        "{EAT}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let newOwner: Array<Int> = numbers
   for (i in range(0, 3)) {{
     eat(newOwner)
   }}
 }}"
     ), "(High) t3 through a hand-over: `let newOwner = numbers` handed `numbers`'s value to `newOwner`, which is declared outside the loop and given on every pass";
     give_in_a_while_condition_is_rejected: format!(
-        "function holds(give rows: array<int>) -> boolean {{
+        "function holds(give rows: Array<Int>) -> Boolean {{
   return rows.count() > 0
 }}
-{EAT}function underTest() -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
+{EAT}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
   while (holds(numbers)) {{
     print(`pass`)
   }}
 }}"
     ), "(High) t3 through the condition: a `while` condition runs at the top of every pass, so a give made in it reaches the next pass; the loop was opened only after the condition was checked, so typeck accepted a double give";
     give_in_an_inner_loop_reaches_the_outer_pass: format!(
-        "{EAT_BAG}function underTest() -> nothing {{
+        "{EAT_BAG}function underTest() -> Nothing {{
   let bag: Bag = {{ items: [1, 2, 3] }}
-  let view: array<int> = bag.items
+  let view: Array<Int> = bag.items
   for (j in range(0, 2)) {{
     print(view.count().toString())
     for (i in range(0, 1)) {{
@@ -662,16 +662,16 @@ cases! { assert_loop_send_rejected;
 
 cases! { assert_accepted;
     give_of_a_loop_local_is_accepted: format!(
-        "{EAT}function underTest() -> nothing {{
+        "{EAT}function underTest() -> Nothing {{
   for (i in range(0, 3)) {{
-    let numbers: array<int> = [1, 2, 3]
+    let numbers: Array<Int> = [1, 2, 3]
     eat(numbers)
   }}
 }}"
     ), "(High) over-rejection: a give of a binding the loop itself declares carries nothing into the next pass";
     give_then_reassign_is_accepted: format!(
-        "{EAT}function underTest() -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
+        "{EAT}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
   for (i in range(0, 3)) {{
     eat(numbers)
     numbers = [4, 5]
@@ -679,8 +679,8 @@ cases! { assert_accepted;
 }}"
     ), "(High) over-rejection: a reassignment before the back-edge revives the binding";
     give_on_a_path_that_returns_is_accepted: format!(
-        "{EAT}function underTest(condition: boolean) -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
+        "{EAT}function underTest(condition: Boolean) -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
   for (i in range(0, 3)) {{
     if (condition) {{
       eat(numbers)
@@ -690,9 +690,9 @@ cases! { assert_accepted;
 }}"
     ), "(High) over-rejection: a give on a path that leaves the loop never reaches the next pass";
     unread_class_mate_of_a_revived_binding_is_accepted: format!(
-        "{EAT_BAG}function underTest() -> nothing {{
+        "{EAT_BAG}function underTest() -> Nothing {{
   let bag: Bag = {{ items: [1, 2, 3] }}
-  let view: array<int> = bag.items
+  let view: Array<Int> = bag.items
   for (i in range(0, 3)) {{
     eatBag(bag)
     bag = freshBag()
@@ -700,8 +700,8 @@ cases! { assert_accepted;
 }}"
     ), "(High) over-rejection: a class-mate the loop never mentions stays consumed after the given binding is revived, but nothing in the next pass reads it";
     give_after_the_loop_is_accepted: format!(
-        "{EAT}function underTest() -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
+        "{EAT}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
   for (i in range(0, 3)) {{
     print(numbers.count().toString())
   }}
@@ -709,9 +709,9 @@ cases! { assert_accepted;
 }}"
     ), "(High) over-rejection: a give after the loop is the ordinary single give";
     give_of_an_outer_loop_local_in_an_inner_loop_is_accepted: format!(
-        "{EAT}function underTest() -> nothing {{
+        "{EAT}function underTest() -> Nothing {{
   for (j in range(0, 2)) {{
-    let numbers: array<int> = [1, 2, 3]
+    let numbers: Array<Int> = [1, 2, 3]
     for (i in range(0, 1)) {{
       eat(numbers)
       numbers = [0]
@@ -770,10 +770,10 @@ fn storing_a_sensitive_string_hands_nothing_over() {
     );
 }
 
-/// (High) A `range` is its start and end and nothing can change them: `owned_copy_plan` calls its
+/// (High) A `Range` is its start and end and nothing can change them: `owned_copy_plan` calls its
 /// copy the receiver's bits, so storing one hands nothing over. `let sameRange = wholeRange` and a
 /// struct literal holding `wholeRange` leave `wholeRange` readable, so `for (i in wholeRange)` is a
-/// valid program. Every form here builds end to end; an `array<range>` does not (codegen cannot
+/// valid program. Every form here builds end to end; an `Array<Range>` does not (codegen cannot
 /// lower a range element yet), so it is not pinned as accepted.
 #[test]
 fn storing_a_range_hands_nothing_over() {
@@ -808,9 +808,9 @@ const EAT2: &str = "function eat_all(give rows: Array<Array<Int>>) -> Nothing {
 #[test]
 fn a_store_then_a_give_of_the_container_is_accepted_and_recorded_twice() {
     let source = format!(
-        "{EAT2}function underTest() -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = []
+        "{EAT2}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
   container.add(numbers)
   eat_all(container)
 }}"
@@ -857,8 +857,8 @@ fn a_store_into_a_temporary_is_recorded_as_an_escape() {
         "{BAG}function makeBag() -> Bag {{
   return {{ items: [0] }}
 }}
-function underTest() -> nothing {{
-  let numbers: array<int> = [1, 2, 3]
+function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
   makeBag().items = numbers
 }}"
     );
@@ -915,7 +915,7 @@ fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
     assert_eq!(founder_name(&transfers, "inner"), "outer");
 }
 
-/// (High) An imported function that returns a `maybe` holding a `channel` hands back a counted
+/// (High) An imported function that returns a `Maybe` holding a `Channel` hands back a counted
 /// reference of its own (`copied_at_return`: its `return` shares what it does not move, C7 slice 3b;
 /// ruled by the Software Architect within the Chief Architect's counted-reference rule). The holder
 /// binds the result by move and is its own founder, so `held` and `local` are each released once and
@@ -943,7 +943,7 @@ function entrypoint() -> Nothing {
     assert_eq!(founder_name(&transfers, "local"), "local");
 }
 
-/// (High) An imported function (or a local one) that returns its `channel` argument hands back a
+/// (High) An imported function (or a local one) that returns its `Channel` argument hands back a
 /// counted reference of its own (`ynz_channel_share` at the callee's `return`, `copied_at_return`),
 /// so the binding that holds the result owns it. It joins nothing, so `held` and `local` are each the founder of a class of
 /// their own and the channel is released once per reference.
@@ -985,7 +985,7 @@ function entrypoint() -> Nothing {
     }
 }
 
-/// (High) An imported function that returns a `maybe` (or a union) may hand back a piece of its
+/// (High) An imported function that returns a `Maybe` (or a union) may hand back a piece of its
 /// argument. The binding that holds the result outlives `local`, so it owns a copy
 /// (`MustCopy` in `non_owned_reads`): it joins nothing and `local` is its own founder.
 #[test]
@@ -1021,8 +1021,8 @@ fn a_field_read_that_outlives_its_root_is_a_copy_owner_in_a_class_of_its_own() {
   let bucket: Bucket = {{ rows: [9] }}
   return bucket
 }}
-function underTest(condition: boolean) -> int {{
-  let cell: array<int> = make().rows
+function underTest(condition: Boolean) -> Int {{
+  let cell: Array<Int> = make().rows
   if (condition) {{
     let owner: Bucket = make()
     cell = owner.rows
@@ -1066,15 +1066,15 @@ fn assert_read_after_call_give_rejected(source: &str) {
 }
 
 cases! { assert_read_after_call_give_rejected;
-    read_after_a_direct_call_store_is_rejected: format!("{PUT}function underTest() -> int {{
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = []
+    read_after_a_direct_call_store_is_rejected: format!("{PUT}function underTest() -> Int {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
   put(container, numbers)
   return numbers.count()
 }}"), "(High) `put(container, numbers)` stores `numbers` INSIDE the callee: the caller's `numbers` is given away at the call, so the read is refused (before, the call joined the two classes and `numbers` stayed readable)";
-    read_after_a_relayed_call_store_is_rejected: format!("{PUT}function underTest() -> int {{
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = []
+    read_after_a_relayed_call_store_is_rejected: format!("{PUT}function underTest() -> Int {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
   relay(container, numbers)
   return numbers.count()
 }}"), "(High) the store happens in the callee's own call (`relay` -> `put`): `relay`'s parameter is `give` too";
@@ -1085,9 +1085,9 @@ cases! { assert_read_after_call_give_rejected;
 #[test]
 fn a_call_that_stores_a_given_argument_is_recorded_as_a_give() {
     let source = format!(
-        "{PUT}function make() -> array<array<int>> {{
-  let numbers: array<int> = [1, 2, 3]
-  let container: array<array<int>> = []
+        "{PUT}function make() -> Array<Array<Int>> {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
   put(container, numbers)
   return container
 }}"
@@ -1142,8 +1142,8 @@ fn a_field_taken_out_of_a_temporary_is_owned_by_its_binding() {
   let bucket: Bucket = {{ rows: [9] }}
   return bucket
 }}
-function underTest() -> int {{
-  let cell: array<int> = make().rows
+function underTest() -> Int {{
+  let cell: Array<Int> = make().rows
   return cell.count()
 }}"
     );
@@ -1202,15 +1202,15 @@ fn a_spawn_in_a_loop_of_an_outer_binding_copies_it() {
     use ynz_typeck::check::BgOwnership;
     let spawn_in = |declared_outside: bool| -> Vec<BgOwnership> {
         let (outside, inside) = if declared_outside {
-            ("  let rows: array<int> = [1, 2, 3]\n", "")
+            ("  let rows: Array<Int> = [1, 2, 3]\n", "")
         } else {
-            ("", "    let rows: array<int> = [1, 2, 3]\n")
+            ("", "    let rows: Array<Int> = [1, 2, 3]\n")
         };
         let source = format!(
-            "function work(rows: array<int>) -> nothing {{
+            "function work(rows: Array<Int>) -> Nothing {{
   print(rows.count().toString())
 }}
-function underTest() -> nothing {{
+function underTest() -> Nothing {{
 {outside}  for (i in range(0, 3)) {{
 {inside}    background work(rows)
   }}
@@ -1277,10 +1277,10 @@ function firstBag<T>(share bags: Array<T>, share fallback: T) -> T {
 #[test]
 fn a_field_of_a_call_result_is_a_piece_of_the_calls_arguments() {
     let source = format!(
-        "{FIRST_BAG}function underTest() -> int {{
-  let bags: array<Bag> = [{{ items: [1] }}]
+        "{FIRST_BAG}function underTest() -> Int {{
+  let bags: Array<Bag> = [{{ items: [1] }}]
   let empty: Bag = {{ items: [] }}
-  let piece: array<int> = firstBag(bags, empty).items
+  let piece: Array<Int> = firstBag(bags, empty).items
   return piece.count()
 }}"
     );
@@ -1299,11 +1299,11 @@ fn a_field_of_a_call_result_is_a_piece_of_the_calls_arguments() {
 #[test]
 fn storing_a_field_of_a_generic_call_result_is_accepted_it_owns_its_value() {
     let source = format!(
-        "{FIRST_BAG}function underTest() -> array<array<int>> {{
-  let bags: array<Bag> = [{{ items: [1] }}]
+        "{FIRST_BAG}function underTest() -> Array<Array<Int>> {{
+  let bags: Array<Bag> = [{{ items: [1] }}]
   let empty: Bag = {{ items: [] }}
-  let container: array<array<int>> = []
-  let piece: array<int> = firstBag(bags, empty).items
+  let container: Array<Array<Int>> = []
+  let piece: Array<Int> = firstBag(bags, empty).items
   container.add(piece)
   return container
 }}"
@@ -1318,10 +1318,10 @@ fn storing_a_field_of_a_generic_call_result_is_accepted_it_owns_its_value() {
 #[test]
 fn a_store_into_a_piece_of_a_call_result_hands_the_value_over() {
     let source = format!(
-        "{FIRST_BAG}function underTest() -> nothing {{
-  let bags: array<Bag> = [{{ items: [1] }}]
+        "{FIRST_BAG}function underTest() -> Nothing {{
+  let bags: Array<Bag> = [{{ items: [1] }}]
   let empty: Bag = {{ items: [] }}
-  let numbers: array<int> = [5]
+  let numbers: Array<Int> = [5]
   firstBag(bags, empty).items = numbers
 }}"
     );
@@ -1361,8 +1361,8 @@ fn a_loop_cell_joins_everything_the_iterated_value_reaches() {
 #[test]
 fn a_given_then_revived_binding_keeps_its_given_escape() {
     let source = format!(
-        "{EAT}function underTest(condition: boolean) -> int {{
-  let numbers: array<int> = [1, 2, 3]
+        "{EAT}function underTest(condition: Boolean) -> Int {{
+  let numbers: Array<Int> = [1, 2, 3]
   if (condition) {{
     eat(numbers)
     numbers = [0]

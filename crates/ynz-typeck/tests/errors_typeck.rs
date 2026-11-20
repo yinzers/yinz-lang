@@ -193,7 +193,7 @@ function entrypoint() -> Nothing {
 #[test]
 fn m7_failed_method_returns_bool() {
     // WHY: `.failed()` is the gate for accessing error details. It must return
-    // `bool`. If it returns something else, `if (x.failed())` won't type-check.
+    // `Boolean`. If it returns something else, `if (x.failed())` won't type-check.
     assert_clean(
         r#"
 function readFile() -> String errors {
@@ -237,7 +237,7 @@ function entrypoint() -> Nothing {
 #[test]
 fn m7_message_method_returns_string() {
     // WHY: `.message` is the human-readable error description. It must return
-    // `string` so it can be passed to `print`. Wrong type breaks the primary
+    // `String` so it can be passed to `print`. Wrong type breaks the primary
     // diagnostic display path.
     assert_clean(
         r#"
@@ -255,13 +255,13 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── 7. .suggestions returns array<string> ────────────────────────────────────
+// ── 7. .suggestions returns Array<String> ────────────────────────────────────
 
 #[test]
 fn m7_suggestions_method_refused_even_when_checked() {
     // WHY: v0.3 concurrency hardening Phase 3 step 3.4 (FRAGO 002 singleton S1). This test
     // used to be `m7_suggestions_method_returns_array_of_string` and asserted the read below
-    // compiled clean, which is `.suggestions` typing correctly (`array<string>`, unchanged)
+    // compiled clean, which is `.suggestions` typing correctly (`Array<String>`, unchanged)
     // while having NO working codegen — a correct, properly `.failed()`-guarded program used
     // to reach codegen and ICE "This is a compiler bug." `ec_field_lowering` now refuses
     // `.suggestions` at THIS site, at compile time, with real teaching text, before codegen
@@ -301,7 +301,7 @@ function entrypoint() -> Nothing {
 fn m7_errors_fn_auto_propagation_success_type() {
     // WHY: in an errors-capable function, using an ErrorsCapable binding as a
     // plain value triggers auto-propagation. The binding's type must narrow to
-    // the inner success type so it can be passed to functions expecting `string`.
+    // the inner success type so it can be passed to functions expecting `String`.
     assert_clean(
         r#"
 function readFile() -> String errors {
@@ -423,8 +423,8 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_errors_capable_declared_fn_type_checks() {
-    // WHY: a function declared `-> int errors` must type-check cleanly when it
-    // returns a plain `int`. The declaration tells the typeck machinery this
+    // WHY: a function declared `-> Int errors` must type-check cleanly when it
+    // returns a plain `Int`. The declaration tells the typeck machinery this
     // function is errors-capable; the return value is the success type.
     assert_clean(
         r#"
@@ -445,7 +445,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_errors_capable_nothing_return_clean() {
-    // WHY: `-> nothing errors` is valid — a side-effectful operation that may
+    // WHY: `-> Nothing errors` is valid — a side-effectful operation that may
     // fail but has no success value. The whole point of nothing errors is to
     // express "this may fail" without returning data.
     assert_clean(
@@ -468,7 +468,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_errors_int_or_fallback_is_int() {
-    // WHY: `.or(0)` on an `int errors` value must return `int`. If the type is
+    // WHY: `.or(0)` on an `Int errors` value must return `Int`. If the type is
     // wrong, arithmetic operations after `.or()` would fail to type-check.
     assert_clean(
         r#"
@@ -488,7 +488,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_errors_bool_or_false_clean() {
-    // WHY: `-> boolean errors` must type-check cleanly. Bool is a primitive just like
+    // WHY: `-> Boolean errors` must type-check cleanly. Bool is a primitive just like
     // int or string — the errors wrapper must work for all inner types.
     assert_clean(
         r#"
@@ -510,7 +510,7 @@ function entrypoint() -> Nothing {
 fn m7_errors_result_used_in_errors_fn_narrows() {
     // WHY: when an errors-capable binding is used in an errors function (auto-
     // propagation context), its type must narrow from ErrorsCapable to the inner
-    // success type. A subsequent function expecting `string` must accept it.
+    // success type. A subsequent function expecting `String` must accept it.
     assert_clean(
         r#"
 function readFile() -> String errors {
@@ -644,7 +644,7 @@ fn m7_errors_capable_type_name_format() {
 
 #[test]
 fn m7_message_method_type_checks_on_errors_capable() {
-    // WHY: `.message` must return `string` from the method dispatch — the type
+    // WHY: `.message` must return `String` from the method dispatch — the type
     // checker must handle it without cascading to a "no such method" error.
     // Accessing `.message` without a `.failed()` check is semantically wrong but
     // P3a allows it; the full flow-sensitive enforcement is a v0.2 enhancement.
@@ -721,7 +721,7 @@ fn m7_failed_if_narrowing_after_block() {
     // WHY: `if (x.failed()) { ... }` must narrow `x` to the success type for
     // code that comes AFTER the if-block. The pattern "check failed, handle it,
     // then use the success value" is the core errors-handling idiom.
-    // After the if-block, `r` is narrowed to `string` — no longer ErrorsCapable.
+    // After the if-block, `r` is narrowed to `String` — no longer ErrorsCapable.
     // Use .or() before the if-check, or just check .failed() and use it.
     assert_clean(
         r#"
@@ -743,9 +743,9 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_errors_capable_inner_maybe_type() {
-    // WHY: `-> maybe<int> errors` is a valid (if exotic) combination — a function
+    // WHY: `-> Maybe<Int> errors` is a valid (if exotic) combination — a function
     // that can either fail OR succeed with an absent value. The inner type must
-    // resolve correctly to `maybe<int>`. Testing with a concrete maybe value
+    // resolve correctly to `Maybe<Int>`. Testing with a concrete maybe value
     // to avoid the `none` literal hint-unwrapping complexity.
     let t = Type::ErrorsCapable {
         inner: Box::new(Type::Maybe {

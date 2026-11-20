@@ -116,7 +116,7 @@ fn let_to_const_hint_does_not_treat_url_slash_slash_as_comment() {
     // start of a comment; only the `//` after the string closes is the real
     // trailing comment that the hint must sit before.
     let src = concat!(
-        "function entrypoint() -> nothing {\n",
+        "function entrypoint() -> Nothing {\n",
         "  let msg = `http://x`  // real comment\n",
         "}\n"
     );
@@ -160,7 +160,7 @@ fn let_to_const_hint_does_not_treat_url_slash_slash_as_comment() {
 #[test]
 fn array_to_fixed_hint_position_is_end_of_statement_not_span_start() {
     // WHY: Same Replacement-category positioning requirement as let→const.
-    // span.start for an array<int> binding is the `let` keyword — placing the
+    // span.start for an Array<Int> binding is the `let` keyword — placing the
     // hint there is wrong; it must be at end-of-statement.
     let src = "function entrypoint() -> Nothing {\n  let nums: Array<Int> = [1, 2, 3]\n}\n";
     let (db, sf) = single_file(src);
@@ -176,7 +176,7 @@ fn array_to_fixed_hint_position_is_end_of_statement_not_span_start() {
 
     assert!(
         !fixed_hints.is_empty(),
-        "never-grown array<int> must emit an ArrayToFixed hint"
+        "never-grown Array<Int> must emit an ArrayToFixed hint"
     );
     for h in &fixed_hints {
         assert!(

@@ -141,7 +141,7 @@ fn const_binding_type_checks_clean() {
 #[test]
 fn conversion_methods_type_check_clean() {
     // WHY: intrinsic method calls must resolve to the correct return type.
-    // If `int.toString()` doesn't resolve to `string`, `print` will reject it.
+    // If `int.toString()` doesn't resolve to `String`, `print` will reject it.
     assert_clean(
         r#"function entrypoint() -> Nothing {
   let n: Int = 42
@@ -153,9 +153,9 @@ fn conversion_methods_type_check_clean() {
 
 #[test]
 fn int_literal_infers_as_int() {
-    // WHY: `let x = 42` must give x the type `int`, not `number`. This is
+    // WHY: `let x = 42` must give x the type `Int`, not `Number`. This is
     // Golden Rule 7 (efficiency first) — the default must be the most
-    // performant type. If x becomes `number`, arithmetic is decimal-128 overhead.
+    // performant type. If x becomes `Number`, arithmetic is decimal-128 overhead.
     let output = assert_errors(
         "function entrypoint() -> Nothing { let x = 42\nprint(x.toString()) }",
         0,
@@ -165,16 +165,16 @@ fn int_literal_infers_as_int() {
         .expr_types
         .values()
         .find(|t| **t == Type::Int);
-    assert!(int_ty.is_some(), "42 should infer as int");
+    assert!(int_ty.is_some(), "42 should infer as Int");
 }
 
 #[test]
 fn int_literal_number_store_binding_is_rejected_with_teaching_error() {
-    // WHY: `let x: number = 42` — an INT literal into a `number`-annotated store
+    // WHY: `let x: Number = 42` — an INT literal into a `Number`-annotated store
     // binding. INTENDED BEHAVIOR CHANGE (v0.3-M6 store-site stopgap, human-directed
     // "no duct tape", FRAGO 020): this previously type-checked clean (the hinted
-    // infer retyped `42` as `number`) and then ICE'd at codegen (raw i64 into the
-    // decimal128 pointer slot). It is now REJECTED with the shared int-literal→`number`
+    // infer retyped `42` as `Number`) and then ICE'd at codegen (raw i64 into the
+    // decimal128 pointer slot). It is now REJECTED with the shared int-literal→`Number`
     // teaching error (`NumberSlotRole::StoreBinding`) — the SAME gate every other slot
     // uses. This is an intended contract change, NOT a weakened test: the int→number
     // COERCION that would accept it stays deferred to the
@@ -188,7 +188,7 @@ fn int_literal_number_store_binding_is_rejected_with_teaching_error() {
     assert!(
         output.diagnostics[0]
             .what
-            .contains("is an int literal — passing an int literal to a `number`"),
+            .contains("is an int literal — passing an int literal to a `Number`"),
         "the store binding must render the shared int-literal→number teaching error; got: {:?}",
         output.diagnostics[0].what
     );
@@ -202,38 +202,38 @@ fn int_literal_number_store_binding_is_rejected_with_teaching_error() {
 #[test]
 fn number_literal_stays_clean_in_number_store_binding() {
     // WHY: the false-fire guard for the store-binding gate above — a genuine decimal
-    // literal (`42.0`) into a `number` binding is already a `number` and must compile
+    // literal (`42.0`) into a `Number` binding is already a `Number` and must compile
     // clean; the gate must fire ONLY on int literals, never on decimals.
     assert_clean("function entrypoint() -> Nothing { let x: Number = 42.0\nprint(x) }");
 }
 
 #[test]
 fn int_literal_retypes_as_float_with_annotation() {
-    // WHY: `let x: float = 42` must store x as `float`. Same annotation override.
+    // WHY: `let x: Float = 42` must store x as `Float`. Same annotation override.
     assert_clean("function entrypoint() -> Nothing { let x: Float = 42\nprint(x) }");
 }
 
 #[test]
 fn number_literal_infers_as_number() {
-    // WHY: `3.14` has a decimal point so it must infer as `number` (decimal128),
-    // not float. `float` would silently corrupt exact decimal values.
+    // WHY: `3.14` has a decimal point so it must infer as `Number` (decimal128),
+    // not float. `Float` would silently corrupt exact decimal values.
     assert_clean("function entrypoint() -> Nothing { let x = 3.14\nprint(x) }");
 }
 
 #[test]
 fn number_literal_retypes_as_float_with_annotation() {
-    // WHY: `let x: float = 1.0` must store x as `float`. The user explicitly
+    // WHY: `let x: Float = 1.0` must store x as `Float`. The user explicitly
     // chose binary floating-point — the annotation governs.
     assert_clean("function entrypoint() -> Nothing { let x: Float = 1.0\nprint(x) }");
 }
 
 #[test]
 fn int_annotation_rejects_number_literal() {
-    // WHY: `let x: int = 1.5` must error — you can't store a decimal in an int.
+    // WHY: `let x: Int = 1.5` must error — you can't store a decimal in an int.
     // The type checker must catch this before codegen tries to emit an alloca.
     let output = assert_errors("function entrypoint() -> Nothing { let x: Int = 1.5 }", 1);
     assert!(
-        output.diagnostics[0].what.contains("number") || output.diagnostics[0].what.contains("int"),
+        output.diagnostics[0].what.contains("Number") || output.diagnostics[0].what.contains("Int"),
         "Diagnostic must mention the types, got: {}",
         output.diagnostics[0].what
     );
@@ -331,7 +331,7 @@ fn bool_less_than_int_is_type_error() {
 
 #[test]
 fn comparison_result_type_is_bool() {
-    // WHY: `a < b` must produce `bool`. If it produced `int` or `number`, the
+    // WHY: `a < b` must produce `Boolean`. If it produced `Int` or `Number`, the
     // boolean operators `&&` and `||` would fail when applied to comparison results.
     assert_clean("function entrypoint() -> Nothing { let x: Int = 1\nlet y: Int = 2\nlet z = x < y\nprint(z) }");
 }
@@ -439,7 +439,7 @@ fn print_with_each_primitive_type_is_clean() {
 
 #[test]
 fn unknown_method_produces_error_with_available_list() {
-    // WHY: `1.unknownMethod()` must name the available methods on `int`.
+    // WHY: `1.unknownMethod()` must name the available methods on `Int`.
     // A generic "method not found" without alternatives leaves the developer
     // to guess what conversions exist.
     let output = assert_errors(
@@ -457,7 +457,7 @@ fn unknown_method_produces_error_with_available_list() {
 
 #[test]
 fn to_string_on_int_produces_string() {
-    // WHY: the return type of `.toString()` must be `string` so `print` accepts it.
+    // WHY: the return type of `.toString()` must be `String` so `print` accepts it.
     assert_clean(
         "function entrypoint() -> Nothing { let x: Int = 42\nlet s = x.toString()\nprint(s) }",
     );
@@ -465,7 +465,7 @@ fn to_string_on_int_produces_string() {
 
 #[test]
 fn to_float_on_int_produces_float() {
-    // WHY: the return type of `.toFloat()` must be `float` so float arithmetic works.
+    // WHY: the return type of `.toFloat()` must be `Float` so float arithmetic works.
     assert_clean(
         "function entrypoint() -> Nothing { let x: Int = 5\nlet f: Float = x.toFloat()\nprint(f) }",
     );
@@ -476,7 +476,7 @@ fn parse_error_gate_prevents_cascade_noise() {
     // WHY: type-checking a body that has parse errors produces duplicate diagnostics
     // that confuse the developer. The gate ensures typeck is silent for functions
     // whose bodies contain error nodes from parser recovery.
-    let output = run("function entrypoint() -> nothing { $ }");
+    let output = run("function entrypoint() -> Nothing { $ }");
     let errors: Vec<_> = output
         .diagnostics
         .iter()
@@ -610,7 +610,7 @@ fn m3_while_loop_type_checks_clean() {
 #[test]
 fn m3_for_range_loop_type_checks_clean() {
     // WHY: `for (i in range(0, 5))` — the canonical loop form — must type-check
-    // clean with `i` typed as `int` inside the body.
+    // clean with `i` typed as `Int` inside the body.
     assert_clean(
         r#"function entrypoint() -> Nothing {
   for (i in range(0, 5)) {
@@ -660,7 +660,7 @@ fn m3_multi_case_string_type_checks_clean() {
 
 #[test]
 fn m3_return_with_correct_type_is_clean() {
-    // WHY: `return 42` in a `-> int` function — the simplest happy-path return.
+    // WHY: `return 42` in a `-> Int` function — the simplest happy-path return.
     assert_clean(
         r#"function answer() -> Int { return 42 }
 function entrypoint() -> Nothing { print(answer()) }"#,
@@ -669,7 +669,7 @@ function entrypoint() -> Nothing { print(answer()) }"#,
 
 #[test]
 fn m3_return_nothing_in_nothing_fn_is_clean() {
-    // WHY: bare `return` in a `-> nothing` function — valid early exit.
+    // WHY: bare `return` in a `-> Nothing` function — valid early exit.
     assert_clean(r#"function entrypoint() -> Nothing { return }"#);
 }
 
@@ -686,7 +686,7 @@ function entrypoint() -> Nothing { print(add(add(1, 2), add(3, 4))) }"#,
 #[test]
 fn m3_multicase_fall_through_ok_for_nothing_fn() {
     // WHY: a non-exhaustive multi-case (no else_arm) is NOT a missing-return error
-    // in a `-> nothing` function — fall-through is fine because the function
+    // in a `-> Nothing` function — fall-through is fine because the function
     // doesn't need to produce a value.
     assert_clean(
         r#"function entrypoint() -> Nothing {
@@ -732,7 +732,7 @@ fn entrypoint_with_parameters_produces_diagnostic() {
 
 #[test]
 fn m3_entrypoint_with_non_nothing_return_type_produces_diagnostic() {
-    // WHY: `entrypoint() -> int` is wrong. The signature pre-pass catches this.
+    // WHY: `entrypoint() -> Int` is wrong. The signature pre-pass catches this.
     let out = assert_errors(r#"function entrypoint() -> Int { return 0 }"#, 1);
     assert!(out.diagnostics[0].what.contains("entrypoint"));
 }
@@ -772,7 +772,7 @@ fn loop_var_mutation_produces_diagnostic() {
 
 #[test]
 fn wrong_return_type_produces_diagnostic() {
-    // WHY: `return `hi`` in a `-> int` function must produce a type-mismatch
+    // WHY: `return `hi`` in a `-> Int` function must produce a type-mismatch
     // diagnostic pointing at the wrong expression, not the whole function.
     let out = assert_errors(
         r#"function foo() -> Int { return `hi` }
@@ -782,12 +782,12 @@ function entrypoint() -> Nothing { print(foo()) }"#,
     assert!(out
         .diagnostics
         .iter()
-        .any(|d| d.what.contains("int") || d.what.contains("string")));
+        .any(|d| d.what.contains("Int") || d.what.contains("String")));
 }
 
 #[test]
 fn missing_return_produces_diagnostic() {
-    // WHY: a `-> int` function with no `return` on all paths must error.
+    // WHY: a `-> Int` function with no `return` on all paths must error.
     // Without this check, the function silently exits with an undefined value.
     // test-ratchet: M7 P1 — migrated to backtick syntax
     let out = assert_errors(
@@ -799,7 +799,7 @@ fn missing_return_produces_diagnostic() {
 
 #[test]
 fn return_without_value_in_non_nothing_fn_produces_diagnostic() {
-    // WHY: bare `return` in a `-> int` function is wrong — the function
+    // WHY: bare `return` in a `-> Int` function is wrong — the function
     // promised a value but returns nothing.
     assert_errors(
         r#"function foo() -> Int { return }
@@ -810,7 +810,7 @@ function entrypoint() -> Nothing { print(foo()) }"#,
 
 #[test]
 fn return_with_value_in_nothing_fn_produces_diagnostic() {
-    // WHY: `return 1` inside a `-> nothing` function is a contradiction —
+    // WHY: `return 1` inside a `-> Nothing` function is a contradiction —
     // the function said it produces no value, then tries to return one.
     assert_errors(r#"function entrypoint() -> Nothing { return 1 }"#, 1);
 }
@@ -833,7 +833,7 @@ function entrypoint() -> Nothing { print(foo()) }"#,
 
 #[test]
 fn multicase_non_exhaustive_in_non_nothing_fn_produces_diagnostic() {
-    // WHY: `function foo(x: int) -> int { if (x) { 1 => return 1 } }` —
+    // WHY: `function foo(x: Int) -> Int { if (x) { 1 => return 1 } }` —
     // no else_arm means there's a fall-through path where no value is returned.
     assert_errors(
         r#"function foo(x: Int) -> Int {
@@ -901,7 +901,7 @@ fn range_wrong_arity_produces_diagnostic() {
 
 #[test]
 fn range_wrong_arg_type_produces_diagnostic() {
-    // WHY: `range(`hi`)` — range requires `int` args. A string arg must error.
+    // WHY: `range(`hi`)` — range requires `Int` args. A string arg must error.
     assert_errors(
         r#"function entrypoint() -> Nothing { for (i in range(`hi`)) { print(i) } }"#,
         1,
@@ -922,14 +922,14 @@ fn undefined_function_produces_diagnostic_with_levenshtein() {
 
 #[test]
 fn function_arg_type_mismatch_produces_diagnostic() {
-    // WHY: `function foo(x: int) -> nothing { }; foo(`hi`)` — string passed
+    // WHY: `function foo(x: Int) -> Nothing { }; foo(`hi`)` — string passed
     // where int expected. Must produce exactly 1 type-mismatch diagnostic.
     let out = assert_errors(
         r#"function foo(x: Int) -> Nothing { }
 function entrypoint() -> Nothing { foo(`hi`) }"#,
         1,
     );
-    assert!(out.diagnostics[0].what.contains("int") || out.diagnostics[0].what.contains("string"));
+    assert!(out.diagnostics[0].what.contains("Int") || out.diagnostics[0].what.contains("String"));
 }
 
 #[test]
@@ -950,7 +950,7 @@ fn parse_error_gate_still_works_in_m3() {
     // confusing "undefined identifier" errors on error-recovery nodes.
     // `let x = $` produces: (1) lex error on `$`, (2) parse error on the
     // missing expression. Both are lex/parse errors — typeck must not add more.
-    let out = run(r#"function entrypoint() -> nothing { let x = $ }"#);
+    let out = run(r#"function entrypoint() -> Nothing { let x = $ }"#);
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -974,7 +974,7 @@ fn parse_error_gate_still_works_in_m3() {
 
 #[test]
 fn while_true_with_no_break_is_missing_return_error() {
-    // WHY: `function foo() -> int { while (true) { } }` — the typeck does NOT
+    // WHY: `function foo() -> Int { while (true) { } }` — the typeck does NOT
     // constant-fold `true`, so while loops always look like "may-not-execute."
     // A non-nothing function that only has a while loop must get a missing-return
     // error. The diagnostic must guide the user to add a `return` inside the body.
@@ -987,7 +987,7 @@ function entrypoint() -> Nothing { print(foo()) }"#,
 
 #[test]
 fn empty_function_body_non_nothing_is_missing_return() {
-    // WHY: `function foo() -> int { }` — zero statements, no return. Must error.
+    // WHY: `function foo() -> Int { }` — zero statements, no return. Must error.
     // Edge case for `analyze_return_paths` with an empty block.
     assert_errors(
         r#"function foo() -> Int { }
@@ -998,7 +998,7 @@ function entrypoint() -> Nothing { print(foo()) }"#,
 
 #[test]
 fn for_loop_var_is_typed_as_int() {
-    // WHY: inside `for (i in range(0, 5))`, `i` must be `int` so it can be
+    // WHY: inside `for (i in range(0, 5))`, `i` must be `Int` so it can be
     // passed to `print` without a `.toString()` call. If `i` is Error or
     // unknown, print(i) would produce a false type error.
     assert_clean(r#"function entrypoint() -> Nothing { for (i in range(0, 10)) { print(i) } }"#);
@@ -1096,7 +1096,7 @@ function entrypoint() -> Nothing { let p: Player = { name: `x`, age: 30 } }
 
 #[test]
 fn field_access_resolves_correct_type() {
-    // WHY: `p.health` where health is `int` must produce an int — not Error.
+    // WHY: `p.health` where health is `Int` must produce an int — not Error.
     // The int literal binop check below confirms the field resolved to int.
     assert_clean(
         r#"
@@ -1128,7 +1128,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn field_assignment_type_checks() {
-    // WHY: `p.health = 50` where health is `int` must check that 50 is `int`.
+    // WHY: `p.health = 50` where health is `Int` must check that 50 is `Int`.
     assert_clean(
         r#"
 shape Player { name: String health: Int }
@@ -1759,7 +1759,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m6_int_to_int_is_clean() {
-    // WHY: `.toInt()` on int must be the identity and return `int` directly (not `maybe<int>`).
+    // WHY: `.toInt()` on int must be the identity and return `Int` directly (not `Maybe<Int>`).
     assert_clean(
         r#"
 function entrypoint() -> Nothing {
@@ -1773,7 +1773,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m6_float_to_int_returns_maybe() {
-    // WHY: `.toInt()` on float is fallible — must return `maybe<int>`, not bare `int`.
+    // WHY: `.toInt()` on float is fallible — must return `Maybe<Int>`, not bare `Int`.
     // If this returns int, NaN and OOR cases silently produce wrong values at runtime.
     assert_clean(
         r#"
@@ -1789,7 +1789,7 @@ function entrypoint() -> Nothing {
 #[test]
 fn m6_string_to_int_returns_maybe() {
     // WHY: `"42".toInt()` is fallible — the string might not be a valid integer.
-    // Must return `maybe<int>` so the caller handles the failure case.
+    // Must return `Maybe<Int>` so the caller handles the failure case.
     assert_clean(
         r#"
 function entrypoint() -> Nothing {
@@ -1882,7 +1882,7 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     let b_path = dir.join("b.ynz");
     let a_path = dir.join("a.ynz");
 
-    // v1: fileB exports `foo(x: int) -> int`. fileA imports and calls `foo(42)`.
+    // v1: fileB exports `foo(x: Int) -> Int`. fileA imports and calls `foo(42)`.
     let file_b_v1 = "export function foo(x: Int) -> Int { return x }";
     let file_a_src =
         "import { foo } from `b`\nfunction entrypoint() -> Nothing { let r = foo(42) }";
@@ -1912,7 +1912,7 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     assert_eq!(
         v1_errors.len(),
         0,
-        "v1: foo(int)->int + call foo(42) should compile clean (no errors); got: {:#?}",
+        "v1: foo(Int)->Int + call foo(42) should compile clean (no errors); got: {:#?}",
         v1_errors
     );
 
@@ -1932,7 +1932,7 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     //             (same function name, same length — values were ignored).
     assert!(
         !v2_errors.is_empty(),
-        "v2: foo now expects string but call passes int — must produce a type error; got 0 errors. \
+        "v2: foo now expects String but call passes Int — must produce a type error; got 0 errors. \
          Diagnostics: {:#?}",
         output2.diagnostics
     );
@@ -1987,7 +1987,7 @@ function entrypoint() -> Nothing {}
         .any(|d| d.what_instead.contains("none"));
     assert!(
         suggests_none,
-        "Expected `none` suggestion for maybe-typed field, got: {:#?}",
+        "Expected `none` suggestion for Maybe-typed field, got: {:#?}",
         output.diagnostics
     );
 }
@@ -2148,7 +2148,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn anon_shape_field_order_irrelevant_for_equivalence() {
-    // WHY: structural typing — {a:int, b:int} and {b:int, a:int} must be the same type
+    // WHY: structural typing — {a:Int, b:Int} and {b:Int, a:Int} must be the same type
     //      so that passing one where the other is expected compiles clean.
     assert_clean(
         r#"
@@ -2203,7 +2203,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn anon_shape_named_shape_are_different_types() {
-    // WHY: nominal typing for named shapes — `shape Foo { a: int }` and `{ a: int }`
+    // WHY: nominal typing for named shapes — `shape Foo { a: Int }` and `{ a: Int }`
     //      do NOT interconvert; the user must pick one or the other.
     let output = assert_errors(
         r#"
@@ -2245,7 +2245,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn anon_shape_in_fixed_works_with_for_destructure() {
-    // WHY: Patrick's motivating example — inline shape in fixed<T>, iterated with
+    // WHY: Patrick's motivating example — inline shape in Fixed<T>, iterated with
     //      destructuring. End-to-end integration with destructuring from commit 19d9d4c.
     assert_clean(
         r#"
@@ -2299,11 +2299,11 @@ fn anon_shape_rejects_hidden_field() {
     // WHY: `hidden` inside an inline shape type is incoherent — hidden fields are
     //      file-private and require a named shape. The parser must emit the specific
     //      diagnostic pointing at the `hidden` keyword.
-    // The `hidden` keyword is consumed and reported; the remaining `b: int` is parsed as
+    // The `hidden` keyword is consumed and reported; the remaining `b: Int` is parsed as
     // a regular field, so the struct literal `{ a: 1 }` gets a secondary "missing b" error.
     let output = run(r#"
-function entrypoint() -> nothing {
-  let p: { a: int, hidden b: int } = { a: 1 }
+function entrypoint() -> Nothing {
+  let p: { a: Int, hidden b: Int } = { a: 1 }
 }
 "#);
     let errors: Vec<_> = output
@@ -2326,7 +2326,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn lint_warns_when_same_inline_shape_used_twice() {
-    // WHY: When the same inline shape `{ a: int, b: string }` appears in two places,
+    // WHY: When the same inline shape `{ a: Int, b: String }` appears in two places,
     // the Tier 3 lint must emit a Warning at each use site suggesting extraction to
     // a named shape. Without this, users silently accumulate duplicate type definitions
     // that must be updated separately when the shape changes.
@@ -2411,7 +2411,7 @@ function entrypoint() -> Nothing {}
 #[test]
 fn cross_file_inline_shape_structural_equivalence_positive() {
     // WHY: Inline shapes rely on content-based canonical naming. Two files that
-    // declare the same `{ a: int, b: string }` must resolve to the same canonical
+    // declare the same `{ a: Int, b: String }` must resolve to the same canonical
     // `__anon__*` shape so cross-file calls type-check correctly. If canonical
     // naming is file-local instead of content-global, every cross-file inline-shape
     // call produces a false type-mismatch error. This test is the regression guard.
@@ -2464,12 +2464,12 @@ fn cross_file_inline_shape_structural_equivalence_positive() {
 #[test]
 fn cross_file_inline_shape_field_mismatch_documents_known_gap() {
     // WHY: A call passing `{ a: 1, c: "hi" }` to a function expecting
-    // `{ a: int, b: string }` should produce a type error — field `c` is not
-    // part of the canonical shape `{ a: int, b: string }`.
+    // `{ a: Int, b: String }` should produce a type error — field `c` is not
+    // part of the canonical shape `{ a: Int, b: String }`.
     //
     // KNOWN LIMITATION (v0.1): struct literals at untyped call-site arguments are
     // not checked against the expected param type. An untyped struct-literal
-    // argument synthesizes a new anon shape `{ a: int, c: string }` and the call
+    // argument synthesizes a new anon shape `{ a: Int, c: String }` and the call
     // checker compares `__anon__a_int__b_string` (param) vs `__anon__a_int__c_string`
     // (arg) — which should be caught, but the expected-type is not threaded into
     // `check_call` argument checking in v0.1. See design/inline-shape-types.md
@@ -2545,7 +2545,7 @@ function entrypoint() -> Nothing {
 }
 
 #[test]
-// WHY: unknown types nested inside `maybe<T>` or `array<T>` inside an inline shape
+// WHY: unknown types nested inside `Maybe<T>` or `Array<T>` inside an inline shape
 // must also error — the validation must recurse through container types, not just
 // check the top-level field type.
 fn anon_shape_unknown_type_in_maybe_field_errors() {
@@ -2563,7 +2563,7 @@ function entrypoint() -> Nothing {
         .any(|d| d.what.contains("GhostType"));
     assert!(
         has_msg,
-        "Expected diagnostic mentioning `GhostType` in maybe field; got: {:#?}",
+        "Expected diagnostic mentioning `GhostType` in Maybe field; got: {:#?}",
         output.diagnostics
     );
 }
@@ -2572,7 +2572,7 @@ function entrypoint() -> Nothing {
 // v0.3-M1: sleepBlocking intrinsic typeck
 // ─────────────────────────────────────────────────────────────────────────────
 
-// WHY: sleepBlocking(int) -> nothing must type-check cleanly with an int arg and
+// WHY: sleepBlocking(int) -> Nothing must type-check cleanly with an int arg and
 // return nothing. If the typeck dispatch arm is missing, users get a confusing
 // "not defined" error instead of a successful type-check.
 #[test]
@@ -2595,8 +2595,8 @@ fn sleep_ms_with_wrong_type_produces_error() {
         "sleepBlocking with string arg must produce an error"
     );
     assert!(
-        errors[0].what.contains("int") || errors[0].what.contains("sleepBlocking"),
-        "error must mention int or sleepBlocking; got: {:?}",
+        errors[0].what.contains("Int") || errors[0].what.contains("sleepBlocking"),
+        "error must mention Int or sleepBlocking; got: {:?}",
         errors[0].what
     );
 }
@@ -2713,9 +2713,9 @@ fn background_with_lend_param_rejected() {
 fn background_with_large_copy_warns() {
     // Shape with 9 fields = 9 * 8 = 72 bytes > 64 byte threshold.
     // NOTE: .copy() with parens (it's an action per dot-postfix rule).
-    let src = "shape BigData { a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int }\n\
-               function process(d: BigData) -> nothing { }\n\
-               function entrypoint() -> nothing {\n  let d: BigData = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }\n  background process(d.copy())\n}";
+    let src = "shape BigData { a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int }\n\
+               function process(d: BigData) -> Nothing { }\n\
+               function entrypoint() -> Nothing {\n  let d: BigData = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }\n  background process(d.copy())\n}";
     let out = run(src);
     let warnings: Vec<_> = out
         .diagnostics
@@ -2738,9 +2738,9 @@ fn background_with_large_copy_warns() {
 #[test]
 fn background_with_small_copy_no_warn() {
     // Shape with 4 fields = 32 bytes < 64 byte threshold
-    let src = "shape Small { a: int, b: int, c: int, d: int }\n\
-               function process(s: Small) -> nothing { }\n\
-               function entrypoint() -> nothing {\n  let s: Small = { a: 1, b: 2, c: 3, d: 4 }\n  background process(s.copy())\n}";
+    let src = "shape Small { a: Int, b: Int, c: Int, d: Int }\n\
+               function process(s: Small) -> Nothing { }\n\
+               function entrypoint() -> Nothing {\n  let s: Small = { a: 1, b: 2, c: 3, d: 4 }\n  background process(s.copy())\n}";
     let out = run(src);
     let warnings: Vec<_> = out
         .diagnostics
@@ -2784,10 +2784,10 @@ fn wait_in_kernel_mode_rejected() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// v0.3-M4 Phase 1 — channel<T> construction typeck (FRAGO 004: methods land in Phase 2)
+// v0.3-M4 Phase 1 — Channel<T> construction typeck (FRAGO 004: methods land in Phase 2)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// WHY: kernel mode must reject `channel<T>` construction (R7 gate) — a channel needs the Tokio
+// WHY: kernel mode must reject `Channel<T>` construction (R7 gate) — a channel needs the Tokio
 // scheduler to suspend a task on send-when-full / receive-when-empty, and that scheduler does not
 // run in kernel mode. This is the trigger the v0_3_m4_errors.ynz gallery documents as a commented
 // block (the --kernel flag is hidden from the public CLI), so this test IS the real trigger.
@@ -2803,14 +2803,14 @@ fn channel_construction_in_kernel_mode_rejected() {
     assert!(
         errors
             .iter()
-            .any(|d| d.what.contains("channel") && d.what.contains("--kernel")),
+            .any(|d| d.what.contains("Channel") && d.what.contains("--kernel")),
         "channel construction in kernel mode must be rejected with a channel/kernel diagnostic; \
          got: {:?}",
         errors
     );
 }
 
-// WHY: the happy path — `channel<T>()` (default capacity) and `channel<T>(N)` both typecheck with
+// WHY: the happy path — `Channel<T>()` (default capacity) and `Channel<T>(N)` both typecheck with
 // no diagnostics. If a valid channel construction ever starts emitting an error, this fails.
 #[test]
 fn channel_construction_default_and_explicit_capacity_typecheck() {
@@ -2836,7 +2836,7 @@ fn channel_construction_default_and_explicit_capacity_typecheck() {
 fn channel_non_positive_capacity_literal_rejected() {
     for cap in ["0", "-1", "-99"] {
         let src = format!(
-            "function entrypoint() -> nothing {{ let c: channel<int> = channel<int>({cap}) }}"
+            "function entrypoint() -> Nothing {{ let c: Channel<Int> = Channel<Int>({cap}) }}"
         );
         let out = run(&src);
         let errors: Vec<_> = out
@@ -2848,7 +2848,7 @@ fn channel_non_positive_capacity_literal_rejected() {
             errors
                 .iter()
                 .any(|d| d.what.contains("capacity must be at least 1")),
-            "channel<int>({cap}) must be rejected as non-positive; got: {:?}",
+            "Channel<Int>({cap}) must be rejected as non-positive; got: {:?}",
             errors
         );
     }
@@ -2863,7 +2863,7 @@ fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
         missing
             .diagnostics
             .iter()
-            .any(|d| d.what.contains("channel` needs an element type")),
+            .any(|d| d.what.contains("Channel` needs an element type")),
         "channel() with no element type must be rejected; got: {:?}",
         missing.diagnostics
     );
@@ -2874,7 +2874,7 @@ fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
         wrong
             .diagnostics
             .iter()
-            .any(|d| d.what.contains("capacity must be an `int`")),
+            .any(|d| d.what.contains("capacity must be an `Int`")),
         "a string capacity must be rejected; got: {:?}",
         wrong.diagnostics
     );
@@ -2884,7 +2884,7 @@ fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
 // v0.3-M4 conduit-receiver ORIGIN discipline (fix-loop regression tests)
 //
 // WHY: typeck used to accept `.send()`/`.receive()` on any plain-ident receiver typed
-// `channel<T>`, while the may-block resolver only derives conduit bindings from a fixed set
+// `Channel<T>`, while the may-block resolver only derives conduit bindings from a fixed set
 // of syntactic origins (annotation, construction, local channel-returning fn, spawn, alias).
 // A channel reaching a binding through a shape field, a maybe-`.value` element, a loop
 // variable, or a cross-module call type-checked but never entered the suspend set — codegen
@@ -2914,7 +2914,7 @@ fn channel_from_shape_field_unannotated_rejected() {
     );
 }
 
-// WHY: same class via a collection element — `chans[0]` is `maybe<channel<int>>`, and the
+// WHY: same class via a collection element — `chans[0]` is `Maybe<Channel<Int>>`, and the
 // `.value` extraction produces a channel binding the resolver can't derive.
 #[test]
 fn channel_from_maybe_value_unannotated_rejected() {
@@ -4728,7 +4728,7 @@ fn incremental_diamond_a_imported_by_b_and_c_both_rechecked() {
 // the wrapper during auto-propagation inside an errors-capable function. Four adversarial
 // cases guard the narrow restoration logic:
 //   (a) `.failed` and `.message` on a let-bound EC value resolve correctly — not just `.or`.
-//   (b) an inner `let x: int` shadows an outer `let x: T errors` — `.or(0)` on the inner
+//   (b) an inner `let x: Int` shadows an outer `let x: T errors` — `.or(0)` on the inner
 //       `x` must NOT restore EC (the inner binding is int, not ErrorsCapable).
 //   (c) an EC-method name on a non-EC binding in an EC function must not trigger restoration.
 //   (d) EC method names inside a non-errors-capable function dispatch as normal methods
@@ -4760,13 +4760,13 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn ec_method_no_over_restoration_when_inner_shadows_outer_ec() {
-    // WHY: the shadowing boundary check — an inner `let x: int` must block EC restoration
+    // WHY: the shadowing boundary check — an inner `let x: Int` must block EC restoration
     // on `x.or(0)` even when an outer `let x: T errors` is in scope. The fix looks up the
     // INNERMOST scope binding; if the lookup incorrectly walks to the outer binding, it would
     // restore ErrorsCapable and produce a wrong dispatch (or silently accept int.or(0) as EC).
     // This test asserts the OUTER-x code is still EC-clean (baseline), and the INNER-x code
     // produces a type error because int has no `.or` method (the restoration must NOT fire).
-    // One error expected: int does not have method `or`.
+    // One error expected: Int does not have method `or`.
     let out = assert_errors(
         r#"
 function compute() -> Int errors {
@@ -4788,7 +4788,7 @@ function entrypoint() -> Nothing {
     assert!(
         out.diagnostics
             .iter()
-            .any(|d| (d.what.contains("or") || d.what.contains("`int`"))
+            .any(|d| (d.what.contains("or") || d.what.contains("`Int`"))
                 && d.severity == ynz_diagnostics::Severity::Error),
         "error must be about `or` on int (no EC restoration for shadowed inner int binding); \
          got: {:#?}",
@@ -4801,8 +4801,8 @@ fn ec_method_named_call_on_non_ec_binding_no_restoration() {
     // WHY: an EC-method-named call (`.or(0)`) on a non-EC binding in an errors-capable
     // function must not trigger restoration. The restoration check (check.rs:1845) guards
     // with `matches!(entry.ty, Type::ErrorsCapable { .. })`. If this guard is absent or
-    // wrong, a plain `int` variable would be promoted to ErrorsCapable for dispatch,
-    // hiding the type error and miscompiling the call. One error expected: int.or not found.
+    // wrong, a plain `Int` variable would be promoted to ErrorsCapable for dispatch,
+    // hiding the type error and miscompiling the call. One error expected: Int.or not found.
     let out = assert_errors(
         r#"
 function compute() -> Int errors {
@@ -4822,7 +4822,7 @@ function entrypoint() -> Nothing {
     assert!(
         out.diagnostics.iter().any(|d| {
             d.severity == ynz_diagnostics::Severity::Error
-                && (d.what.contains("or") || d.what.contains("`int`"))
+                && (d.what.contains("or") || d.what.contains("`Int`"))
         }),
         "error must be about `or` on int; restoration must not fire for non-EC binding; \
          got: {:#?}",
@@ -4852,7 +4852,7 @@ function entrypoint() -> Nothing {
     assert!(
         out.diagnostics.iter().any(|d| {
             d.severity == ynz_diagnostics::Severity::Error
-                && (d.what.contains("or") || d.what.contains("`int`"))
+                && (d.what.contains("or") || d.what.contains("`Int`"))
         }),
         "error must be a type error about `or` on int in a non-EC fn; got: {:#?}",
         out.diagnostics

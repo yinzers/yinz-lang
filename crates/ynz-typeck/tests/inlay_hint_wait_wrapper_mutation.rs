@@ -79,7 +79,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn interpolated_string_lend_call_suppresses_let_to_const_hint() {
-    // WHY: `` `count is ${bump(buf)}` `` where `bump` takes `lend x: int` is a
+    // WHY: `` `count is ${bump(buf)}` `` where `bump` takes `lend x: Int` is a
     // mutation of `buf` inside a `StringPart::Expr` embedded in an
     // `Expr::InterpolatedString`.  The InterpolatedString arm in
     // `collect_maybe_mutated_expr` must recurse into each StringPart::Expr.
@@ -120,8 +120,8 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn wait_wrapper_lend_call_suppresses_array_to_fixed_hint() {
-    // WHY: `let nums: array<int> = [1,2,3]; wait growIt(nums)` where `growIt`
-    // takes `lend arr: int` is a mutation of `nums` (the array binding) hidden
+    // WHY: `let nums: Array<Int> = [1,2,3]; wait growIt(nums)` where `growIt`
+    // takes `lend arr: Int` is a mutation of `nums` (the array binding) hidden
     // behind a `wait` wrapper.
     //
     // The `array→fixed` hint must not fire on `nums` because `growIt` may
@@ -150,7 +150,7 @@ function entrypoint() -> Nothing {
 fn wait_wrapper_share_call_does_not_suppress_let_to_const_hint() {
     // WHY: The fix must only suppress hints for bindings that are actually mutated
     // (lend/give ownership).  A `wait readOnly(x)` where `readOnly` takes
-    // `share x: int` is NOT a mutation.  The `let→const` hint must still fire.
+    // `share x: Int` is NOT a mutation.  The `let→const` hint must still fire.
     //
     // This guards against over-suppression: the Wait arm must recurse into the
     // inner expression and apply the same ownership-aware logic as the Call arm —

@@ -1,4 +1,4 @@
-// WHY: P3c adds map<K,V> typeck: MapLit parsing, bracket access returning maybe<V>,
+// WHY: P3c adds Map<K,V> typeck: MapLit parsing, bracket access returning Maybe<V>,
 // method dispatch (get/set/has/remove/count/keys/values/entries), for-loop MapEntry
 // binding, duplicate-key detection, and all error paths.
 // Regressions here would silently break P4b codegen which lowers map operations.
@@ -56,7 +56,7 @@ fn check_has_diag(source: &str, fragment: &str) {
 
 #[test]
 fn m5p3c_map_string_int_literal_typechecks() {
-    // WHY: acceptance criterion — `let m: map<string, int> = { `alice`: 90, `bob`: 85 }`
+    // WHY: acceptance criterion — `let m: Map<String, Int> = { `alice`: 90, `bob`: 85 }`
     // must type-check without diagnostics.
     check_no_diags(
         r#"
@@ -69,7 +69,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_string_string_literal_typechecks() {
-    // WHY: map<string, string> must work — both key and value types can be string.
+    // WHY: Map<String, String> must work — both key and value types can be string.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -81,7 +81,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_int_bool_literal_typechecks() {
-    // WHY: int keys must be valid — map<int, bool> with int literals.
+    // WHY: Int keys must be valid — Map<Int, bool> with int literals.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -93,7 +93,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_empty_with_annotation_typechecks() {
-    // WHY: `let m: map<string, int> = {}` must be valid — empty map literal
+    // WHY: `let m: Map<String, Int> = {}` must be valid — empty map literal
     // via the BuiltinMap annotation path in check_struct_lit.
     check_no_diags(
         r#"
@@ -120,7 +120,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_bracket_access_returns_maybe() {
-    // WHY: `m["key"]` must return `maybe<int>` — bracket access on maps is fallible.
+    // WHY: `m["key"]` must return `Maybe<Int>` — bracket access on maps is fallible.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -133,7 +133,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_bracket_access_with_or_returns_value() {
-    // WHY: `m[`alice`].or(0)` must resolve to int — chaining `.or()` on a maybe<int>
+    // WHY: `m[`alice`].or(0)` must resolve to int — chaining `.or()` on a Maybe<Int>
     // from bracket access.
     check_no_diags(
         r#"
@@ -147,7 +147,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_bracket_assignment_typechecks() {
-    // WHY: `m[`bob`] = 95` must type-check when m: map<string, int>.
+    // WHY: `m[`bob`] = 95` must type-check when m: Map<String, Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -176,7 +176,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_get_returns_maybe() {
-    // WHY: `.get("alice")` on map<string, int> must return maybe<int>.
+    // WHY: `.get("alice")` on Map<String, Int> must return Maybe<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -189,7 +189,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_has_returns_bool() {
-    // WHY: `.has()` on map<string, int> must return bool.
+    // WHY: `.has()` on Map<String, Int> must return bool.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -228,7 +228,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_count_returns_int() {
-    // WHY: `.count()` on map<string, int> must return int.
+    // WHY: `.count()` on Map<String, Int> must return int.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -241,7 +241,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_keys_returns_array_of_keys() {
-    // WHY: `.keys()` must return array<string> for map<string, int>.
+    // WHY: `.keys()` must return Array<String> for Map<String, Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -254,7 +254,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_values_returns_array_of_values() {
-    // WHY: `.values()` must return array<int> for map<string, int>.
+    // WHY: `.values()` must return Array<Int> for Map<String, Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -298,7 +298,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_find_returns_maybe() {
-    // WHY: `.find()` is an alias for `.get()` — must return maybe<int>.
+    // WHY: `.find()` is an alias for `.get()` — must return Maybe<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -313,7 +313,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_for_loop_entry_key_typechecks() {
-    // WHY: `for (entry in m)` must bind `entry` as MapEntry<string, int>,
+    // WHY: `for (entry in m)` must bind `entry` as MapEntry<String, Int>,
     // and `entry.key` must resolve to string without diagnostics.
     check_no_diags(
         r#"
@@ -403,7 +403,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_wrong_value_type_in_literal_errors() {
-    // WHY: `{ `alice`: `not an int` }` when annotated as map<string, int>
+    // WHY: `{ `alice`: `not an int` }` when annotated as Map<String, Int>
     // must produce a type-mismatch diagnostic.
     check_diag_count(
         r#"
@@ -546,7 +546,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_struct_lit_with_map_annotation_and_identifier_keys_accepted() {
-    // WHY: `let m: map<string, int> = { alice: 90 }` — identifier keys are now
+    // WHY: `let m: Map<String, Int> = { alice: 90 }` — identifier keys are now
     // accepted when the annotation is BuiltinMap. The type context disambiguates:
     // identifier name → string key, value type-checked against the map's value type.
     // Quoted keys (`{ "alice": 90 }`) also still work.
@@ -567,7 +567,7 @@ function entrypoint() -> Nothing {
 #[test]
 fn m5p3c_map_type_name_in_diagnostic_renders_correctly() {
     // WHY: when a map-typed receiver gets an unknown method call, the diagnostic
-    // must render the type as "map<string, int>" — not an internal representation.
+    // must render the type as "Map<String, Int>" — not an internal representation.
     check_has_diag(
         r#"
 function entrypoint() -> Nothing {
@@ -575,7 +575,7 @@ function entrypoint() -> Nothing {
     m.badMethod()
 }
 "#,
-        "map<string, int>",
+        "Map<String, Int>",
     );
 }
 
@@ -671,7 +671,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_bracket_access_exists_check_and_value() {
-    // WHY: bracket access produces maybe<T>, which can be checked with .exists()
+    // WHY: bracket access produces Maybe<T>, which can be checked with .exists()
     // and unwrapped with .value — the full usage pattern must work.
     check_no_diags(
         r#"
@@ -688,7 +688,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3c_map_int_key_bracket_access_returns_maybe() {
-    // WHY: map<int, string> bracket access with int key must return maybe<string>.
+    // WHY: Map<Int, String> bracket access with int key must return Maybe<String>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {

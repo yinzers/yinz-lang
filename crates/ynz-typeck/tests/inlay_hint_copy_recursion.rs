@@ -63,7 +63,7 @@ function entrypoint() -> Nothing {
     assert_eq!(
         hint_at_n.unwrap().size_text,
         "8 bytes",
-        "`int` must render as `8 bytes`",
+        "`Int` must render as `8 bytes`",
     );
 }
 

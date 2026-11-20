@@ -139,7 +139,7 @@ fn a_plain_local_is_released_at_the_end_of_its_block() {
 #[test]
 fn a_binding_given_on_every_path_is_omitted_as_moved() {
     let output = clean(&format!(
-        "{}function giver() -> nothing {{\n  let rows = [1, 2, 3]\n  eat(rows)\n}}\n",
+        "{}function giver() -> Nothing {{\n  let rows = [1, 2, 3]\n  eat(rows)\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -153,7 +153,7 @@ fn a_binding_given_on_every_path_is_omitted_as_moved() {
 #[test]
 fn a_binding_given_on_some_paths_is_released_if_live_and_has_a_move_site() {
     let output = clean(&format!(
-        "{}function some(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n}}\n",
+        "{}function some(flag: Boolean) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -170,7 +170,7 @@ fn a_binding_given_on_some_paths_is_released_if_live_and_has_a_move_site() {
 #[test]
 fn an_early_return_before_a_give_still_releases_the_binding() {
     let output = clean(&format!(
-        "{}function early(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    return\n  }}\n  eat(rows)\n}}\n",
+        "{}function early(flag: Boolean) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    return\n  }}\n  eat(rows)\n}}\n",
         support::EAT
     ));
     let returns = return_edges(&output, "early");
@@ -393,10 +393,10 @@ fn heap_class_of_each_type() {
             },
             HeapClass::Heap(ReleaseKind::Maybe),
         ),
-        // A union with no shape variant and one variant beside `nothing` is that variant's raw
+        // A union with no shape variant and one variant beside `Nothing` is that variant's raw
         // pointer (`is_envelope_union`): the slot holds what its one heap variant holds. With two
-        // variants beside `nothing`, one of them heap (`string | array<int>`, `int | array<int>`,
-        // `string | channel<int>`), the slot is tagged and releases by the variant its tag names.
+        // variants beside `Nothing`, one of them heap (`string | Array<Int>`, `int | Array<Int>`,
+        // `string | Channel<Int>`), the slot is tagged and releases by the variant its tag names.
         (
             Type::Union {
                 variants: vec![Type::Nothing, array.clone()],
@@ -509,7 +509,7 @@ fn only_a_kind_with_frame_backing_feeds_the_crossing_set() {
     assert_eq!(
         crossing_names(&output, "sleeper", Names::User),
         vec!["label".to_string(), "rows".to_string(), "words".to_string()],
-        "the array, the flat shape and the `fixed` list cross (each has a frame home)"
+        "the array, the flat shape and the `Fixed` list cross (each has a frame home)"
     );
     assert!(ReleaseKind::Array.has_frame_backing());
     assert!(ReleaseKind::Shape.has_frame_backing());
@@ -570,7 +570,7 @@ fn an_owner_declared_after_the_last_wait_does_not_cross() {
 #[test]
 fn an_owner_crosses_a_wait_to_reach_a_return_release() {
     let output = clean(&format!(
-        "{}function guarded(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{\n      wait sleep(1)\n      return\n    }}\n  }}\n}}\n",
+        "{}function guarded(choice: Int) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{\n      wait sleep(1)\n      return\n    }}\n  }}\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -770,7 +770,7 @@ fn the_plan_agrees_with_the_live_scope_and_the_record_over_the_whole_corpus() {
 #[test]
 fn a_statement_holding_a_move_site_names_its_founder_as_written() {
     let output = clean(&format!(
-        "{}function some(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n  print(`done`)\n}}\n",
+        "{}function some(flag: Boolean) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n  print(`done`)\n}}\n",
         support::EAT
     ));
     let function = function_of(&output, "some");
@@ -910,7 +910,7 @@ fn a_spawn_that_gives_two_bindings_moves_both_founders() {
 #[test]
 fn a_join_is_moved_only_when_every_path_that_reaches_it_gave() {
     let both = clean(&format!(
-        "{}function both(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ eat(rows) }}\n  }}\n}}\n",
+        "{}function both(choice: Int) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ eat(rows) }}\n  }}\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -918,7 +918,7 @@ fn a_join_is_moved_only_when_every_path_that_reaches_it_gave() {
         Fate::Omitted(OmitReason::Moved)
     );
     let one = clean(&format!(
-        "{}function one(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ print(`kept`) }}\n  }}\n}}\n",
+        "{}function one(choice: Int) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ print(`kept`) }}\n  }}\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -926,7 +926,7 @@ fn a_join_is_moved_only_when_every_path_that_reaches_it_gave() {
         Fate::ReleaseIfLive(ARRAY)
     );
     let other_returns = clean(&format!(
-        "{}function other(choice: int) -> nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ return }}\n  }}\n}}\n",
+        "{}function other(choice: Int) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (choice) {{\n    1 => {{ eat(rows) }}\n    else => {{ return }}\n  }}\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -1152,8 +1152,8 @@ fn heap_class_of_the_remaining_kinds() {
     }
 }
 
-/// Bug: a generic shape instance is judged by its declaration, not its arguments (`Pair<int, int>`
-/// listed, or `Pair<string, int>` not), and a shape that holds itself recurses forever or is
+/// Bug: a generic shape instance is judged by its declaration, not its arguments (`Pair<Int, Int>`
+/// listed, or `Pair<String, Int>` not), and a shape that holds itself recurses forever or is
 /// classed as owning nothing.
 #[test]
 fn generic_and_recursive_shapes_are_classified_by_what_they_hold() {
@@ -1179,7 +1179,7 @@ fn generic_and_recursive_shapes_are_classified_by_what_they_hold() {
 #[test]
 fn only_the_owners_that_release_cross_a_wait() {
     let moved = clean(&format!(
-        "{}function moved() -> nothing {{\n  let rows = [1, 2, 3]\n  eat(rows)\n  wait sleep(1)\n}}\n",
+        "{}function moved() -> Nothing {{\n  let rows = [1, 2, 3]\n  eat(rows)\n  wait sleep(1)\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -1188,7 +1188,7 @@ fn only_the_owners_that_release_cross_a_wait() {
         "given on every path: no release reads it after the wait"
     );
     let if_live = clean(&format!(
-        "{}function if_live(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n  wait sleep(1)\n}}\n",
+        "{}function if_live(flag: Boolean) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    eat(rows)\n  }}\n  wait sleep(1)\n}}\n",
         support::EAT
     ));
     assert_eq!(
@@ -1212,7 +1212,7 @@ fn only_the_owners_that_release_cross_a_wait() {
 fn with_reads_adds_one_read_per_owner_at_each_edge_it_belongs_to() {
     use ynz_ast::nodes::Expr;
     let output = clean(&format!(
-        "{}function placed(flag: boolean) -> nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    let inner = [4]\n    return\n  }}\n  print(`${{rows.count()}}`)\n}}\n",
+        "{}function placed(flag: Boolean) -> Nothing {{\n  let rows = [1, 2, 3]\n  if (flag) {{\n    let inner = [4]\n    return\n  }}\n  print(`${{rows.count()}}`)\n}}\n",
         support::EAT
     ));
     let function = function_of(&output, "placed");
@@ -1513,8 +1513,8 @@ fn a_binding_moved_by_a_store_is_omitted_and_the_new_owner_releases() {
 
 /// Bug (a regression of a program that compiled before C5): the release read of an array owner `reading`
 /// in one block makes the NAME `reading` cross a `wait`, and the guards judge the name by the first
-/// `let v` of the function, a `maybe<int>` that does not cross: the program is rejected with
-/// "a `maybe<int>` value cannot yet cross a `wait`". Producer: `resolve_function` fed an owner's
+/// `let v` of the function, a `Maybe<Int>` that does not cross: the program is rejected with
+/// "a `Maybe<Int>` value cannot yet cross a `wait`". Producer: `resolve_function` fed an owner's
 /// user name to the name-based crossing producer when the function declares that name twice.
 #[test]
 fn a_name_declared_twice_in_a_function_feeds_no_release_read_to_the_guards() {
@@ -1611,7 +1611,7 @@ fn a_give_in_a_nested_if_or_a_match_arm_reaches_each_edge_by_the_paths_that_reac
     ];
     for (case, body, at, expected) in cases {
         let source = format!(
-            "{}function probe(outer: boolean, inner: boolean, choice: int) -> nothing {{\n  let rows = [1]\n{body}}}\n",
+            "{}function probe(outer: Boolean, inner: Boolean, choice: Int) -> Nothing {{\n  let rows = [1]\n{body}}}\n",
             support::EAT
         );
         let output = clean(&source);
@@ -1657,13 +1657,13 @@ fn a_view_through_a_chain_an_element_or_a_lookup_is_not_an_owner() {
         ),
         (
             "an element read of an array",
-            "  let first: Leaf = { label: `a` }\n  let leaves: array<Leaf> = [first]\n  let picked = leaves[0]\n  print(`${picked.exists()}`)\n",
+            "  let first: Leaf = { label: `a` }\n  let leaves: Array<Leaf> = [first]\n  let picked = leaves[0]\n  print(`${picked.exists()}`)\n",
             &["picked"],
             &["leaves"],
         ),
         (
             "a lookup in a map",
-            "  let leaf: Leaf = { label: `a` }\n  let table: map<string, Leaf> = { `k`: leaf }\n  let found = table[`k`]\n  print(`${found.exists()}`)\n",
+            "  let leaf: Leaf = { label: `a` }\n  let table: Map<String, Leaf> = { `k`: leaf }\n  let found = table[`k`]\n  print(`${found.exists()}`)\n",
             &["found"],
             &["table"],
         ),
@@ -1676,7 +1676,7 @@ fn a_view_through_a_chain_an_element_or_a_lookup_is_not_an_owner() {
     ];
     for (case, body, views, roots) in cases {
         let source = format!(
-            "{shapes}function keep(give mid: Mid) -> nothing {{\n  print(`${{mid.tag}}`)\n}}\nfunction probe() -> nothing {{\n{body}}}\n"
+            "{shapes}function keep(give mid: Mid) -> Nothing {{\n  print(`${{mid.tag}}`)\n}}\nfunction probe() -> Nothing {{\n{body}}}\n"
         );
         let output = clean(&source);
         assert_eq!(
@@ -1745,7 +1745,7 @@ fn a_string_joined_to_a_given_class_is_released_but_a_given_string_is_omitted() 
         ),
     ];
     for (case, body, at, name, expected) in cases {
-        let source = format!("{prelude}function probe(flag: boolean) -> nothing {{\n{body}}}\n");
+        let source = format!("{prelude}function probe(flag: Boolean) -> Nothing {{\n{body}}}\n");
         let output = clean(&source);
         assert_eq!(
             fate_of(&list_at(&output, "probe", at), name),

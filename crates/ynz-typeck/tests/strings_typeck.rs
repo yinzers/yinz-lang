@@ -2,7 +2,7 @@
 // returns the correct type; (2) InterpolatedString accepts primitive types;
 // (3) InterpolatedString rejects shapes without a standalone `toString`;
 // (4) unknown string methods produce a diagnostic with the available-methods list;
-// (5) string bracket access returns maybe<string>.
+// (5) string bracket access returns Maybe<String>.
 // Regressions here would silently break codegen which lowers string operations.
 //
 // test-ratchet: M7 P3b adds string method dispatch and interpolation typechecking.
@@ -167,7 +167,7 @@ fn m7_string_ends_with_returns_bool() {
 
 #[test]
 fn m7_string_index_of_returns_maybe_int() {
-    // WHY: .indexOf() returns maybe<int> because the substring may not be found.
+    // WHY: .indexOf() returns Maybe<Int> because the substring may not be found.
     // If it returned plain int, callers would skip the none-check and crash.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
@@ -179,7 +179,7 @@ fn m7_string_index_of_returns_maybe_int() {
 
 #[test]
 fn m7_string_byte_at_returns_maybe_int() {
-    // WHY: .byteAt(n) returns maybe<int> — out-of-bounds returns none.
+    // WHY: .byteAt(n) returns Maybe<Int> — out-of-bounds returns none.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
     let s = `hello`
@@ -190,7 +190,7 @@ fn m7_string_byte_at_returns_maybe_int() {
 
 #[test]
 fn m7_string_grapheme_at_returns_maybe_string() {
-    // WHY: .graphemeAt(n) returns maybe<string> — grapheme-cluster-aware access.
+    // WHY: .graphemeAt(n) returns Maybe<String> — grapheme-cluster-aware access.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
     let s = `café`
@@ -201,7 +201,7 @@ fn m7_string_grapheme_at_returns_maybe_string() {
 
 #[test]
 fn m7_string_get_returns_maybe_string() {
-    // WHY: .get(n) returns maybe<string> (one code point). This is also what
+    // WHY: .get(n) returns Maybe<String> (one code point). This is also what
     // bracket access s[n] desugars to, so the type must be consistent.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
@@ -226,7 +226,7 @@ fn m7_string_substring_returns_string() {
 
 #[test]
 fn m7_string_split_returns_array_of_string() {
-    // WHY: .split(sep) returns array<string>. If the element type were wrong,
+    // WHY: .split(sep) returns Array<String>. If the element type were wrong,
     // any for-loop or map over the split result would produce spurious errors.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
@@ -251,7 +251,7 @@ fn m7_string_replace_returns_string() {
 
 #[test]
 fn m7_interpolated_string_with_int_is_clean() {
-    // WHY: int is a primitive type — always stringifiable. Must not produce
+    // WHY: Int is a primitive type — always stringifiable. Must not produce
     // a diagnostic. If it did, every `print(`count is ${n}`)` would fail.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
@@ -274,7 +274,7 @@ fn m7_interpolated_string_with_bool_is_clean() {
 
 #[test]
 fn m7_interpolated_string_with_float_is_clean() {
-    // WHY: float is primitive — always stringifiable.
+    // WHY: Float is primitive — always stringifiable.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
     let f: Float = 3.14
@@ -285,7 +285,7 @@ fn m7_interpolated_string_with_float_is_clean() {
 
 #[test]
 fn m7_interpolated_string_with_string_is_clean() {
-    // WHY: string inside interpolation is trivially stringifiable.
+    // WHY: String inside interpolation is trivially stringifiable.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
     let name = `world`
@@ -377,11 +377,11 @@ fn m7_string_unknown_method_mentions_available_methods() {
     );
 }
 
-// ── 7. Bracket access desugars to .get() → maybe<string> ────────────────────
+// ── 7. Bracket access desugars to .get() → Maybe<String> ────────────────────
 
 #[test]
 fn m7_string_bracket_access_returns_maybe_string() {
-    // WHY: s[n] desugars to s.get(n) which returns maybe<string>. If this
+    // WHY: s[n] desugars to s.get(n) which returns Maybe<String>. If this
     // were not checked, the type would be wrong for any downstream use.
     check_no_diags(
         r#"function entrypoint() -> Nothing {

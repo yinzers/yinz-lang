@@ -1,4 +1,4 @@
-// WHY: P3b adds built-in collection types (array<T>, fixed<T>, maybe<T>) and
+// WHY: P3b adds built-in collection types (Array<T>, Fixed<T>, Maybe<T>) and
 // ArrayLit parsing. These tests pin the typeck behavior for every acceptance
 // criterion: type inference, method dispatch, bracket access desugar,
 // flow-sensitive `.value`, for-loop element binding, and error paths.
@@ -52,12 +52,12 @@ fn check_has_diag(source: &str, fragment: &str) {
     );
 }
 
-// ── array<T> type-checks ─────────────────────────────────────────────────────
+// ── Array<T> type-checks ─────────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_array_int_literal_typechecks() {
-    // WHY: acceptance criterion — `let arr: array<int> = [1, 2, 3]` must type-check
-    // without diagnostics. If array<T> annotation → ArrayLit inference is broken,
+    // WHY: acceptance criterion — `let arr: Array<Int> = [1, 2, 3]` must type-check
+    // without diagnostics. If Array<T> annotation → ArrayLit inference is broken,
     // all collection code fails.
     check_no_diags(
         r#"
@@ -70,7 +70,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_string_literal_typechecks() {
-    // WHY: array<string> must work the same as array<int>.
+    // WHY: Array<String> must work the same as Array<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -82,7 +82,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_bool_literal_typechecks() {
-    // WHY: array<boolean> must work.
+    // WHY: Array<Boolean> must work.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -94,7 +94,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_empty_with_annotation_typechecks() {
-    // WHY: `let arr: array<int> = []` must be valid — empty arrays are legal.
+    // WHY: `let arr: Array<Int> = []` must be valid — empty arrays are legal.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -131,11 +131,11 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── array<T> method calls ────────────────────────────────────────────────────
+// ── Array<T> method calls ────────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_array_count_returns_int() {
-    // WHY: `.count()` on array<T> must return int.
+    // WHY: `.count()` on Array<T> must return int.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -148,7 +148,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_contains_returns_bool() {
-    // WHY: `.contains()` on array<int> must return bool.
+    // WHY: `.contains()` on Array<Int> must return bool.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -161,7 +161,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_get_returns_maybe() {
-    // WHY: `.get()` on array<int> must return maybe<int>, not int.
+    // WHY: `.get()` on Array<Int> must return Maybe<Int>, not int.
     // This is the core safety guarantee — bracket access can be out-of-bounds.
     check_no_diags(
         r#"
@@ -175,7 +175,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_first_returns_maybe() {
-    // WHY: `.first()` on array<int> must return maybe<int>.
+    // WHY: `.first()` on Array<Int> must return Maybe<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -188,7 +188,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_sort_returns_array() {
-    // WHY: `.sort()` on array<int> must return array<int>.
+    // WHY: `.sort()` on Array<Int> must return Array<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -201,7 +201,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_unknown_method_errors() {
-    // WHY: calling `.frobnicate()` on array<int> must produce a diagnostic.
+    // WHY: calling `.frobnicate()` on Array<Int> must produce a diagnostic.
     // Without method validation, typos silently produce Error types.
     check_diag_count(
         r#"
@@ -216,7 +216,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_unknown_method_error_has_correct_message() {
-    // WHY: the error message must mention `array<int>` and the unknown method name.
+    // WHY: the error message must mention `Array<Int>` and the unknown method name.
     check_has_diag(
         r#"
 function entrypoint() -> Nothing {
@@ -224,16 +224,16 @@ function entrypoint() -> Nothing {
     arr.frobnicate()
 }
 "#,
-        "array<int>",
+        "Array<Int>",
     );
 }
 
-// ── array<T> bracket access ──────────────────────────────────────────────────
+// ── Array<T> bracket access ──────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_array_bracket_access_returns_maybe() {
-    // WHY: acceptance criterion — `arr[0]` on array<int> must produce maybe<int>.
-    // Bracket access desugars to `.get(index)` which is always maybe<T>.
+    // WHY: acceptance criterion — `arr[0]` on Array<Int> must produce Maybe<Int>.
+    // Bracket access desugars to `.get(index)` which is always Maybe<T>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -246,7 +246,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_bracket_assign_typechecks() {
-    // WHY: acceptance criterion — `arr[0] = 5` on array<int> must type-check.
+    // WHY: acceptance criterion — `arr[0] = 5` on Array<Int> must type-check.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -259,7 +259,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_bracket_assign_wrong_type_errors() {
-    // WHY: `arr[0] = `hello`` on array<int> must error — wrong element type.
+    // WHY: `arr[0] = `hello`` on Array<Int> must error — wrong element type.
     check_diag_count(
         r#"
 function entrypoint() -> Nothing {
@@ -271,11 +271,11 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── fixed<T> type-checks ─────────────────────────────────────────────────────
+// ── Fixed<T> type-checks ─────────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_fixed_int_literal_typechecks() {
-    // WHY: acceptance criterion — `let f: fixed<string> = [`a`, `b`, `c`]` must
+    // WHY: acceptance criterion — `let f: Fixed<String> = [`a`, `b`, `c`]` must
     // type-check. Fixed literals use the same ArrayLit AST node as array.
     check_no_diags(
         r#"
@@ -311,11 +311,11 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── fixed<T> method calls ────────────────────────────────────────────────────
+// ── Fixed<T> method calls ────────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_fixed_count_returns_int() {
-    // WHY: `.count()` on fixed<T> must return int.
+    // WHY: `.count()` on Fixed<T> must return int.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -328,7 +328,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_fixed_get_returns_maybe() {
-    // WHY: `.get()` on fixed<int> must return maybe<int>.
+    // WHY: `.get()` on Fixed<Int> must return Maybe<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -341,7 +341,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_fixed_contains_returns_bool() {
-    // WHY: `.contains()` on fixed<int> must return bool.
+    // WHY: `.contains()` on Fixed<Int> must return bool.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -354,7 +354,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_fixed_add_method_errors() {
-    // WHY: `fixed<T>` does not have `.add()` — it's size-locked. The error message
+    // WHY: `Fixed<T>` does not have `.add()` — it's size-locked. The error message
     // must distinguish fixed from array and explain the limitation.
     check_diag_count(
         r#"
@@ -369,7 +369,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_fixed_add_error_message_mentions_array() {
-    // WHY: the `.add()` error on fixed must hint to use array<T> instead.
+    // WHY: the `.add()` error on fixed must hint to use Array<T> instead.
     check_has_diag(
         r#"
 function entrypoint() -> Nothing {
@@ -377,7 +377,7 @@ function entrypoint() -> Nothing {
     f.add(4)
 }
 "#,
-        "array<T>",
+        "Array<T>",
     );
 }
 
@@ -395,11 +395,11 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── fixed<T> bracket access ──────────────────────────────────────────────────
+// ── Fixed<T> bracket access ──────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_fixed_bracket_access_returns_maybe() {
-    // WHY: `f[0]` on fixed<int> must produce maybe<int>.
+    // WHY: `f[0]` on Fixed<Int> must produce Maybe<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -412,7 +412,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_fixed_bracket_assign_typechecks() {
-    // WHY: `f[0] = 5` on fixed<int> must type-check.
+    // WHY: `f[0] = 5` on Fixed<Int> must type-check.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -425,7 +425,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_fixed_bracket_assign_wrong_type_errors() {
-    // WHY: `f[0] = "bad"` on fixed<int> must error.
+    // WHY: `f[0] = "bad"` on Fixed<Int> must error.
     check_diag_count(
         r#"
 function entrypoint() -> Nothing {
@@ -437,11 +437,11 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── maybe<T> type-checks ─────────────────────────────────────────────────────
+// ── Maybe<T> type-checks ─────────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_maybe_none_literal_typechecks() {
-    // WHY: acceptance criterion — `let m: maybe<int> = none` must type-check.
+    // WHY: acceptance criterion — `let m: Maybe<Int> = none` must type-check.
     // This is the fundamental use of the none literal.
     check_no_diags(
         r#"
@@ -467,7 +467,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_none_in_wrong_context_errors() {
-    // WHY: `let m: int = none` — none cannot be an int — must error.
+    // WHY: `let m: Int = none` — none cannot be an int — must error.
     check_diag_count(
         r#"
 function entrypoint() -> Nothing {
@@ -478,11 +478,11 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── maybe<T> methods ─────────────────────────────────────────────────────────
+// ── Maybe<T> methods ─────────────────────────────────────────────────────────
 
 #[test]
 fn m5p3b_maybe_exists_returns_bool() {
-    // WHY: `.exists()` on maybe<int> must return bool. This is the gate for
+    // WHY: `.exists()` on Maybe<Int> must return bool. This is the gate for
     // flow-sensitive `.value` access.
     check_no_diags(
         r#"
@@ -496,7 +496,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_maybe_or_returns_inner_type() {
-    // WHY: acceptance criterion — `m.or(0)` on maybe<int> must produce int.
+    // WHY: acceptance criterion — `m.or(0)` on Maybe<Int> must produce int.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -522,7 +522,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_maybe_unknown_method_errors() {
-    // WHY: unknown method on maybe<T> must produce a diagnostic.
+    // WHY: unknown method on Maybe<T> must produce a diagnostic.
     check_diag_count(
         r#"
 function entrypoint() -> Nothing {
@@ -534,12 +534,12 @@ function entrypoint() -> Nothing {
     );
 }
 
-// ── maybe<T>.value flow-sensitive access ─────────────────────────────────────
+// ── Maybe<T>.value flow-sensitive access ─────────────────────────────────────
 
 #[test]
 fn m5p3b_maybe_value_without_guard_errors() {
     // WHY: acceptance criterion — `m.value` without a prior `.exists()` check
-    // must produce a compile error. This is the core safety guarantee of maybe<T>.
+    // must produce a compile error. This is the core safety guarantee of Maybe<T>.
     check_diag_count(
         r#"
 function entrypoint() -> Nothing {
@@ -583,7 +583,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_maybe_value_type_is_inner() {
-    // WHY: inside the `.exists()` guard, `m.value` must type-check as int (not maybe<int>).
+    // WHY: inside the `.exists()` guard, `m.value` must type-check as int (not Maybe<Int>).
     // Using it where int is expected must succeed.
     check_no_diags(
         r#"
@@ -618,7 +618,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_maybe_bad_field_access_errors() {
-    // WHY: `m.foo` on maybe<int> (where foo is not `value`) must error with a
+    // WHY: `m.foo` on Maybe<Int> (where foo is not `value`) must error with a
     // helpful message pointing to `.value`, `.exists()`, and `.or()`.
     check_diag_count(
         r#"
@@ -649,7 +649,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_for_loop_over_array_typechecks() {
-    // WHY: acceptance criterion — `for (x in arr)` where arr is array<int>
+    // WHY: acceptance criterion — `for (x in arr)` where arr is Array<Int>
     // must bind x as int and type-check without diagnostics.
     check_no_diags(
         r#"
@@ -665,7 +665,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_for_loop_over_fixed_typechecks() {
-    // WHY: acceptance criterion — `for (x in f)` where f is fixed<string>
+    // WHY: acceptance criterion — `for (x in f)` where f is Fixed<String>
     // must bind x as string.
     check_no_diags(
         r#"
@@ -681,7 +681,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_for_loop_over_array_wrong_elem_type_errors() {
-    // WHY: `let n: string = x` where x is int (from array<int>) must error.
+    // WHY: `let n: String = x` where x is int (from Array<Int>) must error.
     // The loop variable must have the correct element type.
     check_diag_count(
         r#"
@@ -700,8 +700,8 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_bare_array_type_without_arg_errors() {
-    // WHY: `let arr: array = []` — bare `array` without type arg must error with
-    // a message pointing to `array<T>`.
+    // WHY: `let arr: Array = []` — bare `Array` without type arg must error with
+    // a message pointing to `Array<T>`.
     check_diag_count(
         r#"
 function entrypoint() -> Nothing {
@@ -714,7 +714,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_bare_fixed_type_without_arg_errors() {
-    // WHY: `let f: fixed = []` — bare `fixed` without type arg must error.
+    // WHY: `let f: Fixed = []` — bare `Fixed` without type arg must error.
     check_diag_count(
         r#"
 function entrypoint() -> Nothing {
@@ -727,11 +727,11 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_bare_maybe_type_without_arg_errors() {
-    // WHY: `let m: maybe = none` — bare `maybe` without type arg must error.
+    // WHY: `let m: Maybe = none` — bare `Maybe` without type arg must error.
     check_diag_count(
         r#"
-function entrypoint() -> nothing {
-    let m: maybe = none
+function entrypoint() -> Nothing {
+    let m: Maybe = none
 }
 "#,
         1,
@@ -740,7 +740,7 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m5p3b_bare_array_error_mentions_type_arg() {
-    // WHY: the error must tell the user to write `array<T>`.
+    // WHY: the error must tell the user to write `Array<T>`.
     check_has_diag(
         r#"
 function entrypoint() -> Nothing {
@@ -786,7 +786,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_type_name_in_diagnostic() {
-    // WHY: `type_name` for BuiltinArray must render as "array<int>", not some
+    // WHY: `type_name` for BuiltinArray must render as "Array<Int>", not some
     // internal representation. Diagnostics must use user-facing Yinz terms.
     check_has_diag(
         r#"
@@ -795,13 +795,13 @@ function entrypoint() -> Nothing {
     arr.badMethod()
 }
 "#,
-        "array<int>",
+        "Array<Int>",
     );
 }
 
 #[test]
 fn m5p3b_fixed_type_name_in_diagnostic() {
-    // WHY: `type_name` for BuiltinFixed must render as "fixed<int>".
+    // WHY: `type_name` for BuiltinFixed must render as "Fixed<Int>".
     check_has_diag(
         r#"
 function entrypoint() -> Nothing {
@@ -809,13 +809,13 @@ function entrypoint() -> Nothing {
     f.badMethod()
 }
 "#,
-        "fixed<int>",
+        "Fixed<Int>",
     );
 }
 
 #[test]
 fn m5p3b_maybe_type_name_in_diagnostic() {
-    // WHY: `type_name` for Maybe must render as "maybe<int>".
+    // WHY: `type_name` for Maybe must render as "Maybe<Int>".
     check_has_diag(
         r#"
 function entrypoint() -> Nothing {
@@ -823,7 +823,7 @@ function entrypoint() -> Nothing {
     m.badMethod()
 }
 "#,
-        "maybe<int>",
+        "Maybe<Int>",
     );
 }
 
@@ -831,7 +831,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_acceptance_array_add_method_typechecks() {
-    // WHY: acceptance criterion — `arr.add(4)` on array<int> must type-check.
+    // WHY: acceptance criterion — `arr.add(4)` on Array<Int> must type-check.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -858,7 +858,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_acceptance_array_bracket_desugar() {
-    // WHY: acceptance criterion — `arr[0]` produces `maybe<int>`, matching
+    // WHY: acceptance criterion — `arr[0]` produces `Maybe<Int>`, matching
     // the `.get(index)` return type.
     check_no_diags(
         r#"
@@ -875,7 +875,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_acceptance_full_maybe_workflow() {
-    // WHY: end-to-end test of the complete maybe<T> workflow:
+    // WHY: end-to-end test of the complete Maybe<T> workflow:
     // create, check exists, access .value, use .or() — all in one function.
     check_no_diags(
         r#"
@@ -893,7 +893,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_acceptance_fixed_for_loop() {
-    // WHY: end-to-end test of iterating over a fixed<int> — must compile
+    // WHY: end-to-end test of iterating over a Fixed<Int> — must compile
     // and bind loop variable as int.
     check_no_diags(
         r#"
@@ -909,7 +909,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_acceptance_array_for_loop() {
-    // WHY: end-to-end test of iterating over an array<int>.
+    // WHY: end-to-end test of iterating over an Array<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -936,7 +936,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_fixed_sort_returns_fixed() {
-    // WHY: `.sort()` on fixed<int> must return fixed<int>, not array<int>.
+    // WHY: `.sort()` on Fixed<Int> must return Fixed<Int>, not Array<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -964,7 +964,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_maybe_string_exists_guard_works() {
-    // WHY: flow-sensitive narrowing must work for maybe<string> as well as maybe<int>.
+    // WHY: flow-sensitive narrowing must work for Maybe<String> as well as Maybe<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -979,7 +979,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_last_returns_maybe() {
-    // WHY: `.last()` on array<string> must return maybe<string>.
+    // WHY: `.last()` on Array<String> must return Maybe<String>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {
@@ -992,7 +992,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m5p3b_array_filter_returns_array() {
-    // WHY: `.filter()` on array<int> must return array<int>.
+    // WHY: `.filter()` on Array<Int> must return Array<Int>.
     check_no_diags(
         r#"
 function entrypoint() -> Nothing {

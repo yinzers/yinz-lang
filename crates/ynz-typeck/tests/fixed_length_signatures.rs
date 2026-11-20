@@ -1,4 +1,4 @@
-//! v0.3-M9 C1h (#433): the lengths the type checker works out for `fixed` in function signatures.
+//! v0.3-M9 C1h (#433): the lengths the type checker works out for `Fixed` in function signatures.
 //! High tier (data integrity across a call): each test names the bug it catches.
 
 use ynz_diagnostics::{DiagnosticKind, Severity};
@@ -85,8 +85,8 @@ fn functions_that_only_return_each_other_have_no_length_to_work_out() {
     assert_eq!(unknown.len(), 2, "{:#?}", errors(&output));
 }
 
-// Bug: the field rule let a length through anywhere inside a field's type (`maybe<fixed<int, 2>>`,
-// `array<fixed<int, 2>>`), where nothing stores the list by value, or refused the whole field type
+// Bug: the field rule let a length through anywhere inside a field's type (`Maybe<Fixed<Int, 2>>`,
+// `Array<Fixed<Int, 2>>`), where nothing stores the list by value, or refused the whole field type
 // that is allowed.
 #[test]
 fn a_length_is_allowed_on_the_whole_type_of_a_field_and_nowhere_deeper() {
@@ -95,9 +95,9 @@ fn a_length_is_allowed_on_the_whole_type_of_a_field_and_nowhere_deeper() {
          function entrypoint() -> Nothing { print(1) }",
     );
     assert!(errors(&whole).is_empty(), "{:#?}", errors(&whole));
-    for nested in ["maybe<fixed<int, 2>>", "array<fixed<int, 2>>"] {
+    for nested in ["Maybe<Fixed<Int, 2>>", "Array<Fixed<Int, 2>>"] {
         let output = check(&format!(
-            "shape Bag {{ items: {nested} }}\nfunction entrypoint() -> nothing {{ print(1) }}"
+            "shape Bag {{ items: {nested} }}\nfunction entrypoint() -> Nothing {{ print(1) }}"
         ));
         let refused: Vec<_> = errors(&output)
             .into_iter()
@@ -107,7 +107,7 @@ fn a_length_is_allowed_on_the_whole_type_of_a_field_and_nowhere_deeper() {
     }
 }
 
-// Bug: a field of an inline shape written `fixed<T>` (no length) was accepted and read count 0:
+// Bug: a field of an inline shape written `Fixed<T>` (no length) was accepted and read count 0:
 // the field rules covered only named shapes (High: data integrity).
 #[test]
 fn an_inline_shape_field_without_a_length_is_refused_like_a_named_one() {
@@ -141,7 +141,7 @@ fn task_function_refusals(source: &str) -> usize {
         .count()
 }
 
-// Bug: a function built once (it waits) that takes an unsized `fixed` has no length for the
+// Bug: a function built once (it waits) that takes an unsized `Fixed` has no length for the
 // parameter. The refusal must fire exactly where the body asks for the length, in each way it can
 // (High: data integrity; before the refusal each of these stopped the compiler with an internal
 // error or released with no count).
@@ -149,8 +149,8 @@ fn task_function_refusals(source: &str) -> usize {
 fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
     let waiting_with = |parameter: &str, body: &str, extra: &str| {
         format!(
-            "{extra}\nfunction show({parameter}) -> int {{\n  wait sleep(1)\n{body}\n  return 1\n}}\n\
-             function entrypoint() -> nothing {{\n  let done = wait show([1, 2, 3])\n  print(done)\n}}"
+            "{extra}\nfunction show({parameter}) -> Int {{\n  wait sleep(1)\n{body}\n  return 1\n}}\n\
+             function entrypoint() -> Nothing {{\n  let done = wait show([1, 2, 3])\n  print(done)\n}}"
         )
     };
     let refused_bodies = [
@@ -161,12 +161,12 @@ fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
         ("returns it", "  let back = xs"),
     ];
     for (branch, body) in refused_bodies {
-        let source = waiting_with("share xs: fixed<int>", body, "");
+        let source = waiting_with("share xs: Fixed<Int>", body, "");
         assert_eq!(task_function_refusals(&source), 1, "{branch}\n{source}");
     }
     // handed to a function that needs the length
     let source = waiting_with(
-        "share xs: fixed<int>",
+        "share xs: Fixed<Int>",
         "  let n = inner(xs)",
         "function inner(share xs: Fixed<Int>) -> Int { return xs.count() }",
     );
@@ -176,7 +176,7 @@ fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
         "hands it to a callee that needs it\n{source}"
     );
     // owned, with items that must be released
-    let source = waiting_with("give xs: fixed<string>", "", "");
+    let source = waiting_with("give xs: Fixed<String>", "", "");
     let source = source.replace("show([1, 2, 3])", "show([`a`, `b`])");
     assert_eq!(
         task_function_refusals(&source),
@@ -185,7 +185,7 @@ fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
     );
     // handed to a task: the task's copy is sized from the length here
     let source = waiting_with(
-        "share xs: fixed<int>",
+        "share xs: Fixed<Int>",
         "  let task = background inner(xs)",
         "function inner(share xs: Fixed<Int>) -> Int {\n  wait sleep(1)\n  return 1\n}",
     );
@@ -197,7 +197,7 @@ fn a_function_built_once_is_refused_an_unsized_list_it_asks_the_length_of() {
 }
 
 // Bug (the converse): the refusal fired on functions that only receive the list (the C6
-// spawn-copy guards pass a `fixed<string>` to a callee that waits and never reads it), which
+// spawn-copy guards pass a `Fixed<String>` to a callee that waits and never reads it), which
 // compiled and ran correctly before.
 #[test]
 fn a_function_built_once_that_never_asks_for_the_length_is_not_refused() {
@@ -215,7 +215,7 @@ fn a_function_built_once_that_never_asks_for_the_length_is_not_refused() {
     }
 }
 
-// Bug: a received `fixed<string>` task result, bound to a local released after a later `wait`, was
+// Bug: a received `Fixed<String>` task result, bound to a local released after a later `wait`, was
 // released from cells in a dead resume-function stack frame (stack-use-after-return); it must be
 // refused with a diagnostic instead (High: data integrity).
 #[test]
@@ -269,7 +269,7 @@ fn refusals_of(source: &str, kind: DiagnosticKind) -> usize {
         .count()
 }
 
-// Bug: the export refusal was pinned for a returned list only, so an exported `fixed` PARAMETER
+// Bug: the export refusal was pinned for a returned list only, so an exported `Fixed` PARAMETER
 // without its length (which a module checked alone cannot size) could compile unnoticed. The rows
 // are the refusals the Chief Architect's ruling lists, each a complete program with the number of
 // refusals of its kind: (a) an exported unsized parameter, (b) an exported unsized return, both at
@@ -343,14 +343,14 @@ fn an_exported_function_must_write_the_length_of_each_fixed_it_takes_or_returns(
 fn a_written_length_is_checked_against_each_list_passed_or_returned_at_its_boundaries() {
     let call = |written: &str, passed: &str| {
         format!(
-            "function total(share xs: fixed<int, {written}>) -> int {{ return xs.count() }}\n\
-             function entrypoint() -> nothing {{\n  let xs: fixed<int> = {passed}\n  print(total(xs))\n}}"
+            "function total(share xs: Fixed<Int, {written}>) -> Int {{ return xs.count() }}\n\
+             function entrypoint() -> Nothing {{\n  let xs: Fixed<Int> = {passed}\n  print(total(xs))\n}}"
         )
     };
     let returning = |written: &str, returned: &str| {
         format!(
-            "function make() -> fixed<int, {written}> {{\n  let xs: fixed<int> = {returned}\n  return xs\n}}\n\
-             function entrypoint() -> nothing {{ print(make().count()) }}"
+            "function make() -> Fixed<Int, {written}> {{\n  let xs: Fixed<Int> = {returned}\n  return xs\n}}\n\
+             function entrypoint() -> Nothing {{ print(make().count()) }}"
         )
     };
     let rows: Vec<(String, String, usize)> = vec![
@@ -386,15 +386,15 @@ fn a_written_length_is_checked_against_each_list_passed_or_returned_at_its_bound
 }
 
 // Bug: the shape-field rules said the compiler checks "every list stored in a field" against the
-// field's written length, but a list of another length stored in `fixed<int, 3>` field was
+// field's written length, but a list of another length stored in `Fixed<Int, 3>` field was
 // accepted: two items were padded with a zero and a fourth item was dropped, silently (High: data
 // integrity of a value stored in a shape).
 #[test]
 fn a_list_of_another_length_is_refused_where_it_is_stored_in_a_sized_field() {
     let storing = |stored: &str| {
         format!(
-            "shape Bag {{\n  items: fixed<int, 3>\n}}\n\
-             function entrypoint() -> nothing {{\n  let source: fixed<int> = {stored}\n  let bag: Bag = {{ items: source }}\n  print(bag.items.count())\n}}"
+            "shape Bag {{\n  items: Fixed<Int, 3>\n}}\n\
+             function entrypoint() -> Nothing {{\n  let source: Fixed<Int> = {stored}\n  let bag: Bag = {{ items: source }}\n  print(bag.items.count())\n}}"
         )
     };
     let literal = "shape Bag {\n  items: Fixed<Int, 3>\n}\n\
@@ -422,27 +422,27 @@ fn a_list_of_another_length_is_refused_where_it_is_stored_in_a_sized_field() {
 fn an_unusable_written_length_is_refused_by_kind_and_the_limits_are_accepted() {
     let parameter = |written: &str| {
         format!(
-            "function total(share xs: {written}) -> int {{ return 1 }}\n\
-             function entrypoint() -> nothing {{ print(1) }}"
+            "function total(share xs: {written}) -> Int {{ return 1 }}\n\
+             function entrypoint() -> Nothing {{ print(1) }}"
         )
     };
     let rows: Vec<(String, Option<DiagnosticKind>)> = vec![
-        (parameter("fixed<int, 0>"), None),
-        (parameter("fixed<int, 4294967295>"), None),
+        (parameter("Fixed<Int, 0>"), None),
+        (parameter("Fixed<Int, 4294967295>"), None),
         (
-            parameter("fixed<int, 4294967296>"),
+            parameter("Fixed<Int, 4294967296>"),
             Some(DiagnosticKind::FixedLengthNotUsable),
         ),
         (
-            parameter("fixed<int, 3, 4>"),
+            parameter("Fixed<Int, 3, 4>"),
             Some(DiagnosticKind::FixedLengthNotUsable),
         ),
         (
-            parameter("array<int, 4>"),
+            parameter("Array<Int, 4>"),
             Some(DiagnosticKind::FixedLengthNotAllowedHere),
         ),
         (
-            parameter("maybe<fixed<int, 3>>"),
+            parameter("Maybe<Fixed<Int, 3>>"),
             Some(DiagnosticKind::FixedLengthNotAllowedHere),
         ),
         (
@@ -470,15 +470,15 @@ fn an_unusable_written_length_is_refused_by_kind_and_the_limits_are_accepted() {
     }
 }
 
-// Bug: the fallback of `.or` on a received `fixed` list was not compared with the list's length:
+// Bug: the fallback of `.or` on a received `Fixed` list was not compared with the list's length:
 // `.or(oneItem)` gave a list of 1 item typed as the callee's 4, and `list[3]` read past the
 // fallback's stack block (High: memory safety of a value that leaves a task).
 #[test]
 fn a_fallback_of_another_length_is_refused_for_or_on_a_received_fixed() {
     let received = |fallback: &str| {
         format!(
-            "function build() -> fixed<int> {{\n  wait sleep(1)\n  let numbers: fixed<int> = [10, 20, 30, 40]\n  return numbers\n}}\n\
-             function entrypoint() -> nothing {{\n  let first = background build()\n  wait sleep(20)\n  let got = first.receive()\n  let again = first.receive()\n  let fallback: fixed<int> = {fallback}\n  let list = again.or(fallback)\n  print(list.count())\n}}"
+            "function build() -> Fixed<Int> {{\n  wait sleep(1)\n  let numbers: Fixed<Int> = [10, 20, 30, 40]\n  return numbers\n}}\n\
+             function entrypoint() -> Nothing {{\n  let first = background build()\n  wait sleep(20)\n  let got = first.receive()\n  let again = first.receive()\n  let fallback: Fixed<Int> = {fallback}\n  let list = again.or(fallback)\n  print(list.count())\n}}"
         )
     };
     let rows = [
@@ -506,7 +506,7 @@ fn a_fallback_of_another_length_is_refused_for_or_on_a_received_fixed() {
 }
 
 // Bug: a list of another length reassigned to a binding, or assigned to a sized field, was refused
-// with a message that named `fixed<int>` on both sides, so it read as no mismatch (Golden Rule 3).
+// with a message that named `Fixed<Int>` on both sides, so it read as no mismatch (Golden Rule 3).
 // Each side shows its length.
 #[test]
 fn a_length_mismatch_on_reassignment_or_field_assignment_names_both_lengths() {
@@ -518,7 +518,7 @@ fn a_length_mismatch_on_reassignment_or_field_assignment_names_both_lengths() {
         .collect();
     assert_eq!(reassign_texts.len(), 1, "{:#?}", errors(&output));
     assert!(
-        reassign_texts[0].contains("fixed<int, 2>") && reassign_texts[0].contains("fixed<int, 3>"),
+        reassign_texts[0].contains("Fixed<Int, 2>") && reassign_texts[0].contains("Fixed<Int, 3>"),
         "{}",
         reassign_texts[0]
     );

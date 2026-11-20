@@ -359,16 +359,16 @@ verdict_cases! {
         [("numbers", 2, None)],
         "a bits loop variable recorded as a view, which codegen would lower as a pointer";
 
-    // ── `maybe` bindings ──
+    // ── `Maybe` bindings ──
     a_maybe_array_element_let_is_a_view_while_the_list_is_not_written:
         "function entrypoint() -> Nothing {\n  let rows: Array<Array<Int>> = [[1]]\n  let picked = rows.get(0)\n  let fallback: Array<Int> = []\n  let found = picked.or(fallback)\n  print(found.count())\n}\n",
         [("rows.get(0)", 1, VIEW)],
-        "a `maybe<array>` binding copying its payload although the list is never written (cost, Rule 6)";
+        "a `Maybe<Array>` binding copying its payload although the list is never written (cost, Rule 6)";
 
     a_maybe_array_element_let_is_a_copy_when_the_element_is_overwritten:
         "function entrypoint() -> Nothing {\n  let rows: Array<Array<Int>> = [[1]]\n  let picked = rows.get(0)\n  rows[0] = [9]\n  let fallback: Array<Int> = []\n  let found = picked.or(fallback)\n  print(found.count())\n}\n",
         [("rows.get(0)", 1, COPY)],
-        "a `maybe<array>` binding that points at the element the list overwrote (High)";
+        "a `Maybe<Array>` binding that points at the element the list overwrote (High)";
 
     // ── returns ──
     a_returned_place_read_has_no_entry_because_it_always_copies:

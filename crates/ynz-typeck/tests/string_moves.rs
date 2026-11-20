@@ -122,7 +122,7 @@ move_cases! {
             ("make(n)", 1, true),
             ("a.copy()", 1, true),
         ],
-        "a fresh string copied at its store, or an `int` toString (a heap string since C3a) treated as borrowed (cost)";
+        "a fresh string copied at its store, or an `Int` toString (a heap string since C3a) treated as borrowed (cost)";
 
     a_builtin_method_is_not_a_function_call_of_the_same_name:
         "function or(first: String, second: String) -> String {\n  return second\n}\nfunction entrypoint() -> Nothing {\n  let names: Array<String> = [`a`]\n  let got: String = names[0].or(`none`)\n  print(got)\n}\n",
@@ -177,5 +177,5 @@ move_cases! {
             ("flag.toString()", 1, false),
             ("`a`", 1, false),
         ],
-        "a literal, an element, an `.or()` result or a static `boolean` name stored without a copy: a later release frees static or shared bytes (High)";
+        "a literal, an element, an `.or()` result or a static `Boolean` name stored without a copy: a later release frees static or shared bytes (High)";
 }

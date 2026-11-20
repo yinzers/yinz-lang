@@ -37,15 +37,15 @@ fn test_variable_type_hint_fires_for_int_literal() {
         "unannotated let must produce a type hint"
     );
     assert!(
-        hints.iter().any(|h| h.type_text == "int"),
-        "inferred type must be `int`; got: {:?}",
+        hints.iter().any(|h| h.type_text == "Int"),
+        "inferred type must be `Int`; got: {:?}",
         hints.iter().map(|h| &h.type_text).collect::<Vec<_>>()
     );
 }
 
 #[test]
 fn test_variable_type_hint_suppressed_for_annotated_let() {
-    // WHY: `let x: int = 42` already has the annotation — no hint should fire.
+    // WHY: `let x: Int = 42` already has the annotation — no hint should fire.
     let src = "function entrypoint() -> Nothing {\n  let x: Int = 42\n}\n";
     let (db, sf) = single_file(src);
     let hints = variable_type_hints(&db, sf);
@@ -127,7 +127,7 @@ fn test_let_to_const_suppressed_when_reassigned() {
 
 #[test]
 fn test_array_to_fixed_fires_for_annotated_never_grown() {
-    // WHY: `let nums: array<int> = [1, 2, 3]` with no .add() call is a fixed
+    // WHY: `let nums: Array<Int> = [1, 2, 3]` with no .add() call is a fixed
     // promotion candidate.
     let src = "function entrypoint() -> Nothing {\n  let nums: Array<Int> = [1, 2, 3]\n}\n";
     let (db, sf) = single_file(src);
@@ -136,7 +136,7 @@ fn test_array_to_fixed_fires_for_annotated_never_grown() {
         hints
             .iter()
             .any(|h| matches!(h.kind, PromotionKind::ArrayToFixed)),
-        "never-grown array<int> must emit ArrayToFixed hint"
+        "never-grown Array<Int> must emit ArrayToFixed hint"
     );
 }
 
@@ -146,7 +146,7 @@ fn test_array_to_fixed_fires_for_annotated_never_grown() {
 
 #[test]
 fn test_copy_point_does_not_fire_for_string_arg() {
-    // WHY: `string` is NOT trivially copyable (heap allocation) — no copy hint.
+    // WHY: `String` is NOT trivially copyable (heap allocation) — no copy hint.
     let src = "function greet(s: String) -> String { return s }\n\
                function entrypoint() -> Nothing {\n  let r = greet(`hi`)\n}\n";
     let (db, sf) = single_file(src);

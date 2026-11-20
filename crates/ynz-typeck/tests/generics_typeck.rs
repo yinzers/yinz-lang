@@ -159,7 +159,7 @@ function entrypoint() -> Nothing {
     assert_eq!(
         entries.len(),
         2,
-        "Expected two identity instantiations (int + string)"
+        "Expected two identity instantiations (Int + String)"
     );
 }
 
@@ -369,7 +369,7 @@ shape Pair<A, B> { first: A  second: B }
 function entrypoint() -> Nothing { }
 "#,
     );
-    // Indirect verification: a Pair<int, string> binding must resolve cleanly.
+    // Indirect verification: a Pair<Int, String> binding must resolve cleanly.
     // If the shape table is wrong, this would have produced a diagnostic.
     let _ = out;
 }
@@ -378,8 +378,8 @@ function entrypoint() -> Nothing { }
 
 #[test]
 fn m5_field_access_through_generic_shape() {
-    // WHY: acceptance criterion — `p.first` where `p: Pair<int, string>` must
-    // resolve to `int`. Without substitution, it would stay as `TypeParam("A")`
+    // WHY: acceptance criterion — `p.first` where `p: Pair<Int, String>` must
+    // resolve to `Int`. Without substitution, it would stay as `TypeParam("A")`
     // and typeck would fail to verify downstream uses.
     check_no_diags(
         r#"
@@ -530,7 +530,7 @@ function entrypoint() -> Nothing { let n = identity(5) }
     assert_eq!(
         sig.ret_type,
         Type::Int,
-        "Monomorphized identity<int> must have ret_type = int"
+        "Monomorphized identity<Int> must have ret_type = Int"
     );
 }
 
@@ -554,7 +554,7 @@ function entrypoint() -> Nothing { let n = identity(5) }
     assert_eq!(
         sig.param_types,
         vec![Type::Int],
-        "Monomorphized identity<int> must have param_type = int"
+        "Monomorphized identity<Int> must have param_type = Int"
     );
 }
 
@@ -595,7 +595,7 @@ fn assert_one_error_saying(source: &str, expected_what: &str) {
 
 #[test]
 fn v03_m9_unknown_generic_name_in_a_let_annotation_is_reported() {
-    // BUG (High: type validation): `Nope<int>` resolved to an unreported error type, so the
+    // BUG (High: type validation): `Nope<Int>` resolved to an unreported error type, so the
     // annotation passed the checker with no diagnostic. The resolver serves every annotation, so
     // this guards the ordinary `let` path, not only a hidden default.
     assert_one_error_saying(
@@ -610,7 +610,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn v03_m9_type_arguments_on_a_plain_shape_in_a_parameter_are_reported() {
-    // BUG (High: type validation): `Big<int>` on a shape declared without type parameters
+    // BUG (High: type validation): `Big<Int>` on a shape declared without type parameters
     // resolved to an unreported error type. Guards the parameter-annotation path and the
     // "declared but not generic" wording.
     assert_one_error_saying(
@@ -629,7 +629,7 @@ function entrypoint() -> Nothing { }
 
 #[test]
 fn v03_m9_map_missing_its_value_type_in_a_let_annotation_is_reported() {
-    // BUG (High: type validation): `map<int>` filled the missing value type with an unreported
+    // BUG (High: type validation): `Map<Int>` filled the missing value type with an unreported
     // error type. Guards the `let` path for a built-in generic missing an argument.
     assert_one_error_saying(
         r#"
@@ -637,21 +637,21 @@ function entrypoint() -> Nothing {
   let scores: Map<Int> = {}
 }
 "#,
-        "`map` takes 2 type arguments.",
+        "`Map` takes 2 type arguments.",
     );
 }
 
 #[test]
 fn v03_m9_type_arguments_on_a_built_in_or_type_parameter_name_say_it_takes_none() {
-    // BUG (teaching surface): `string<int>` and `T<int>` name a type that exists, but the
-    // resolver's fall-through said "`string` is not a known type", which misstates the mistake.
+    // BUG (teaching surface): `String<Int>` and `T<Int>` name a type that exists, but the
+    // resolver's fall-through said "`String` is not a known type", which misstates the mistake.
     assert_one_error_saying(
         r#"
 function entrypoint() -> Nothing {
   let label: String<Int> = `a`
 }
 "#,
-        "`string` does not take type arguments.",
+        "`String` does not take type arguments.",
     );
     assert_one_error_saying(
         r#"

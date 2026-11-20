@@ -80,7 +80,7 @@ move_cases! {
         "a `.copy()` receiver treated as consumed (its boxes taken by the copy, a double free when both are released, High)";
 
     a_field_read_stored_is_never_a_move:
-        "function entrypoint() -> nothing {\n  let inner: Inner = { id: 1 }\n  let outer: Outer = { inner: inner, tag: 2 }\n  let alias = outer.inner\n  print(alias.id + outer.tag)\n}\n",
+        "function entrypoint() -> Nothing {\n  let inner: Inner = { id: 1 }\n  let outer: Outer = { inner: inner, tag: 2 }\n  let alias = outer.inner\n  print(alias.id + outer.tag)\n}\n",
         [("outer.inner", 1, false)],
         "a binding made from a field that takes the field's boxes while the field still owns them (double free, High)";
 

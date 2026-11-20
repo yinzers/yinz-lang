@@ -74,7 +74,7 @@ fn m7_range_stored_in_let_is_clean() {
 
 #[test]
 fn m7_range_passed_to_function_is_clean() {
-    // WHY: range values must be passable as function arguments. Without this,
+    // WHY: Range values must be passable as function arguments. Without this,
     // any function that accepts a Range would be unusable.
     check_no_diags(
         r#"function useRange(give r: Range) -> Nothing {
@@ -140,7 +140,7 @@ fn m7_for_loop_over_string_literal_is_clean() {
     );
 }
 
-// ── 3. For-loop over array<T> still works (non-regression) ──────────────────
+// ── 3. For-loop over Array<T> still works (non-regression) ──────────────────
 
 #[test]
 fn m7_for_loop_over_array_still_works() {
@@ -158,7 +158,7 @@ fn m7_for_loop_over_array_still_works() {
 
 #[test]
 fn m7_for_loop_over_fixed_still_works() {
-    // WHY: non-regression for fixed<T> iteration.
+    // WHY: non-regression for Fixed<T> iteration.
     check_no_diags(
         r#"function entrypoint() -> Nothing {
     let nums: Fixed<Int> = [1, 2, 3]
@@ -173,7 +173,7 @@ fn m7_for_loop_over_fixed_still_works() {
 
 #[test]
 fn m7_for_loop_over_shape_with_next_fn_works() {
-    // WHY: a user shape with a standalone next() returning maybe<T> must be
+    // WHY: a user shape with a standalone next() returning Maybe<T> must be
     // iterable via for-loop. The loop variable must have element type T.
     // The next() function simply returns none — we're testing dispatch, not logic.
     check_no_diags(
@@ -237,7 +237,7 @@ function entrypoint() -> Nothing {
 #[test]
 fn m7_for_loop_shape_next_returns_wrong_type_produces_error() {
     // WHY: if next() returns a non-maybe type, it doesn't satisfy Iterable<T>.
-    // The error must explain that next() must return maybe<T>.
+    // The error must explain that next() must return Maybe<T>.
     check_diag_count(
         r#"shape BadIter {
     pos: Int
@@ -259,7 +259,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_for_loop_shape_next_wrong_type_error_mentions_maybe() {
-    // WHY: the error for a next() with wrong return type must mention maybe<T>
+    // WHY: the error for a next() with wrong return type must mention Maybe<T>
     // to guide the user toward the correct signature.
     check_has_diag(
         r#"shape BadIter {
@@ -276,7 +276,7 @@ function entrypoint() -> Nothing {
         print(x)
     }
 }"#,
-        "maybe",
+        "Maybe",
     );
 }
 
@@ -299,7 +299,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_frame_line_field_returns_maybe_int() {
-    // WHY: Frame.line is maybe<int> because some frames (e.g. macro-generated code)
+    // WHY: Frame.line is Maybe<Int> because some frames (e.g. macro-generated code)
     // may not have a source line. Accessing it as a plain int would require
     // unsafe unwrapping.
     check_no_diags(
@@ -345,7 +345,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn m7_source_loc_line_field_returns_maybe_int() {
-    // WHY: SourceLoc.line is maybe<int> for the same reason as Frame.line.
+    // WHY: SourceLoc.line is Maybe<Int> for the same reason as Frame.line.
     check_no_diags(
         r#"function getSrcLine(give loc: SourceLoc) -> Maybe<Int> {
     return loc.line

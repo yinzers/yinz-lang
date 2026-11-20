@@ -99,7 +99,7 @@ function entrypoint() -> Nothing {
 
 #[test]
 fn lend_param_call_suppresses_let_to_const_hint() {
-    // WHY: This is the CORRECT suppress guard.  `consume` takes `lend x: int`, meaning
+    // WHY: This is the CORRECT suppress guard.  `consume` takes `lend x: Int`, meaning
     // it may mutate the argument in place.  The binding should never receive a
     // `let→const` hint.  Both before and after the fix, this case must be suppressed —
     // but confirming it still works after the fix guards against over-narrowing.
@@ -294,8 +294,8 @@ function entrypoint() -> Nothing {
   let _result = make_thing(a, identity_lend(b))
 }
 "#;
-    // `b` is passed to `identity_lend` which takes `lend b: int` → b is mutated.
-    // `a` is passed to `make_thing` which takes `share a: int` → a is NOT mutated → hint fires.
+    // `b` is passed to `identity_lend` which takes `lend b: Int` → b is mutated.
+    // `a` is passed to `make_thing` which takes `share a: Int` → a is NOT mutated → hint fires.
     // `_result` is let, assigned to an int → also gets a hint.
     // Total hints: a, _result → 2.  b must have no hint.
     let count = let_to_const_hint_count(src);

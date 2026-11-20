@@ -289,7 +289,7 @@ function entrypoint() -> Nothing { }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.5 — generic type position (`Container<int>`)
+// Bug 2.5 — generic type position (`Container<Int>`)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]

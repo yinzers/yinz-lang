@@ -70,7 +70,7 @@ fn let_hints_where_the_value_went() {
   let owner: Array<Int> = numbers
   print(owner.count().toString())
 }",
-        "let owner: array<int> = numbers",
+        "let owner: Array<Int> = numbers",
         "handed to `owner`",
     );
 }
@@ -84,7 +84,7 @@ fn literal_part_hints_where_the_value_went() {
   let rows: Array<Array<Int>> = [numbers]
   print(rows.count().toString())
 }",
-        "let rows: array<array<int>> = [numbers",
+        "let rows: Array<Array<Int>> = [numbers",
         "handed to the literal `[numbers]`",
     );
 }

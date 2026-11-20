@@ -174,11 +174,11 @@ fn all_builtin_methods_are_registered() {
 
     // (builtins.rs fn name, registry receiver_type base)
     let cases: &[(&str, &str)] = &[
-        ("array_method_return", "array"),
-        ("fixed_method_return", "fixed"),
-        ("maybe_method_return", "maybe"),
-        ("map_method_return", "map"),
-        ("string_method_return", "string"),
+        ("array_method_return", "Array"),
+        ("fixed_method_return", "Fixed"),
+        ("maybe_method_return", "Maybe"),
+        ("map_method_return", "Map"),
+        ("string_method_return", "String"),
         ("sensitive_method_return", "sensitive"),
     ];
 

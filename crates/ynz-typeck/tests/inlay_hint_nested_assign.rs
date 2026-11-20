@@ -32,7 +32,7 @@ fn nested_field_assign_marks_root_binding_mutated_no_let_to_const_hint() {
     // The false `let→const` hint fired on `player`.  After the fix, `root_ident`
     // follows the chain to `player`, records it mutated, and the hint is suppressed.
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let player = { name: "Carey", address: { street: "Federal St", city: "Pittsburgh" } }
   player.address.street = "Mon Wharf"
 }
@@ -106,7 +106,7 @@ fn single_level_field_assign_still_marks_binding_mutated() {
     // break the existing one-level case.  `player.health = 5` must still record
     // `player` as mutated (no let→const hint on `player`).
     let src = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let player = { name: "Carey", health: 100 }
   player.health = 50
 }
@@ -139,12 +139,12 @@ fn nested_method_call_receiver_marks_root_binding_mutated() {
     // `addr` is genuinely never reassigned after construction and legitimately
     // receives a LetToConst hint — the assertion targets only `player`.
     let src = r#"
-shape Address { street: string }
-shape Player { name: string, address: Address, health: int }
-function heal(lend self: Player, amount: int) -> nothing {
+shape Address { street: String }
+shape Player { name: String, address: Address, health: Int }
+function heal(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health + amount
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let addr = { street: "Federal St" }
   let player = { name: "Carey", address: addr, health: 80 }
   player.address.heal(5)
