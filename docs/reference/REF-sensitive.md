@@ -19,14 +19,14 @@ Values from environment variables and other secret sources are automatically pro
 
 ## How it works
 
-`env.get()` returns `sensitive string` by default. No extra annotation needed:
+`env.get()` returns `sensitive String` by default. No extra annotation needed:
 
 ```
 let foundApiKey = env.get(`STRIPE_KEY`)         // a maybe: the key, or nothing
-let apiKey = foundApiKey.or(``)                 // sensitive string
+let apiKey = foundApiKey.or(``)                 // sensitive String
 let foundDatabasePassword = env.get(`DB_PASSWORD`)     // a maybe: the password, or nothing
-let databasePassword = foundDatabasePassword.or(``)  // sensitive string
-let appName = `My App`                          // regular string
+let databasePassword = foundDatabasePassword.or(``)  // sensitive String
+let appName = `My App`                          // regular String
 ```
 
 ---
@@ -43,9 +43,9 @@ print(apiKey)                                   // [REDACTED]
 log(`Connecting with key: ${apiKey}`)           // Connecting with key: [REDACTED]
 
 shape Config {
-  appName: string
-  apiKey: sensitive string
-  port: number
+  appName: String
+  apiKey: sensitive String
+  port: Number
 }
 
 let foundConfigKey = env.get(`API_KEY`)
@@ -80,8 +80,8 @@ print(apiKey.reveal())
 Not just env vars — mark any value sensitive:
 
 ```
-let socialSecurityNumber: sensitive string = sensitive(`123-45-6789`)
-let cardNumber: sensitive string = sensitive(rawCardNumber)
+let socialSecurityNumber: sensitive String = sensitive(`123-45-6789`)
+let cardNumber: sensitive String = sensitive(rawCardNumber)
 
 print(socialSecurityNumber)    // [REDACTED]
 ```
@@ -90,16 +90,16 @@ print(socialSecurityNumber)    // [REDACTED]
 
 ## Text made from a sensitive value stays sensitive
 
-Changing or joining a sensitive string gives another sensitive string. A plain fact about it, such as its length, is not sensitive:
+Changing or joining a sensitive String gives another sensitive String. A plain fact about it, such as its length, is not sensitive:
 
 ```
 let foundKey = env.get(`API_KEY`)      // a maybe: the key, or nothing
-let key = foundKey.or(``)              // sensitive string
-let upper = key.toUpperCase()          // still sensitive string
-let trimmed = key.trim()               // still sensitive string
-let combined = `Bearer ${key}`         // still sensitive string
+let key = foundKey.or(``)              // sensitive String
+let upper = key.toUpperCase()          // still sensitive String
+let trimmed = key.trim()               // still sensitive String
+let combined = `Bearer ${key}`         // still sensitive String
 
-let length = key.count()               // int — NOT sensitive (length isn't secret)
+let length = key.count()               // Int — NOT sensitive (length isn't secret)
 ```
 
 ---

@@ -20,9 +20,9 @@ A union type is a value that can be one of several different types. Each type in
 ## Defining a union
 
 ```
-shape Circle { radius: number }
-shape Square { side: number }
-shape Triangle { base: number, height: number }
+shape Circle { radius: Number }
+shape Square { side: Number }
+shape Triangle { base: Number, height: Number }
 
 shape Shape = Circle | Square | Triangle
 ```
@@ -34,7 +34,7 @@ shape Shape = Circle | Square | Triangle
 ## Checking which variant you have — `is` tells the compiler which kind
 
 ```
-function getArea(share shape: Shape) -> number {
+function getArea(share shape: Shape) -> Number {
   if (shape) {
     is Circle => return math.PI * shape.radius * shape.radius
     is Square => return shape.side * shape.side
@@ -52,12 +52,12 @@ After `is Circle`, the compiler knows `shape` is a `Circle`. Use `.radius` direc
 In a union, `is` matches only the exact type the value has. Sharing fields with `extends` doesn't change this:
 
 ```
-shape User { name: string, email: string }
-shape Admin extends User { permissions: fixed<string> }
+shape User { name: String, email: String }
+shape Admin extends User { permissions: Fixed<String> }
 
 shape AnyUser = Admin | User
 
-function describe(share user: AnyUser) -> string {
+function describe(share user: AnyUser) -> String {
   if (user) {
     is Admin => return `Admin: ` + user.name
     is User => return `User: ` + user.name
@@ -72,7 +72,7 @@ function describe(share user: AnyUser) -> string {
 ## Outside a union, an `extends` shape can be used as its parent
 
 ```
-function greet(share user: User) -> string {
+function greet(share user: User) -> String {
   return `Hello ` + user.name
 }
 
@@ -87,13 +87,13 @@ The rule: `is` in a union matches the exact type only. Outside a union, a shape 
 ## Unions of shapes that extend each other
 
 ```
-shape User { name: string, email: string }
-shape Admin extends User { permissions: fixed<string>, role: string }
-shape Guest extends User { expiresAt: number }
+shape User { name: String, email: String }
+shape Admin extends User { permissions: Fixed<String>, role: String }
+shape Guest extends User { expiresAt: Number }
 
 shape AnyUser = Admin | Guest | User
 
-function getAccess(share user: AnyUser) -> string {
+function getAccess(share user: AnyUser) -> String {
   if (user) {
     is Admin => {
       let firstPermission = user.permissions.first()   // a maybe: the permission, or nothing
@@ -112,11 +112,11 @@ function getAccess(share user: AnyUser) -> string {
 A `Circle` can go where a `Shape` is expected. A `Shape` cannot go where a `Circle` is expected: it might hold a `Square`, so the compiler refuses it until an `is` arm has checked.
 
 ```
-function describeCircle(share circle: Circle) -> string {
+function describeCircle(share circle: Circle) -> String {
   return `a circle`
 }
 
-function describe(share figure: Shape) -> string {
+function describe(share figure: Shape) -> String {
   return describeCircle(figure)
 }
 
@@ -129,7 +129,7 @@ Inside `is Circle =>`, `figure` is a `Circle`, so `describeCircle(figure)` compi
 The suggestion changes with what can be checked. An `is` arm checks a name and names a shape variant, so:
 
 - A value that is not a name (`holder.inner`, `pick()`): the error asks you to bind it first, `let checked = holder.inner`, then check `checked`.
-- A variant that is not a shape (`int`, `string`), or a union with no shape variant (`map<string, string> | nothing`): no `is` arm can name the variant, so the error suggests making the receiving function accept the union, or keeping the value as the variant from where it is created.
+- A variant that is not a shape (`Int`, `String`), or a union with no shape variant (`Map<String, String> | Nothing`): no `is` arm can name the variant, so the error suggests making the receiving function accept the union, or keeping the value as the variant from where it is created.
 
 ---
 
@@ -138,7 +138,7 @@ The suggestion changes with what can be checked. An `is` arm checks a name and n
 When you use a multi-case `if` on a union, you must cover every variant, or add an `else =>` line for the rest:
 
 ```
-function getArea(share shape: Shape) -> number {
+function getArea(share shape: Shape) -> Number {
   if (shape) {
     is Circle   => return math.PI * shape.radius * shape.radius
     is Square   => return shape.side * shape.side
@@ -154,13 +154,13 @@ Leaving out a variant is a compile error. The compiler tells you which ones are 
 // Add the missing arms (e.g. `is Triangle =>`) or add an `else =>` default arm.
 ```
 
-A variant that is not a shape (`int`, `string`, …) counts too: `is` arms name shape variants only, so for `Circle | int` the missing `int` is handled with `else =>`. `nothing` is the one exemption: in `T | nothing` a match with only the arms for `T` is complete, because no arm can name `nothing` and skipping the absent case drops no data.
+A variant that is not a shape (`Int`, `String`, …) counts too: `is` arms name shape variants only, so for `Circle | Int` the missing `Int` is handled with `else =>`. `Nothing` is the one exemption: in `T | Nothing` a match with only the arms for `T` is complete, because no arm can name `Nothing` and skipping the absent case drops no data.
 
 ---
 
-## `maybe<T>` is a union
+## `Maybe<T>` is a union
 
-`maybe<string>` is the same type as `string | none`. Every `maybe` type is a union. See [Maybe Types](REF-maybe.md).
+`Maybe<String>` is the same type as `String | none`. Every `Maybe` type is a union. See [Maybe Types](REF-maybe.md).
 
 ---
 

@@ -46,10 +46,10 @@ Yinz combines four things: **easy syntax**, **real systems skills** (ownership, 
 ### Pattern 1 — Choosing how to store data
 
 ```ynz
-let scores: map<string, number> = { alice: 90, bob: 85, charlie: 78 }
+let scores: Map<String, Number> = { alice: 90, bob: 85, charlie: 78 }
 // IDE HINT: Every key here is written out in your code, so a shape is
 //           much faster than a map:
-//   shape Scores { alice: number, bob: number, charlie: number }
+//   shape Scores { alice: Number, bob: Number, charlie: Number }
 //   let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
 //
 // Why: Reading a shape field is one step: the computer jumps straight to it.
@@ -61,13 +61,13 @@ let scores: map<string, number> = { alice: 90, bob: 85, charlie: 78 }
 ### Pattern 2 — Speed suggestions
 
 ```ynz
-let weekdays: array<string> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
+let weekdays: Array<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
 // IDE HINT: `weekdays` never grows or shrinks, so the compiler stores it as
-//           a `fixed<string>`. You can write that yourself:
-//   let weekdays: fixed<string> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
+//           a `Fixed<String>`. You can write that yourself:
+//   let weekdays: Fixed<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
 //
 // Why: Nothing in this file calls .add() or .remove() on `weekdays`, so it
-//      never needs room to grow. A `fixed<string>` lives in the quick memory
+//      never needs room to grow. A `Fixed<String>` lives in the quick memory
 //      a function uses for its own variables, so reading it is faster.
 ```
 
@@ -86,15 +86,15 @@ let serverName = `prod-01`
 ### Pattern 4 — Choosing a number type
 
 ```ynz
-let price: float = 19.99
-// IDE HINT: Using float for financial values may cause rounding errors.
-//   Consider number for exact arithmetic:
-//     let price: number = 19.99
+let price: Float = 19.99
+// IDE HINT: Using Float for financial values may cause rounding errors.
+//   Consider Number for exact arithmetic:
+//     let price: Number = 19.99
 //
-// Why: float stores numbers in binary, which can't hold most decimal
+// Why: Float stores numbers in binary, which can't hold most decimal
 //      fractions exactly (0.1 + 0.2 = 0.30000000000000004). Money math that
 //      repeats many times adds up those tiny errors and gives wrong totals.
-//      number does its math in base 10, so it is exact for any value you
+//      Number does its math in base 10, so it is exact for any value you
 //      would write by hand. The speed difference is small; the accuracy
 //      difference is large.
 ```
@@ -102,7 +102,7 @@ let price: float = 19.99
 ### Pattern 5 — Memory and ownership
 
 ```ynz
-function takeDamage(share player: Player, amount: number) -> nothing {
+function takeDamage(share player: Player, amount: Number) -> Nothing {
   player.health = player.health - amount
   // COMPILE ERROR: `player` is declared `share` — read-only — so its fields cannot be changed.
   //   Change the parameter to `lend player: Player` if this function needs to modify it.
@@ -123,11 +123,11 @@ The IDE is not only a place to type code. It teaches just as much as compiler er
 So a developer learns even when their code is **completely correct**:
 
 ```ynz
-let maxHealth = 42            // IDE shows muted ": int" → teaches how the compiler picks types
+let maxHealth = 42            // IDE shows muted ": Int" → teaches how the compiler picks types
 heal(player)                  // IDE shows muted "share" → teaches ownership at call sites
 db.fetch(`users`)             // IDE shows muted "wait" → teaches that the call pauses for the network
 arena scratch {
-  let temp: array<int> = []     // IDE shows muted ".in(scratch)" → teaches that memory comes from the arena
+  let temp: Array<Int> = []     // IDE shows muted ".in(scratch)" → teaches that memory comes from the arena
 }
 ```
 
@@ -204,7 +204,7 @@ The compiler's teaching covers at least these areas:
 | **Choosing a data layout** | shape or map, array or fixed array, when to use which |
 | **Speed habits** | reserving room up front, avoiding repeated memory requests, why merged steps are fast |
 | **Memory and ownership** | when to use share, lend, give and copy, and why ownership matters |
-| **Number types** | when to use number, float or int, and why exact decimals are the default |
+| **Number types** | when to use Number, Float or Int, and why exact decimals are the default |
 | **The usual Yinz style** | one step per line instead of chaining, named intermediate values, descriptive function names |
 | **Design habits** | when a shape is better than a map, when a union is better than yes/no flags |
 | **Conventions** | naming (Rule 10), how to handle errors, how to organize modules |
