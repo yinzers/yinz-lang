@@ -173,15 +173,8 @@ let admin = admins.fetchUser(id)    // no conflict — the module name makes it 
 ```
 import { Player } from `models/game`
 import { Player } from `external/legacy`
-// COMPILE ERROR: 'Player' is imported from two places.
-//
-//   Line 1: from `models/game`
-//   Line 2: from `external/legacy`
-//
-//   These can't both use the name 'Player' in the same file. Rename one:
-//
-//     import { Player } from `models/game`
-//     import { Player as LegacyPlayer } from `external/legacy`
+// COMPILE ERROR: Import name `Player` is already bound by a previous import.
+// Use a different local name: `import { Player as otherName } from "..."`
 ```
 
 The same rule applies if one of your own modules has the same name as a standard library module (for example, a `math.ynz` file next to the built-in `math` module). Neither one wins automatically — rename one with `as`.

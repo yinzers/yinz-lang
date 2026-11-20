@@ -124,9 +124,8 @@ function getArea(share shape: Shape) -> number {
 Leaving out a variant is a compile error. The compiler tells you which ones are missing:
 
 ```
-// COMPILE ERROR: Non-exhaustive union multi-case — Shape has 3 variants; only 2 are handled.
-// Missing variant: Triangle
-// Add: is Triangle => ...  or add: else => ...
+// COMPILE ERROR: Non-exhaustive union multi-case — 1 variant is not handled: Triangle.
+// Add the missing arms (e.g. `is Triangle =>`) or add an `else =>` default arm.
 ```
 
 ---

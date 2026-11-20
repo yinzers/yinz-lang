@@ -71,10 +71,11 @@ In TypeScript, `const` stops reassignment but you can still change the fields. I
 ```
 const player: Player = { name: `Patrick`, health: 100 }
 player.health = 50
-// COMPILE ERROR: player is const — fields can't change.
+// COMPILE ERROR: `player` is `const` and its fields cannot be changed.
+// Declare it with `let` instead: `let player: ShapeType = { ... }`
 ```
 
-Declare it with `let` if the value needs to change.
+Use `let` if the value needs to change.
 
 ### Text: one quote style
 
@@ -83,7 +84,7 @@ Yinz has one text form: backticks. It supports `${}` and multiple lines.
 ```
 print("hello world")
 // COMPILE ERROR: Double-quoted strings don't exist in Yinz.
-// Use backtick strings instead: `hello world`
+// Use backtick strings instead: `hello` or `Hello ${name}`
 ```
 
 Single quotes get the same error.
@@ -135,8 +136,8 @@ A value that might be missing has the type `maybe<T>`. You cannot use it until y
 ```
 let nickname: maybe<string> = none
 print(nickname.value)
-// COMPILE ERROR: nickname is maybe<string> — value might be none.
-// Use nickname.or(default) or check nickname.exists() first.
+// COMPILE ERROR: `maybe.value` requires you to first check `m.exists()`.
+// Add a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.
 ```
 
 Two correct ways:
@@ -182,11 +183,11 @@ A union uses `|`, as in TypeScript. You check the kind with `is` inside an `if` 
 ```
 shape Shape = Circle | Square | Triangle
 
-function getArea(share shape: Shape) -> number {
-  if (shape) {
-    is Circle => return math.PI * shape.radius * shape.radius
-    is Square => return shape.side * shape.side
-    is Triangle => return (shape.base * shape.height) / 2
+function describe(share outline: Shape) -> nothing {
+  if (outline) {
+    is Circle => print(`circle`)
+    is Square => print(`square`)
+    is Triangle => print(`triangle`)
   }
 }
 ```
@@ -194,9 +195,8 @@ function getArea(share shape: Shape) -> number {
 If you forget a kind, the compiler names it:
 
 ```
-// COMPILE ERROR: Non-exhaustive union multi-case — Shape has 3 variants; only 2 are handled.
-// Missing variant: Triangle
-// Add: is Triangle => ...  or add: else => ...
+// COMPILE ERROR: Non-exhaustive union multi-case — 1 variant is not handled: Triangle.
+// Add the missing arms (e.g. `is Triangle =>`) or add an `else =>` default arm.
 ```
 
 Write unions with `|`. Words such as `or` do not work.
@@ -208,7 +208,7 @@ Built-in collection names are lowercase.
 ```
 let scores: Array<int> = []
 // COMPILE ERROR: `Array` is not a type — built-in collection types are lowercase in Yinz.
-// Use `array` (lowercase): `array<int>`
+// Use `array` (lowercase): `array<...>`
 ```
 
 Reading by position never crashes. `scores[3]` gives a `maybe`, so you handle the missing case:
@@ -223,11 +223,14 @@ print(score)    // 0
 A shape value is not a collection. Use `[...]` to make one:
 
 ```
-shape Player { name: string, health: int }
+shape Player {
+  name: string
+  health: int
+}
 
 let team: array<Player> = { name: `Alice`, health: 100 }
 // COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `array<Player>`.
-// Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
+// Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
 ### Numbers: `number` is exact
@@ -247,9 +250,10 @@ Use `int` for whole numbers and `float` only when you want fast binary arithmeti
 
 ```
 let label: string = `5`
-let count: number = 5
+let count: number = 5.0
 if (label == count) { }
-// COMPILE ERROR: cannot compare string and number
+// COMPILE ERROR: `==` cannot be used with `string` and `number`.
+// Check that both sides have the same type.
 ```
 
 There is no `===`.
@@ -298,7 +302,7 @@ if (statusCode) {
 }
 ```
 
-Writing `switch` gives a warning: "`switch` is not a keyword in Yinz. Use multi-case `if` with `=>` arms."
+Writing `switch` gives the warning "`switch` is not a keyword in Yinz." and tells you to use a multi-case `if` with `=>` arms.
 
 ### Chaining: one step per line
 
@@ -306,9 +310,8 @@ Give each step a name:
 
 ```
 let active = players.filter(p => p.health > 0)
-let ranked = active.sort(p => p.health, desc)
-let top = ranked.limit(10)
-let names = top.map(p => p.name)
+let topTen = active.limit(10)
+let names = topTen.map(p => p.name)
 ```
 
 The compiler joins the steps into one fast pass, so the named version costs nothing.
@@ -338,12 +341,8 @@ When two imports use the same name, TypeScript quietly keeps the last one. Yinz 
 ```
 import { Player } from `models/game`
 import { Player } from `external/legacy`
-// COMPILE ERROR: 'Player' is imported from two places.
-//
-//   These can't both use the name 'Player' in the same file. Rename one:
-//
-//     import { Player } from `models/game`
-//     import { Player as LegacyPlayer } from `external/legacy`
+// COMPILE ERROR: Import name `Player` is already bound by a previous import.
+// Use a different local name: `import { Player as otherName } from "..."`
 ```
 
 ### Slow work: no `async`, no `await`
