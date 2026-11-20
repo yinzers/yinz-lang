@@ -241,7 +241,7 @@ function divmod(a: number, b: number) -> DivResult {
 }
 ```
 
-The compiler checks that the fields exist and have the right types. You don't write `new DivResult(...)`.
+The compiler checks that the fields exist and have the right types.
 
 ---
 
