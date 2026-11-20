@@ -47,7 +47,7 @@ The compiler skips any field other than the three above and prints a warning, so
 target = "native"
 ```
 
-```
+```text
 Warning: Unknown field `target` in yinz.toml — ignored.
 ```
 
