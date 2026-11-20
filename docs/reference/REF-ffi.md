@@ -29,22 +29,22 @@ foreign function curlEasyPerform(handle: int) -> int from `libcurl`
 
 ---
 
-## The rule: always wrap in safe Yinz functions
+## The rule: always call foreign code through a safe Yinz function
 
-Keep the foreign boundary as small as possible. Declare the foreign function, then wrap it right away in a safe Yinz function that the rest of your code uses:
+Keep the foreign boundary as small as possible. Declare the foreign function, then put a safe Yinz function around it right away, and let the rest of your code call only that function:
 
 ```
 // The foreign declaration — kept in one place
 foreign function readFd(fd: int, buffer: int, size: int) -> int from `libc`
 
-// The safe wrapper — this is what everyone else calls
+// The safe function — this is what everyone else calls
 export function readBinaryFile(path: string) -> array<byte> errors {
   // all the unchecked foreign calls stay in here
   // callers see normal Yinz types and the errors system
 }
 ```
 
-The foreign call never escapes the wrapper. That keeps unchecked code in one place, so the compiler can still check the rest of your program.
+The foreign call never escapes the safe function. That keeps unchecked code in one place, so the compiler can still check the rest of your program.
 
 ---
 
@@ -54,4 +54,4 @@ The compiler cannot see what a foreign function does. It cannot check it for own
 
 - **Every foreign call needs `wait`.** The compiler can't tell whether it is safe to run the call alongside other work.
 - **The compiler never runs a foreign call at the same time as other code on its own.**
-- **The compiler warns on every foreign call:** `Foreign call: compiler cannot verify memory safety. Consider wrapping in a safe Yinz function.`
+- **The compiler warns on every foreign call:** `Foreign call: compiler cannot verify memory safety. Consider calling it only through a safe Yinz function.`
