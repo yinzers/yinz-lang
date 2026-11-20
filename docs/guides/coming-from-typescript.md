@@ -89,9 +89,9 @@ print("hello world")
 
 Single quotes get the same error.
 
-### Line endings: no semicolons
+### Comments and line endings: `//`, `///`, and no `;`
 
-A newline ends a statement.
+A newline ends a statement. A `;` is an error:
 
 ```
 let health = 100;
@@ -99,13 +99,49 @@ let health = 100;
 // Remove the `;` — Yinz uses newlines to end statements.
 ```
 
-### Comments: `//` and `///` only
-
 There is no `/* */` block comment. A `///` block directly above a declaration is its doc comment, and it shows in editor hover.
 
 ```
 // regular comment, one line
 /// doc comment, shown in IDE hover
+```
+
+### Data structures: `shape` replaces `interface` and `class`
+
+A `shape` lists fields and nothing else. There is no constructor: you build a value by writing its fields.
+
+TypeScript:
+
+```ts
+interface Player {
+  name: string
+  health: number
+}
+
+const player: Player = { name: 'Alice', health: 50 }
+```
+
+Yinz:
+
+```
+shape Player {
+  name: String
+  health: Int
+}
+
+let player: Player = { name: `Alice`, health: 50 }
+```
+
+A TypeScript `class` with a constructor becomes the same `shape`. Its methods become standalone functions, which the next trap shows.
+
+Writing `class` gives errors, and among them you also get this warning:
+
+```
+class Player {
+  name: String
+}
+// COMPILE WARNING: `class` is not a keyword in Yinz.
+// Use `shape` for data and standalone functions for behavior: `shape Player { name: String }` then `function greet(share self: Player) -> String`
 ```
 
 ### Functions: methods are not inside shapes
@@ -201,7 +237,56 @@ If you forget a kind, the compiler names it:
 
 Write unions with `|`. Words such as `or` do not work.
 
-### Collections: capitalized names, and reading returns a `Maybe`
+### Named value sets: `options` replaces `enum`
+
+An `options` declaration lists the allowed names. You write no numbers. You pick a name with `Status.active`.
+
+TypeScript:
+
+```ts
+enum Status {
+  Active,
+  Banned,
+}
+
+const status: Status = Status.Active
+if (status === Status.Banned) {
+  console.log('banned')
+}
+```
+
+Yinz:
+
+```
+options Status {
+  active
+  banned
+}
+
+function entrypoint() -> Nothing {
+  let status: Status = Status.active
+  if (status) {
+    active => {
+      print(`online`)
+    }
+    banned => {
+      print(`banned`)
+    }
+  }
+}
+```
+
+This prints `online`. Names are camelCase, like every other name that is not a type. The compiler checks that your `if` handles every name in the set.
+
+Writing `enum` gives errors, and among them you also get this warning:
+
+```
+enum Status {
+// COMPILE WARNING: `enum` is not a keyword in Yinz.
+// Use `options` to declare a set of named values: `options Status { active, inactive, banned }`
+```
+
+### Collections and reading by position: capitalized names, and reading returns a `Maybe`
 
 Every type starts with a capital letter, built-in collections included.
 
