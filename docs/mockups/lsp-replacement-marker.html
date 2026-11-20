@@ -5,7 +5,7 @@
 /* Codicons: VS Code's own icon font. Local copy first, CDN fallback for the repo copy. */
 @font-face { font-family: codicon; src: url("codicon.ttf") format("truetype"), url("https://cdn.jsdelivr.net/npm/@vscode/codicons/dist/codicon.ttf") format("truetype"); }
 
-/* Colour roles: VS Code Dark Modern theme tokens (stock). The marker reuses one more stock token. */
+/* Colour roles: VS Code Dark Modern theme tokens (stock), plus one colour the extension contributes (yinz.lessonUnderline). */
 :root {
   --chrome-bg: #181818;        /* titleBar / activityBar / tabs / statusBar background */
   --chrome-border: #2b2b2b;    /* panel and bar borders */
@@ -27,9 +27,9 @@
   /* syntax (Dark Modern = Dark+ token colours) */
   --t-kw: #569cd6; --t-fn: #dcdcaa; --t-var: #9cdcfe; --t-ty: #4ec9b0; --t-num: #b5cea8; --t-op: #d4d4d4;
   --t-b1: #ffd700; --t-b2: #da70d6;   /* bracket pair colourisation level 1, 2 */
-  /* The replacement marker: the extension's own theme colour, dotted (not a squiggle), so it never reads
-     as an error or warning diagnostic. #4FD1E8 on #1f1f1f = 9.12:1, above the 3:1 non-text minimum. */
-  --replacement-marker: #4FD1E8; /* yinz.lessonUnderline (dark default), overridable in workbench.colorCustomizations */
+  /* The replacement marker: dotted cyan underline (yinz.lessonUnderline), dotted (not a squiggle) so it never
+     reads as an error or warning diagnostic. #4FD1E8 on #1f1f1f = 9.12:1, above the 3:1 non-text minimum. */
+  --replacement-marker: #4FD1E8; /* yinz.lessonUnderline (dark default), user-overridable */
   --mono: "Droid Sans Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace; /* VS Code editor default stack */
   --ui: -apple-system, "Segoe UI", system-ui, Ubuntu, "DejaVu Sans", sans-serif; /* VS Code workbench stack */
 }
@@ -114,10 +114,10 @@ figcaption { font-size: 13px; color: var(--fg-muted); margin-bottom: 8px; }
 </style></head>
 <body>
 <h1>Yinz VS Code extension · Replacement marker</h1>
-<p class="lede">The only new visual is the dotted cyan underline (the theme colour <code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>array</code> (line 3). Hover widget, lightbulb and code-action menu are stock VS Code, Dark Modern theme.</p>
+<p class="lede">The only new visual is the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>array</code> (line 3). Hover widget, lightbulb and code-action menu are stock VS Code, Dark Modern theme.</p>
 
 <figure class="shot" id="rest">
-<figcaption>0 · At rest: the dotted cyan underline on <code>let</code> (line 2) and <code>array</code> (line 3) is the only new visual</figcaption>
+<figcaption>0 · At rest: the dotted cyan underline (<code>yinz.lessonUnderline</code>) on <code>let</code> (line 2) and <code>array</code> (line 3) is the only new visual</figcaption>
 <div class="win">
   <div class="title"><span class="ci logo">&#xea9b;</span><span class="ci">&#xea9c;</span><div class="cmd"><span class="ci">&#xea6d;</span> yinz-demo</div><span class="ci">&#xebf3;</span></div>
   <div class="body">

@@ -6,10 +6,18 @@ Approved by Chief (card #569). Renders: `lsp-replacement-marker-0-rest.png` … 
 See, without being nagged, where a written form could be stricter (`let` → `const`, `array` → `fixed`), learn why from the hover, and convert in one action.
 
 ## Main decision
-The only new visual is a **dotted underline on the existing token**, coloured with the extension's own theme colour `yinz.lessonUnderline` (cyan; Dark Modern default `#4FD1E8`, light default `#0E7490`). Everything else is stock VS Code: hover widget, lightbulb, code-action menu.
+The only new visual is a **dotted cyan underline on the existing token**, in a colour the extension contributes: `yinz.lessonUnderline`. Everything else is stock VS Code: hover widget, lightbulb, code-action menu.
 
+| Theme kind | Default | Contrast on editor background |
+|---|---|---|
+| Dark | `#4FD1E8` | 9.12:1 on `#1f1f1f` (Dark Modern) |
+| Light | `#0E7490` | 5.36:1 on `#ffffff` (Light Modern) |
+| High contrast | `#4FD1E8` (dark), `#0E7490` (light) | 11.62:1 on `#000000` (dark), 5.36:1 on `#ffffff` (light) |
+
+- Users override it with `workbench.colorCustomizations` (`"yinz.lessonUnderline": "#…"`).
+- Cyan, not the theme's info blue: most users run dark themes, and a blue or dark blue underline reads too dark there (Chief's call).
 - Dotted, never a squiggle: squiggles are VS Code's diagnostic style, and this is not a diagnostic. The Problems count stays 0/0.
-- Cyan, because most people use dark themes and a blue or dark blue can be too dark. A theme colour, not a hard-coded hex, so users can override it in `workbench.colorCustomizations`. `#4FD1E8` on `#1f1f1f` = 9.12:1 (≥ 3:1 non-text).
+- All defaults clear the 3:1 non-text contrast minimum (WCAG 2.2 AA).
 - `text-decoration: underline dotted`, 1 px, offset 2 px (`.sugg` in the HTML).
 
 ## Interaction
