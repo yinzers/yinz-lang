@@ -44,6 +44,11 @@ shape Player {
   health: Int
   position: Position
 }
+
+function entrypoint() -> Nothing {
+  let player: Player = { name: `Ana`, health: 100, position: { x: 1.5, y: 2.5 } }
+  print(player.position.x.toString())
+}
 ```
 
 `position` lives directly inside `Player`. Reading `player.position.x` reads memory right next to the rest of the `Player`.
@@ -61,6 +66,11 @@ shape Stats {
   health: Int
   attack: Int
   defense: Int
+}
+
+function entrypoint() -> Nothing {
+  let stats: Stats = { health: 100, attack: 12, defense: 8 }
+  print(stats.attack.toString())
 }
 ```
 
