@@ -102,7 +102,7 @@ Runtime behavior is configured in code, in your `entrypoint()` function, using `
 function entrypoint() -> nothing {
   setShutdownTimeout(duration.minutes(5))
   setShutdownHandler(signal => { ... })
-  setErrorHandler(e => { ... })
+  setErrorHandler(error => { ... })
   setThreadPoolSize(16)
   setLogLevel(`debug`)
 
@@ -187,6 +187,6 @@ function entrypoint() -> nothing {
 | Required var documentation | `.env.example` (committed) | `DATABASE_URL=` |
 | Shutdown timeout | `setShutdownTimeout()` in `entrypoint()` | `setShutdownTimeout(duration.minutes(2))` |
 | Thread pool size | `setThreadPoolSize()` in `entrypoint()` | `setThreadPoolSize(16)` |
-| Error handling behavior | `setErrorHandler()` in `entrypoint()` | `setErrorHandler(e => { ... })` |
-| Shutdown behavior | `setShutdownHandler()` in `entrypoint()` | `setShutdownHandler(s => { ... })` |
+| Error handling behavior | `setErrorHandler()` in `entrypoint()` | `setErrorHandler(error => { ... })` |
+| Shutdown behavior | `setShutdownHandler()` in `entrypoint()` | `setShutdownHandler(signal => { ... })` |
 | Environment-specific logic | An `if` in `entrypoint()` | ``if (environment == `production`) { ... }`` |

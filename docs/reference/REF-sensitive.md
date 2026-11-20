@@ -24,8 +24,8 @@ Values from environment variables and other secret sources are automatically pro
 ```
 let foundApiKey = env.get(`STRIPE_KEY`)         // a maybe: the key, or nothing
 let apiKey = foundApiKey.or(``)                 // sensitive string
-let foundDbPass = env.get(`DB_PASSWORD`)        // a maybe: the password, or nothing
-let dbPass = foundDbPass.or(``)                 // sensitive string
+let foundDatabasePassword = env.get(`DB_PASSWORD`)     // a maybe: the password, or nothing
+let databasePassword = foundDatabasePassword.or(``)  // sensitive string
 let appName = `My App`                          // regular string
 ```
 
@@ -61,8 +61,8 @@ print(config)
 
 ```
 // Pass the secret only to code that actually needs it
-let conn = database.connect(dbPass.reveal())
-let res = request.post(url, { headers: { authorization: apiKey.reveal() } })
+let connection = database.connect(databasePassword.reveal())
+let response = request.post(url, { headers: { authorization: apiKey.reveal() } })
 ```
 
 The IDE warns you when you print a revealed value:
@@ -80,10 +80,10 @@ print(apiKey.reveal())
 Not just env vars — mark any value sensitive:
 
 ```
-let ssn: sensitive string = sensitive(`123-45-6789`)
-let card: sensitive string = sensitive(rawCardNumber)
+let socialSecurityNumber: sensitive string = sensitive(`123-45-6789`)
+let cardNumber: sensitive string = sensitive(rawCardNumber)
 
-print(ssn)    // [REDACTED]
+print(socialSecurityNumber)    // [REDACTED]
 ```
 
 ---
@@ -99,7 +99,7 @@ let upper = key.toUpperCase()          // still sensitive string
 let trimmed = key.trim()               // still sensitive string
 let combined = `Bearer ${key}`         // still sensitive string
 
-let length = key.count()               // number — NOT sensitive (length isn't secret)
+let length = key.count()               // int — NOT sensitive (length isn't secret)
 ```
 
 ---
@@ -112,7 +112,6 @@ Error messages hide sensitive data automatically:
 // Error output when database connection fails:
 // ERROR: Could not connect to database
 //   URL: [REDACTED]
-//   (use --reveal-sensitive flag for local debugging)
 ```
 
 ---
