@@ -134,8 +134,8 @@ function entrypoint() -> Nothing {
 
 ```
 `int` is not a type name.
-  Write `Int`.
-  Why: Every type in Yinz starts with a capital letter, built-ins included.
+  write `Int`
+  Why: Write `Int`. — Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
 **A shape named like a built-in type.** A `shape` or union alias called `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` or `SourceLoc` is an error:
@@ -143,6 +143,11 @@ function entrypoint() -> Nothing {
 ```ynz
 shape Map {
   name: String
+}
+
+function entrypoint() -> Nothing {
+  let value: Map = { name: `x` }
+  print(value.name)
 }
 ```
 
@@ -178,7 +183,7 @@ Functions, modules and variables keep lowercase names, and they may match a type
 **A good runtime error** says where it happened and how to fix it:
 
 ```
-RUNTIME ERROR: <the operation> at src/main.ynz:12:5
+RUNTIME ERROR: Int overflow in '+' at src/main.ynz:12:5
 
   The value wrapped past the maximum (or minimum) for this type.
 
