@@ -344,9 +344,9 @@ The compiler already uses the stricter form, so these two domains mark the token
 
 | Surface | Behavior |
 |---|---|
-| Marker | Semantic-token modifier `promotable` (legend index 0, bit `1`) on the `array` token of the annotation / the `let` keyword. The VS Code extension draws it as a dotted underline. |
+| Marker | Semantic-token modifier `promotable` (legend index 0, bit `1`) on the `array` token of the annotation / the `let` keyword. The VS Code extension draws it as a blue dotted underline in the theme's `editorInfo.foreground` colour (a `ThemeColor`, so it follows the user's theme; red is for errors and yellow for lint). It applies the underline from full and range semantic-token responses; a range response replaces only the ranges it overlaps. |
 | Hover | A marked token answers with the domain's registry WHAT / WHAT INSTEAD / WHY (`lsp_inlay_hint_hover_for`), replacing the plain `let` keyword hover for that token only. |
-| Click | Code action of kind `refactor.rewrite` (an optional improvement, not a fix) whose `TextEdit` replaces exactly the token with `fixed` / `const`. Offered when the request range touches the token (either edge). `capabilities` advertises `quickfix` and `refactor.rewrite`. |
+| Click | Code action of kind `refactor.rewrite` (an optional improvement, not a fix) titled exactly `Write 'const' instead of 'let'` / `Write 'fixed' instead of 'array'` (the hover quotes the same words), whose `TextEdit` replaces exactly the token with `const` / `fixed`. Offered when the request range touches the token (either edge). `capabilities` advertises `quickfix` and `refactor.rewrite`. |
 | Inlay hint | None for these two domains. |
 
 Source of truth: the typeck passes `array_to_fixed_promotion_hints` / `let_to_const_promotion_hints` (`PromotionHint.keyword_span`); the LSP never re-derives "never grown" or "never reassigned". A parser-synthesized `let` (the loop variables of `for ((key, value) in table)`) has no written keyword, so its `keyword_span` is `None` and it is neither marked nor rewritable.

@@ -45,8 +45,8 @@ Every semantic the compiler figures out from context gets a muted hint:
 | Function param types (where context allows) | depends on call site | the figured-out type |
 | Ownership at call sites (informational only — no body-level syntax) | `foo(player)` | `share` or `lend` keyword after `player` — purely teaching; click jumps to foo's signature where the modifier IS declared |
 | Wait points on I/O | `db.fetch()` | `wait` keyword before the call |
-| Array that never grows | `let scores: array<int> = [90, 72]` | dotted underline on `array` (see [Replacement hints](#replacement-hints-the-underlined-token)) |
-| Binding that never changes | `let attempts = 3` | dotted underline on `let` (same section) |
+| Array that never grows | `let scores: array<int> = [90, 72]` | blue dotted underline on `array` (see [Replacement hints](#replacement-hints-the-underlined-token)) |
+| Binding that never changes | `let attempts = 3` | blue dotted underline on `let` (same section) |
 | Lifetimes | always figured out | the lifetime (only shown on request — usually hidden) |
 | Allocator | inside `arena scratch { let a: array<int> = [] }` | `.in(scratch)` after the constructor |
 | Implicit copy points | trivially-copyable values | `.copy` where the copy happens |
@@ -124,7 +124,7 @@ One canonical explanation lives in one source (typically the rule file or design
 
 ## Replacement hints: the underlined token
 
-When the compiler already uses a stricter form than the one you wrote, the IDE adds no text. It puts a dotted underline on the token you wrote:
+When the compiler already uses a stricter form than the one you wrote, the IDE adds no text. It puts a blue dotted underline on the token you wrote. The colour is the theme's `editorInfo.foreground`, so it follows your theme; red stays for errors and yellow for lint:
 
 ```
 function entrypoint() -> nothing {
@@ -135,7 +135,7 @@ function entrypoint() -> nothing {
 Both the `let` and the `array` are underlined, because nothing reassigns `highScores` and nothing grows it.
 
 - **Hover** an underlined token: the three-part explanation (WHAT, WHAT INSTEAD, WHY) for that promotion.
-- **Click** the lightbulb on it: the *Write `const` instead of `let`* / *Write `fixed` instead of `array`* refactor rewrites exactly that token. After both:
+- **Click** the lightbulb on it: the *Write 'const' instead of 'let'* / *Write 'fixed' instead of 'array'* refactor rewrites exactly that token. After both:
 
 ```
 function entrypoint() -> nothing {
