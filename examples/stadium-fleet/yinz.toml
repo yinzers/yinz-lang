@@ -1,9 +1,7 @@
 # Single project yinz.toml with multiple named entry points.
 #
-# Yinz workspaces deliberately avoid the per-folder yinz.toml sprawl that
-# TypeScript / Rust monorepos suffer from. ONE yinz.toml at the root lists
-# every named entry. Shared code lives in a plain folder and is imported
-# root-relatively.
+# ONE yinz.toml at the root lists every named entry. Shared code lives in a
+# plain folder and is imported root-relatively.
 #
 # Theme: stadium services — two ships sharing a ballpark. The scoreboard
 # tallies runs each inning; concessions broadcasts food specials. Both
