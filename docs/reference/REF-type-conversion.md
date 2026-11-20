@@ -13,45 +13,45 @@ metadata:
 
 # Type Conversion
 
-Convert between types using dot methods. No cast keyword. Type `.to` on any value and autocomplete shows available conversions.
+Convert between types using dot functions. There is no cast keyword. Type `.to` after any value and autocomplete shows the conversions you can use.
 
 ---
 
 ## Safe conversions — always succeed
 
-These always produce a value. No error handling needed.
+These always give you a value. You don't need to handle a failure.
 
 ```
 // Number conversions
 let n: number = 42.7
-let i = n.toInt()        // 42 — truncates decimal
-let f = n.toFloat()      // 42.7 as float
-let s = n.toString()     // "42.7"
+let i = n.toInt()        // 42 — drops the decimal part
+let f = n.toFloat()      // 42.7 as a float
+let s = n.toString()     // `42.7`
 
 // Int conversions
 let count: int = 10
-let n = count.toNumber() // 10 as number
-let f = count.toFloat()  // 10.0 as float
-let s = count.toString() // "10"
+let n = count.toNumber() // 10 as a number
+let f = count.toFloat()  // 10.0 as a float
+let s = count.toString() // `10`
 
 // Float conversions
 let v: float = 9.81
-let n = v.toNumber()     // 9.81 as number (exact decimal)
-let s = v.toString()     // "9.81"
+let n = v.toNumber()     // 9.81 as a number (exact decimal)
+let s = v.toString()     // `9.81`
 
 // Boolean conversions
 let active: boolean = true
-let s = active.toString() // "true"
+let s = active.toString() // `true`
 ```
 
 ---
 
-## Unsafe conversions — might fail, return `maybe`
+## Conversions that can fail — they return `maybe`
 
-Parsing a string into a number might fail if the string isn't valid. These return `maybe` so the compiler forces you to handle the failure case:
+Turning text into a number can fail if the text isn't a valid number. These conversions return a `maybe`, so the compiler makes you handle the failure case:
 
 ```
-let input = "42"
+let input = `42`
 let count = input.toInt()           // maybe<int>
 let price = input.toNumber()        // maybe<number>
 let velocity = input.toFloat()      // maybe<float>
@@ -62,46 +62,55 @@ if (count.exists()) {
 }
 
 // Or use a default:
-let parsedCount = input.toInt()     // a Maybe: the number, or nothing
-let count = parsedCount.or(0)       // a plain int, 0 if input isn't a number
+let parsedCount = input.toInt()     // a maybe: the number, or nothing
+let safeCount = parsedCount.or(0)   // a plain int, 0 if input isn't a number
 
 // Failure case:
-let bad = "hello".toInt()           // none — "hello" is not a number
-let badCount = bad.or(0)            // 0 — fallback
+let hello = `hello`
+let bad = hello.toInt()             // none — `hello` is not a number
+let badCount = bad.or(0)            // 0 — the default
 ```
 
-## Parsing non-decimal strings
+## Parsing hex, binary and octal text
 
-For hex, binary, and octal strings, use explicit methods. All return `maybe<int>` — the string might not be valid for that base.
+For text in base 16 (hex), base 2 (binary) or base 8 (octal), use one function per base. All return `maybe<int>`, because the text might not be valid for that base.
 
 ```
-"FF".fromHex()        // maybe<int> — 255
-"ff".fromHex()        // maybe<int> — 255 (case-insensitive)
-"1010".fromBinary()   // maybe<int> — 10
-"17".fromOctal()      // maybe<int> — 15
+let hexUpper = `FF`
+let hexLower = `ff`
+let binaryText = `1010`
+let octalText = `17`
 
-// With fallback:
-let validHex = "FF".fromHex()
+hexUpper.fromHex()       // maybe<int> — 255
+hexLower.fromHex()       // maybe<int> — 255 (upper or lower case both work)
+binaryText.fromBinary()  // maybe<int> — 10
+octalText.fromOctal()    // maybe<int> — 15
+
+// With a default:
+let validHex = hexUpper.fromHex()
 let validValue = validHex.or(0)     // 255
-let invalidHex = "ZZ".fromHex()
-let invalidValue = invalidHex.or(0) // 0 — "ZZ" is not valid hex
+let badHexText = `ZZ`
+let invalidHex = badHexText.fromHex()
+let invalidValue = invalidHex.or(0) // 0 — `ZZ` is not valid hex
 
 // Failure case:
-"GG".fromHex()        // none — G is not a valid hex digit
-"19".fromOctal()      // none — 9 is not a valid octal digit
+let wrongHex = `GG`
+let wrongOctal = `19`
+wrongHex.fromHex()       // none — G is not a hex digit
+wrongOctal.fromOctal()   // none — 9 is not an octal digit
 ```
 
-There is no "parse with radix" argument. Each base has its own method — unambiguous, no magic numbers.
+There is no "choose the base" argument. Each base has its own function, so there is no number to remember or get wrong.
 
 ---
 
-## Union types — no conversion needed, just check which kind
+## Unions — no conversion needed, just check which kind
 
-For union types, use `is` to ask which kind it is. No cast required:
+A union is a value that can be one of several shapes. Use `is` to ask which one it is. No cast needed:
 
 ```
 if (shape is Circle) {
-  print(shape.radius)    // compiler already knows shape is Circle here
+  print(shape.radius)    // inside this block the compiler knows it is a Circle
 }
 ```
 
@@ -111,11 +120,11 @@ See [Unions](REF-unions.md).
 
 ## No `as` keyword
 
-There is no cast keyword. Every conversion is explicit and named:
+There is no cast keyword. Every conversion is written out by name:
 
 ```
 let n: number = value as number    // COMPILE ERROR: use .toNumber() instead
 let n: number = value.toNumber()   // correct
 ```
 
-This keeps conversions visible, autocomplete-discoverable, and consistently safe.
+That way every conversion is easy to spot, easy to find with autocomplete, and handled in the same safe way.

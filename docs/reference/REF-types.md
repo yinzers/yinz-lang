@@ -15,7 +15,7 @@ metadata:
 
 A `shape` defines the structure of your data — what fields it has and what types those fields hold.
 
-> Yinz is not object-oriented (see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md)). Shapes hold DATA and (optionally) CONTRACT METHOD-SIGNATURE DECLARATIONS — never method bodies. Methods are standalone `function` declarations. `value.method()` is parser-level sugar for `method(value)` — both call forms work (Uniform Function Call Syntax — UFCS).
+> Yinz is not object-oriented. A shape holds data and, if you want, contract signatures (lists of the functions a shape must provide) — never function bodies. Functions are declared on their own. `value.method()` is a shortcut for `method(value)`, and both forms work.
 
 ---
 
@@ -29,13 +29,13 @@ shape Player {
 }
 ```
 
-Fields are laid out flat and contiguous in memory. Fast to access, CPU-cache friendly.
+The fields sit next to each other in memory, so reading them is fast.
 
 ---
 
-## Creating an instance
+## Creating a shape value
 
-Use annotation-driven literal form — declare the variable's type, then assign a `{ ... }` literal:
+Write the variable's type, then assign a `{ ... }` value:
 
 ```ynz
 const player: Player = {
@@ -55,13 +55,13 @@ const player: Player = {
 // COMPILE ERROR: Missing field 'score' (required by Player).
 ```
 
-The `let p = Player { ... }` prefix-form is NOT legal — Yinz uses structural-typed literals exclusively. The annotation on the binding tells the compiler what shape the literal must satisfy.
+Writing the name before the braces, as in `let p = Player { ... }`, is NOT allowed. The type you write on the variable tells the compiler which shape the `{ ... }` value must match.
 
 ---
 
-## Methods are standalone functions
+## Functions for a shape are standalone
 
-In Yinz, methods are normal `function` declarations at file/module level. They take the value as the first parameter (conventionally named `self`). At the call site, you can write either `value.method()` (dot-call) or `method(value)` (function-call) — both are legal and equivalent.
+In Yinz, the functions that work on a shape are normal `function` declarations at the top level of a file or module. They take the value as the first parameter (usually named `self`). When you call one, you can write either `value.method()` (dot form) or `method(value)` (plain form). Both are legal and mean the same thing.
 
 ```ynz
 shape Player {
@@ -69,7 +69,7 @@ shape Player {
   health: number
 }
 
-// Methods live as standalone functions — NOT inside the shape body
+// These functions live on their own — NOT inside the shape body
 function takeDamage(lend self: Player, amount: number) -> nothing {
   self.health = self.health - amount
 }
@@ -80,20 +80,20 @@ function isAlive(share self: Player) -> boolean {
 
 const player: Player = { name: `Patrick`, health: 100 }
 
-player.takeDamage(25)    // dot-call — sugar for takeDamage(player, 25)
-takeDamage(player, 25)    // function-call — same effect
-player.isAlive()          // dot-call — sugar for isAlive(player)
+player.takeDamage(25)    // dot form — a shortcut for takeDamage(player, 25)
+takeDamage(player, 25)    // plain form — same effect
+player.isAlive()          // dot form — a shortcut for isAlive(player)
 ```
 
-The `lend self: Player` parameter says "this function modifies a Player." `share self: Player` says "read-only." See [`docs/reference/REF-ownership.md`](REF-ownership.md).
+The `lend self: Player` parameter says "this function changes a Player." `share self: Player` says "this function only reads it." See [REF-ownership.md](REF-ownership.md).
 
-The IDE recognizes both call forms. Typing `player.` shows autocomplete with all standalone functions whose first parameter type is `Player` — autocomplete-as-teaching for free, without methods being bound to the type.
+The IDE understands both forms. Typing `player.` shows every function whose first parameter is a `Player`, so autocomplete helps you discover functions even though they are not stored inside the shape.
 
 ---
 
-## Extending shapes — data-only inheritance
+## Extending shapes — sharing fields
 
-`extends` reuses parent's FIELDS. Behavior comes from standalone functions — but today, each function name must be **unique in its file**. Give the Warrior-specific behavior its own name instead of reusing the parent's function name:
+`extends` reuses the parent's FIELDS. Behavior comes from standalone functions, and each function name must be **unique in its file**. Give the Warrior's behavior its own name instead of reusing the parent's function name:
 
 ```ynz
 shape Entity {
@@ -110,8 +110,8 @@ function takeDamage(lend self: Entity, amount: number) -> nothing {
   self.health = self.health - amount
 }
 
-// Warrior-specific version — armor absorbs damage. Different name, since
-// Yinz doesn't dispatch two same-named functions by parameter type today.
+// Warrior version — armor absorbs damage. It needs a different name, because
+// two functions with the same name in one file are not allowed.
 function takeWarriorDamage(lend self: Warrior, amount: number) -> nothing {
   self.health = self.health - (amount - self.armor)
 }
@@ -127,9 +127,9 @@ warrior.takeWarriorDamage(20)
 // Damage applied: 20 - 15 = 5
 ```
 
-Single inheritance only. A shape can `extends` one other shape; the fields are reused, but each shape's own behavior needs its own function name.
+A shape can `extends` only one other shape. The fields are reused, but each shape's own behavior needs its own function name.
 
-There is no `override` keyword in Yinz. Writing two `function` declarations with the same name in the same file — even with different first-parameter types — is a compile error:
+There is no `override` keyword in Yinz. Two `function` declarations with the same name in the same file are a compile error, even when their first parameters have different types:
 
 ```ynz
 function takeDamage(lend self: Entity, amount: number) -> nothing {
@@ -143,13 +143,13 @@ function takeDamage(lend self: Warrior, amount: number) -> nothing {
 // Rename one of the two functions — each function in a file must have a unique name.
 ```
 
-Dispatching a same-named function by argument type (so `warrior.takeDamage(20)` and `entity.takeDamage(20)` could each call the version written for their own shape) is a planned but not-yet-shipped feature — see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md) for the eventual model.
+Picking a same-named function by its argument's type (so `warrior.takeDamage(20)` and `entity.takeDamage(20)` each call the version written for their own shape) is planned but not built yet.
 
 ---
 
-## base shapes — not directly instantiable
+## base shapes — never created directly
 
-Mark a shape `base` if it's only meant to be extended, never created directly:
+Mark a shape `base` if it exists only to be extended and should never be created directly:
 
 ```ynz
 base shape Entity {
@@ -175,7 +175,7 @@ const w: Warrior = { name: `test`, health: 50, weapon: `axe`, armor: 10 }   // f
 
 ## follows — behavior contracts
 
-If two unrelated shapes need to be used interchangeably, define a contract shape and use `follows`. Contracts declare method signatures in bare-signature form (no `function` keyword, no body — the implementing shape must provide a matching standalone function).
+If two unrelated shapes need to be used interchangeably, write a contract and use `follows`. A contract lists function signatures with no `function` keyword and no body. Every shape that follows the contract must have matching standalone functions.
 
 ```ynz
 shape Damageable {
@@ -193,8 +193,8 @@ shape Building follows Damageable {
   health: number
 }
 
-// Standalone functions provide the implementations.
-// Compiler verifies these match Damageable's signature when checking `follows`.
+// Standalone functions supply the behavior.
+// The compiler checks that they match Damageable's signature.
 function takeDamage(lend self: Player, amount: number) -> nothing {
   self.health = self.health - amount
 }
@@ -204,14 +204,14 @@ function takeDamage(lend self: Building, amount: number) -> nothing {
 }
 
 function dealDamage(lend target: Damageable, amount: number) -> nothing {
-  target.takeDamage(amount)    // dot-call — works for any shape that follows Damageable
+  target.takeDamage(amount)    // dot form — works for any shape that follows Damageable
 }
 
 dealDamage(player, 50)        // Player follows Damageable — works
 dealDamage(building, 30)      // Building follows Damageable — works
 ```
 
-`follows` is optional — Yinz uses structural typing (if the matching functions exist, the shape can be used). But declaring `follows` catches mismatches at definition time rather than at the first call site, and makes the relationship visible to readers.
+`follows` is optional. If the matching functions exist, the shape can be used wherever the contract is asked for. But writing `follows` makes the compiler report a mismatch where you declare the shape instead of at the first call, and it tells readers what the shape is meant to do.
 
 A shape can follow multiple contracts — `extends` comes first, then `follows` with a comma-separated list:
 
@@ -226,9 +226,9 @@ shape Warrior extends Entity follows Damageable, Attackable, Renderable {
 
 ---
 
-## Structural typing — shape matching
+## Matching by fields
 
-You don't have to name the shape when returning a literal. The data has to match the declared return type:
+You don't have to name the shape when you return a `{ ... }` value. Its fields only have to match the declared return type:
 
 ```ynz
 shape DivResult {
@@ -241,13 +241,13 @@ function divmod(a: number, b: number) -> DivResult {
 }
 ```
 
-The compiler checks that the fields exist with the right types. No need to write `new DivResult(...)`.
+The compiler checks that the fields exist and have the right types. You don't write `new DivResult(...)`.
 
 ---
 
 ## Hidden fields — invisible outside the same file
 
-Mark a field `hidden` to make it inaccessible to code in OTHER FILES. Hidden fields require a default value because external code can't provide them at construction.
+Mark a field `hidden` to make it unreachable from code in OTHER FILES. A hidden field needs a default value, because code in other files can't provide one when it creates the shape.
 
 ```ynz
 // File: player.ynz
@@ -265,7 +265,7 @@ function takeDamage(lend self: Player, amount: number) -> nothing {
 }
 ```
 
-External callers only provide visible fields when creating the value:
+Code in other files only provides the visible fields when it creates the value:
 
 ```ynz
 // File: entrypoint.ynz
@@ -275,22 +275,20 @@ const player: Player = { name: `Alice`, health: 100 }
 // damageMultiplier starts at 1.0, internalCache starts empty
 // (defaults from player.ynz)
 
-takeDamage(player, 25)              // ✅ public API
+takeDamage(player, 25)              // ✅ allowed — takeDamage is exported
 print(player.damageMultiplier)
 // COMPILE ERROR: damageMultiplier is hidden — not accessible outside player.ynz.
 ```
 
-`hidden` is about visibility, not mutability. Hidden fields can be both read and written by standalone functions in the same file. They're invisible to imports.
+`hidden` controls who can see a field, not whether it can change. Functions in the same file can both read and write a hidden field. Other files that import the shape can't see it.
 
-`hidden` gives per-field visibility within an exported shape: code in other files cannot write `player.damageMultiplier = 10` and bypass whatever invariants `takeDamage` maintains.
+You can export a shape and still keep some fields private. Code in other files cannot write `player.damageMultiplier = 10` and skip the rules that `takeDamage` follows.
 
 ---
 
-## Inline shapes (anonymous types)
+## Inline shapes (shapes without a name)
 
-> Design rationale: [`docs/internal/implementation/IMP-inline-shape-types.md`](../internal/implementation/IMP-inline-shape-types.md)
-
-If a type is only used in one place, you can define it right where you use it instead of scrolling to a `shape` declaration at the top of the file.
+If a shape is used in only one place, you can write it right where you use it instead of scrolling up to a `shape` declaration at the top of the file.
 
 ```ynz
 // Named shape — right when used in more than one function
@@ -314,7 +312,7 @@ const intervals: fixed<{ minutes: int }> = [
 Inline shapes work in any type-annotation position:
 
 ```ynz
-// Variable binding
+// Variable
 let p: { x: int, y: int } = { x: 3, y: 4 }
 
 // Function parameter
@@ -344,9 +342,9 @@ let p: { x: int, y: int } = { x: 3, y: 4 }
 print(`${p.x + p.y}`)  // prints 7
 ```
 
-### Structural equivalence
+### Same fields means same type
 
-Two inline shapes with the same fields are the same type, regardless of where they appear or what order the fields are listed:
+Two inline shapes with the same fields are the same type, wherever they appear and in whatever order the fields are listed:
 
 ```ynz
 function takesAB(p: { a: int, b: int }) -> nothing {
@@ -361,7 +359,7 @@ function entrypoint() -> nothing {
 
 ### Inline vs named: which to use
 
-Use an inline shape when the type is truly one-off — defined and consumed in the same small block. Use a named shape when:
+Use an inline shape when it is truly one-off — written and used in the same small block. Use a named shape when:
 
 - The same type appears in more than one function or file
 - You want to give the type a meaningful name for readability
@@ -383,5 +381,5 @@ shape IntervalConfig {
 ### Restrictions
 
 - **No `hidden` fields.** Hidden fields are file-private and require a named `shape` declaration.
-- **No `extends` or `follows`.** Inline shapes are pure data — they have no inheritance or contract requirements.
+- **No `extends` or `follows`.** Inline shapes hold plain data only, so they can't share fields with a parent or follow a contract.
 - Named shapes and inline shapes with identical fields are **different types** and do not convert to each other. If you annotate a variable `let x: Foo`, you cannot assign an `{ a: int }` value to it even if `Foo` has exactly field `a: int`.
